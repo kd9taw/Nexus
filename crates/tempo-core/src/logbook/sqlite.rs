@@ -367,6 +367,11 @@ const INDEXES: [&str; 9] = [
     "CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC)",
 ];
 
+/// The reads behind the UI's log questions (SPEC-2 v3 C17a): the order vectors, rows by rowid,
+/// the call index.
+mod query_reads;
+pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
+
 /// Every `qso` column the store writes, **in bind order**.
 ///
 /// ⭐ The write list and the read list are ONE list, exactly as `contest_fields` and

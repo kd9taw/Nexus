@@ -1222,6 +1222,13 @@ mod tests {
 
     /// One random change of the kinds the app makes to the log — see the tempo-app store tests'
     /// twin — including the fill job.
+    /// The id of the contact at `at`: how a change names its contact (SPEC-2 C16).
+    fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+        e.log_records()[at]
+            .id
+            .expect("every row the log holds carries an id")
+    }
+
     fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
         let stem = g.pick(STEMS);
         let call = format!("{stem}{}{}", g.below(4), ["AB", "XYZ"][g.below(2)]);
@@ -1249,22 +1256,29 @@ mod tests {
                     1 => r.call = call,
                     _ => r.grid = Some("FN42".into()),
                 }
-                eng.update_qso(at, r);
+                let id = id_at(&eng, at);
+                eng.update_qso(id, r);
             }
             4 if len > 0 => {
-                e.lock().unwrap().delete_qso(at);
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.delete_qso(id);
             }
             5 if len > 0 => {
-                e.lock().unwrap().mark_qsl_card(at, g.chance(2));
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.mark_qsl_card(id, g.chance(2));
             }
             6 if len > 0 => {
-                e.lock()
-                    .unwrap()
-                    .mark_qsl_sent(at, Some(tempo_core::logbook::QslVia::Direct));
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.mark_qsl_sent(id, Some(tempo_core::logbook::QslVia::Direct));
             }
             7 if len > 0 => {
                 let sat = g.chance(2).then_some("RS-44");
-                e.lock().unwrap().set_sat_tag(at, sat);
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.set_sat_tag(id, sat);
             }
             8 if len > 0 => {
                 let mut eng = e.lock().unwrap();
@@ -1535,7 +1549,8 @@ mod tests {
             let mut eng = e.lock().unwrap();
             let mut edited = QsoRecord::clone(&eng.log_records()[5]);
             edited.band = "6m".into();
-            assert!(eng.update_qso(5, edited));
+            let id = id_at(&eng, 5);
+            assert!(eng.update_qso(id, edited));
         }
         assert_eq!(folds(), 4, "control: an edit folds each again");
         assert_every_fold_agrees(&e, &tallies, "after the edit");

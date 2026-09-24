@@ -847,6 +847,7 @@ pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
 mod op;
+pub mod query;
 pub mod reader;
 mod records;
 pub mod sqlite;
@@ -946,7 +947,10 @@ impl Logbook {
     /// award_confirmed / credit / upload) is preserved from the existing record so
     /// an edit can never fabricate a confirmation; the next reconcile re-validates
     /// it against the corrected key. Returns false if `index` is out of range.
-    pub fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
         match self.records.get(index) {
             Some(old) => {
                 // An edit is the same row, corrected: it keeps the row's identity.
@@ -1132,7 +1136,15 @@ impl Logbook {
     /// shadowed by their own correction.
     ///
     /// Returns false if `index` is out of range. Pure — call [`save`](Self::save) to persist.
-    pub fn mark_qsl_sent(&mut self, index: usize, via: Option<QslVia>, date_unix: u64) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn mark_qsl_sent(
+        &mut self,
+        index: usize,
+        via: Option<QslVia>,
+        date_unix: u64,
+    ) -> bool {
         match self.records.write_as(OpClass::Stamp).get_mut(index) {
             Some(rec) => {
                 Arc::make_mut(rec).qsl_sent = match via {
@@ -1171,7 +1183,10 @@ impl Logbook {
     /// `confirmed` and `award_confirmed` follow the channels, as the parser, the store and
     /// `log.adi` all read them back: every fold counts a contact by `award_confirmed`, so a
     /// card that set only its channel counted for nothing until a restart re-read the log.
-    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
                 let rec = Arc::make_mut(rec);
@@ -1205,7 +1220,10 @@ impl Logbook {
     /// holding a second copy of it. The caller gates the name; this stores what it is given.
     ///
     /// Returns false when `index` names no row, and when the name is blank.
-    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
         let name = match sat_name {
             // A tag with no name is the lone `PROP_MODE=SAT` TQSL rejects. Refused here
             // rather than written, for the same reason an empty QSL-sent code is an error
@@ -1245,7 +1263,10 @@ impl Logbook {
     /// Remove the record at `index` (a mis-logged contact). Returns false if out of
     /// range. NOTE: this shifts the indices of all later records — callers that hold
     /// indices must reload after a delete.
-    pub fn delete(&mut self, index: usize) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn delete(&mut self, index: usize) -> bool {
         if index < self.records.len() {
             self.records.write_as(OpClass::Structural).remove(index);
             true

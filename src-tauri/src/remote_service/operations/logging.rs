@@ -3,8 +3,9 @@
 //! cannot acquire TX authority, retry a write or clear a replacement contact.
 //!
 //! Log changes (edit, delete, QSL marks) follow the same rules. A row is found again by the key
-//! of the exact row the browser's log page showed, never by a position, so a row that changed at
-//! the station since that page is refused rather than overwritten. "Applied" is claimed only
+//! of the exact row the browser's log page showed, or by its id and the edit key of the version
+//! the page holds, never by a position, so a row that changed at the station since that page is
+//! refused rather than overwritten. "Applied" is claimed only
 //! once the change is proved durable: with the logbook store, by the store's own commit of it
 //! (the writer's ticket, waited for with the engine released); on the 1.13 path, where the
 //! engine's rewrite does not sync and reports a failed save only to stderr, by re-reading the log
@@ -24,7 +25,7 @@ use tempo_app::engine::{
     Engine, LogWriteOutcome,
 };
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
-use tempo_core::logbook::{adif_record_own_log, QslVia, QsoRecord};
+use tempo_core::logbook::{adif_record_own_log, QslVia, QsoRecord, RecordId};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -188,12 +189,44 @@ pub(super) const CAPABILITIES: [&str; 6] = [
 /// neither advertise nor accept it again.
 pub(super) const SELF_SPOT: bool = true;
 
+/// The contact a log change names. Two shapes, and a page sends the one it can:
+/// - `{call, whenUnix, key}`, every page up to 1.14: the SHA-256 of the row exactly as its log
+///   page showed it ([`row_key`]), found among the rows with that call and time;
+/// - `{id, editKey}` (SPEC-2 v2 §9): the contact's id and the edit key of the version the page
+///   holds (`QsoEdit::key`), the address a page reading the log by id sends.
+///
+/// Either way the station finds the contact as it stands now or refuses the change as stale.
+/// Untagged: the two shapes share no field, and each refuses the other's (`deny_unknown_fields`).
+/// The id shape is the desktop's own `RowRef`, so the two writers cannot disagree about it.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Target {
+    Key(KeyTarget),
+    Id(crate::log_by_id::RowRef),
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Target {
+pub struct KeyTarget {
     call: String,
     when_unix: u64,
     key: String,
+}
+
+impl Target {
+    /// The wire grammar of a target: a key target's call, time and 64-hex key; an id target's
+    /// id in its one canonical text and a 16-hex edit key.
+    fn valid(&self) -> bool {
+        match self {
+            Self::Key(t) => {
+                !t.call.is_empty()
+                    && t.call.len() <= 32
+                    && t.when_unix <= 253_402_300_799
+                    && key(&t.key, 64)
+            }
+            Self::Id(t) => t.id.parse::<RecordId>().is_ok() && key(&t.edit_key, 16),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -286,12 +319,10 @@ impl Change {
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
     pub(super) fn valid(&self, now_unix: u64) -> bool {
-        self.target().is_none_or(|t| {
-            !t.call.is_empty()
-                && t.call.len() <= 32
-                && t.when_unix <= 253_402_300_799
-                && key(&t.key, 64)
-        }) && match self {
+        if self.target().is_some_and(|t| !t.valid()) {
+            return false;
+        }
+        match self {
             Self::Edit { record, .. } => record.when_unix.is_some() && record.valid(now_unix),
             // Exactly the menu's letters. The empty placeholder is a non-choice, never a clear.
             Self::QslSent { via, .. } => {
@@ -499,27 +530,35 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
 /// whole log on every reload would cost a serialise and a digest per record under the engine
 /// lock, where keying one row on one click costs nothing anyone can notice.
 pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> Target {
-    Target {
+    Target::Key(KeyTarget {
         call: seen.call.clone(),
         when_unix: seen.when_unix,
         key: serde_json::to_value(seen)
             .map(|v| value_key(&v))
             .unwrap_or_default(),
-    }
+    })
 }
 
-/// The position TODAY of the row a writer saw — the browser's log page or the shack's log
-/// view — or `None` when no row holds exactly that content any more. This is the one way
-/// either writer turns a row into an index: a position kept from an earlier read is stale the
-/// moment the OTHER writer deletes above it, and acting on it deleted or rewrote a different
-/// contact. Another instance's appends are folded in first so the index cannot shift under
-/// the caller.
-#[allow(deprecated)] // SPEC-2 C16: Remote's edit targets, by id
-pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<usize> {
+/// The id of the contact a writer saw — the browser's log page or the shack's log view — or
+/// `None` when no contact is that row any more: none holds exactly that content (a key
+/// target), or the contact is gone or no longer the version the writer held (an id target).
+/// A position is never the answer: one kept from an earlier read is stale the moment the
+/// OTHER writer deletes above it, and acting on it deleted or rewrote a different contact.
+/// Another instance's changes are folded in first, so the answer is about the log as it is.
+#[allow(deprecated)] // SPEC-2 C18: a key target's candidates, from the in-memory log
+pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
     engine.sync_shared_log_if_changed();
-    engine.log_records().iter().position(|r| {
-        r.call == target.call && r.when_unix == target.when_unix && row_key(r) == target.key
-    })
+    match target {
+        Target::Key(t) => engine
+            .log_records()
+            .iter()
+            .find(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
+            .and_then(|r| r.id),
+        Target::Id(t) => {
+            let id = t.id.parse().ok()?;
+            engine.fresh_log_row(id, &t.edit_key).ok().map(|_| id)
+        }
+    }
 }
 
 pub(super) enum ChangeWork {
@@ -626,9 +665,9 @@ pub(super) fn prepare_change(
         _ => {}
     }
     let t = change.target().ok_or(ChangeReason::ContextChanged)?;
-    let index = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
+    let id = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
     let store = engine.log_store_open();
-    let (proof, durable) = engine.with_log_tickets(|engine| rewrite(engine, change, index));
+    let (proof, durable) = engine.with_log_tickets(|engine| rewrite(engine, change, id));
     let (expected, count) = proof?;
     Ok(ChangeWork::Rewrite {
         path: engine.log_path().map(Path::to_path_buf),
@@ -640,13 +679,17 @@ pub(super) fn prepare_change(
 
 /// The row change itself, under the Engine lock: what the file must then hold (`expected`,
 /// `count` copies of it) for the 1.13 path's proof.
-#[allow(deprecated)] // SPEC-2 C16: Remote's edits, by id
+#[allow(deprecated)] // SPEC-2 C19: the 1.13 path's proof counts copies in the whole log
 fn rewrite(
     engine: &mut Engine,
     change: &Change,
-    index: usize,
+    id: RecordId,
 ) -> Result<(String, usize), ChangeReason> {
-    let stored = engine.log_records()[index].as_ref().clone();
+    let stored = engine
+        .logged_row(id)
+        .ok_or(ChangeReason::ContextChanged)?
+        .as_ref()
+        .clone();
     let copies = |records: &[std::sync::Arc<QsoRecord>], of: &QsoRecord, text: &str| {
         records
             .iter()
@@ -657,20 +700,20 @@ fn rewrite(
     };
     let (expected, count) = if let Change::Delete { .. } = change {
         let text = adif_record_own_log(&stored);
-        if !engine.delete_qso(index) {
+        if !engine.delete_qso(id) {
             return Err(ChangeReason::ContextChanged);
         }
         let count = copies(engine.log_records(), &stored, &text);
         (text, count)
     } else {
-        // The row stays at `index`; prove the record the engine actually wrote there.
+        // Prove the record the engine actually wrote under `id`.
         let applied = match change {
-            Change::Edit { record, .. } => engine.update_qso(index, edited(record, &stored)),
+            Change::Edit { record, .. } => engine.update_qso(id, edited(record, &stored)),
             // `valid` admitted only B/D/E or null, so a letter always parses here.
             Change::QslSent { via, .. } => {
-                engine.mark_qsl_sent(index, via.as_deref().and_then(QslVia::from_code))
+                engine.mark_qsl_sent(id, via.as_deref().and_then(QslVia::from_code))
             }
-            Change::QslCard { received, .. } => engine.mark_qsl_card(index, *received),
+            Change::QslCard { received, .. } => engine.mark_qsl_card(id, *received),
             Change::Delete { .. }
             | Change::Hunt { .. }
             | Change::ClearHunt {}
@@ -684,11 +727,7 @@ fn rewrite(
         if !applied {
             return Err(ChangeReason::ContextChanged);
         }
-        let written = engine
-            .log_records()
-            .get(index)
-            .cloned()
-            .ok_or(ChangeReason::ContextChanged)?;
+        let written = engine.logged_row(id).ok_or(ChangeReason::ContextChanged)?;
         let text = adif_record_own_log(&written);
         let count = copies(engine.log_records(), &written, &text);
         (text, count)

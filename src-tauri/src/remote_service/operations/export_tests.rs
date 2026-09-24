@@ -480,14 +480,15 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
                     return;
                 }
                 let mut e = hook.lock().unwrap();
-                let at = |e: &tempo_app::engine::Engine, call: &str| {
-                    e.log_records().iter().position(|r| r.call == call).unwrap()
+                let id = |e: &tempo_app::engine::Engine, call: &str| {
+                    let r = e.log_records().iter().find(|r| r.call == call);
+                    r.and_then(|r| r.id).unwrap()
                 };
-                let moved = at(&e, "K1AAA");
-                let mut r = tempo_core::logbook::QsoRecord::clone(&e.log_records()[moved]);
+                let moved = id(&e, "K1AAA");
+                let mut r = tempo_core::logbook::QsoRecord::clone(&e.logged_row(moved).unwrap());
                 r.when_unix += 86_400;
                 assert!(e.update_qso(moved, r));
-                let deleted = at(&e, "K1BBB");
+                let deleted = id(&e, "K1BBB");
                 assert!(e.delete_qso(deleted));
                 e.flush_log_store(std::time::Duration::from_secs(60))
                     .expect("committed to the store");

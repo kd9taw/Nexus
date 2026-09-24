@@ -42,9 +42,15 @@ mod cluster_nodes;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
+/// The Logbook's changes to one contact, addressed by id and the edit key of the version the
+/// caller holds (SPEC-2 v2 §3).
+mod log_by_id;
 /// The log's folds and lookups — needs, awards, Journey, statistics, hunted parks, a station's
 /// last grid, upload health — read from the logbook store off the Engine lock (SPEC-2 v3 C14).
 mod log_folds;
+/// The UI's log questions answered by the engine — pages, places, a call's history, an entity's
+/// slots (SPEC-2 v3 C17a).
+mod log_queries;
 mod pouncer;
 mod profile_sync;
 /// The quit when the logbook still has changes on their way to disk: the window is held while
@@ -423,21 +429,34 @@ mod whole_log_reader_tests {
         let engine = engine_with_log();
         let report = confirmation_diagnostics(&engine).expect("the log reads");
         // The engine's own diagnosis, called as the command used to call it — on a raw lock,
-        // which test code may take and the fence does not count.
-        let direct = engine
-            .lock()
-            .unwrap()
-            .confirmation_diagnostics(now_unix(), |call| {
-                propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-            })
-            .expect("the log reads");
+        // which test code may take and the fence does not count — and named from its log.
+        let (direct, rows) = {
+            let e = engine.lock().unwrap();
+            let direct = e
+                .confirmation_diagnostics(now_unix(), |call| {
+                    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+                })
+                .expect("the log reads");
+            (direct, e.log_snapshot().records)
+        };
         assert!(
             !direct.one_away.is_empty(),
             "premise: the entity lookup reaches the report"
         );
+        let mut direct = DiagnosticsReportDto::from(direct);
+        let ids: Vec<_> = rows.iter().map(|r| r.id).collect();
+        let rows: Vec<tempo_core::diagnostics::DiagRow> = rows
+            .iter()
+            .map(|r| tempo_core::diagnostics::DiagRow::from(r.as_ref()))
+            .collect();
+        direct.name_rows(&rows, &ids);
+        assert!(
+            report.diagnoses.iter().all(|d| d.id.is_some()),
+            "premise: the command's report is named"
+        );
         assert_eq!(
-            serde_json::to_value(DiagnosticsReportDto::from(report)).unwrap(),
-            serde_json::to_value(DiagnosticsReportDto::from(direct)).unwrap()
+            serde_json::to_value(report).unwrap(),
+            serde_json::to_value(direct).unwrap()
         );
     }
 }
@@ -2624,6 +2643,20 @@ mod durable_command_tests {
         (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
     }
 
+    /// The id of the contact at `at`: how a test names a row it picked by place.
+    pub(super) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+        e.log_records()[at]
+            .id
+            .expect("every row the log holds carries an id")
+    }
+
+    /// Mark a paper card on the contact at `at` — a change for a test to hold on a stalled disk.
+    pub(super) fn card_at(engine: &SharedEngine, at: usize) -> bool {
+        let mut e = engine_lock(engine);
+        let id = id_at(&e, at);
+        e.mark_qsl_card(id, true)
+    }
+
     /// The naive shape this replaces: the change and its wait run INSIDE the async task, so the
     /// wait holds a runtime worker for as long as the disk takes. Kept only as the control.
     async fn waits_on_the_worker<T>(
@@ -2656,7 +2689,9 @@ mod durable_command_tests {
             let engine = std::sync::Arc::clone(&engine);
             let body = move || {
                 let mut eng = engine_lock(&engine);
-                eng.with_log_tickets(|eng| Ok::<bool, String>(eng.mark_qsl_card(i, true)))
+                eng.with_log_tickets(|eng| {
+                    Ok::<bool, String>(eng.mark_qsl_card(id_at(eng, i), true))
+                })
             };
             waits.push(if naive {
                 rt.spawn(async move { waits_on_the_worker(body).await })
@@ -2725,7 +2760,7 @@ mod durable_command_tests {
         let marked = rt
             .block_on(durable_command(move || {
                 let mut e = engine_lock(&eng);
-                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(4, true)))
+                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(id_at(e, 4), true)))
             }))
             .expect("durable");
         assert!(marked);
@@ -2810,8 +2845,16 @@ mod lotw_batch_tests {
     /// returns.
     #[test]
     fn a_contact_deleted_while_tqsl_runs_moves_no_stamp_onto_another() {
+        // Both ways a batch is chosen by hand: by position (the Awards view's buttons) and by id.
         let (dir, engine, ids) = station("lotw-delete", 4);
-        let report = lotw_upload_batch_with(&engine, Some(vec![0, 1, 3]), true, |_, args| {
+        a_delete_mid_batch(&dir, &engine, &ids, LotwPick::Positions(vec![0, 1, 3]));
+        let (dir, engine, ids) = station("lotw-delete-by-id", 4);
+        let chosen = LotwPick::Ids(vec![ids[0], ids[1], ids[3]]);
+        a_delete_mid_batch(&dir, &engine, &ids, chosen);
+    }
+
+    fn a_delete_mid_batch(dir: &Path, engine: &SharedEngine, ids: &[RecordId], pick: LotwPick) {
+        let report = lotw_upload_batch_with(engine, pick, true, |_, args| {
             assert!(
                 std::fs::read_to_string(args.last().expect("the batch file"))
                     .expect("TQSL can read it")
@@ -2819,7 +2862,7 @@ mod lotw_batch_tests {
                 "premise: TQSL is handed the batch"
             );
             assert!(
-                engine_lock(&engine).delete_qso(0),
+                engine_lock(engine).delete_qso(ids[0]),
                 "deleted while TQSL runs"
             );
             Ok((0, String::new()))
@@ -2833,10 +2876,7 @@ mod lotw_batch_tests {
         );
 
         let pending = Some(Some(UploadOutcome::Pending));
-        for (held, what) in outcomes(&dir, &engine, &ids)
-            .iter()
-            .zip(["memory", "store"])
-        {
+        for (held, what) in outcomes(dir, engine, ids).iter().zip(["memory", "store"]) {
             assert_eq!(
                 held,
                 &vec![None, pending, Some(None), pending],
@@ -2844,7 +2884,7 @@ mod lotw_batch_tests {
                  and both uploaded contacts still in the log are marked"
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A contact CORRECTED while TQSL signs is not the contact TQSL signed: LoTW holds the old
@@ -2853,11 +2893,11 @@ mod lotw_batch_tests {
     #[test]
     fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
         let (dir, engine, ids) = station("lotw-edit", 4);
-        let report = lotw_upload_batch_with(&engine, None, true, |_, _| {
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
             let mut eng = engine_lock(&engine);
             let mut fixed = QsoRecord::clone(&eng.log_records()[1]);
             fixed.call = "K1DUX".into();
-            assert!(eng.update_qso(1, fixed), "corrected while TQSL runs");
+            assert!(eng.update_qso(ids[1], fixed), "corrected while TQSL runs");
             Ok((0, String::new()))
         })
         .expect("the upload ran");
@@ -2880,7 +2920,7 @@ mod lotw_batch_tests {
             );
         }
         assert!(
-            engine_lock(&engine).lotw_unsent_indices() == vec![1],
+            engine_lock(&engine).lotw_unsent_ids() == vec![ids[1]],
             "the corrected contact is offered again"
         );
         assert!(
@@ -2893,50 +2933,75 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The command's two ways of choosing, as the UI sends them: nothing is the default batch,
+    /// positions are the Awards buckets', ids are ids — and both at once, or an id the station
+    /// never handed out, is refused.
+    #[test]
+    fn the_command_reads_its_choice_as_sent() {
+        let id: RecordId = "00000000:0123456789abcdef:1".parse().expect("an id");
+        assert_eq!(LotwPick::chosen(None, None), Ok(LotwPick::Unsent));
+        assert_eq!(
+            LotwPick::chosen(Some(vec![2, 0]), None),
+            Ok(LotwPick::Positions(vec![2, 0]))
+        );
+        assert_eq!(
+            LotwPick::chosen(None, Some(vec![id.to_string()])),
+            Ok(LotwPick::Ids(vec![id]))
+        );
+        assert!(LotwPick::chosen(Some(vec![0]), Some(vec![id.to_string()])).is_err());
+        assert!(LotwPick::chosen(None, Some(vec!["row 0".into()])).is_err());
+    }
+
     /// A contact with no known time of day is never signed — LoTW matches on time, so it could
     /// never confirm — whether the batch is the default one, read from the store (SPEC-2 v3
-    /// C15), or chosen by hand by position. The file TQSL is handed holds every other contact,
-    /// and the report counts them. Once they are sent, nothing is owed: the timeless contact is
-    /// not a reason to start TQSL.
+    /// C15), or chosen by hand, by id or by position. The file TQSL is handed holds every other
+    /// contact, and the report counts them. Once they are sent, nothing is owed: the timeless
+    /// contact is not a reason to start TQSL.
     #[test]
     fn a_contact_with_no_known_time_is_never_signed() {
-        let (dir, engine, _) = station("lotw-timeless", 3);
+        let (dir, engine, ids) = station("lotw-timeless", 3);
         let _ = engine_lock(&engine)
             .import_adif("<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n");
-        let timeless = engine_lock(&engine)
-            .log_records()
-            .iter()
-            .position(|r| r.call == "N0TIM")
-            .expect("imported");
-        assert!(
-            !engine_lock(&engine).log_records()[timeless].time_known,
-            "premise: a contact with no known time"
-        );
-        for (chosen, sent) in [(None, 3), (Some(vec![0, timeless, 1]), 2)] {
+        let (at, timeless) = {
+            let eng = engine_lock(&engine);
+            let at = eng
+                .log_records()
+                .iter()
+                .position(|r| r.call == "N0TIM")
+                .expect("imported");
+            let r = &eng.log_records()[at];
+            assert!(!r.time_known, "premise: a contact with no known time");
+            (at, r.id.expect("an id"))
+        };
+        for (what, pick, sent) in [
+            ("the default batch", LotwPick::Unsent, 3),
+            ("by id", LotwPick::Ids(vec![ids[0], timeless, ids[2]]), 2),
+            ("by position", LotwPick::Positions(vec![0, at, 1]), 2),
+        ] {
             let mut file = String::new();
-            let report = lotw_upload_batch_with(&engine, chosen.clone(), true, |_, args| {
+            let report = lotw_upload_batch_with(&engine, pick, true, |_, args| {
                 file = std::fs::read_to_string(args.last().expect("the batch file"))
                     .expect("the batch file reads");
                 Ok((0, String::new()))
             })
             .expect("the upload ran");
-            assert_eq!(report.dispatched, sent, "{chosen:?}");
-            assert_eq!(file.matches("<EOR>").count(), sent, "{chosen:?}: {file}");
-            assert!(!file.contains("N0TIM"), "{chosen:?}: never signed: {file}");
+            assert_eq!(report.dispatched, sent, "{what}");
+            assert_eq!(file.matches("<EOR>").count(), sent, "{what}: {file}");
+            assert!(!file.contains("N0TIM"), "{what}: never signed: {file}");
         }
         let rows = engine_lock(&engine).log_rows();
         assert!(
             !tempo_app::station::lotw_owed(&rows).expect("the store reads"),
             "only the timeless contact is unsent, and it is owed nothing"
         );
-        assert!(engine_lock(&engine).lotw_unsent_indices().is_empty());
+        assert!(engine_lock(&engine).lotw_unsent_ids().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
 #[cfg(test)]
 mod logbook_startup_tests {
-    use super::durable_command_tests::engine_on_store;
+    use super::durable_command_tests::{card_at, engine_on_store};
     use super::*;
     use std::time::{Duration, Instant};
     use tempo_core::logbook::migrate::database_path;
@@ -3169,7 +3234,7 @@ mod logbook_startup_tests {
         };
         let hold = WriteHold::take(&db).expect("stall the store");
         assert!(
-            engine_lock(&engine).mark_qsl_card(3, true),
+            engine_lock(&engine).mark_qsl_card(id.unwrap(), true),
             "not waited for"
         );
 
@@ -3216,7 +3281,7 @@ mod logbook_startup_tests {
 
         // The control: beside the writer, while a change waits on a stalled disk.
         let hold = WriteHold::take(&db).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(3, true));
+        assert!(card_at(&engine, 3));
         let beside = dir.with_extension("beside");
         copy_data_dir_verified(&dir, &beside, None).expect("copied");
         drop(hold);
@@ -3227,7 +3292,7 @@ mod logbook_startup_tests {
 
         // Through the writer: another change, the same stall, released while the copy waits.
         let hold = WriteHold::take(&db).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(4, true));
+        assert!(card_at(&engine, 4));
         let release = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(300));
             drop(hold);
@@ -16889,7 +16954,10 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// with another contact's fields and its confirmations stripped as a "callsign correction" —
 /// under a toast naming the row the operator meant. The key finds the row where it is today,
 /// or refuses when no row holds that content any more.
-fn locate_seen(eng: &mut Engine, seen: &LoggedQso) -> Result<usize, String> {
+fn locate_seen(
+    eng: &mut Engine,
+    seen: &LoggedQso,
+) -> Result<tempo_core::logbook::RecordId, String> {
     use remote_service::operations::logging::{locate, seen_target};
     locate(eng, &seen_target(seen)).ok_or_else(|| LOG_ROW_GONE.into())
 }
@@ -16933,13 +17001,11 @@ fn durability_failed(why: String) -> String {
     format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
 }
 
-/// The row at `index` as `get_log` would show it — what a log command hands back so a
+/// The contact `id` as `get_log` would show it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
-#[allow(deprecated)] // SPEC-2 C17a: a row by position
-fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
+fn log_row(eng: &Engine, id: tempo_core::logbook::RecordId) -> Result<LoggedQso, String> {
     let r = eng
-        .log_records()
-        .get(index)
+        .logged_row(id)
         .map(|r| r.as_ref().clone())
         .ok_or(LOG_ROW_GONE)?;
     let mut q = LoggedQso::from(r);
@@ -16960,11 +17026,11 @@ async fn edit_qso(
     durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let index = locate_seen(eng, &target)?;
-            if !eng.update_qso(index, record.into()) {
+            let id = locate_seen(eng, &target)?;
+            if !eng.update_qso(id, record.into()) {
                 return Err(LOG_ROW_GONE.into());
             }
-            log_row(eng, index)
+            log_row(eng, id)
         })
     })
     .await
@@ -17024,11 +17090,11 @@ async fn mark_qsl_sent(
     durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let index = locate_seen(eng, &target)?;
-            if !eng.mark_qsl_sent(index, via) {
+            let id = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_sent(id, via) {
                 return Err(LOG_ROW_GONE.into());
             }
-            log_row(eng, index)
+            log_row(eng, id)
         })
     })
     .await
@@ -17051,11 +17117,11 @@ async fn mark_qsl_card(
     durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let index = locate_seen(eng, &target)?;
-            if !eng.mark_qsl_card(index, received) {
+            let id = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_card(id, received) {
                 return Err(LOG_ROW_GONE.into());
             }
-            log_row(eng, index)
+            log_row(eng, id)
         })
     })
     .await
@@ -17123,11 +17189,11 @@ async fn set_sat_tag(
     durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let index = locate_seen(eng, &target)?;
-            if !eng.set_sat_tag(index, name.as_deref()) {
+            let id = locate_seen(eng, &target)?;
+            if !eng.set_sat_tag(id, name.as_deref()) {
                 return Err(LOG_ROW_GONE.into());
             }
-            log_row(eng, index)
+            log_row(eng, id)
         })
     })
     .await
@@ -17154,8 +17220,8 @@ async fn delete_qso(
     durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let index = locate_seen(eng, &target)?;
-            if !eng.delete_qso(index) {
+            let id = locate_seen(eng, &target)?;
+            if !eng.delete_qso(id) {
                 return Err(LOG_ROW_GONE.into());
             }
             Ok(eng.snapshot())
@@ -17268,25 +17334,22 @@ async fn get_confirmation_diagnostics(
     state: State<'_, SharedEngine>,
 ) -> Result<DiagnosticsReportDto, String> {
     let engine = state.inner().clone();
-    log_folds::off_the_runtime(move || confirmation_diagnostics(&engine).map(Into::into)).await
+    log_folds::off_the_runtime(move || confirmation_diagnostics(&engine)).await
 }
 
 /// `get_confirmation_diagnostics`' report. Under the engine lock only what the diagnosis reads
 /// is taken (the log's rows — handles, or a copy of pointers on the 1.13 path — and the latest
 /// reconcile summaries); the diagnosis — a read of the store and a DXCC lookup per contact, 180
-/// ms at 150,000 — runs after the lock is released.
-fn confirmation_diagnostics(
-    engine: &Mutex<Engine>,
-) -> Result<tempo_core::diagnostics::DiagnosticsReport, String> {
+/// ms at 150,000 — runs after the lock is released. Every contact it points at is named by its
+/// id (SPEC-2 v2 §3, C17a), so the Awards view needs no log.
+fn confirmation_diagnostics(engine: &Mutex<Engine>) -> Result<DiagnosticsReportDto, String> {
     let (inputs, now) = {
         let eng = engine_lock(engine);
         (eng.confirmation_diagnostics_inputs(), now_unix())
     };
-    inputs
-        .diagnose(now, |call| {
-            propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-        })
-        .map(|(report, _)| report)
+    inputs.diagnose_named(now, |call| {
+        propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+    })
 }
 
 /// One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose view).
@@ -18474,7 +18537,7 @@ static CLUBLOG_NO_CREDS_ANNOUNCED: std::sync::atomic::AtomicBool =
 /// automatic upload was allowed to exist.
 ///
 /// `UploadOutcome::is_sent()` deliberately excludes `Rejected` and `AuthFail`, so
-/// `lotw_unsent_indices()` keeps handing back a batch that already failed. Without this
+/// `lotw_unsent_ids()` keeps handing back a batch that already failed. Without this
 /// latch a missing Callsign Certificate — or ONE malformed QSO, since TQSL's exit 9
 /// stamps the entire batch `Rejected` without naming the record it dropped — would
 /// re-sign and re-upload everything every interval, spawning TQSL each time. That is the
@@ -20356,24 +20419,58 @@ async fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, Str
 async fn upload_lotw_report(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
+    ids: Option<Vec<String>>,
 ) -> Result<UploadReportDto, String> {
     conn_logged(
         "LoTW",
         |r| format!("upload — {} QSO(s), outcome: {}", r.dispatched, r.outcome),
-        upload_lotw_report_impl(state, indices).await,
+        upload_lotw_report_impl(state, indices, ids).await,
     )
 }
 
 async fn upload_lotw_report_impl(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
+    ids: Option<Vec<String>>,
 ) -> Result<UploadReportDto, String> {
+    let pick = LotwPick::chosen(indices, ids)?;
     // On the blocking pool: TQSL can take tens of seconds, and the stamps are then waited for
     // on disk. Neither may occupy a runtime worker (see `durable_command`).
     let engine = Arc::clone(&state);
-    tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, indices, true))
+    tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, pick, true))
         .await
         .map_err(|e| format!("LoTW upload task failed: {e}"))?
+}
+
+/// The contacts an upload to LoTW signs.
+#[derive(Debug, PartialEq)]
+enum LotwPick {
+    /// Every contact owed to LoTW, read from the store ([`tempo_app::station::lotw_unsent`]):
+    /// the Logbook's button and the automatic batch.
+    Unsent,
+    /// The contacts these ids name (SPEC-2 v2 §3).
+    Ids(Vec<tempo_core::logbook::RecordId>),
+    /// The contacts at these positions in the log as it stands: the Awards view's per-bucket
+    /// buttons, until each diagnosis carries its contact's id.
+    Positions(Vec<usize>),
+}
+
+impl LotwPick {
+    /// The command's two ways of choosing, of which it takes at most one.
+    fn chosen(indices: Option<Vec<usize>>, ids: Option<Vec<String>>) -> Result<Self, String> {
+        match (indices, ids) {
+            (None, None) => Ok(Self::Unsent),
+            (Some(at), None) => Ok(Self::Positions(at)),
+            (None, Some(ids)) => ids
+                .iter()
+                .map(|id| id.parse().map_err(|()| format!("'{id}' names no contact.")))
+                .collect::<Result<_, _>>()
+                .map(Self::Ids),
+            (Some(_), Some(_)) => {
+                Err("Choose the contacts to upload by id or by position, not both.".into())
+            }
+        }
+    }
 }
 
 /// The whole LoTW upload, independent of Tauri's command shape, so the automatic worker
@@ -20382,10 +20479,10 @@ async fn upload_lotw_report_impl(
 /// `State` lifetime.
 fn lotw_upload_batch(
     state: &SharedEngine,
-    indices: Option<Vec<usize>>,
+    pick: LotwPick,
     wait: bool,
 ) -> Result<UploadReportDto, String> {
-    lotw_upload_batch_with(state, indices, wait, run_tqsl)
+    lotw_upload_batch_with(state, pick, wait, run_tqsl)
 }
 
 /// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
@@ -20394,7 +20491,7 @@ fn lotw_upload_batch(
 /// to survive.
 fn lotw_upload_batch_with(
     state: &SharedEngine,
-    indices: Option<Vec<usize>>,
+    pick: LotwPick,
     wait: bool,
     tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
@@ -20414,10 +20511,15 @@ fn lotw_upload_batch_with(
                     .into(),
             );
         }
-        // A batch chosen by hand names positions in the log as it stands (the Awards view's
-        // per-bucket buttons), so its rows are read here, in the same hold of the lock as the
-        // positions. The default batch is found in the store once the lock is released.
-        let chosen = indices.map(|at| eng.lotw_rows_at(&at));
+        // A batch chosen by hand names its contacts: by id, or — the Awards view's per-bucket
+        // buttons, until they send the report's ids — by position in the log as it stands, turned
+        // into ids here, in the same hold of the lock as the positions. The contacts themselves
+        // are read from the store once the lock is released, as the default batch's are.
+        let chosen = match pick {
+            LotwPick::Unsent => None,
+            LotwPick::Ids(ids) => Some(ids),
+            LotwPick::Positions(at) => Some(eng.ids_at_positions(&at)),
+        };
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
@@ -20433,7 +20535,7 @@ fn lotw_upload_batch_with(
     // exclusion — filter HERE, at the one choke point every batch passes: LoTW matches on time,
     // so a record with no known time of day can never confirm and must not be signed.
     let batch: Vec<tempo_core::logbook::QsoRecord> = match chosen {
-        Some(rows) => rows,
+        Some(ids) => tempo_app::station::rows_named(&rows, &ids)?,
         None => tempo_app::station::lotw_unsent(&rows)?,
     }
     .into_iter()
@@ -27027,7 +27129,7 @@ fn start_on_the_logbook(
             // long as the outage lasted. Only a hard `Err` (no TQSL installed, unwritable
             // temp file) leaves it alone, and that case cannot loop because it never got
             // as far as a process.
-            match lotw_upload_batch(&auto_engine, None, false) {
+            match lotw_upload_batch(&auto_engine, LotwPick::Unsent, false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field
@@ -28284,6 +28386,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(BetaUpdateState::default())
+        .manage(log_queries::LogQueries::default())
         .invoke_handler(tauri::generate_handler![
             display_metrics,
             update_install_block,
@@ -28580,6 +28683,12 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_sat_tag,
             lotw_sat_names,
             delete_qso,
+            log_by_id::edit_qso_by_id,
+            log_by_id::mark_qsl_sent_by_id,
+            log_by_id::mark_qsl_card_by_id,
+            log_by_id::set_sat_tag_by_id,
+            log_by_id::delete_qso_by_id,
+            log_queries::ask_log,
             purge_log,
             get_awards,
             get_journey,
@@ -30157,7 +30266,7 @@ mod tests {
             .expect("the end of the command")
             .0;
         assert!(
-            body.contains("set_sat_tag(index, name.as_deref())"),
+            body.contains("set_sat_tag(id, name.as_deref())"),
             "the command must pass the Option through — None is the removal"
         );
         assert!(
@@ -36951,12 +37060,13 @@ mod tests {
             hunted_today(&e, &spot, HIDE_NOON),
             "the hunt tagged the contact"
         );
-        let at = e
+        let id = e
             .get_log()
             .iter()
-            .position(|r| r.call == "K1ABC/P")
+            .find(|r| r.call == "K1ABC/P")
+            .and_then(|r| r.id)
             .expect("the contact is in the log");
-        assert!(e.delete_qso(at));
+        assert!(e.delete_qso(id));
         assert!(
             !hunted_today(&e, &spot, HIDE_NOON),
             "deleting the contact brings the activation back"
@@ -37509,14 +37619,15 @@ mod tests {
         // An edit rewrites a row the copy holds: the whole log, never a delta.
         let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
-        assert!(engine_lock(&engine).update_qso(0, edited));
+        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
         let after_edit = super::log_delta(&engine, grown.revision, copy.len());
         assert!(after_edit.full, "an edit is not an append");
         assert_eq!(after_edit.rows, get_log());
         assert_eq!(after_edit.rows[0].comment.as_deref(), Some("fixed"));
 
         // A delete likewise.
-        assert!(engine_lock(&engine).delete_qso(0));
+        let first = engine_lock(&engine).log_records()[0].id.unwrap();
+        assert!(engine_lock(&engine).delete_qso(first));
         let after_delete = super::log_delta(&engine, after_edit.revision, after_edit.rows.len());
         assert!(after_delete.full, "a delete is not an append");
         assert_eq!(after_delete.rows, get_log());
@@ -37584,7 +37695,7 @@ mod tests {
         // A rewrite moves them all, as an append does.
         let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.band = "40m".into();
-        assert!(engine_lock(&engine).update_qso(0, edited));
+        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
         assert_eq!(folds(), 3, "an edit folds each tally again");
     }
 }
