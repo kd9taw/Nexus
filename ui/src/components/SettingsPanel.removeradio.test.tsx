@@ -11,7 +11,7 @@
 // button reaches a real dialog, and that the answer decides whether the radio is actually
 // removed. Neither half was covered before: no test touched any of the twelve converted paths.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import { ConfirmHost } from '../confirm'
 import type { FeaturesApi } from '../useFeatures'
@@ -175,5 +175,27 @@ describe('Remove radio asks first, and the answer decides', () => {
 
     await waitFor(() => expect(screen.queryByText('Remove IC-9700?')).toBeNull())
     expect(api.get('removeRadio')).not.toHaveBeenCalled()
+  })
+})
+
+describe('the keyboard, once the radio is removed', () => {
+  it('goes to the radio list — the Remove button it was on went with the radio, and never to the page', async () => {
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    const remove = (await screen.findAllByRole('button', { name: 'Remove' })).find(
+      (b) => !(b as HTMLButtonElement).disabled && /roster/i.test((b as HTMLButtonElement).title),
+    )!
+    // The station answers with one radio left.
+    api.get('removeRadio').mockImplementation(async () => {
+      api.get('getSettings').mockImplementation(() => Promise.resolve({ ...(twoRadioSettings() as object), radios: [FTDX10] }))
+      return {}
+    })
+    act(() => remove.focus())
+    fireEvent.click(remove)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove radio' }))
+    await waitFor(() => expect(api.get('removeRadio')).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(remove.isConnected, 'the IC-9700 card is gone').toBe(false))
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body))
+    expect(document.activeElement?.classList.contains('radios-manager'), 'the radio list').toBe(true)
   })
 })

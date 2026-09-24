@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { postSpot } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
@@ -40,6 +40,24 @@ export function SpotDialog({
   const [busy, setBusy] = useState(false)
   // A browser posts through the station; the station's own cluster login is what goes out.
   const local = useStationControl(), client = useRemoteOperations(), remoteSpot = useLogChange('postSpot')
+
+  // THE KEYBOARD GOES BACK TO WHERE THE DIALOG WAS OPENED FROM when it closes — cancelled, escaped
+  // or posted. It was left on the page itself; and a Remote post asks first (confirmDialog), so the
+  // question's own control is gone with this dialog and only this dialog knows where to return.
+  // The call box is focused here rather than by `autoFocus`, which would move the keyboard before
+  // the control that opened the dialog could be noted.
+  const callRef = useRef<HTMLInputElement>(null)
+  useLayoutEffect(() => {
+    if (!open) return
+    const active = document.activeElement
+    const opener = active instanceof HTMLElement && active !== document.body ? active : null
+    callRef.current?.focus()
+    return () => {
+      const now = document.activeElement
+      if (now && now !== document.body && now.isConnected) return // the keyboard is somewhere already
+      if (opener?.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [open])
 
   // Re-seed from the current call/dial each time the dialog opens.
   useEffect(() => {
@@ -108,9 +126,9 @@ export function SpotDialog({
         <label className="settings-field">
           <span className="settings-label">{t('spots.post.call.label')}</span>
           <input
+            ref={callRef}
             className="settings-input"
             value={call}
-            autoFocus
             onChange={(e) => setCall(e.target.value)}
             onKeyDown={onKey}
             autoComplete="off"

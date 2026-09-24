@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { AppSnapshot } from '../types'
 import { ConfirmHost } from '../confirm'
 import { t } from '../i18n'
@@ -65,4 +65,19 @@ it('says so when the park or dial moved after the press', async () => {
   fireEvent.click(await view())
   fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
   await waitFor(() => expect(toast.pushToast).toHaveBeenCalledWith(t('ota.selfSpot.moved'), 'error', 6000))
+})
+
+it('gives the keyboard back to Spot me when the question closes, answered either way', async () => {
+  // The question is opened by code, and closed with the keyboard left on the page itself.
+  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  const button = await view()
+  act(() => button.focus())
+  fireEvent.click(button)
+  fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await waitFor(() => expect(document.activeElement, 'after no').toBe(button))
+  fireEvent.click(button)
+  fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
+  await waitFor(() => expect(api.selfSpot).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(document.activeElement, 'after yes').toBe(button))
 })

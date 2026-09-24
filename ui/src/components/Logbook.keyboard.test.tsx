@@ -201,6 +201,23 @@ describe('the Logbook is a keyboard grid', () => {
     expect(focusedIndex(), 'the same place in the list').toBe(3)
   })
 
+  it('the row’s ✕ answered yes: the keyboard goes to the ✕ of the contact that takes its place', async () => {
+    vi.mocked(deleteQso).mockImplementation(async (q: LoggedQso) => {
+      engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== q.id)
+      engine.revision += 1
+      return {} as never
+    })
+    await openAt(3)
+    const del = screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(3) }) })
+    act(() => del.focus())
+    fireEvent.click(del)
+    fireEvent.click(await screen.findByRole('button', { name: t('logbook.delete.confirm') }))
+    await waitFor(() => expect(del.isConnected).toBe(false))
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(4) }) })),
+    )
+  })
+
   it('Escape on the grid closes the edit form', async () => {
     await openAt(2)
     fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: callAt(2) }) }))
