@@ -13,9 +13,9 @@ import type { LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
-import { emptyAnswer, rowKeyAt, type LogQuestion } from '../features/logAnswers'
+import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
 import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
-import { logSource, useLogAnswer, useLogPages } from '../features/logSource'
+import { logSource, useLogAnswer, useLogAnswers, useLogPages } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
@@ -258,6 +258,10 @@ type SortKey = LogSortKey
 const LOG_PAGE = 128
 /** A row's height before it is measured: its 22 px buttons plus padding. */
 const ROW_ESTIMATE = 43
+/** Rows the list renders beyond the viewport on each side (the virtualizer's `overscan`). */
+const OVERSCAN = 12
+/** Pages the list keeps of the orders it has read — the order on screen, and one coming. */
+const HELD_PAGES = 64
 /** The Logbook's LoTW-backlog question — the same one every render. */
 const LOTW_BACKLOG = { kind: 'lotwBacklog' } as const satisfies LogQuestion
 /** How many contacts the log holds: the count badge, the purge warning, the exports' gates. */
@@ -918,14 +922,58 @@ export function Logbook({
     () => ({ sort: sortKey, asc: sortAsc, search: deferredSearch, needsConfirmOnly }),
     [sortKey, sortAsc, deferredSearch, needsConfirmOnly],
   )
-  const firstPage = useLogAnswer(control ? { kind: 'page', query, offset: 0, limit: LOG_PAGE } : null, logTick)
+  const queryKey = logQueryKey(query)
+  const latestFirst = useLogAnswer(control ? { kind: 'page', query, offset: 0, limit: LOG_PAGE } : null, logTick)
   // A Remote browser's rows are the page the station sent, searched and filtered there: they are
   // only put in this view's order (newest first — the headers are off there), exactly as before.
   const remoteOrder = useMemo(
     () => (control ? [] : logOrder(observedLog, { ...query, search: '', needsConfirmOnly: false })),
     [control, observedLog, query],
   )
-  const listTotal = control ? (firstPage?.total ?? 0) : remoteOrder.length
+
+  // THE LIST ON SCREEN IS ONE ORDER, AND IT IS SWAPPED WHOLE (v2 R4, R5). The source may already
+  // hold a newer order than the list shows — a contact was logged, a row deleted. The list keeps
+  // showing the order it has until EVERYTHING the new one needs is here: its first page (the
+  // count), where the rows under the operator went (`locate`, below), and the pages that place
+  // shows. Then it swaps in ONE render and is placed before the browser paints. A source that
+  // answers one question at a time used to have the list swap on the first answer and wait for the
+  // rest with the new rows at the old scroll: the row under the pointer sat 43 px off for as long
+  // as they took (measured in Chrome: 1 frame at local speed, 10 at 150 ms).
+  //
+  // So the list keeps the pages it has read, by (query, order, offset) — the order on screen stays
+  // here while the source moves on — and `shown` names the order it shows. A NEW list (the first,
+  // a new sort or search) is shown as it comes, as before; only a change within one list waits.
+  const held = useRef(new Map<string, LogPage>())
+  const pageKey = (qk: string, orderRev: number, offset: number) => `${qk}|${orderRev}|${offset}`
+  const remember = (page: LogPage | undefined) => {
+    if (!page) return
+    const k = pageKey(logQueryKey(page.query), page.orderRev, page.offset)
+    const had = held.current.get(k)
+    // Never back in content: an older read of the same rows in the same order is not applied (R4).
+    if (had && had !== page && had.contentRev > page.contentRev) return
+    held.current.delete(k)
+    held.current.set(k, page)
+    for (const oldest of held.current.keys()) {
+      if (held.current.size <= HELD_PAGES) break
+      held.current.delete(oldest)
+    }
+  }
+  const recall = (orderRev: number, offset: number) => {
+    const k = pageKey(queryKey, orderRev, offset)
+    const page = held.current.get(k)
+    if (page) {
+      held.current.delete(k)
+      held.current.set(k, page)
+    }
+    return page
+  }
+  remember(latestFirst)
+  const [shown, setShown] = useState<{ queryKey: string; orderRev: number } | null>(null)
+  const latestRev = latestFirst && logQueryKey(latestFirst.query) === queryKey ? latestFirst.orderRev : null
+  const onScreen = shown?.queryKey === queryKey ? shown.orderRev : null
+  const showingRev = onScreen ?? latestRev
+  const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
+  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0)?.total ?? 0)) : remoteOrder.length
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -965,73 +1013,97 @@ export function Logbook({
     scrollMargin: listOffset,
   })
 
-  // The pages the rows on screen fall in (the virtualizer's window, overscan included), besides
-  // the first. A row whose page is not here yet draws as a placeholder; a page cut from an older
-  // order than the first page's is not used (one view, one order — v2 R4).
+  // v2 §6 R5 — THE ROWS UNDER THE OPERATOR STAY PUT. When the log changes under the list (the
+  // sequencer logs a contact, another writer deletes one), rows appear or vanish above the view and
+  // every row below them changes place: the list used to slide a row under the pointer, so a click
+  // meant for one contact's ✎ or ✕ could land on its neighbour. After every commit the rows at the
+  // top edge of the view are noted — keys and pixel offsets (`anchor`). While a newer order is
+  // pending, the first of them still in it is located there, and the list is swapped in placed so
+  // that row sits exactly where it was (its successor holds if the row itself was deleted). A view
+  // showing the list's first row is not held: a new contact appears at the top, as it always did.
+  const anchor = useRef<{ rows: { key: string; delta: number }[]; atTop: boolean } | null>(null)
+  const placement = useRef<{ index: number; delta: number } | null>(null)
+  const justPlaced = useRef(false)
+
   const virtualRows = rowVirtualizer.getVirtualItems()
-  const pageOffsets = control
-    ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))].filter((o) => o > 0)
-    : []
-  const pages = useLogPages(control ? query : null, pageOffsets, LOG_PAGE, logTick)
+  const held0 = anchor.current
+  const locating = pendingRev !== null && held0 !== null && !held0.atTop ? held0.rows : []
+  const located = useLogAnswers(
+    locating.map((row): LogQuestion => ({ kind: 'locate', query, id: row.key })),
+    logTick,
+    control,
+  ) as readonly (LogLocate | undefined)[]
+  // Where the list will stand in the pending order: `undefined` while that is not known yet;
+  // `index: null` keeps the scroll (at the top, or when no anchor row survived).
+  let target: { index: number | null; delta: number } | undefined
+  if (pendingRev !== null) {
+    target = { index: null, delta: 0 }
+    for (let k = 0; k < locating.length; k++) {
+      const at = located[k]
+      if (!at || at.orderRev !== pendingRev) {
+        target = undefined
+        break
+      }
+      if (at.index !== null) {
+        target = { index: at.index, delta: locating[k].delta }
+        break
+      }
+    }
+  }
+  // The pages that place shows (the viewport there, overscan included) — asked for now, with the
+  // pages of the rows on screen, so the swap waits for nothing it will draw.
+  const offsetsOf = (first: number, last: number) => {
+    const out: number[] = []
+    for (let o = Math.floor(Math.max(0, first) / LOG_PAGE) * LOG_PAGE; o <= last; o += LOG_PAGE) out.push(o)
+    return out
+  }
+  const visibleOffsets = control ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
+  const pendingTotal = pendingRev === null ? 0 : (recall(pendingRev, 0)?.total ?? 0)
+  const targetOffsets =
+    target === undefined || pendingTotal === 0
+      ? []
+      : target.index === null
+        ? visibleOffsets.filter((o) => o < pendingTotal)
+        : offsetsOf(
+            target.index - OVERSCAN,
+            Math.min(
+              pendingTotal - 1,
+              target.index + Math.ceil((scrollRef.current?.clientHeight ?? 0) / ROW_ESTIMATE) + 1 + OVERSCAN,
+            ),
+          )
+  const pages = useLogPages(
+    control ? query : null,
+    [...new Set([...visibleOffsets, ...targetOffsets])].filter((o) => o > 0),
+    LOG_PAGE,
+    logTick,
+  )
+  pages.forEach((page) => remember(page))
+  const ready =
+    pendingRev !== null && target !== undefined && [0, ...targetOffsets].every((o) => recall(pendingRev, o) !== undefined)
   const rowAt = (i: number): { q: LoggedQso; key: string } | undefined => {
     if (!control) {
       const pos = remoteOrder[i]
       return pos === undefined ? undefined : { q: observedLog[pos], key: rowKeyAt(observedLog, pos) }
     }
+    if (showingRev === null) return undefined
     const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
-    const page = offset === 0 ? firstPage : pages.get(offset)
-    if (!page || !firstPage || page.orderRev !== firstPage.orderRev) return undefined
+    const page = recall(showingRev, offset)
+    if (!page) return undefined
     const k = i - offset
     return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
   }
 
-  // v2 §6 R5 — THE ROWS UNDER THE OPERATOR STAY PUT. When the log changes under the list (the
-  // sequencer logs a contact, another writer deletes one), rows appear or vanish above the view and
-  // every row below them changes place: the list used to slide a row under the pointer, so a click
-  // meant for one contact's ✎ or ✕ could land on its neighbour. After every commit the rows at the
-  // top edge of the view are noted — keys and pixel offsets. When the ORDER changes for the same
-  // query, the first of them still in the list is located in the new order and the view scrolled
-  // so it sits exactly where it was (its successor holds if the row itself was deleted). A view
-  // showing the list's first row is not held: a new contact appears at the top, as it always did.
-  const anchor = useRef<{ rows: { key: string; delta: number }[]; atTop: boolean } | null>(null)
-  const shown = useRef<{ orderRev: number; queryKey: string } | null>(null)
-  const justPlaced = useRef(false)
-  const queryKey = logQueryKey(query)
+  // The swapped-in order is placed after the render that shows it, before the browser paints.
+  // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
   useLayoutEffect(() => {
-    const was = shown.current
-    shown.current = firstPage ? { orderRev: firstPage.orderRev, queryKey } : null
+    const p = placement.current
+    placement.current = null
     const el = scrollRef.current
-    const held = anchor.current
-    if (!control || !el || !firstPage || !was || !held || held.atTop) return
-    if (was.queryKey !== queryKey || was.orderRev === firstPage.orderRev) return
-    const orderRev = firstPage.orderRev
-    const place = (index: number, delta: number) => {
-      const start =
-        rowVirtualizer.measurementsCache[index]?.start ?? index * ROW_ESTIMATE + rowVirtualizer.options.scrollMargin
-      el.scrollTop = start - delta
-      justPlaced.current = true
-    }
-    const found = (at: { index: number | null; orderRev: number } | undefined) => at && at.index !== null && at.orderRev === orderRev
-    // The whole-log source answers at once; an asking one may have to be asked — and then the
-    // view is placed only if it is still at this order and the operator has not scrolled since.
-    const pending: { key: string; delta: number }[] = []
-    for (const row of held.rows) {
-      const at = logSource().peek({ kind: 'locate', query, id: row.key })
-      if (at === undefined) pending.push(row)
-      else if (found(at)) {
-        if (pending.length === 0) return place(at.index!, row.delta)
-        break
-      }
-    }
-    if (pending.length === 0) return
-    const top = el.scrollTop
-    void (async () => {
-      for (const row of held.rows) {
-        const at = await logSource().ask({ kind: 'locate', query, id: row.key }).catch(() => undefined)
-        if (shown.current?.orderRev !== orderRev || el.scrollTop !== top) return
-        if (found(at)) return place(at!.index!, row.delta)
-      }
-    })()
+    if (!p || !control || !el) return
+    const start =
+      rowVirtualizer.measurementsCache[p.index]?.start ?? p.index * ROW_ESTIMATE + rowVirtualizer.options.scrollMargin
+    el.scrollTop = start - p.delta
+    justPlaced.current = true
   })
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -1054,6 +1126,18 @@ export function Logbook({
       if (rows.length === 8) break
     }
     anchor.current = { rows, atTop }
+  })
+  // The swap: a new list is recorded as it is shown; a newer order within the list is swapped in
+  // once `ready`, with its placement — a state change in a layout effect re-renders before paint.
+  useLayoutEffect(() => {
+    if (!control || latestRev === null) return
+    if (onScreen === null) {
+      setShown({ queryKey, orderRev: latestRev })
+      return
+    }
+    if (!ready || pendingRev === null || target === undefined) return
+    placement.current = target.index === null ? null : { index: target.index, delta: target.delta }
+    setShown({ queryKey, orderRev: pendingRev })
   })
 
   // Measure where the rows actually start inside .log-scroll (globe + sticky block).

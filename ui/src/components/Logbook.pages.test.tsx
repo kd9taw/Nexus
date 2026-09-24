@@ -234,11 +234,11 @@ function laterSource() {
   const held = new Map<string, unknown>()
   const listeners = new Set<() => void>()
   const wanted = new Map<string, LogQuestion>()
+  const asks: { q: LogQuestion; resolve: (a: unknown) => void }[] = []
   const source: LogSource = {
     peek: <Q extends LogQuestion>(q: Q) => held.get(questionKey(q)) as AnswerTo<Q> | undefined,
-    ask: async () => {
-      throw new Error('not asked in this test')
-    },
+    // Answered at the next delivery, like every other question.
+    ask: <Q extends LogQuestion>(q: Q) => new Promise<AnswerTo<Q>>((resolve) => asks.push({ q, resolve: resolve as (a: unknown) => void })),
     want: (q) => {
       wanted.set(questionKey(q), q)
       return () => wanted.delete(questionKey(q))
@@ -252,8 +252,12 @@ function laterSource() {
   }
   /** Answer every question wanted so far (or those `only` picks) from `log` at `revision`. */
   const deliver = (log: LoggedQso[], revision: number, only: (q: LogQuestion) => boolean = () => true) =>
-    act(() => {
+    act(async () => {
       for (const [key, q] of wanted) if (only(q)) held.set(key, answerFrom(log, q, revision))
+      for (const a of asks.splice(0)) {
+        if (only(a.q)) a.resolve(answerFrom(log, a.q, revision))
+        else asks.push(a)
+      }
       for (const l of listeners) l()
     })
   return { source, deliver, wanted }
@@ -270,7 +274,7 @@ describe('with a source that answers later (the engine’s shape)', () => {
     expect([...later.wanted.values()].some((q) => q.kind === 'page' && q.offset === 0)).toBe(true)
 
     // The first page and the count arrive: the list is 300 long and its top rows are real.
-    later.deliver(log, 1)
+    await later.deliver(log, 1)
     await waitFor(() => expect(shownCalls(container)[0]).toBe(oracleNewestFirst(log)[0].call))
 
     // Scroll to the page boundary: page 3 is wanted but not answered — its rows are placeholders.
@@ -288,10 +292,10 @@ describe('with a source that answers later (the engine’s shape)', () => {
     // Page 3 arrives from a NEWER order (a contact logged since) while page 1 is still the old
     // order: the two cannot share a view, so page 3's rows stay placeholders…
     const newer = [...log, contact(999, { call: 'NEW1', whenUnix: 1_800_000_000 })]
-    later.deliver(newer, 2, (q) => q.kind === 'page' && q.offset === 256)
+    await later.deliver(newer, 2, (q) => q.kind === 'page' && q.offset === 256)
     expect(container.querySelector('.logbook-row[data-index="258"]')?.classList.contains('placeholder')).toBe(true)
     // …until the first page is of that order too — then every row is from the newer order.
-    later.deliver(newer, 2)
+    await later.deliver(newer, 2)
     await waitFor(() => expect(container.querySelector('.logbook-row.placeholder')).toBeNull())
     const want = oracleNewestFirst(newer)
     for (const r of [...container.querySelectorAll('.log-rows .logbook-row')] as HTMLElement[]) {
@@ -299,6 +303,57 @@ describe('with a source that answers later (the engine’s shape)', () => {
       expect(r.querySelector('.qrz-link-call')?.textContent, `row ${i}`).toBe(want[i].call)
     }
   })
+
+  // The answers of a newer order land one at a time, in either order: the other pages before the
+  // anchor's new place, or the place before the pages it shows. Both must hold the list still.
+  const ORDERS: [string, (q: LogQuestion) => boolean, (q: LogQuestion) => boolean][] = [
+    ['pages, then the anchor’s place', (q) => q.kind === 'page', (q) => q.kind === 'locate'],
+    ['the anchor’s place, then the pages', (q) => q.kind === 'locate', (q) => q.kind === 'page'],
+  ]
+  for (const [name, second, third] of ORDERS)
+    it(`FIX: a newer order is swapped in WHOLE — the row under the operator never moves (${name})`, async () => {
+      // A source that answers one question at a time (the engine's, C17a): after a contact is
+      // logged, the first page, the other pages and the anchor's new place land separately. The
+      // list used to swap to the new order on the first of them, drawing it at the old scroll until
+      // the anchor's place arrived — the row under the pointer sat 43 px off, and before its page
+      // came it was not drawn at all. It must hold still through every partial delivery.
+      const log = Array.from({ length: 300 }, (_, i) => contact(i))
+      const later = laterSource()
+      setLogSource(later.source)
+      const { container, rerender } = render(view(1))
+      await later.deliver(log, 1)
+      await waitFor(() => expect(shownCalls(container).length).toBeGreaterThan(0))
+      const sc = container.querySelector('.log-scroll') as HTMLElement
+      act(() => {
+        sc.scrollTop = 150 * ROW_PX
+        sc.dispatchEvent(new Event('scroll'))
+      })
+      await later.deliver(log, 1) // the pages of the rows now on screen
+      await waitFor(() => expect(container.querySelector('.logbook-row[data-index="150"] .qrz-link-call')).not.toBeNull())
+      const looking = (container.querySelector('.logbook-row[data-index="150"] .qrz-link-call') as HTMLElement).textContent!
+      const topOfLooking = () => {
+        const row = [...container.querySelectorAll('.log-rows .logbook-row')].find(
+          (r) => r.querySelector('.qrz-link-call')?.textContent === looking,
+        ) as HTMLElement | undefined
+        return row ? Number(row.dataset.index) * ROW_PX - sc.scrollTop : null
+      }
+      const before = topOfLooking()
+      expect(before).toBe(0)
+
+      // The sequencer logs a contact; the snapshot's tick moves; the answers come back one by one.
+      const newer = [...log, contact(1000, { call: 'NEW1', whenUnix: 1_800_000_000 })]
+      rerender(view(2))
+      await later.deliver(newer, 2, (q) => q.kind === 'page' && q.offset === 0)
+      expect(topOfLooking(), 'after the new first page alone').toBe(before)
+      await later.deliver(newer, 2, second)
+      expect(topOfLooking(), `after the ${name.split(',')[0]}`).toBe(before)
+      await later.deliver(newer, 2, third)
+      await later.deliver(newer, 2) // anything the placed view still asks
+      await waitFor(() => expect(container.querySelector('.count-badge')?.textContent).toBe('301'))
+      expect(topOfLooking(), 'after the swap').toBe(before)
+      // …and the list IS the new order now: the row sits one place further down it.
+      expect(container.querySelector('.logbook-row[data-index="151"] .qrz-link-call')?.textContent).toBe(looking)
+    })
 
   it('an answer to another sort never lands in this one (the page question carries its query)', () => {
     const page = (sort: 'time' | 'call') =>
