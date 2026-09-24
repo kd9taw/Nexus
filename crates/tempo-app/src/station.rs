@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use tempo_core::logbook::hot::{HotIndex, HotKeys};
 use tempo_core::logbook::writer::Change;
-use tempo_core::logbook::{Logbook, OpClass, QsoRecord, RecordId, WorkedSince};
+use tempo_core::logbook::{LogOp, Logbook, OpClass, QsoEdit, QsoRecord, RecordId, WorkedSince};
 
 use crate::logstore::{LogStore, Opened};
 
@@ -228,6 +228,17 @@ impl Hot<'_> {
     pub(crate) fn entity_confirmed_on(&self, entity: &str, band: &str) -> bool {
         self.0.entity_confirmed_on(entity, &band_key(band))
     }
+}
+
+/// Why a change addressed to one contact — by its id and the edit key of the version the caller
+/// holds ([`QsoEdit::key`]) — was not made. See [`StationCore::fresh_row`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowRefusal {
+    /// No row carries that id: it was deleted, or was never in this log.
+    Gone,
+    /// The row is there, but changed since the caller read it — here as it now stands, for the
+    /// caller to show and retry against.
+    Changed(Arc<QsoRecord>),
 }
 
 /// The log's rows as they stood just before a change, and the revision they stood at: what the
@@ -1230,7 +1241,7 @@ impl StationCore {
     /// the file; we still hold the 12:00 row; this recovery sees 12:05 as a contact
     /// we do not have and APPENDS it. From then on both instances hold two rows for
     /// one QSO — stably, permanently, and in the file — and both are eligible to be
-    /// uploaded (`lotw_unsent_indices` counts them separately, so LoTW is offered two
+    /// uploaded (`lotw_unsent_ids` counts them separately, so LoTW is offered two
     /// QSOs for one contact). Same for a corrected callsign or band. An edit that
     /// keeps all four key fields pairs normally, and OUR copy of the edited field is
     /// what the next rewrite writes back: that correction is silently reverted.
@@ -1564,12 +1575,57 @@ impl StationCore {
         true
     }
 
-    /// Edit an existing logbook entry (a correction — busted call, wrong band, etc).
-    /// Sync-derived state is preserved by `Logbook::update_record`. Persists by
-    /// rewriting the whole ADIF (an edit can't be an append). Returns false if
-    /// `index` is out of range.
-    #[allow(deprecated)] // SPEC-2 C16: an edit addressed by position
-    pub fn update_qso(&mut self, index: usize, mut rec: QsoRecord) -> bool {
+    /// The contact the log holds under `id`, if any.
+    #[allow(deprecated)] // SPEC-2 C19: a row by id, from the in-memory log
+    pub(crate) fn row(&self, id: RecordId) -> Option<Arc<QsoRecord>> {
+        self.logbook
+            .records()
+            .iter()
+            .find(|r| r.id == Some(id))
+            .cloned()
+    }
+
+    /// The contact `id` names, if it is still the version whose edit key is `edit_key` — the
+    /// check every change addressed by a `RowRef` makes first, against the log as it stands:
+    /// another instance's appends are folded in before it looks, as before any change.
+    ///
+    /// A key rather than the whole row, so the writes that happen on their own — an upload
+    /// stamp, a confirmation from LoTW — never refuse an operator's edit ([`QsoEdit::key`]).
+    pub fn fresh_row(
+        &mut self,
+        id: RecordId,
+        edit_key: &str,
+    ) -> Result<Arc<QsoRecord>, RowRefusal> {
+        self.recover_external_appends();
+        let row = self.row(id).ok_or(RowRefusal::Gone)?;
+        if QsoEdit::project(&row).key() == edit_key {
+            Ok(row)
+        } else {
+            Err(RowRefusal::Changed(row))
+        }
+    }
+
+    /// Apply one change to one contact, named by its id — the path every change an operator or
+    /// a stamp makes to ONE row takes. A change that finds no row (deleted since, or another
+    /// instance's) changes nothing and says so; it never falls back to a position.
+    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
+    fn change_row(&mut self, op: LogOp, context: &str) -> bool {
+        self.recover_external_appends();
+        let base = self.change_base();
+        let done = !self.logbook.apply(op).is_empty();
+        if done {
+            self.persist_change(base, context);
+        } else {
+            // Nothing changed — though the write may still have moved the log's revision.
+            self.catch_up_hot(Some(&base));
+        }
+        done
+    }
+
+    /// Edit the contact `id` (a correction — busted call, wrong band, etc). Sync-derived
+    /// state is preserved by `Logbook::update_record`. Returns false if no row carries `id`.
+    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
+    pub fn update_qso(&mut self, id: RecordId, mut rec: QsoRecord) -> bool {
         // Keep country populated on edits (the edit form doesn't carry it).
         if rec.country.is_none() {
             if let Some(resolve) = &self.dxcc_resolve {
@@ -1591,123 +1647,145 @@ impl StationCore {
         // `update_record`'s own trimmed, case-insensitive rule, so the two can never disagree
         // about what counts as a correction.
         let call_changed = self
-            .logbook
-            .records()
-            .get(index)
+            .row(id)
             .is_some_and(|old| !rec.call.trim().eq_ignore_ascii_case(old.call.trim()));
-        let ok = self.logbook.update_record(index, rec);
+        let ok = !self
+            .logbook
+            .apply(LogOp::Edit {
+                id,
+                rec: Box::new(rec),
+            })
+            .is_empty();
         if !ok {
             // Nothing changed — though the write may still have moved the log's revision.
             self.catch_up_hot(Some(&base));
         } else {
             self.persist_change(base, "update_qso");
-            self.sync_hot();
             if call_changed {
-                // The STORED record, not the incoming payload: `update_record` merges the
-                // fields the edit form does not carry (park refs, TIME_OFF, the split leg),
-                // and the connectors must send the whole contact, not the form's half of it.
-                if let Some(fixed) = self
-                    .logbook
-                    .records()
-                    .get(index)
-                    .map(|r| QsoRecord::clone(r))
-                {
-                    // Every leg: every stamp was just cleared, so every connector is owed.
-                    // The disabled ones are dropped by the worker's own toggle check, the
-                    // same way a freshly logged contact's are.
-                    self.requeue_upload(fixed, crate::engine::upload_legs::ALL, 0);
-                }
+                self.requeue_corrected(id);
             }
         }
         ok
     }
 
-    /// Record — or WITHDRAW — the operator's QSL-sent declaration for logbook entry `index`.
+    /// A contact whose CALLSIGN was just corrected, queued to every connector again — the
+    /// STORED record, not the incoming payload: `update_record` merges the fields the edit form
+    /// does not carry (park refs, TIME_OFF, the split leg), and the connectors must send the
+    /// whole contact, not the form's half of it.
+    fn requeue_corrected(&mut self, id: RecordId) {
+        if let Some(fixed) = self.row(id).map(|r| QsoRecord::clone(&r)) {
+            // Every leg: every stamp was just cleared, so every connector is owed. The disabled
+            // ones are dropped by the worker's own toggle check, the same way a freshly logged
+            // contact's are.
+            self.requeue_upload(fixed, crate::engine::upload_legs::ALL, 0);
+        }
+    }
+
+    /// The Logbook form's edit of the contact `id`, as ONE change: the field edit, and the
+    /// QSL-sent and paper-card marks where the edit changes them — what the form used to send as
+    /// three commands, each its own write (`QsoEdit`'s header).
+    ///
+    /// Refused — changing nothing — when no row carries `id`, or when the row is no longer the
+    /// version whose key is `edit_key`. `Err` of `Ok` is an edit the caller must not send again
+    /// as it is: its QSL-sent code is not one the form offers.
+    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
+    pub fn edit_qso(
+        &mut self,
+        id: RecordId,
+        edit_key: &str,
+        edit: &QsoEdit,
+    ) -> Result<Result<(), RowRefusal>, String> {
+        let stored = match self.fresh_row(id, edit_key) {
+            Ok(row) => row,
+            Err(refusal) => return Ok(Err(refusal)),
+        };
+        let sent = edit.qsl_sent_change(&stored)?;
+        let card = edit.qsl_card_change(&stored);
+        let mut rec = edit.record(&stored);
+        // Keep country populated on edits, as `update_qso` does: the form does not carry it.
+        if let Some(resolve) = &self.dxcc_resolve {
+            rec.country = resolve(&rec.call);
+        }
+        let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
+        let base = self.change_base();
+        self.logbook.apply(LogOp::Edit {
+            id,
+            rec: Box::new(rec),
+        });
+        // A corrected call goes back out to the connectors as the edit alone left the contact
+        // ([`Self::requeue_corrected`]) — as it did when the two marks were commands of their own
+        // that came after the edit.
+        let corrected = if call_changed { self.row(id) } else { None };
+        if let Some(via) = sent {
+            self.logbook.apply(LogOp::MarkQslSent {
+                id,
+                via,
+                date_unix: now_unix_secs(),
+            });
+        }
+        if let Some(received) = card {
+            self.logbook.apply(LogOp::MarkQslCard { id, received });
+        }
+        self.persist_change(base, "edit_qso");
+        if let Some(fixed) = corrected {
+            self.requeue_upload(QsoRecord::clone(&fixed), crate::engine::upload_legs::ALL, 0);
+        }
+        Ok(Ok(()))
+    }
+
+    /// Record — or WITHDRAW — the operator's QSL-sent declaration for the contact `id`.
     /// `Some(via)` marks it sent (bureau/direct/electronic, dated now); `None` clears the mark,
     /// which until now had no path at all while the received side has taken a bool since #152.
     /// Never touches confirmation state in either direction. Persists by rewriting the ADIF —
     /// a clear MUST be written, since it carries the operator decision that keeps a later
-    /// import from restoring the mark. Returns false if `index` is out of range.
-    #[allow(deprecated)] // SPEC-2 C16: a mark addressed by position
+    /// import from restoring the mark. Returns false if no row carries `id`.
     pub fn mark_qsl_sent(
         &mut self,
-        index: usize,
+        id: RecordId,
         via: Option<tempo_core::logbook::QslVia>,
     ) -> bool {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let ok = self.logbook.mark_qsl_sent(index, via, now_unix_secs());
-        if ok {
-            self.persist_change(base, "mark_qsl_sent");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        ok
+        self.change_row(
+            LogOp::MarkQslSent {
+                id,
+                via,
+                date_unix: now_unix_secs(),
+            },
+            "mark_qsl_sent",
+        )
     }
 
-    /// Record whether a PAPER QSL card arrived for entry `index` (#152). Persists by rewriting
-    /// the ADIF, and refreshes the worked index because a card is an award-eligible
-    /// confirmation — the needs/awards model reads it.
-    #[allow(deprecated)] // SPEC-2 C16: a mark addressed by position
-    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let ok = self.logbook.mark_qsl_card(index, received);
-        if ok {
-            self.persist_change(base, "mark_qsl_card");
-            self.sync_hot();
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        ok
+    /// Record whether a PAPER QSL card arrived for the contact `id` (#152) — an award-eligible
+    /// confirmation, which the needs/awards model and the hot index both read.
+    pub fn mark_qsl_card(&mut self, id: RecordId, received: bool) -> bool {
+        self.change_row(LogOp::MarkQslCard { id, received }, "mark_qsl_card")
     }
 
-    /// Set — or REMOVE — the satellite tag on entry `index` (`PROP_MODE=SAT` + `SAT_NAME`).
+    /// Set — or REMOVE — the satellite tag on the contact `id` (`PROP_MODE=SAT` + `SAT_NAME`).
     /// `Some(name)` tags the contact, `None` removes the tag; the name has already been
     /// gated against LoTW's accepted list by the command layer that owns the table.
     ///
     /// Persists by rewriting the ADIF — a removal MUST be written: the wrongly tagged record
     /// is what LoTW and the Satellite-VUCC fold are reading, and until the file says
-    /// otherwise the contact keeps claiming a bird it was never worked through. Refreshes
-    /// the worked index for the same reason `mark_qsl_card` does: `PROP_MODE=SAT` diverts a
-    /// grid out of the per-band terrestrial sets into the band-independent satellite one, so
-    /// the awards model has to be told. Returns false if `index` is out of range.
-    #[allow(deprecated)] // SPEC-2 C16: a tag addressed by position
-    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let ok = self.logbook.set_sat_tag(index, sat_name);
-        if ok {
-            self.persist_change(base, "set_sat_tag");
-            self.sync_hot();
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        ok
+    /// otherwise the contact keeps claiming a bird it was never worked through.
+    /// `PROP_MODE=SAT` diverts a grid out of the per-band terrestrial sets into the
+    /// band-independent satellite one, which the hot index follows. Returns false if no row
+    /// carries `id`.
+    pub fn set_sat_tag(&mut self, id: RecordId, sat_name: Option<&str>) -> bool {
+        self.change_row(
+            LogOp::SetSatTag {
+                id,
+                sat_name: sat_name.map(str::to_string),
+            },
+            "set_sat_tag",
+        )
     }
 
-    /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
-    /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
-    /// caller must reload the log afterward.
-    #[allow(deprecated)] // SPEC-2 C16: a delete addressed by position
-    pub fn delete_qso(&mut self, index: usize) -> bool {
-        // Recover another instance's appends BEFORE the delete, so the rewrite
-        // drops only THIS record (the deleted key is absent from our copy at save
-        // time, so recovery can't re-add it) and keeps the other writer's QSOs.
-        self.recover_external_appends();
-        let base = self.change_base();
-        let ok = self.logbook.delete(index);
-        if ok {
-            self.persist_change(base, "delete_qso");
-            self.sync_hot();
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        ok
+    /// Delete the contact `id` (a mis-logged contact). Returns false if no row carries it.
+    ///
+    /// Another instance's appends are recovered BEFORE the delete (in the change path), so the
+    /// rewrite drops only THIS record and keeps the other writer's QSOs.
+    pub fn delete_qso(&mut self, id: RecordId) -> bool {
+        self.change_row(LogOp::Delete(id), "delete_qso")
     }
 
     /// Purge the ENTIRE logbook (operator-confirmed, destructive, irreversible).
@@ -1853,7 +1931,7 @@ impl StationCore {
     /// Record a QRZ Logbook push outcome on the just-pushed QSO (`upload.qrz`), so
     /// the diagnostics can show "never uploaded to QRZ" (R1) / "QRZ upload bounced"
     /// (R9). Persists on change. Returns whether a record was stamped.
-    #[allow(deprecated)] // SPEC-2 C16: the stamp finds its row in the whole log
+    #[allow(deprecated)] // SPEC-2 C19: by id; an id-less push's newest match, from the log
     pub fn stamp_qrz_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -1880,7 +1958,7 @@ impl StationCore {
 
     /// Record a ClubLog realtime push outcome on the just-pushed QSO
     /// (`upload.clublog`). Persists on change. Returns whether a record was stamped.
-    #[allow(deprecated)] // SPEC-2 C16: the stamp finds its row in the whole log
+    #[allow(deprecated)] // SPEC-2 C19: by id; an id-less push's newest match, from the log
     pub fn stamp_clublog_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -1907,7 +1985,7 @@ impl StationCore {
 
     /// Record an eQSL ADIF-upload outcome on the just-pushed QSO (`upload.eqsl`).
     /// Persists on change. Returns whether a record was stamped.
-    #[allow(deprecated)] // SPEC-2 C16: the stamp finds its row in the whole log
+    #[allow(deprecated)] // SPEC-2 C19: by id; an id-less push's newest match, from the log
     pub fn stamp_eqsl_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -2041,70 +2119,85 @@ impl StationCore {
         }
     }
 
-    /// Log indices (oldest-first) of QSOs not yet sent to LoTW: award-unconfirmed
-    /// AND either never uploaded or a prior bounce. `UploadState` IS the per-QSO
-    /// cursor — Pending/Accepted/Duplicate are excluded (don't re-send).
-    #[allow(deprecated)] // SPEC-2 C16: LoTW's unsent rows by position
-    pub fn lotw_unsent_indices(&self) -> Vec<usize> {
+    /// The contacts (oldest-first, by id) not yet sent to LoTW: award-unconfirmed AND either
+    /// never uploaded or a prior bounce. `UploadState` IS the per-QSO cursor —
+    /// Pending/Accepted/Duplicate are excluded (don't re-send).
+    #[allow(deprecated)] // SPEC-2 C15: LoTW's unsent contacts, from the in-memory log
+    pub fn lotw_unsent_ids(&self) -> Vec<RecordId> {
         self.logbook
             .records()
             .iter()
-            .enumerate()
-            .filter(|(_, r)| !r.award_confirmed)
-            .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
+            .filter(|r| !r.award_confirmed)
+            .filter(|r| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
             // LoTW matches on both operators' times agreeing (±30 min): a record
             // with NO known time can never match, so signing and sending it just
             // parks it at LoTW as unmatched forever — and, being re-sendable, it
             // kept the "Upload to LoTW (N)" count from ever clearing.
-            .filter(|(_, r)| r.time_known)
-            .map(|(i, _)| i)
+            .filter(|r| r.time_known)
+            .filter_map(|r| r.id)
             .collect()
     }
 
-    /// Stamp `upload.lotw` on the given records after an upload attempt, then save.
-    ///
-    /// BY POSITION, so only for positions taken in the same hold of the engine lock (the
-    /// operator's "already uploaded" declaration). An upload releases the lock while TQSL runs,
-    /// and the positions it took may name other contacts by the time it is done: that is
-    /// [`Self::stamp_lotw_batch`].
-    #[allow(deprecated)] // SPEC-2 C16: a stamp addressed by position
+    /// The contacts `ids` names that the log still holds, in the order `ids` names them — one
+    /// pass over the log, however many are asked for.
+    #[allow(deprecated)] // SPEC-2 C15: the LoTW batch's rows, from the in-memory log
+    pub(crate) fn rows_of(&self, ids: &[RecordId]) -> Vec<Arc<QsoRecord>> {
+        let wanted: HashSet<RecordId> = ids.iter().copied().collect();
+        let held: HashMap<RecordId, Arc<QsoRecord>> = self
+            .logbook
+            .records()
+            .iter()
+            .filter_map(|r| {
+                r.id.filter(|id| wanted.contains(id))
+                    .map(|id| (id, r.clone()))
+            })
+            .collect();
+        ids.iter().filter_map(|id| held.get(id).cloned()).collect()
+    }
+
+    /// Stamp `upload.lotw` on the contacts `ids` names, then save — the operator's "already
+    /// uploaded" declaration. By id, so a contact deleted since the ids were taken is simply not
+    /// found; a batch TQSL signed goes through [`Self::stamp_lotw_batch`], which also refuses a
+    /// contact changed since it was signed.
+    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
     pub fn stamp_lotw_upload(
         &mut self,
-        indices: &[usize],
+        ids: &[RecordId],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
     ) {
-        // Recover another instance's appends before the full-log rewrite; the
-        // recovered records land at the end, so `indices` still address the same
-        // rows.
         self.recover_external_appends();
         let base = self.change_base();
+        let wanted: HashSet<RecordId> = ids.iter().copied().collect();
+        let hits: Vec<usize> = self
+            .logbook
+            .records()
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.id.is_some_and(|id| wanted.contains(&id)))
+            .map(|(i, _)| i)
+            .collect();
         // One classified write for the whole batch — a stamp nothing derived reads, and
         // taking it per row would move the revision once per stamped record.
         let records = self.logbook.records_mut(OpClass::Stamp);
-        for &i in indices {
-            if let Some(r) = records.get_mut(i) {
-                Arc::make_mut(r).upload.lotw = Some(tempo_core::logbook::UploadStatus {
-                    outcome,
-                    when_unix,
-                    detail,
-                });
-            }
+        for i in hits {
+            Arc::make_mut(&mut records[i]).upload.lotw = Some(tempo_core::logbook::UploadStatus {
+                outcome,
+                when_unix,
+                detail,
+            });
         }
         self.persist_change(base, "lotw upload stamp");
     }
 
-    /// The contacts at `indices` as a LoTW batch hands them to TQSL: each one's id, and its
-    /// fingerprint as the upload serialises it. Taken in the same hold of the lock as the
-    /// batch file, so the two describe one state of the log. A row without an id cannot be
-    /// named later and is left out — every row the log holds carries one.
-    #[allow(deprecated)] // SPEC-2 C16: LoTW's signed rows by position
-    pub fn lotw_signed(&self, indices: &[usize]) -> Vec<LotwSigned> {
-        let records = self.logbook.records();
-        indices
+    /// The contacts `ids` names as a LoTW batch hands them to TQSL: each one's id, and its
+    /// fingerprint as the upload serialises it, in the order `ids` names them. Taken in the same
+    /// hold of the lock as the batch file, so the two describe one state of the log; a contact
+    /// the log no longer holds is left out.
+    pub fn lotw_signed(&self, ids: &[RecordId]) -> Vec<LotwSigned> {
+        self.rows_of(ids)
             .iter()
-            .filter_map(|&i| records.get(i))
             .filter_map(|r| {
                 Some(LotwSigned {
                     id: r.id?,
@@ -2468,7 +2561,7 @@ mod grid_tests {
         // A delete, through the station: the deleted row's slots leave the index, and no row is
         // looked up again.
         let before = lookups.load(Ordering::Relaxed);
-        assert!(sc.delete_qso(1));
+        assert!(sc.delete_qso(sc.logbook.records()[1].id.unwrap()));
         assert_eq!(
             lookups.load(Ordering::Relaxed) - before,
             0,
@@ -2550,7 +2643,8 @@ mod grid_tests {
 
         // Deleting the later contact falls back to the earlier one — the answer follows the
         // rows, it does not accumulate.
-        sc.logbook.delete(0);
+        sc.logbook
+            .apply(LogOp::Delete(sc.logbook.records()[0].id.unwrap()));
         sc.sync_hot();
         assert_eq!(sc.last_worked_unix("W6A"), Some(1_000));
     }
@@ -3011,6 +3105,13 @@ mod hot_parity_tests {
         })
     }
 
+    /// The id of the contact at `at`: how the property names a row it picked by place.
+    fn id_at(sc: &StationCore, at: usize) -> RecordId {
+        sc.logbook.records()[at]
+            .id
+            .expect("every row the log holds carries an id")
+    }
+
     /// Every change the station makes to its log, through the method the app calls.
     fn change(sc: &mut StationCore, rng: &mut Rng) -> &'static str {
         let n = sc.logbook.len();
@@ -3024,11 +3125,13 @@ mod hot_parity_tests {
                 "log a contact"
             }
             5 if n > 0 => {
-                sc.update_qso(rng.below(n), contact(rng));
+                let id = id_at(sc, rng.below(n));
+                sc.update_qso(id, contact(rng));
                 "edit"
             }
             6 if n > 0 => {
-                sc.delete_qso(rng.below(n));
+                let id = id_at(sc, rng.below(n));
+                sc.delete_qso(id);
                 "delete"
             }
             7 if rng.chance(15) => {
@@ -3083,21 +3186,23 @@ mod hot_parity_tests {
                 "connector stamp"
             }
             14 if n > 0 => {
-                sc.stamp_lotw_upload(&[rng.below(n)], UploadOutcome::Accepted, 1, None);
+                let id = id_at(sc, rng.below(n));
+                sc.stamp_lotw_upload(&[id], UploadOutcome::Accepted, 1, None);
                 "LoTW stamp"
             }
             15 if n > 0 => {
-                let i = rng.below(n);
+                let id = id_at(sc, rng.below(n));
                 if rng.chance(50) {
-                    sc.mark_qsl_sent(i, Some(QslVia::Bureau));
+                    sc.mark_qsl_sent(id, Some(QslVia::Bureau));
                     "QSL sent"
                 } else {
-                    sc.mark_qsl_card(i, rng.chance(70));
+                    sc.mark_qsl_card(id, rng.chance(70));
                     "QSL card"
                 }
             }
             16 if n > 0 => {
-                sc.set_sat_tag(rng.below(n), rng.chance(50).then_some("SO-50"));
+                let id = id_at(sc, rng.below(n));
+                sc.set_sat_tag(id, rng.chance(50).then_some("SO-50"));
                 "satellite tag"
             }
             17 => {
@@ -3301,7 +3406,8 @@ mod hot_parity_tests {
         HOT_REBUILDS.with(|c| c.set(0));
         // Around the station: an append straight onto the log.
         sc.logbook.add(contact(&mut rng));
-        assert!(sc.update_qso(1, contact(&mut rng)));
+        let second = id_at(&sc, 1);
+        assert!(sc.update_qso(second, contact(&mut rng)));
         assert_eq!(
             HOT_REBUILDS.with(|c| c.get()),
             0,

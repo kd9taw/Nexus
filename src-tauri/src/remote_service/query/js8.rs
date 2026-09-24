@@ -229,7 +229,7 @@ mod tests {
                 .0;
             let mut q = e.log_records()[index].as_ref().clone();
             q.comment = Some("CURRENT".into());
-            assert!(e.update_qso(index, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         assert_eq!(
             cache.read(&engine).unwrap()["history"]["W1AW"]["comment"],
@@ -244,7 +244,7 @@ mod tests {
                 let mut e = engine.lock().unwrap();
                 let mut q = e.log_records()[0].as_ref().clone();
                 q.comment = Some("CHANGED".into());
-                assert!(e.update_qso(0, q));
+                assert!(e.update_qso(q.id.unwrap(), q));
             }
         });
         assert_eq!(result.unwrap_err(), "applicationBusy");
@@ -252,7 +252,7 @@ mod tests {
             let mut e = engine.lock().unwrap();
             let mut q = e.log_records()[0].as_ref().clone();
             q.comment = Some("x".repeat(1025));
-            assert!(e.update_qso(0, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         assert_eq!(
             Cache::default().read(&engine).unwrap_err(),

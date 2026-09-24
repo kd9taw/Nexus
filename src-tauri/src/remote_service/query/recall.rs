@@ -405,7 +405,7 @@ mod tests {
                     .unwrap();
                 let mut changed = e.log_records()[index].as_ref().clone();
                 changed.notes = Some("edited during recall".into());
-                assert!(e.update_qso(index, changed));
+                assert!(e.update_qso(changed.id.unwrap(), changed));
                 assert_eq!(e.log_records().len(), count);
             }
         });

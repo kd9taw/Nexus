@@ -593,7 +593,7 @@ pub fn logbook_save_choice(keep_trying: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable_command_tests::engine_on_store;
+    use crate::durable_command_tests::{card_at, engine_on_store};
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::{mpsc, Arc};
@@ -649,10 +649,7 @@ mod tests {
     fn a_pending_save_cannot_hold_the_rig_keyed() {
         let (dir, engine) = engine_on_store("quit-order", 10);
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-        assert!(
-            engine_lock(&engine).mark_qsl_card(3, true),
-            "a change waiting on the stalled disk"
-        );
+        assert!(card_at(&engine, 3), "a change waiting on the stalled disk");
 
         let stopped = Arc::new(AtomicBool::new(false));
         let (first_tx, first) = mpsc::channel::<(bool, Notice)>();
@@ -874,7 +871,7 @@ mod tests {
             let (dir, engine) = engine_on_store("update-flush", 6);
             let hold =
                 WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-            assert!(engine_lock(&engine).mark_qsl_card(2, true));
+            assert!(card_at(&engine, 2));
             let flushing = std::thread::spawn({
                 let engine = Arc::clone(&engine);
                 move || {
@@ -992,7 +989,7 @@ mod tests {
         assert_eq!(logbook_waiting(&engine), Some(false), "nothing on its way");
 
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(2, true));
+        assert!(card_at(&engine, 2));
         assert_eq!(
             logbook_waiting(&engine),
             Some(true),
@@ -1054,7 +1051,7 @@ mod tests {
     fn a_save_that_lands_closes_with_nothing_left_for_the_final_flush() {
         let (dir, engine) = engine_on_store("quit-lands", 10);
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(4, true));
+        assert!(card_at(&engine, 4));
         let release = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(400));
             drop(hold);
@@ -1101,7 +1098,7 @@ mod tests {
     fn a_slow_save_asks_and_keep_trying_waits_again() {
         let (dir, engine) = engine_on_store("quit-slow", 10);
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(1, true));
+        assert!(card_at(&engine, 1));
         let told = heard();
         let mut hold = Some(hold);
         let mut asked = 0;
@@ -1152,8 +1149,8 @@ mod tests {
     fn quit_without_gives_up_and_says_how_many() {
         let (dir, engine) = engine_on_store("quit-without", 10);
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(1, true));
-        assert!(engine_lock(&engine).mark_qsl_card(2, true));
+        assert!(card_at(&engine, 1));
+        assert!(card_at(&engine, 2));
         let told = heard();
         let outcome = save_the_logbook(
             &engine,
@@ -1326,7 +1323,7 @@ mod tests {
     fn the_update_path_says_the_radio_is_still_running() {
         let (dir, engine) = engine_on_store("quit-update", 10);
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
-        assert!(engine_lock(&engine).mark_qsl_card(1, true));
+        assert!(card_at(&engine, 1));
         let told = heard();
         let outcome = save_the_logbook(
             &engine,

@@ -49,7 +49,7 @@ pub fn classify_tqsl_exit(code: i32, stderr: &str) -> Option<UploadOutcome> {
         // We invoke TQSL with `-x -a compliant`, which sets ignore_err = true, so a bad
         // record is skipped SILENTLY. TQSL does not tell us WHICH, and the caller stamps one
         // outcome across the whole batch — so calling this "Pending" (an is_sent state) marks
-        // the dropped QSO as delivered, removes it from lotw_unsent_indices() forever, and it
+        // the dropped QSO as delivered, removes it from lotw_unsent_ids() forever, and it
         // is never retried despite never reaching LoTW. Losing a QSO permanently is far worse
         // than re-offering the accepted ones, which LoTW simply dedupes.
         9 => Some(UploadOutcome::Rejected),
@@ -259,7 +259,7 @@ mod tests {
         // 9 was previously mapped to Pending ("partial = success"). That is the exact belief
         // that loses a QSO: TQSL runs with -x -a compliant, so a rejected record is skipped
         // SILENTLY and unidentified, and the caller stamps ONE outcome across the whole
-        // batch. Pending is an is_sent() state, so the dropped QSO left lotw_unsent_indices()
+        // batch. Pending is an is_sent() state, so the dropped QSO left lotw_unsent_ids()
         // permanently without ever reaching LoTW.
         assert_eq!(classify_tqsl_exit(9, ""), Some(Rejected));
         assert_eq!(classify_tqsl_exit(8, ""), Some(Duplicate)); // all dupes (terminal!)

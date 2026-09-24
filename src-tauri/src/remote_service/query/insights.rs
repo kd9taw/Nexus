@@ -386,7 +386,7 @@ mod tests {
                     let mut e = engine.try_lock().unwrap();
                     let mut q = e.log_records()[0].as_ref().clone();
                     q.notes = Some("edited while reading".into());
-                    assert!(e.update_qso(0, q));
+                    assert!(e.update_qso(q.id.unwrap(), q));
                     assert_eq!(e.log_records().len(), 270);
                 }
             });
@@ -411,7 +411,7 @@ mod tests {
             let mut q = e.log_records()[0].as_ref().clone();
             q.notes = Some("contact note ".repeat(100_000));
             q.comment = Some("private comment".into());
-            assert!(e.update_qso(0, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         for kind in [Collection::Awards, Collection::Statistics] {
             let read = read_engine(&engine, kind).unwrap().to_string();
@@ -421,7 +421,7 @@ mod tests {
             let mut e = engine.lock().unwrap();
             let mut q = e.log_records()[0].as_ref().clone();
             q.country = Some("X".repeat(TEXT_BYTES + 1));
-            assert!(e.update_qso(0, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         assert!(matches!(
             read_engine(&engine, Collection::Statistics),
@@ -442,7 +442,7 @@ mod tests {
             } else {
                 q.credit_granted = vec!["DXCC".into(); 65];
             }
-            assert!(engine.lock().unwrap().update_qso(0, q));
+            assert!(engine.lock().unwrap().update_qso(q.id.unwrap(), q));
             assert!(matches!(
                 read_engine(&engine, Collection::Awards),
                 Err("applicationTooLarge")

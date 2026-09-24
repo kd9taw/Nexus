@@ -1059,6 +1059,94 @@ export async function deleteQso(target: LoggedQso): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('delete_qso', { target })
 }
 
+/** One contact, named by its id and the edit key of the version the caller holds (SPEC-2 v2 §3):
+ *  what a view that reads the log by id sends to change a contact. The backend hands out both —
+ *  with a row it serves, or in a `RowAnswer` — and the UI never builds or parses either. */
+export interface RowRef {
+  id: string
+  editKey: string
+}
+
+/** A contact as it now stands, with the key the next change to it must send. */
+export interface KeyedRow {
+  row: LoggedQso
+  editKey: string
+}
+
+/** What a change by `RowRef` did. `applied`/`deleted` are made and on disk. `changed` and `gone`
+ *  changed nothing: the contact changed since the caller read it (`current` is it now — show it,
+ *  and retry against its key), or no contact has that id. An upload stamp or a confirmation never
+ *  makes a contact `changed`: the key covers only what an edit can write. */
+export type RowAnswer =
+  | { kind: 'applied'; current: KeyedRow }
+  | { kind: 'deleted' }
+  | { kind: 'changed'; current: KeyedRow }
+  | { kind: 'gone' }
+
+/** The park half of a `QsoEdit`. The form's own rule holds: with both refs empty no park is written
+ *  and the stored one is kept whole; a ref carries its programme (the stored one, or POTA). */
+export interface OtaEdit {
+  myProgram: string | null
+  myRef: string | null
+  theirProgram: string | null
+  theirRef: string | null
+}
+
+/** Exactly what the Logbook's edit form writes to one contact — tempo-core's `QsoEdit`, whose field
+ *  list `features/__fixtures__/log-query/qso-edit-fields.json` pins on both sides. Every field is
+ *  sent, `null` included. `timeOffUnix: null` leaves the stored end time alone. `qslSentVia` is the
+ *  form's own vocabulary: `null` not sent, a method letter, or `'SENT'` for a mark with no method
+ *  (which the form shows and never sends as a change). */
+export interface QsoEdit {
+  call: string
+  grid: string | null
+  state: string | null
+  band: string
+  freqMhz: number
+  mode: string
+  rstSent: string | null
+  rstRcvd: string | null
+  name: string | null
+  qth: string | null
+  comment: string | null
+  notes: string | null
+  txPower: number | null
+  whenUnix: number
+  timeOffUnix: number | null
+  ota: OtaEdit
+  myGrid: string | null
+  myRig: string | null
+  qslSentVia: 'B' | 'D' | 'E' | 'SENT' | null
+  qslCard: boolean
+}
+
+/** The Logbook form's edit of the contact `target`, as ONE change: the fields, and the QSL-sent
+ *  and paper-card marks where the form changed them — one write, where `editQso` then
+ *  `markQslSent` then `markQslCard` were three. Returns once it is on disk. */
+export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAnswer> {
+  return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
+}
+
+/** `markQslSent`, by `RowRef`: a method marks the contact sent, dated now; `null` withdraws. */
+export async function markQslSentById(target: RowRef, via: 'B' | 'D' | 'E' | null): Promise<RowAnswer> {
+  return invoke<RowAnswer>('mark_qsl_sent_by_id', { target, via })
+}
+
+/** `markQslCard`, by `RowRef`. */
+export async function markQslCardById(target: RowRef, received: boolean): Promise<RowAnswer> {
+  return invoke<RowAnswer>('mark_qsl_card_by_id', { target, received })
+}
+
+/** `setSatTag`, by `RowRef`: a name LoTW accepts tags the contact; `null` removes the tag. */
+export async function setSatTagById(target: RowRef, satName: string | null): Promise<RowAnswer> {
+  return invoke<RowAnswer>('set_sat_tag_by_id', { target, satName })
+}
+
+/** `deleteQso`, by `RowRef`. */
+export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
+  return invoke<RowAnswer>('delete_qso_by_id', { target })
+}
+
 /** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file.
  * Irreversible; the UI gates this behind a typed confirmation. Returns the number
  * of contacts removed. */
@@ -1119,6 +1207,12 @@ export async function downloadLotwReport(): Promise<LotwSyncResult> {
  *  specific log rows, or omit for the default unsent-unconfirmed batch. */
 export async function uploadLotwReport(indices?: number[]): Promise<UploadReport> {
   return invoke<UploadReport>('upload_lotw_report', { indices: indices ?? null })
+}
+
+/** `uploadLotwReport` for the contacts these ids name (SPEC-2 v2 §3) — ids a view was handed with
+ *  the rows, never positions. Refused if an id is not one the backend handed out. */
+export async function uploadLotwReportByIds(ids: string[]): Promise<UploadReport> {
+  return invoke<UploadReport>('upload_lotw_report', { indices: null, ids })
 }
 
 /** Mark every currently-unsent QSO as already on LoTW (for an imported legacy log uploaded
