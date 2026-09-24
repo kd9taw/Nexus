@@ -1732,7 +1732,7 @@ pub enum UploadOrigin {
     /// A contact just logged at the key. Goes out AT ONCE — that is what "realtime"
     /// means, and pacing one of these would be a regression, not a fix.
     Live,
-    /// A record swept back up by a catch-up scan ([`StationCore::requeue_failed_uploads`]):
+    /// A record swept back up by a catch-up scan ([`StationCore::requeue_catch_up`]):
     /// history, not news. Paced — see [`CATCHUP_UPLOAD_SPACING_SECS`].
     CatchUp,
 }
@@ -1743,7 +1743,7 @@ pub enum UploadOrigin {
 pub struct PendingUpload {
     pub rec: tempo_core::logbook::QsoRecord,
     /// Live contact or catch-up replay — see [`UploadOrigin`]. Set at BOTH enqueue
-    /// points (`log_qso` = Live, `requeue_failed_uploads` = CatchUp) and CARRIED
+    /// points (`log_qso` = Live, `requeue_catch_up` = CatchUp) and CARRIED
     /// THROUGH the worker's transient-failure re-queue, so a catch-up record that
     /// blips on the network cannot come back as a live one and skip the pacing.
     pub origin: UploadOrigin,
@@ -10313,12 +10313,31 @@ impl Engine {
         // EMPTY whenever the switch is off — so "default OFF" is one function's
         // property and not a flag every caller has to remember to check.
         let legs = upload_legs::mask_for(station.log.session.upload_destinations());
-        let report = tempo_core::contest::merge_into_general(
+        let mut report = tempo_core::contest::merge_into_general(
             &station.log,
             &self.settings.fd_position_id,
             &mut self.station.logbook,
         );
         if !report.written.is_empty() {
+            // Each merged contact is filled before it is written (SPEC-2 v3 D2-A), as every
+            // insert is: the rows the merge just appended, and the copies an upload sends. Still
+            // the merge's append — the same rows, in the same hold of the lock, before anyone can
+            // have read them — so it is claimed as one.
+            let (country, state) = (
+                self.station.dxcc_resolve.as_deref(),
+                self.station.state_resolve.as_deref(),
+            );
+            for rec in &mut report.written {
+                crate::station::fill_with(rec, country, state);
+            }
+            let held = self
+                .station
+                .logbook
+                .records_mut(tempo_core::logbook::OpClass::Append);
+            let from = held.len().saturating_sub(report.written.len());
+            for r in &mut held[from..] {
+                crate::station::fill_with(Arc::make_mut(r), country, state);
+            }
             // MEMORY FIRST, then the append that stamps the shared log's freshness
             // fingerprint — the same order and the same reason as `log_qso`.
             self.station.append_to_log(&report.written);
@@ -21125,28 +21144,18 @@ contact yourself."
     /// reloads its equivalents from disk. Encoding "CQ <call>" populates the
     /// same table through pack28→save_hash_call without transmitting anything,
     /// so compound stations you've worked resolve immediately on relaunch.
-    #[allow(deprecated)] // SPEC-2 C14: the newest compound calls, read from the store
-    pub fn seed_hash_table(&self) {
-        use tempo_core::message::is_compound;
+    ///
+    /// `calls` are the log's newest compound calls, newest first, as the command layer reads them
+    /// from the log — with the Engine lock released; only the encoding runs under it.
+    pub fn seed_hash_table(&self, calls: &[String]) {
         let mode = modes::make_mode(modes::ModeKind::Ft8);
-        let mut seen = std::collections::HashSet::new();
         // Each `encode` writes the process-global packjt77 hash table via FFI — the
         // same table the worker's decode reads. Hold the decoder lock across the
         // whole seed so it can't race an in-flight decode (may briefly wait if one
         // is running; seeding is a one-shot startup task).
         let _g = source_lock(&self.source);
-        // Newest first; cap the work — each encode is one FFI round-trip. The rows are read
-        // where they are: this used to clone every record in the log (165 ms and 184 MiB at
-        // 150,000 contacts) to look at the newest few hundred calls.
-        for rec in self.station.logbook.records().iter().rev() {
-            let call = rec.call.trim().to_uppercase();
-            if !is_compound(&call) || !seen.insert(call.clone()) {
-                continue;
-            }
+        for call in calls {
             let _ = mode.encode(&format!("CQ {call}"));
-            if seen.len() >= 50 {
-                break;
-            }
         }
     }
 
@@ -22560,6 +22569,17 @@ contact yourself."
         self.station.store.as_ref().map(|s| s.reads())
     }
 
+    /// The log's rows for a pass over them, taken under this lock and read after it is released
+    /// — see [`crate::logstore::LogRows`]. The store's; on the 1.13 path, the log in memory.
+    pub fn log_rows(&self) -> crate::logstore::LogRows {
+        self.station.log_rows()
+    }
+
+    /// See [`StationCore::apply_log_fills`] — the fill job's write (SPEC-2 v3 D2-A).
+    pub fn apply_log_fills(&mut self, fills: &[crate::station::LogFill], fill_ver: i64) -> usize {
+        self.station.apply_log_fills(fills, fill_ver)
+    }
+
     /// The store's mirror of `log.adi`, as it stands.
     pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
         self.station.store.as_ref().map(|s| s.mirror_status())
@@ -22766,9 +22786,25 @@ contact yourself."
             .requeue_after_failure(rec, legs, attempts, earliest_due, origin)
     }
 
-    /// See [`StationCore::requeue_failed_uploads`].
+    /// See [`StationCore::catch_up_room`].
+    pub fn catch_up_room(&self) -> usize {
+        self.station.catch_up_room()
+    }
+
+    /// See [`StationCore::requeue_catch_up`].
+    pub fn requeue_catch_up(&mut self, stale: Vec<(QsoRecord, u8)>) -> usize {
+        self.station.requeue_catch_up(stale)
+    }
+
+    /// The catch-up sweep in one breath, for a test that owns its engine: the room, the pick
+    /// ([`crate::station::catch_up_records`] — a read of the store) and the queueing. The
+    /// command runs the three with the Engine lock released for the read.
+    #[cfg(test)]
     pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
-        self.station.requeue_failed_uploads(legs)
+        let (rows, room) = (self.log_rows(), self.catch_up_room());
+        let stale = crate::station::catch_up_records(&rows, legs, room)
+            .expect("the test's log can be read");
+        self.station.requeue_catch_up(stale)
     }
 
     /// See [`StationCore::note_upload`].
@@ -22913,11 +22949,6 @@ contact yourself."
         self.station.merge_lotw_own_echo(text, when_unix)
     }
 
-    /// See [`StationCore::oldest_pending_lotw_date`].
-    pub fn oldest_pending_lotw_date(&self) -> Option<String> {
-        self.station.oldest_pending_lotw_date()
-    }
-
     /// See [`StationCore::stamp_qrz_upload`].
     pub fn stamp_qrz_upload(
         &mut self,
@@ -22952,13 +22983,6 @@ contact yourself."
     ) -> bool {
         self.station
             .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
-    }
-
-    /// See [`StationCore::upload_health`]. Cheap and read-only — the Settings panel polls
-    /// it every 5 s under this lock, so it must never clone the record vector (which is
-    /// what [`Self::get_log`] does).
-    pub fn upload_health(&self) -> tempo_core::logbook::UploadHealth {
-        self.station.upload_health()
     }
 
     /// See [`StationCore::merge_eqsl_report`].
@@ -23016,6 +23040,15 @@ contact yourself."
         self.station.logbook.revision()
     }
 
+    /// The revision of the log's last change a fold over its content must be built again for
+    /// — every change but an upload stamp, a QSL-sent mark or an id's adoption. The key a fold
+    /// that reads none of those is kept against (SPEC-2 v3 §4.4). See
+    /// [`tempo_core::logbook::OpClass`] for which change moves which watermark.
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
+    pub fn log_index_rev(&self) -> u64 {
+        self.station.logbook.index_rev()
+    }
+
     /// Whether the log only grew since it stood at `revision`. See
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
     #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
@@ -23033,12 +23066,13 @@ contact yourself."
         self.station.get_log()
     }
 
-    /// See [`StationCore::confirmation_diagnostics`].
+    /// See [`StationCore::confirmation_diagnostics`] — a read of the store, so for an engine no
+    /// Engine guard holds (a test's own); a command takes [`Self::confirmation_diagnostics_inputs`].
     pub fn confirmation_diagnostics(
         &self,
         now: i64,
         resolve: impl Fn(&str) -> Option<String>,
-    ) -> tempo_core::diagnostics::DiagnosticsReport {
+    ) -> Result<tempo_core::diagnostics::DiagnosticsReport, String> {
         self.station.confirmation_diagnostics(now, resolve)
     }
 

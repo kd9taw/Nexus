@@ -46,9 +46,10 @@
 //! **The same rule for passes over the whole log in memory** ([`whole_log_off_engine_lock`],
 //! also C12): the needs fold, the log statistics, the sked's grid lookup, the confirmation
 //! diagnosis and Remote's log window each take the log's pointers under the lock and make their
-//! pass after releasing it. The passes still made under the lock (the snapshot's worked sets and
-//! the other hot readers, the Needed board's scan for today's hunted parks) are C13's and C14's
-//! to move.
+//! pass after releasing it. Since C14 the folds and lookups read the store instead, every one
+//! through the app's `LogRows`, whose passes assert this as well — on the 1.13 path, where its
+//! rows are still the log in memory, as much as on the store. The passes still made under the
+//! lock (the snapshot's worked sets and the other hot readers) are C13's to move.
 //!
 //! **The small journals too:** the Field Day contest journal and the message queue's are
 //! written on their own thread (`crate::journal`), a log lane like the two above
