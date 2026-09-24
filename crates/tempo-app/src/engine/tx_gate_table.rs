@@ -1,10 +1,11 @@
 //! ⛔ TODAY'S TRANSMIT-GATE DECISIONS, PINNED OVER A TABLE OF STATION STATES.
 //!
-//! The dual-receiver programme is about to put a second receiver into the engine, and its
-//! first ruling (D1) says the licence gate should one day judge whichever receiver actually
-//! TRANSMITS. That switch is a separate step with its own yes. Until it is taken, adding the
-//! receiver model must not move a single decision, and "it doesn't touch `tx_allowed`" is a
-//! claim about a diff, not about behaviour. This table is the behaviour.
+//! The dual-receiver programme put a second receiver into the engine, and its first ruling
+//! (D1) says the licence gate judges whichever receiver actually TRANSMITS. The table was
+//! pinned before the receiver model existed, because adding the model had to move no
+//! decision, and "it doesn't touch `tx_allowed`" is a claim about a diff, not about
+//! behaviour. The switch to D1 then moved exactly the rows in [`D1_DIFFERS`], which carry the
+//! answers the operator approved (2026-09-23). This table is the behaviour.
 //!
 //! Every row builds a station state through the verbs the product itself uses (a band pick, a
 //! section change, a split the radio loop acknowledged, a satellite pass) and records what
@@ -20,9 +21,9 @@
 //! dual-receiver radios in ordinary operation, and satellite cross-band pairs, because those
 //! are the three places a second receiver could plausibly leak into the answer.
 //!
-//! The same rows are then judged the D1 way ([`Engine::tx_source_verdict`], against the receiver
-//! that transmits), and [`D1_DIFFERS`] pins every row where that answer parts from the gate's —
-//! the difference the maintainer rules on before the gate is ever switched.
+//! The gate is D1 ([`Engine::tx_source_verdict`], judged against the receiver that transmits),
+//! and [`D1_DIFFERS`] pins every row where it parts from the gate as it stood before the
+//! switch — the difference the operator ruled on.
 
 use super::*;
 use crate::dualrx::ReceiverId;
@@ -130,7 +131,7 @@ pub(super) fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Opti
     }
 }
 
-/// One station state and the decisions the gate made for it before the receiver model.
+/// One station state and the decisions the gate makes for it.
 struct Row {
     name: &'static str,
     build: fn() -> Engine,
@@ -276,6 +277,9 @@ fn rows() -> Vec<Row> {
             phone_seg: None,
         },
         // ── Satellite cross-band pairs ─────────────────────────────────────────────────
+        // Since the D1 switch (operator sign-off, 2026-09-23) the gate judges the receiver that
+        // transmits, and the five rows in `D1_DIFFERS` carry its answers: the uplink band's phone
+        // segment on every cross-band pass, and the mode-released uplink refused.
         Row {
             name: "IC-9700 RS-44 phone, native CI-V: uplink rides Sub, General",
             build: || {
@@ -288,7 +292,7 @@ fn rows() -> Vec<Row> {
             },
             tx_allowed: true,
             emission_mhz: 145.965,
-            phone_seg: Some((420.0, 450.0)),
+            phone_seg: Some((144.1, 148.0)),
         },
         Row {
             name: "IC-9700 RS-44 digital, native CI-V: uplink rides Sub, General",
@@ -302,7 +306,7 @@ fn rows() -> Vec<Row> {
             },
             tx_allowed: true,
             emission_mhz: 145.965,
-            phone_seg: Some((420.0, 450.0)),
+            phone_seg: Some((144.1, 148.0)),
         },
         // `true` when pinned. `2a9f28b4` (the Digital licence gate) now judges the data carrier
         // on the side the uplink VFO is commanded, PKTLSB here since `2d4300ad`: 1500 Hz below
@@ -319,7 +323,7 @@ fn rows() -> Vec<Row> {
             },
             tx_allowed: false,
             emission_mhz: 144.101,
-            phone_seg: Some((420.0, 450.0)),
+            phone_seg: Some((144.1, 148.0)),
         },
         // Added with the D1 comparison below, and measured the same way: the gate code these
         // rows exercise is unchanged from the base. The one state in which the uplink's
@@ -338,9 +342,9 @@ fn rows() -> Vec<Row> {
                 e.request_sideband_override(Some("USB"));
                 e
             },
-            tx_allowed: true,
+            tx_allowed: false,
             emission_mhz: 144.101,
-            phone_seg: Some((420.0, 450.0)),
+            phone_seg: Some((144.1, 148.0)),
         },
         Row {
             name: "IC-9700 RS-44, Open class",
@@ -393,7 +397,7 @@ fn rows() -> Vec<Row> {
             },
             tx_allowed: true,
             emission_mhz: 145.965,
-            phone_seg: Some((420.0, 450.0)),
+            phone_seg: Some((144.1, 148.0)),
         },
     ]
 }
@@ -428,7 +432,8 @@ fn same_seg(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> bool {
     }
 }
 
-/// ⛔ THE GATE'S DECISIONS ARE TODAY'S, ROW FOR ROW.
+/// ⛔ THE GATE'S DECISIONS, ROW FOR ROW: as they were before the receiver model, except the
+/// rows the D1 switch moved ([`D1_DIFFERS`]), which carry the answers the operator approved.
 ///
 /// All rows are checked before anything is reported, so a regression names every state it
 /// moved rather than the first.
@@ -469,15 +474,18 @@ fn the_gate_table_is_not_uniform() {
 
 // ── D1's input: which receiver transmits ─────────────────────────────────────────────────
 
-/// ⛔ THE RECEIVER A SPLIT RIDES NEVER REACHES THE GATE.
+/// ⛔ THE RECEIVER A SPLIT RIDES REACHES THE GATE ONLY WHERE D1 SAYS, AND CAN ONLY REFUSE MORE.
 ///
-/// The radio loop names the receiver in the very call that grants a split confirmation, so the
-/// grant site now writes one more field. Every row holding a confirmed split is rebuilt with
-/// that record flipped (Main ↔ Sub) and must decide identically — while the flip must visibly
-/// move [`Engine::tx_source`], or this would be a mutation that changed nothing.
+/// The radio loop names the receiver in the very call that grants a split confirmation, and
+/// since the D1 switch the gate judges that receiver. Every row holding a confirmed split is
+/// rebuilt with the record flipped (Main ↔ Sub). The flip must visibly move
+/// [`Engine::tx_source`] (or this would be a mutation that changed nothing), must never move
+/// the judged frequency, must never allow the Sub-sourced one of the pair where the
+/// Main-sourced one is refused, and may move the decision on the [`D1_DIFFERS`] rows alone.
 #[test]
-fn the_receiver_a_split_rides_never_reaches_the_gate() {
+fn the_receiver_a_split_rides_reaches_the_gate_only_where_d1_says() {
     let mut flipped = Vec::new();
+    let mut moved = Vec::new();
     for row in rows() {
         let e = (row.build)();
         let Some(hz) = e.tx_split_confirmed_hz else {
@@ -495,13 +503,70 @@ fn the_receiver_a_split_rides_never_reaches_the_gate() {
             "{}: the flip must move the transmit source",
             row.name
         );
-        assert_eq!(decisions(&twin), decisions(&e), "{}", row.name);
+        let (mine, flip) = (decisions(&e), decisions(&twin));
+        assert!(
+            close(mine.1, flip.1),
+            "{}: the judged frequency moved",
+            row.name
+        );
+        let (on_sub, on_main) = if e.tx_source() == ReceiverId::Sub {
+            (mine, flip)
+        } else {
+            (flip, mine)
+        };
+        assert!(
+            on_main.0 || !on_sub.0,
+            "{}: the Sub is allowed where Main is refused",
+            row.name
+        );
+        if mine != flip {
+            moved.push(row.name);
+        }
         flipped.push(e.tx_source());
     }
     assert!(
         flipped.contains(&ReceiverId::Main) && flipped.contains(&ReceiverId::Sub),
         "the table must carry confirmed splits on both receivers: {flipped:?}"
     );
+    let mut listed: Vec<&str> = D1_DIFFERS.iter().map(|d| d.row).collect();
+    listed.sort_unstable();
+    moved.sort_unstable();
+    assert_eq!(
+        moved, listed,
+        "the flip moves the decision on exactly the D1 rows"
+    );
+}
+
+/// ⛔ ON THE SUB THE GATE KEEPS ITS PHONE CHECK: D1 judges the uplink by the gate's own model,
+/// which judges Phone's passband in the word the uplink VFO is commanded (`a7cbffff`).
+///
+/// A PHONE uplink on the edge bird is commanded LSB, so its passband reaches below 144.100,
+/// where 2 m is CW-only, and every class is refused — as before the switch. Judging the Sub by
+/// the band convention alone (USB, above the carrier) would allow it. RS-44 is the control: the
+/// same pass shape, its LSB passband inside the all-mode segment, keys for every class.
+#[test]
+fn on_the_sub_the_gate_keeps_its_phone_check() {
+    for class in ["technician", "general", "extra"] {
+        let mut e = sat_pass(3081, class, "phone", EDGE_BIRD);
+        assert_eq!(
+            loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+            Some("Sub")
+        );
+        assert_eq!(e.tx_source(), ReceiverId::Sub, "{class}: precondition");
+        assert_eq!(
+            e.tx_mode_effective(),
+            "LSB",
+            "{class}: precondition: the uplink is commanded LSB"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "{class}: an LSB uplink at 144.101 reaches the CW-only segment"
+        );
+        let mut control = sat_pass(3081, class, "phone", RS44);
+        loop_applies_sat_split(&mut control, SatCatBackend::NativeCiv);
+        assert_eq!(control.tx_source(), ReceiverId::Sub, "{class}: control");
+        assert!(control.tx_allowed(), "{class}: RS-44's LSB uplink keys");
+    }
 }
 
 /// D1 — THE TRANSMIT SOURCE: Main, except while an acknowledged split rides the Sub band.
@@ -569,7 +634,7 @@ fn the_transmit_source_is_main_until_an_acknowledged_split_rides_the_sub() {
     assert_eq!(e.tx_source(), ReceiverId::Sub, "IC-905 uplink");
 }
 
-// ── D1: the same table, judged against the transmit source ─────────────────────────────
+// ── D1: the gate, judged against the transmit source ───────────────────────────────────
 
 /// What D1 answers for one row of the table.
 struct D1Answer {
@@ -579,15 +644,16 @@ struct D1Answer {
     phone_seg: Option<(f64, f64)>,
 }
 
-/// ⭐ THE DIFF TABLE — every row where D1's verdict ([`Engine::tx_source_verdict`]) decides
-/// differently from the gate today, with what D1 would answer. D1 and today agree on every row
-/// not listed, by assertion.
+/// ⭐ THE DIFF TABLE — every row where the D1 switch changed the gate's answer
+/// ([`Engine::tx_source_verdict`] against the gate as it stood before, [`pre_switch`]), with the
+/// answer it gives now. The two agree on every row not listed, by assertion.
 ///
-/// Read it as: switching the gate to D1 moves the band strip's phone shade on every cross-band
-/// pass (Main's 70 cm segment becomes the uplink's 2 m one), never moves the judged frequency,
-/// and changes a licence answer in exactly one state — the uplink's sideband unknown (the mode
-/// taken back mid-pass, so Nexus commands none) and a sideband-sensitive emission within an
-/// offset of a segment edge: D1 judges both sides of the carrier, the gate the dial's word.
+/// Read it as: the switch moved the band strip's phone shade on every cross-band pass (Main's
+/// 70 cm segment became the uplink's 2 m one), never moved the judged frequency, and changed a
+/// licence answer in exactly one state — the uplink's sideband unknown (the mode taken back
+/// mid-pass, so Nexus commands none) and a sideband-sensitive emission within an offset of a
+/// segment edge: D1 judges both sides of the carrier, where the gate before judged the dial's
+/// word.
 ///
 /// The edge bird with its sideband KNOWN refuses on both sides since `2a9f28b4`. Its data uplink
 /// is commanded PKTLSB (`2d4300ad`), and the gate now judges the data carrier on the side that
@@ -627,13 +693,26 @@ const D1_DIFFERS: &[D1Answer] = &[
     },
 ];
 
-/// D1 JUDGES THE TRANSMIT SOURCE, and parts from today's gate only where the Sub transmits.
+/// The gate as it stood before the D1 switch: the emitted frequency judged by the key-time
+/// model ([`Engine::tx_frequency_allowed`]), with the band strip shaded for Main's band.
+fn pre_switch(e: &Engine) -> (bool, f64, Option<(f64, f64)>) {
+    (
+        e.tx_frequency_allowed(),
+        e.tx_emission_mhz(),
+        crate::privileges::phone_segment(e.settings.license_class, &e.settings.band),
+    )
+}
+
+/// ⛔ THE GATE IS D1: the key-time verb, the snapshot's lock and the band strip's shade all read
+/// [`Engine::tx_source_verdict`], and it parts from the gate as it stood before the switch
+/// exactly on the [`D1_DIFFERS`] rows, with exactly those answers.
 ///
-/// A Main-sourced verdict IS the gate's (it judges the same receiver), so every difference must
-/// come from a Sub-sourced row; and a Sub-sourced row may still agree (the Open class has no
-/// segments to differ over), which is why the Sub-sourced count is asserted separately.
+/// A Main-sourced verdict IS the gate as it stood (it judges the same receiver), so every
+/// difference must come from a Sub-sourced row; and a Sub-sourced row may still agree (the Open
+/// class has no segments to differ over), which is why the Sub-sourced count is asserted
+/// separately.
 #[test]
-fn d1_judges_the_transmit_source_and_parts_from_today_only_where_the_sub_transmits() {
+fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
     let rows = rows();
     for d in D1_DIFFERS {
         assert!(
@@ -650,8 +729,14 @@ fn d1_judges_the_transmit_source_and_parts_from_today_only_where_the_sub_transmi
         if v.source == ReceiverId::Sub {
             sub_sourced.push(row.name);
         }
-        let today = decisions(&e);
         let d1 = (v.tx_allowed, v.emission_mhz, v.phone_seg);
+        let read = decisions(&e);
+        assert!(
+            read.0 == d1.0 && close(read.1, d1.1) && same_seg(read.2, d1.2),
+            "{}: the gate reads {read:?}, D1 answers {d1:?}",
+            row.name
+        );
+        let before = pre_switch(&e);
         match D1_DIFFERS.iter().find(|d| d.row == row.name) {
             Some(d) => {
                 assert_eq!(v.source, ReceiverId::Sub, "{}", row.name);
@@ -662,9 +747,13 @@ fn d1_judges_the_transmit_source_and_parts_from_today_only_where_the_sub_transmi
                     "{}: D1 now answers {d1:?}",
                     row.name
                 );
-                assert_ne!(d1, today, "{}: listed as differing, but agrees", row.name);
+                assert_ne!(d1, before, "{}: listed as differing, but agrees", row.name);
             }
-            None => assert_eq!(d1, today, "{}: D1 must agree with the gate here", row.name),
+            None => assert_eq!(
+                d1, before,
+                "{}: D1 must agree with the old gate here",
+                row.name
+            ),
         }
     }
     assert_eq!(

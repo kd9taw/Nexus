@@ -2579,7 +2579,8 @@ pub struct Engine {
     ///
     /// ⚠️ MEANINGFUL ONLY WHILE `tx_split_confirmed_hz` IS `Some`. The revocations clear that
     /// field alone and leave this one stale on purpose — nothing may read it without the
-    /// confirmation beside it ([`Engine::tx_source`] does not). The gate never reads it at all.
+    /// confirmation beside it ([`Engine::tx_source`] does not). The gate reads it only through
+    /// [`Engine::tx_source`] (D1).
     tx_split_confirmed_rx: crate::dualrx::ReceiverId,
     /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
     ///
@@ -14357,9 +14358,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// receiver `rx` — the Sub when the split rode the Sub band (`sat_split_tx_vfo` answered
     /// `"Sub"`), Main otherwise.
     ///
-    /// `rx` changes nothing the gate decides: [`Self::tx_allowed`] judges `tx_hz` exactly as it
-    /// always has. It is recorded so the receiver model can say WHICH receiver transmits (D1,
-    /// [`Self::tx_source`]) and where the Sub is tuned.
+    /// `rx` is the receiver the licence gate judges from here on (D1, [`Self::tx_source`],
+    /// [`Self::tx_source_verdict`]), and where the receiver model puts the Sub's dial. The
+    /// frequency judged is `tx_hz` either way.
     pub fn rig_split_applied_on(&mut self, tx_hz: u64, rx: crate::dualrx::ReceiverId) {
         // THE ONE PLACE PERMISSION IS GRANTED. The caller has already proved both writes
         // succeeded on a rig we hold control of; that acknowledgement is what the privilege
@@ -14389,9 +14390,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// a pass transmits out of its Sub band although the capability table has no vendor
     /// statement of a second receiver for it.
     ///
-    /// ⛔ NOTHING GATES ON THIS YET. [`Self::tx_allowed`] judges exactly what it judged before
-    /// the receiver model existed; the model computes D1's verdict beside it, and switching the
-    /// gate over is a separate step with its own approval.
+    /// ⛔ THE LICENCE GATE JUDGES THIS RECEIVER: [`Self::tx_allowed`] reads
+    /// [`Self::tx_source_verdict`] (operator sign-off, 2026-09-23).
     pub fn tx_source(&self) -> crate::dualrx::ReceiverId {
         match self.tx_split_confirmed_hz {
             Some(_) => self.tx_split_confirmed_rx,
@@ -18471,7 +18471,21 @@ contact yourself."
     /// transmitting VFO is actually commanded — the cockpit's pick and a satellite uplink's own
     /// word included ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the
     /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
+    ///
+    /// ⭐ JUDGED AGAINST THE RECEIVER THAT TRANSMITS (D1; operator sign-off, 2026-09-23): this
+    /// is [`Self::tx_source_verdict`]'s answer. Main transmits in every state but an
+    /// acknowledged split riding the Sub band, and there the answer is exactly
+    /// [`Self::tx_frequency_allowed`], the gate as it stood before the switch. While the Sub
+    /// transmits it is that same judgement of the uplink, plus both sides of the carrier when
+    /// Nexus commands the uplink no mode word, so the switch can only ever refuse more.
     pub fn tx_allowed(&self) -> bool {
+        self.tx_source_verdict().tx_allowed
+    }
+
+    /// THE KEY-TIME JUDGEMENT OF THE FREQUENCY THE NEXT OVER IS EMITTED ON: the whole licence
+    /// gate before the D1 switch, unchanged, and still the whole of it whenever Main transmits
+    /// ([`Self::tx_allowed`], [`Self::tx_source_verdict`]).
+    fn tx_frequency_allowed(&self) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
@@ -19427,11 +19441,15 @@ contact yourself."
             .unwrap_or(100);
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
-        // Phone sub-band the operator may legally use on the CURRENT band + class — the band-strip
-        // shades it. None for no-phone-privilege / Open / off-plan bands (then the strip shows none).
-        let (plo, phi) =
-            crate::privileges::phone_segment(self.settings.license_class, &self.settings.band)
-                .map_or((None, None), |(lo, hi)| (Some(lo), Some(hi)));
+        // Phone sub-band the operator may legally use, for the class, on the band the radio
+        // TRANSMITS from — the band-strip shades it. That is the current band, except while an
+        // acknowledged split rides the Sub band, where it is the uplink's (D1: the verdict the
+        // lock above reads, `Engine::tx_source_verdict`). None for no-phone-privilege / Open /
+        // off-plan bands (then the strip shows none).
+        let (plo, phi) = self
+            .tx_source_verdict()
+            .phone_seg
+            .map_or((None, None), |(lo, hi)| (Some(lo), Some(hi)));
         s.radio.phone_seg_lo = plo;
         s.radio.phone_seg_hi = phi;
         // Rig DSP-func states [nb, nr, notch, comp, vox]; None = unsupported → the toggle hides.

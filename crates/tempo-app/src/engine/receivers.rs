@@ -14,8 +14,8 @@
 //!
 //! | | Field | Resolved as |
 //! |---|---|---|
-//! | U1 | `tx_allowed` | per radio (one transmitter, one verdict), judged against the TX SOURCE (D1, [`Engine::tx_source`]) — computed ALONGSIDE in this build, [`Engine::tx_source_verdict`] |
-//! | U2, U3 | `phone_seg_lo/hi` | the same: the TX source's band, alongside |
+//! | U1 | `tx_allowed` | per radio (one transmitter, one verdict), judged against the TX SOURCE (D1, [`Engine::tx_source`]): [`Engine::tx_source_verdict`], which `tx_allowed` reads |
+//! | U2, U3 | `phone_seg_lo/hi` | the same: the TX source's band, which the snapshot shades |
 //! | U4 | `active_vfo` | per receiver (D5): each receiver has its own A/B pair |
 //! | U5 | `rx_ranges_mhz` | per receiver; the radio's `\dump_state` list describes Main. What depends on BOTH receivers is a pairing, not a list: [`Receivers::pairing`] (D6) |
 //! | U6, U7 | `att_steps_db`, `preamp_steps_db` | per receiver; the radio's lists describe Main's front end |
@@ -60,13 +60,13 @@
 //! names Main on the wire for the receive-chain commands its CI-V reference marks; its dial and
 //! mode verbs are unmarked and follow the panel the same way.
 //!
-//! ## D1, alongside and deciding nothing
-//! [`Engine::tx_source_verdict`] judges the TX source the way D1 says the gate should: the
-//! source receiver's own transmit frequency, sideband and band. NOTHING READS IT TO DECIDE
-//! ANYTHING. `tx_allowed`, the phone segment and every transmit path's gate decide exactly what
-//! they decided before this module existed; switching them over is a separate step with its own
-//! approval, taken with the differences in front of the maintainer. The engine's gate table
-//! (`engine::tx_gate_table`) pins both answers, row by row.
+//! ## D1: the licence gate judges the TX source
+//! [`Engine::tx_source_verdict`] is the licence gate (operator sign-off, 2026-09-23):
+//! `tx_allowed`, which every transmit path ANDs in, is its answer, and the snapshot's phone
+//! segment is its shade. While Main transmits it is the gate exactly as it stood before the
+//! switch; while the Sub does, the same judgement of the uplink plus one rule (see the
+//! verdict), so it can only ever refuse more. The engine's gate table
+//! (`engine::tx_gate_table`) pins the answers row by row, and the five rows the switch moved.
 
 use super::Engine;
 use crate::bandplan::band_for_dial;
@@ -238,8 +238,8 @@ pub struct Receivers {
     pub pairing: Option<Pairing>,
 }
 
-/// D1's verdict — the licence gate judged against the TX SOURCE. Computed alongside the gate;
-/// nothing reads it to decide anything.
+/// THE LICENCE GATE'S VERDICT, judged against the TX SOURCE (D1): [`Engine::tx_allowed`] is its
+/// `tx_allowed`, and the snapshot's phone segment its `phone_seg`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TxSourceVerdict {
     /// The receiver whose band the radio transmits from ([`Engine::tx_source`]).
@@ -256,6 +256,9 @@ pub struct TxSourceVerdict {
 struct SubUplink {
     mhz: f64,
     sideband: Option<&'static str>,
+    /// Does Nexus command the uplink VFO a mode word at all ([`Engine::sat_tx_mode`])? Not
+    /// once the operator has taken the mode back mid-pass, nor with no pass holding it.
+    commanded: bool,
 }
 
 /// The sideband a commanded rig mode puts a signal on; `None` for a mode with none (FM, CW, AM)
@@ -320,52 +323,59 @@ impl Engine {
         })
     }
 
-    /// D1'S VERDICT — the licence gate judged against the TX SOURCE ([`Engine::tx_source`]).
+    /// D1 — THE LICENCE GATE, JUDGED AGAINST THE TX SOURCE ([`Engine::tx_source`]).
+    /// [`Engine::tx_allowed`] is this verdict's `tx_allowed`, so every transmit path ANDs it in,
+    /// and the snapshot's phone segment is its `phone_seg` (operator sign-off, 2026-09-23).
     ///
-    /// ⛔ COMPUTED ALONGSIDE THE GATE, AND NOTHING READS IT TO DECIDE ANYTHING. Every transmit
-    /// path still ANDs in [`Engine::tx_allowed`], unchanged.
-    ///
-    /// - **Main transmits** (every state but an acknowledged Sub split): Main is what the gate
-    ///   already judges, so this is the gate's own answer — the same frequency, the same
-    ///   verdict, the phone segment of Main's band — and cannot differ from it.
-    /// - **The Sub transmits** (an acknowledged split riding the Sub band): judge the SUB. Its
-    ///   emission is its dial plus the transmit offsets the gate adds (XIT; a repeater shift,
-    ///   which a satellite pass forces to simplex), in the Sub's own sideband — the one Nexus
-    ///   commands for the uplink. Where no sideband is commanded (the operator took the mode
-    ///   back mid-pass) it is unknown, and both halves of the carrier must be legal, the gate's
+    /// - **Main transmits** (every state but an acknowledged Sub split): the gate exactly as it
+    ///   stood before the switch, [`Engine::tx_frequency_allowed`] — the same frequency, the
+    ///   same verdict — and the phone segment of Main's band.
+    /// - **The Sub transmits** (an acknowledged split riding the Sub band): the same frequency,
+    ///   the uplink plus the transmit offsets the gate adds (XIT; a repeater shift, which a
+    ///   satellite pass forces to simplex), judged by that same gate. It already judges Phone's
+    ///   passband and Digital's data carrier in the word the uplink VFO is commanded
+    ///   (`tx_mode_effective`), so a cross-band pass is judged once, by one model. One rule is
+    ///   added: where Nexus commands the uplink NO word (the operator took the mode back
+    ///   mid-pass) the side of the carrier is unknown, and both sides must be legal, the gate's
     ///   own rule for an unreadable RTTY mode word. XIT on a split is judged both ways, the
     ///   gate's rule unchanged. The phone segment is the Sub's band's.
     ///
-    /// ⚠️ What it cannot see, stated so the switch is not over-trusted: the Sub's mode is the
-    /// one COMMANDED (nothing reads it back on this path), exactly as XIT is the offset
-    /// commanded; and RTTY takes its side from the radio's reported mode word, which on a
-    /// two-receiver radio is Main's.
+    /// ⚠️ SO ON THE SUB IT CAN ONLY EVER REFUSE MORE than the gate did before the switch, and
+    /// only in the Digital section, the one section model that reads a side: Phone's
+    /// convention, CW's carrier and RTTY's and Keyboard's own models read none. A commanded
+    /// word that names no side (FM) adds nothing, as `digital_emission_allowed` has it.
+    ///
+    /// ⚠️ What it cannot see, stated so it is not over-trusted: the Sub's mode is the one
+    /// COMMANDED (nothing reads it back on this path), exactly as XIT is the offset commanded;
+    /// and RTTY takes its side from the radio's reported mode word, which on a two-receiver
+    /// radio is Main's.
     pub fn tx_source_verdict(&self) -> TxSourceVerdict {
         let class = self.settings.license_class;
+        let judged = self.tx_frequency_allowed();
         let Some(up) = self.sub_uplink() else {
             return TxSourceVerdict {
                 source: ReceiverId::Main,
                 emission_mhz: self.tx_emission_mhz(),
-                tx_allowed: self.tx_allowed(),
+                tx_allowed: judged,
                 phone_seg: crate::privileges::phone_segment(class, &self.settings.band),
             };
         };
         let om = self.settings.operating_mode;
         let xit = self.xit_offset_mhz();
         let emission = up.mhz + xit + self.rptr_shift_mhz();
-        let judge = |f: f64| match up.sideband {
-            Some(sideband) => self.emission_allowed(om, f, sideband),
-            None => self.emission_allowed(om, f, "USB") && self.emission_allowed(om, f, "LSB"),
-        };
-        let tx_allowed = if self.xit_hz != 0 {
-            judge(emission) && judge(emission - xit)
-        } else {
-            judge(emission)
-        };
+        // No word commanded for the uplink: the side of the carrier is unknown, so both.
+        let both_sides =
+            |f: f64| self.emission_allowed(om, f, "USB") && self.emission_allowed(om, f, "LSB");
+        let side_unknown_ok = up.commanded
+            || if self.xit_hz != 0 {
+                both_sides(emission) && both_sides(emission - xit)
+            } else {
+                both_sides(emission)
+            };
         TxSourceVerdict {
             source: ReceiverId::Sub,
             emission_mhz: emission,
-            tx_allowed,
+            tx_allowed: judged && side_unknown_ok,
             phone_seg: band_for_dial(up.mhz)
                 .and_then(|band| crate::privileges::phone_segment(class, band)),
         }
@@ -427,9 +437,11 @@ impl Engine {
             return None;
         }
         let hz = self.tx_split_confirmed_hz?;
+        let word = self.sat_tx_mode();
         Some(SubUplink {
             mhz: hz as f64 / 1e6,
-            sideband: self.sat_tx_mode().as_deref().and_then(sideband_of_mode),
+            sideband: word.as_deref().and_then(sideband_of_mode),
+            commanded: word.is_some(),
         })
     }
 }
