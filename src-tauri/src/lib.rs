@@ -26366,6 +26366,12 @@ pub fn run() {
     }
     // Re-seed the decoder's hash table from the logbook so <...> compound-call
     // tokens resolve right after launch (the Fortran table dies with the process).
+    // ⚠️ It seeds NOTHING: this runs before the logbook is adopted
+    // (`start_on_the_logbook`), so the log is still empty here, and has been since
+    // this call was added. A <...> call therefore resolves only once it is heard in
+    // full again — which is what WSJT-X does (its table starts empty each session).
+    // Kept that way on purpose (operator, 2026-09-24): making it work would change
+    // FT decode output away from WSJT-X, and that needs its own sign-off.
     {
         let eng = engine_lock(&engine);
         eng.seed_hash_table();
