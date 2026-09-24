@@ -242,6 +242,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log is still loading.** On the log strip and the Operate card, the need badge now appears once the
   log has answered for that call.
 
+- **After a question or a dialog closes, the keyboard goes back to where you were.** Answering a
+  confirmation, or closing the Getting started guide, the setup wizard, a contact's details, the
+  CHIRP how-to, the satellite question or the logbook-saving notice, left the keyboard on the page
+  itself, so the next Tab started again from the top. It now returns to the button you opened it
+  from, and after a delete to the same button on the next item.
+
 - **A paper QSL card you mark as received now counts toward your awards straight away.** Ticking
   the card in the Logbook recorded the card but not the confirmation that Awards, the Needed
   board and the Journey count, so the new confirmation only appeared after Nexus was restarted.
