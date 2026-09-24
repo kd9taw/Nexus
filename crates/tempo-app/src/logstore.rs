@@ -1962,7 +1962,7 @@ mod tests {
             for &from in &bounds {
                 for &to in &bounds {
                     let text = x::export_logbook(rows, format, from, to).expect("exports");
-                    out.push((format!("{format} {from:?}..{to:?}"), text));
+                    out.push((format!("{format} {from:?}..{to:?}"), text.text));
                 }
             }
         }
@@ -1974,7 +1974,7 @@ mod tests {
         ));
         for op in &ops {
             let text = x::export_for_operator(rows, op).expect("exports");
-            out.push((format!("operator {op:?}"), text));
+            out.push((format!("operator {op:?}"), text.text));
         }
         out.push((
             "activations".into(),
@@ -1997,7 +1997,10 @@ mod tests {
         for (reference, day, call) in &asks {
             let text =
                 x::export_for_activation(rows, reference, *day, call.as_deref()).expect("exports");
-            out.push((format!("activation {reference:?} {day} {call:?}"), text));
+            out.push((
+                format!("activation {reference:?} {day} {call:?}"),
+                text.text,
+            ));
         }
         out
     }
@@ -2084,12 +2087,14 @@ mod tests {
         assert!(nonempty > 2_000, "the exports held contacts: {nonempty}");
     }
 
-    /// ★ AN EXPORT NEVER LEAVES OUT A CHANGE IT WAS ASKED AFTER. With the store's write lock held
-    /// elsewhere (a write taking its time), a contact logged just before the export is not in
-    /// the store yet: the export says so and writes no file, rather than a file without the
-    /// contact. The control is the same export once the store has it, which holds it.
+    /// ★ AN EXPORT THE STORE HAS NOT CAUGHT UP WITH IS WRITTEN, AND SAYS HOW MANY CHANGES IT
+    /// LACKS (the operator's pick). With the store's write lock held elsewhere (a write taking its
+    /// time), a contact logged just before the export is not in the store yet: the export is the
+    /// store as it stands — without the contact — and counts the one change still on its way, so
+    /// the screen can say so. The control is the same export once the store has it, which holds
+    /// it and counts nothing.
     #[test]
-    fn an_export_the_store_has_not_caught_up_with_is_refused_not_short() {
+    fn an_export_the_store_has_not_caught_up_with_is_written_and_counts_what_it_lacks() {
         let d = Dir::new("export-behind");
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let e = launch_with_resolvers(&d);
@@ -2104,13 +2109,28 @@ mod tests {
             from: None,
             to: None,
         };
-        let refused = crate::logexport::export_waiting(&source, kind(), Duration::from_millis(300));
-        let why = refused.expect_err("an export missing the contact is refused");
-        assert!(why.contains("not saved to its database yet"), "{why}");
+        let behind = crate::logexport::export_waiting(&source, kind(), Duration::from_millis(300))
+            .expect("an export is written while a change is on its way");
+        assert_eq!(
+            (behind.saving, behind.held),
+            (1, 0),
+            "and it counts the change it lacks, as still being saved"
+        );
+        assert!(!behind.text.contains("W9LATE"), "the store as it stands");
+        assert_eq!(
+            behind.text.matches("<EOR>").count(),
+            5,
+            "every contact the store holds"
+        );
         drop(hold);
-        let text = crate::logexport::export_waiting(&source, kind(), Duration::from_secs(60))
+        let caught_up = crate::logexport::export_waiting(&source, kind(), Duration::from_secs(60))
             .expect("control: once the store has it");
-        assert!(text.contains("W9LATE"), "and the export holds it");
+        assert!(caught_up.text.contains("W9LATE"), "the export holds it");
+        assert_eq!(
+            (caught_up.saving, caught_up.held),
+            (0, 0),
+            "and lacks nothing"
+        );
     }
 
     // ── the mirror, read from the store (SPEC-2 v3 C15) ──────────────────────
@@ -3243,6 +3263,56 @@ mod tests {
         assert!(!store.unsaved().is_empty(), "so a quit is held for it");
     }
 
+    /// An export counts a change the store refused for what it is APART from the changes still
+    /// being saved: those will land, this one never will, and the screen says which. The file is
+    /// the store as it stands, without it. The control is the same export before the refusal,
+    /// which lacks nothing.
+    #[test]
+    fn an_export_counts_a_change_refused_for_good_apart_from_the_changes_still_saving() {
+        let d = Dir::new("export-held");
+        let mut opened = open_fast(&d);
+        let log = log_of(&mut opened);
+        let store = &mut opened.store;
+        let adif = || tempo_core::logbook::ExportKind::Adif {
+            from: None,
+            to: None,
+        };
+        let export = |store: &LogStore| {
+            crate::logexport::export_waiting(
+                &crate::logexport::Source::of_store(store),
+                adif(),
+                Duration::from_millis(200),
+            )
+            .expect("an export is written")
+        };
+        let before = export(store);
+        assert_eq!(
+            (before.saving, before.held),
+            (0, 0),
+            "control: nothing lacking"
+        );
+
+        let mut orphan = qso("K5ORPHAN", 1_788_000_100);
+        orphan.id = None;
+        let refused = Change {
+            rev: log.revision() + 1,
+            upsert: vec![sqlite::RowWrite::new(Arc::new(orphan))],
+            ..Change::default()
+        };
+        let t = store.submit(refused).expect("a ticket");
+        assert!(resolved(&t, 30), "the writer gives up on it");
+        assert!(!t.refusal().expect("refused").retryable, "for good");
+
+        let after = export(store);
+        assert_eq!(
+            (after.saving, after.held),
+            (0, 1),
+            "counted as held, not as still being saved"
+        );
+        assert!(!after.text.contains("K5ORPHAN"), "and not in the file");
+        assert_eq!(after.text, before.text, "the store as it stands");
+    }
+
     /// ★ A change the database dropped for a reason that can pass is sent again FROM MEMORY once
     /// its wait is up — and lands carrying the rows as memory holds them THEN, a later change to
     /// the same row included. Never out of order, never twice.
@@ -3341,7 +3411,9 @@ mod tests {
     ///
     /// And a read of the store follows it too: stale while the change is held — it truly is not
     /// saved — and current again once the re-send has landed it, so the folds keep their answers
-    /// again rather than reading the whole log at every ask for the rest of the session.
+    /// again rather than reading the whole log at every ask for the rest of the session. An export
+    /// (the operator's pick) is written all the while — the rescue a failing disk needs — and
+    /// counts the change it lacks until the re-send lands it.
     #[test]
     fn the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so() {
         let d = Dir::new("resend-busy");
@@ -3369,8 +3441,16 @@ mod tests {
             adif(),
             Duration::from_millis(200),
         )
-        .expect_err("no export while the change is held");
-        assert!(held.contains("locked"), "and it says why: {held}");
+        .expect("an export while the change is held is written — the rescue a failing disk needs");
+        assert_eq!(
+            (held.saving, held.held),
+            (1, 0),
+            "and counts the change it lacks, as still being saved: it is sent again"
+        );
+        assert!(
+            !held.text.contains("<QSL_RCVD:1>Y"),
+            "the store as it stands, without the change"
+        );
         let read = |e: &Engine| {
             e.log_rows()
                 .each_record(Duration::from_millis(100), &mut |_| {
@@ -3395,13 +3475,14 @@ mod tests {
             e.log_unsaved().is_empty(),
             "and a quit has nothing left to wait for, log.adi included"
         );
-        let text = crate::logexport::export_waiting(
+        let saved = crate::logexport::export_waiting(
             &crate::logexport::Source::of(&e),
             adif(),
             DURABLE_WAIT,
         )
         .expect("an export once the re-send has landed the change");
-        assert!(text.contains("<QSL_RCVD:1>Y"), "and it carries the change");
+        assert!(saved.text.contains("<QSL_RCVD:1>Y"), "carries the change");
+        assert_eq!((saved.saving, saved.held), (0, 0), "and lacks nothing");
         assert_eq!(
             read(&e),
             Freshness::Current,

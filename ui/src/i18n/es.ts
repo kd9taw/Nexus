@@ -1936,6 +1936,9 @@ export const ES: PartialCatalog = {
   "logbook.export.from.label": "desde",
   "logbook.export.from.title": "Exporta solo los QSOs de esta fecha UTC en adelante (vacío = desde el principio)",
   "logbook.export.perOperator.done": "Exportados {{count}} archivos → Descargas",
+  // Machine translation, not yet reviewed by a speaker (SPEC-2 C15, 2026-09-24).
+  "logbook.export.lacks.saving": { "one": "Falta {{count}} cambio reciente en la exportación: Nexus todavía lo está guardando en el libro de guardia.", "other": "Faltan {{count}} cambios recientes en la exportación: Nexus todavía los está guardando en el libro de guardia." },
+  "logbook.export.lacks.held": { "one": "Falta en la exportación {{count}} cambio que el libro de guardia rechazó. Nexus lo conserva en memoria durante esta sesión y te pregunta por él al salir.", "other": "Faltan en la exportación {{count}} cambios que el libro de guardia rechazó. Nexus los conserva en memoria durante esta sesión y te pregunta por ellos al salir." },
   "logbook.export.activation.label": "activación",
   "logbook.export.activation.title": "Elige un día de parque para exportarlo como el archivo que pide POTA: un parque, un día UTC, un indicativo",
   "logbook.export.activation.none": "ninguna",

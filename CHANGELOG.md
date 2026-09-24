@@ -244,8 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the decoder and the waterfall felt on a log of a hundred thousand contacts. They now read the
   logbook database while the radio carries on, and the files are the same, byte for byte. If a
   change you made is not in the database a minute after you ask for an export — still on its
-  way, or refused by the disk — the export now says so and writes no file, rather than a file
-  without it.
+  way, or refused by the disk — the file is still written with what the database holds, so an
+  export still rescues your log from a failing disk, and Nexus tells you how many recent changes
+  the file is missing and whether they are still being saved.
 
 - **Keeping `log.adi` up to date no longer needs memory the size of your log.** Every change
   used to build the whole file in memory before writing it — about 64 MB on a log of 150,000

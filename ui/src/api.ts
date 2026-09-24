@@ -27,6 +27,7 @@ import type {
   ClubLogPushResult,
   Activation,
   LoggedActivation,
+  LogExport,
   DetectedRig,
   FdEventBeacon,
   FdMergeReport,
@@ -1337,8 +1338,8 @@ export async function exportGeneralLog(
   format: 'adif' | 'csv',
   from?: string,
   to?: string,
-): Promise<string> {
-  return invoke<string>('export_general_log', { format, from: from || null, to: to || null })
+): Promise<LogExport> {
+  return invoke<LogExport>('export_general_log', { format, from: from || null, to: to || null })
 }
 
 /** The absolute path where the ALL.TXT decode log is written (to show in Settings). */
@@ -3324,8 +3325,8 @@ export async function logOperators(): Promise<string[]> {
 
 /** ADIF for ONE operator's contacts (#25). POTA and Field Day both require each operator to
  *  submit their own log. */
-export async function exportLogForOperator(operator: string): Promise<string> {
-  return invoke<string>('export_log_for_operator', { operator })
+export async function exportLogForOperator(operator: string): Promise<LogExport> {
+  return invoke<LogExport>('export_log_for_operator', { operator })
 }
 
 /** Activations present in the log — your park × UTC day × the callsign you signed, newest
@@ -3342,8 +3343,8 @@ export async function exportLogForActivation(
   reference: string,
   dayStartUnix: number,
   callsign: string | null,
-): Promise<string> {
-  return invoke<string>('export_log_for_activation', { reference, dayStartUnix, callsign })
+): Promise<LogExport> {
+  return invoke<LogExport>('export_log_for_activation', { reference, dayStartUnix, callsign })
 }
 
 /** Everything that makes this station THIS station, as one JSON file (#28) — settings plus the

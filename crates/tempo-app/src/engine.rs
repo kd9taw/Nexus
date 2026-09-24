@@ -34505,7 +34505,8 @@ mod tests {
         );
         let adif =
             crate::logexport::export_logbook(&crate::logexport::Source::of(&e), "adif", None, None)
-                .expect("the log reads");
+                .expect("the log reads")
+                .text;
         assert!(
             adif.contains("<STATION_CALLSIGN:3>W6R"),
             "the export is the only artifact that can answer 'which call worked this?': {adif}"

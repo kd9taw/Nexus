@@ -15,21 +15,24 @@
 //! each record as the store's one decoder reads it back, in log order — and the store holds
 //! exactly what memory holds (SPEC-2 v3 D2-A saved the country and state fills too).
 //!
-//! # An export never leaves out a change it was asked after
+//! # A change the database does not hold yet: the file says what it is, the screen says what it lacks
 //!
-//! Every change this process made before the export was asked for must be in the store. The
-//! export takes them as the quit does ([`Unsaved`]: the tickets of the changes still on their
-//! way, and the ones the writer gave up on) and first waits for them — up to [`EXPORT_WAIT`],
-//! the wait an operator's own command gives its change. If they are not all saved by then (a
-//! bulk import still being written, a disk refusing the write), there is no export: the file
-//! would silently lack contacts the Logbook shows, and an operator submitting a log to POTA or
-//! ARRL would never know. It says why instead.
+//! The operator's ruling (SPEC-2 v3 C15): *export with a warning* — "Write what the database
+//! holds and say how many recent changes aren't in the file yet (they keep retrying). Export still
+//! works as a rescue when the disk is failing."
 //!
-//! ⚠️ Why not the read's own freshness ([`crate::logstore::Freshness`]): it rests on the writer's
-//! durability watermark, which the first change the writer ever gives up on caps for good — so
-//! after one refusal, even one saved later by a re-send, every read would count as stale and no
-//! export could be made for the rest of the session. The changes' own tickets say exactly what
-//! is saved now.
+//! So an export first waits, up to [`EXPORT_WAIT`] (the wait an operator's own command gives its
+//! change), for this process's changes made before it was asked for — taken as the quit takes
+//! them ([`Unsaved`]: the tickets of the changes still on their way, and the ones the writer gave
+//! up on). Then it writes the store as it stands, whatever that wait found, and counts the
+//! changes still not in it for the screen to say so, in two counts because they are two
+//! different news: [`Exported::saving`], still on their way or being sent again, which will land;
+//! [`Exported::held`], refused by the store for what they are, which will not. Nothing missing:
+//! nothing counted, nothing said.
+//!
+//! ⚠️ Why the changes' own tickets and not the read's freshness
+//! ([`crate::logstore::Freshness`]): a stale read says only that something is missing. The
+//! tickets say how many, and which of the two kinds.
 //!
 //! ⚠️ Every function here reads the store: never call one under the Engine lock (a debug build
 //! panics). Take the [`Source`] under it, release it, then call.
@@ -39,7 +42,7 @@ use std::time::Duration;
 
 use tempo_core::logbook::{Activations, Export, ExportKind, LoggedActivation, Operators};
 
-use crate::logstore::{LogRows, Unsaved, DURABLE_WAIT, READ_WAIT};
+use crate::logstore::{LogRows, Standing, Unsaved, DURABLE_WAIT, READ_WAIT};
 
 /// How long an export waits for the changes made before it was asked for to reach the store:
 /// as long as an operator's own command waits for its change ([`DURABLE_WAIT`]).
@@ -70,6 +73,15 @@ impl Source {
             unsaved: Unsaved::default(),
         }
     }
+
+    /// The export source of a store a test opened, and of the changes submitted to it.
+    #[cfg(test)]
+    pub(crate) fn of_store(store: &crate::logstore::LogStore) -> Source {
+        Source {
+            rows: LogRows::Store(store.reads()),
+            unsaved: store.unsaved(),
+        }
+    }
 }
 
 /// The general logbook as `format` — `"csv"` (any case) for CSV, anything else ADIF — bounded to
@@ -80,7 +92,7 @@ pub fn export_logbook(
     format: &str,
     from_unix: Option<u64>,
     to_unix: Option<u64>,
-) -> Result<String, String> {
+) -> Result<Exported, String> {
     let kind = match format.to_ascii_lowercase().as_str() {
         "csv" => ExportKind::Csv {
             from: from_unix,
@@ -95,7 +107,7 @@ pub fn export_logbook(
 }
 
 /// ADIF of `operator`'s contacts (`Logbook::adif_for_operator`).
-pub fn export_for_operator(from: &Source, operator: &str) -> Result<String, String> {
+pub fn export_for_operator(from: &Source, operator: &str) -> Result<Exported, String> {
     export_waiting(
         from,
         ExportKind::Operator(operator.to_string()),
@@ -110,7 +122,7 @@ pub fn export_for_activation(
     reference: &str,
     day_start_unix: u64,
     callsign: Option<&str>,
-) -> Result<String, String> {
+) -> Result<Exported, String> {
     export_waiting(
         from,
         ExportKind::Activation {
@@ -122,18 +134,35 @@ pub fn export_for_activation(
     )
 }
 
-/// Every distinct operator in the log, uppercased and sorted (`Logbook::operators`).
+/// Every distinct operator in the log, uppercased and sorted (`Logbook::operators`) — the store
+/// as it stands once this process's changes have had the ordinary read's wait to land.
 pub fn operators(from: &Source) -> Result<Vec<String>, String> {
     let mut found = Operators::default();
-    pass(from, EXPORT_WAIT, &mut |r| found.add(r))?;
+    pass(from, READ_WAIT, &mut |r| found.add(r))?;
     Ok(found.finish())
 }
 
-/// Every distinct activation in the log, newest first (`Logbook::activations`).
+/// Every distinct activation in the log, newest first (`Logbook::activations`), as
+/// [`operators`].
 pub fn activations(from: &Source) -> Result<Vec<LoggedActivation>, String> {
     let mut found = Activations::default();
-    pass(from, EXPORT_WAIT, &mut |r| found.add(r))?;
+    pass(from, READ_WAIT, &mut |r| found.add(r))?;
     Ok(found.finish())
+}
+
+/// An export's file — the store as it stood when it was read — and this process's changes made
+/// before it was asked for that were not in the store then, so are not in the file. Both counts
+/// `0`: nothing to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exported {
+    /// The file.
+    pub text: String,
+    /// Changes the file lacks that are still being saved: on their way to the store, or refused
+    /// for a reason that can pass and sent again from memory until they land.
+    pub saving: usize,
+    /// Changes the file lacks that the store refused for what they are: kept in memory for the
+    /// session, and asked about when Nexus quits. Never in the store.
+    pub held: usize,
 }
 
 /// The export `kind`, waiting at most `wait` for this process's changes to reach the store —
@@ -142,39 +171,31 @@ pub(crate) fn export_waiting(
     from: &Source,
     kind: ExportKind,
     wait: Duration,
-) -> Result<String, String> {
+) -> Result<Exported, String> {
     let mut e = Export::new(kind);
-    pass(from, wait, &mut |r| e.add(r))?;
-    Ok(e.finish())
+    let lacking = pass(from, wait, &mut |r| e.add(r))?;
+    Ok(Exported {
+        text: e.finish(),
+        saving: lacking.pending + lacking.retryable,
+        held: lacking.refused,
+    })
 }
 
-/// Every record of the log, whole and in log order, through `take` — once every change made
-/// before the export was asked for is in the store, or why it is not.
+/// Every record of the log, whole and in log order, through `take`, once this process's changes
+/// have had `wait` to reach the store — and where the ones that had not stand.
 fn pass(
     from: &Source,
     wait: Duration,
     take: &mut dyn FnMut(&tempo_core::logbook::QsoRecord),
-) -> Result<(), String> {
-    let standing = from.unsaved.wait(wait);
-    if !standing.saved() {
-        let n = standing.pending + standing.retryable + standing.refused;
-        let why = standing
-            .retry_reason
-            .or(standing.reason)
-            .map(|w| format!(" ({w})"))
-            .unwrap_or_default();
-        return Err(format!(
-            "The logbook has {n} change(s) not saved to its database yet{why}. The export would \
-             leave them out, so it was not made — try again once they are saved."
-        ));
-    }
-    // Every one of them is in: what the read says of its own freshness adds nothing (see the
-    // module header).
+) -> Result<Standing, String> {
+    let lacking = from.unsaved.wait(wait);
+    // The wait for them is over: the read takes the store as it stands, without a wait of its
+    // own for changes this one has already waited on.
     from.rows
-        .each_record(READ_WAIT, &mut |r| {
+        .each_record(Duration::ZERO, &mut |r| {
             take(r);
             ControlFlow::Continue(())
         })
         .map_err(|e| format!("The logbook could not be read for the export: {e}"))?;
-    Ok(())
+    Ok(lacking)
 }

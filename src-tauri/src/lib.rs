@@ -12178,14 +12178,15 @@ fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, 
 /// full log the operator believes is filtered.
 ///
 /// Read from the logbook store with the engine lock released, on the blocking pool
-/// (`tempo_app::logexport`, SPEC-2 v3 C15).
+/// (`tempo_app::logexport`, SPEC-2 v3 C15). A file the database had not caught up with is
+/// still written, and says how many recent changes it lacks.
 #[tauri::command]
 async fn export_general_log(
     state: State<'_, SharedEngine>,
     format: String,
     from: Option<String>,
     to: Option<String>,
-) -> Result<String, String> {
+) -> Result<tempo_app::dto::LogExportDto, String> {
     let parse = |d: Option<String>| -> Result<Option<(u64, u64)>, String> {
         match d.as_deref().map(str::trim) {
             None | Some("") => Ok(None),
@@ -12199,7 +12200,7 @@ async fn export_general_log(
     let to_unix = parse(to)?.map(|b| b.1);
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
-        tempo_app::logexport::export_logbook(&source, &format, from_unix, to_unix)
+        tempo_app::logexport::export_logbook(&source, &format, from_unix, to_unix).map(Into::into)
     })
     .await
 }
@@ -12401,10 +12402,10 @@ async fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, St
 async fn export_log_for_operator(
     state: State<'_, SharedEngine>,
     operator: String,
-) -> Result<String, String> {
+) -> Result<tempo_app::dto::LogExportDto, String> {
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
-        tempo_app::logexport::export_for_operator(&source, &operator)
+        tempo_app::logexport::export_for_operator(&source, &operator).map(Into::into)
     })
     .await
 }
@@ -12440,7 +12441,7 @@ async fn export_log_for_activation(
     reference: String,
     day_start_unix: u64,
     callsign: Option<String>,
-) -> Result<String, String> {
+) -> Result<tempo_app::dto::LogExportDto, String> {
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
         tempo_app::logexport::export_for_activation(
@@ -12449,6 +12450,7 @@ async fn export_log_for_activation(
             day_start_unix,
             callsign.as_deref(),
         )
+        .map(Into::into)
     })
     .await
 }

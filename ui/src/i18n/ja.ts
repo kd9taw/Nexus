@@ -667,6 +667,9 @@ export const JA: PartialCatalog = {
   "logbook.export.perOperator.label": "オペレーター別にエクスポート",
   "logbook.export.perOperator.title": "オペレーターごとに1つのADIF（{{operators}}）と結合ログを出力",
   "logbook.export.perOperator.done": "{{count}}個のファイルをエクスポート → ダウンロードフォルダー",
+  // Machine translation, not yet reviewed by a speaker (SPEC-2 C15, 2026-09-24).
+  "logbook.export.lacks.saving": "最近の変更{{count}}件がエクスポートに含まれていません。Nexusがまだログブックに保存しています。",
+  "logbook.export.lacks.held": "ログブックが受け付けなかった変更{{count}}件はエクスポートに含まれていません。このセッションの間はメモリに保持し、終了時に確認します。",
   "logbook.export.activation.label": "アクティベーション",
   "logbook.export.activation.title": "POTA が求めるファイル（1 つの公園・1 UTC 日・1 つのコールサイン）として書き出す公園の日を選びます",
   "logbook.export.activation.none": "なし",
