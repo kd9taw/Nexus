@@ -39,6 +39,7 @@ import { setSubLevel } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl } from '../stationAccess'
+import { controlFailureMessage } from '../remote-web/control-failure'
 import { formatDialMhz } from './FrequencyReadout'
 import {
   deadControlProps,
@@ -187,7 +188,11 @@ function SubLevelRow({
   const send = (value: number) => {
     void setSubLevel(spec.level, value / 100)
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast(t('phone.sub.failed', { plate: control.plate }), 'error'))
+      // On the Remote page, what the station did — busy, not sent, or not confirmed — in the words
+      // every station control uses; "could not set" would claim a level that may have changed.
+      .catch((error) =>
+        pushToast(local ? t('phone.sub.failed', { plate: control.plate }) : controlFailureMessage(error), 'error'),
+      )
   }
   const begin = () => {
     dragging.current = true

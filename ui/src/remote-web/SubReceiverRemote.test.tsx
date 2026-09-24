@@ -48,6 +48,7 @@ vi.mock('../components/SpotDialog', () => ({ SpotDialog: () => null }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()) }))
 import { getSettings, cwDecode } from '../api'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
 
 const clients: OperationClient[] = []
 const uninstall: (() => void)[] = []
@@ -120,7 +121,9 @@ function page(mode: 'phone' | 'cw', receivers: ReceiversStatus | undefined, capa
   const writes = () => sent.filter(w => w.request.type === 'stationControl')
   // The same page again, with another snapshot (`s`) or with the station's readings gone stale.
   const again = (s: AppSnapshot = snap, available = true) => ui.rerender(tree(s, available))
-  return { ...ui, writes, snap, again }
+  // The station's answer to the last request this browser sent.
+  const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1].request.requestId, value })
+  return { ...ui, writes, snap, again, reply }
 }
 
 async function settle() {
@@ -239,6 +242,20 @@ describe.each(['phone', 'cw'] as const)('the Remote page, %s cockpit', mode => {
     await settle()
     expect(p.writes()).toHaveLength(1)
     expect(p.writes()[0].request.action.value).toBe(0.4)
+  })
+
+  it.each([
+    ['stationBusy', 'remote.controlBusy'],
+    ['hardwareUnavailable', 'remote.controlRequestFailed'],
+  ] as const)('a %s refusal says what the station did, never that the level could not be set', async (reason, words) => {
+    const p = page(mode, DUAL, ['subReceiverLevels'])
+    await settle()
+    fireEvent.change(screen.getByLabelText('Sub receiver AF gain'), { target: { value: '40' } })
+    await settle()
+    const request = p.writes()[0].request
+    act(() => p.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'rejected', reason }))
+    await settle()
+    expect(vi.mocked(pushToast).mock.calls).toEqual([[t(words), 'error']])
   })
 
   it('a station that does not advertise subReceiverLevels: the row is drawn, its sliders dead, nothing sent', async () => {

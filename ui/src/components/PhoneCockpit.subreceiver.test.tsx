@@ -222,6 +222,16 @@ describe('a confirmed dual receiver gets a Sub strip — and only one', () => {
     expect(mockSetSubLevel, 'Main’s AF reached the Sub').not.toHaveBeenCalled()
   })
 
+  it('a refusal at the desktop says the Sub level was not set, naming the control', async () => {
+    const { pushToast } = await import('../toast')
+    vi.mocked(pushToast).mockClear()
+    mountDual(dual(SUB_7610, true))
+    mockSetSubLevel.mockRejectedValueOnce('this connection cannot reach the sub receiver')
+    fireEvent.change(screen.getByLabelText('Sub receiver AF gain'), { target: { value: '40' } })
+    await vi.waitFor(() => expect(pushToast).toHaveBeenCalled())
+    expect(vi.mocked(pushToast).mock.calls).toEqual([['Nexus could not set the sub receiver’s AF.', 'error']])
+  })
+
   it('the slider shows what the radio ACCEPTED; a level never set reads as unknown, not zero', () => {
     mountDual(dual({ ...SUB_7610, afGain: 0.25 }, true))
     const row = (id: string) => subStrip()!.querySelector(`[data-chain="${id}"]`)!
