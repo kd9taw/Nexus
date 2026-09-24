@@ -21,14 +21,13 @@
 //! holds and say how many recent changes aren't in the file yet (they keep retrying). Export still
 //! works as a rescue when the disk is failing."
 //!
-//! So an export first waits, up to [`EXPORT_WAIT`] (the wait an operator's own command gives its
-//! change), for this process's changes made before it was asked for — taken as the quit takes
-//! them ([`Unsaved`]: the tickets of the changes still on their way, and the ones the writer gave
-//! up on). Then it writes the store as it stands, whatever that wait found, and counts the
-//! changes still not in it for the screen to say so, in two counts because they are two
-//! different news: [`Exported::saving`], still on their way or being sent again, which will land;
-//! [`Exported::held`], refused by the store for what they are, which will not. Nothing missing:
-//! nothing counted, nothing said.
+//! So an export first waits, up to [`EXPORT_WAIT`] (about ten seconds), for this process's
+//! changes made before it was asked for — taken as the quit takes them ([`Unsaved`]: the tickets
+//! of the changes still on their way, and the ones the writer gave up on). Then it writes the
+//! store as it stands, whatever that wait found, and counts the changes still not in it for the
+//! screen to say so, in two counts because they are two different news: [`Exported::saving`],
+//! still on their way or being sent again, which will land; [`Exported::held`], refused by the
+//! store for what they are, which will not. Nothing missing: nothing counted, nothing said.
 //!
 //! ⚠️ Why the changes' own tickets and not the read's freshness
 //! ([`crate::logstore::Freshness`]): a stale read says only that something is missing. The
@@ -42,11 +41,13 @@ use std::time::Duration;
 
 use tempo_core::logbook::{Activations, Export, ExportKind, LoggedActivation, Operators};
 
-use crate::logstore::{LogRows, Standing, Unsaved, DURABLE_WAIT, READ_WAIT};
+use crate::logstore::{LogRows, Standing, Unsaved, READ_WAIT};
 
-/// How long an export waits for the changes made before it was asked for to reach the store:
-/// as long as an operator's own command waits for its change ([`DURABLE_WAIT`]).
-pub const EXPORT_WAIT: Duration = DURABLE_WAIT;
+/// How long an export waits for the changes made before it was asked for to reach the store,
+/// before it writes what the store holds and says what the file lacks — the operator's ruling,
+/// "about 10 seconds": time enough for a change on its way to land, and a rescue from a failing
+/// disk is not a minute's wait. (It was [`crate::logstore::DURABLE_WAIT`], a minute.)
+pub const EXPORT_WAIT: Duration = Duration::from_secs(10);
 
 /// What an export reads, taken under the Engine lock — handles, no I/O: the log's rows, and this
 /// process's changes that were not in the store yet when the export was asked for.

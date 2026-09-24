@@ -2133,6 +2133,50 @@ mod tests {
         );
     }
 
+    /// ★ AN EXPORT WAITS ABOUT TEN SECONDS FOR A STUCK CHANGE, THEN WRITES THE RESCUE FILE (the
+    /// operator's ruling). With the store's write lock held elsewhere, a contact logged just
+    /// before the export cannot land — the writer keeps trying for about 21 s before it gives up —
+    /// so the export waits out its own bound, measured here, then writes the store as it stands
+    /// and counts the change it lacks. The bound that shipped before was a minute: the same export
+    /// sat until the writer gave up, which the upper end of the measurement tells apart.
+    #[test]
+    fn an_export_waits_about_ten_seconds_for_a_stuck_change_then_writes_the_rescue_file() {
+        let d = Dir::new("export-wait");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let e = launch_with_resolvers(&d);
+        flush(&e.lock().unwrap());
+        let hold = WriteHold::take(&d.db()).unwrap();
+        let source = {
+            let mut eng = e.lock().unwrap();
+            eng.log_qso(qso("W9STUCK", 1_788_100_000));
+            crate::logexport::Source::of(&eng)
+        };
+        let asked = Instant::now();
+        let written = crate::logexport::export_logbook(&source, "adif", None, None)
+            .expect("the rescue file is written");
+        let waited = asked.elapsed();
+        assert!(
+            waited >= Duration::from_millis(9_900) && waited < Duration::from_secs(15),
+            "the export waited about ten seconds for the stuck change: {waited:?}"
+        );
+        assert_eq!(
+            (written.saving, written.held),
+            (1, 0),
+            "and counts it, as still being saved"
+        );
+        assert!(!written.text.contains("W9STUCK"), "the store as it stands");
+        assert_eq!(
+            written.text.matches("<EOR>").count(),
+            5,
+            "every contact the store holds"
+        );
+        drop(hold);
+        let saved = crate::logexport::export_logbook(&source, "adif", None, None)
+            .expect("control: once the store has it");
+        assert!(saved.text.contains("W9STUCK"), "the export holds it");
+        assert_eq!((saved.saving, saved.held), (0, 0), "and lacks nothing");
+    }
+
     // ── the mirror, read from the store (SPEC-2 v3 C15) ──────────────────────
 
     /// ★ THE MIRROR IS STAGE 1'S, BYTE FOR BYTE — after the conversion of an operator's
