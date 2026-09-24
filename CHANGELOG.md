@@ -157,6 +157,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
   it had already taken in are kept; importing the file again adds the rest without duplicating
   any.
+- **The dated backups of your logbook keep several days of copies again, however big the log.**
+  Nexus keeps dated copies of `log.adi` in the `backups/` folder beside it — one a day while the
+  log changes, and one before anything makes it smaller. That folder was capped at 64 MB, which
+  was room for nine copies of the biggest logs of its day and for only ONE copy of a
+  150,000-contact log, so the copy taken before a delete replaced yesterday's. It now holds up to
+  four copies of your log (never less than 64 MB): about 190 MB more beside a 150,000-contact
+  log. How to go back to one of them is in the install guide, under "Restoring the logbook from a
+  backup copy" — now that the logbook is a database, dropping a copy over `log.adi` is not enough
+  on its own.
 - **Closing Nexus while the logbook is still saving now says so, and asks before it drops
   anything.** If you close the window while changes are still on their way to the disk — right
   after a big import, or on a slow drive — Nexus takes the radio off the air first, as it always

@@ -884,6 +884,85 @@ mod tests {
         );
     }
 
+    /// ★ RESTORING FROM A BACKUP, exactly as `docs/install.md` tells an operator to: quit, move
+    /// the database files aside, copy the dated copy over `log.adi`, start. The log is then the
+    /// copy's — contacts logged since it was taken are gone from it, which is what a restore is
+    /// — and the database moved aside still holds them, so the restore can be undone.
+    ///
+    /// The control is the same copy put back WITHOUT moving the database: it is taken in as an
+    /// import, which adds and never removes, so nothing is restored. That is why the steps say
+    /// to move the database first.
+    #[test]
+    fn restoring_a_backup_copy_by_the_documented_steps_restores_it() {
+        let d = Dir::new("restore");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let e = engine_on_store(&d); // the conversion
+        flush(&e);
+        // The mirror's first write replaced the converted file; the ring kept that file.
+        let ring: Vec<PathBuf> = std::fs::read_dir(d.0.join("backups"))
+            .expect("the ring exists")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "adi"))
+            .collect();
+        assert_eq!(ring.len(), 1, "premise: one dated copy: {ring:?}");
+        let copy = ring[0].clone();
+
+        let mut e = e;
+        e.log_qso(qso("W1NEW", 1_790_000_000));
+        e.log_qso(qso("W2NEW", 1_790_000_600));
+        flush(&e);
+        drop(e); // quit
+        assert_eq!(
+            stored(&d).len(),
+            12,
+            "premise: the store has the new contacts"
+        );
+
+        // The control: the copy over `log.adi`, the database left where it is.
+        std::fs::copy(&copy, d.log()).unwrap();
+        let kept = engine_on_store(&d);
+        flush(&kept);
+        assert_eq!(
+            kept.log_records().len(),
+            12,
+            "control: with the database in place the copy is only taken in, and nothing goes"
+        );
+        drop(kept);
+
+        // The documented steps.
+        let aside = d.0.join("before-restore");
+        std::fs::create_dir_all(&aside).unwrap();
+        for name in ["log.sqlite3", "log.sqlite3-wal", "log.sqlite3-shm"] {
+            if d.0.join(name).exists() {
+                std::fs::rename(d.0.join(name), aside.join(name)).unwrap();
+            }
+        }
+        std::fs::copy(&copy, d.log()).unwrap();
+        let restored = engine_on_store(&d);
+        flush(&restored);
+        let calls: Vec<String> = restored
+            .log_records()
+            .iter()
+            .map(|r| r.call.clone())
+            .collect();
+        assert_eq!(calls.len(), 10, "the log is the copy's: {calls:?}");
+        assert!(
+            !calls.iter().any(|c| c.ends_with("NEW")),
+            "and only the copy's: {calls:?}"
+        );
+        assert_eq!(stored(&d).len(), 10, "the new database holds the copy");
+        assert_eq!(
+            LogDb::open(&aside.join("log.sqlite3"))
+                .unwrap()
+                .load_all()
+                .unwrap()
+                .len(),
+            12,
+            "the database moved aside still has everything, so the restore can be undone"
+        );
+    }
+
     // ── parity with the ADIF path ───────────────────────────────────────────
 
     /// ★ PROPERTY 3 — THE OLD PATH IS THE ORACLE. The same operations, in the same order,

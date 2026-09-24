@@ -1880,12 +1880,19 @@ impl Logbook {
     ///
     /// # The three bounds
     ///
-    /// `keep` most recent snapshots, a `total_cap` byte ceiling over the folder, and the
+    /// `keep` most recent snapshots, a byte ceiling over the folder — `total_cap` of the larger
+    /// of the file being replaced and the one replacing it (see [`backup_total_cap`]) — and the
     /// one-per-day rule that limits how fast the ring can turn over. Oldest go first. The
     /// ANCHOR is not in this folder at all — it is `log.adi.bak`, beside the log — so "the
     /// anchor is never eligible for rotation" holds by construction rather than by a check
     /// someone could delete.
-    fn snapshot_before_save(path: &Path, new_len: u64, now_unix: u64, keep: usize, total_cap: u64) {
+    fn snapshot_before_save(
+        path: &Path,
+        new_len: u64,
+        now_unix: u64,
+        keep: usize,
+        total_cap: &dyn Fn(u64) -> u64,
+    ) {
         // No file yet (first ever save) or an empty one: nothing to preserve.
         let Ok(meta) = std::fs::metadata(path) else {
             return;
@@ -1949,7 +1956,9 @@ impl Logbook {
             return;
         }
         snaps.push(name);
-        Self::rotate_snapshots(&dir, snaps, keep, total_cap);
+        // The LARGER of the two: a purge shrinks the log to nothing, and a ceiling taken from
+        // the new length would then evict the very copies of the log it shrank from.
+        Self::rotate_snapshots(&dir, snaps, keep, total_cap(cur_len.max(new_len)));
     }
 
     /// The snapshot file names in `dir` for the log named `stem`, oldest first. The name
@@ -2054,18 +2063,30 @@ impl Logbook {
     /// NAS log is a supported deployment — and a same-tick sibling write would
     /// otherwise be invisible.
     pub fn save(&self, path: &Path) -> std::io::Result<Option<(std::time::SystemTime, u64)>> {
-        self.save_at(path, now_unix(), BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+        self.save_with(path, now_unix(), BACKUP_KEEP, &backup_total_cap)
     }
 
-    /// [`save`](Self::save) with the clock and the backup bounds injected. The snapshot rules
-    /// are CALENDAR-day rules over a bounded ring, and a test can neither wait a day nor write
-    /// 64 MiB of fixtures to watch the ceiling bite.
+    /// [`save`](Self::save) with the clock and the backup bounds injected, the byte ceiling a
+    /// fixed number. The snapshot rules are CALENDAR-day rules over a bounded ring, and a test
+    /// can neither wait a day nor write 64 MiB of fixtures to watch the ceiling bite.
+    #[cfg(test)]
     fn save_at(
         &self,
         path: &Path,
         now_unix: u64,
         keep: usize,
         total_cap: u64,
+    ) -> std::io::Result<Option<(std::time::SystemTime, u64)>> {
+        self.save_with(path, now_unix, keep, &|_| total_cap)
+    }
+
+    /// The save itself: the ring's byte ceiling is `total_cap` of the log's size.
+    fn save_with(
+        &self,
+        path: &Path,
+        now_unix: u64,
+        keep: usize,
+        total_cap: &dyn Fn(u64) -> u64,
     ) -> std::io::Result<Option<(std::time::SystemTime, u64)>> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -3230,12 +3251,28 @@ fn dedup_mode(mode: &str) -> String {
 /// bound that normally binds; the byte ceiling below takes over for a very large log.
 const BACKUP_KEEP: usize = 10;
 
-/// Byte ceiling over the whole `backups/` ring. The biggest logs seen here are ~26,000 QSOs
-/// at roughly 250 bytes a record — about 7 MB — so 64 MiB is ~9 snapshots of a log that
-/// large: the ceiling binds before the count does exactly when a snapshot is expensive, and
-/// the count binds first for the ordinary few-thousand-QSO log (~600 KB, well under). Either
-/// way the folder is bounded by a number, not by "prune when it feels big".
+/// The floor of the byte ceiling over the whole `backups/` ring (see [`backup_total_cap`]). For
+/// a log of ~26,000 QSOs — about 7 MB — 64 MiB is ~9 snapshots: the ceiling binds before the
+/// count does exactly when a snapshot is expensive, and the count binds first for the ordinary
+/// few-thousand-QSO log (~600 KB, well under). Either way the folder is bounded by a number,
+/// not by "prune when it feels big".
 const BACKUP_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How many copies of the log the ring's byte ceiling makes room for, however big the log is.
+const BACKUP_LOG_COPIES: u64 = 4;
+
+/// The byte ceiling over the `backups/` ring for a log of `log_len` bytes: room for
+/// [`BACKUP_LOG_COPIES`] copies of it, and never less than [`BACKUP_TOTAL_BYTES`].
+///
+/// A fixed 64 MiB was sized for the biggest logs of its day. A lifetime log of 150,000 contacts
+/// is a 64 MB `log.adi`, and under a fixed ceiling its ring held ONE copy — so the day a delete
+/// or a lost row shrank the log, the pre-shrink copy replaced yesterday's, and "what did my
+/// log look like last week" had no answer. Four copies of the log is several days of history at
+/// any size (operator ruling, 2026-09-23: about +192 MB beside a 150,000-contact log, +640 MB
+/// beside 500,000).
+fn backup_total_cap(log_len: u64) -> u64 {
+    BACKUP_TOTAL_BYTES.max(log_len.saturating_mul(BACKUP_LOG_COPIES))
+}
 
 /// Wall clock, Unix seconds. `0` if the system clock is before the epoch — a nonsense stamp
 /// is still a usable file name, and a backup must never fail over a clock.
@@ -7243,6 +7280,63 @@ mod tests {
             std::fs::read(&anchor).unwrap(),
             anchor_bytes,
             "the anchor is not in backups/ and is never eligible for rotation"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ring's byte ceiling for a log of a given size: four copies of it, never under 64 MiB.
+    #[test]
+    fn the_rings_ceiling_is_four_copies_of_the_log_and_never_under_64_mib() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(backup_total_cap(0), 64 * MIB, "an empty log");
+        assert_eq!(
+            backup_total_cap(7_000_000),
+            64 * MIB,
+            "a 26,000-contact log"
+        );
+        assert_eq!(backup_total_cap(16 * MIB), 64 * MIB, "the crossover");
+        assert_eq!(backup_total_cap(20 * MIB), 80 * MIB);
+        assert_eq!(
+            backup_total_cap(63_933_561),
+            4 * 63_933_561,
+            "a 150,000-contact log"
+        );
+        assert_eq!(backup_total_cap(u64::MAX), u64::MAX, "no overflow");
+    }
+
+    /// A folder where the ring already holds four dated copies of a big `log.adi` — sparse
+    /// files: the ring counts a copy by its length, so the fixture costs no disk.
+    pub(super) fn ring_of_four_big_copies(dir: &Path, len: u64) {
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        for day in 1..=4 {
+            let f = std::fs::File::create(backups.join(format!("log-2026010{day}-120000.adi")))
+                .unwrap();
+            f.set_len(len).unwrap();
+        }
+        let log = std::fs::File::create(dir.join("log.adi")).unwrap();
+        log.set_len(len).unwrap();
+    }
+
+    /// ★ A BIG LOG KEEPS SEVERAL DATED COPIES AGAIN — the 1.13 path's save. A 20 MiB log is
+    /// saved as an empty one, a shrink: the file it replaces joins the four copies already in
+    /// the ring. Under the old fixed 64 MiB ceiling the ring kept three of the five; its ceiling
+    /// is now four copies of the log, so it keeps four — and the new copy is one of them.
+    #[test]
+    fn a_big_logs_ring_keeps_four_copies_through_a_save() {
+        const LEN: u64 = 20 * 1024 * 1024;
+        let dir = scratch_log_dir();
+        ring_of_four_big_copies(&dir, LEN);
+        Logbook::new().save(&dir.join("log.adi")).unwrap();
+        let kept = snaps(&dir);
+        assert_eq!(kept.len(), 4, "four copies of the log: {kept:?}");
+        assert!(
+            !kept.iter().any(|n| n.contains("20260101")),
+            "the oldest made room: {kept:?}"
+        );
+        assert!(
+            kept.iter().any(|n| n.ends_with("-shrink.adi")),
+            "the copy taken before the shrink is kept: {kept:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

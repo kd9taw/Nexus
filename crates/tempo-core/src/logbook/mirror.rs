@@ -510,7 +510,7 @@ fn write_once(
             body.len() as u64,
             super::now_unix(),
             super::BACKUP_KEEP,
-            super::BACKUP_TOTAL_BYTES,
+            &super::backup_total_cap,
         );
         std::fs::rename(&tmp, path)?;
         super::sync_parent_dir(path);
@@ -839,6 +839,40 @@ mod tests {
             std::fs::read(&shrinks[0]).unwrap(),
             before,
             "and it is the file as it was before the shrinking write"
+        );
+    }
+
+    /// ★ A BIG LOG KEEPS SEVERAL DATED COPIES AGAIN — through the mirror, which is how the
+    /// ring is written now. The log shrinks from 20 MiB to a few contacts (a purge): the file it
+    /// replaces joins the four copies already in the ring, and the ceiling — four copies of the
+    /// LARGER of the two files, never under 64 MiB — keeps four. A fixed 64 MiB kept three; a
+    /// ceiling taken from the new, small file would have kept one.
+    #[test]
+    fn a_big_logs_ring_keeps_four_copies_through_the_mirror() {
+        const LEN: u64 = 20 * 1024 * 1024;
+        let d = Dir::new("bigring");
+        crate::logbook::tests::ring_of_four_big_copies(&d.0, LEN);
+        let w = MirrorWriter::with_options(
+            d.log(),
+            MirrorOptions {
+                debounce: Duration::from_millis(5),
+                max_delay: Duration::from_millis(50),
+                // The big file is the operator's own log, just taken into the store.
+                accepted: file_stamp(&d.log()),
+            },
+        );
+        w.submit(rows(3));
+        let status = w.flush(Duration::from_secs(30));
+        assert_eq!(status.writes, 1, "the mirror replaced the file: {status:?}");
+        let kept = Logbook::snapshot_names(&d.0.join("backups"), "log");
+        assert_eq!(kept.len(), 4, "four copies of the log: {kept:?}");
+        assert!(
+            !kept.iter().any(|n| n.contains("20260101")),
+            "the oldest made room: {kept:?}"
+        );
+        assert!(
+            kept.iter().any(|n| n.ends_with("-shrink.adi")),
+            "the copy taken before the purge is kept: {kept:?}"
         );
     }
 
