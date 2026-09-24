@@ -27,7 +27,7 @@
 
 use super::*;
 use crate::dualrx::ReceiverId;
-use crate::settings::SatVfoMap;
+use crate::settings::{CwKeyerBackend, SatVfoMap};
 use tempo_core::doppler::{DownlinkClass, Transponder};
 
 /// RS-44 as the satellite tests elsewhere in the engine carry it: an INVERTING linear
@@ -82,16 +82,25 @@ pub(super) fn station(
 /// the transponder picked, the nominal legs queued. The section is set FIRST because a section
 /// change releases a satellite's hold on the rig mode.
 pub(super) fn sat_pass(model: u32, class: &str, section: &str, tp: Transponder) -> Engine {
-    sat_pass_with(model, class, section, tp, DownlinkClass::Usb)
+    sat_pass_with(
+        model,
+        class,
+        section,
+        tp,
+        DownlinkClass::Usb,
+        CwKeyerBackend::Cat,
+    )
 }
 
-/// [`sat_pass`] with the downlink the record names: USB, LSB or an FM channel.
+/// [`sat_pass`] with the downlink the record names (USB, LSB or an FM channel) and the CW keyer,
+/// whose choice decides the CW mode word, so it is set before the section.
 fn sat_pass_with(
     model: u32,
     class: &str,
     section: &str,
     tp: Transponder,
     down: DownlinkClass,
+    keyer: CwKeyerBackend,
 ) -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     e.settings.ensure_radio_profiles();
@@ -99,6 +108,7 @@ fn sat_pass_with(
     e.settings.rig_conn = "serial".to_string();
     e.settings.rig_addr = String::new();
     e.settings.icom_native_cat = true;
+    e.settings.cw_keyer = keyer;
     e.settings.sync_active_from_flat();
     let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
     for id in ids {
@@ -779,9 +789,10 @@ fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
 /// The (uplink, downlink) pairs [`the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded`]
 /// works, each inverting and not. CONSTRUCTED: no real bird uplinks within an audio offset of a
 /// segment edge, and that is exactly where the side of a carrier can change a licence answer.
-const SWEEP_PAIRS: [(u64, u64); 9] = [
+const SWEEP_PAIRS: [(u64, u64); 10] = [
     (144_101_000, 435_640_000), // just above 2 m's CW-only floor, 70 cm down (cross-band)
     (144_099_000, 435_640_000), // just below it
+    (144_000_300, 435_640_000), // 0.3 kHz above the bottom of 2 m: a CW tone below leaves the band
     (147_999_000, 435_640_000), // just below the top of 2 m
     (145_965_000, 435_640_000), // RS-44's uplink, well inside
     (420_001_000, 145_900_000), // just above the bottom of 70 cm, 2 m down (cross-band)
@@ -791,28 +802,52 @@ const SWEEP_PAIRS: [(u64, u64); 9] = [
     (147_999_000, 145_950_000), // same band, at the top of 2 m
 ];
 
+/// Each section the sweep works, and the CW keyer it keys with. CW twice: the rig's own keyer
+/// keys the carrier at the dial, the soundcard keyer a tone a pitch from it on the side the mode
+/// word names — the one CW case whose commanded word the gate judges.
+const SWEEP_SECTIONS: [(&str, CwKeyerBackend); 6] = [
+    ("phone", CwKeyerBackend::Cat),
+    ("digital", CwKeyerBackend::Cat),
+    ("cw", CwKeyerBackend::Cat),
+    ("cw", CwKeyerBackend::Soundcard),
+    ("rtty", CwKeyerBackend::Cat),
+    ("keyboard", CwKeyerBackend::Cat),
+];
+
 /// ⛔ THE SWITCH ONLY EVER REFUSES MORE, AND ONLY WHERE NEXUS COMMANDS THE UPLINK NO WORD.
 ///
 /// The table pins 23 states. This sweeps the pass shapes around them: the two radios the native
 /// daemon carries a cross-band pass on (IC-9700, IC-905), every US class and Open, every
-/// section, the [`SWEEP_PAIRS`] with a USB, LSB or FM downlink, the mode taken back mid-pass or
-/// not, and XIT off and on — 8,640 states, in well under a second.
+/// section ([`SWEEP_SECTIONS`], CW on both keyers), the [`SWEEP_PAIRS`] with a USB, LSB or FM
+/// downlink, the mode taken back mid-pass or not, and XIT off and on — 11,520 states, in well
+/// under a second.
 ///
 /// In every one the gate after the switch never allows what the gate before it
 /// ([`Engine::tx_frequency_allowed`]) refused, never moves the judged frequency, and is what the
 /// snapshot's lock and shade read, the shade being the band the radio transmits from. Every
 /// answer the switch DID change is Sub-sourced, in the Digital section, with the mode taken back
-/// and so no uplink word commanded: the one rule D1 adds (operator sign-off, 2026-09-23). The
-/// counts at the end are the controls: every pass shape was built, the sweep reached both
-/// receivers, and the switch visibly acted on the shade and on the lock.
+/// and so no uplink word commanded: the one rule D1 adds (operator sign-off, 2026-09-23).
+///
+/// ⚠️ A GUARD THAT NEVER REACHES A CHECK PROVES NOTHING ABOUT IT. The gate judges the transmit
+/// VFO's commanded word in Phone, Digital, Keyboard, RTTY and soundcard CW (`a7cbffff`,
+/// `2a9f28b4`, `35ea98fb`, `c82b54ec`), and on the Sub the switched gate must refuse wherever
+/// those terms do. So the sweep also counts, per section, the Sub-transmitting states only those
+/// terms refuse (the section model at the stored side allows them), and requires at least one
+/// for each — and none for CW on the rig's keyer, whose carrier is the dial and whose term adds
+/// nothing. The other counts are the controls that every pass shape was built, both receivers
+/// were reached, and the switch visibly acted on the shade and on the lock.
 #[test]
 fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded() {
     use crate::settings::OperatingMode;
+    use std::collections::BTreeMap;
     let (mut states, mut unbuilt, mut on_sub, mut on_main, mut refused, mut shaded) =
         (0, 0, 0, 0, 0, 0);
+    let mut by_the_word: BTreeMap<String, u32> = BTreeMap::new();
     for model in [3081u32, 3090] {
         for class in ["technician", "general", "extra", "open"] {
-            for section in ["phone", "digital", "cw", "rtty", "keyboard"] {
+            for (section, keyer) in SWEEP_SECTIONS {
+                let label = format!("{section} {keyer:?}");
+                by_the_word.entry(label.clone()).or_insert(0);
                 for (up, down_hz) in SWEEP_PAIRS {
                     for invert in [true, false] {
                         let tp = Transponder {
@@ -824,7 +859,8 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
                         for down in [DownlinkClass::Usb, DownlinkClass::Lsb, DownlinkClass::Fm] {
                             for released in [false, true] {
                                 for xit in [0, 3_000] {
-                                    let mut e = sat_pass_with(model, class, section, tp, down);
+                                    let mut e =
+                                        sat_pass_with(model, class, section, tp, down, keyer);
                                     if e.split_tx_mhz().is_none()
                                         || loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv)
                                             .is_none()
@@ -840,7 +876,7 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
                                     }
                                     states += 1;
                                     let what = format!(
-                                        "{model} {class} {section} up {up} invert {invert} \
+                                        "{model} {class} {label} up {up} invert {invert} \
                                          {down:?} released {released} xit {xit}"
                                     );
                                     let before = e.tx_frequency_allowed();
@@ -890,6 +926,18 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
                                             if !same_seg(sub_seg, main_seg) {
                                                 shaded += 1;
                                             }
+                                            // Refused by the commanded-word terms alone: the
+                                            // section model, at the stored side, allows it.
+                                            let om = e.settings.operating_mode;
+                                            let stored = e.settings.sideband.clone();
+                                            let f = e.tx_emission_mhz();
+                                            if xit == 0
+                                                && e.emission_allowed(om, f, &stored)
+                                                && !before
+                                            {
+                                                *by_the_word.entry(label.clone()).or_insert(0) += 1;
+                                                assert!(!v.tx_allowed, "{what}");
+                                            }
                                         }
                                     }
                                 }
@@ -904,7 +952,7 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
         unbuilt, 0,
         "pass shapes the sweep could not build: re-check SWEEP_PAIRS"
     );
-    assert_eq!(states, 8_640);
+    assert_eq!(states, 11_520);
     assert!(
         on_sub > 0 && on_main > 0,
         "both receivers: {on_sub} Sub, {on_main} Main"
@@ -914,4 +962,17 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
         refused > 0,
         "the switch refused nothing: the sweep proves nothing about the rule"
     );
+    for (label, n) in &by_the_word {
+        if label == "cw Cat" {
+            assert_eq!(
+                *n, 0,
+                "the rig's CW keyer has no commanded-word term: {by_the_word:?}"
+            );
+        } else {
+            assert!(
+                *n > 0,
+                "{label}: no Sub state reaches its commanded-word term: {by_the_word:?}"
+            );
+        }
+    }
 }
