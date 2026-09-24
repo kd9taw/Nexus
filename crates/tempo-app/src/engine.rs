@@ -23154,6 +23154,50 @@ contact yourself."
         self.station.logbook.revision()
     }
 
+    /// The revision of the log's last change a fold over its content must be built again for
+    /// — every change but an upload stamp, a QSL-sent mark or an id's adoption. The key a fold
+    /// that reads none of those is kept against (SPEC-2 v3 §4.4). See
+    /// [`tempo_core::logbook::OpClass`] for which change moves which watermark.
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
+    pub fn log_index_rev(&self) -> u64 {
+        self.station.logbook.index_rev()
+    }
+
+    /// The revision of the log's last change to any contact's content — everything but an
+    /// append. See [`tempo_core::logbook::OpClass`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
+    pub fn log_content_rev(&self) -> u64 {
+        self.station.logbook.content_rev()
+    }
+
+    /// The revision of the log's last change to a contact's identifying fields — an append, an
+    /// edit, a delete. What an index keyed on calls is kept against. See
+    /// [`tempo_core::logbook::OpClass`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
+    pub fn log_key_rev(&self) -> u64 {
+        self.station.logbook.key_rev()
+    }
+
+    /// Worked before (B4), call scope, for each of `keys` — a call as the hot index keys it,
+    /// ASCII upper-cased and untrimmed — from the hot index (SPEC-2 v3 C17a: the band map's
+    /// worked calls). No pass over the log.
+    pub fn log_b4_worked(&self, keys: &[String]) -> Vec<bool> {
+        let hot = self.station.hot();
+        keys.iter().map(|k| hot.worked_call(k)).collect()
+    }
+
+    /// The hot index's worked-before (B4) call keys that hold a character outside ASCII: the
+    /// calls whose ASCII fold is not the UI's Unicode one, which the UI's log questions (C17a)
+    /// must look at row by row. A pass over the index's distinct calls — kept by the caller
+    /// against [`Self::log_key_rev`].
+    pub fn log_odd_call_keys(&self) -> Vec<String> {
+        let hot = self.station.hot();
+        hot.worked_call_keys()
+            .filter(|k| !k.is_ascii())
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Whether the log only grew since it stood at `revision`. See
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
     #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log

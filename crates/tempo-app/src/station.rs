@@ -79,6 +79,11 @@ impl DiagnosticsInputs {
         self.records.len()
     }
 
+    /// The log the diagnosis runs over, in log order — what its positions name.
+    pub fn rows(&self) -> &[Arc<QsoRecord>] {
+        &self.records
+    }
+
     /// The diagnosis, exactly as [`StationCore::confirmation_diagnostics`] has always made it.
     pub fn diagnose(
         &self,

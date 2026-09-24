@@ -203,6 +203,7 @@ mod tests {
             call: None,
             other_index: None,
             until_unix: None,
+            other_id: None,
         };
         let report = |explanation: String| DiagnosticsReportDto {
             diagnoses: vec![QsoDiagnosisDto {
@@ -215,6 +216,11 @@ mod tests {
                     explanation,
                     action: action.clone(),
                 }],
+                id: None,
+                call: None,
+                band: None,
+                mode: None,
+                when_unix: None,
             }],
             buckets: Vec::new(),
             one_away: Vec::new(),

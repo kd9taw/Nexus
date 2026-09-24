@@ -798,6 +798,7 @@ pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
 mod op;
+pub mod query;
 pub mod reader;
 mod records;
 pub mod sqlite;

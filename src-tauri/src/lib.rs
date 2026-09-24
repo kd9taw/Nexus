@@ -45,6 +45,9 @@ mod data_folder_location;
 /// The Logbook's changes to one contact, addressed by id and the edit key of the version the
 /// caller holds (SPEC-2 v2 §3).
 mod log_by_id;
+/// The UI's log questions answered by the engine — pages, places, a call's history, an entity's
+/// slots (SPEC-2 v3 C17a).
+mod log_queries;
 mod pouncer;
 mod profile_sync;
 /// The quit when the logbook still has changes on their way to disk: the window is held while
@@ -473,20 +476,27 @@ mod whole_log_reader_tests {
         let engine = engine_with_log();
         let report = confirmation_diagnostics(&engine);
         // The engine's own diagnosis, called as the command used to call it — on a raw lock,
-        // which test code may take and the fence does not count.
-        let direct = engine
-            .lock()
-            .unwrap()
-            .confirmation_diagnostics(now_unix(), |call| {
+        // which test code may take and the fence does not count — and named from its log.
+        let (direct, rows) = {
+            let e = engine.lock().unwrap();
+            let direct = e.confirmation_diagnostics(now_unix(), |call| {
                 propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
             });
+            (direct, e.log_snapshot().records)
+        };
         assert!(
             !direct.one_away.is_empty(),
             "premise: the entity lookup reaches the report"
         );
+        let mut direct = DiagnosticsReportDto::from(direct);
+        direct.name_rows(&rows);
+        assert!(
+            report.diagnoses.iter().all(|d| d.id.is_some()),
+            "premise: the command's report is named"
+        );
         assert_eq!(
-            serde_json::to_value(DiagnosticsReportDto::from(report)).unwrap(),
-            serde_json::to_value(DiagnosticsReportDto::from(direct)).unwrap()
+            serde_json::to_value(report).unwrap(),
+            serde_json::to_value(direct).unwrap()
         );
     }
 }
@@ -17335,20 +17345,23 @@ fn journey_qso(r: &tempo_core::logbook::QsoRecord) -> propagation::JourneyQso {
 fn get_confirmation_diagnostics(
     state: State<'_, SharedEngine>,
 ) -> Result<DiagnosticsReportDto, String> {
-    Ok(confirmation_diagnostics(&state).into())
+    Ok(confirmation_diagnostics(&state))
 }
 
 /// `get_confirmation_diagnostics`' report. Under the engine lock only what the diagnosis reads
 /// is copied (the log's pointers and the latest reconcile summaries); the diagnosis — a DXCC
-/// lookup per contact, 180 ms at 150,000 — runs after the lock is released.
-fn confirmation_diagnostics(engine: &Mutex<Engine>) -> tempo_core::diagnostics::DiagnosticsReport {
+/// lookup per contact, 180 ms at 150,000 — runs after the lock is released. Every contact it
+/// points at is named by its id (SPEC-2 v2 §3, C17a), so the Awards view needs no log.
+fn confirmation_diagnostics(engine: &Mutex<Engine>) -> DiagnosticsReportDto {
     let (inputs, now) = {
         let eng = engine_lock(engine);
         (eng.confirmation_diagnostics_inputs(), now_unix())
     };
-    inputs.diagnose(now, |call| {
+    let mut report = DiagnosticsReportDto::from(inputs.diagnose(now, |call| {
         propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-    })
+    }));
+    report.name_rows(inputs.rows());
+    report
 }
 
 /// One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose view).
@@ -28331,6 +28344,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(BetaUpdateState::default())
+        .manage(log_queries::LogQueries::default())
         .invoke_handler(tauri::generate_handler![
             display_metrics,
             update_install_block,
@@ -28632,6 +28646,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             log_by_id::mark_qsl_card_by_id,
             log_by_id::set_sat_tag_by_id,
             log_by_id::delete_qso_by_id,
+            log_queries::ask_log,
             purge_log,
             get_awards,
             get_journey,

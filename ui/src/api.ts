@@ -58,6 +58,7 @@ import type {
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
+import type { AnswerTo, LogQuestion } from './features/logAnswers'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -1213,6 +1214,17 @@ export async function uploadLotwReport(indices?: number[]): Promise<UploadReport
  *  the rows, never positions. Refused if an id is not one the backend handed out. */
 export async function uploadLotwReportByIds(ids: string[]): Promise<UploadReport> {
   return invoke<UploadReport>('upload_lotw_report', { indices: null, ids })
+}
+
+/** Ask the engine one of the UI's log questions (SPEC-2 v3 C17a): a page of the Logbook, where a
+ *  row sits in it, one call's history, an entity's slots, a roster's summary, the band map's
+ *  worked calls. The answer is what `answerFrom` gives over the whole log; a page carries the
+ *  query, `revision`, `orderRev` (moves with the order, not on an upload stamp) and `contentRev`.
+ *  This is the transport `createAskingLogSource` takes. Rejects with the engine's reason when it
+ *  cannot answer — the folds (`workedGrids`, `gridPoints`, `bandsInLog`, `statistics`,
+ *  `lotwBacklog`) until C17a's second part. */
+export async function askLog<Q extends LogQuestion>(q: Q): Promise<AnswerTo<Q>> {
+  return invoke<AnswerTo<Q>>('ask_log', { q })
 }
 
 /** Mark every currently-unsent QSO as already on LoTW (for an imported legacy log uploaded
