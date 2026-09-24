@@ -2076,38 +2076,47 @@ fn get_data_folder() -> DataFolderInfo {
 
 /// Choose the data folder (#289). `copy` carries the log and data across, verified, first.
 /// Takes effect at the next launch — see `shared_data_dir`.
-#[tauri::command(async)]
-fn set_data_folder(
+///
+/// On the BLOCKING pool, not a runtime worker (#335): a copy reads and writes the whole data
+/// folder and waits up to two minutes for the database's own copy through its writer, and a
+/// worker held that long is one the waterfall and every other command need.
+#[tauri::command]
+async fn set_data_folder(
     state: State<'_, SharedEngine>,
     path: String,
     copy: bool,
 ) -> Result<DataCopyReport, String> {
-    if std::env::var_os("NEXUS_DATA_DIR")
-        .filter(|s| !s.is_empty())
-        .is_some()
-    {
-        return Err(
-            "NEXUS_DATA_DIR is set for this launch, and it wins over this setting. Clear it to \
-             choose the folder here."
-                .to_string(),
-        );
-    }
-    let base = config_dir_for(None);
-    let install = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-    // The database in this folder is open in this process: its copy goes through its writer.
-    // Taken under the engine lock, used after it is released.
-    let live = engine_lock(&state).log_store_writer();
-    apply_data_folder(
-        &base,
-        &shared_data_dir(),
-        Path::new(path.trim()),
-        copy,
-        install.as_deref(),
-        data_folder_location::mount_table().as_deref(),
-        live.as_deref(),
-    )
+    let engine = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        if std::env::var_os("NEXUS_DATA_DIR")
+            .filter(|s| !s.is_empty())
+            .is_some()
+        {
+            return Err(
+                "NEXUS_DATA_DIR is set for this launch, and it wins over this setting. Clear it \
+                 to choose the folder here."
+                    .to_string(),
+            );
+        }
+        let base = config_dir_for(None);
+        let install = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+        // The database in this folder is open in this process: its copy goes through its
+        // writer. Taken under the engine lock, used after it is released.
+        let live = engine_lock(&engine).log_store_writer();
+        apply_data_folder(
+            &base,
+            &shared_data_dir(),
+            Path::new(path.trim()),
+            copy,
+            install.as_deref(),
+            data_folder_location::mount_table().as_deref(),
+            live.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("data folder task failed: {e}"))?
 }
 
 /// Go back to the default folder (clears the pointer). Applies at the next launch.
@@ -2769,7 +2778,7 @@ mod logbook_startup_tests {
             "the journals every exit path writes include the log"
         );
         assert!(
-            body_of(src, "fn set_data_folder(").contains("log_store_writer()"),
+            body_of(src, "async fn set_data_folder(").contains("log_store_writer()"),
             "a folder move copies the open store through its writer"
         );
     }
@@ -32266,7 +32275,8 @@ mod tests {
 
     /// Each command body and each `async fn` in `src` that waits for a logbook change to reach
     /// the disk on the thread it runs on, as `name: wait` — a `wait_durable(…)`, a change's
-    /// `.wait(…DURABLE_WAIT)`, or a function here that makes one (followed to any depth). A wait
+    /// `.wait(…DURABLE_WAIT)`, a `copy_database(…)` (the store copied whole, through its writer
+    /// or beside it), or a function here that makes one (followed to any depth). A wait
     /// inside `spawn_blocking(…)` or a spawned thread's closure is off that thread and does not
     /// count. The shape is the HTTP scan's above; what it looks for is the logbook's wait.
     fn durable_waits_where_a_command_runs(src: &str) -> Vec<String> {
@@ -32341,6 +32351,11 @@ mod tests {
             });
             if durable {
                 found.push("wait(DURABLE_WAIT)".to_string());
+            }
+            // A copy of the database: through the writer it waits up to two minutes behind every
+            // change before it, and either way it reads and writes the whole store.
+            if body.match_indices("copy_database(").any(|(at, _)| here(at)) {
+                found.push("copy_database".to_string());
             }
             for helper in helpers {
                 let called = body.match_indices(&format!("{helper}(")).any(|(at, _)| {
@@ -32445,13 +32460,21 @@ mod tests {
             "fn not_the_logbook(pair: State<'_, Pair>) {",
             "    let _held = pair.ready.wait(pair.lock.lock().unwrap());",
             "}",
+            "fn move_folder(live: Option<&LogWriter>, dst: &Path) -> Result<u64, String> {",
+            "    live.map_or(Ok(0), |w| w.copy_database(dst, LIVE_DATABASE_COPY_WAIT))",
+            "}",
+            "#[tauri::command(async)]",
+            "fn copies_on_a_worker(dst: String) -> Result<u64, String> {",
+            "    move_folder(None, Path::new(&dst))",
+            "}",
         ]
         .join("\n");
         assert_eq!(
             durable_waits_where_a_command_runs(&src),
             [
                 "waits_on_a_worker: wait(DURABLE_WAIT)",
-                "two_helpers_deep: stamp_then"
+                "two_helpers_deep: stamp_then",
+                "copies_on_a_worker: move_folder"
             ]
         );
     }
