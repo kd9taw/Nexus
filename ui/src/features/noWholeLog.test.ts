@@ -31,11 +31,8 @@ const WHOLE_LOG_ADAPTER = ['api.ts', 'features/logStore.ts', 'features/wholeLogS
 const STILL_READING = [
   'components/AwardsView.tsx',
   'components/Globe3D.tsx',
-  'components/Js8Cockpit.tsx',
-  'components/LogEntry.tsx',
   'components/Logbook.tsx',
   'components/MapView.tsx',
-  'components/OperateCockpit.tsx',
   'components/StatsView.tsx',
 ]
 

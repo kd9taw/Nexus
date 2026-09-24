@@ -5,7 +5,7 @@
 // "translated" one would have broken an example of a wire format. See the invariant-token rule in
 // `i18n/index.ts`.
 
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type {
   AppSnapshot,
   ContestFieldSpec,
@@ -15,8 +15,9 @@ import type {
 } from '../types'
 import { t } from '../i18n'
 import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
-import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
-import { NO_LOG, useSharedLog } from '../features/logStore'
+import { bandKey, modeKey } from '../features/callHistory'
+import { emptyAnswer } from '../features/logAnswers'
+import { useLogAnswer } from '../features/logSource'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
 import {
   domainSuggestions,
@@ -452,10 +453,10 @@ export function LogEntry({
   const [parkDetail, setParkDetail] = useState<Park | null>(null)
   const [parkDetailLive, setParkDetailLive] = useState(false)
   const [qrzBusy, setQrzBusy] = useState(false)
-  // The general logbook behind the B4/dupe badges and the recall card: the window's one shared
-  // copy (features/logStore), which follows the engine's logTick. Not read in FD mode — the
+  // The general logbook behind the B4/dupe badges and the recall card: asked of `LogSource`
+  // (features/logSource) below, following the engine's logTick. Not read in FD mode — the
   // contest log does the dupe checking there — and never in remote mode.
-  const allLog = useSharedLog(snap.logTick, !fdActive && !remoteMode) ?? NO_LOG
+  const readsLog = !fdActive && !remoteMode
   // Opt-in manual override (standard-log path only) for a contact made on a radio NOT
   // connected to Nexus — e.g. a V/UHF rig. CLOSED = log the live rig + now, byte-identical
   // to before this existed. OPEN = the operator sets band / freq / mode / UTC time by hand,
@@ -837,12 +838,17 @@ export function LogEntry({
     onCallChangeRef.current(c)
   }, [logCall])
 
-  const hist = useMemo(
-    // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
-    // so the Dupe badge and the B4 chips can never disagree about what a dupe is.
-    () => callHistory(allLog, logCall, snap.radio.band, mode, snap.b4MatchMode ?? false),
-    [allLog, logCall, snap.radio.band, mode, snap.b4MatchMode],
-  )
+  // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
+  // so the Dupe badge and the B4 chips can never disagree about what a dupe is. Until the
+  // window has an answer the card shows the empty log's, as it did while the log loaded.
+  const histQuestion = {
+    kind: 'callHistory',
+    call: logCall,
+    band: snap.radio.band,
+    mode,
+    matchMode: snap.b4MatchMode ?? false,
+  } as const
+  const hist = useLogAnswer(readsLog ? histQuestion : null, snap.logTick) ?? emptyAnswer(histQuestion)
 
   // The award identity for the badges: cty.dat resolved from the CALL (a local
   // in-process table — no network), never the QRZ country string. Keying on the
@@ -867,7 +873,10 @@ export function LogEntry({
     }
   }, [logCall, remoteMode])
   const entityForBadge = logEntity ?? logCountry
-  const newEntity = useMemo(() => isNewEntity(allLog, entityForBadge), [allLog, entityForBadge])
+  // Is the entity new, and which of its band/mode slots are worked — one question.
+  const entityQuestion = { kind: 'entity', entity: entityForBadge } as const
+  const entityAnswer = useLogAnswer(readsLog ? entityQuestion : null, snap.logTick) ?? emptyAnswer(entityQuestion)
+  const newEntity = entityAnswer.newEntity
 
   // THE COUNTRY FILE'S ZONE, as a HINT in a contest that receives a CQ zone — the slot the
   // DTO tags with ADIF's `CQZ`. It is the placeholder of that box and never its value: a
@@ -897,7 +906,7 @@ export function LogEntry({
   // slot for it? Only meaningful once the entity is in the log (an ATNO is owned by
   // `newEntity` above; a blank/unresolved entity yields workedEver=false and falls through
   // to the plain "not in your log" line). Bands/modes are entity-wide; band wins over mode.
-  const slots = useMemo(() => entitySlots(allLog, entityForBadge), [allLog, entityForBadge])
+  const slots = entityAnswer.slots
   // Both sides go through the same key functions — the live band/mode and the stored ones. A raw
   // string compare here was half of the false-badge family: USB against a log of LSB read as a
   // mode never worked, and a stored band token that named no band matched nothing forever.

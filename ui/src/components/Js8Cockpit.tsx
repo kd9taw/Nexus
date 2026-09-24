@@ -44,8 +44,8 @@ import {
   setTxOffset,
 } from '../api'
 import { bandLabelForMhz } from '../band'
-import { callHistory } from '../features/callHistory'
-import { NO_LOG, useSharedLog } from '../features/logStore'
+import { emptyAnswer } from '../features/logAnswers'
+import { useLogAnswer } from '../features/logSource'
 import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../features/js8Pins'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useUnits } from '../units'
@@ -225,12 +225,10 @@ export function Js8Cockpit({
     void getLicensedBandPlan('js8').then(setPlan).catch(() => {})
   }, [remote])
 
-  // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns. The log strip and the
-  // Operate cockpit answer "have I worked this call" exactly this way — the window's shared
-  // copy of the log (features/logStore) into features/callHistory — and this is that path, not
-  // a second one. Read only while this is the visible view: the join scans the log once per
-  // heard station, and a hidden roster has no business paying that on every logged contact.
-  const log = useSharedLog(snap?.logTick, active && !remote) ?? NO_LOG
+  // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns is asked of `LogSource`
+  // (`logDetail`, below): the same `callHistory` rule the log strip and the Operate card answer
+  // "have I worked this call" with, and not a second one. Asked only while this is the visible
+  // view: a hidden roster has no business paying for the join on every logged contact.
 
   // ★ PINS — an operator hold on a roster that re-sorts under him. Held in state so a write
   // that localStorage refuses still applies for the session (features/js8Pins).
@@ -414,25 +412,16 @@ export function Js8Cockpit({
    *  same, mainwindow.cpp:10325-10345). Keyed on the CALL SET, not the stations array — that
    *  array is a fresh object on every 500 ms poll, and re-scanning the whole log twice a
    *  second per station is not a thing a roster may cost. */
+  // JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE, any band,
+  // any mode (features/callHistory `callsSummary`). The band/mode dupe scope belongs to the log
+  // strip, not here.
+  const summaryQuestion = { kind: 'callsSummary', calls: stationCalls.split(' ').filter(Boolean) } as const
+  const summary =
+    useLogAnswer(active && !remote ? summaryQuestion : null, snap?.logTick) ?? emptyAnswer(summaryQuestion)
   const logDetail = useMemo(() => {
     if (remote) return new Map(Object.entries(context.value?.history ?? {}).filter(([,h]) => h.count > 0))
-    const out = new Map<string, { count: number; lastUnix: number | null; grid: string; name: string; comment: string }>()
-    for (const call of stationCalls.split(' ').filter(Boolean)) {
-      // JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE,
-      // any band, any mode. The band/mode dupe scope belongs to the log strip, not here.
-      const hist = callHistory(log, call, '')
-      if (!hist.workedBefore) continue
-      const last = hist.qsos.reduce((a, b) => (b.whenUnix > a.whenUnix ? b : a))
-      out.set(call, {
-        count: hist.count,
-        lastUnix: hist.lastUnix,
-        grid: (last.grid ?? '').trim(),
-        name: (last.name ?? '').trim(),
-        comment: (last.comment ?? '').trim(),
-      })
-    }
-    return out
-  }, [log, stationCalls, remote, context.value])
+    return new Map(Object.entries(summary))
+  }, [summary, remote, context.value])
 
   const sending = js8?.sending === true
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
