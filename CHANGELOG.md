@@ -209,7 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waterfall felt. The journal is now written on a thread of its own a moment later, in the same
   order and with the same contents; a contact you log by hand is still on the disk before the
   logging window confirms it, and quitting waits for the last write. The queue of held Tempo
-  messages is written the same way.
+  messages and the JS8 inbox are written the same way.
 
 - **An upload to QRZ, ClubLog or eQSL is now marked on the contact that was actually sent.**
   With two contacts with the same station on the same band, mode and day, sending the earlier
@@ -414,6 +414,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frequency the radio really transmits on. That can lift a lock that was only there because of
   an offset the radio never used, and it can lock where that offset hid a frequency outside your
   privileges. Every other radio keeps XIT as it was.
+
+- **XIT is no longer offered through OmniRig.** OmniRig passes frequency, mode, PTT and split to
+  the radio but not XIT, so an XIT offset set on a radio controlled through OmniRig never reached
+  it, while Nexus showed it on the transmit line and the transmit lock checked it. Through OmniRig
+  the XIT buttons are now gone, a Remote XIT request is refused, and the lock checks the frequency
+  the radio really transmits on. As on the radios above, that can lift a lock that was only there
+  because of that offset, and it can lock where the offset hid a frequency outside your
+  privileges.
+
+- **The transmit lock now checks a satellite uplink in its own mode right after each Doppler
+  correction too.** During a pass Nexus retunes the uplink every few seconds. For the moment
+  between each correction and the radio taking it, the lock judged the uplink in the downlink's
+  mode. Up an inverting transponder that put your signal on the wrong side of the uplink
+  frequency, so within a couple of kHz of a band or segment edge it could cross the edge for that
+  moment with nothing locked. The lock now checks the uplink's own mode then as well. Nothing that
+  was locked before is unlocked.
+
+- **The CW ID after an FT 73 is now checked where it is sent.** With **CW ID after 73** on,
+  Nexus sends your call in CW after the final 73, and the lock checked it as if it were the FT8
+  signal, one audio offset above the dial. The CW goes out elsewhere: from the soundcard keyer one
+  CW pitch from the dial, and from the radio's own keyer on the dial. So near the bottom of a band
+  or of your segment it could go out below the edge. An ID that would go outside your CW
+  privileges is now not sent. When the ID is sent and what it sends are otherwise unchanged, and
+  nothing that was locked before is unlocked.
 
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments

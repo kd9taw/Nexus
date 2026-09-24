@@ -963,12 +963,13 @@ mod tests {
         }
     }
 
-    /// `new`'s rows with each QSL-sent stamp (`date_unix`, `cleared_unix`) set to the matching
-    /// row of `old`, where both carry one and they are no more than `spanned` seconds apart —
-    /// the most wall-clock time the two engines' calls have taken between them. Everything else
-    /// is left for the comparison to judge, so a stamp missing on one side, or further apart,
-    /// still fails.
-    fn with_qsl_clock_of<A, B>(new: &[A], old: &[B], spanned: u64) -> Vec<QsoRecord>
+    /// `new`'s rows with each wall-clock stamp set to the matching row of `old`, where both carry
+    /// one and they are no more than `spanned` seconds apart — the most wall-clock time the two
+    /// engines' calls have taken between them. The stamps the engine takes from the clock itself:
+    /// the QSL-sent mark (`date_unix`, `cleared_unix`) and an upload's time (`when_unix`, e.g.
+    /// "mark all uploaded"). Everything else — an upload's outcome and detail included — is left
+    /// for the comparison to judge, so a stamp missing on one side, or further apart, still fails.
+    fn with_wall_clock_of<A, B>(new: &[A], old: &[B], spanned: u64) -> Vec<QsoRecord>
     where
         A: std::borrow::Borrow<QsoRecord>,
         B: std::borrow::Borrow<QsoRecord>,
@@ -985,6 +986,19 @@ mod tests {
                     r.qsl_sent.date_unix = near(r.qsl_sent.date_unix, o.qsl_sent.date_unix);
                     r.qsl_sent.cleared_unix =
                         near(r.qsl_sent.cleared_unix, o.qsl_sent.cleared_unix);
+                    let up = &o.upload;
+                    for (mine, theirs) in [
+                        (&mut r.upload.lotw, &up.lotw),
+                        (&mut r.upload.eqsl, &up.eqsl),
+                        (&mut r.upload.qrz, &up.qrz),
+                        (&mut r.upload.clublog, &up.clublog),
+                    ] {
+                        if let (Some(m), Some(t)) = (mine.as_mut(), theirs.as_ref()) {
+                            if m.when_unix.abs_diff(t.when_unix) <= spanned {
+                                m.when_unix = t.when_unix;
+                            }
+                        }
+                    }
                 }
                 r
             })
@@ -1444,7 +1458,7 @@ mod tests {
             step(&mut old);
             step(&mut new);
             spanned = spanned.max(crate::engine::now_unix_secs() - before);
-            let aligned = with_qsl_clock_of(new.log_records(), old.log_records(), spanned);
+            let aligned = with_wall_clock_of(new.log_records(), old.log_records(), spanned);
             same_log_across(&aligned, old.log_records(), what);
         }
         // Every step DID something — the census that keeps the comparisons above from passing
@@ -1497,7 +1511,7 @@ mod tests {
             "the store on disk is the store's memory",
         );
         same_log_across(
-            &with_qsl_clock_of(&stored(&b), old.log_records(), spanned),
+            &with_wall_clock_of(&stored(&b), old.log_records(), spanned),
             old.log_records(),
             "the store on disk",
         );
@@ -1506,7 +1520,7 @@ mod tests {
             tempo_core::logbook::Logbook::load(&a.log()),
         );
         same_log_across(
-            &with_qsl_clock_of(mirror.records(), file.records(), spanned),
+            &with_wall_clock_of(mirror.records(), file.records(), spanned),
             file.records(),
             "the mirror against the 1.13 file",
         );

@@ -1,12 +1,13 @@
-//! The small journals' own writer thread: the Field Day contest journal and the
-//! store-and-forward message queue.
+//! The small journals' own writer thread: the Field Day contest journal, the
+//! store-and-forward message queue and the JS8 station's inbox.
 //!
 //! # Why a thread
 //!
 //! Each of these journals is rewritten whole on every change — a temporary file, written and
 //! fsynced, renamed over the journal — and the changes are made under the Engine lock, often by
 //! the radio loop itself: the FT Field Day sequencer journals every contact from inside the slot
-//! it logs it in, and the message queue is journaled from TX planning and decode handling. The
+//! it logs it in, the message queue is journaled from TX planning and decode handling, and the
+//! JS8 inbox from decode handling and the once-a-second JS8 tick. The
 //! fsync finishes when the disk says so, and while it ran under the lock the radio loop waited
 //! on the disk. Now the caller hands the bytes to this thread — a channel send, no I/O — and the
 //! thread writes them.
