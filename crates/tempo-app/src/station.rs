@@ -297,6 +297,21 @@ pub fn lotw_unsent(rows: &crate::logstore::LogRows) -> Result<Vec<QsoRecord>, St
     Ok(whole.into_iter().filter(owed_to_lotw).collect())
 }
 
+/// The contacts `ids` names, whole and read from the store, in the order `ids` names them — what
+/// a LoTW batch chosen by id signs, as the log in memory answers the same ids: a contact the log
+/// no longer holds is left out, and one named twice is there twice.
+///
+/// ⚠️ It reads the store: never under the Engine lock, as [`lotw_unsent`].
+pub fn rows_named(
+    rows: &crate::logstore::LogRows,
+    ids: &[RecordId],
+) -> Result<Vec<QsoRecord>, String> {
+    let (found, _) = rows.rows_by_ids(ids).map_err(|e| e.to_string())?;
+    let by_id: HashMap<RecordId, QsoRecord> =
+        found.into_iter().filter_map(|r| Some((r.id?, r))).collect();
+    Ok(ids.iter().filter_map(|id| by_id.get(id).cloned()).collect())
+}
+
 /// Whether any contact is owed to LoTW — the automatic batch's question before it starts TQSL,
 /// answered from the store at the first one owed.
 ///

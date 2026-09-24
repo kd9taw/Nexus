@@ -2341,6 +2341,43 @@ mod tests {
         );
     }
 
+    /// The contacts a list of ids names, read from the store, come back in the order the ids name
+    /// them — not log order — with a contact the log does not hold left out and one named twice
+    /// there twice: exactly what the log in memory answers for the same ids, on the store and on
+    /// the 1.13 path alike. What a LoTW batch chosen by id signs (`station::rows_named`).
+    #[test]
+    fn the_rows_a_list_of_ids_names_come_back_in_the_order_it_names_them() {
+        let d = Dir::new("rows-named");
+        std::fs::write(d.log(), export_fixture()).unwrap();
+        let e = launch_with_resolvers(&d);
+        let (rows, held) = {
+            let eng = e.lock().unwrap();
+            (eng.log_rows(), eng.log_records().to_vec())
+        };
+        assert!(matches!(rows, LogRows::Store(_)), "premise: the store's");
+        let ids: Vec<tempo_core::logbook::RecordId> = held.iter().filter_map(|r| r.id).collect();
+        assert_eq!(ids.len(), held.len(), "premise: every contact has an id");
+        let never = tempo_core::logbook::RecordId::Minted {
+            posid: 0xdead,
+            nonce: 1,
+            seq: 999_999,
+        };
+        assert!(!ids.contains(&never), "premise: an id the log never held");
+        // Newest first, one named twice, one the log never held.
+        let asked = [ids[40], ids[7], never, ids[52], ids[7], ids[0]];
+        let memory: Vec<QsoRecord> = asked
+            .iter()
+            .filter_map(|id| held.iter().find(|r| r.id == Some(*id)))
+            .map(|r| QsoRecord::clone(r))
+            .collect();
+        assert_eq!(memory.len(), 5, "premise: one left out, one twice");
+        let from_store = crate::station::rows_named(&rows, &asked).expect("the store reads");
+        assert!(from_store == memory, "the store answers as memory does");
+        let from_memory = crate::station::rows_named(&LogRows::Memory(held.clone()), &asked)
+            .expect("the log in memory reads");
+        assert!(from_memory == memory, "and so does the 1.13 path");
+    }
+
     /// ⛔ PROPERTY 7, the launch after the conversion. Left as the file it was converted from,
     /// `log.adi` is not the store's own picture, so every launch until the first change would
     /// read it and take it in — and taking in is an import. A log holding one contact twice,
