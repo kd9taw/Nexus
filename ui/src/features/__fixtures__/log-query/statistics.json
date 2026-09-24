@@ -1,0 +1,5136 @@
+[
+ {
+  "name": "golden",
+  "counts": {
+   "total": 24,
+   "uniqueCalls": 19,
+   "confirmed": 6,
+   "awardConfirmed": 3,
+   "dxccEntities": 15,
+   "byBand": [
+    {
+     "label": "20m",
+     "count": 9
+    },
+    {
+     "label": "40m",
+     "count": 3
+    },
+    {
+     "label": "15m",
+     "count": 1
+    },
+    {
+     "label": "17m",
+     "count": 1
+    },
+    {
+     "label": "10m",
+     "count": 1
+    },
+    {
+     "label": "6m",
+     "count": 1
+    },
+    {
+     "label": "80m",
+     "count": 1
+    },
+    {
+     "label": "2m",
+     "count": 2
+    },
+    {
+     "label": "20M",
+     "count": 1
+    },
+    {
+     "label": "12m",
+     "count": 1
+    },
+    {
+     "label": "30m",
+     "count": 2
+    }
+   ],
+   "byMode": [
+    {
+     "label": "FT8",
+     "count": 13
+    },
+    {
+     "label": "ft8",
+     "count": 2
+    },
+    {
+     "label": "SSB",
+     "count": 3
+    },
+    {
+     "label": "CW",
+     "count": 1
+    },
+    {
+     "label": "FT4",
+     "count": 1
+    },
+    {
+     "label": "FM",
+     "count": 2
+    },
+    {
+     "label": "ssb",
+     "count": 1
+    },
+    {
+     "label": "JS8",
+     "count": 1
+    }
+   ],
+   "byYear": [
+    {
+     "label": "2024",
+     "count": 15
+    },
+    {
+     "label": "2023",
+     "count": 4
+    },
+    {
+     "label": "2022",
+     "count": 1
+    },
+    {
+     "label": "2021",
+     "count": 1
+    },
+    {
+     "label": "2020",
+     "count": 2
+    },
+    {
+     "label": "2019",
+     "count": 1
+    }
+   ],
+   "byState": [
+    {
+     "label": "CT",
+     "count": 1
+    },
+    {
+     "label": "WI",
+     "count": 2
+    },
+    {
+     "label": "MA",
+     "count": 1
+    },
+    {
+     "label": "AK",
+     "count": 1
+    }
+   ],
+   "entities": [
+    {
+     "label": "United States",
+     "count": 5
+    },
+    {
+     "label": "Fed. Rep. of Germany",
+     "count": 2
+    },
+    {
+     "label": "Aland Islands",
+     "count": 1
+    },
+    {
+     "label": "Sao Tome & Principe",
+     "count": 1
+    },
+    {
+     "label": "Turkey",
+     "count": 1
+    },
+    {
+     "label": "ſtraße",
+     "count": 1
+    },
+    {
+     "label": "Japan",
+     "count": 1
+    },
+    {
+     "label": "Australia",
+     "count": 1
+    },
+    {
+     "label": "England",
+     "count": 1
+    },
+    {
+     "label": "Canary Islands",
+     "count": 1
+    },
+    {
+     "label": "Brazil",
+     "count": 2
+    },
+    {
+     "label": "Canada",
+     "count": 2
+    },
+    {
+     "label": "New Zealand",
+     "count": 1
+    },
+    {
+     "label": "Alaska",
+     "count": 1
+    },
+    {
+     "label": "Italy",
+     "count": 1
+    }
+   ],
+   "hourUtc": [
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0,
+    2,
+    0,
+    9,
+    0,
+    3,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1
+   ],
+   "hourUnknown": 3,
+   "qsl": {
+    "card": 2,
+    "lotw": 2,
+    "eqsl": 4
+   }
+  }
+ },
+ {
+  "name": "tied",
+  "log": [
+   {
+    "id": "st000",
+    "call": "W1AW",
+    "grid": "FN31pr",
+    "country": "United States",
+    "entity": "Åland Islands",
+    "state": "wi",
+    "band": "20m",
+    "freqMhz": 14.074,
+    "mode": "SSB",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
+   },
+   {
+    "id": "st001",
+    "call": "w1aw",
+    "grid": "fn31",
+    "country": "Hawaii",
+    "entity": "Aland Islands",
+    "state": "wa",
+    "band": "20M",
+    "freqMhz": 7.074,
+    "mode": "ssb",
+    "rstSent": "-05",
+    "rstRcvd": "-07",
+    "name": "Hiram P",
+    "qth": null,
+    "comment": "second",
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st002",
+    "call": " W1AW ",
+    "grid": "EN52",
+    "country": null,
+    "entity": "aland islands",
+    "state": "WI",
+    "band": "40m",
+    "freqMhz": 14.2,
+    "mode": "USB",
+    "rstSent": "59",
+    "rstRcvd": "57",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st003",
+    "call": "ß1AA",
+    "grid": "EN52",
+    "country": "united states",
+    "entity": "Réunion",
+    "state": "ſc",
+    "band": " 40m ",
+    "freqMhz": 7.2,
+    "mode": "lsb",
+    "rstSent": "55",
+    "rstRcvd": "59",
+    "name": "Kay",
+    "qth": null,
+    "comment": "park",
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "POTA",
+     "theirRef": "US-1234"
+    }
+   },
+   {
+    "id": "st004",
+    "call": "ss1aa",
+    "grid": "JO31ab",
+    "country": "Australia",
+    "entity": "Reunion",
+    "state": " ct ",
+    "band": "15m",
+    "freqMhz": 14.025,
+    "mode": "uſb",
+    "rstSent": "599",
+    "rstRcvd": "579",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st005",
+    "call": "K1ABC",
+    "grid": "JO31",
+    "country": "",
+    "entity": "Curaçao",
+    "state": "",
+    "band": "15M",
+    "freqMhz": 21.074,
+    "mode": "Usb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": false,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st006",
+    "call": "k1abc",
+    "grid": "KP00",
+    "country": " ALASKA ",
+    "entity": "CURAÇAO",
+    "state": "Ca",
+    "band": "",
+    "freqMhz": 18.1,
+    "mode": "FT8",
+    "rstSent": "-15",
+    "rstRcvd": "-18",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st007",
+    "call": "JA1XYZ",
+    "grid": "JJ30",
+    "country": "Japan",
+    "entity": "São Tomé",
+    "state": null,
+    "band": "  ",
+    "freqMhz": 28.074,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "rejected",
+      "whenUnix": 1641081600
+     }
+    }
+   },
+   {
+    "id": "st008",
+    "call": "VE3ABC",
+    "grid": "KM59",
+    "country": "United States",
+    "entity": "Sao Tome",
+    "state": "XX",
+    "band": "6m",
+    "freqMhz": 14.074,
+    "mode": "CW",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "authfail",
+      "whenUnix": 1709251200
+     }
+    }
+   },
+   {
+    "id": "st009",
+    "call": "DL1ABC",
+    "grid": "jo62",
+    "country": "Hawaii",
+    "entity": "Zambia",
+    "state": "wi",
+    "band": "2m",
+    "freqMhz": 14.074,
+    "mode": "cw",
+    "rstSent": "ı5",
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st010",
+    "call": "",
+    "grid": "PM95",
+    "country": null,
+    "entity": "zambia",
+    "state": "wa",
+    "band": "20m",
+    "freqMhz": 50.313,
+    "mode": "FM",
+    "rstSent": "-20",
+    "rstRcvd": "-21",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "pending",
+      "whenUnix": 1715644800
+     }
+    }
+   },
+   {
+    "id": "st011",
+    "call": "K0XY",
+    "grid": "QF56",
+    "country": "united states",
+    "entity": "Émile Land",
+    "state": "WI",
+    "band": "20M",
+    "freqMhz": 3.573,
+    "mode": " FT4 ",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "myProgram": "POTA",
+     "myRef": "VK-0001"
+    }
+   },
+   {
+    "id": "st012",
+    "call": "K1XY",
+    "grid": "",
+    "country": "Australia",
+    "entity": "Ängland",
+    "state": "ſc",
+    "band": "40m",
+    "freqMhz": 144.174,
+    "mode": "ſſb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st013",
+    "call": "K2XY",
+    "grid": null,
+    "country": "",
+    "entity": "United States",
+    "state": " ct ",
+    "band": " 40m ",
+    "freqMhz": 0,
+    "mode": "",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st014",
+    "call": "K3XY",
+    "grid": "IO91",
+    "country": " ALASKA ",
+    "entity": "UNITED STATES",
+    "state": "",
+    "band": "15m",
+    "freqMhz": 14.23,
+    "mode": "SSB",
+    "rstSent": "59",
+    "rstRcvd": "59",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st015",
+    "call": "K4XY",
+    "grid": "IL18",
+    "country": "Japan",
+    "entity": "Japan",
+    "state": "Ca",
+    "band": "15M",
+    "freqMhz": 24.915,
+    "mode": "ssb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "WWFF",
+     "theirRef": "eaff-0001"
+    }
+   },
+   {
+    "id": "st016",
+    "call": "K5XY",
+    "grid": "GG66",
+    "country": "United States",
+    "entity": "",
+    "state": null,
+    "band": "",
+    "freqMhz": 14.074,
+    "mode": "USB",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin A",
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st017",
+    "call": "K6XY",
+    "grid": "GG66",
+    "country": "Hawaii",
+    "entity": null,
+    "state": "XX",
+    "band": "  ",
+    "freqMhz": 14.074,
+    "mode": "lsb",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin B",
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st018",
+    "call": "K7XY",
+    "grid": "FN03",
+    "country": null,
+    "entity": "Åland Islands",
+    "state": "wi",
+    "band": "6m",
+    "freqMhz": 10.136,
+    "mode": "uſb",
+    "rstSent": "+05",
+    "rstRcvd": "",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st019",
+    "call": "K8XY",
+    "grid": "FN03",
+    "country": "united states",
+    "entity": "Aland Islands",
+    "state": "wa",
+    "band": "2m",
+    "freqMhz": 10.136,
+    "mode": "Usb",
+    "rstSent": "",
+    "rstRcvd": "+05",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st020",
+    "call": "K9XY",
+    "grid": "RF72",
+    "country": "Australia",
+    "entity": "aland islands",
+    "state": "WI",
+    "band": "20m",
+    "freqMhz": 7.074,
+    "mode": "FT8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": false,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st021",
+    "call": "K10XY",
+    "grid": " fn42ab ",
+    "country": "",
+    "entity": "Réunion",
+    "state": "ſc",
+    "band": "20M",
+    "freqMhz": 145.9,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "propMode": "SAT",
+    "satName": "SO-50"
+   },
+   {
+    "id": "st022",
+    "call": "K11XY",
+    "grid": "BP51",
+    "country": " ALASKA ",
+    "entity": "Reunion",
+    "state": " ct ",
+    "band": "40m",
+    "freqMhz": 14.074,
+    "mode": "CW",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st023",
+    "call": "K12XY",
+    "grid": "JN45",
+    "country": "Japan",
+    "entity": "Curaçao",
+    "state": "",
+    "band": " 40m ",
+    "freqMhz": 14.074,
+    "mode": "cw",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st024",
+    "call": "K13XY",
+    "grid": "FN31pr",
+    "country": "United States",
+    "entity": "CURAÇAO",
+    "state": "Ca",
+    "band": "15m",
+    "freqMhz": 14.074,
+    "mode": "FM",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
+   },
+   {
+    "id": "st025",
+    "call": "K14XY",
+    "grid": "fn31",
+    "country": "Hawaii",
+    "entity": "São Tomé",
+    "state": null,
+    "band": "15M",
+    "freqMhz": 7.074,
+    "mode": " FT4 ",
+    "rstSent": "-05",
+    "rstRcvd": "-07",
+    "name": "Hiram P",
+    "qth": null,
+    "comment": "second",
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st026",
+    "call": "K15XY",
+    "grid": "EN52",
+    "country": null,
+    "entity": "Sao Tome",
+    "state": "XX",
+    "band": "",
+    "freqMhz": 14.2,
+    "mode": "ſſb",
+    "rstSent": "59",
+    "rstRcvd": "57",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st027",
+    "call": "K16XY",
+    "grid": "EN52",
+    "country": "united states",
+    "entity": "Zambia",
+    "state": "wi",
+    "band": "  ",
+    "freqMhz": 7.2,
+    "mode": "",
+    "rstSent": "55",
+    "rstRcvd": "59",
+    "name": "Kay",
+    "qth": null,
+    "comment": "park",
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "POTA",
+     "theirRef": "US-1234"
+    }
+   },
+   {
+    "id": "st028",
+    "call": "K17XY",
+    "grid": "JO31ab",
+    "country": "Australia",
+    "entity": "zambia",
+    "state": "wa",
+    "band": "6m",
+    "freqMhz": 14.025,
+    "mode": "SSB",
+    "rstSent": "599",
+    "rstRcvd": "579",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st029",
+    "call": "K18XY",
+    "grid": "JO31",
+    "country": "",
+    "entity": "Émile Land",
+    "state": "WI",
+    "band": "2m",
+    "freqMhz": 21.074,
+    "mode": "ssb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st030",
+    "call": "K19XY",
+    "grid": "KP00",
+    "country": " ALASKA ",
+    "entity": "Ängland",
+    "state": "ſc",
+    "band": "20m",
+    "freqMhz": 18.1,
+    "mode": "USB",
+    "rstSent": "-15",
+    "rstRcvd": "-18",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st031",
+    "call": "K20XY",
+    "grid": "JJ30",
+    "country": "Japan",
+    "entity": "United States",
+    "state": " ct ",
+    "band": "20M",
+    "freqMhz": 28.074,
+    "mode": "lsb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "rejected",
+      "whenUnix": 1641081600
+     }
+    }
+   },
+   {
+    "id": "st032",
+    "call": "K21XY",
+    "grid": "KM59",
+    "country": "United States",
+    "entity": "UNITED STATES",
+    "state": "",
+    "band": "40m",
+    "freqMhz": 14.074,
+    "mode": "uſb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "authfail",
+      "whenUnix": 1709251200
+     }
+    }
+   },
+   {
+    "id": "st033",
+    "call": "K22XY",
+    "grid": "jo62",
+    "country": "Hawaii",
+    "entity": "Japan",
+    "state": "Ca",
+    "band": " 40m ",
+    "freqMhz": 14.074,
+    "mode": "Usb",
+    "rstSent": "ı5",
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st034",
+    "call": "K23XY",
+    "grid": "PM95",
+    "country": null,
+    "entity": "",
+    "state": null,
+    "band": "15m",
+    "freqMhz": 50.313,
+    "mode": "FT8",
+    "rstSent": "-20",
+    "rstRcvd": "-21",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "pending",
+      "whenUnix": 1715644800
+     }
+    }
+   },
+   {
+    "id": "st035",
+    "call": "K24XY",
+    "grid": "QF56",
+    "country": "united states",
+    "entity": null,
+    "state": "XX",
+    "band": "15M",
+    "freqMhz": 3.573,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "myProgram": "POTA",
+     "myRef": "VK-0001"
+    }
+   },
+   {
+    "id": "st036",
+    "call": "K25XY",
+    "grid": "",
+    "country": "Australia",
+    "entity": "Åland Islands",
+    "state": "wi",
+    "band": "",
+    "freqMhz": 144.174,
+    "mode": "CW",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st037",
+    "call": "K26XY",
+    "grid": null,
+    "country": "",
+    "entity": "Aland Islands",
+    "state": "wa",
+    "band": "  ",
+    "freqMhz": 0,
+    "mode": "cw",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st038",
+    "call": "K27XY",
+    "grid": "IO91",
+    "country": " ALASKA ",
+    "entity": "aland islands",
+    "state": "WI",
+    "band": "6m",
+    "freqMhz": 14.23,
+    "mode": "FM",
+    "rstSent": "59",
+    "rstRcvd": "59",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st039",
+    "call": "K28XY",
+    "grid": "IL18",
+    "country": "Japan",
+    "entity": "Réunion",
+    "state": "ſc",
+    "band": "2m",
+    "freqMhz": 24.915,
+    "mode": " FT4 ",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "WWFF",
+     "theirRef": "eaff-0001"
+    }
+   },
+   {
+    "id": "st040",
+    "call": "K29XY",
+    "grid": "GG66",
+    "country": "United States",
+    "entity": "Reunion",
+    "state": " ct ",
+    "band": "20m",
+    "freqMhz": 14.074,
+    "mode": "ſſb",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin A",
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st041",
+    "call": "W1AW",
+    "grid": "GG66",
+    "country": "Hawaii",
+    "entity": "Åland Islands",
+    "state": "",
+    "band": "20M",
+    "freqMhz": 14.074,
+    "mode": "",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin B",
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st042",
+    "call": "w1aw",
+    "grid": "FN03",
+    "country": null,
+    "entity": "Aland Islands",
+    "state": "Ca",
+    "band": "40m",
+    "freqMhz": 10.136,
+    "mode": "SSB",
+    "rstSent": "+05",
+    "rstRcvd": "",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st043",
+    "call": " W1AW ",
+    "grid": "FN03",
+    "country": "united states",
+    "entity": "aland islands",
+    "state": null,
+    "band": " 40m ",
+    "freqMhz": 10.136,
+    "mode": "ssb",
+    "rstSent": "",
+    "rstRcvd": "+05",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st044",
+    "call": "ß1AA",
+    "grid": "RF72",
+    "country": "Australia",
+    "entity": "Réunion",
+    "state": "XX",
+    "band": "15m",
+    "freqMhz": 7.074,
+    "mode": "USB",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st045",
+    "call": "ss1aa",
+    "grid": " fn42ab ",
+    "country": "",
+    "entity": "Reunion",
+    "state": "wi",
+    "band": "15M",
+    "freqMhz": 145.9,
+    "mode": "lsb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "propMode": "SAT",
+    "satName": "SO-50"
+   },
+   {
+    "id": "st046",
+    "call": "K1ABC",
+    "grid": "BP51",
+    "country": " ALASKA ",
+    "entity": "Curaçao",
+    "state": "wa",
+    "band": "",
+    "freqMhz": 14.074,
+    "mode": "uſb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st047",
+    "call": "k1abc",
+    "grid": "JN45",
+    "country": "Japan",
+    "entity": "CURAÇAO",
+    "state": "WI",
+    "band": "  ",
+    "freqMhz": 14.074,
+    "mode": "Usb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st048",
+    "call": "JA1XYZ",
+    "grid": "FN31pr",
+    "country": "United States",
+    "entity": "São Tomé",
+    "state": "ſc",
+    "band": "6m",
+    "freqMhz": 14.074,
+    "mode": "FT8",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
+   },
+   {
+    "id": "st049",
+    "call": "VE3ABC",
+    "grid": "fn31",
+    "country": "Hawaii",
+    "entity": "Sao Tome",
+    "state": " ct ",
+    "band": "2m",
+    "freqMhz": 7.074,
+    "mode": "ft8",
+    "rstSent": "-05",
+    "rstRcvd": "-07",
+    "name": "Hiram P",
+    "qth": null,
+    "comment": "second",
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st050",
+    "call": "DL1ABC",
+    "grid": "EN52",
+    "country": null,
+    "entity": "Zambia",
+    "state": "",
+    "band": "20m",
+    "freqMhz": 14.2,
+    "mode": "CW",
+    "rstSent": "59",
+    "rstRcvd": "57",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st051",
+    "call": "",
+    "grid": "EN52",
+    "country": "united states",
+    "entity": "zambia",
+    "state": "Ca",
+    "band": "20M",
+    "freqMhz": 7.2,
+    "mode": "cw",
+    "rstSent": "55",
+    "rstRcvd": "59",
+    "name": "Kay",
+    "qth": null,
+    "comment": "park",
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "POTA",
+     "theirRef": "US-1234"
+    }
+   },
+   {
+    "id": "st052",
+    "call": "K0XY",
+    "grid": "JO31ab",
+    "country": "Australia",
+    "entity": "Émile Land",
+    "state": null,
+    "band": "40m",
+    "freqMhz": 14.025,
+    "mode": "FM",
+    "rstSent": "599",
+    "rstRcvd": "579",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st053",
+    "call": "K1XY",
+    "grid": "JO31",
+    "country": "",
+    "entity": "Ängland",
+    "state": "XX",
+    "band": " 40m ",
+    "freqMhz": 21.074,
+    "mode": " FT4 ",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st054",
+    "call": "K2XY",
+    "grid": "KP00",
+    "country": " ALASKA ",
+    "entity": "United States",
+    "state": "wi",
+    "band": "15m",
+    "freqMhz": 18.1,
+    "mode": "ſſb",
+    "rstSent": "-15",
+    "rstRcvd": "-18",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st055",
+    "call": "K3XY",
+    "grid": "JJ30",
+    "country": "Japan",
+    "entity": "UNITED STATES",
+    "state": "wa",
+    "band": "15M",
+    "freqMhz": 28.074,
+    "mode": "",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "rejected",
+      "whenUnix": 1641081600
+     }
+    }
+   },
+   {
+    "id": "st056",
+    "call": "K4XY",
+    "grid": "KM59",
+    "country": "United States",
+    "entity": "Japan",
+    "state": "WI",
+    "band": "",
+    "freqMhz": 14.074,
+    "mode": "SSB",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "authfail",
+      "whenUnix": 1709251200
+     }
+    }
+   },
+   {
+    "id": "st057",
+    "call": "K5XY",
+    "grid": "jo62",
+    "country": "Hawaii",
+    "entity": "",
+    "state": "ſc",
+    "band": "  ",
+    "freqMhz": 14.074,
+    "mode": "ssb",
+    "rstSent": "ı5",
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st058",
+    "call": "K6XY",
+    "grid": "PM95",
+    "country": null,
+    "entity": null,
+    "state": " ct ",
+    "band": "6m",
+    "freqMhz": 50.313,
+    "mode": "USB",
+    "rstSent": "-20",
+    "rstRcvd": "-21",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "pending",
+      "whenUnix": 1715644800
+     }
+    }
+   },
+   {
+    "id": "st059",
+    "call": "K7XY",
+    "grid": "QF56",
+    "country": "united states",
+    "entity": "Åland Islands",
+    "state": "",
+    "band": "2m",
+    "freqMhz": 3.573,
+    "mode": "lsb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "myProgram": "POTA",
+     "myRef": "VK-0001"
+    }
+   },
+   {
+    "id": "st060",
+    "call": "K8XY",
+    "grid": "",
+    "country": "Australia",
+    "entity": "Aland Islands",
+    "state": "Ca",
+    "band": "20m",
+    "freqMhz": 144.174,
+    "mode": "uſb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st061",
+    "call": "K9XY",
+    "grid": null,
+    "country": "",
+    "entity": "aland islands",
+    "state": null,
+    "band": "20M",
+    "freqMhz": 0,
+    "mode": "Usb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st062",
+    "call": "K10XY",
+    "grid": "IO91",
+    "country": " ALASKA ",
+    "entity": "Réunion",
+    "state": "XX",
+    "band": "40m",
+    "freqMhz": 14.23,
+    "mode": "FT8",
+    "rstSent": "59",
+    "rstRcvd": "59",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st063",
+    "call": "K11XY",
+    "grid": "IL18",
+    "country": "Japan",
+    "entity": "Reunion",
+    "state": "wi",
+    "band": " 40m ",
+    "freqMhz": 24.915,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "WWFF",
+     "theirRef": "eaff-0001"
+    }
+   },
+   {
+    "id": "st064",
+    "call": "K12XY",
+    "grid": "GG66",
+    "country": "United States",
+    "entity": "Curaçao",
+    "state": "wa",
+    "band": "15m",
+    "freqMhz": 14.074,
+    "mode": "CW",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin A",
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st065",
+    "call": "K13XY",
+    "grid": "GG66",
+    "country": "Hawaii",
+    "entity": "CURAÇAO",
+    "state": "WI",
+    "band": "15M",
+    "freqMhz": 14.074,
+    "mode": "cw",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin B",
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st066",
+    "call": "K14XY",
+    "grid": "FN03",
+    "country": null,
+    "entity": "São Tomé",
+    "state": "ſc",
+    "band": "",
+    "freqMhz": 10.136,
+    "mode": "FM",
+    "rstSent": "+05",
+    "rstRcvd": "",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st067",
+    "call": "K15XY",
+    "grid": "FN03",
+    "country": "united states",
+    "entity": "Sao Tome",
+    "state": " ct ",
+    "band": "  ",
+    "freqMhz": 10.136,
+    "mode": " FT4 ",
+    "rstSent": "",
+    "rstRcvd": "+05",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st068",
+    "call": "K16XY",
+    "grid": "RF72",
+    "country": "Australia",
+    "entity": "Zambia",
+    "state": "",
+    "band": "6m",
+    "freqMhz": 7.074,
+    "mode": "ſſb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st069",
+    "call": "K17XY",
+    "grid": " fn42ab ",
+    "country": "",
+    "entity": "zambia",
+    "state": "Ca",
+    "band": "2m",
+    "freqMhz": 145.9,
+    "mode": "",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "propMode": "SAT",
+    "satName": "SO-50"
+   },
+   {
+    "id": "st070",
+    "call": "K18XY",
+    "grid": "BP51",
+    "country": " ALASKA ",
+    "entity": "Émile Land",
+    "state": null,
+    "band": "20m",
+    "freqMhz": 14.074,
+    "mode": "SSB",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st071",
+    "call": "K19XY",
+    "grid": "JN45",
+    "country": "Japan",
+    "entity": "Ängland",
+    "state": "XX",
+    "band": "20M",
+    "freqMhz": 14.074,
+    "mode": "ssb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st072",
+    "call": "K20XY",
+    "grid": "FN31pr",
+    "country": "United States",
+    "entity": "United States",
+    "state": "wi",
+    "band": "40m",
+    "freqMhz": 14.074,
+    "mode": "USB",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
+   },
+   {
+    "id": "st073",
+    "call": "K21XY",
+    "grid": "fn31",
+    "country": "Hawaii",
+    "entity": "UNITED STATES",
+    "state": "wa",
+    "band": " 40m ",
+    "freqMhz": 7.074,
+    "mode": "lsb",
+    "rstSent": "-05",
+    "rstRcvd": "-07",
+    "name": "Hiram P",
+    "qth": null,
+    "comment": "second",
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st074",
+    "call": "K22XY",
+    "grid": "EN52",
+    "country": null,
+    "entity": "Japan",
+    "state": "WI",
+    "band": "15m",
+    "freqMhz": 14.2,
+    "mode": "uſb",
+    "rstSent": "59",
+    "rstRcvd": "57",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st075",
+    "call": "K23XY",
+    "grid": "EN52",
+    "country": "united states",
+    "entity": "",
+    "state": "ſc",
+    "band": "15M",
+    "freqMhz": 7.2,
+    "mode": "Usb",
+    "rstSent": "55",
+    "rstRcvd": "59",
+    "name": "Kay",
+    "qth": null,
+    "comment": "park",
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "POTA",
+     "theirRef": "US-1234"
+    }
+   },
+   {
+    "id": "st076",
+    "call": "K24XY",
+    "grid": "JO31ab",
+    "country": "Australia",
+    "entity": null,
+    "state": " ct ",
+    "band": "",
+    "freqMhz": 14.025,
+    "mode": "FT8",
+    "rstSent": "599",
+    "rstRcvd": "579",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st077",
+    "call": "K25XY",
+    "grid": "JO31",
+    "country": "",
+    "entity": "Åland Islands",
+    "state": "",
+    "band": "  ",
+    "freqMhz": 21.074,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": false,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st078",
+    "call": "K26XY",
+    "grid": "KP00",
+    "country": " ALASKA ",
+    "entity": "Aland Islands",
+    "state": "Ca",
+    "band": "6m",
+    "freqMhz": 18.1,
+    "mode": "CW",
+    "rstSent": "-15",
+    "rstRcvd": "-18",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st079",
+    "call": "K27XY",
+    "grid": "JJ30",
+    "country": "Japan",
+    "entity": "aland islands",
+    "state": null,
+    "band": "2m",
+    "freqMhz": 28.074,
+    "mode": "cw",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "rejected",
+      "whenUnix": 1641081600
+     }
+    }
+   },
+   {
+    "id": "st080",
+    "call": "K28XY",
+    "grid": "KM59",
+    "country": "United States",
+    "entity": "Réunion",
+    "state": "XX",
+    "band": "20m",
+    "freqMhz": 14.074,
+    "mode": "FM",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "authfail",
+      "whenUnix": 1709251200
+     }
+    }
+   },
+   {
+    "id": "st081",
+    "call": "K29XY",
+    "grid": "jo62",
+    "country": "Hawaii",
+    "entity": "Reunion",
+    "state": "wi",
+    "band": "20M",
+    "freqMhz": 14.074,
+    "mode": " FT4 ",
+    "rstSent": "ı5",
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st082",
+    "call": "W1AW",
+    "grid": "PM95",
+    "country": null,
+    "entity": "Åland Islands",
+    "state": "wa",
+    "band": "40m",
+    "freqMhz": 50.313,
+    "mode": "ſſb",
+    "rstSent": "-20",
+    "rstRcvd": "-21",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "pending",
+      "whenUnix": 1715644800
+     }
+    }
+   },
+   {
+    "id": "st083",
+    "call": "w1aw",
+    "grid": "QF56",
+    "country": "united states",
+    "entity": "Aland Islands",
+    "state": "WI",
+    "band": " 40m ",
+    "freqMhz": 3.573,
+    "mode": "",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "myProgram": "POTA",
+     "myRef": "VK-0001"
+    }
+   },
+   {
+    "id": "st084",
+    "call": " W1AW ",
+    "grid": "",
+    "country": "Australia",
+    "entity": "aland islands",
+    "state": "ſc",
+    "band": "15m",
+    "freqMhz": 144.174,
+    "mode": "SSB",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st085",
+    "call": "ß1AA",
+    "grid": null,
+    "country": "",
+    "entity": "Réunion",
+    "state": " ct ",
+    "band": "15M",
+    "freqMhz": 0,
+    "mode": "ssb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st086",
+    "call": "ss1aa",
+    "grid": "IO91",
+    "country": " ALASKA ",
+    "entity": "Reunion",
+    "state": "",
+    "band": "",
+    "freqMhz": 14.23,
+    "mode": "USB",
+    "rstSent": "59",
+    "rstRcvd": "59",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st087",
+    "call": "K1ABC",
+    "grid": "IL18",
+    "country": "Japan",
+    "entity": "Curaçao",
+    "state": "Ca",
+    "band": "  ",
+    "freqMhz": 24.915,
+    "mode": "lsb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "WWFF",
+     "theirRef": "eaff-0001"
+    }
+   },
+   {
+    "id": "st088",
+    "call": "k1abc",
+    "grid": "GG66",
+    "country": "United States",
+    "entity": "CURAÇAO",
+    "state": null,
+    "band": "6m",
+    "freqMhz": 14.074,
+    "mode": "uſb",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin A",
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st089",
+    "call": "JA1XYZ",
+    "grid": "GG66",
+    "country": "Hawaii",
+    "entity": "São Tomé",
+    "state": "XX",
+    "band": "2m",
+    "freqMhz": 14.074,
+    "mode": "Usb",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin B",
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st090",
+    "call": "VE3ABC",
+    "grid": "FN03",
+    "country": null,
+    "entity": "Sao Tome",
+    "state": "wi",
+    "band": "20m",
+    "freqMhz": 10.136,
+    "mode": "FT8",
+    "rstSent": "+05",
+    "rstRcvd": "",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st091",
+    "call": "DL1ABC",
+    "grid": "FN03",
+    "country": "united states",
+    "entity": "Zambia",
+    "state": "wa",
+    "band": "20M",
+    "freqMhz": 10.136,
+    "mode": "ft8",
+    "rstSent": "",
+    "rstRcvd": "+05",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st092",
+    "call": "",
+    "grid": "RF72",
+    "country": "Australia",
+    "entity": "zambia",
+    "state": "WI",
+    "band": "40m",
+    "freqMhz": 7.074,
+    "mode": "CW",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st093",
+    "call": "K0XY",
+    "grid": " fn42ab ",
+    "country": "",
+    "entity": "Émile Land",
+    "state": "ſc",
+    "band": " 40m ",
+    "freqMhz": 145.9,
+    "mode": "cw",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "propMode": "SAT",
+    "satName": "SO-50"
+   },
+   {
+    "id": "st094",
+    "call": "K1XY",
+    "grid": "BP51",
+    "country": " ALASKA ",
+    "entity": "Ängland",
+    "state": " ct ",
+    "band": "15m",
+    "freqMhz": 14.074,
+    "mode": "FM",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st095",
+    "call": "K2XY",
+    "grid": "JN45",
+    "country": "Japan",
+    "entity": "United States",
+    "state": "",
+    "band": "15M",
+    "freqMhz": 14.074,
+    "mode": " FT4 ",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st096",
+    "call": "K3XY",
+    "grid": "FN31pr",
+    "country": "United States",
+    "entity": "UNITED STATES",
+    "state": "Ca",
+    "band": "",
+    "freqMhz": 14.074,
+    "mode": "ſſb",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
+   },
+   {
+    "id": "st097",
+    "call": "K4XY",
+    "grid": "fn31",
+    "country": "Hawaii",
+    "entity": "Japan",
+    "state": null,
+    "band": "  ",
+    "freqMhz": 7.074,
+    "mode": "",
+    "rstSent": "-05",
+    "rstRcvd": "-07",
+    "name": "Hiram P",
+    "qth": null,
+    "comment": "second",
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st098",
+    "call": "K5XY",
+    "grid": "EN52",
+    "country": null,
+    "entity": "",
+    "state": "XX",
+    "band": "6m",
+    "freqMhz": 14.2,
+    "mode": "SSB",
+    "rstSent": "59",
+    "rstRcvd": "57",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st099",
+    "call": "K6XY",
+    "grid": "EN52",
+    "country": "united states",
+    "entity": null,
+    "state": "wi",
+    "band": "2m",
+    "freqMhz": 7.2,
+    "mode": "ssb",
+    "rstSent": "55",
+    "rstRcvd": "59",
+    "name": "Kay",
+    "qth": null,
+    "comment": "park",
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "POTA",
+     "theirRef": "US-1234"
+    }
+   },
+   {
+    "id": "st100",
+    "call": "K7XY",
+    "grid": "JO31ab",
+    "country": "Australia",
+    "entity": "Åland Islands",
+    "state": "wa",
+    "band": "20m",
+    "freqMhz": 14.025,
+    "mode": "USB",
+    "rstSent": "599",
+    "rstRcvd": "579",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st101",
+    "call": "K8XY",
+    "grid": "JO31",
+    "country": "",
+    "entity": "Aland Islands",
+    "state": "WI",
+    "band": "20M",
+    "freqMhz": 21.074,
+    "mode": "lsb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st102",
+    "call": "K9XY",
+    "grid": "KP00",
+    "country": " ALASKA ",
+    "entity": "aland islands",
+    "state": "ſc",
+    "band": "40m",
+    "freqMhz": 18.1,
+    "mode": "uſb",
+    "rstSent": "-15",
+    "rstRcvd": "-18",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st103",
+    "call": "K10XY",
+    "grid": "JJ30",
+    "country": "Japan",
+    "entity": "Réunion",
+    "state": " ct ",
+    "band": " 40m ",
+    "freqMhz": 28.074,
+    "mode": "Usb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "rejected",
+      "whenUnix": 1641081600
+     }
+    }
+   },
+   {
+    "id": "st104",
+    "call": "K11XY",
+    "grid": "KM59",
+    "country": "United States",
+    "entity": "Reunion",
+    "state": "",
+    "band": "15m",
+    "freqMhz": 14.074,
+    "mode": "FT8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "authfail",
+      "whenUnix": 1709251200
+     }
+    }
+   },
+   {
+    "id": "st105",
+    "call": "K12XY",
+    "grid": "jo62",
+    "country": "Hawaii",
+    "entity": "Curaçao",
+    "state": "Ca",
+    "band": "15M",
+    "freqMhz": 14.074,
+    "mode": "ft8",
+    "rstSent": "ı5",
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st106",
+    "call": "K13XY",
+    "grid": "PM95",
+    "country": null,
+    "entity": "CURAÇAO",
+    "state": null,
+    "band": "",
+    "freqMhz": 50.313,
+    "mode": "CW",
+    "rstSent": "-20",
+    "rstRcvd": "-21",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "pending",
+      "whenUnix": 1715644800
+     }
+    }
+   },
+   {
+    "id": "st107",
+    "call": "K14XY",
+    "grid": "QF56",
+    "country": "united states",
+    "entity": "São Tomé",
+    "state": "XX",
+    "band": "  ",
+    "freqMhz": 3.573,
+    "mode": "cw",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "myProgram": "POTA",
+     "myRef": "VK-0001"
+    }
+   },
+   {
+    "id": "st108",
+    "call": "K15XY",
+    "grid": "",
+    "country": "Australia",
+    "entity": "Sao Tome",
+    "state": "wi",
+    "band": "6m",
+    "freqMhz": 144.174,
+    "mode": "FM",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st109",
+    "call": "K16XY",
+    "grid": null,
+    "country": "",
+    "entity": "Zambia",
+    "state": "wa",
+    "band": "2m",
+    "freqMhz": 0,
+    "mode": " FT4 ",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st110",
+    "call": "K17XY",
+    "grid": "IO91",
+    "country": " ALASKA ",
+    "entity": "zambia",
+    "state": "WI",
+    "band": "20m",
+    "freqMhz": 14.23,
+    "mode": "ſſb",
+    "rstSent": "59",
+    "rstRcvd": "59",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st111",
+    "call": "K18XY",
+    "grid": "IL18",
+    "country": "Japan",
+    "entity": "Émile Land",
+    "state": "ſc",
+    "band": "20M",
+    "freqMhz": 24.915,
+    "mode": "",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "WWFF",
+     "theirRef": "eaff-0001"
+    }
+   },
+   {
+    "id": "st112",
+    "call": "K19XY",
+    "grid": "GG66",
+    "country": "United States",
+    "entity": "Ängland",
+    "state": " ct ",
+    "band": "40m",
+    "freqMhz": 14.074,
+    "mode": "SSB",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin A",
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st113",
+    "call": "K20XY",
+    "grid": "GG66",
+    "country": "Hawaii",
+    "entity": "United States",
+    "state": "",
+    "band": " 40m ",
+    "freqMhz": 14.074,
+    "mode": "ssb",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin B",
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st114",
+    "call": "K21XY",
+    "grid": "FN03",
+    "country": null,
+    "entity": "UNITED STATES",
+    "state": "Ca",
+    "band": "15m",
+    "freqMhz": 10.136,
+    "mode": "USB",
+    "rstSent": "+05",
+    "rstRcvd": "",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st115",
+    "call": "K22XY",
+    "grid": "FN03",
+    "country": "united states",
+    "entity": "Japan",
+    "state": null,
+    "band": "15M",
+    "freqMhz": 10.136,
+    "mode": "lsb",
+    "rstSent": "",
+    "rstRcvd": "+05",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st116",
+    "call": "K23XY",
+    "grid": "RF72",
+    "country": "Australia",
+    "entity": "",
+    "state": "XX",
+    "band": "",
+    "freqMhz": 7.074,
+    "mode": "uſb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": false,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st117",
+    "call": "K24XY",
+    "grid": " fn42ab ",
+    "country": "",
+    "entity": null,
+    "state": "wi",
+    "band": "  ",
+    "freqMhz": 145.9,
+    "mode": "Usb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "propMode": "SAT",
+    "satName": "SO-50"
+   },
+   {
+    "id": "st118",
+    "call": "K25XY",
+    "grid": "BP51",
+    "country": " ALASKA ",
+    "entity": "Åland Islands",
+    "state": "wa",
+    "band": "6m",
+    "freqMhz": 14.074,
+    "mode": "FT8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st119",
+    "call": "K26XY",
+    "grid": "JN45",
+    "country": "Japan",
+    "entity": "Aland Islands",
+    "state": "WI",
+    "band": "2m",
+    "freqMhz": 14.074,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st120",
+    "call": "K27XY",
+    "grid": "FN31pr",
+    "country": "United States",
+    "entity": "aland islands",
+    "state": "ſc",
+    "band": "20m",
+    "freqMhz": 14.074,
+    "mode": "CW",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
+   },
+   {
+    "id": "st121",
+    "call": "K28XY",
+    "grid": "fn31",
+    "country": "Hawaii",
+    "entity": "Réunion",
+    "state": " ct ",
+    "band": "20M",
+    "freqMhz": 7.074,
+    "mode": "cw",
+    "rstSent": "-05",
+    "rstRcvd": "-07",
+    "name": "Hiram P",
+    "qth": null,
+    "comment": "second",
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st122",
+    "call": "K29XY",
+    "grid": "EN52",
+    "country": null,
+    "entity": "Reunion",
+    "state": "",
+    "band": "40m",
+    "freqMhz": 14.2,
+    "mode": "FM",
+    "rstSent": "59",
+    "rstRcvd": "57",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st123",
+    "call": "W1AW",
+    "grid": "EN52",
+    "country": "united states",
+    "entity": "Åland Islands",
+    "state": "Ca",
+    "band": " 40m ",
+    "freqMhz": 7.2,
+    "mode": " FT4 ",
+    "rstSent": "55",
+    "rstRcvd": "59",
+    "name": "Kay",
+    "qth": null,
+    "comment": "park",
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "POTA",
+     "theirRef": "US-1234"
+    }
+   },
+   {
+    "id": "st124",
+    "call": "w1aw",
+    "grid": "JO31ab",
+    "country": "Australia",
+    "entity": "Aland Islands",
+    "state": null,
+    "band": "15m",
+    "freqMhz": 14.025,
+    "mode": "ſſb",
+    "rstSent": "599",
+    "rstRcvd": "579",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262307600,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st125",
+    "call": " W1AW ",
+    "grid": "JO31",
+    "country": "",
+    "entity": "aland islands",
+    "state": "XX",
+    "band": "15M",
+    "freqMhz": 21.074,
+    "mode": "",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234571490,
+    "timeKnown": false,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st126",
+    "call": "ß1AA",
+    "grid": "KP00",
+    "country": " ALASKA ",
+    "entity": "Réunion",
+    "state": "wi",
+    "band": "",
+    "freqMhz": 18.1,
+    "mode": "SSB",
+    "rstSent": "-15",
+    "rstRcvd": "-18",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500004056,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st127",
+    "call": "ss1aa",
+    "grid": "JJ30",
+    "country": "Japan",
+    "entity": "Reunion",
+    "state": "wa",
+    "band": "  ",
+    "freqMhz": 28.074,
+    "mode": "ssb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000090000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "rejected",
+      "whenUnix": 1641081600
+     }
+    }
+   },
+   {
+    "id": "st128",
+    "call": "K1ABC",
+    "grid": "KM59",
+    "country": "United States",
+    "entity": "Curaçao",
+    "state": "WI",
+    "band": "6m",
+    "freqMhz": 14.074,
+    "mode": "USB",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1700000000,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "authfail",
+      "whenUnix": 1709251200
+     }
+    }
+   },
+   {
+    "id": "st129",
+    "call": "k1abc",
+    "grid": "jo62",
+    "country": "Hawaii",
+    "entity": "CURAÇAO",
+    "state": "ſc",
+    "band": "2m",
+    "freqMhz": 14.074,
+    "mode": "lsb",
+    "rstSent": "ı5",
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1704067200,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st130",
+    "call": "JA1XYZ",
+    "grid": "PM95",
+    "country": null,
+    "entity": "São Tomé",
+    "state": " ct ",
+    "band": "20m",
+    "freqMhz": 50.313,
+    "mode": "uſb",
+    "rstSent": "-20",
+    "rstRcvd": "-21",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000000001,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "pending",
+      "whenUnix": 1715644800
+     }
+    }
+   },
+   {
+    "id": "st131",
+    "call": "VE3ABC",
+    "grid": "QF56",
+    "country": "united states",
+    "entity": "Sao Tome",
+    "state": "",
+    "band": "20M",
+    "freqMhz": 3.573,
+    "mode": "Usb",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600000123,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "myProgram": "POTA",
+     "myRef": "VK-0001"
+    }
+   },
+   {
+    "id": "st132",
+    "call": "DL1ABC",
+    "grid": "",
+    "country": "Australia",
+    "entity": "Zambia",
+    "state": "Ca",
+    "band": "40m",
+    "freqMhz": 144.174,
+    "mode": "FT8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1262304000,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st133",
+    "call": "",
+    "grid": null,
+    "country": "",
+    "entity": "zambia",
+    "state": null,
+    "band": " 40m ",
+    "freqMhz": 0,
+    "mode": "ft8",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1234567890,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": false,
+     "lotw": true,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st134",
+    "call": "K0XY",
+    "grid": "IO91",
+    "country": " ALASKA ",
+    "entity": "Émile Land",
+    "state": "XX",
+    "band": "15m",
+    "freqMhz": 14.23,
+    "mode": "CW",
+    "rstSent": "59",
+    "rstRcvd": "59",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1500000456,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st135",
+    "call": "K1XY",
+    "grid": "IL18",
+    "country": "Japan",
+    "entity": "Ängland",
+    "state": "wi",
+    "band": "15M",
+    "freqMhz": 24.915,
+    "mode": "cw",
+    "rstSent": null,
+    "rstRcvd": null,
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 8640000086400,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": true,
+    "qslRcvd": {
+     "card": true,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": {
+     "theirProgram": "WWFF",
+     "theirRef": "eaff-0001"
+    }
+   },
+   {
+    "id": "st136",
+    "call": "K2XY",
+    "grid": "GG66",
+    "country": "United States",
+    "entity": "United States",
+    "state": "wa",
+    "band": "",
+    "freqMhz": 14.074,
+    "mode": "FM",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin A",
+    "notes": null,
+    "whenUnix": 1700003600,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st137",
+    "call": "K3XY",
+    "grid": "GG66",
+    "country": "Hawaii",
+    "entity": "UNITED STATES",
+    "state": "WI",
+    "band": "  ",
+    "freqMhz": 14.074,
+    "mode": " FT4 ",
+    "rstSent": "-01",
+    "rstRcvd": "-02",
+    "name": null,
+    "qth": null,
+    "comment": "twin B",
+    "notes": null,
+    "whenUnix": 1704070800,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st138",
+    "call": "K4XY",
+    "grid": "FN03",
+    "country": null,
+    "entity": "Japan",
+    "state": "ſc",
+    "band": "6m",
+    "freqMhz": 10.136,
+    "mode": "ſſb",
+    "rstSent": "+05",
+    "rstRcvd": "",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 9000000003601,
+    "timeKnown": true,
+    "confirmed": true,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": true
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   },
+   {
+    "id": "st139",
+    "call": "K5XY",
+    "grid": "FN03",
+    "country": "united states",
+    "entity": "",
+    "state": " ct ",
+    "band": "2m",
+    "freqMhz": 10.136,
+    "mode": "",
+    "rstSent": "",
+    "rstRcvd": "+05",
+    "name": null,
+    "qth": null,
+    "comment": null,
+    "notes": null,
+    "whenUnix": 1600003723,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null
+   }
+  ],
+  "counts": {
+   "total": 140,
+   "uniqueCalls": 37,
+   "confirmed": 76,
+   "awardConfirmed": 44,
+   "dxccEntities": 14,
+   "byBand": [
+    {
+     "label": "20m",
+     "count": 14
+    },
+    {
+     "label": "20M",
+     "count": 14
+    },
+    {
+     "label": "40m",
+     "count": 28
+    },
+    {
+     "label": "15m",
+     "count": 14
+    },
+    {
+     "label": "15M",
+     "count": 14
+    },
+    {
+     "label": "6m",
+     "count": 14
+    },
+    {
+     "label": "2m",
+     "count": 14
+    }
+   ],
+   "byMode": [
+    {
+     "label": "SSB",
+     "count": 50
+    },
+    {
+     "label": "ssb",
+     "count": 10
+    },
+    {
+     "label": "FT8",
+     "count": 10
+    },
+    {
+     "label": "ft8",
+     "count": 10
+    },
+    {
+     "label": "CW",
+     "count": 10
+    },
+    {
+     "label": "cw",
+     "count": 10
+    },
+    {
+     "label": "FM",
+     "count": 10
+    },
+    {
+     "label": "FT4",
+     "count": 10
+    },
+    {
+     "label": "ſſb",
+     "count": 10
+    }
+   ],
+   "byYear": [
+    {
+     "label": "2023",
+     "count": 18
+    },
+    {
+     "label": "2024",
+     "count": 18
+    },
+    {
+     "label": "2020",
+     "count": 18
+    },
+    {
+     "label": "2010",
+     "count": 17
+    },
+    {
+     "label": "2009",
+     "count": 17
+    },
+    {
+     "label": "2017",
+     "count": 17
+    }
+   ],
+   "byState": [
+    {
+     "label": "WI",
+     "count": 16
+    },
+    {
+     "label": "WA",
+     "count": 8
+    },
+    {
+     "label": "SC",
+     "count": 8
+    },
+    {
+     "label": "CA",
+     "count": 8
+    },
+    {
+     "label": "CT",
+     "count": 8
+    }
+   ],
+   "entities": [
+    {
+     "label": "Åland Islands",
+     "count": 10
+    },
+    {
+     "label": "Aland Islands",
+     "count": 20
+    },
+    {
+     "label": "Réunion",
+     "count": 10
+    },
+    {
+     "label": "Reunion",
+     "count": 10
+    },
+    {
+     "label": "Curaçao",
+     "count": 14
+    },
+    {
+     "label": "São Tomé",
+     "count": 7
+    },
+    {
+     "label": "Sao Tome",
+     "count": 7
+    },
+    {
+     "label": "Zambia",
+     "count": 14
+    },
+    {
+     "label": "Émile Land",
+     "count": 7
+    },
+    {
+     "label": "Ängland",
+     "count": 7
+    },
+    {
+     "label": "United States",
+     "count": 16
+    },
+    {
+     "label": "Japan",
+     "count": 7
+    },
+    {
+     "label": "Hawaii",
+     "count": 1
+    },
+    {
+     "label": "Australia",
+     "count": 1
+    }
+   ],
+   "hourUtc": [
+    8,
+    17,
+    9,
+    8,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    9,
+    9,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    9,
+    18
+   ],
+   "hourUnknown": 27,
+   "qsl": {
+    "card": 28,
+    "lotw": 20,
+    "eqsl": 47
+   }
+  }
+ }
+]

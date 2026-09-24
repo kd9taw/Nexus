@@ -59,6 +59,7 @@ import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } fro
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
+import { finishLogStats, type LogStatCounts } from './features/logStats'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 
@@ -1218,12 +1219,17 @@ export async function uploadLotwReportByIds(ids: string[]): Promise<UploadReport
 
 /** Ask the engine one of the UI's log questions (SPEC-2 v3 C17a): a page of the Logbook, where a
  *  row sits in it, one call's history, an entity's slots, a roster's summary, the band map's
- *  worked calls. The answer is what `answerFrom` gives over the whole log; a page carries the
- *  query, `revision`, `orderRev` (moves with the order, not on an upload stamp) and `contentRev`.
- *  This is the transport `createAskingLogSource` takes. Rejects with the engine's reason when it
- *  cannot answer — the folds (`workedGrids`, `gridPoints`, `bandsInLog`, `statistics`,
- *  `lotwBacklog`) until C17a's second part. */
+ *  worked calls, the squares and bands worked, the statistics, the LoTW backlog. The answer is
+ *  what `answerFrom` gives over the whole log; a page carries the query, `revision`, `orderRev`
+ *  (moves with the order, not on an upload stamp) and `contentRev`. This is the transport
+ *  `createAskingLogSource` takes. Rejects with the engine's reason when it cannot answer.
+ *
+ *  The statistics arrive COUNTED and are ordered here (`finishLogStats`): their ties are broken
+ *  by `localeCompare`, in this webview's locale, which the engine cannot reproduce. */
 export async function askLog<Q extends LogQuestion>(q: Q): Promise<AnswerTo<Q>> {
+  if (q.kind === 'statistics') {
+    return finishLogStats(await invoke<LogStatCounts>('ask_log', { q })) as AnswerTo<Q>
+  }
   return invoke<AnswerTo<Q>>('ask_log', { q })
 }
 
