@@ -1379,19 +1379,30 @@ export async function updateInstallBlock(): Promise<string | null> {
 /** Flush the conversations, the Field Day log, the open propagation episodes and the window
  * geometry to disk before a self-update hands off to the installer. Called immediately BEFORE
  * the plugin's `install()`, because on Windows that call ends the process outright
- * (`ShellExecuteW` then `exit(0)`) and the ordinary quit cleanup never runs. A no-op on
- * macOS/Linux, where `restartApp()` takes the normal exit path. */
+ * (`ShellExecuteW` then `exit(0)`) and the ordinary quit cleanup never runs. On Windows it
+ * first waits for the logbook to be saved — showing the saving line and, if the save cannot
+ * finish, asking the operator (see `LogbookSaving.tsx`) — so it resolves when the logbook is on
+ * disk or the operator chose to go on without the rest. A no-op on macOS/Linux, where
+ * `restartApp()` takes the normal exit path. */
 export async function prepareUpdateInstall(): Promise<void> {
   return invoke<void>('prepare_update_install')
 }
 
 /** Restart Nexus after a self-update install — through the backend's ordinary quit cleanup
- * (TX unkey, journal flushes, window geometry), never a hard kill. The updater plugin's
- * `install()` restarts nothing on macOS/Linux, so this call is what makes "Nexus will
- * restart…" true there; on Windows the installer already exited the process before
- * `install()` resolves, so this is never reached. */
+ * (TX unkey, journal flushes, window geometry), never a hard kill. The backend stops the radio,
+ * then saves the logbook with the window still up, then restarts, so this resolves before the
+ * restart happens. The updater plugin's `install()` restarts nothing on macOS/Linux, so this
+ * call is what makes "Nexus will restart…" true there; on Windows the installer already exited
+ * the process before `install()` resolves, so this is never reached. */
 export async function restartApp(): Promise<void> {
   return invoke<void>('restart_app')
+}
+
+/** The operator's answer when a quit could not save the logbook on its own: keep waiting for
+ * the changes still on their way to disk, or quit without them. The backend waits for exactly
+ * one answer per question and ignores a second. */
+export async function logbookSaveChoice(keepTrying: boolean): Promise<void> {
+  return invoke<void>('logbook_save_choice', { keepTrying })
 }
 
 /** A newer BETA build the opt-in channel found, or null when up to date / offline. */

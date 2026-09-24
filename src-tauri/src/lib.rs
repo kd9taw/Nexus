@@ -39,6 +39,9 @@ mod cluster_nodes;
 mod data_folder_location;
 mod pouncer;
 mod profile_sync;
+/// The quit when the logbook still has changes on their way to disk: the window is held while
+/// they are saved, with the radio stopped FIRST — see the module header for the order.
+mod quit;
 mod remote_monitor;
 mod remote_service;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
@@ -24435,13 +24438,18 @@ async fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<S
 /// in the seconds the install itself took; routing the restart through the same
 /// safe-shutdown means a keyed rig is unkeyed, never hard-killed. (`restart()` on the main
 /// thread would skip those events entirely — its own docs say so.)
+///
+/// And first, when the logbook still has changes on their way to disk, the same held quit as a
+/// window close ([`quit::restart_when_saved`]): the radio stopped, then the save, shown, with
+/// the window up — and only then the restart. Nothing on its way: the restart is requested at
+/// once, as before. Never blocks: this runs on the UI thread.
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
     tempo_core::applog::info(
         "updater",
         "install finished — restarting through quit_cleanup",
     );
-    app.request_restart();
+    quit::restart_when_saved(&app);
 }
 
 // ─── Opt-in BETA update channel ────────────────────────────────────────────────────────────
@@ -24934,8 +24942,9 @@ static LAUNCH_ATTACHED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 /// `applicationWillTerminate` (tao `AppState::exit` → `handle_nonuser_event`), so blocking
 /// here still happens before the process dies.
 ///
-/// TX SAFETY: the unkey block below is the close path's, moved verbatim — this change
-/// extends its COVERAGE to the Cmd+Q and restart paths, it does not alter its behaviour.
+/// TX SAFETY: the unkey ([`stop_the_radio`], run below before anything is flushed) is the close
+/// path's block, moved verbatim — this change extends its COVERAGE to the Cmd+Q and restart
+/// paths, it does not alter its behaviour.
 fn quit_cleanup(app_handle: &tauri::AppHandle) {
     use std::sync::atomic::Ordering;
     if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
@@ -24947,12 +24956,37 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     if attached {
         capture_all_window_geometry(app_handle);
     }
+    // Unkey the transmitter before the process dies (see `stop_the_radio`). A quit the logbook
+    // held has already done it, before it waited on anything; the second run finds the loop gone
+    // and returns at once, and sweeps any daemon started since.
+    stop_the_radio();
+    if attached {
+        persist_journals(app_handle);
+    } else {
+        flush_logbook(
+            app_handle.state::<SharedEngine>().inner(),
+            LOG_FLUSH_ON_EXIT,
+        );
+    }
+    // LAST: a clean exit is itself diagnostic — its absence in the file says the process
+    // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
+    tempo_core::applog::info("startup", "clean shutdown");
+    tempo_core::applog::flush();
+}
+
+/// Take the transmitter off the air and stop the radio loop — a quit's FIRST act.
+///
+/// [`quit_cleanup`]'s unkey block, moved here verbatim so that the quit the logbook holds
+/// ([`quit::prepare_quit`]) runs the very same steps before it waits on anything. Safe to run
+/// twice: the second run finds SHUTDOWN_DONE already set and returns at once.
+fn stop_the_radio() {
     // Unkey the transmitter before the process dies: signal the radio
     // loop to drop PTT and give it a brief window to flush the un-key
     // command to the rig. A stuck carrier on quit is a TX-safety
     // hazard, so this blocks the exit for up to ~3 s.
     #[cfg(feature = "radio")]
     {
+        use std::sync::atomic::Ordering;
         tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
         // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
         // not a fixed sleep: the loop only reaches the un-key after
@@ -24973,18 +25007,6 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
         // ordinary case where the loop's drops already ran.
         tempo_audio::rigctld_proc::kill_leftover_daemons();
     }
-    if attached {
-        persist_journals(app_handle);
-    } else {
-        flush_logbook(
-            app_handle.state::<SharedEngine>().inner(),
-            LOG_FLUSH_ON_EXIT,
-        );
-    }
-    // LAST: a clean exit is itself diagnostic — its absence in the file says the process
-    // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
-    tempo_core::applog::info("startup", "clean shutdown");
-    tempo_core::applog::flush();
 }
 
 /// Snapshot the main window's box and every band-map pop-out's, while they still exist.
@@ -25046,19 +25068,29 @@ fn persist_journals(app_handle: &tauri::AppHandle) {
 /// that never verified) must leave a working app behind, not one whose radio loop has been shut
 /// down under it. Persisting is idempotent; shutting down is not.
 ///
+/// **The logbook first, with the operator told** ([`quit::save_before_the_installer`]): the
+/// installer ends the process, so changes still on their way to disk are saved with the window
+/// up and the saving line shown, and a save that cannot finish asks Keep trying / Quit without
+/// — as a quit does, but with the radio left running, for the reason above. It resolves once
+/// the logbook is saved or the operator chose to go on, so it runs on the blocking pool.
+///
 /// A no-op off Windows: there `install()` returns to its caller, the frontend calls
-/// `restart_app`, and `quit_cleanup` runs in full on the ordinary exit path.
+/// `restart_app`, and `quit_cleanup` runs in full on the ordinary exit path. (A `cfg!` rather
+/// than `#[cfg]`, so the Windows body is type-checked on every platform.)
 #[tauri::command]
-fn prepare_update_install(app: tauri::AppHandle) {
-    #[cfg(windows)]
-    {
+async fn prepare_update_install(app: tauri::AppHandle) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
         tempo_core::applog::info("updater", "flushing journals before the installer handoff");
+        quit::save_before_the_installer(&app);
         capture_all_window_geometry(&app);
         persist_journals(&app);
         tempo_core::applog::flush();
-    }
-    #[cfg(not(windows))]
-    let _ = app;
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Everything the Tauri builder chain MOVES, in one clonable bundle.
@@ -27484,6 +27516,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             update_install_block,
             prepare_update_install,
             restart_app,
+            quit::logbook_save_choice,
             check_beta_update,
             install_beta_update,
             log_operators,
@@ -27947,7 +27980,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
                 // Remember the band-map window's size+position so it reopens where it was.
                 // Captured on close (not per move/resize) so we write the file once, not on
@@ -27964,6 +27997,12 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                             capture_bandmap_window(&w);
                             let _ = w.close();
                         }
+                    }
+                    // The logbook still has changes on their way to disk: keep the window while
+                    // they are saved — the radio stopped first (see `quit`). Nothing on its way,
+                    // and the close goes ahead exactly as it always did.
+                    if quit::hold_the_close(app) {
+                        api.prevent_close();
                     }
                 }
             }

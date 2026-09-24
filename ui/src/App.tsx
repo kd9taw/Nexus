@@ -170,6 +170,7 @@ import { RoamPanel } from './components/RoamPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toasts } from './components/Toasts'
 import { ConfirmHost, confirmDialog } from './confirm'
+import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -3548,6 +3549,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       {/* Destructive actions confirm through this, not window.confirm — which is inert in the
           macOS webview and silently answered "no" to every one of them. See src/confirm.tsx. */}
       <ConfirmHost />
+      {/* Quitting while the logbook is still saving: the station holds this window and says so
+          here (src-tauri quit.rs). The desktop's alone — a browser has no quit to report. */}
+      {!remote && <LogbookSaving />}
       <Announcer />
 
       {radioPicker?.showPicker && (
