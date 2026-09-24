@@ -2159,6 +2159,132 @@ mod tests {
         assert!(std::fs::read_to_string(d.log()).unwrap().contains("W9LATE"));
     }
 
+    // ── the LoTW batch, read from the store (SPEC-2 v3 C15) ──────────────────
+
+    /// The batch file as the upload built it before C15 — `Engine::lotw_upload_adif`'s body,
+    /// verbatim but for `self`: the records at `indices` in the log in memory, in that order.
+    fn lotw_adif_before(
+        recs: &[Arc<QsoRecord>],
+        indices: &[usize],
+        adif_loc: bool,
+        call: &str,
+        grid: &str,
+    ) -> String {
+        let mut out = tempo_core::logbook::adif_header();
+        for &i in indices {
+            if let Some(r) = recs.get(i) {
+                if adif_loc {
+                    out.push_str(&tempo_core::logbook::adif_record_with_station(
+                        r, call, grid,
+                    ));
+                } else {
+                    out.push_str(&tempo_core::logbook::adif_record(r));
+                }
+            }
+        }
+        out
+    }
+
+    /// ★ THE LoTW BATCH FROM THE STORE IS THE BATCH THE LOG IN MEMORY MADE — after the export
+    /// fixture, contacts with no known time, and 6 seeded runs of 30 random changes with LoTW
+    /// stamps of every outcome mixed in (and the operator's "already uploaded" declaration now
+    /// and then), the default batch read from the store is exactly the contacts
+    /// `lotw_unsent_indices` names in memory: the same records, the same file handed to TQSL in
+    /// both location modes (against the pre-C15 builder), the same ids and fingerprints for the
+    /// stamp, and the same answer to "is anything owed?".
+    #[test]
+    fn the_lotw_batch_from_the_store_is_the_batch_the_log_in_memory_made() {
+        use tempo_core::logbook::{UploadDetail, UploadOutcome};
+        let mut checked = 0usize;
+        let mut owed_seen = 0usize;
+        for seed in 1..=6u64 {
+            let d = Dir::new(&format!("lotw-{seed}"));
+            std::fs::write(d.log(), export_fixture()).unwrap();
+            let e = launch_with_resolvers(&d);
+            // Contacts with no known time of day: never owed.
+            let _ = e.lock().unwrap().import_adif(
+                "<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n\
+                 <CALL:5>N1TIM<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260916<EOR>\n",
+            );
+            let mut g = Gen(seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
+            for step in 0..30 {
+                random_change(&e, &mut g, step);
+                {
+                    let mut eng = e.lock().unwrap();
+                    let len = eng.log_records().len();
+                    match g.below(6) {
+                        0 | 1 if len > 0 => {
+                            let outcome = [
+                                UploadOutcome::Pending,
+                                UploadOutcome::Accepted,
+                                UploadOutcome::Duplicate,
+                                UploadOutcome::Rejected,
+                                UploadOutcome::AuthFail,
+                            ][g.below(5)];
+                            let at = g.below(len);
+                            eng.stamp_lotw_upload(
+                                &[at],
+                                outcome,
+                                1_788_000_000 + step as i64,
+                                Some(UploadDetail::RecordRefused).filter(|_| g.below(2) == 0),
+                            );
+                        }
+                        2 if step % 11 == 10 => {
+                            eng.mark_lotw_uploaded_all();
+                        }
+                        _ => {}
+                    }
+                }
+                if step % 3 != 2 {
+                    continue;
+                }
+                let (rows, indices, memory, signed_before, held) = {
+                    let eng = e.lock().unwrap();
+                    let indices = eng.lotw_unsent_indices();
+                    (
+                        eng.log_rows(),
+                        indices.clone(),
+                        eng.lotw_rows_at(&indices),
+                        eng.lotw_signed(&indices),
+                        eng.log_records().to_vec(),
+                    )
+                };
+                let from_store = crate::station::lotw_unsent(&rows).expect("the store reads");
+                assert!(
+                    from_store == memory,
+                    "seed {seed}, step {step}: the store's batch differs from memory's"
+                );
+                for adif_loc in [false, true] {
+                    assert_eq!(
+                        crate::station::lotw_batch_adif(&from_store, adif_loc, "KD9TAW", "EN52"),
+                        lotw_adif_before(&held, &indices, adif_loc, "KD9TAW", "EN52"),
+                        "seed {seed}, step {step}: the file TQSL signs (location in ADIF: {adif_loc})"
+                    );
+                }
+                let signed: Vec<crate::station::LotwSigned> = from_store
+                    .iter()
+                    .filter_map(crate::station::LotwSigned::of)
+                    .collect();
+                assert_eq!(
+                    signed, signed_before,
+                    "seed {seed}, step {step}: the stamp's rows"
+                );
+                assert_eq!(
+                    crate::station::lotw_owed(&rows).unwrap(),
+                    !indices.is_empty(),
+                    "seed {seed}, step {step}: is anything owed"
+                );
+                owed_seen += usize::from(!indices.is_empty());
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 60);
+        assert!(
+            owed_seen > 20,
+            "premise: batches with contacts in them ({owed_seen})"
+        );
+    }
+
     /// ⛔ PROPERTY 7, the launch after the conversion. Left as the file it was converted from,
     /// `log.adi` is not the store's own picture, so every launch until the first change would
     /// read it and take it in — and taking in is an import. A log holding one contact twice,

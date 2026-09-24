@@ -52,6 +52,17 @@ pub struct LotwSigned {
     fingerprint: u64,
 }
 
+impl LotwSigned {
+    /// The contact `r` as a batch hands it to TQSL: its id and its fingerprint. `None` for a row
+    /// with no id, which could not be named later — every row the log holds carries one.
+    pub fn of(r: &QsoRecord) -> Option<LotwSigned> {
+        Some(LotwSigned {
+            id: r.id?,
+            fingerprint: lotw_fingerprint(r),
+        })
+    }
+}
+
 /// What [`StationCore::stamp_lotw_batch`] did with a batch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LotwStamped {
@@ -231,6 +242,103 @@ fn lotw_fingerprint(r: &QsoRecord) -> u64 {
     let mut h = std::hash::DefaultHasher::new();
     h.write(tempo_core::logbook::adif_record(&row).as_bytes());
     h.finish()
+}
+
+/// Whether a contact is owed to LoTW: award-unconfirmed AND either never uploaded or a prior
+/// bounce. `UploadState` IS the per-QSO cursor — Pending/Accepted/Duplicate are excluded (don't
+/// re-send).
+///
+/// LoTW matches on both operators' times agreeing (±30 min): a record with NO known time can
+/// never match, so signing and sending it just parks it at LoTW as unmatched forever — and,
+/// being re-sendable, it kept the "Upload to LoTW (N)" count from ever clearing.
+///
+/// THE rule, for the log in memory ([`StationCore::lotw_unsent_indices`]) and the store
+/// ([`lotw_unsent`]) alike.
+fn owed_to_lotw(r: &QsoRecord) -> bool {
+    !r.award_confirmed
+        && r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent())
+        && r.time_known
+}
+
+/// What [`owed_to_lotw`] reads of each contact: the four confirmation channels (which
+/// `award_confirmed` is read from), whether its time is known, and the upload stamps.
+const OWED_TO_LOTW: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "time_known",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: true,
+};
+
+/// The contacts owed to LoTW ([`owed_to_lotw`]), whole, in log order — the default batch an
+/// upload signs, read from the store (SPEC-2 v3 C15) with the Engine lock released: a narrow
+/// pass names them, and they are read whole by id.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`StationCore::log_rows`])
+/// under it. A contact another change removes between the two reads is simply not in the
+/// batch; a change still on its way to the store is in the next batch.
+pub fn lotw_unsent(rows: &crate::logstore::LogRows) -> Result<Vec<QsoRecord>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut owed = Vec::new();
+    rows.each(OWED_TO_LOTW, Scope::All, Order::Log, &mut |r| {
+        if let Some(id) = r.id.filter(|_| owed_to_lotw(r)) {
+            owed.push(id);
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    let (whole, _) = rows.rows_by_ids(&owed).map_err(|e| e.to_string())?;
+    // The rows as they stand at the second read: one a change settled meanwhile is not owed.
+    Ok(whole.into_iter().filter(owed_to_lotw).collect())
+}
+
+/// Whether any contact is owed to LoTW — the automatic batch's question before it starts TQSL,
+/// answered from the store at the first one owed.
+///
+/// ⚠️ It reads the store: never under the Engine lock, as [`lotw_unsent`].
+pub fn lotw_owed(rows: &crate::logstore::LogRows) -> Result<bool, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut any = false;
+    rows.each(OWED_TO_LOTW, Scope::All, Order::Log, &mut |r| {
+        any = owed_to_lotw(r);
+        if any {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(any)
+}
+
+/// The ADIF upload payload for TQSL: the header, then `batch` in its order.
+///
+/// In ADIF-location mode (`adif_location`), each record is stamped with STATION_CALLSIGN +
+/// MY_GRIDSQUARE so TQSL can sign from the ADIF (no named `-l` location). Named-location mode is
+/// byte-identical to before (no MY_ fields), so existing uploads are unchanged.
+///
+/// `call` is the FALLBACK, not the answer: `adif_record_with_station` skips its own stamp when
+/// the record carries a STATION_CALLSIGN of its own (which `adif_record` has already emitted),
+/// so a batch uploaded after the operator sets their home call back still signs each contact
+/// under the call that made it. Records written before that stamp existed carry none and sign
+/// from the live setting, exactly as they always did.
+pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, grid: &str) -> String {
+    let mut out = tempo_core::logbook::adif_header();
+    for r in batch {
+        if adif_location {
+            out.push_str(&tempo_core::logbook::adif_record_with_station(
+                r, call, grid,
+            ));
+        } else {
+            out.push_str(&tempo_core::logbook::adif_record(r));
+        }
+    }
+    out
 }
 
 /// Canonical band key for the per-band worked indices.
@@ -2212,14 +2320,22 @@ impl StationCore {
             .records()
             .iter()
             .enumerate()
-            .filter(|(_, r)| !r.award_confirmed)
-            .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
-            // LoTW matches on both operators' times agreeing (±30 min): a record
-            // with NO known time can never match, so signing and sending it just
-            // parks it at LoTW as unmatched forever — and, being re-sendable, it
-            // kept the "Upload to LoTW (N)" count from ever clearing.
-            .filter(|(_, r)| r.time_known)
+            .filter(|(_, r)| owed_to_lotw(r))
             .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The contacts at `positions` in the log as it stands, in that order — a LoTW batch chosen
+    /// by hand, which a view still names by position (the Awards view's diagnosis buckets). Read
+    /// in the same hold of the lock that reads the positions; a position past the end names
+    /// nothing. Only the rows asked for are copied, never the log.
+    #[allow(deprecated)] // SPEC-2 C16: LoTW's rows chosen by position
+    pub fn lotw_rows_at(&self, positions: &[usize]) -> Vec<QsoRecord> {
+        let records = self.logbook.records();
+        positions
+            .iter()
+            .filter_map(|&i| records.get(i))
+            .map(|r| QsoRecord::clone(r))
             .collect()
     }
 

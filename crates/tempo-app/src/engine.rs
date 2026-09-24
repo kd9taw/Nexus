@@ -11526,35 +11526,22 @@ impl Engine {
         });
     }
 
-    /// Build the ADIF upload payload (header + the records at `indices`) for TQSL.
-    #[allow(deprecated)] // SPEC-2 C15: the LoTW batch
+    /// The ADIF upload payload (header + the records at `indices`) for TQSL, as the upload
+    /// builds it ([`crate::station::lotw_batch_adif`]) with this station's settings — for a test
+    /// that owns its engine. The upload itself reads its default batch from the store.
+    #[cfg(test)]
     pub fn lotw_upload_adif(&self, indices: &[usize]) -> String {
-        let recs = self.station.logbook.records();
-        let mut out = tempo_core::logbook::adif_header();
-        // In ADIF-location mode, stamp each record with STATION_CALLSIGN + MY_GRIDSQUARE so TQSL
-        // can sign from the ADIF (no named `-l` location). Named-location mode is byte-identical
-        // to before (no MY_ fields), so existing uploads are unchanged.
-        //
-        // `call` is the FALLBACK, not the answer: `adif_record_with_station` skips its own stamp
-        // when the record carries a STATION_CALLSIGN of its own (which `adif_record` has already
-        // emitted), so a batch uploaded after the operator sets their home call back still signs
-        // each contact under the call that made it. Records written before that stamp existed
-        // carry none and sign from the live setting, exactly as they always did.
-        let adif_loc = self.settings.lotw_use_adif_location;
-        let call = self.settings.mycall.clone();
-        let grid = self.settings.mygrid.clone();
-        for &i in indices {
-            if let Some(r) = recs.get(i) {
-                if adif_loc {
-                    out.push_str(&tempo_core::logbook::adif_record_with_station(
-                        r, &call, &grid,
-                    ));
-                } else {
-                    out.push_str(&tempo_core::logbook::adif_record(r));
-                }
-            }
-        }
-        out
+        crate::station::lotw_batch_adif(
+            &self.station.lotw_rows_at(indices),
+            self.settings.lotw_use_adif_location,
+            &self.settings.mycall,
+            &self.settings.mygrid,
+        )
+    }
+
+    /// See [`StationCore::lotw_rows_at`].
+    pub fn lotw_rows_at(&self, positions: &[usize]) -> Vec<QsoRecord> {
+        self.station.lotw_rows_at(positions)
     }
 
     /// Mark every QSO currently counted as un-uploaded to LoTW (the "Upload to LoTW (N)" set)

@@ -237,13 +237,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download or a Field Day merge that used to happen only after the next restart. It now happens
   as the contact arrives, as it always did for a contact you log yourself.
 
-- **Exporting a big logbook no longer makes the radio wait.** The ADIF and CSV exports (the
-  whole log, a date range, one operator or one activation) and the lists of operators and
-  activations to choose from went through every contact while the radio waited for them — a
-  pause the decoder and the waterfall felt on a log of a hundred thousand contacts. They now
-  read the logbook database while the radio carries on, and the files are the same, byte for
-  byte. If changes are still on their way to the database a minute after you ask for an export,
-  it now says so and writes no file, rather than a file without them.
+- **Exporting a big logbook, or starting a LoTW upload, no longer makes the radio wait.** The
+  ADIF and CSV exports (the whole log, a date range, one operator or one activation) and the
+  lists of operators and activations to choose from went through every contact while the radio
+  waited for them, and so did the LoTW upload while it gathered the contacts to sign — a pause
+  the decoder and the waterfall felt on a log of a hundred thousand contacts. They now read the
+  logbook database while the radio carries on, and the files are the same, byte for byte. If
+  changes are still on their way to the database a minute after you ask for an export, it now
+  says so and writes no file, rather than a file without them.
 
 - **Keeping `log.adi` up to date no longer needs memory the size of your log.** Every change
   used to build the whole file in memory before writing it — about 64 MB on a log of 150,000

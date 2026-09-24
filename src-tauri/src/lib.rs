@@ -2893,6 +2893,45 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A contact with no known time of day is never signed — LoTW matches on time, so it could
+    /// never confirm — whether the batch is the default one, read from the store (SPEC-2 v3
+    /// C15), or chosen by hand by position. The file TQSL is handed holds every other contact,
+    /// and the report counts them. Once they are sent, nothing is owed: the timeless contact is
+    /// not a reason to start TQSL.
+    #[test]
+    fn a_contact_with_no_known_time_is_never_signed() {
+        let (dir, engine, _) = station("lotw-timeless", 3);
+        let _ = engine_lock(&engine)
+            .import_adif("<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n");
+        let timeless = engine_lock(&engine)
+            .log_records()
+            .iter()
+            .position(|r| r.call == "N0TIM")
+            .expect("imported");
+        assert!(
+            !engine_lock(&engine).log_records()[timeless].time_known,
+            "premise: a contact with no known time"
+        );
+        for (chosen, sent) in [(None, 3), (Some(vec![0, timeless, 1]), 2)] {
+            let mut file = String::new();
+            let report = lotw_upload_batch_with(&engine, chosen.clone(), true, |_, args| {
+                file = std::fs::read_to_string(args.last().expect("the batch file"))
+                    .expect("the batch file reads");
+                Ok((0, String::new()))
+            })
+            .expect("the upload ran");
+            assert_eq!(report.dispatched, sent, "{chosen:?}");
+            assert_eq!(file.matches("<EOR>").count(), sent, "{chosen:?}: {file}");
+            assert!(!file.contains("N0TIM"), "{chosen:?}: never signed: {file}");
+        }
+        let rows = engine_lock(&engine).log_rows();
+        assert!(
+            !tempo_app::station::lotw_owed(&rows).expect("the store reads"),
+            "only the timeless contact is unsent, and it is owed nothing"
+        );
+        assert!(engine_lock(&engine).lotw_unsent_indices().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
@@ -20349,17 +20388,16 @@ fn lotw_upload_batch(
 /// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
 /// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
 /// to survive.
-#[allow(deprecated)] // SPEC-2 C15: the LoTW batch
 fn lotw_upload_batch_with(
     state: &SharedEngine,
     indices: Option<Vec<usize>>,
     wait: bool,
     tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
-    // Brief lock: read config + build the batch + ADIF, then release before spawn.
-    // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
-    // to answer, which is tens of seconds on a big batch.
-    let (batch, signed, adif, location, tqsl_path) = {
+    // Brief lock: read config and what the batch is, then release it — before the batch is read
+    // from the store, and before TQSL is spawned. Held across the spawn it would freeze the
+    // whole UI for as long as ARRL takes to answer, which is tens of seconds on a big batch.
+    let (chosen, rows, location, tqsl_path, (adif_location, call, grid)) = {
         let eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
@@ -20372,33 +20410,47 @@ fn lotw_upload_batch_with(
                     .into(),
             );
         }
-        let mut batch = indices.unwrap_or_else(|| eng.lotw_unsent_indices());
-        // Caller-supplied indices (the Awards per-bucket buttons) bypass
-        // lotw_unsent_indices' time_known exclusion — filter HERE, at the one
-        // choke point every batch passes: LoTW matches on time, so a record
-        // with no known time of day can never confirm and must not be signed.
-        {
-            let records = eng.get_log();
-            batch.retain(|&i| records.get(i).map(|r| r.time_known).unwrap_or(false));
-        }
-        if batch.is_empty() {
-            return Ok(UploadReportDto {
-                dispatched: 0,
-                outcome: "none".into(),
-                detail: None,
-                skipped_edited: 0,
-                skipped_deleted: 0,
-            });
-        }
-        let adif = eng.lotw_upload_adif(&batch);
-        // The contacts by id, taken with the file: the stamp below finds them by id once TQSL
-        // is done, because by then the positions in `batch` may name other contacts.
-        let signed = eng.lotw_signed(&batch);
+        // A batch chosen by hand names positions in the log as it stands (the Awards view's
+        // per-bucket buttons), so its rows are read here, in the same hold of the lock as the
+        // positions. The default batch is found in the store once the lock is released.
+        let chosen = indices.map(|at| eng.lotw_rows_at(&at));
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        (batch, signed, adif, location, tqsl_path)
+        let station = (
+            use_adif_location,
+            eng.settings().mycall.clone(),
+            eng.settings().mygrid.clone(),
+        );
+        (chosen, eng.log_rows(), location, tqsl_path, station)
     };
+    // The contacts the batch signs, whole: the chosen ones, or every one owed to LoTW, read from
+    // the store (SPEC-2 v3 C15). A batch chosen by hand bypasses the default batch's time_known
+    // exclusion — filter HERE, at the one choke point every batch passes: LoTW matches on time,
+    // so a record with no known time of day can never confirm and must not be signed.
+    let batch: Vec<tempo_core::logbook::QsoRecord> = match chosen {
+        Some(rows) => rows,
+        None => tempo_app::station::lotw_unsent(&rows)?,
+    }
+    .into_iter()
+    .filter(|r| r.time_known)
+    .collect();
+    if batch.is_empty() {
+        return Ok(UploadReportDto {
+            dispatched: 0,
+            outcome: "none".into(),
+            detail: None,
+            skipped_edited: 0,
+            skipped_deleted: 0,
+        });
+    }
+    let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
+    // The contacts by id, taken with the file: the stamp below finds them by id once TQSL is
+    // done, and only where each is still the contact that was signed.
+    let signed: Vec<tempo_app::station::LotwSigned> = batch
+        .iter()
+        .filter_map(tempo_app::station::LotwSigned::of)
+        .collect();
 
     // Write the batch ADIF to a temp file for TQSL to sign. Use a UNIQUE,
     // unpredictable name (not the old fixed `nexus_lotw_upload.adi` a co-tenant
@@ -26948,9 +27000,19 @@ fn start_on_the_logbook(
             }
             // Nothing to send: return WITHOUT spawning TQSL and without touching the
             // cursor, so an idle station stays due and uploads promptly once it works
-            // someone — rather than sitting out the rest of the interval.
-            if engine_lock(&auto_engine).lotw_unsent_indices().is_empty() {
-                continue;
+            // someone — rather than sitting out the rest of the interval. Asked of the store,
+            // with the engine lock released (SPEC-2 v3 C15).
+            let rows = engine_lock(&auto_engine).log_rows();
+            match tempo_app::station::lotw_owed(&rows) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    tempo_core::applog::warn(
+                        "LoTW",
+                        &format!("the automatic LoTW upload could not read the logbook: {e}"),
+                    );
+                    continue;
+                }
             }
             // THE CURSOR POLICY, and it deliberately differs from the QRZ worker this is
             // modelled on. QRZ leaves its high-water alone on failure because it is a
