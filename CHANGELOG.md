@@ -202,6 +202,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Logbook no longer slides contacts out from under the pointer when the log changes.** With
+  the list scrolled down, a contact the FT sequencer logged went in above everything on screen and
+  pushed every row below it down by a row's height, so a click aimed at one contact's ✎ or ✕ could
+  land on its neighbour. A contact deleted from another window or a Remote browser slid them the
+  other way. The rows you are looking at now stay exactly where they are. At the top of the list
+  nothing changes: a new contact still appears there, as it always did.
+
+- **The Logbook's edit mark and an open comment stay on their own contact.** When a contact above
+  them was deleted from another window or a Remote browser, both moved onto the neighbouring
+  contact. They now stay with the contact you opened them on.
+
+- **Awards can push a contact you logged after opening it.** Under "Confirmations — why isn't
+  this credited?", the Push to QRZ, ClubLog or eQSL button looked the contact up in the copy of
+  the log Awards took when it opened, so a contact logged since then answered "Could not find
+  that QSO in the log". It now sends the contact the diagnosis names.
+
 - **Logging a Field Day contact no longer makes the radio wait for the disk.** Every Field Day
   contact rewrites the contest journal, and that write used to finish on the disk before the
   radio could go on — including when the FT sequencer logged a contact itself, in the middle of
