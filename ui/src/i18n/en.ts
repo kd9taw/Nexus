@@ -9182,6 +9182,21 @@ export const EN = {
     other: 'Quit without the last {{count}} changes',
   },
   'quit.logbook.stopTx': 'Stop TX',
+  // A change the database refused and the station sent again from memory (Keep trying).
+  'quit.logbook.retry.body': {
+    one: '{{count}} change could not be written to the logbook: {{reason}}. Keep trying sends it again.',
+    other:
+      '{{count}} changes could not be written to the logbook: {{reason}}. Keep trying sends them again.',
+  },
+  // The logbook database refused a change (C10b). The station keeps it in memory: it sends it
+  // again while the refusal can pass (another program holding the database, a full or failing
+  // disk), and holds it for the quit when it cannot. Said while it lasts, and once more when
+  // every change is saved again. `{{reason}}` is the station's diagnostic wording, untranslated.
+  'shell.logSave.retrying':
+    'Nexus could not save a change to the logbook: {{reason}}. It keeps the change in memory and sends it again until the logbook takes it. Nothing is lost while Nexus stays open.',
+  'shell.logSave.held':
+    'The logbook refused a change for good: {{reason}}. Nexus keeps it in memory for this session, and asks about it when you quit. The diagnostic log has the details.',
+  'shell.logSave.saved': 'The logbook is saved again: every change it had refused is on disk now.',
   'shell.message.failed': 'Message could not be sent',
   'shell.bandFeed.failed': 'Could not open the band feed',
   'shell.resend.failed': 'Could not re-send to {{peer}}',

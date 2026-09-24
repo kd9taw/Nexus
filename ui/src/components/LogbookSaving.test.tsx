@@ -169,6 +169,50 @@ describe('the logbook-saving dialog', () => {
     expect(button('Quit without the last 3 changes')).not.toBeNull()
   })
 
+  it('a change refused for a reason that can pass offers Keep trying, which sends it again', async () => {
+    await mount()
+    emit(LOGBOOK_SAVE_FAILED, {
+      pending: 0,
+      retryable: 1,
+      refused: 0,
+      reason: null,
+      retryReason: 'database or disk is full',
+      radioLive: false,
+    })
+    expect(
+      screen.getByText(t('quit.logbook.retry.body', { count: 1, reason: 'database or disk is full' })),
+    ).toBeTruthy()
+    expect(dialog()!.textContent, 'not the words for a change refused for good').not.toContain(
+      t('quit.logbook.refused.body', { count: 1, reason: 'database or disk is full' }),
+    )
+    const keep = button('Keep trying')
+    expect(keep, 'sending it again can land it, so Keep trying is on offer').not.toBeNull()
+    expect(button('Quit without the last change')).not.toBeNull()
+    fireEvent.click(keep!)
+    await act(async () => {})
+    expect(invoked).toContainEqual(['logbook_save_choice', { keepTrying: true }])
+  })
+
+  it('both kinds of refusal at once: each line names its own reason, and the quit counts both', async () => {
+    await mount()
+    emit(LOGBOOK_SAVE_FAILED, {
+      pending: 0,
+      retryable: 1,
+      refused: 1,
+      reason: 'UNIQUE constraint failed',
+      retryReason: 'database or disk is full',
+      radioLive: false,
+    })
+    expect(
+      screen.getByText(t('quit.logbook.retry.body', { count: 1, reason: 'database or disk is full' })),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(t('quit.logbook.refused.body', { count: 1, reason: 'UNIQUE constraint failed' })),
+    ).toBeTruthy()
+    expect(button('Keep trying')).not.toBeNull()
+    expect(button('Quit without the last 2 changes')).not.toBeNull()
+  })
+
   it('the save finishing hides it', async () => {
     await mount()
     emit(LOGBOOK_SAVE_FAILED, { pending: 1, refused: 0, reason: null, radioLive: false })
