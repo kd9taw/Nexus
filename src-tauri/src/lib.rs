@@ -28,6 +28,11 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+// Test code reads the in-memory log freely — fixtures and oracles — so the handles on it that are
+// marked `#[deprecated]` (SPEC-2's census ratchet) are allowed under `cfg(test)`; production code
+// names, at each use, the step that moves it. The tests move to the store-backed accessor in C19.
+#![cfg_attr(test, allow(deprecated))]
+
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -188,6 +193,7 @@ fn note_log_tally() {
 /// the log's read identity taken under the same lock (see [`PropContext`]). Under the lock only
 /// the kept model or a copy of the log's pointers is taken ([`needs_capture`]); the fold runs
 /// after it is released ([`needs_finish`]).
+#[allow(deprecated)] // SPEC-2 C14: the needs fold, read from the store
 fn needs_kept(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
@@ -213,6 +219,7 @@ enum NeedsCapture {
 /// The needs model's half that runs UNDER the engine lock: a revision read and, only when the
 /// model must be folded again, a pointer copy of the log (1 ms at 150,000 contacts, where the
 /// per-row copy it replaces was 31 ms and a full clone 165 ms).
+#[allow(deprecated)] // SPEC-2 C14: the needs fold, read from the store
 fn needs_capture(eng: &Engine, kept: &Tally<(), propagation::LogNeeds>) -> NeedsCapture {
     let revision = eng.log_revision();
     match kept.get(revision, &()) {
@@ -9267,6 +9274,7 @@ fn newest_logged_grid(
 /// most birds it is the correct answer, which is why the DTO reports the
 /// separation and the birds scanned.
 #[tauri::command]
+#[allow(deprecated)] // SPEC-2 C14: the last grid by call, read from the store
 async fn get_sat_sked(
     state: State<'_, SharedEngine>,
     names: Vec<String>,
@@ -16329,6 +16337,7 @@ async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<Ap
 /// cty.dat spell entities differently, which made the DXCC totals disagree and
 /// the NEW ONE badge fire on every German/Russian contact forever).
 #[tauri::command(async)]
+#[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC
 fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
     // A snapshot under the lock — pointers, no record cloned — converted after it is
     // released: the per-row copy and country lookup are the whole cost, and the radio loop
@@ -16385,6 +16394,7 @@ async fn get_log_delta(
         .map_err(|e| format!("engine task failed: {e}"))
 }
 
+#[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC
 fn log_delta(engine: &Mutex<Engine>, since_revision: u64, have_count: usize) -> LogDelta {
     // The row pointers are copied and the revision read under ONE lock, so they always agree;
     // the conversion runs after it is released, as in `get_log`.
@@ -16504,6 +16514,7 @@ fn durability_failed(why: String) -> String {
 
 /// The row at `index` as `get_log` would show it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
+#[allow(deprecated)] // SPEC-2 C17a: a row by position
 fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
     let r = eng
         .log_records()
@@ -16790,6 +16801,7 @@ fn get_awards(
 /// `get_awards`'s summary, folded again only when the log's revision or the operator's call
 /// (the home entity "First DX" is judged against) has moved. The main window polls it twice a
 /// minute; the records are cloned under the lock and folded after it.
+#[allow(deprecated)] // SPEC-2 C14: the awards fold, read from the store
 fn awards_kept(engine: &Mutex<Engine>, tallies: &LogTallies) -> Arc<propagation::AwardSummary> {
     let eng = engine_lock(engine);
     let (revision, my_call) = (eng.log_revision(), eng.settings().mycall.clone());
@@ -16847,6 +16859,7 @@ fn get_log_stats(state: State<'_, SharedEngine>) -> Result<propagation::LogStats
 /// `get_log_stats`' answer. Under the engine lock only the operator's call and a copy of the
 /// log's pointers are taken (where a clone of every record used to be, 165 ms at 150,000
 /// contacts); the calls are read and folded after it is released.
+#[allow(deprecated)] // SPEC-2 C14: the statistics, read from the store
 fn log_stats(engine: &Mutex<Engine>) -> propagation::LogStats {
     let (my_call, records) = {
         let eng = engine_lock(engine);
@@ -16883,6 +16896,7 @@ struct JourneyKey {
 /// reads has moved. The clock is NOT part of the key: the model finishes the weekly streak and
 /// the annual marathon for whatever time it is asked about (`propagation::JourneyModel`), so
 /// a kept model answers each once-a-minute poll exactly as a fresh computation would.
+#[allow(deprecated)] // SPEC-2 C14: the Journey fold, read from the store
 fn journey_kept(engine: &Mutex<Engine>, tallies: &LogTallies) -> Arc<propagation::JourneyModel> {
     let eng = engine_lock(engine);
     let s = eng.settings();
@@ -17587,6 +17601,7 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
 
 // Shared calculation, with an immutable engine guard. Remote never invokes the
 // native command's shared-log reconciliation or any logbook write/recovery path.
+#[allow(deprecated)] // SPEC-2 C14: today's hunted parks, read from the store
 fn read_need_alerts(
     eng: tempo_app::engine::EngineGuard<'_>,
     needs_kept: &Tally<(), propagation::LogNeeds>,
@@ -20078,6 +20093,7 @@ fn lotw_upload_batch(
 /// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
 /// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
 /// to survive.
+#[allow(deprecated)] // SPEC-2 C15: the LoTW batch
 fn lotw_upload_batch_with(
     state: &SharedEngine,
     indices: Option<Vec<usize>>,
@@ -22892,6 +22908,7 @@ struct OtaLogFlags {
 /// PARK (never on the hunter side of the log, nor in the imported Hunted Parks), and whether the
 /// activation is already hunted today. Split from the command because the command fetches, and
 /// this is the part with a rule in it.
+#[allow(deprecated)] // SPEC-2 C14: today's hunted parks, read from the store
 fn ota_log_flags(
     eng: &tempo_app::engine::Engine,
     spots: &[propagation::OtaSpot],

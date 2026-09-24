@@ -4490,6 +4490,7 @@ impl Engine {
     }
 
     /// Construct from full [`Settings`].
+    #[allow(deprecated)] // SPEC-2 C19: the Engine is built around the in-memory log
     pub fn with_settings(settings: Settings) -> Self {
         // Passive launch (safety): never auto-transmit on startup. The CQ beacon
         // is a deliberate, per-session opt-in — even if a saved settings file has
@@ -10293,6 +10294,7 @@ impl Engine {
     /// default**, on only when the operator turned it on for this session, and only to
     /// the destinations that session names. Queued as `CatchUp`, because a weekend's
     /// contacts arriving at once are history, not news.
+    #[allow(deprecated)] // SPEC-2 C19: the contest merge checks the whole log first
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Field Day mode is not active".into());
@@ -11098,6 +11100,7 @@ impl Engine {
         self.log_qso_inner(rec, true)
     }
 
+    #[allow(deprecated)] // SPEC-2 C13: the duplicate guard and the worked index
     fn log_qso_inner(&mut self, mut rec: QsoRecord, sync: bool) -> LogWriteOutcome {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
@@ -11466,6 +11469,7 @@ impl Engine {
     }
 
     /// Build the ADIF upload payload (header + the records at `indices`) for TQSL.
+    #[allow(deprecated)] // SPEC-2 C15: the LoTW batch
     pub fn lotw_upload_adif(&self, indices: &[usize]) -> String {
         let recs = self.station.logbook.records();
         let mut out = tempo_core::logbook::adif_header();
@@ -20990,6 +20994,7 @@ contact yourself."
     /// reloads its equivalents from disk. Encoding "CQ <call>" populates the
     /// same table through pack28→save_hash_call without transmitting anything,
     /// so compound stations you've worked resolve immediately on relaunch.
+    #[allow(deprecated)] // SPEC-2 C14: the newest compound calls, read from the store
     pub fn seed_hash_table(&self) {
         use tempo_core::message::is_compound;
         let mode = modes::make_mode(modes::ModeKind::Ft8);
@@ -21851,6 +21856,7 @@ contact yourself."
     /// Shared by the log record and the snapshot's `QsoStatus.dxgrid` so the cockpit's DX Grid
     /// box and the logged GRIDSQUARE resolve identically — they diverged before, and the
     /// operator saw a blank grid on screen for a contact that logged correctly.
+    #[allow(deprecated)] // SPEC-2 C13: the partner's grid, from the hot index
     fn dx_grid_resolved(&self, dxcall: &str, dxgrid: Option<String>) -> Option<String> {
         // Which of the three this takes is also what the confirm popup needs to know later —
         // `GridSource::of` is the one predicate, so the hold's provenance cannot drift from
@@ -22300,6 +22306,7 @@ contact yourself."
     }
 
     /// Hand the log the position id its minted ids carry (see [`log_posid`]).
+    #[allow(deprecated)] // SPEC-2 C19: the minter outlives the in-memory log
     fn sync_log_posid(&mut self) {
         self.station.logbook.set_posid(log_posid(&self.settings));
     }
@@ -22594,6 +22601,7 @@ contact yourself."
     /// because seqs are per position and restart at 1 — so `1` names a row in every log
     /// the operator has ever run, and last weekend's correction must not rewrite this
     /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    #[allow(deprecated)] // SPEC-2 C16: an edit addressed by position
     pub fn update_qso(&mut self, index: usize, rec: QsoRecord) -> bool {
         if !self.station.update_qso(index, rec) {
             return false;
@@ -22747,6 +22755,12 @@ contact yourself."
     }
 
     /// Immutable log view for bounded read models. Does not sync, recover or write a file.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
+    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
     pub fn log_records(&self) -> &[std::sync::Arc<QsoRecord>] {
         self.station.logbook.records()
     }
@@ -22754,28 +22768,47 @@ contact yourself."
     /// The log's revision and a copy of the pointers to its records, taken without cloning a
     /// record. See [`tempo_core::logbook::Logbook::snapshot`]: take it under the engine lock,
     /// then do the real work after releasing it.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
+    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
     pub fn log_snapshot(&self) -> tempo_core::logbook::LogSnapshot {
         self.station.logbook.snapshot()
     }
 
     /// Retain across chunked reads to detect any intervening log mutation/replacement.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
+    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
     pub fn log_read_token(&self) -> std::sync::Arc<()> {
         self.station.logbook.read_token()
     }
 
     /// The log's revision — the key a whole-log result is cached against. See
     /// [`tempo_core::logbook::Logbook::revision`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_revision(&self) -> u64 {
         self.station.logbook.revision()
     }
 
     /// Whether the log only grew since it stood at `revision`. See
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_appended_only_since(&self, revision: u64) -> bool {
         self.station.logbook.appended_only_since(revision)
     }
 
     /// See [`StationCore::get_log`].
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.station.get_log()
     }

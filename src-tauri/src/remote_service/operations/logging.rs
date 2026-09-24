@@ -514,6 +514,7 @@ pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> Target {
 /// moment the OTHER writer deletes above it, and acting on it deleted or rewrote a different
 /// contact. Another instance's appends are folded in first so the index cannot shift under
 /// the caller.
+#[allow(deprecated)] // SPEC-2 C16: Remote's edit targets, by id
 pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<usize> {
     engine.sync_shared_log_if_changed();
     engine.log_records().iter().position(|r| {
@@ -639,6 +640,7 @@ pub(super) fn prepare_change(
 
 /// The row change itself, under the Engine lock: what the file must then hold (`expected`,
 /// `count` copies of it) for the 1.13 path's proof.
+#[allow(deprecated)] // SPEC-2 C16: Remote's edits, by id
 fn rewrite(
     engine: &mut Engine,
     change: &Change,

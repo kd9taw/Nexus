@@ -38,6 +38,7 @@ impl Cache {
     pub(super) fn read(&mut self, engine: &crate::SharedEngine) -> Result<Value, &'static str> {
         self.read_chunks(engine, |_| {})
     }
+    #[allow(deprecated)] // SPEC-2 C18: Remote from the store
     fn read_chunks(
         &mut self,
         engine: &crate::SharedEngine,

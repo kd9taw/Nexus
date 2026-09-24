@@ -465,6 +465,7 @@ impl Publisher {
             end -= 1;
         }
     }
+    #[allow(deprecated)] // SPEC-2 C18: Remote's Log collection from the store
     fn capture(
         &mut self,
         request: &Request,

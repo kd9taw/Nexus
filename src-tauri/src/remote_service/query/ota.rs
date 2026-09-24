@@ -116,6 +116,7 @@ pub(super) fn read_engine(
     read_chunks(engine, sources, crate::now_unix(), |_| {})
 }
 
+#[allow(deprecated)] // SPEC-2 C18: Remote from the store
 fn read_chunks(
     engine: &crate::SharedEngine,
     sources: &Sources,
