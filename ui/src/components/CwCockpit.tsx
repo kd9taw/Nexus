@@ -76,6 +76,8 @@ import { controlFailureMessage } from '../remote-web/control-failure'
 import { latestOnly } from '../remote-web/latest-only'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
+import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
+import { subRowShown } from '../features/rigControls'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
@@ -1026,11 +1028,16 @@ export function CwCockpit({
   const hasScopeCtlPane = shown('scopeCtl') && (civScope || flexScope)
   const hasDspPane = shown('dsp') && cwDspFuncs.length > 0
   const hasRxDspPane = shown('rxdsp') && canRxDsp
+  // THE SUB ROW (dual-receiver radios; operator ruling 2026-09-23, "Phone and CW"). The Sub's
+  // levels are receive levels, so they ride the RX DSP group's ⊞ id: hide RX DSP and they go
+  // with it. Local station only (the Remote contract carries no Sub control), and only for a
+  // Sub Nexus can command — every other radio draws exactly what it drew.
+  const hasSubRow = control && shown('rxdsp') && subRowShown({ catOk, receivers: snap.radio.receivers })
   const hasBandPane = shown('bandActivity') && onWorkSpot != null
   const hasCopilotPane = shown('copilot')
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
-  const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane
+  const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane || hasSubRow
   const mainPresent = hasDecodePane || hasSentPane
   const auxPresent = hasRigCtlPane || hasBandPane || hasCopilotPane
   // Three columns are decode+sent | aux | log, so the tier is only offered when BOTH the
@@ -1178,6 +1185,8 @@ export function CwCockpit({
   const rigCtlPane = hasRigCtlPane ? (
     <CockpitPaneFrame title={t('cw.pane.rigctl.title')} paneId="rigctl" fit="content">
       <div className="cw-rigctl">
+      {/* MAIN — exactly while the SUB row below is drawn; nothing for any other radio. */}
+      {hasSubRow && <MainReceiverPlate radio={snap.radio} catOk={catOk} />}
       {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
           span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
       {hasScopeCtlPane && civScope && (
@@ -1336,6 +1345,7 @@ export function CwCockpit({
           </div>
       )}
       </div>
+      {hasSubRow && <SubReceiverStrip radio={snap.radio} catOk={catOk} onSnap={onSnap} />}
     </CockpitPaneFrame>
   ) : null
 

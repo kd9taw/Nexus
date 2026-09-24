@@ -1,17 +1,20 @@
 // THE SUB RECEIVER STRIP — the Phone cockpit's view of a dual-receiver radio's SECOND receiver.
 //
-// ⭐ IT RENDERS NOTHING UNLESS THE SNAPSHOT OFFERS A SUB. A radio with one receiver, a radio
-// nobody has read a manual for (UNKNOWN — never a "no", and no Sub UI on it, ruling D3), a
-// shared-front-end radio this build does not offer a Sub for, and a station older than the
-// field all draw exactly what they drew before; a golden in PhoneCockpit.subreceiver.test.tsx
-// holds that byte for byte.
+// ⭐ IT RENDERS NOTHING UNLESS THE SNAPSHOT OFFERS A SUB NEXUS CAN COMMAND (`subRowShown`). A
+// radio with one receiver, a radio nobody has read a manual for (UNKNOWN — never a "no", and no
+// Sub UI on it, ruling D3), a shared-front-end radio this build does not offer a Sub for, a
+// dual-receiver radio on a CAT path that cannot name its Sub (operator ruling 2026-09-23, "Hide
+// it"), and a station older than the field all draw exactly what they drew before; goldens in
+// PhoneCockpit.subreceiver.test.tsx and CwCockpit.subreceiver.test.tsx hold that byte for byte.
+//
+// Two hosts, by operator ruling ("Phone and CW"): Phone's receiver pane and CW's rig strip. Main's
+// controls are labelled MAIN (`MainReceiverPlate`) exactly while this row is drawn.
 //
 // ⚠️ A NEW COMPONENT, NOT A WIDENED SHARED ONE. The dual-receiver ruling D9 puts the Sub's
 // meters and scope PER HOST and names no host, so no meter or scope host changes: this is not
-// `SMeter` (one host), `TxMeters` (three) or `PhoneScope` (two) grown a Sub mode. It has one
-// host — Phone's receiver pane — and draws no meter at all: nothing reads the Sub's S-meter in
-// this build, and a second meter that never moves is the one thing this programme set out not
-// to ship.
+// `SMeter` (one host), `TxMeters` (three) or `PhoneScope` (two) grown a Sub mode. It draws no
+// meter at all: nothing reads the Sub's S-meter in this build, and a second meter that never
+// moves is the one thing this programme set out not to ship.
 //
 // What it draws, all of it from the snapshot and the controls table:
 //   · the Sub's dial where the engine knows it (the uplink an acknowledged satellite split
@@ -19,8 +22,8 @@
 //   · the Sub's rows the table offers (`subChainControls`): RF, AF and squelch where the vendor
 //     table credits the Sub with the stage (D7) and the CAT path can name the Sub — each one
 //     showing the value the RADIO ACCEPTED, never a reading;
-//   · one line for each honest "no": the connection cannot reach the Sub; a level NOT CONFIRMED
-//     for the Sub (never "not on this radio"); and that these levels are set, not read back.
+//   · one line for each honest "no": a level NOT CONFIRMED for the Sub (never "not on this
+//     radio"), and that these levels are set, not read back.
 //
 // Desktop only: the host draws it for the local station alone. The Remote operation contract
 // carries no Sub control, so the hosted page renders none.
@@ -34,13 +37,15 @@ import {
   deadControlProps,
   subCauseFor,
   subChainControls,
+  subRowShown,
   subUnconfirmedPlates,
   type RigControl,
   type SubState,
 } from '../features/rigControls'
 
-/** The rig's own name for its second receiver, as printed on a front panel. INVARIANT. */
+/** The rig's own names for its two receivers, as printed on a front panel. INVARIANT. */
 const SUB = 'SUB'
+const MAIN = 'MAIN'
 /** Not known. */
 const DASH = '—'
 
@@ -70,9 +75,9 @@ export function SubReceiverStrip({
 }) {
   const receivers = radio.receivers
   const sub = receivers?.sub
-  // No hooks above this line, and none in this component at all: the rows own theirs.
-  if (!receivers || !sub) return null
   const state: SubState = { catOk, receivers }
+  // No hooks above this line, and none in this component at all: the rows own theirs.
+  if (!receivers || !sub || !subRowShown(state)) return null
   const rows = subChainControls(state)
   const unconfirmed = subUnconfirmedPlates(state)
   const dial = sub.dialMhz
@@ -96,11 +101,6 @@ export function SubReceiverStrip({
           onSnap={onSnap}
         />
       ))}
-      {receivers.subCommandable === false && (
-        <p className="ph-chain-absent" role="note">
-          {t('phone.sub.noRoute')}
-        </p>
-      )}
       {unconfirmed.length > 0 && (
         <p className="ph-chain-absent" role="note">
           {t('phone.sub.unconfirmed', { plates: unconfirmed.join(' · ') })}
@@ -112,6 +112,18 @@ export function SubReceiverStrip({
         </p>
       )}
     </div>
+  )
+}
+
+/** MAIN, at the head of Main's controls — drawn exactly while a SUB row is (`subRowShown`), so a
+ *  radio with one receiver, or a Sub Nexus cannot command, draws nothing here and its screen is
+ *  unchanged. The plate is the rig's own word; the receiver it names is Main's. */
+export function MainReceiverPlate({ radio, catOk }: { radio: RadioStatus; catOk: boolean }) {
+  if (!subRowShown({ catOk, receivers: radio.receivers })) return null
+  return (
+    <span className="ph-chain-item" data-receiver-plate="main">
+      <span className="ph-dsplev-lbl">{MAIN}</span>
+    </span>
   )
 }
 

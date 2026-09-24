@@ -22,7 +22,15 @@ import { StationControlContext } from '../stationAccess'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
-  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], getCatCwUnprovenRigModels: [] }
+  // `getMeters` answers the meter bus's own resting reading: the live meter poll is a timer, and
+  // an `{}` answer landing (or not) before the golden is read would make the document depend on
+  // how loaded the box is.
+  const reads: Record<string, unknown> = {
+    getLicensedBandPlan: [],
+    getBandPlan: [],
+    getCatCwUnprovenRigModels: [],
+    getMeters: { rxLevel: 0, smeterDb: null, cwToneHz: null },
+  }
   return Object.fromEntries(Object.entries(actual).map(([name, value]) => [name,
     typeof value === 'function' ? vi.fn(async () => structuredClone(reads[name] ?? {})) : value]))
 })
@@ -183,17 +191,16 @@ describe('a confirmed dual receiver gets a Sub strip — and only one', () => {
     expect(document.body.textContent, 'the Sub’s unknowns must not read as the radio lacking them').not.toMatch(/Not on this radio/)
   })
 
-  it('a route that cannot name the Sub: no Sub controls, and the strip says why', () => {
-    mountDual(dual(SUB_7610, false))
-    expect(subStrip(), 'the display half stays').not.toBeNull()
-    expect(subRows()).toEqual([])
-    expect(subStrip()!.textContent).toContain('needs Nexus’s own CI-V control')
-  })
-
-  it('a route not yet reported: no Sub controls and no claim either way', () => {
-    mountDual(dual(SUB_7610, null))
-    expect(subRows()).toEqual([])
-    expect(subStrip()!.textContent).not.toContain('needs Nexus’s own CI-V control')
+  it('⛔ a Sub Nexus cannot command gets NO row — the cockpit is the single-receiver golden, byte for byte', () => {
+    // Operator ruling (2026-09-23, "Hide it"): an FTDX101, TS-990S, IC-9100, IC-910H or FTDX5000
+    // on the Hamlib path — or an Icom run through Hamlib — shows no Sub row at all, and nothing
+    // on its screen changes. The route not yet reported (the first moment after a connect) is
+    // the same: no row until the radio loop says the Sub can be reached.
+    const golden = readFileSync(GOLDEN, 'utf8')
+    for (const subCommandable of [false, null] as const) {
+      const html = cockpitHtml(dual(SUB_7610, subCommandable))
+      expect(html, `subCommandable=${subCommandable}`).toBe(golden)
+    }
   })
 
   it('no CAT: the Sub rows stay, dead', () => {
@@ -232,6 +239,21 @@ describe('a confirmed dual receiver gets a Sub strip — and only one', () => {
     mountDual(dual(SUB_9700, true))
     expect(subStrip()!.textContent).not.toContain('145.9650')
     expect(subStrip()!.querySelector('[data-sub-dial]')?.textContent).toBe('—')
+  })
+
+  it('MAIN labels Main’s chain exactly while a SUB row is shown', () => {
+    mountDual(dual(SUB_7610, true))
+    const mainChain = document.querySelector('[data-pane="receiver"] .ph-chain:not(.ph-subrx)')!
+    const plate = mainChain.querySelector('[data-receiver-plate="main"]')
+    expect(plate, 'no MAIN plate on Main’s chain beside a SUB row').not.toBeNull()
+    expect(plate!.textContent).toBe('MAIN')
+    expect(mainChain.firstElementChild, 'MAIN heads the chain').toBe(plate)
+    expect(document.querySelectorAll('[data-receiver-plate="main"]').length, 'one MAIN plate').toBe(1)
+    // …and with no SUB row there is no MAIN plate: the golden cases above prove the whole
+    // document; this is the direct statement.
+    cleanup()
+    mountDual(dual(SUB_7610, false))
+    expect(document.querySelector('[data-receiver-plate="main"]')).toBeNull()
   })
 
   it('the Remote page draws no Sub strip — its operation contract carries no Sub control', () => {

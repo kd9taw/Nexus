@@ -3032,7 +3032,6 @@ export const ES: PartialCatalog = {
   "phone.sub.sql.aria": "Silenciador del receptor secundario",
   "phone.sub.sql.title": "Silenciador del receptor secundario. Ajustado desde Nexus; la radio no lo informa.",
   "phone.sub.level.unknown": "desconocido",
-  "phone.sub.noRoute": "Esta conexión no llega al receptor secundario: para eso hace falta el control CI-V propio de Nexus.",
   "phone.sub.unconfirmed": "Sin confirmar para el receptor secundario: {{plates}}",
   "phone.sub.setNotRead": "Ajustado desde Nexus — la radio no informa los niveles del receptor secundario.",
   "phone.sub.failed": "Nexus no pudo ajustar {{plate}} del receptor secundario.",

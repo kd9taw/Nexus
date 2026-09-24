@@ -9,17 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The Sub receiver of a dual-receiver radio now has a row on the Phone screen.** In the
-  Receiver pane, under the main controls, a **SUB** row shows the second receiver: its frequency
-  where Nexus knows it (the uplink during a satellite pass), and sliders for its RF gain and, on
-  an IC-7610, its AF gain and squelch. They work on an IC-7610 or IC-9700 run through Nexus's own
-  CI-V control, and they change only the Sub — the main receiver's controls are untouched. Nexus
-  does not read the Sub's levels back from the radio yet, so each slider shows the last value the
+- **The Sub receiver of an IC-7610 or IC-9700 now has its own row on the Phone and CW screens.**
+  In Phone's Receiver pane and in CW's rig controls, a **SUB** row shows the second receiver: its
+  frequency where Nexus knows it (the uplink during a satellite pass), and sliders for its RF gain
+  and, on an IC-7610, its AF gain and squelch. The main receiver's controls are labelled **MAIN**
+  while the SUB row is there. It appears when the radio runs through Nexus's own CI-V control,
+  and the sliders change only the Sub — the main receiver's controls are untouched. Nexus does
+  not read the Sub's levels back from the radio yet, so each slider shows the last value the
   radio accepted from Nexus, and a knob turned on the radio itself is not reflected. An IC-9700
-  gets RF gain only: Icom's documentation does not say its Sub has an audio stage of its own. On
-  other dual-receiver radios (FTDX101, TS-990S, IC-9100, IC-910H, FTDX5000), and on an Icom run
-  through Hamlib, the row says the connection cannot reach the Sub. A radio with one receiver
-  looks exactly as before. Needs checking on a real IC-7610 and IC-9700.
+  gets RF gain only: Icom's documentation does not say its Sub has an audio stage of its own. In
+  CW the SUB row hides with the RX DSP controls. Other dual-receiver radios (FTDX101, TS-990S,
+  IC-9100, IC-910H, FTDX5000), an Icom run through Hamlib, and every radio with one receiver look
+  exactly as before. Needs checking on a real IC-7610 and IC-9700.
 
 - **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
   The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for

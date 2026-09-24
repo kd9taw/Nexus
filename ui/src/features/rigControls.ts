@@ -381,6 +381,20 @@ export function subCauseFor(c: RigControl, s: SubState): SubCause | null {
   return null
 }
 
+/**
+ * ⛔ IS A SUB ROW DRAWN AT ALL? Only for a Sub this build offers, on a CAT path the radio loop
+ * has reported can NAME it (`subCommandable === true`).
+ *
+ * Operator ruling (2026-09-23, "Hide it"): a dual-receiver radio Nexus cannot command — an
+ * FTDX101, TS-990S, IC-9100, IC-910H or FTDX5000 on the Hamlib path, or an IC-7610/IC-9700 run
+ * through Hamlib — shows no Sub row, and nothing on its screen changes. The route not yet
+ * reported is the same answer: no row until the loop has said. A dead CAT link is NOT: the row
+ * stays, its controls dead behind the pane's banner, like Main's.
+ */
+export function subRowShown(s: SubState): boolean {
+  return !!s.receivers?.sub && s.receivers.subCommandable === true
+}
+
 /** Does this row get drawn for the Sub — live, or dead behind the pane's no-CAT banner. */
 export function subRendersRow(c: RigControl, s: SubState): boolean {
   const cause = subCauseFor(c, s)

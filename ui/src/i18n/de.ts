@@ -5073,7 +5073,6 @@ export const DE: PartialCatalog = {
   "phone.sub.sql.aria": "Rauschsperre des Unterempfängers",
   "phone.sub.sql.title": "Rauschsperre des Unterempfängers. Von Nexus gesetzt; das Funkgerät meldet sie nicht zurück.",
   "phone.sub.level.unknown": "unbekannt",
-  "phone.sub.noRoute": "Diese Verbindung erreicht den Unterempfänger nicht: Dafür braucht es die eigene CI-V-Steuerung von Nexus.",
   "phone.sub.unconfirmed": "Für den Unterempfänger nicht bestätigt: {{plates}}",
   "phone.sub.setNotRead": "Von Nexus gesetzt — das Funkgerät meldet die Pegel des Unterempfängers nicht zurück.",
   "phone.sub.failed": "Nexus konnte {{plate}} des Unterempfängers nicht setzen.",

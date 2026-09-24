@@ -3032,7 +3032,6 @@ export const FR: PartialCatalog = {
   "phone.sub.sql.aria": "Squelch du récepteur secondaire",
   "phone.sub.sql.title": "Squelch du récepteur secondaire. Réglé depuis Nexus ; la radio ne le renvoie pas.",
   "phone.sub.level.unknown": "inconnu",
-  "phone.sub.noRoute": "Cette connexion n’atteint pas le récepteur secondaire : il faut pour cela le pilotage CI-V propre à Nexus.",
   "phone.sub.unconfirmed": "Non confirmé pour le récepteur secondaire : {{plates}}",
   "phone.sub.setNotRead": "Réglé depuis Nexus — la radio ne renvoie pas les niveaux du récepteur secondaire.",
   "phone.sub.failed": "Nexus n’a pas pu régler {{plate}} du récepteur secondaire.",

@@ -5422,7 +5422,6 @@ export const JA: PartialCatalog = {
   "phone.sub.sql.aria": "サブ受信機のスケルチ",
   "phone.sub.sql.title": "サブ受信機のスケルチ。Nexus から設定します。無線機からは報告されません。",
   "phone.sub.level.unknown": "不明",
-  "phone.sub.noRoute": "この接続ではサブ受信機に届きません。Nexus 独自の CI-V 制御が必要です。",
   "phone.sub.unconfirmed": "サブ受信機では未確認: {{plates}}",
   "phone.sub.setNotRead": "Nexus から設定した値です — 無線機はサブ受信機のレベルを報告しません。",
   "phone.sub.failed": "Nexus はサブ受信機の {{plate}} を設定できませんでした。",

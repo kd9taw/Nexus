@@ -8777,8 +8777,6 @@ export const EN = {
   'phone.sub.sql.aria': 'Sub receiver squelch',
   'phone.sub.sql.title': 'Squelch of the sub receiver. Set from Nexus; the radio does not report it back.',
   'phone.sub.level.unknown': 'not known',
-  'phone.sub.noRoute':
-    'This connection cannot reach the sub receiver: that needs Nexus’s own CI-V control of the radio.',
   'phone.sub.unconfirmed': 'Not confirmed for the sub receiver: {{plates}}',
   'phone.sub.setNotRead': 'Set from Nexus — the radio does not report the sub receiver’s levels back.',
   'phone.sub.failed': 'Nexus could not set the sub receiver’s {{plate}}.',

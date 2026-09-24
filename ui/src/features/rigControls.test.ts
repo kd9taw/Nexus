@@ -20,6 +20,7 @@ import {
   subRendersRow,
   subChainControls,
   subUnconfirmedPlates,
+  subRowShown,
   type ControlState,
   type RigControl,
   type SubState,
@@ -460,5 +461,23 @@ describe('the receiver axis — which receiver a row is drawn for', () => {
     for (const c of RIG_CONTROLS.filter((r) => r.chain === 'tx')) {
       expect(subCauseFor(c, s), c.id).toBe('notBuilt')
     }
+  })
+})
+
+describe('⛔ WHETHER A SUB ROW IS DRAWN AT ALL (operator ruling 2026-09-23: "Hide it")', () => {
+  it('only for an offered Sub on a route that names it — nothing for a Sub Nexus cannot command', () => {
+    expect(subRowShown(sub(receivers(SUB_7610, true)))).toBe(true)
+    expect(subRowShown(sub(receivers(SUB_9700, true))), 'RF alone is still a row').toBe(true)
+    // An FTDX101/TS-990S/IC-9100/IC-910H/FTDX5000, or an Icom run through Hamlib: no row.
+    expect(subRowShown(sub(receivers(SUB_7610, false)))).toBe(false)
+    // The route not reported yet: no row until the radio loop says the Sub can be reached.
+    expect(subRowShown(sub(receivers(SUB_7610, null)))).toBe(false)
+    // No Sub offered, or a station older than the field.
+    expect(subRowShown(sub(receivers(null, null, 'unknown')))).toBe(false)
+    expect(subRowShown(sub(undefined))).toBe(false)
+  })
+
+  it('a dead CAT link does not take a commandable Sub’s row away — its rows stay, dead', () => {
+    expect(subRowShown(sub(receivers(SUB_7610, true), false))).toBe(true)
   })
 })
