@@ -18,7 +18,7 @@
 // report — and after it. Rows are 43 px; a row whose comment is open is 120. The ResizeObservers
 // are the test's, as there.
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
@@ -76,6 +76,10 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
 })
+// The list's end-of-scroll report comes 150 ms after the last scroll event, from a timer the list
+// does not clear when it unmounts. Let the last test's land while this file's window still exists
+// (after it, React has no `window` to read, and the run fails on an error in no test).
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)))
 
 /** The station's rows, newest first as it sends them: contact `i` is `K{i}ABC`, id `id-{i}`;
  *  `withComment` carry a comment, whose text opens the row. */

@@ -1149,8 +1149,8 @@ export function Logbook({
   // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
   useLayoutEffect(() => {
-    // A new list drawn while a row is open (`drawnList`, above): the old list's heights dropped and
-    // the rows drawn now measured, the scroll left where it is — as a new list always left it.
+    // A new list drawn (`drawnList`, above). While a row is open, the old list's heights are dropped
+    // and the rows drawn now measured — without scrolling: where the view goes is decided below.
     if (drawnList !== null && heightsFor.current !== drawnList) {
       const replaced = heightsFor.current !== null
       heightsFor.current = drawnList
@@ -1168,6 +1168,27 @@ export function Logbook({
           rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
         }
         rowVirtualizer.getVirtualItems()
+      }
+      // BACK TO THE TOP on a new sort, search or filter (v2 §6): the rows the operator was looking
+      // at are not where they were, or not in this list at all. The new list's first row goes to the
+      // top of the list, under the search box and the headers, which stay put — the globe band above
+      // them is not brought back, or the box being typed in would jump. A view that has not scrolled
+      // into the list is there already. (A newer order of the SAME list is not a new list: the swap
+      // keeps the rows under the operator where they are, R5.) A Remote browser's new page is left
+      // as it was: it empties while it loads.
+      const el = scrollRef.current
+      const rows = rowsWrapRef.current
+      const sticky = el?.querySelector<HTMLElement>('.log-sticky')
+      if (replaced && control && el && rows && sticky) {
+        const top = Math.max(0, rows.offsetTop - sticky.offsetHeight)
+        if (el.scrollTop > top) {
+          el.scrollTop = top
+          // …and drawn there by the render that follows, not when the scroll is reported: so the rows
+          // noted under the operator are the new list's first rows, and a newer order arriving now
+          // keeps the view at the top (R5's rule for a view at the top).
+          rowVirtualizer.scrollOffset = el.scrollTop
+          justPlaced.current = true
+        }
       }
     }
     const moving = heightMoves.current

@@ -25,7 +25,7 @@
 // test drives (a row mounting, or opening, is observed and measured). "As first drawn" is the list
 // before that report: what a browser paints in the frame the change lands in.
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
@@ -101,6 +101,10 @@ afterEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
 })
+// The list's end-of-scroll report comes 150 ms after the last scroll event, from a timer the list
+// does not clear when it unmounts. Let the last test's land while this file's window still exists
+// (after it, React has no `window` to read, and the run fails on an error in no test).
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)))
 
 /** `n` contacts, newest last in the log (so newest-first puts contact n-1 on top); `withNote` get a
  *  private note, whose 📝 opens the row. */
@@ -299,10 +303,11 @@ describe('…and a NEW list (a new sort or search) is measured afresh', () => {
     expect(misfits(container), 'once the rows that mounted are measured').toEqual([])
   })
 
-  it('a new list that keeps the rows above the view does not move the rows in it', async () => {
+  it('a new list with a row open goes back to the top, and is laid out as its rows are there and below', async () => {
     // K200ABC (open) is index 100; the oldest contact alone has no "ABC", so the search "ABC" is a
     // new list with every other row in its place — and one row shorter, which is how the test
-    // knows it is drawn.
+    // knows it is drawn. A new list goes back to the top (Logbook.backToTop.test.tsx); the heights
+    // are re-measured first, and must hold wherever the view then goes.
     const rows = log(301, [200]).map((q, i) => (i === 0 ? { ...q, call: 'ZZ1ZZ' } : q))
     engine.log = rows
     engine.revision = 1
@@ -327,14 +332,19 @@ describe('…and a NEW list (a new sort or search) is measured afresh', () => {
     await waitFor(() => expect(container.querySelector('.logbook-row[data-index="106"]')).not.toBeNull())
     const rowsEl = container.querySelector('.log-rows') as HTMLElement
     const height = parseFloat(rowsEl.style.height)
-    const looking = container.querySelector('.logbook-row[data-index="106"]') as HTMLElement
-    const [top, at] = [sc.scrollTop, rowY(looking)]
 
     searchFor(container, 'ABC')
     await waitFor(() => expect(parseFloat(rowsEl.style.height)).toBe(height - ROW_PX))
-    expect(misfits(container)).toEqual([])
-    expect(sc.scrollTop, 'the view is not scrolled').toBe(top)
-    expect(rowY(container.querySelector('.logbook-row[data-index="106"]') as HTMLElement), 'the row in view').toBe(at)
+    expect(sc.scrollTop, 'back at the top of the list').toBe(0)
+    act(() => {
+      sc.dispatchEvent(new Event('scroll')) // as a browser reports the scroll
+    })
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="0"]')).not.toBeNull())
+    fire()
+    expect(misfits(container), 'the top of the new list').toEqual([])
+    scrollTo(106)
+    await waitFor(() => expect(indexOf(container, 'K200ABC')).toBe(100))
+    expect(misfits(container), 'back down at the open row, as first drawn').toEqual([])
   })
 
   it('FIX: a new SORT that moves the open row', async () => {
@@ -372,13 +382,14 @@ describe('…and a NEW list (a new sort or search) is measured afresh', () => {
         sc.scrollTop = index * ROW_PX
         sc.dispatchEvent(new Event('scroll'))
       })
-    // Down the list, until the open row's place is no longer drawn; then a new sort, by call.
+    // Down the list, until the open row's place is no longer drawn; then a new sort, by call — drawn
+    // down there first (it re-measures what it draws), then taken to its top (Logbook.backToTop).
     scrollTo(40)
     await waitFor(() => expect(container.querySelector('.logbook-row[data-index="4"]')).toBeNull())
-    fireEvent.click(screen.getByRole('columnheader', { name: t('logbook.column.call') }))
-    await waitFor(() => expect(indexOf(container, 'K55ABC')).toBe(50))
-    fire()
-    // Back at the top of the new list: index 4 is K13ABC, a closed row, mounting where the old list
+    const byCall = screen.getByRole('columnheader', { name: t('logbook.column.call') })
+    fireEvent.click(byCall)
+    await waitFor(() => expect(byCall.getAttribute('aria-sort')).toBe('ascending'))
+    // At the top of the new list: index 4 is K13ABC, a closed row, mounting where the old list
     // measured the open one.
     scrollTo(0)
     await waitFor(() => expect(indexOf(container, 'K13ABC')).toBe(4))
