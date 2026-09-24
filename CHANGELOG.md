@@ -203,9 +203,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **On a cross-band satellite pass, the licence check and the band strip follow the band you
   transmit on.** On an IC-9700 or IC-905 using native CI-V the uplink goes out on the Sub band,
   so the band strip now shades the phone segment of the uplink's band rather than the
-  downlink's. The transmit lock judges the same frequency it always did. The one new refusal is
-  a data uplink whose mode Nexus no longer sets, near a segment edge: it now stays locked unless
-  both sides of the carrier are inside your privileges.
+  downlink's. The transmit lock judges the same frequency it always did. The new refusals are an
+  uplink whose mode Nexus no longer sets because you changed it mid-pass, in FT and the other
+  data modes, PSK31, RTTY sent as audio tones, or CW sent from the sound card, near a segment
+  edge: it now stays locked unless both sides of the carrier are inside your privileges.
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a

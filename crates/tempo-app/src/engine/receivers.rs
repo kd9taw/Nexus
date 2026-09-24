@@ -342,9 +342,13 @@ impl Engine {
     ///   own rule for an unreadable RTTY mode word. XIT on a split is judged both ways, the
     ///   gate's rule unchanged. The phone segment is the Sub's band's.
     ///
+    /// D1X (operator, 2026-09-24, "Extend it"): the rule reaches PSK31, RTTY-AFSK and soundcard
+    /// CW, whose signal also sits on the side the word names. There both sides are judged through
+    /// the section's commanded-word model (`commanded_emission_allowed`), which adds nothing for
+    /// a keyer that keys the rig's own mode: RTTY on FSK, CW on the rig's own keyer.
+    ///
     /// ⚠️ SO ON THE SUB IT CAN ONLY EVER REFUSE MORE than the gate did before the switch, and
-    /// only in the Digital section, the one section model that reads a side: Phone's
-    /// convention, CW's carrier and RTTY's and Keyboard's own models read none. A commanded
+    /// only in Digital, PSK31, RTTY-AFSK and soundcard CW. Phone is not extended. A commanded
     /// word that names no side (FM) adds nothing, as `digital_emission_allowed` has it.
     ///
     /// ⚠️ What it cannot see, stated so it is not over-trusted: the Sub's mode is the one
@@ -365,9 +369,22 @@ impl Engine {
         let om = self.settings.operating_mode;
         let xit = self.xit_offset_mhz();
         let emission = up.mhz + xit + self.rptr_shift_mhz();
-        // No word commanded for the uplink: the side of the carrier is unknown, so both.
-        let both_sides =
-            |f: f64| self.emission_allowed(om, f, "USB") && self.emission_allowed(om, f, "LSB");
+        // No word commanded for the uplink: the side of the carrier is unknown, so both — in the
+        // section model (only Digital's reads a side, D1) and, for PSK31, RTTY and CW, in the
+        // commanded-word model (D1X), which adds nothing for RTTY's FSK or CW's own keyer.
+        let d1x = matches!(
+            om,
+            crate::settings::OperatingMode::Keyboard
+                | crate::settings::OperatingMode::Rtty
+                | crate::settings::OperatingMode::Cw
+        );
+        let both_sides = |f: f64| {
+            self.emission_allowed(om, f, "USB")
+                && self.emission_allowed(om, f, "LSB")
+                && (!d1x
+                    || (self.commanded_emission_allowed(om, f, "USB")
+                        && self.commanded_emission_allowed(om, f, "LSB")))
+        };
         let side_unknown_ok = up.commanded
             || if self.xit_hz != 0 {
                 both_sides(emission) && both_sides(emission - xit)

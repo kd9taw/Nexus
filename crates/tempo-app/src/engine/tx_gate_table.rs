@@ -58,6 +58,32 @@ pub(super) const VV_BIRD: Transponder = Transponder {
     half_width_hz: 15_000,
 };
 
+/// CONSTRUCTED inverting pairs, 70 cm down (so the uplink rides the Sub), whose uplink sits
+/// within one soundcard offset of a 2 m edge — one for each section D1X extends. PSK31's 1 kHz
+/// centre below 144.1005 is 144.0995, in the CW-only segment.
+const PSK_EDGE_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 144_100_500,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// RTTY-AFSK's mark/space span above 147.9985 reaches past the top of 2 m.
+const RTTY_TOP_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 147_998_500,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// A 600 Hz soundcard CW tone below 144.0003 is 143.9997, below 2 m.
+const CW_FLOOR_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 144_000_300,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
 /// A station on `model` with `class` privileges, in `section`, tuned to `mhz` on `band`.
 pub(super) fn station(
     model: u32,
@@ -89,11 +115,13 @@ pub(super) fn sat_pass(model: u32, class: &str, section: &str, tp: Transponder) 
         tp,
         DownlinkClass::Usb,
         CwKeyerBackend::Cat,
+        "afsk",
     )
 }
 
-/// [`sat_pass`] with the downlink the record names (USB, LSB or an FM channel) and the CW keyer,
-/// whose choice decides the CW mode word, so it is set before the section.
+/// [`sat_pass`] with the downlink the record names (USB, LSB or an FM channel), the CW keyer and
+/// the RTTY backend (`"afsk"` or `"fsk"`), whose choices decide the CW and RTTY mode words, so
+/// they are set before the section.
 fn sat_pass_with(
     model: u32,
     class: &str,
@@ -101,6 +129,7 @@ fn sat_pass_with(
     tp: Transponder,
     down: DownlinkClass,
     keyer: CwKeyerBackend,
+    rtty: &str,
 ) -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     e.settings.ensure_radio_profiles();
@@ -109,6 +138,7 @@ fn sat_pass_with(
     e.settings.rig_addr = String::new();
     e.settings.icom_native_cat = true;
     e.settings.cw_keyer = keyer;
+    e.settings.rtty_backend = rtty.to_string();
     e.settings.sync_active_from_flat();
     let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
     for id in ids {
@@ -150,6 +180,32 @@ pub(super) fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Opti
             None
         }
     }
+}
+
+/// An IC-9700 pass, General, whose uplink rides the Sub and whose mode the operator then took
+/// back mid-pass: the one state in which Nexus commands the uplink no word, in `section` with the
+/// given CW keyer and RTTY backend.
+fn released_on_the_sub(
+    section: &str,
+    keyer: CwKeyerBackend,
+    rtty: &str,
+    tp: Transponder,
+) -> Engine {
+    let mut e = sat_pass_with(
+        3081,
+        "general",
+        section,
+        tp,
+        DownlinkClass::Usb,
+        keyer,
+        rtty,
+    );
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub")
+    );
+    e.request_sideband_override(Some("USB"));
+    e
 }
 
 /// One station state and the decisions the gate makes for it.
@@ -420,6 +476,52 @@ fn rows() -> Vec<Row> {
             emission_mhz: 145.965,
             phone_seg: Some((144.1, 148.0)),
         },
+        // ── D1X (operator, 2026-09-24): the unknown-side rule in PSK31, RTTY-AFSK and soundcard
+        // CW. With the mode taken back Nexus commands the uplink no word, the gate before D1X
+        // judged the dial's word alone, and each edge bird's other side leaves the privileges.
+        // RS-44 in each section is the control: legal on both sides, and keyable.
+        Row {
+            name: "IC-9700 PSK31 edge bird (up 144.1005), uplink mode released mid-pass",
+            build: || released_on_the_sub("keyboard", CwKeyerBackend::Cat, "afsk", PSK_EDGE_BIRD),
+            tx_allowed: false,
+            emission_mhz: 144.1005,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RTTY-AFSK edge bird (up 147.9985), uplink mode released mid-pass",
+            build: || released_on_the_sub("rtty", CwKeyerBackend::Cat, "afsk", RTTY_TOP_BIRD),
+            tx_allowed: false,
+            emission_mhz: 147.9985,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 soundcard CW edge bird (up 144.0003), uplink mode released mid-pass",
+            build: || released_on_the_sub("cw", CwKeyerBackend::Soundcard, "afsk", CW_FLOOR_BIRD),
+            tx_allowed: false,
+            emission_mhz: 144.0003,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 PSK31, uplink mode released mid-pass",
+            build: || released_on_the_sub("keyboard", CwKeyerBackend::Cat, "afsk", RS44),
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 RTTY-AFSK, uplink mode released mid-pass",
+            build: || released_on_the_sub("rtty", CwKeyerBackend::Cat, "afsk", RS44),
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 soundcard CW, uplink mode released mid-pass",
+            build: || released_on_the_sub("cw", CwKeyerBackend::Soundcard, "afsk", RS44),
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
     ]
 }
 
@@ -502,7 +604,8 @@ fn the_gate_table_is_not_uniform() {
 /// rebuilt with the record flipped (Main ↔ Sub). The flip must visibly move
 /// [`Engine::tx_source`] (or this would be a mutation that changed nothing), must never move
 /// the judged frequency, must never allow the Sub-sourced one of the pair where the
-/// Main-sourced one is refused, and may move the decision on the [`D1_DIFFERS`] rows alone.
+/// Main-sourced one is refused, and may move the decision on the [`D1_DIFFERS`] and
+/// [`D1X_DIFFERS`] rows alone.
 #[test]
 fn the_receiver_a_split_rides_reaches_the_gate_only_where_d1_says() {
     let mut flipped = Vec::new();
@@ -549,7 +652,7 @@ fn the_receiver_a_split_rides_reaches_the_gate_only_where_d1_says() {
         flipped.contains(&ReceiverId::Main) && flipped.contains(&ReceiverId::Sub),
         "the table must carry confirmed splits on both receivers: {flipped:?}"
     );
-    let mut listed: Vec<&str> = D1_DIFFERS.iter().map(|d| d.row).collect();
+    let mut listed: Vec<&str> = differs().map(|d| d.row).collect();
     listed.sort_unstable();
     moved.sort_unstable();
     assert_eq!(
@@ -812,6 +915,57 @@ const D1_DIFFERS: &[D1Answer] = &[
     },
 ];
 
+/// ⭐ THE D1X EXTENSION (operator, 2026-09-24): "Extend it". D1's rule — no uplink word
+/// commanded, so both sides of the carrier must be legal — reaches PSK31, RTTY-AFSK and soundcard
+/// CW, whose signal also sits on the side the word names. These are the rows it added, with the
+/// answer the gate gives each, against the gate as it stood before the switch
+/// ([`pre_switch`]); [`D1_DIFFERS`] above, the approved diff, is not edited. Each edge bird is
+/// refused where the gate before D1X allowed it; each RS-44 control keys, as before, and every one
+/// of the six moves the shade to the uplink's band, as every cross-band pass does.
+const D1X_DIFFERS: &[D1Answer] = &[
+    D1Answer {
+        row: "IC-9700 PSK31 edge bird (up 144.1005), uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 144.1005,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RTTY-AFSK edge bird (up 147.9985), uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 147.9985,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 soundcard CW edge bird (up 144.0003), uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 144.0003,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 PSK31, uplink mode released mid-pass",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 RTTY-AFSK, uplink mode released mid-pass",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 soundcard CW, uplink mode released mid-pass",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+];
+
+/// Every row the switch changed: the approved D1 diff, then the D1X extension.
+fn differs() -> impl Iterator<Item = &'static D1Answer> {
+    D1_DIFFERS.iter().chain(D1X_DIFFERS)
+}
+
 /// The gate as it stood before the D1 switch: the emitted frequency judged by the key-time
 /// model ([`Engine::tx_frequency_allowed`]), with the band strip shaded for Main's band.
 fn pre_switch(e: &Engine) -> (bool, f64, Option<(f64, f64)>) {
@@ -824,7 +978,7 @@ fn pre_switch(e: &Engine) -> (bool, f64, Option<(f64, f64)>) {
 
 /// ⛔ THE GATE IS D1: the key-time verb, the snapshot's lock and the band strip's shade all read
 /// [`Engine::tx_source_verdict`], and it parts from the gate as it stood before the switch
-/// exactly on the [`D1_DIFFERS`] rows, with exactly those answers.
+/// exactly on the [`D1_DIFFERS`] and [`D1X_DIFFERS`] rows, with exactly those answers.
 ///
 /// A Main-sourced verdict IS the gate as it stood (it judges the same receiver), so every
 /// difference must come from a Sub-sourced row; and a Sub-sourced row may still agree (the Open
@@ -833,7 +987,7 @@ fn pre_switch(e: &Engine) -> (bool, f64, Option<(f64, f64)>) {
 #[test]
 fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
     let rows = rows();
-    for d in D1_DIFFERS {
+    for d in differs() {
         assert!(
             rows.iter().any(|r| r.name == d.row),
             "the diff table names a row the table does not have: {}",
@@ -856,7 +1010,7 @@ fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
             row.name
         );
         let before = pre_switch(&e);
-        match D1_DIFFERS.iter().find(|d| d.row == row.name) {
+        match differs().find(|d| d.row == row.name) {
             Some(d) => {
                 assert_eq!(v.source, ReceiverId::Sub, "{}", row.name);
                 assert!(
@@ -877,8 +1031,8 @@ fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
     }
     assert_eq!(
         sub_sourced.len(),
-        6,
-        "the Sub transmits on six rows, listed or not: {sub_sourced:?}"
+        12,
+        "the Sub transmits on twelve rows, listed or not: {sub_sourced:?}"
     );
 }
 
@@ -887,8 +1041,9 @@ fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
 /// The (uplink, downlink) pairs [`the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded`]
 /// works, each inverting and not. CONSTRUCTED: no real bird uplinks within an audio offset of a
 /// segment edge, and that is exactly where the side of a carrier can change a licence answer.
-const SWEEP_PAIRS: [(u64, u64); 10] = [
+const SWEEP_PAIRS: [(u64, u64); 11] = [
     (144_101_000, 435_640_000), // just above 2 m's CW-only floor, 70 cm down (cross-band)
+    (144_100_500, 435_640_000), // closer: a PSK31 signal 1 kHz below crosses into it
     (144_099_000, 435_640_000), // just below it
     (144_000_300, 435_640_000), // 0.3 kHz above the bottom of 2 m: a CW tone below leaves the band
     (147_999_000, 435_640_000), // just below the top of 2 m
@@ -900,52 +1055,66 @@ const SWEEP_PAIRS: [(u64, u64); 10] = [
     (147_999_000, 145_950_000), // same band, at the top of 2 m
 ];
 
-/// Each section the sweep works, and the CW keyer it keys with. CW twice: the rig's own keyer
-/// keys the carrier at the dial, the soundcard keyer a tone a pitch from it on the side the mode
-/// word names — the one CW case whose commanded word the gate judges.
-const SWEEP_SECTIONS: [(&str, CwKeyerBackend); 6] = [
-    ("phone", CwKeyerBackend::Cat),
-    ("digital", CwKeyerBackend::Cat),
-    ("cw", CwKeyerBackend::Cat),
-    ("cw", CwKeyerBackend::Soundcard),
-    ("rtty", CwKeyerBackend::Cat),
-    ("keyboard", CwKeyerBackend::Cat),
+/// Each section the sweep works, with the CW keyer and the RTTY backend it keys with. CW and
+/// RTTY twice each: the rig's own CW keyer keys the carrier at the dial and the soundcard keyer a
+/// tone a pitch from it on the side the mode word names; AFSK keys its tones on the side the word
+/// names and FSK keys the rig's own RTTY mode. D1X extends the unknown-side rule to the soundcard
+/// keyers only, and the models it reuses add nothing for the other two.
+const SWEEP_SECTIONS: [(&str, CwKeyerBackend, &str); 7] = [
+    ("phone", CwKeyerBackend::Cat, "afsk"),
+    ("digital", CwKeyerBackend::Cat, "afsk"),
+    ("cw", CwKeyerBackend::Cat, "afsk"),
+    ("cw", CwKeyerBackend::Soundcard, "afsk"),
+    ("rtty", CwKeyerBackend::Cat, "afsk"),
+    ("rtty", CwKeyerBackend::Cat, "fsk"),
+    ("keyboard", CwKeyerBackend::Cat, "afsk"),
+];
+
+/// The sweep's labels for the sections whose unknown-side refusals the switch makes: Digital
+/// (D1), and PSK31, RTTY-AFSK and soundcard CW (D1X, operator 2026-09-24).
+const UNKNOWN_SIDE_SECTIONS: [&str; 4] = [
+    "digital Cat afsk",
+    "keyboard Cat afsk",
+    "rtty Cat afsk",
+    "cw Soundcard afsk",
 ];
 
 /// ⛔ THE SWITCH ONLY EVER REFUSES MORE, AND ONLY WHERE NEXUS COMMANDS THE UPLINK NO WORD.
 ///
-/// The table pins 23 states. This sweeps the pass shapes around them: the two radios the native
-/// daemon carries a cross-band pass on (IC-9700, IC-905), every US class and Open, every
-/// section ([`SWEEP_SECTIONS`], CW on both keyers), the [`SWEEP_PAIRS`] with a USB, LSB or FM
-/// downlink, the mode taken back mid-pass or not, and XIT off and on — 11,520 states, in well
-/// under a second.
+/// The table pins the D1 and D1X rows. This sweeps the pass shapes around them: the two radios
+/// the native daemon carries a cross-band pass on (IC-9700, IC-905), every US class and Open,
+/// every section ([`SWEEP_SECTIONS`], CW and RTTY on both of their keyers), the [`SWEEP_PAIRS`]
+/// with a USB, LSB or FM downlink, the mode taken back mid-pass or not, and XIT off and on —
+/// 14,784 states, in well under a second.
 ///
 /// In every one the gate after the switch never allows what the gate before it
 /// ([`Engine::tx_frequency_allowed`]) refused, never moves the judged frequency, and is what the
 /// snapshot's lock and shade read, the shade being the band the radio transmits from. Every
-/// answer the switch DID change is Sub-sourced, in the Digital section, with the mode taken back
-/// and so no uplink word commanded: the one rule D1 adds (operator sign-off, 2026-09-23).
+/// answer the switch DID change is Sub-sourced, with the mode taken back and so no uplink word
+/// commanded, in one of the [`UNKNOWN_SIDE_SECTIONS`] — and each of those four has at least one
+/// such refusal, so the sweep reaches every section the rule covers. Phone, RTTY on FSK and CW on
+/// the rig's keyer never have one.
 ///
 /// ⚠️ A GUARD THAT NEVER REACHES A CHECK PROVES NOTHING ABOUT IT. The gate judges the transmit
 /// VFO's commanded word in Phone, Digital, Keyboard, RTTY and soundcard CW (`a7cbffff`,
 /// `2a9f28b4`, `35ea98fb`, `c82b54ec`), and on the Sub the switched gate must refuse wherever
 /// those terms do. So the sweep also counts, per section, the Sub-transmitting states only those
 /// terms refuse (the section model at the stored side allows them), and requires at least one
-/// for each — and none for CW on the rig's keyer, whose carrier is the dial and whose term adds
-/// nothing. The other counts are the controls that every pass shape was built, both receivers
-/// were reached, and the switch visibly acted on the shade and on the lock.
+/// for each — and none for CW on the rig's keyer or RTTY on FSK, whose terms add nothing. The
+/// other counts are the controls that every pass shape was built, both receivers were reached,
+/// and the switch visibly acted on the shade and on the lock.
 #[test]
 fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded() {
-    use crate::settings::OperatingMode;
     use std::collections::BTreeMap;
-    let (mut states, mut unbuilt, mut on_sub, mut on_main, mut refused, mut shaded) =
-        (0, 0, 0, 0, 0, 0);
+    let (mut states, mut unbuilt, mut on_sub, mut on_main, mut shaded) = (0, 0, 0, 0, 0);
     let mut by_the_word: BTreeMap<String, u32> = BTreeMap::new();
+    let mut refused_by: BTreeMap<String, u32> = BTreeMap::new();
     for model in [3081u32, 3090] {
         for class in ["technician", "general", "extra", "open"] {
-            for (section, keyer) in SWEEP_SECTIONS {
-                let label = format!("{section} {keyer:?}");
+            for (section, keyer, rtty) in SWEEP_SECTIONS {
+                let label = format!("{section} {keyer:?} {rtty}");
                 by_the_word.entry(label.clone()).or_insert(0);
+                refused_by.entry(label.clone()).or_insert(0);
                 for (up, down_hz) in SWEEP_PAIRS {
                     for invert in [true, false] {
                         let tp = Transponder {
@@ -958,7 +1127,7 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
                             for released in [false, true] {
                                 for xit in [0, 3_000] {
                                     let mut e =
-                                        sat_pass_with(model, class, section, tp, down, keyer);
+                                        sat_pass_with(model, class, section, tp, down, keyer, rtty);
                                     if e.split_tx_mhz().is_none()
                                         || loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv)
                                             .is_none()
@@ -991,12 +1160,11 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
                                     );
                                     assert!(!v.tx_allowed || before, "{what}: THE SWITCH UNLOCKED");
                                     if v.tx_allowed != before {
-                                        refused += 1;
+                                        *refused_by.entry(label.clone()).or_insert(0) += 1;
                                         assert_eq!(v.source, ReceiverId::Sub, "{what}");
-                                        assert_eq!(
-                                            e.settings.operating_mode,
-                                            OperatingMode::Digital,
-                                            "{what}: a refusal outside Digital"
+                                        assert!(
+                                            UNKNOWN_SIDE_SECTIONS.contains(&label.as_str()),
+                                            "{what}: a refusal in a section the rule does not cover"
                                         );
                                         assert!(
                                             released && e.sat_tx_mode().is_none(),
@@ -1050,21 +1218,28 @@ fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded(
         unbuilt, 0,
         "pass shapes the sweep could not build: re-check SWEEP_PAIRS"
     );
-    assert_eq!(states, 11_520);
+    assert_eq!(states, 14_784);
     assert!(
         on_sub > 0 && on_main > 0,
         "both receivers: {on_sub} Sub, {on_main} Main"
     );
     assert!(shaded > 0, "the switch moved no shade");
-    assert!(
-        refused > 0,
-        "the switch refused nothing: the sweep proves nothing about the rule"
-    );
+    for (label, n) in &refused_by {
+        if UNKNOWN_SIDE_SECTIONS.contains(&label.as_str()) {
+            assert!(
+                *n > 0,
+                "{label}: the switch refused nothing there, so the sweep proves nothing about \
+                 the rule in it: {refused_by:?}"
+            );
+        } else {
+            assert_eq!(*n, 0, "{label}: {refused_by:?}");
+        }
+    }
     for (label, n) in &by_the_word {
-        if label == "cw Cat" {
+        if label == "cw Cat afsk" || label == "rtty Cat fsk" {
             assert_eq!(
                 *n, 0,
-                "the rig's CW keyer has no commanded-word term: {by_the_word:?}"
+                "{label}: this keyer has no commanded-word term: {by_the_word:?}"
             );
         } else {
             assert!(
