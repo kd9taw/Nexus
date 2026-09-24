@@ -2544,6 +2544,56 @@ mod journal_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ THE EXIT PATH WAITS FOR THE JS8 INBOX'S JOURNAL TOO. A stored message is marked read
+    /// and its journal write queues behind a stalled one: the exit path's wait does not return
+    /// while it is on its way, holds no lock meanwhile, and returns once the inbox is on disk.
+    #[test]
+    fn the_exit_path_waits_for_the_js8_inbox_journal() {
+        let (dir, engine) = held_up("js8");
+        let journal = dir.join("js8_station.json");
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        {
+            let mut e = engine_lock(&engine);
+            e.set_js8_journal_path(journal.clone());
+            e.js8_load_journal(&format!(
+                r#"{{"inbox":[{{"id":1,"from":"W1AW","to":"K1ABC","text":"FRIDAY CONTACT","path":[],"state":"store","atMs":{now_ms},"freqHz":1750.0,"snrDb":-10}}],"heard":[],"allcallReplied":[],"nextInboxId":2}}"#
+            ));
+            // The operator reads the message: the inbox's journal, queued behind the stall.
+            e.js8_inbox_mark(1, tempo_app::dto::Js8InboxState::Read)
+                .expect("the stored message");
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let engine = std::sync::Arc::clone(&engine);
+            std::thread::spawn(move || {
+                settle_journals(&engine);
+                let _ = tx.send(());
+            });
+        }
+        // Observe first and assert after the release (see the exit-path test above).
+        let waited = rx.recv_timeout(Duration::from_millis(300)).is_err();
+        let on_its_way = !journal.exists();
+        let lock_free = engine_try_lock(&engine).is_ok();
+        release(&dir);
+        let finished = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        assert!(
+            waited,
+            "the exit path waits while the inbox's journal is still on its way"
+        );
+        assert!(on_its_way, "control: it really is on its way");
+        assert!(lock_free, "and it waits with the engine lock released");
+        assert!(finished, "the exit path finishes once the write lands");
+        let text = std::fs::read_to_string(&journal).expect("the inbox is on disk");
+        assert!(
+            text.contains("FRIDAY CONTACT") && text.contains(r#""state":"read""#),
+            "as the operator left it: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ AN OPERATOR'S CONTEST CONTACT IS ON DISK WHEN THE COMMAND ANSWERS, as it was when the
     /// journal was written under the lock — but the wait is now made with the lock released,
     /// on the blocking pool. The contact is in the contest log at once; the answer waits for
@@ -5255,7 +5305,8 @@ fn persist_field_day_log(engine: &SharedEngine) {
 }
 
 /// Wait until the journals' own thread (`tempo_core::journal`) has written everything handed
-/// to it — the Field Day log's last flush and the message queue — before the process goes.
+/// to it — the Field Day log's last flush, the message queue and the JS8 inbox — before the
+/// process goes.
 /// Unbounded, as the synchronous writes it replaces were. The mark is taken under the engine
 /// lock and waited on after it is released.
 fn settle_journals(engine: &SharedEngine) {

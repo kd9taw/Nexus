@@ -127,8 +127,9 @@ impl Engine {
         permit: &Permit,
     ) -> Result<(), Reason> {
         self.remote_clarifier_ready(connection, permit, true)?;
-        // A radio with no XIT (the IC-9700, and every radio in `settings::NO_XIT_RIGS`) says so,
-        // rather than admitting a change the station's own verb will not make.
+        // A radio with no XIT (the IC-9700, every radio in `settings::NO_XIT_RIGS`, and any radio
+        // behind OmniRig) says so, rather than admitting a change the station's own verb will not
+        // make.
         if !self.xit_supported() {
             return Err(Reason::UnsupportedAction);
         }
