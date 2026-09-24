@@ -590,6 +590,104 @@ fn on_the_sub_the_gate_keeps_its_phone_check() {
     }
 }
 
+/// One Doppler tick of a pass, as the satellite tracker drives it, and NOT the radio loop's
+/// apply of the uplink it sends: a LEO's range rate five seconds after the nominal tune, so the
+/// uplink moves. The rig still transmits on the uplink it acknowledged. Returns the one sent.
+fn tick_without_the_apply(e: &mut Engine) -> u64 {
+    let acked = e
+        .tx_split_confirmed_hz
+        .expect("precondition: an acknowledged uplink");
+    let sent = e
+        .sat_doppler_tick(7.0, 1_005_000, false)
+        .and_then(|c| c.uplink_hz)
+        .expect("precondition: the tick moves the uplink");
+    assert_ne!(sent, acked, "precondition: a new uplink");
+    assert_eq!(
+        e.tx_split_confirmed_hz,
+        Some(acked),
+        "precondition: the loop has not applied it"
+    );
+    sent
+}
+
+/// ⛔ ON THE SUB THE GATE KEEPS THE UPLINK'S WORD THROUGH A DOPPLER TICK (`6a2d9aac` on the D1
+/// path).
+///
+/// Between a tick and the radio loop's apply of the uplink it sends, the rig still transmits on
+/// the uplink it acknowledged, in the uplink's own word, while `tx_mode_effective` already
+/// answers the dial's. The gate judges the uplink's word as well, from the acknowledgement the
+/// split grant recorded. On this line the grant is [`Engine::rig_split_applied_on`], which the
+/// radio loop calls directly when the uplink rides the Sub, so the recording must happen there
+/// and not only on the Main wrapper, `rig_split_applied`, the path main's own tick tests take.
+///
+/// On the constructed edge bird (uplink 144.101, inverting) the uplink goes out in PKTLSB or
+/// LSB, below 144.100: refused once acknowledged, and it must stay refused through the tick, in
+/// Digital and in Phone. RS-44's uplink, well inside 2 m, is the control: keyable before the
+/// tick, through it and after its apply on the Sub.
+#[test]
+fn on_the_sub_the_gate_keeps_the_uplinks_word_through_a_doppler_tick() {
+    for (section, dial_word, uplink_word) in
+        [("digital", "PKTUSB", "PKTLSB"), ("phone", "USB", "LSB")]
+    {
+        let mut e = sat_pass(3081, "general", section, EDGE_BIRD);
+        assert_eq!(
+            loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+            Some("Sub"),
+            "{section}: precondition: the uplink rides the Sub"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "{section}: precondition: acknowledged, the uplink is refused"
+        );
+        tick_without_the_apply(&mut e);
+        assert_eq!(
+            e.tx_source(),
+            ReceiverId::Sub,
+            "{section}: the Sub still transmits"
+        );
+        assert_eq!(
+            e.tx_mode_effective(),
+            dial_word,
+            "{section}: precondition: between the two, the dial's word"
+        );
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some(uplink_word),
+            "{section}: precondition: the uplink's own word"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "{section}: until the loop moves it, the {uplink_word} uplink at 144.101 MHz on the \
+             Sub still reaches below 144.100 (the uplink's word as the gate sees it: {:?})",
+            e.sat_uplink_word()
+        );
+        assert!(
+            !e.snapshot().radio.tx_allowed,
+            "{section}: the lock indicator reads the same verdict"
+        );
+    }
+    // CONTROL: a legal uplink on the Sub keys through the same tick and after its apply.
+    let mut e = sat_pass(3081, "general", "digital", RS44);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub"),
+        "control: precondition: the uplink rides the Sub"
+    );
+    assert!(e.tx_allowed(), "control: RS-44's uplink keys");
+    let sent = tick_without_the_apply(&mut e);
+    assert!(
+        e.tx_allowed(),
+        "control: RS-44 keys between the tick and its apply"
+    );
+    e.rig_split_applied_on(sent, ReceiverId::Sub);
+    assert_eq!(
+        e.tx_source(),
+        ReceiverId::Sub,
+        "control: the apply rides the Sub"
+    );
+    assert!(e.tx_allowed(), "control: RS-44 keys after the apply");
+}
+
 /// D1 — THE TRANSMIT SOURCE: Main, except while an acknowledged split rides the Sub band.
 #[test]
 fn the_transmit_source_is_main_until_an_acknowledged_split_rides_the_sub() {
