@@ -153,6 +153,30 @@ export function refreshSharedLog(): void {
   schedule()
 }
 
+// ---- For the whole-log `LogSource` adapter (features/wholeLogSource.ts), this store's only reader
+// once the views ask `LogSource` instead (SPEC-2 v3 C17b). The same store, read without a hook. ----
+
+/** The window's copy, or null until it has loaded. Shared and read-only, as everywhere. */
+export function sharedLogRows(): LoggedQso[] | null {
+  return rows
+}
+
+/** The engine revision the copy answers (0 until it has loaded). */
+export function sharedLogRevision(): number {
+  return revision
+}
+
+/** Be told when the copy changes. */
+export function subscribeSharedLog(listener: () => void): () => void {
+  return subscribe(listener)
+}
+
+/** A reader reports its tick, exactly as `useSharedLog` does: a tick the copy has not answered
+ *  asks for the change, and `undefined` (a reader with no snapshot) asks for a refresh. */
+export function followSharedLog(logTick: number | undefined): void {
+  report(logTick)
+}
+
 /** Tests: forget the copy and every reader. src/test-setup.ts runs this after every test, so a
  *  log one test loaded can never answer the next one's first read. */
 export function __resetSharedLogForTests(): void {

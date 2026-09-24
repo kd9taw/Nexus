@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bandKey, callHistory, entitySlots, historySummary, isNewEntity, modeKey } from './callHistory'
+import { bandKey, callHistory, callsSummary, entitySlots, historySummary, isNewEntity, modeKey } from './callHistory'
 import type { LoggedQso } from '../types'
 
 function qso(call: string, band: string, mode: string, whenUnix: number, confirmed = false): LoggedQso {
@@ -250,5 +250,45 @@ describe('entitySlots resolves through those keys', () => {
     // Distinct from the case above: nothing was recorded, so there is nothing unresolvable.
     const log = [{ call: 'G0A', country: 'England', mode: 'SSB' }]
     expect(entitySlots(log, 'England').bandUnknown).toBe(false)
+  })
+})
+
+// The JS8 roster's log join, moved out of the cockpit so a `LogSource` can answer it (SPEC-2 v3
+// C17b). ORACLE is the cockpit's own loop as it stood (Js8Cockpit.tsx at d5be14ea, :417-435),
+// pasted unchanged; `callsSummary` must build the same entries for every call.
+describe('callsSummary is the JS8 roster join, moved', () => {
+  function ORACLE(log: LoggedQso[], stationCalls: string) {
+    const out = new Map<string, { count: number; lastUnix: number | null; grid: string; name: string; comment: string }>()
+    for (const call of stationCalls.split(' ').filter(Boolean)) {
+      const hist = callHistory(log, call, '')
+      if (!hist.workedBefore) continue
+      const last = hist.qsos.reduce((a, b) => (b.whenUnix > a.whenUnix ? b : a))
+      out.set(call, {
+        count: hist.count,
+        lastUnix: hist.lastUnix,
+        grid: (last.grid ?? '').trim(),
+        name: (last.name ?? '').trim(),
+        comment: (last.comment ?? '').trim(),
+      })
+    }
+    return out
+  }
+  const row = (call: string, whenUnix: number, grid: string | null, name: string | null, comment: string | null) =>
+    ({ ...qso(call, '20m', 'FT8', whenUnix), grid, name, comment }) as LoggedQso
+
+  it('agrees with the cockpit\'s loop, including the first-of-equal-times "latest" rule', () => {
+    const log = [
+      row('W1AW', 100, 'FN31 ', ' Hiram', 'first'),
+      row('w1aw', 300, null, 'Hiram P', null),
+      row('W1AW', 300, 'FN42', 'later twin', 'not chosen'), // equal time, later in the log: not "latest"
+      row('K1ABC', 50, 'EN52', null, ' park '),
+      row(' k1abc ', 60, '', 'Kay', ''),
+    ]
+    const stationCalls = ['K1ABC', 'NONE', 'W1AW', 'w1aw'].sort().join(' ')
+    const want = ORACLE(log, stationCalls)
+    const got = callsSummary(log, stationCalls.split(' ').filter(Boolean))
+    expect(new Map(Object.entries(got))).toEqual(want)
+    expect(want.get('W1AW')?.name, 'the fixture must reach the tie rule').toBe('Hiram P')
+    expect(want.has('NONE')).toBe(false)
   })
 })
