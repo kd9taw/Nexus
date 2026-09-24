@@ -40,8 +40,8 @@
 //! `Durability::wait` go through), an append receipt's sync, a wait for a database copy, the
 //! conversion of `log.adi`, and the store's open ([`off_engine_lock`]).
 //!
-//! **The small journals too:** the Field Day contest journal and the message queue's are
-//! written on their own thread (`crate::journal`), a log lane like the two above
+//! **The small journals too:** the Field Day contest journal, the message queue's and the JS8
+//! inbox's are written on their own thread (`crate::journal`), a log lane like the two above
 //! ([`on_log_lane`]), and a command's wait for them is fenced ([`off_engine_lock`]). The one
 //! wait for them under the lock is the Field Day rebuild's read-back on a change of mode —
 //! the wait the synchronous write used to make there, never in a radio tick.
