@@ -662,6 +662,34 @@ mod tests {
         }
     }
 
+    /// `new`'s rows with each QSL-sent stamp (`date_unix`, `cleared_unix`) set to the matching
+    /// row of `old`, where both carry one and they are no more than `spanned` seconds apart —
+    /// the most wall-clock time the two engines' calls have taken between them. Everything else
+    /// is left for the comparison to judge, so a stamp missing on one side, or further apart,
+    /// still fails.
+    fn with_qsl_clock_of<A, B>(new: &[A], old: &[B], spanned: u64) -> Vec<QsoRecord>
+    where
+        A: std::borrow::Borrow<QsoRecord>,
+        B: std::borrow::Borrow<QsoRecord>,
+    {
+        let near = |n: Option<u64>, o: Option<u64>| match (n, o) {
+            (Some(n), Some(o)) if n.abs_diff(o) <= spanned => Some(o),
+            _ => n,
+        };
+        new.iter()
+            .zip(old.iter().map(Some).chain(std::iter::repeat(None)))
+            .map(|(n, o)| {
+                let mut r = n.borrow().clone();
+                if let Some(o) = o.map(|o| o.borrow()) {
+                    r.qsl_sent.date_unix = near(r.qsl_sent.date_unix, o.qsl_sent.date_unix);
+                    r.qsl_sent.cleared_unix =
+                        near(r.qsl_sent.cleared_unix, o.qsl_sent.cleared_unix);
+                }
+                r
+            })
+            .collect()
+    }
+
     pub(crate) fn flush(e: &Engine) {
         e.flush_log_store(Duration::from_secs(60)).expect("written");
     }
@@ -1024,10 +1052,20 @@ mod tests {
                 }),
             ),
         ];
+        // The QSL-sent mark stamps the wall clock inside the engine (`StationCore::mark_qsl_sent`),
+        // once per engine, so a second boundary between the two calls moves that stamp and
+        // nothing else — and the stamp stays on the row for every step after. The store's row
+        // takes the ADIF path's stamp when the two lie within the most seconds any pair so far
+        // spanned; every other byte, and any stamp further apart or missing on one side, still
+        // has to match exactly.
+        let mut spanned = 0;
         for (what, step) in &steps {
+            let before = crate::engine::now_unix_secs();
             step(&mut old);
             step(&mut new);
-            same_log_across(new.log_records(), old.log_records(), what);
+            spanned = spanned.max(crate::engine::now_unix_secs() - before);
+            let aligned = with_qsl_clock_of(new.log_records(), old.log_records(), spanned);
+            same_log_across(&aligned, old.log_records(), what);
         }
         // Every step DID something — the census that keeps the comparisons above from passing
         // over a log nothing happened to.
@@ -1078,10 +1116,18 @@ mod tests {
             new.log_records(),
             "the store on disk is the store's memory",
         );
-        same_log_across(&stored(&b), old.log_records(), "the store on disk");
         same_log_across(
-            tempo_core::logbook::Logbook::load(&b.log()).records(),
-            tempo_core::logbook::Logbook::load(&a.log()).records(),
+            &with_qsl_clock_of(&stored(&b), old.log_records(), spanned),
+            old.log_records(),
+            "the store on disk",
+        );
+        let (mirror, file) = (
+            tempo_core::logbook::Logbook::load(&b.log()),
+            tempo_core::logbook::Logbook::load(&a.log()),
+        );
+        same_log_across(
+            &with_qsl_clock_of(mirror.records(), file.records(), spanned),
+            file.records(),
             "the mirror against the 1.13 file",
         );
 
