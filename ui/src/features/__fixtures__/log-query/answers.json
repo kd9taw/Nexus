@@ -2436,5 +2436,11 @@
    "id": "no-such-id"
   },
   "a": null
+ },
+ {
+  "q": {
+   "kind": "logSize"
+  },
+  "a": 24
  }
 ]

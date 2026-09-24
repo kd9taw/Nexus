@@ -1981,6 +1981,7 @@ export const DE: PartialCatalog = {
   "logbook.field.qslCard.label": "Karte erhalten",
   "logbook.empty": "Noch keine QSOs geloggt.",
   "logbook.emptySearch": "Keine QSOs passen zu „{{query}}“.",
+  "logbook.rows.loading": "Wird geladen…",
   "logbook.row.park.worked": "{{program}} {{ref}} (gearbeitet)",
   "logbook.row.park.mine": "Eigene Aktivierung: {{program}} {{ref}}",
   "logbook.row.qsl.lotw": "Über LoTW bestätigt (diplomtauglich)",

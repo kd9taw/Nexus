@@ -26,12 +26,13 @@ import * as THREE from 'three'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
 import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
-import { qsoGridPoints } from '../features/qsoPoints'
+import { gridCountsToPoints } from '../features/qsoPoints'
+import { emptyAnswer } from '../features/logAnswers'
+import { useLogAnswer } from '../features/logSource'
 import { BAND_COLOR, bandColor } from '../bandColors'
 import { subsolarPoint, usStateBorders } from '../mapGeo'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
-import type { LoggedQso } from '../types'
 
 /** Low→high band order = BAND_COLOR's key order (the app's canonical band list). */
 const BAND_ORDER = Object.keys(BAND_COLOR)
@@ -62,7 +63,9 @@ function dotSprite(): THREE.CanvasTexture {
   return tex
 }
 
-export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
+/** The Logbook's globe. It asks the log for what it draws — the bands in it, and the worked
+ *  squares of the band on show — following the Logbook's `logTick`, and never holds the log. */
+export default function QsoGlobe({ logTick }: { logTick?: number }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const globeRef = useRef<GlobeMethods | undefined>(undefined)
   const cloudRef = useRef<THREE.Points | null>(null)
@@ -76,10 +79,10 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
   const [band, setBand] = useState<string>('all')
 
   // Bands present in the log, in the app's canonical low→high order.
+  const bandsQuestion = { kind: 'bandsInLog' } as const
+  const bands = useLogAnswer(bandsQuestion, logTick) ?? emptyAnswer(bandsQuestion)
   const bandsInLog = useMemo(() => {
-    const seen = new Set<string>()
-    for (const q of qsos) if (q.band) seen.add(q.band)
-    return [...seen].sort((a, b) => {
+    return [...bands].sort((a, b) => {
       const ia = BAND_ORDER.indexOf(a)
       const ib = BAND_ORDER.indexOf(b)
       if (ia !== -1 && ib !== -1) return ia - ib
@@ -87,7 +90,7 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
       if (ib !== -1) return 1
       return a.localeCompare(b)
     })
-  }, [qsos])
+  }, [bands])
 
   // Measure the band BEFORE paint — react-globe.gl sizes to the whole window when
   // width/height are undefined (the same trap Globe3D guards against).
@@ -103,8 +106,10 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
 
   // QSOs → unique 4-char grid squares → dots (the shared reduction the 2-D map uses too, so the
   // two views plot identical points). The dedupe is what keeps a 50k-QSO FT8 log at ~a thousand
-  // points instead of 50k.
-  const points = useMemo(() => qsoGridPoints(qsos, band), [qsos, band])
+  // points instead of 50k — and the squares are counted where the log is; only the placing is here.
+  const squaresQuestion = { kind: 'gridPoints', band } as const
+  const squares = useLogAnswer(squaresQuestion, logTick) ?? emptyAnswer(squaresQuestion)
+  const points = useMemo(() => gridCountsToPoints(squares), [squares])
 
   // US state borders as a static reference overlay (the SAME us-atlas mesh Connect's Globe3D
   // draws) — most logs are WAS-minded, so seeing which state a dot sits in is the point. One

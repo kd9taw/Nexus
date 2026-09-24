@@ -78,6 +78,7 @@ export const QUESTIONS: LogQuestion[] = [
   { kind: 'rowsAt', indices: [0, 9, 23, 24, -1] },
   { kind: 'row', id: 'fx07' },
   { kind: 'row', id: 'no-such-id' },
+  { kind: 'logSize' },
 ]
 
 const idOf = (r: LoggedQso | null) => (r === null ? null : (r.id ?? null))

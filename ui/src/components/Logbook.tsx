@@ -13,9 +13,9 @@ import type { LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
-import { modeKey } from '../features/callHistory'
-import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
-import { lotwBacklog } from '../features/lotwBacklog'
+import { emptyAnswer, rowKeyAt, type LogQuestion } from '../features/logAnswers'
+import { defaultAsc, fmtUtc, logOrder, type LogQuery, type LogSortKey } from '../features/logQuery'
+import { logSource, useLogAnswer, useLogPages } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
@@ -211,14 +211,6 @@ const QSL_MENU_LABEL = 'QSL▸'
 /** The satellite tag menu. `SAT` is the ADIF `PROP_MODE` value itself, not a word. */
 const SAT_MENU_LABEL = 'SAT▸'
 
-function fmtUtc(whenUnix: number): string {
-  const d = new Date(whenUnix * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(
-    d.getUTCHours(),
-  )}:${p(d.getUTCMinutes())}Z`
-}
-
 function fmtReport(v: string | null): string {
   return v && v.trim() !== '' ? v : '—'
 }
@@ -258,35 +250,16 @@ function parseReport(s: string): string | null {
   return t === '' ? null : t
 }
 
-// Sortable columns. `band` sorts by frequency (more meaningful than the label string).
-type SortKey = 'call' | 'country' | 'band' | 'freq' | 'mode' | 'sent' | 'rcvd' | 'time' | 'park' | 'qsl'
-function sortVal(q: LoggedQso, k: SortKey): string | number {
-  switch (k) {
-    case 'call':
-      return q.call.toUpperCase()
-    case 'country':
-      return (q.country ?? '').toUpperCase()
-    case 'band':
-    case 'freq':
-      return q.freqMhz
-    case 'mode':
-      return q.mode.toUpperCase()
-    case 'sent':
-      return (q.rstSent ?? '').toUpperCase()
-    case 'rcvd':
-      return (q.rstRcvd ?? '').toUpperCase()
-    case 'time':
-      return q.whenUnix
-    case 'park':
-      return (q.ota?.theirRef ?? q.ota?.myRef ?? '').toUpperCase()
-    case 'qsl':
-      return q.awardConfirmed ? 2 : q.confirmed ? 1 : 0
-  }
-}
-/** Sensible default direction when switching TO a column: text ascending, numeric/time descending. */
-function defaultAsc(k: SortKey): boolean {
-  return k === 'call' || k === 'country' || k === 'mode' || k === 'sent' || k === 'rcvd' || k === 'park'
-}
+// The columns' sort and the search box's filter are `features/logQuery` — the ONE copy the list's
+// source runs, so what a page holds is exactly what this view used to sort and filter itself.
+type SortKey = LogSortKey
+
+/** Rows per Logbook page: what the list asks its source for at a time (SPEC-2 v2 §6). */
+const LOG_PAGE = 128
+/** The Logbook's LoTW-backlog question — the same one every render. */
+const LOTW_BACKLOG = { kind: 'lotwBacklog' } as const satisfies LogQuestion
+/** How many contacts the log holds: the count badge, the purge warning, the exports' gates. */
+const LOG_SIZE = { kind: 'logSize' } as const satisfies LogQuestion
 
 import { useStationControl } from '../stationAccess'
 import { useRemoteLog } from '../remote-web/useRemoteLog'
@@ -309,14 +282,17 @@ export function Logbook({
   const canEdit = useLogChange('logEdit')
   const canLog = useLogChange('log.manual')
   const canQsl = useLogChange('qslMarks')
-  // The desktop reads the window's one shared copy of the log (features/logStore). It follows
-  // `logTick`, so the list reloads when the log changes under this view — a Remote browser's
-  // delete or edit, another instance's contact, a connector stamp. The rows are addressed by
-  // key, so a stale list is refused rather than acted on; following the tick is what keeps that
-  // refusal rare. A Remote browser shows the page of rows the station sent (below).
-  const sharedLog = useSharedLog(logTick, control)
+  // The desktop asks `LogSource` for the pages of the list it shows (below, after the sort and
+  // search state they are cut by). The source follows `logTick`, so the list moves when the log
+  // changes under this view — a Remote browser's delete or edit, another instance's contact, a
+  // connector stamp. The rows are addressed by key, so a stale list is refused rather than acted
+  // on; following the tick is what keeps that refusal rare. A Remote browser shows the page of
+  // rows the station sent (`observedLog`, below).
   const [observedLog, setLog] = useState<LoggedQso[]>([])
-  const log = control ? (sharedLog ?? NO_LOG) : observedLog
+  // The whole log's size, not the list's: the count badge, the purge warning, the exports and the
+  // globe key on it. A Remote browser counts the rows the station sent, as it always did.
+  const nativeLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick) ?? emptyAnswer(LOG_SIZE)
+  const logSize = control ? nativeLogSize : observedLog.length
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
     call: '',
@@ -351,7 +327,7 @@ export function Logbook({
     // before the log has loaded, and the extra state update it lands shifts the first few
     // renders. That is what put the Purge button's disabled read on the wrong side of a
     // waitFor in Logbook.test.tsx — a real timing change, not a flaky test.
-    if (!control || log.length === 0) {
+    if (!control || logSize === 0) {
       setOperators((prev) => (prev.length === 0 ? prev : []))
       return
     }
@@ -363,7 +339,7 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the split
-  }, [log.length, control])
+  }, [logSize, control])
   // The satellites LoTW accepts, for the row's tag picker. A fixed backend table, so it is
   // fetched once rather than per log change — and it is a PICKER because TQSL matches
   // SAT_NAME against its own list and rejects anything else, which through the compliant
@@ -381,7 +357,7 @@ export function Logbook({
   const [activations, setActivations] = useState<LoggedActivation[]>([])
   const [activationKey, setActivationKey] = useState('')
   useEffect(() => {
-    if (log.length === 0) {
+    if (logSize === 0) {
       setActivations((prev) => (prev.length === 0 ? prev : []))
       return
     }
@@ -394,7 +370,7 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the per-activation export
-  }, [log.length])
+  }, [logSize])
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [search, setSearch] = useState('')
@@ -437,16 +413,16 @@ export function Logbook({
     text: string
     result: QrzCorrectResult | null
   } | null>(null)
-  // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
-  // The row being edited, AS THE OPERATOR OPENED IT — not `log[index]` read back at save time.
-  // The list reloads under an open form (a Remote delete, a connector stamp), and after a
-  // delete above it the same index names a different contact; the target of the edit, and the
-  // fields the form did not carry, come from this row. `index` only marks the row in the list.
-  const [editing, setEditing] = useState<{ index: number; row: LoggedQso } | null>(null)
+  // The row being edited, AS THE OPERATOR OPENED IT — never read back from the list at save time.
+  // The list moves under an open form (a Remote delete, a connector stamp), and after a delete
+  // above it the same place names a different contact; the target of the edit, and the fields
+  // the form did not carry, come from this row. `key` (its id) only marks the row in the list,
+  // and follows it wherever the list puts it. null = the form logs a NEW QSO.
+  const [editing, setEditing] = useState<{ key: string; row: LoggedQso } | null>(null)
   /** The contact open in the detail view (#313 — "there's no View capability"). Read-only:
    *  the pencil beside it is still the one editing path, so there is one writer. */
   const [viewing, setViewing] = useState<LoggedQso | null>(null)
-  const editIndex = editing?.index ?? null
+  const editingKey = editing?.key ?? null
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
   // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
   // oldest-first, which the test user disliked).
@@ -482,9 +458,9 @@ export function Logbook({
     }
   }
 
-  // After this view's own write: bring the shared copy up to date now, not on the next tick.
+  // After this view's own write: bring the list up to date now, not on the next tick.
   const load = useCallback(() => {
-    if (control) refreshSharedLog()
+    if (control) logSource().refresh()
   }, [control])
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
@@ -549,8 +525,10 @@ export function Logbook({
   }
 
   // QSOs not yet sent to LoTW, and the date-only ones LoTW can never match (features/
-  // lotwBacklog). Once per log, not once per render: this view re-renders on every snapshot.
-  const { unsent: unsentLotw, timeless: timelessLotw } = useMemo(() => lotwBacklog(log), [log])
+  // lotwBacklog), asked of the log — once per change to it, never once per render: this view
+  // re-renders on every snapshot.
+  const { unsent: unsentLotw, timeless: timelessLotw } =
+    useLogAnswer(control ? LOTW_BACKLOG : null, logTick) ?? emptyAnswer(LOTW_BACKLOG)
 
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
@@ -624,9 +602,9 @@ export function Logbook({
   const exportRangeBad = exportFromBad || exportToBad
 
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
-  const startEdit = (q: LoggedQso, i: number) => {
+  const startEdit = (q: LoggedQso, key: string) => {
     setErr(null)
-    setEditing({ index: i, row: q })
+    setEditing({ key, row: q })
     setDraft({
       call: q.call,
       grid: q.grid ?? '',
@@ -882,7 +860,7 @@ export function Logbook({
   // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
   const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
 
-  const onDelete = async (q: LoggedQso, i: number) => {
+  const onDelete = async (q: LoggedQso, key: string) => {
     if (
       !(await confirmDialog({
         title: t('logbook.delete.heading', { call: q.call, band: q.band }),
@@ -897,7 +875,7 @@ export function Logbook({
       const outcome = await remoteChange({ kind: 'delete', target: await logTarget(q) })
       if (outcome?.outcome === 'applied') {
         pushToast(t('logbook.delete.done', { call: q.call }), 'success')
-        if (editIndex === i) cancelForm()
+        if (editingKey === key) cancelForm()
         remoteLog.refresh(at)
       }
       return
@@ -905,7 +883,7 @@ export function Logbook({
     const snap = await withErrorToast(() => deleteQso(q), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
-      if (editIndex === i) cancelForm()
+      if (editingKey === key) cancelForm()
       load()
     }
   }
@@ -930,41 +908,22 @@ export function Logbook({
     }
   }
 
-  const matchesSearch = useCallback(
-    (q: LoggedQso): boolean => {
-      if (needsConfirmOnly && q.awardConfirmed) return false
-      const t = deferredSearch.trim().toLowerCase()
-      if (!t) return true
-      return (
-        q.call.toLowerCase().includes(t) ||
-        (q.country?.toLowerCase().includes(t) ?? false) ||
-        (q.grid?.toLowerCase().includes(t) ?? false) ||
-        q.band.toLowerCase().includes(t) ||
-        q.mode.toLowerCase().includes(t) ||
-        // …and under the name the operator thinks in. A phone contact carries the sideband
-        // it was worked on, so searching "ssb" would otherwise miss every USB/LSB row —
-        // Nexus's own phone contacts, and any imported from a logger that spells it that
-        // way. The raw spelling above still matches, so "usb" finds the USB rows alone.
-        modeKey(q.mode).toLowerCase().includes(t) ||
-        fmtUtc(q.whenUnix).toLowerCase().includes(t)
-      )
-    },
-    [deferredSearch, needsConfirmOnly],
+  // What the list shows: the search and the chip (the deferred search, so typing stays responsive
+  // on a big log) and the sorted column. The desktop asks its source for the list in PAGES of this
+  // order — the first here, for the count; the rest below, for the rows on screen — and holds only
+  // those. A page is cut by `features/logQuery`, the filter and sort this view used to run itself.
+  const query = useMemo<LogQuery>(
+    () => ({ sort: sortKey, asc: sortAsc, search: deferredSearch, needsConfirmOnly }),
+    [sortKey, sortAsc, deferredSearch, needsConfirmOnly],
   )
-
-  // Filter + sort ONCE per data/criteria change (not on every render, e.g. the frequent dial-poll
-  // re-renders). `i` is the backend get_log index, kept glued to each record so edit/delete/mark
-  // still target the right row regardless of display order.
-  const rows = useMemo(() => {
-    const out = log.map((q, i) => ({ q, i })).filter(({ q }) => !control || matchesSearch(q))
-    out.sort((a, b) => {
-      const av = sortVal(a.q, sortKey)
-      const bv = sortVal(b.q, sortKey)
-      const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
-      return sortAsc ? cmp : -cmp
-    })
-    return out
-  }, [log, matchesSearch, sortKey, sortAsc, control])
+  const firstPage = useLogAnswer(control ? { kind: 'page', query, offset: 0, limit: LOG_PAGE } : null, logTick)
+  // A Remote browser's rows are the page the station sent, searched and filtered there: they are
+  // only put in this view's order (newest first — the headers are off there), exactly as before.
+  const remoteOrder = useMemo(
+    () => (control ? [] : logOrder(observedLog, { ...query, search: '', needsConfirmOnly: false })),
+    [control, observedLog, query],
+  )
+  const listTotal = control ? (firstPage?.total ?? 0) : remoteOrder.length
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -972,7 +931,7 @@ export function Logbook({
   // D#278: the operator's own switch (Settings ▸ Appearance ▸ Workspace). Off = no band at all,
   // and the table starts at the top.
   const [globeWanted] = useLogbookGlobe()
-  const globeShown = control && globeOk && globeWanted && log.length > 0
+  const globeShown = control && globeOk && globeWanted && logSize > 0
 
   // #162: rows whose Comment is opened to its full length, keyed like the row itself. The column
   // clips to one line; clicking the comment wraps it in place (the virtualizer measures the
@@ -993,7 +952,7 @@ export function Logbook({
   const rowsWrapRef = useRef<HTMLDivElement>(null)
   const [listOffset, setListOffset] = useState(0)
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: listTotal,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 43, // ~row height; measureElement corrects per row
     overscan: 12,
@@ -1003,6 +962,26 @@ export function Logbook({
     // the sticky block's height isn't a constant; the row transform subtracts it back.
     scrollMargin: listOffset,
   })
+
+  // The pages the rows on screen fall in (the virtualizer's window, overscan included), besides
+  // the first. A row whose page is not here yet draws as a placeholder; a page cut from an older
+  // order than the first page's is not used (one view, one order — v2 R4).
+  const virtualRows = rowVirtualizer.getVirtualItems()
+  const pageOffsets = control
+    ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))].filter((o) => o > 0)
+    : []
+  const pages = useLogPages(control ? query : null, pageOffsets, LOG_PAGE, logTick)
+  const rowAt = (i: number): { q: LoggedQso; key: string } | undefined => {
+    if (!control) {
+      const pos = remoteOrder[i]
+      return pos === undefined ? undefined : { q: observedLog[pos], key: rowKeyAt(observedLog, pos) }
+    }
+    const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
+    const page = offset === 0 ? firstPage : pages.get(offset)
+    if (!page || !firstPage || page.orderRev !== firstPage.orderRev) return undefined
+    const k = i - offset
+    return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
+  }
 
   // Measure where the rows actually start inside .log-scroll (globe + sticky block).
   useLayoutEffect(() => {
@@ -1216,7 +1195,7 @@ export function Logbook({
       <div className="panel-header log-header">
         <div className="log-title">
           <h2>{t('logbook.title')}</h2>
-          <span className="count-badge">{remoteLog?.total ?? log.length}</span>
+          <span className="count-badge">{remoteLog?.total ?? logSize}</span>
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
         {!control && remoteLog && (canLog || showForm) && (
@@ -1403,7 +1382,7 @@ export function Logbook({
           <button
             type="button"
             className="export-btn"
-            disabled={log.length === 0 || exportRangeBad}
+            disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
                 const text = await exportGeneralLog('adif', exportFrom, exportTo)
@@ -1520,7 +1499,7 @@ export function Logbook({
           <button
             type="button"
             className="export-btn"
-            disabled={log.length === 0 || exportRangeBad}
+            disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
                 const text = await exportGeneralLog('csv', exportFrom, exportTo)
@@ -1579,7 +1558,7 @@ export function Logbook({
             type="button"
             className="export-btn danger"
             onClick={() => setShowPurge(true)}
-            disabled={log.length === 0}
+            disabled={logSize === 0}
             title={t('logbook.purge.title')}
           >
             {t('logbook.purge.label')}
@@ -1779,7 +1758,7 @@ export function Logbook({
                 commands address a logged record. Shack only: a Remote edit is one change keyed by
                 the row it started from, and the two follow-ups would each need the key of the row
                 the previous write produced; the hosted row menu already offers both marks by key. */}
-            {editIndex !== null && !remoteLog && (
+            {editingKey !== null && !remoteLog && (
               <>
                 <div className="logbook-field">
                   <label htmlFor="logbook-qsl-sent">{t('logbook.field.qslSent.label')}</label>
@@ -1821,11 +1800,11 @@ export function Logbook({
           </div>
           <div className="logbook-form-actions">
             {err && <span className="settings-error" role="alert">{err}</span>}
-            {editIndex !== null && (
+            {editingKey !== null && (
               <span className="logbook-editing-note">{t('logbook.form.editingNote')}</span>
             )}
             <button type="submit" className="settings-save" disabled={!draft.call.trim()}>
-              {editIndex !== null ? t('logbook.form.save') : t('logbook.form.log')}
+              {editingKey !== null ? t('logbook.form.save') : t('logbook.form.log')}
             </button>
           </div>
         </form>
@@ -1836,7 +1815,7 @@ export function Logbook({
           {globeShown && (
             <div className="log-globe-band">
               <Suspense fallback={<div className="log-globe-loading">{t('logbook.globe.loading')}</div>}>
-                <QsoGlobe qsos={log} />
+                <QsoGlobe logTick={logTick} />
               </Suspense>
             </div>
           )}
@@ -1845,7 +1824,7 @@ export function Logbook({
           <div className="log-sticky">
       <div className="log-searchbar">
         {remoteLog && <>
-          <span role="status">{remoteLog.phase === 'loading' ? t('remote.collectionLoading') : remoteLog.phase === 'unavailable' ? t('remote.collectionUnavailable') : t('remote.logPage', { start: remoteLog.total ? remoteLog.offset + 1 : 0, end: remoteLog.offset + log.length, total: remoteLog.total })}</span>
+          <span role="status">{remoteLog.phase === 'loading' ? t('remote.collectionLoading') : remoteLog.phase === 'unavailable' ? t('remote.collectionUnavailable') : t('remote.logPage', { start: remoteLog.total ? remoteLog.offset + 1 : 0, end: remoteLog.offset + observedLog.length, total: remoteLog.total })}</span>
           {remoteLog.retained < remoteLog.total && <span>{t('remote.logWindow', { count: remoteLog.retained })}</span>}
           <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasPrevious} onClick={remoteLog.previous}>{t('remote.previousPage')}</button>
           <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasNext} onClick={() => void remoteLog.next()}>{t('remote.nextPage')}</button>
@@ -1927,21 +1906,47 @@ export function Logbook({
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
-          {log.length === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
-          {log.length > 0 && rows.length === 0 && (
+          {logSize === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
+          {logSize > 0 && listTotal === 0 && (
             <p className="empty">{t('logbook.emptySearch', { query: deferredSearch.trim() })}</p>
           )}
-          {rows.length > 0 && (
+          {listTotal > 0 && (
             <div
               ref={rowsWrapRef}
               className="log-rows"
               style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}
             >
-              {rowVirtualizer.getVirtualItems().map((vrow) => {
-                const { q, i } = rows[vrow.index]
+              {virtualRows.map((vrow) => {
+                // A row whose page is still on its way: its place, kept, until the page lands.
+                const row = rowAt(vrow.index)
+                const placed = {
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  // scrollMargin is baked into vrow.start (the globe band above);
+                  // subtract it because rows are positioned within THIS container,
+                  // which document flow already places below the band.
+                  transform: `translateY(${vrow.start - rowVirtualizer.options.scrollMargin}px)`,
+                } as const
+                if (!row)
+                  return (
+                    <div
+                      className="log-row logbook-row placeholder"
+                      role="row"
+                      aria-busy="true"
+                      key={`placeholder-${vrow.index}`}
+                      data-index={vrow.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={placed}
+                    >
+                      <span className="log-cell">{t('logbook.rows.loading')}</span>
+                    </div>
+                  )
+                const { q, key } = row
                 return (
                   <div
-                    className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
+                    className={`log-row logbook-row${editingKey === key ? ' editing' : ''}`}
                     // ⛔ DOUBLE-CLICK, NOT A TENTH BUTTON. A view button in the action cluster
                     // was built first and MEASURED: ten controls need ~318 px of button plus
                     // nine gaps against a 336 px track floor, and the harness reported
@@ -1954,21 +1959,14 @@ export function Logbook({
                     onDoubleClick={() => setViewing(q)}
                     title={t('logbook.row.view.title', { call: q.call })}
                     role="row"
-                    // The backend index `i` is unique per record → collision-proof even for two
-                    // identical QSOs (double-clicked Log in the same second). Rows are stateless
-                    // divs, so key churn after a delete-shift costs nothing.
-                    key={`${q.call}-${q.whenUnix}-${i}`}
+                    // The row's key is its id: unique per record — collision-proof even for two
+                    // identical QSOs (double-clicked Log in the same second) — and it FOLLOWS the
+                    // row when the list moves, so an open comment or the edit mark stays on it.
+                    key={key}
                     data-index={vrow.index}
                     ref={rowVirtualizer.measureElement}
                     style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      // scrollMargin is baked into vrow.start (the globe band above);
-                      // subtract it because rows are positioned within THIS container,
-                      // which document flow already places below the band.
-                      transform: `translateY(${vrow.start - rowVirtualizer.options.scrollMargin}px)`,
+                      ...placed,
                       // Stripe by REAL index (inline beats the nth-child rule, which would otherwise
                       // stripe by render order and appear to "move" as the virtual window scrolls).
                       background: vrow.index % 2 ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)' : 'transparent',
@@ -2099,7 +2097,7 @@ export function Logbook({
                   </>
                 )}
                 <span
-                  className={`log-cell log-note${openComments.has(`${q.call}-${q.whenUnix}-${i}`) ? ' expanded' : ''}`}
+                  className={`log-cell log-note${openComments.has(key) ? ' expanded' : ''}`}
                   title={[
                     (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
                     (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
@@ -2116,9 +2114,9 @@ export function Logbook({
                     <button
                       type="button"
                       className="log-note-flag"
-                      aria-expanded={openComments.has(`${q.call}-${q.whenUnix}-${i}`)}
+                      aria-expanded={openComments.has(key)}
                       aria-label={t('logbook.row.notes.readAria')}
-                      onClick={() => toggleComment(`${q.call}-${q.whenUnix}-${i}`)}
+                      onClick={() => toggleComment(key)}
                     >
                       📝
                     </button>
@@ -2129,8 +2127,8 @@ export function Logbook({
                     <button
                       type="button"
                       className="log-note-text"
-                      aria-expanded={openComments.has(`${q.call}-${q.whenUnix}-${i}`)}
-                      onClick={() => toggleComment(`${q.call}-${q.whenUnix}-${i}`)}
+                      aria-expanded={openComments.has(key)}
+                      onClick={() => toggleComment(key)}
                     >
                       {(q.comment ?? '').trim()}
                     </button>
@@ -2143,7 +2141,7 @@ export function Logbook({
                       not rendered at all, so the single line the column gets still belongs to
                       the comment — the note is multi-line free text and would win a fight for
                       it. Open, it takes a line of its own below (`flex: 1 0 100%`). */}
-                  {openComments.has(`${q.call}-${q.whenUnix}-${i}`) && (q.notes ?? '').trim() && (
+                  {openComments.has(key) && (q.notes ?? '').trim() && (
                     <span className="log-note-private">{(q.notes ?? '').trim()}</span>
                   )}
                 </span>
@@ -2312,7 +2310,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn"
-                    onClick={() => startEdit(q, i)}
+                    onClick={() => startEdit(q, key)}
                     title={t('logbook.row.edit', { call: q.call })}
                     aria-label={t('logbook.row.edit', { call: q.call })}
                   >
@@ -2321,7 +2319,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn danger"
-                    onClick={() => onDelete(q, i)}
+                    onClick={() => onDelete(q, key)}
                     title={t('logbook.row.delete', { call: q.call })}
                     aria-label={t('logbook.row.delete', { call: q.call })}
                   >
@@ -2350,7 +2348,7 @@ export function Logbook({
               <span className="logconfirm-sub danger">{t('logbook.purge.irreversible')}</span>
             </div>
             <p className="purge-warn">
-              <T k="logbook.purge.warn" tags={{ b: <strong /> }} vals={{ count: log.length }} />
+              <T k="logbook.purge.warn" tags={{ b: <strong /> }} vals={{ count: logSize }} />
             </p>
             {/* The sync cursors are the non-obvious half of a purge, and getting it wrong cost an
                 operator his whole confirmation history: each cursor means "I already hold every
@@ -2389,7 +2387,7 @@ export function Logbook({
                 onClick={onPurge}
                 disabled={purging || purgeText.trim().toUpperCase() !== PURGE_WORD}
               >
-                {purging ? t('logbook.purge.busy') : t('logbook.purge.confirm', { count: log.length })}
+                {purging ? t('logbook.purge.busy') : t('logbook.purge.confirm', { count: logSize })}
               </button>
             </div>
           </div>

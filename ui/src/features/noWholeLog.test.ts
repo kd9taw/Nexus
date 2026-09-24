@@ -27,10 +27,10 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  *  `LogSource` adapter answering from that copy until the engine answers (C17a deletes all three). */
 const WHOLE_LOG_ADAPTER = ['api.ts', 'features/logStore.ts', 'features/wholeLogSource.ts']
 
-/** Views not yet moved onto `LogSource`. Each C17b step removes the views it moves. */
-const STILL_READING = [
-  'components/Logbook.tsx',
-]
+/** Views not yet moved onto `LogSource`. Each C17b step removed the views it moved; none is left.
+ *  (Kept, and empty, so a view that starts reading the log again has to be ADDED here to pass —
+ *  a visible act in a diff, not a silent one.) */
+const STILL_READING: string[] = []
 
 const WHOLE_LOG_API = new Set(['getLog', 'getLogDelta', 'LogDelta'])
 const WHOLE_LOG_COMMANDS = new Set(['get_log', 'get_log_delta'])

@@ -1,0 +1,231 @@
+// @vitest-environment jsdom
+//
+// THE LOGBOOK LIST, IN PAGES (SPEC-2 v3 C17b, V5; v2 §6).
+//
+// The list used to be the whole log, filtered and sorted in the view. It is now `total` rows long,
+// and each row comes from a page of 128 the view asks `LogSource` for. Pinned here:
+//   1. rows past the first page are exactly the rows the view used to show there — today's order
+//      (an ORACLE copy of the view's own filter-and-sort) at the same places;
+//   2. a row is its ID: the edit mark and an open comment stay on their contact when the list moves
+//      under them (v2 §6 (5)). The view used to key both by the row's log POSITION, so a delete
+//      above moved them onto the next contact — this half is a FIX, red on the code before it;
+//   3. with a source that answers LATER (the engine's, C17a), a row whose page is on its way is a
+//      placeholder in its place, and a page cut from an OLDER order than the first page's is never
+//      shown beside it (v2 R4) — the rows of one view come from one order.
+
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { Logbook } from './Logbook'
+import { ConfirmHost } from '../confirm'
+import { t } from '../i18n'
+import { answerFrom, questionKey, type AnswerTo, type LogQuestion } from '../features/logAnswers'
+import { DEFAULT_LOG_QUERY } from '../features/logQuery'
+import { setLogSource, type LogSource } from '../features/logSource'
+import type { LoggedQso } from '../types'
+
+const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
+vi.mock('../api', () => {
+  const noop = () => vi.fn()
+  return {
+    getLogDelta: vi.fn(async () => ({ revision: engine.revision, full: true, rows: engine.log })),
+    deleteQso: vi.fn(() => Promise.resolve({})),
+    editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
+    logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    saveTextToDownloads: noop(), logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
+    markQslSent: noop(), markQslCard: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
+    qrzPushQso: noop(), clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
+  }
+})
+vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
+
+const ROW_PX = 43 // the list's own row estimate — what jsdom's zero-height rows are placed at
+beforeAll(() => {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+  // A 600 px viewport, so the virtualizer puts ~14 rows (+ overscan) on screen — and each row
+  // measures at the list's own estimate, so a row's place is index × ROW_PX, as it is on screen
+  // (the virtualizer measures rows by `offsetHeight`; a blanket 600 would make every row 600 tall).
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get() {
+      return (this as HTMLElement).classList?.contains('logbook-row') ? ROW_PX : 600
+    },
+  })
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
+})
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+  localStorage.clear()
+})
+
+const contact = (i: number, over: Partial<LoggedQso> = {}): LoggedQso =>
+  ({
+    id: `id-${i}`,
+    call: `K${i}ABC`,
+    grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8', rstSent: '-10', rstRcvd: '-12',
+    name: null, qth: null, comment: null, notes: null, country: 'United States',
+    // Every third contact shares a second with its neighbour, so ties are everywhere.
+    whenUnix: 1_700_000_000 + Math.floor(i / 3) * 60,
+    confirmed: false, awardConfirmed: i % 5 === 0, qslRcvd: null, qslSent: null, ota: null,
+    ...over,
+  }) as unknown as LoggedQso
+
+/** The calls the list shows, top to bottom (placeholders read as '…'). */
+const shownCalls = (root: HTMLElement) =>
+  [...root.querySelectorAll('.log-rows .logbook-row')].map((r) =>
+    r.classList.contains('placeholder') ? '…' : (r.querySelector('.qrz-link-call')?.textContent ?? '?'),
+  )
+const view = (logTick: number) => (
+  <>
+    <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" logTick={logTick} />
+    <ConfirmHost />
+  </>
+)
+
+// ---- ORACLE: the view's own filter-and-sort at d5be14ea (the default query: newest first) ----
+function oracleNewestFirst(log: LoggedQso[]): LoggedQso[] {
+  const out = log.map((q, i) => ({ q, i }))
+  out.sort((a, b) => {
+    const av = a.q.whenUnix
+    const bv = b.q.whenUnix
+    const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
+    return -cmp
+  })
+  return out.map(({ q }) => q)
+}
+
+describe('rows past the first page', () => {
+  it('are the rows the view used to show at those places', async () => {
+    engine.log = Array.from({ length: 300 }, (_, i) => contact(i))
+    const { container } = render(view(1))
+    await waitFor(() => expect(shownCalls(container).length).toBeGreaterThan(0))
+    const scroller = container.querySelector('.log-scroll') as HTMLElement
+    // Scroll into the THIRD page (rows 256…) and let the virtualizer take the new window.
+    act(() => {
+      scroller.scrollTop = 262 * ROW_PX
+      scroller.dispatchEvent(new Event('scroll'))
+    })
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="262"]')).not.toBeNull())
+    const want = oracleNewestFirst(engine.log as LoggedQso[])
+    const rendered = [...container.querySelectorAll('.log-rows .logbook-row')] as HTMLElement[]
+    expect(rendered.some((r) => Number(r.dataset.index) >= 256), 'the window never reached page 3').toBe(true)
+    expect(rendered.some((r) => Number(r.dataset.index) < 256), 'the window must straddle two pages').toBe(true)
+    for (const r of rendered) {
+      const i = Number(r.dataset.index)
+      expect(r.querySelector('.qrz-link-call')?.textContent, `row ${i}`).toBe(want[i].call)
+    }
+  })
+})
+
+describe('a row is its id', () => {
+  it('FIX: the edit mark and an open comment stay on their contact when a delete above moves the list', async () => {
+    const rows = [
+      contact(1, { call: 'W1AW', whenUnix: 1_700_000_300 }),
+      contact(2, { call: 'K1ABC', whenUnix: 1_700_000_200, comment: 'rag chew about antennas' }),
+      contact(3, { call: 'N2XYZ', whenUnix: 1_700_000_100 }),
+      contact(4, { call: 'G4ABC', whenUnix: 1_700_000_000 }),
+    ]
+    engine.log = rows
+    const { container, rerender } = render(view(1))
+    await waitFor(() => expect(shownCalls(container)).toEqual(['W1AW', 'K1ABC', 'N2XYZ', 'G4ABC']))
+    fireEvent.click(container.querySelector('button[aria-label="Edit K1ABC"]') as HTMLButtonElement)
+    fireEvent.click(container.querySelector('.log-note-text') as HTMLButtonElement) // open K1ABC's comment
+    const marked = () => container.querySelector('.logbook-row.editing .qrz-link-call')?.textContent
+    const openRow = () => container.querySelector('.log-note.expanded')?.closest('.logbook-row')?.querySelector('.qrz-link-call')?.textContent
+    expect(marked()).toBe('K1ABC')
+    expect(openRow()).toBe('K1ABC')
+
+    // Another writer deletes W1AW — the contact ABOVE, lower in the log — and the tick moves.
+    engine.log = rows.slice(1)
+    engine.revision = 2
+    rerender(view(2))
+    await waitFor(() => expect(shownCalls(container)).toEqual(['K1ABC', 'N2XYZ', 'G4ABC']))
+    expect(marked(), 'the edit mark moved to another contact').toBe('K1ABC')
+    expect(openRow(), 'the open comment moved to another contact').toBe('K1ABC')
+  })
+})
+
+/** A source that answers only when the test says so — the shape of the engine's (C17a). Answers
+ *  are today's, from `answerFrom` over the log at a chosen revision. */
+function laterSource() {
+  const held = new Map<string, unknown>()
+  const listeners = new Set<() => void>()
+  const wanted = new Map<string, LogQuestion>()
+  const source: LogSource = {
+    peek: <Q extends LogQuestion>(q: Q) => held.get(questionKey(q)) as AnswerTo<Q> | undefined,
+    ask: async () => {
+      throw new Error('not asked in this test')
+    },
+    want: (q) => {
+      wanted.set(questionKey(q), q)
+      return () => wanted.delete(questionKey(q))
+    },
+    follow: () => {},
+    subscribe: (l) => {
+      listeners.add(l)
+      return () => listeners.delete(l)
+    },
+    refresh: () => {},
+  }
+  /** Answer every question wanted so far (or those `only` picks) from `log` at `revision`. */
+  const deliver = (log: LoggedQso[], revision: number, only: (q: LogQuestion) => boolean = () => true) =>
+    act(() => {
+      for (const [key, q] of wanted) if (only(q)) held.set(key, answerFrom(log, q, revision))
+      for (const l of listeners) l()
+    })
+  return { source, deliver, wanted }
+}
+
+describe('with a source that answers later (the engine’s shape)', () => {
+  it('draws placeholders in place, then the rows, and never mixes a page from an older order', async () => {
+    const log = Array.from({ length: 300 }, (_, i) => contact(i))
+    const later = laterSource()
+    setLogSource(later.source)
+    const { container } = render(view(1))
+    // Nothing answered yet: the view knows no rows, so it shows none (and asks for the first page).
+    expect(shownCalls(container)).toEqual([])
+    expect([...later.wanted.values()].some((q) => q.kind === 'page' && q.offset === 0)).toBe(true)
+
+    // The first page and the count arrive: the list is 300 long and its top rows are real.
+    later.deliver(log, 1)
+    await waitFor(() => expect(shownCalls(container)[0]).toBe(oracleNewestFirst(log)[0].call))
+
+    // Scroll to the page boundary: page 3 is wanted but not answered — its rows are placeholders.
+    const scroller = container.querySelector('.log-scroll') as HTMLElement
+    act(() => {
+      scroller.scrollTop = 250 * ROW_PX
+      scroller.dispatchEvent(new Event('scroll'))
+    })
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="258"]')).not.toBeNull())
+    const placeholder = container.querySelector('.logbook-row[data-index="258"]') as HTMLElement
+    expect(placeholder.classList.contains('placeholder'), 'a row of an unanswered page must hold its place').toBe(true)
+    expect(placeholder.getAttribute('aria-busy')).toBe('true')
+    expect(placeholder.textContent).toBe(t('logbook.rows.loading'))
+
+    // Page 3 arrives from a NEWER order (a contact logged since) while page 1 is still the old
+    // order: the two cannot share a view, so page 3's rows stay placeholders…
+    const newer = [...log, contact(999, { call: 'NEW1', whenUnix: 1_800_000_000 })]
+    later.deliver(newer, 2, (q) => q.kind === 'page' && q.offset === 256)
+    expect(container.querySelector('.logbook-row[data-index="258"]')?.classList.contains('placeholder')).toBe(true)
+    // …until the first page is of that order too — then every row is from the newer order.
+    later.deliver(newer, 2)
+    await waitFor(() => expect(container.querySelector('.logbook-row.placeholder')).toBeNull())
+    const want = oracleNewestFirst(newer)
+    for (const r of [...container.querySelectorAll('.log-rows .logbook-row')] as HTMLElement[]) {
+      const i = Number(r.dataset.index)
+      expect(r.querySelector('.qrz-link-call')?.textContent, `row ${i}`).toBe(want[i].call)
+    }
+  })
+
+  it('an answer to another sort never lands in this one (the page question carries its query)', () => {
+    const page = (sort: 'time' | 'call') =>
+      questionKey({ kind: 'page', query: { ...DEFAULT_LOG_QUERY, sort }, offset: 0, limit: 128 })
+    expect(page('time')).not.toBe(page('call'))
+  })
+})

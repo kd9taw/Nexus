@@ -50,6 +50,8 @@ export type LogQuestion =
   | { kind: 'statistics' }
   /** The Logbook's "Upload to LoTW" count, and the date-only contacts LoTW can never match. */
   | { kind: 'lotwBacklog' }
+  /** How many contacts the log holds (the Logbook's count badge, its purge warning, its gates). */
+  | { kind: 'logSize' }
   /** Rows by LOG POSITION — the Awards diagnosis addresses its QSOs that way (see §C17a in the
    *  report: the diagnosis gaining row ids retires this question). */
   | { kind: 'rowsAt'; indices: readonly number[] }
@@ -109,6 +111,7 @@ export interface LogAnswers {
   bandsInLog: string[]
   statistics: LogStats
   lotwBacklog: { unsent: number; timeless: number }
+  logSize: number
   /** `null` for a position the log does not have. */
   rowsAt: (LoggedQso | null)[]
   row: LoggedQso | null
@@ -148,6 +151,7 @@ export function questionKey(q: LogQuestion): string {
     case 'bandsInLog':
     case 'statistics':
     case 'lotwBacklog':
+    case 'logSize':
       return q.kind
   }
 }
@@ -200,6 +204,8 @@ function compute(
       return computeLogStats(log)
     case 'lotwBacklog':
       return lotwBacklog(log)
+    case 'logSize':
+      return log.length
     case 'rowsAt':
       return q.indices.map((i) => log[i] ?? null)
     case 'row': {
