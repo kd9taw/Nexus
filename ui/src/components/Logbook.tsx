@@ -1941,6 +1941,13 @@ export function Logbook({
                       style={placed}
                     >
                       <span className="log-cell">{t('logbook.rows.loading')}</span>
+                      {/* The row buttons' own box, unseen: a row's height is its 22 px buttons
+                          plus padding, so a placeholder holding one is exactly as tall as the row
+                          it stands for — nothing below it moves when the row lands, and the list
+                          never measures a short row it then has to correct. */}
+                      <span className="log-cell log-rowactions" aria-hidden="true">
+                        <span className="log-rowbtn" style={{ visibility: 'hidden' }} />
+                      </span>
                     </div>
                   )
                 const { q, key } = row
