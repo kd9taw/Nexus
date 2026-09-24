@@ -668,6 +668,9 @@ export function CwCockpit({
   //     says when it has something to show rather than looking dead.
   const cwDspFuncs = CW_DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
   const canRxDsp = snap.radio.nrLevel != null || snap.radio.agc != null
+  // The SUB row rides the RX DSP box too (see `hasSubRow`), so a radio drawing one has something
+  // behind that box even when it reports no NR/AGC — and its ⊞ entry must not say otherwise.
+  const subRowHere = control && subRowShown({ catOk, receivers: snap.radio.receivers })
   const host = panels
     ? panelHost(panels, {
         menu: CW_PANEL_IDS,
@@ -677,7 +680,7 @@ export function CwCockpit({
         notes: {
           scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           dsp: cwDspFuncs.length > 0 ? undefined : NO_DSP_FUNCS_REASON,
-          rxdsp: canRxDsp ? undefined : NO_DSP_LEVELS_REASON,
+          rxdsp: canRxDsp || subRowHere ? undefined : NO_DSP_LEVELS_REASON,
           sent: sent.length > 0 ? undefined : NOTHING_SENT_REASON,
           txmeters: TX_METERS_WHEN,
         },
@@ -1032,7 +1035,7 @@ export function CwCockpit({
   // levels are receive levels, so they ride the RX DSP group's ⊞ id: hide RX DSP and they go
   // with it. Local station only (the Remote contract carries no Sub control), and only for a
   // Sub Nexus can command — every other radio draws exactly what it drew.
-  const hasSubRow = control && shown('rxdsp') && subRowShown({ catOk, receivers: snap.radio.receivers })
+  const hasSubRow = subRowHere && shown('rxdsp')
   const hasBandPane = shown('bandActivity') && onWorkSpot != null
   const hasCopilotPane = shown('copilot')
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
