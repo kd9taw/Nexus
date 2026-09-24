@@ -4444,6 +4444,13 @@ struct TxGateStamp {
     /// (satellite + transponder, operator passband offset Hz).
     sat_tuning: Option<(String, i64)>,
     /// The sideband folded to the one bit `tx_allowed()` reads.
+    ///
+    /// The Digital gate also reads the word the TRANSMIT VFO is commanded
+    /// (`Engine::tx_mode_effective`), and needs no field of its own for it. Away from a pass
+    /// that word is the dial's, derived from this sideband, the dial and FM holds that only a
+    /// tune, a section change, a radio handoff or a settings save moves, and each of those
+    /// advances `generation`. During a pass it is the uplink's, and `commit_tx` re-runs the
+    /// whole gate while a pass owns the dial.
     lsb: bool,
     tx_offset_hz: f32,
     operating_mode: crate::settings::OperatingMode,
@@ -18407,10 +18414,11 @@ contact yourself."
     /// `Open` always permits. Judges the EMITTED RF, not the bare dial: for digital the signal
     /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
     /// higher-class-only edge can still emit inside it; on an FM channel the transmitter is
-    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz; in Phone the passband is
-    /// judged in the mode the rig is actually commanded, the cockpit's pick included
-    /// ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the snapshot exposes it
-    /// so the cockpit can show a lockout indicator. See `privileges.rs`.
+    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz; in Phone the passband, and
+    /// in Digital the side of the dial the data carrier sits on, are judged in the mode the
+    /// transmitting VFO is actually commanded — the cockpit's pick and a satellite uplink's own
+    /// word included ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the
+    /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
@@ -18561,11 +18569,13 @@ contact yourself."
     ///
     /// Two models, and BOTH must pass:
     /// * [`Self::emission_allowed`], the section's own model, with Phone on the band's
-    ///   convention (LSB below 10 MHz, USB above). Unchanged, so every refusal the gate made
-    ///   before still stands.
-    /// * in Phone, the passband of the mode the transmitting VFO is actually COMMANDED
-    ///   ([`Self::tx_mode_effective`]): the same word the radio loop writes, so the gate and the
-    ///   radio cannot drift apart.
+    ///   convention (LSB below 10 MHz, USB above) and Digital's data carrier on the STORED
+    ///   sideband's side. Unchanged, so every refusal the gate made before still stands.
+    /// * in Phone and Digital, the emission of the mode the transmitting VFO is actually
+    ///   COMMANDED ([`Self::tx_mode_effective`]): the same word the radio loop writes, so the
+    ///   gate and the radio cannot drift apart. Phone judges that word's passband
+    ///   ([`Self::phone_emission_allowed`]), Digital the side its data carrier sits on
+    ///   ([`Self::digital_emission_allowed`]).
     ///
     /// ⭐ THE SECOND TERM IS THE FIX. From the day it arrived (0.4.0) the cockpit's mode pick
     /// (`sideband_override`, which a saved-memory recall also sets) reached the radio through
@@ -18573,16 +18583,26 @@ contact yourself."
     /// sideband. A General who picked USB at 7.299 transmitted across the 7.300 band edge, and
     /// LSB at 14.226 went under the 14.225 General phone floor, with the gate saying allowed.
     ///
+    /// ⭐ AND IN DIGITAL. The stored sideband is the DIAL's, and during a satellite pass the dial
+    /// is the downlink. An inverting transponder's data uplink is commanded PKTLSB while the dial
+    /// listens USB (`uplink_mode_for` mirrors the data submode), so its carrier goes out one audio
+    /// offset BELOW the uplink while the stored side put it one offset above — on the Sub band of
+    /// a cross-band pass and on Main's VFO B for a same-band one alike. An uplink within an
+    /// offset of a segment edge crossed it, with the gate saying allowed.
+    ///
     /// ⚠️ Keeping the convention term means a pick on the band's OTHER side is judged on both
     /// sides of the carrier: USB at the very bottom of a General's 40 m segment stays refused,
     /// exactly as before, although its own passband is legal. That is the cost of this fix only
     /// ever refusing more than before; dropping the convention term for a pick is a separate
-    /// decision, not a defect.
+    /// decision, not a defect. Digital pays the same cost: a data uplink whose commanded side is
+    /// legal stays refused where its stored side is not.
     fn emission_in_use_allowed(&self, mhz: f64) -> bool {
         let om = self.settings.operating_mode;
         self.emission_allowed(om, mhz, &self.settings.sideband)
             && (om != crate::settings::OperatingMode::Phone
                 || self.phone_emission_allowed(mhz, &self.tx_mode_effective()))
+            && (om != crate::settings::OperatingMode::Digital
+                || self.digital_emission_allowed(mhz, &self.tx_mode_effective()))
     }
 
     /// The mode word the TRANSMITTING VFO is commanded into — each VFO read from the one place
@@ -18600,9 +18620,10 @@ contact yourself."
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
     /// only matters for Digital, whose audio offset is sideband-signed)? THE one
     /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it (and, in
-    /// Phone, the mode actually commanded on top — [`Self::emission_in_use_allowed`]), and the
-    /// per-(band, mode) dial memory re-runs it at restore time — the license
-    /// class can change mid-session, so a remembered dial is re-checked, never trusted.
+    /// Phone and Digital, the mode actually commanded on top —
+    /// [`Self::emission_in_use_allowed`]), and the per-(band, mode) dial memory re-runs it at
+    /// restore time — the license class can change mid-session, so a remembered dial is
+    /// re-checked, never trusted.
     fn emission_allowed(
         &self,
         om: crate::settings::OperatingMode,
@@ -18667,6 +18688,32 @@ contact yourself."
             _ => (true, true),
         };
         allow(carrier) && (!above || allow(carrier + SSB_BW)) && (!below || allow(carrier - SSB_BW))
+    }
+
+    /// May the operator's class key a DIGITAL emission from the transmit dial `dial`, with the
+    /// transmitting VFO commanded `word`? The data signal is narrow and sits one TX audio offset
+    /// from the dial, on the side the WORD names — above it for `USB`/`PKTUSB`, below it for
+    /// `LSB`/`PKTLSB` — which is where the radio puts it, whatever side the dial listens on.
+    ///
+    /// A word that names no side (`FM`, `PKTFM`, or one this model does not know) adds nothing:
+    /// [`Self::emission_allowed`]'s stored-sideband judgement, which every caller ANDs in, is
+    /// then the whole verdict, exactly as before. So this can only ever refuse more than the
+    /// gate did before it knew the commanded word.
+    fn digital_emission_allowed(&self, dial: f64, word: &str) -> bool {
+        let off = self.tx_offset_hz as f64 / 1_000_000.0;
+        let allow = |f: f64| {
+            crate::privileges::tx_allowed(
+                self.settings.license_class,
+                f,
+                crate::settings::OperatingMode::Digital,
+            )
+        };
+        match word.trim().to_ascii_uppercase().as_str() {
+            "USB" | "PKTUSB" => allow(dial + off),
+            "LSB" | "PKTLSB" => allow(dial - off),
+            // FM, PKTFM and any word this model does not know: no side to judge.
+            _ => true,
+        }
     }
 
     /// UDP HighlightCallsign (JTAlert): paint/clear a callsign in the decode
@@ -50928,6 +50975,496 @@ mod phone_pick_licence_tests {
         assert!(
             !e.tx_allowed(),
             "the split TX without XIT is 7.2990 USB, across the 7.300 band edge"
+        );
+    }
+}
+
+/// The Digital licence gate judges the data carrier on the side the TRANSMITTING VFO is
+/// commanded — and never less than the stored sideband it judged by before.
+///
+/// `emission_allowed` puts the data carrier one TX audio offset from the transmit dial, on the
+/// side the STORED sideband names, and during a satellite pass that is the DOWNLINK's. Since
+/// `2d4300ad` an inverting transponder's data uplink is commanded PKTLSB while the dial listens
+/// USB, so FT8's carrier went out one offset BELOW the uplink while the gate judged it one offset
+/// ABOVE: on the Sub band of a cross-band pass, and on Main's VFO B for a same-band one. No real
+/// bird uplinks within an offset of a segment edge, so the fixtures are constructed, and the rule
+/// is pinned by sweeps over every data edge rather than by a list of birds.
+#[cfg(test)]
+mod digital_side_licence_tests {
+    use super::*;
+    use crate::settings::{LicenseClass, OperatingMode, SatVfoMap};
+    use tempo_core::doppler::{DownlinkClass, Transponder};
+
+    /// A CONSTRUCTED inverting linear transponder, 70 cm down, whose 2 m uplink sits 1 kHz above
+    /// the CW-only segment (144.0–144.1). Cross-band, so on an IC-9700 it rides the Sub band.
+    const EDGE_BIRD: Transponder = Transponder {
+        uplink_centre_hz: 144_101_000,
+        downlink_centre_hz: 435_640_000,
+        invert: true,
+        half_width_hz: 30_000,
+    };
+
+    /// The same uplink on a SAME-BAND inverting pair, 2 m in and 2 m out. Main and Sub cannot
+    /// share a band, so the pass rides VFO B on Main.
+    const VV_EDGE_BIRD: Transponder = Transponder {
+        uplink_centre_hz: 144_101_000,
+        downlink_centre_hz: 145_950_000,
+        invert: true,
+        half_width_hz: 15_000,
+    };
+
+    /// An IC-9700 served by the native CI-V daemon, Main = downlink / Sub = uplink confirmed,
+    /// `class` privileges, in the Digital section — before any pass is picked. The section comes
+    /// first because a section change releases a satellite's hold on the rig mode.
+    fn ic9700_in_digital(class: LicenseClass) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = 3081; // IC-9700
+        e.settings.rig_conn = "serial".to_string();
+        e.settings.rig_addr = String::new();
+        e.settings.icom_native_cat = true;
+        e.settings.sync_active_from_flat();
+        let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
+        for id in ids {
+            e.settings.confirm_sat_uplink(id, SatVfoMap::MainDownSubUp);
+        }
+        e.settings.license_class = class;
+        e.set_operating_mode("digital", false);
+        e
+    }
+
+    /// Work `tp` the way the Satellites view and the radio loop do: the transponder held, its
+    /// nominal pair tuned with a `down` downlink, then the loop's split apply on the native
+    /// daemon — which VFO the uplink rides, and the rig's acknowledgement. Returns that VFO.
+    fn work_pass(e: &mut Engine, tp: Transponder, down: DownlinkClass) -> &'static str {
+        e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
+        e.sat_tune_nominal(down, 1_000_000);
+        let up_mhz = e
+            .split_tx_mhz()
+            .expect("the pick queued the uplink on the split");
+        let up = (up_mhz * 1e6).round() as u64;
+        e.rig_dial_applied(e.settings.dial_hz());
+        let vfo = e
+            .sat_split_tx_vfo(up, SatCatBackend::NativeCiv)
+            .expect("the native daemon carries this uplink");
+        e.rig_split_applied(up);
+        vfo
+    }
+
+    /// The state the fix is about, checked before any verdict is read: the stored sideband —
+    /// the only side the gate used to read — says USB, the transmit VFO is commanded PKTLSB, and
+    /// the two sides of the 144.101 uplink disagree about the licence: above it is 2 m's
+    /// all-mode segment, below it the CW-only one.
+    fn the_two_sides_disagree(e: &Engine) {
+        assert_eq!(e.settings.operating_mode, OperatingMode::Digital);
+        assert_eq!(
+            e.tx_split_confirmed_hz,
+            Some(144_101_000),
+            "precondition: the uplink is the acknowledged split"
+        );
+        assert_eq!(
+            e.settings.sideband, "USB",
+            "precondition: the stored sideband is the downlink's"
+        );
+        assert_eq!(
+            e.tx_mode_effective(),
+            "PKTLSB",
+            "precondition: the uplink VFO is commanded PKTLSB"
+        );
+        let off = f64::from(e.tx_offset_hz()) / 1e6;
+        let (class, data) = (e.settings.license_class, OperatingMode::Digital);
+        assert!(
+            crate::privileges::tx_allowed(class, 144.101 + off, data),
+            "precondition: {:.4} (above the uplink) is all-mode",
+            144.101 + off
+        );
+        assert!(
+            !crate::privileges::tx_allowed(class, 144.101 - off, data),
+            "precondition: {:.4} (below it) is CW-only",
+            144.101 - off
+        );
+    }
+
+    /// ⭐ THE CROSS-BAND CASE, on the Sub band. PKTLSB on the 144.101 uplink sends FT8's 1500 Hz
+    /// carrier at 144.0995, inside 2 m's CW-only segment; the gate judged it at 144.1025 and
+    /// allowed it. The lock the cockpit shows reads the same refusal.
+    #[test]
+    fn an_inverting_birds_data_uplink_is_judged_below_the_uplink() {
+        let mut e = ic9700_in_digital(LicenseClass::General);
+        assert_eq!(
+            work_pass(&mut e, EDGE_BIRD, DownlinkClass::Usb),
+            "Sub",
+            "precondition: a cross-band pass rides the Sub band"
+        );
+        the_two_sides_disagree(&e);
+        assert!(
+            !e.tx_allowed(),
+            "PKTLSB on 144.101 MHz puts the data carrier at 144.0995, where 2 m is CW-only"
+        );
+        assert!(
+            !e.snapshot().radio.tx_allowed,
+            "the snapshot the cockpit's lock reads must show the lock"
+        );
+    }
+
+    /// ⭐ THE SAME GAP ON MAIN'S VFO B. A same-band inverting pair carries its uplink on VFO B —
+    /// Main and Sub cannot share 2 m — commanded PKTLSB exactly as on the Sub band.
+    #[test]
+    fn the_same_uplink_on_mains_vfo_b_is_judged_below_it_too() {
+        let mut e = ic9700_in_digital(LicenseClass::General);
+        assert_eq!(
+            work_pass(&mut e, VV_EDGE_BIRD, DownlinkClass::Usb),
+            "VFOB",
+            "precondition: a same-band pass rides VFO B on Main"
+        );
+        the_two_sides_disagree(&e);
+        assert!(
+            !e.tx_allowed(),
+            "PKTLSB on VFO B at 144.101 MHz puts the data carrier at 144.0995, where 2 m is CW-only"
+        );
+    }
+
+    /// The slot planner is the path that keys FT8, and it plans no over on the edge bird's
+    /// PKTLSB uplink. The control — the same bird not inverting, its uplink commanded PKTUSB and
+    /// its carrier at 144.1025 — plans one, so the refusal is the licence's, not the fixture's.
+    #[test]
+    fn an_armed_cq_on_that_uplink_plans_no_over() {
+        let plans = |tp: Transponder| {
+            let mut e = ic9700_in_digital(LicenseClass::General);
+            e.set_tier(Tier::Ft8);
+            work_pass(&mut e, tp, DownlinkClass::Usb);
+            e.set_tx_enabled(true);
+            e.start_cq(None).unwrap();
+            (0..4u64).any(|slot| e.plan_tx(slot).is_some())
+        };
+        let straight = Transponder {
+            invert: false,
+            ..EDGE_BIRD
+        };
+        assert!(
+            plans(straight),
+            "control: a PKTUSB uplink at 144.101 is legal and plans an over"
+        );
+        assert!(
+            !plans(EDGE_BIRD),
+            "a PKTLSB uplink at 144.101 must plan no over"
+        );
+    }
+
+    /// The guard the other way round: the fix refuses a SIDE, not a bird or a frequency. The edge
+    /// uplink commanded PKTUSB (a bird that does not invert), and an inverting bird whose uplink
+    /// sits well inside the segment (RS-44's 145.965), both stay keyable.
+    #[test]
+    fn a_data_uplink_whose_commanded_side_is_legal_stays_keyable() {
+        let cases = [
+            (
+                "not inverting, PKTUSB at 144.101",
+                Transponder {
+                    invert: false,
+                    ..EDGE_BIRD
+                },
+                "PKTUSB",
+            ),
+            (
+                "inverting, PKTLSB at 145.965",
+                Transponder {
+                    uplink_centre_hz: 145_965_000,
+                    ..EDGE_BIRD
+                },
+                "PKTLSB",
+            ),
+        ];
+        for (name, tp, word) in cases {
+            let mut e = ic9700_in_digital(LicenseClass::General);
+            work_pass(&mut e, tp, DownlinkClass::Usb);
+            assert_eq!(e.tx_mode_effective(), word, "precondition: {name}");
+            assert!(e.tx_allowed(), "{name} must stay keyable");
+        }
+    }
+
+    /// ⛔ NEVER LESS, at one edge a reader can check by hand. An inverting bird's uplink at
+    /// 147.999: its commanded PKTLSB carrier (147.9975) is inside 2 m, the stored side's
+    /// (148.0005) is past the top of the band. The gate refused this before it knew the
+    /// commanded side, and knowing it must not unlock it.
+    #[test]
+    fn knowing_the_commanded_side_never_unlocks_what_the_stored_side_refused() {
+        let mut e = ic9700_in_digital(LicenseClass::General);
+        let tp = Transponder {
+            uplink_centre_hz: 147_999_000,
+            ..EDGE_BIRD
+        };
+        work_pass(&mut e, tp, DownlinkClass::Usb);
+        assert_eq!(e.tx_mode_effective(), "PKTLSB", "precondition");
+        let off = f64::from(e.tx_offset_hz()) / 1e6;
+        let (general, data) = (LicenseClass::General, OperatingMode::Digital);
+        assert!(
+            crate::privileges::tx_allowed(general, 147.999 - off, data),
+            "precondition: the commanded side is inside 2 m"
+        );
+        assert!(
+            !crate::privileges::tx_allowed(general, 147.999 + off, data),
+            "precondition: the stored side is past 148.000"
+        );
+        assert!(!e.tx_allowed(), "the stored side's refusal stands");
+    }
+
+    /// Every edge of a US data segment from 160 m to 13 cm (MHz), for any class: both ends of
+    /// every data row in `privileges.rs`, where the side a data carrier sits on decides the
+    /// verdict. Channelized 60 m is not swept.
+    const DATA_EDGES: &[f64] = &[
+        1.800, 2.000, 3.500, 3.525, 3.600, 7.000, 7.025, 7.125, 10.100, 10.150, 14.000, 14.025,
+        14.150, 18.068, 18.110, 21.000, 21.025, 21.200, 24.890, 24.930, 28.000, 28.300, 50.000,
+        50.100, 54.000, 144.000, 144.100, 148.000, 222.000, 225.000, 420.000, 450.000, 902.000,
+        928.000, 1240.000, 1300.000, 2300.000, 2310.000, 2390.000, 2450.000,
+    ];
+
+    /// The TX audio offsets swept (Hz): low, the usual FT8 slot, and high in the passband.
+    const OFFSETS_HZ: [f32; 3] = [500.0, 1500.0, 2500.0];
+
+    /// Every class: the three US classes, and `Open`, which no side may ever refuse.
+    const CLASSES: [LicenseClass; 4] = [
+        LicenseClass::Technician,
+        LicenseClass::General,
+        LicenseClass::Extra,
+        LicenseClass::Open,
+    ];
+
+    /// The transmit dials swept around one edge: within 2 kHz either side, in 0.5 kHz steps.
+    fn dials_around(edge: f64) -> impl Iterator<Item = u64> {
+        (-4i64..=4).map(move |k| ((edge * 1e6).round() as i64 + k * 500) as u64)
+    }
+
+    /// One state a sweep judged: the gate's verdict, and the verdicts of the two sides it could
+    /// be judged on, each worked out here from the privilege table alone.
+    struct Verdict {
+        /// `tx_allowed()`, the gate under test.
+        got: bool,
+        /// TODAY'S MODEL, written out independently: the carrier one offset from the transmit
+        /// dial on the STORED sideband's side — below it for `LSB`, above it for anything else.
+        stored: bool,
+        /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
+        /// that names no side (FM).
+        commanded: Option<bool>,
+        case: String,
+    }
+
+    /// May `class` key a data carrier `off` MHz below (`lsb`) or above `tx_mhz`?
+    fn side_allows(class: LicenseClass, tx_mhz: f64, off: f64, lsb: bool) -> bool {
+        let carrier = if lsb { tx_mhz - off } else { tx_mhz + off };
+        crate::privileges::tx_allowed(class, carrier, OperatingMode::Digital)
+    }
+
+    /// The side a commanded word names: `Some(true)` below the dial, `Some(false)` above, `None`
+    /// for none.
+    fn named_side(word: &str) -> Option<bool> {
+        match word {
+            "LSB" | "PKTLSB" => Some(true),
+            "USB" | "PKTUSB" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// A pass's shape: the downlink's class, whether the bird inverts, whether the radio takes
+    /// data as plain SSB (`data_modes_plain_ssb`), and the word the transmit VFO must then be
+    /// commanded. Every pairing of a stored side with a commanded one, and FM, which names none.
+    const PASS_SHAPES: [(DownlinkClass, bool, bool, &str); 6] = [
+        (DownlinkClass::Usb, false, false, "PKTUSB"),
+        (DownlinkClass::Usb, true, false, "PKTLSB"),
+        (DownlinkClass::Lsb, false, false, "PKTLSB"),
+        (DownlinkClass::Lsb, true, false, "PKTUSB"),
+        (DownlinkClass::Usb, true, true, "LSB"),
+        (DownlinkClass::Fm, true, false, "FM"),
+    ];
+
+    /// A pass on every uplink [`dials_around`] every [`DATA_EDGES`] edge, for every class,
+    /// offset and [`PASS_SHAPES`] shape, each built through the pick and the loop's split apply
+    /// with its commanded word checked before the verdict is read. Built once and shared by the
+    /// sweeps below.
+    fn pass_verdicts() -> &'static [Verdict] {
+        static ROWS: std::sync::OnceLock<Vec<Verdict>> = std::sync::OnceLock::new();
+        ROWS.get_or_init(|| {
+            let mut out = Vec::new();
+            for class in CLASSES {
+                for off_hz in OFFSETS_HZ {
+                    for (down, invert, plain, word) in PASS_SHAPES {
+                        let mut e = ic9700_in_digital(class);
+                        e.set_tx_offset(off_hz);
+                        e.settings.data_modes_plain_ssb = plain;
+                        e.settings.sync_active_from_flat();
+                        let off = f64::from(e.tx_offset_hz()) / 1e6;
+                        for &edge in DATA_EDGES {
+                            // Cross-band from every swept uplink: 70 cm down, or 2 m down for a
+                            // 70 cm uplink.
+                            let downlink_centre_hz = if (400.0..500.0).contains(&edge) {
+                                145_950_000
+                            } else {
+                                435_640_000
+                            };
+                            for up in dials_around(edge) {
+                                let tp = Transponder {
+                                    uplink_centre_hz: up,
+                                    downlink_centre_hz,
+                                    invert,
+                                    half_width_hz: 30_000,
+                                };
+                                work_pass(&mut e, tp, down);
+                                let tx = up as f64 / 1e6;
+                                let case = format!(
+                                    "{class:?} up {tx:.4} off {off_hz} {down:?} invert={invert} \
+                                     plain={plain} ({word})"
+                                );
+                                assert_eq!(
+                                    e.tx_split_confirmed_hz,
+                                    Some(up),
+                                    "precondition, {case}: the uplink is the acknowledged split"
+                                );
+                                assert_eq!(
+                                    e.tx_mode_effective(),
+                                    word,
+                                    "precondition, {case}: the transmit VFO's commanded word"
+                                );
+                                let stored_lsb = e.settings.sideband.eq_ignore_ascii_case("LSB");
+                                assert_eq!(
+                                    stored_lsb,
+                                    down == DownlinkClass::Lsb,
+                                    "precondition, {case}: the stored side is the downlink's"
+                                );
+                                out.push(Verdict {
+                                    got: e.tx_allowed(),
+                                    stored: side_allows(class, tx, off, stored_lsb),
+                                    commanded: named_side(word)
+                                        .map(|lsb| side_allows(class, tx, off, lsb)),
+                                    case,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// Away from a pass: every dial [`dials_around`] every [`DATA_EDGES`] edge, for every class
+    /// and offset, on USB and on LSB. The transmit VFO is the dial's here, commanded on the
+    /// stored side, so the two sides are one.
+    fn terrestrial_verdicts() -> Vec<Verdict> {
+        let mut out = Vec::new();
+        for class in CLASSES {
+            for off_hz in OFFSETS_HZ {
+                let mut e = Engine::new("KD9TAW", "EN52", 0);
+                e.settings.license_class = class;
+                e.set_operating_mode("digital", false);
+                e.set_tx_offset(off_hz);
+                let off = f64::from(e.tx_offset_hz()) / 1e6;
+                for &edge in DATA_EDGES {
+                    for hz in dials_around(edge) {
+                        let dial = hz as f64 / 1e6;
+                        let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+                        for sideband in ["USB", "LSB"] {
+                            e.set_frequency(dial, band, sideband);
+                            let case = format!("{class:?} dial {dial:.4} off {off_hz} {sideband}");
+                            let lsb = sideband == "LSB";
+                            assert_eq!(
+                                e.tx_mode_effective(),
+                                if lsb { "PKTLSB" } else { "PKTUSB" },
+                                "precondition, {case}: the dial's own word"
+                            );
+                            let stored = side_allows(class, dial, off, lsb);
+                            out.push(Verdict {
+                                got: e.tx_allowed(),
+                                stored,
+                                commanded: Some(stored),
+                                case,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The first `n` cases in `rows`, and how many there were — a red sweep names its cases
+    /// without printing thousands of lines.
+    fn first_cases<'a>(rows: impl Iterator<Item = &'a Verdict>, n: usize) -> (usize, Vec<&'a str>) {
+        let all: Vec<&str> = rows.map(|r| r.case.as_str()).collect();
+        (all.len(), all.into_iter().take(n).collect())
+    }
+
+    /// Away from a pass the gate is exactly what it was, at every data edge, for every class and
+    /// offset, on either sideband.
+    #[test]
+    fn away_from_a_pass_every_digital_verdict_is_what_it_was() {
+        let v = terrestrial_verdicts();
+        let (moved, first) = first_cases(v.iter().filter(|r| r.got != r.stored), 20);
+        assert_eq!(moved, 0, "verdicts moved away from a pass: {first:#?}");
+        let allowed = v.iter().filter(|r| r.stored).count();
+        assert!(
+            allowed > 1_000 && v.len() - allowed > 1_000,
+            "the sweep must straddle the edges: {allowed} allowed of {}",
+            v.len()
+        );
+    }
+
+    /// ⛔ THE INVARIANT: knowing the commanded side only ever refuses MORE. Across every data
+    /// edge, class, offset and commanded word — on a pass and away from one — no state is
+    /// allowed that the stored side alone refused.
+    ///
+    /// The controls are what make a pass mean something: the sweep must hold states where the
+    /// commanded side alone would ALLOW what the stored side refuses — the ones an OR in place
+    /// of the AND would unlock — and states where it refuses what the stored side allowed, the
+    /// ones the fix exists for.
+    #[test]
+    fn the_commanded_side_only_ever_refuses_more() {
+        let terrestrial = terrestrial_verdicts();
+        let rows = || pass_verdicts().iter().chain(terrestrial.iter());
+        let (unlocked, first) = first_cases(rows().filter(|r| r.got && !r.stored), 20);
+        assert_eq!(
+            unlocked, 0,
+            "allowed where the stored side refused: {first:#?}"
+        );
+        let or_would_unlock = rows()
+            .filter(|r| !r.stored && r.commanded != Some(false))
+            .count();
+        let the_fix_refuses = rows()
+            .filter(|r| r.stored && r.commanded == Some(false))
+            .count();
+        assert!(
+            or_would_unlock > 100 && the_fix_refuses > 100,
+            "the sweep must hold both disagreements: {or_would_unlock} an OR would unlock, \
+             {the_fix_refuses} the commanded side refuses"
+        );
+    }
+
+    /// On a pass, every Digital verdict is BOTH sides: the stored side, as before, AND the side
+    /// the transmit VFO is commanded, wherever its word names one — at every data edge, for
+    /// every class, offset and pass shape.
+    #[test]
+    fn a_pass_is_judged_on_both_sides_at_every_data_edge() {
+        let v = pass_verdicts();
+        let (wrong, first) = first_cases(
+            v.iter()
+                .filter(|r| r.got != (r.stored && r.commanded.unwrap_or(true))),
+            20,
+        );
+        assert_eq!(
+            wrong,
+            0,
+            "{wrong} of {} verdicts are not both sides; the first: {first:#?}",
+            v.len()
+        );
+        let refused_by_the_commanded_side = v
+            .iter()
+            .filter(|r| r.stored && r.commanded == Some(false))
+            .count();
+        let allowed = v.iter().filter(|r| r.got).count();
+        assert!(
+            refused_by_the_commanded_side > 100 && allowed > 1_000 && v.len() - allowed > 1_000,
+            "the sweep must reach the fix and straddle the edges: \
+             {refused_by_the_commanded_side} refused by the commanded side, {allowed} allowed \
+             of {}",
+            v.len()
         );
     }
 }

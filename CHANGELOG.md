@@ -278,6 +278,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sideband changes: FT timing, sequencing and audio are exactly as before, and a non-inverting
   bird is untouched.
 
+- **The transmit lock now checks a data uplink on the sideband it actually goes out on.** In
+  Digital the lock works out where your signal lands, the dial plus your audio offset, and it
+  took the side from the dial. Up an inverting transponder the data uplink goes out on the
+  opposite sideband, so the signal sits below the uplink frequency, not above it. That is new
+  in this release for most radios, and was already so in 1.14.0 on a radio set to **Data modes
+  use plain SSB**. Within a couple of kHz of a band or segment edge, the uplink could cross the
+  edge with nothing locked. The lock now checks both sides, the one it always checked and the
+  one the transmit VFO is set to, whether the uplink rides the Sub band or VFO B, and reads
+  🔒 TX locked if either is outside your privileges. Nothing that was locked before is
+  unlocked, and away from a satellite pass nothing changes.
+
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments
   included, and Nexus believed it: picking one put both legs in FM, routed the pick by your FM
