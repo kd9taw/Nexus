@@ -1749,34 +1749,55 @@ mod tests {
     /// going red the moment the lane stops working (lane gone ⇒ `fast` ≈ `fifo` ⇒ ratio 1).
     /// Both terms are measured on the same box in the same run, so load moves them together.
     ///
-    /// The absolute requirement has not been dropped — it is the second assertion, at a
-    /// ceiling no plausible load reaches, and the print below is what to read for the real
-    /// number on real hardware. The mechanism itself is held down WITHOUT a clock at all by
+    /// The absolute requirement has not been dropped — it is the last assertion, at a ceiling
+    /// no plausible load reaches, and the print below is what to read for the real number on
+    /// real hardware. The mechanism itself is held down WITHOUT a clock at all by
     /// `a_contest_qso_overtakes_a_bulk_write_it_shares_no_row_with`.
+    ///
+    /// ⚠️ **BEST OF THREE, EACH LANE.** One race per lane went red on a loaded CI runner with
+    /// the lane working: 164 ms against 322 ms, 1.96×, a load spike on the one interactive
+    /// race (it is 12–36 ms unloaded). So each lane is raced three times, interleaved so a load
+    /// that comes and goes falls on both, and the best of each is compared: load only ever
+    /// adds time, so a lane's best race is the one nearest what the lane really does. It is
+    /// still no easier to pass with the lane gone: then no race of the interactive write can
+    /// overtake anything, its best is the bulk write's time, and the ratio is ~1.
     #[test]
     fn a_contest_insert_is_durable_while_a_bulk_write_runs() {
-        let s = Scratch::new();
-        let (fast, unfinished) = race(&s, false, Priority::Interactive);
-        assert!(
-            unfinished,
-            "the premise: the bulk write was still in flight"
-        );
-
-        let s = Scratch::new();
-        let (fifo, _) = race(&s, false, Priority::Bulk);
+        const TRIALS: usize = 3;
+        // Per trial: the insert in the interactive lane, whether the bulk write was still in
+        // flight when it landed, and the same insert queued behind the bulk write.
+        let trials: Vec<(Duration, bool, Duration)> = (0..TRIALS)
+            .map(|_| {
+                let s = Scratch::new();
+                let (fast, unfinished) = race(&s, false, Priority::Interactive);
+                let s = Scratch::new();
+                let (fifo, _) = race(&s, false, Priority::Bulk);
+                (fast, unfinished, fifo)
+            })
+            .collect();
+        let fast = trials.iter().map(|t| t.0).min().expect("a trial");
+        let fifo = trials.iter().map(|t| t.2).min().expect("a trial");
 
         println!(
-            "contest insert: {fast:?} in the interactive lane, {fifo:?} behind the bulk write"
+            "contest insert: best {fast:?} in the interactive lane, best {fifo:?} behind the bulk \
+             write; (lane, bulk in flight, behind) per trial: {trials:?}"
         );
         assert!(
             fifo > Duration::from_millis(50),
             "the control: without the lane the same insert must miss the budget, took {fifo:?} \
-             — if it did not, the bulk write is too small to be measuring anything"
+             at best — if it did not, the bulk write is too small to be measuring anything \
+             (trials: {trials:?})"
         );
         assert!(
             fast * 2 < fifo,
-            "the lane bought nothing: the contest insert took {fast:?} against {fifo:?} behind \
-             the bulk write, so it is being queued with it rather than let in between its chunks"
+            "the lane bought nothing: the contest insert took {fast:?} at best against {fifo:?} \
+             behind the bulk write, so it is being queued with it rather than let in between its \
+             chunks (trials: {trials:?})"
+        );
+        assert!(
+            trials.iter().all(|t| t.1),
+            "the premise: in every trial the bulk write was still in flight when the contest \
+             insert landed (trials: {trials:?})"
         );
         assert!(
             fast < Duration::from_secs(1),
