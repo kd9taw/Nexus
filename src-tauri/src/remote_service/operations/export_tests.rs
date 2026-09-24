@@ -116,31 +116,47 @@ fn download(f: &Fixture, state: &Value, selection: &Value) -> (Vec<u8>, Value) {
     (bytes, file)
 }
 
+/// The desktop's own list and file (its `log_activations` and `export_log_for_activation`
+/// commands): the source taken under the Engine lock, read with it released, as they do.
+fn desktop_list(f: &Fixture) -> Vec<tempo_app::dto::LoggedActivationDto> {
+    let source = tempo_app::logexport::Source::of(&f.engine.lock().unwrap());
+    let found = tempo_app::logexport::activations(&source).unwrap();
+    found.into_iter().map(Into::into).collect()
+}
+
+fn desktop_file(f: &Fixture, reference: &str, day: u64, callsign: Option<&str>) -> String {
+    let source = tempo_app::logexport::Source::of(&f.engine.lock().unwrap());
+    tempo_app::logexport::export_for_activation(&source, reference, day, callsign)
+        .unwrap()
+        .text
+}
+
+/// Everything submitted to the store written, before the fixture's folder goes.
+fn settle(f: &Fixture) {
+    crate::remote_service::query::log_tests::settle(&f.engine);
+}
+
+/// On the 1.13 path, and on the store that owns the log since the logbook moved into its database.
 #[test]
 fn an_activation_file_is_the_desktop_export_byte_for_byte_and_nothing_else_from_the_log() {
-    let f = Fixture::new();
-    seed(&f);
-    let state = lease(&f);
-    let listed = run(&f, 4, &export(&state, Value::Null, 0)).unwrap();
-    let activations: Vec<tempo_app::dto::LoggedActivationDto> = f
-        .engine
-        .lock()
-        .unwrap()
-        .log_activations()
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    for f in [Fixture::new(), Fixture::with_store()] {
+        the_file_is_the_desktops_and_nothing_else(&f);
+        settle(&f);
+    }
+}
+
+fn the_file_is_the_desktops_and_nothing_else(f: &Fixture) {
+    seed(f);
+    let state = lease(f);
+    let listed = run(f, 4, &export(&state, Value::Null, 0)).unwrap();
+    let activations = desktop_list(f);
     assert_eq!(activations.len(), 3, "US-1234 on two UTC days, and US-5678");
     assert_eq!(
         listed,
         json!({"operation":"activationExport","activations":activations})
     );
-    let (bytes, _) = download(&f, &state, &selection("US-1234", DAY));
-    let desktop =
-        f.engine
-            .lock()
-            .unwrap()
-            .export_logbook_for_activation("US-1234", DAY, Some("W9XYZ"));
+    let (bytes, _) = download(f, &state, &selection("US-1234", DAY));
+    let desktop = desktop_file(f, "US-1234", DAY, Some("W9XYZ"));
     assert_eq!(
         bytes,
         desktop.as_bytes(),
@@ -311,11 +327,7 @@ fn a_long_activation_arrives_in_whole_chunks_and_a_file_over_the_bound_is_refuse
     );
     assert_eq!(
         bytes,
-        f.engine
-            .lock()
-            .unwrap()
-            .export_logbook_for_activation("US-1234", DAY, Some("W9XYZ"))
-            .as_bytes()
+        desktop_file(&f, "US-1234", DAY, Some("W9XYZ")).as_bytes()
     );
 
     let big = Fixture::new();
@@ -332,11 +344,7 @@ fn a_long_activation_arrives_in_whole_chunks_and_a_file_over_the_bound_is_refuse
         })
         .collect();
     big.engine.lock().unwrap().import_adif(&huge);
-    let desktop =
-        big.engine
-            .lock()
-            .unwrap()
-            .export_logbook_for_activation("US-1234", DAY, Some("W9XYZ"));
+    let desktop = desktop_file(&big, "US-1234", DAY, Some("W9XYZ"));
     assert!(
         desktop.len() > 1024 * 1024,
         "positive control: the desktop file really is over the bound"
@@ -365,14 +373,147 @@ fn the_list_is_the_logs_newest_activations_and_bounded() {
     f.engine.lock().unwrap().import_adif(&parks);
     let state = lease(&f);
     let listed = run(&f, 4, &export(&state, Value::Null, 0)).unwrap();
-    let all: Vec<tempo_app::dto::LoggedActivationDto> = f
-        .engine
-        .lock()
-        .unwrap()
-        .log_activations()
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let all = desktop_list(&f);
     assert_eq!(all.len(), 130, "positive control: more than the bound");
     assert_eq!(listed["activations"], json!(all[..128]));
+}
+
+/// ★ OFF BOTH LOCKS, AND NEVER OLDER THAN THE QUESTION: asked straight after a contact is logged
+/// — while its write is held up, as another process's write holds it — the read waits for it with
+/// the Engine and the authority free (checked from this thread while it waits), and then lists
+/// its activation. Held past the wait, it is refused `stationBusy`, the word a page retries; the
+/// control: once the write lands, the same read answers, with the contact.
+#[test]
+fn an_export_waits_for_a_contact_just_logged_with_both_locks_free_and_is_busy_past_the_wait() {
+    use crate::remote_service::query::log_tests::parse_one;
+    use tempo_core::logbook::sqlite::WriteHold;
+    let f = Fixture::with_store();
+    seed(&f);
+    let state = lease(&f);
+    let lists = |value: &Value, park: &str| {
+        value["activations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["reference"] == park)
+    };
+    let db = f.dir.join("contacts.sqlite3");
+    let hold = WriteHold::take(&db).unwrap();
+    f.engine.lock().unwrap().log_qso(parse_one(&contact(
+        "K1FFF",
+        "20260911",
+        "010000",
+        Some("US-4321"),
+        "",
+    )));
+    let listed = std::thread::scope(|s| {
+        let asked = s.spawn(|| run(&f, 4, &export(&state, Value::Null, 0)));
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(
+            !asked.is_finished(),
+            "the read waits for the contact's write"
+        );
+        for _ in 0..5 {
+            assert!(
+                f.engine.try_lock().is_ok(),
+                "the Engine lock is free while it waits"
+            );
+            assert!(
+                f.authority.core.try_lock().is_ok(),
+                "and so is the authority"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(hold);
+        asked.join().unwrap()
+    })
+    .unwrap();
+    assert!(
+        lists(&listed, "US-4321"),
+        "the contact logged before it was asked: {listed}"
+    );
+
+    let hold = WriteHold::take(&db).unwrap();
+    f.engine.lock().unwrap().log_qso(parse_one(&contact(
+        "K1GGG",
+        "20260911",
+        "020000",
+        Some("US-8765"),
+        "",
+    )));
+    let stale = run(&f, 4, &export(&state, Value::Null, 0));
+    drop(hold);
+    assert_eq!(stale, Err("stationBusy"));
+    let listed = run(&f, 4, &export(&state, Value::Null, 0)).unwrap();
+    assert!(
+        lists(&listed, "US-8765"),
+        "control: once written, the read answers: {listed}"
+    );
+    settle(&f);
+}
+
+/// ★ ONE PICTURE, THE ENGINE FREE: the file is cut from the picture of the log its activation was
+/// found in. After the pass that finds it and before its contacts' whole records are read, the
+/// operator moves one of its two contacts to the next day and deletes the other — committed to the
+/// store: the file is still both contacts, byte for byte the file before. At every step of the read
+/// the Engine lock is free, and the read is one pass and then the whole records, nothing more. The
+/// next read has the changes: the activation holds no contact, and is not found.
+#[test]
+fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
+    use crate::remote_service::query::picture::{at_seams, Seam};
+    use std::{cell::RefCell, rc::Rc};
+    for f in [Fixture::new(), Fixture::with_store()] {
+        seed(&f);
+        let state = lease(&f);
+        let pick = selection("US-1234", DAY);
+        let before = desktop_file(&f, "US-1234", DAY, Some("W9XYZ"));
+        let (hook, seams) = (f.engine.clone(), Rc::new(RefCell::new(Vec::new())));
+        let seen = seams.clone();
+        let during = at_seams(
+            move |seam| {
+                assert!(
+                    hook.try_lock().is_ok(),
+                    "the Engine lock is free while the log is read"
+                );
+                seen.borrow_mut().push(seam);
+                if seen.borrow().len() != 2 {
+                    return;
+                }
+                let mut e = hook.lock().unwrap();
+                let at = |e: &tempo_app::engine::Engine, call: &str| {
+                    e.log_records().iter().position(|r| r.call == call).unwrap()
+                };
+                let moved = at(&e, "K1AAA");
+                let mut r = tempo_core::logbook::QsoRecord::clone(&e.log_records()[moved]);
+                r.when_unix += 86_400;
+                assert!(e.update_qso(moved, r));
+                let deleted = at(&e, "K1BBB");
+                assert!(e.delete_qso(deleted));
+                e.flush_log_store(std::time::Duration::from_secs(60))
+                    .expect("committed to the store");
+            },
+            || download(&f, &state, &pick).0,
+        );
+        assert_eq!(
+            *seams.borrow(),
+            [Seam::Each, Seam::Whole],
+            "one pass, then the whole records it picked"
+        );
+        assert_eq!(
+            during,
+            before.as_bytes(),
+            "the file is the log as the read found it"
+        );
+        assert_ne!(
+            desktop_file(&f, "US-1234", DAY, Some("W9XYZ")),
+            before,
+            "premise: the changes moved the file"
+        );
+        assert_eq!(
+            run(&f, 4, &export(&state, pick.clone(), 0)).unwrap(),
+            json!({"operation":"activationExport","refused":"notFound"}),
+            "the next read has the changes"
+        );
+        settle(&f);
+    }
 }

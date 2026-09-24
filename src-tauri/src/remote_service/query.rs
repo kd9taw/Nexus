@@ -13,12 +13,12 @@ mod field_day;
 mod insights;
 mod js8;
 #[cfg(test)]
-mod log_tests;
+pub(super) mod log_tests;
 pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
 mod parks;
-mod picture;
+pub(super) mod picture;
 mod pounce;
 mod recall;
 mod rotator;

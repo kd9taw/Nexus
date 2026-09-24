@@ -1179,7 +1179,13 @@ impl Authority {
                 if l.id != *lease_id || l.session != session || l.device != device {
                     return Err("notController");
                 }
-                export::respond(&engine, selection.as_ref(), *index)
+                // The log's handles under the Engine lock, and nothing more: the list and the
+                // file are read from the store with BOTH locks released, so neither the radio
+                // loop nor another browser's operation waits behind the read.
+                let rows = engine.log_rows();
+                drop(engine);
+                drop(c);
+                export::respond(&rows, selection.as_ref(), *index)
             }
             Request::ProgramExport {
                 station_boot_id,

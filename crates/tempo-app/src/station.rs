@@ -2595,31 +2595,6 @@ impl StationCore {
     pub fn take_all_txt_pending(&mut self) -> Vec<String> {
         std::mem::take(&mut self.all_txt_pending)
     }
-
-    /// Distinct activations in the log — YOUR park × UTC day × the callsign it was worked
-    /// under, newest first. What the per-activation export offers to split by.
-    ///
-    /// The log in memory, for Remote's activation export, which answers under the Engine lock
-    /// its operations hold. The desktop's reads the store off the lock
-    /// ([`crate::logexport::activations`]) through the same rule.
-    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
-    pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
-        self.logbook.activations()
-    }
-
-    /// ADIF containing only ONE activation's contacts — the three bounds an
-    /// `Activation` carries, handed straight back. For Remote, as [`Self::log_activations`];
-    /// the desktop's is [`crate::logexport::export_for_activation`].
-    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
-    pub fn export_logbook_for_activation(
-        &self,
-        reference: &str,
-        day_start_unix: u64,
-        callsign: Option<&str>,
-    ) -> String {
-        self.logbook
-            .adif_for_activation(reference, day_start_unix, callsign)
-    }
 }
 
 #[cfg(test)]

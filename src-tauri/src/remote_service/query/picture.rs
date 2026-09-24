@@ -43,7 +43,7 @@ const UNREADABLE: &str = "applicationUnavailable";
 
 /// The log as one read sees it: the store inside one read transaction, or on the 1.13 path the
 /// log in memory as a copy of its pointers. [`read`] makes it, for the length of one read.
-pub(super) enum Picture<'a> {
+pub(in crate::remote_service) enum Picture<'a> {
     Store(&'a LogDb),
     Memory(&'a [Arc<QsoRecord>]),
 }
@@ -52,7 +52,7 @@ pub(super) enum Picture<'a> {
 /// whole record is fetched by ([`Picture::whole`]). Two picks are the same pick when they are the
 /// same place, which in one picture is the same contact.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Pick {
+pub(in crate::remote_service) struct Pick {
     pub(super) at: usize,
     id: Option<RecordId>,
 }
@@ -77,7 +77,7 @@ impl Ord for Pick {
 impl Picture<'_> {
     /// Hand `each` every contact, in log order, with (at least) `narrow`'s fields filled, and its
     /// [`Pick`]. The first refusal `each` answers ends the pass, and is the answer.
-    pub(super) fn each(
+    pub(in crate::remote_service) fn each(
         &self,
         narrow: Narrow,
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
@@ -110,7 +110,10 @@ impl Picture<'_> {
 
     /// The whole records of `picks`, in the order given — from this same picture, so a contact
     /// edited or deleted since the pass that picked it is still the contact it picked.
-    pub(super) fn whole(&self, picks: &[Pick]) -> Result<Vec<QsoRecord>, &'static str> {
+    pub(in crate::remote_service) fn whole(
+        &self,
+        picks: &[Pick],
+    ) -> Result<Vec<QsoRecord>, &'static str> {
         #[cfg(test)]
         seam(Seam::Whole);
         match self {
@@ -172,7 +175,7 @@ pub(super) fn within(deadline: std::time::Instant, pick: Pick) -> Result<(), &'s
 /// behind; then everything `f` reads comes from one read transaction.
 ///
 /// ⚠️ Never call it holding the Engine lock; a debug build panics.
-pub(super) fn read<T>(
+pub(in crate::remote_service) fn read<T>(
     rows: &LogRows,
     f: impl FnOnce(&Picture<'_>) -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
@@ -195,7 +198,7 @@ pub(super) fn read<T>(
 /// fetches the whole records its pass picked — between two statements of one read transaction.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Seam {
+pub(in crate::remote_service) enum Seam {
     Count,
     Each,
     Whole,
@@ -222,7 +225,10 @@ fn seam(at: Seam) {
 
 /// Run `hook` at every [`Seam`] of every read this thread makes while `body` runs.
 #[cfg(test)]
-pub(super) fn at_seams<T>(hook: impl FnMut(Seam) + 'static, body: impl FnOnce() -> T) -> T {
+pub(in crate::remote_service) fn at_seams<T>(
+    hook: impl FnMut(Seam) + 'static,
+    body: impl FnOnce() -> T,
+) -> T {
     struct Clear;
     impl Drop for Clear {
         fn drop(&mut self) {
