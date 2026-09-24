@@ -1201,7 +1201,6 @@ impl StationCore {
 
     /// How many logged QSOs carry the current activation reference (the live count
     /// for the activation panel). 0 when not activating.
-    #[allow(deprecated)] // SPEC-2 C13: the activation count, from the hot index
     pub fn activation_qso_count(&self) -> usize {
         match &self.activation {
             Some((_, reference)) => self.hot().activation_count(reference),
