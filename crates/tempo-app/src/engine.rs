@@ -22,6 +22,7 @@ pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
 pub mod remote_transmit;
+pub mod sub_controls;
 #[cfg(test)]
 mod tx_gate_table;
 
@@ -2723,6 +2724,9 @@ pub struct Engine {
     rig_rf_gain: Option<f32>,
     squelch: Option<f32>,
     rig_squelch: Option<f32>,
+    /// The SUB receiver's levels — what the operator asked of it and what the radio accepted,
+    /// keyed to the radio in play. See [`sub_controls`].
+    sub_controls: sub_controls::SubControls,
     /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
@@ -4693,6 +4697,7 @@ impl Engine {
             rig_rf_gain: None,
             squelch: None,
             rig_squelch: None,
+            sub_controls: Default::default(),
             nr_level: None,
             rig_nr_level: None,
             comp_level: None,
@@ -19349,7 +19354,7 @@ contact yourself."
         s.radio.hold_tx_freq = self.hold_tx_freq;
         // ⭐ THE RECEIVERS, beside the flat fields above — built from the engine's one receiver
         // model, never a second copy (dual-receiver programme, the DTO stage; ADDITIVE).
-        s.radio.receivers = Some(crate::dto::ReceiversDto::from(&self.receivers()));
+        s.radio.receivers = Some(self.receivers_dto());
         // The clock chip's whole story, not just the number: what we steer by,
         // how old that measurement is, how many servers stood behind it, and any
         // offset guard 3 refused. `now` once, so age and freshness agree.
