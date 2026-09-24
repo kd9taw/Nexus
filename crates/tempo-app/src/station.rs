@@ -604,7 +604,7 @@ impl StationCore {
             tempo_core::logbook::migrate::Outcome::Converted { .. }
         ) {
             if let Some(store) = &self.store {
-                store.refresh_mirror(&self.logbook);
+                store.refresh_mirror();
             }
         }
         self.refresh_worked_index();
@@ -646,7 +646,7 @@ impl StationCore {
             store.accept_log_file(stamp);
             // Its contacts are in: the mirror replaces it now, whether or not it held anything
             // new, so it is not read and taken in again at every launch.
-            store.refresh_mirror(&self.logbook);
+            store.refresh_mirror();
         }
     }
 
@@ -658,15 +658,15 @@ impl StationCore {
     }
 
     /// Carry a change made in memory to disk. With the store, the rows whose contents differ
-    /// from `base` go to the writer thread — a channel send, no I/O — and the log to the mirror
-    /// lane. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was.
+    /// from `base` go to the writer thread — a channel send, no I/O — and the mirror lane is
+    /// told. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was.
     #[allow(deprecated)] // SPEC-2 C19: Stage 1's diff of every change
     fn persist_change(&mut self, base: Option<Vec<Arc<QsoRecord>>>, context: &str) {
         match (base, &self.store) {
             (Some(before), Some(store)) => {
                 let change = Change::between(&before, &self.logbook, store.resolved());
                 if let Some(store) = self.store.as_mut() {
-                    store.submit(change, &self.logbook);
+                    store.submit(change);
                 }
             }
             _ => self.save_log(context),
@@ -678,7 +678,7 @@ impl StationCore {
     #[allow(deprecated)] // SPEC-2 C19: Stage 1's appended rows
     fn persist_appended(&mut self, count: usize) -> Option<tempo_core::logbook::writer::Ticket> {
         let change = Change::appended(&self.logbook, count, self.store.as_ref()?.resolved());
-        self.store.as_mut()?.submit(change, &self.logbook)
+        self.store.as_mut()?.submit(change)
     }
 
     /// Point the Field Day contest log at its durable ADIF journal. Called once
@@ -923,7 +923,7 @@ impl StationCore {
             let mut change = Change::between(&before, &self.logbook, store.resolved()).in_bulk();
             change.meta.push((crate::logfill::FILL_VER, fill_ver));
             if let Some(store) = self.store.as_mut() {
-                store.submit(change, &self.logbook);
+                store.submit(change);
             }
         }
         hits.len()
@@ -2449,46 +2449,21 @@ impl StationCore {
         std::mem::take(&mut self.all_txt_pending)
     }
 
-    /// Export the **general** logbook (Chat/QSO contacts, any mode) as ADIF or
-    /// CSV. Independent of Field Day's contest log (`Engine::export_log`).
-    /// `from_unix`/`to_unix` bound the QSO start time inclusively (#98); both
-    /// `None` = the whole log, byte-identical to the unbounded export.
-    #[allow(deprecated)] // SPEC-2 C15: an export
-    pub fn export_logbook(
-        &self,
-        format: &str,
-        from_unix: Option<u64>,
-        to_unix: Option<u64>,
-    ) -> String {
-        match format.to_ascii_lowercase().as_str() {
-            "csv" => self.logbook.csv_in_range(from_unix, to_unix),
-            _ => self.logbook.adif_in_range(from_unix, to_unix),
-        }
-    }
-
-    /// Distinct operators in the log (#25) — what a per-operator export offers to split by.
-    #[allow(deprecated)] // SPEC-2 C15: an export's split
-    pub fn log_operators(&self) -> Vec<String> {
-        self.logbook.operators()
-    }
-
-    /// ADIF containing only `operator`'s contacts (#25).
-    #[allow(deprecated)] // SPEC-2 C15: an export
-    pub fn export_logbook_for_operator(&self, operator: &str) -> String {
-        self.logbook.adif_for_operator(operator)
-    }
-
     /// Distinct activations in the log — YOUR park × UTC day × the callsign it was worked
-    /// under, newest first. What the per-activation export offers to split by, the way
-    /// [`Self::log_operators`] drives the per-operator one.
-    #[allow(deprecated)] // SPEC-2 C15: an export's split
+    /// under, newest first. What the per-activation export offers to split by.
+    ///
+    /// The log in memory, for Remote's activation export, which answers under the Engine lock
+    /// its operations hold. The desktop's reads the store off the lock
+    /// ([`crate::logexport::activations`]) through the same rule.
+    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
     pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
         self.logbook.activations()
     }
 
     /// ADIF containing only ONE activation's contacts — the three bounds an
-    /// `Activation` carries, handed straight back.
-    #[allow(deprecated)] // SPEC-2 C15: an export
+    /// `Activation` carries, handed straight back. For Remote, as [`Self::log_activations`];
+    /// the desktop's is [`crate::logexport::export_for_activation`].
+    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
     pub fn export_logbook_for_activation(
         &self,
         reference: &str,

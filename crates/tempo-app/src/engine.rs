@@ -23276,27 +23276,6 @@ contact yourself."
         self.station.take_all_txt_pending()
     }
 
-    /// See [`StationCore::export_logbook`].
-    pub fn export_logbook(
-        &self,
-        format: &str,
-        from_unix: Option<u64>,
-        to_unix: Option<u64>,
-    ) -> String {
-        self.station.export_logbook(format, from_unix, to_unix)
-    }
-
-    /// Distinct operators in the log (#25).
-    pub fn log_operators(&self) -> Vec<String> {
-        self.station.log_operators()
-    }
-
-    /// ADIF containing only `operator`'s contacts (#25) — POTA and Field Day both require each
-    /// operator to submit their own log.
-    pub fn export_logbook_for_operator(&self, operator: &str) -> String {
-        self.station.export_logbook_for_operator(operator)
-    }
-
     /// See [`StationCore::log_activations`].
     pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
         self.station.log_activations()
@@ -34525,7 +34504,8 @@ mod tests {
             Some("W6R"),
             "the call the contact was made under must reach the record"
         );
-        let adif = e.export_logbook("adif", None, None);
+        let adif = crate::logexport::export_logbook(&e.log_rows(), "adif", None, None)
+            .expect("the log reads");
         assert!(
             adif.contains("<STATION_CALLSIGN:3>W6R"),
             "the export is the only artifact that can answer 'which call worked this?': {adif}"

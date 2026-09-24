@@ -18,11 +18,27 @@
 //!
 //! **Its own lane.** Serialising a lifetime log is hundreds of milliseconds; doing it on a
 //! caller's thread would put it back on exactly the path this programme is clearing. The mirror
-//! holds no database connection — it turns records into text and replaces a file — so it is a
-//! plain second thread and can never sit behind a database write.
+//! is a plain second thread, and it never sits behind a database write: it READS the store, on
+//! a read connection, and in WAL mode a reader never waits for the writer.
 //!
 //! **Debounced and coalesced.** Only the newest state matters: a mirror is a picture of the log
 //! now, not a journal of how it got there. Ten stamps in a second cost one write.
+//!
+//! # Where the picture comes from — SPEC-2 v3 C15
+//!
+//! Until C15 every change handed the lane a copy of the whole log's pointers, and the lane built
+//! the whole file as one `String` before writing it — 60 MiB at 150,000 contacts, 200 MiB at
+//! 500,000. Now a change hands the lane only its revision ([`MirrorWriter::dirty`]). When the
+//! lane writes, it waits (bounded) for the store to hold every change up to that revision, then
+//! streams the store in log order, a chunk of whole records at a time
+//! ([`super::sqlite::LogDb::each_record`]), serialising each record straight into the file. The
+//! bytes are the ones [`mirror_adif`] makes of the same log; what the lane holds while it writes
+//! is one chunk, whatever the log's size.
+//!
+//! The header records the body's length, which is known only once the body is written. So the
+//! body is written after room for the header of the length the lane expects (its last write's,
+//! or the file's own), and the header goes in last; a wrong expectation costs one copy of the
+//! body into a second file, never a wrong file.
 //!
 //! # ⚠️ The transition hazard, and the guard for it
 //!
@@ -50,6 +66,8 @@
 //! contacts lost for good, and nothing else in the app still holds them.
 
 use super::QsoRecord;
+use std::io::{Seek, SeekFrom, Write};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -63,6 +81,10 @@ const MAX_DELAY: Duration = Duration::from_millis(5_000);
 /// How much of a file's head is read to look for the generated marker. The header ends at
 /// `<EOH>`, so this never has to touch the body — and the body is the 100 MB part.
 const HEADER_PROBE_BYTES: usize = 8 * 1024;
+/// How long a write waits for the store to hold the change it was told about before it tries
+/// again later. The writer commits a change within a disk flush; this is for a bulk write the
+/// lane has caught up with.
+const READY_WAIT: Duration = Duration::from_millis(2_000);
 
 /// The ADIF header field that marks a file as written by the mirror. Its VALUE is the byte
 /// length of everything after `<EOH>`, which is what lets [`mirror_state`] tell a picture the
@@ -84,7 +106,8 @@ pub fn mirror_header(body_len: usize) -> String {
     )
 }
 
-/// The whole mirror file for `records`.
+/// The whole mirror file for `records`, as one `String` — what the lane's streamed write
+/// produces, byte for byte, and what it is tested against.
 pub fn mirror_adif(records: &[Arc<QsoRecord>]) -> String {
     let mut body = String::from("\n");
     for r in records {
@@ -93,6 +116,77 @@ pub fn mirror_adif(records: &[Arc<QsoRecord>]) -> String {
     let mut out = mirror_header(body.len());
     out.push_str(&body);
     out
+}
+
+/// Where a mirror lane reads the log it pictures — SPEC-2 v3 C15: the logbook store
+/// ([`StoreSource`]).
+pub trait MirrorSource: Send + Sync + 'static {
+    /// Wait up to `wait` for the log to hold every change up to revision `rev`.
+    fn ready(&self, rev: u64, wait: Duration) -> Readiness;
+    /// Hand `each` every contact of the log as it now stands, whole, in log order — one picture
+    /// of it, one contact at a time. `each` answering [`ControlFlow::Break`] ends the pass.
+    fn each(&self, each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>) -> Result<(), String>;
+}
+
+/// Whether a source holds the changes a write was told about ([`MirrorSource::ready`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readiness {
+    /// Every one of them.
+    Ready,
+    /// Not yet: they are still on their way to it. The write waits for a later turn.
+    Behind,
+    /// Never: one was lost for good, so the log as it stands is all there will be — and it is
+    /// what is written.
+    Lost(String),
+}
+
+/// The logbook store as a mirror's source: its writer says what is committed, and a read
+/// connection streams it, `chunk` whole records at a time.
+pub struct StoreSource {
+    reader: Arc<super::reader::LogReader>,
+    writer: Arc<super::writer::LogWriter>,
+    chunk: usize,
+}
+
+impl StoreSource {
+    /// The store behind `reader` and `writer`, streamed in chunks of
+    /// [`super::sqlite::RECORD_CHUNK`].
+    pub fn new(
+        reader: Arc<super::reader::LogReader>,
+        writer: Arc<super::writer::LogWriter>,
+    ) -> StoreSource {
+        StoreSource::with_chunk(reader, writer, super::sqlite::RECORD_CHUNK)
+    }
+
+    /// [`Self::new`], streamed `chunk` records at a time — what a test measuring the lane's
+    /// memory uses.
+    pub fn with_chunk(
+        reader: Arc<super::reader::LogReader>,
+        writer: Arc<super::writer::LogWriter>,
+        chunk: usize,
+    ) -> StoreSource {
+        StoreSource {
+            reader,
+            writer,
+            chunk,
+        }
+    }
+}
+
+impl MirrorSource for StoreSource {
+    fn ready(&self, rev: u64, wait: Duration) -> Readiness {
+        match self.writer.wait_committed(rev, wait) {
+            Ok(_) => Readiness::Ready,
+            Err(super::writer::WaitError::Timeout { .. }) => Readiness::Behind,
+            Err(super::writer::WaitError::Failed(why)) => Readiness::Lost(why),
+        }
+    }
+
+    fn each(&self, each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>) -> Result<(), String> {
+        self.reader
+            .read(|db| db.each_record(self.chunk, &mut |r| each(&r)))
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// What the file at a `log.adi` path is, as far as the mirror is concerned.
@@ -237,8 +331,8 @@ pub struct Status {
 }
 
 enum Msg {
-    /// The log as it now stands. Pointer copies, so this costs a `Vec` and not the records.
-    Write(Vec<Arc<QsoRecord>>),
+    /// The log has changed: the next picture must hold every change up to this revision.
+    Dirty(u64),
     /// Write anything pending NOW and answer when it is on disk.
     Flush(mpsc::SyncSender<Status>),
     /// The store has taken in the file with this stamp: it may be replaced from now on.
@@ -276,17 +370,23 @@ pub struct MirrorWriter {
 }
 
 impl MirrorWriter {
-    /// Start the lane, mirroring to `path`, with nothing accepted: only an absent file, a
-    /// pristine mirror or this lane's own write may be replaced.
-    pub fn start(path: PathBuf) -> MirrorWriter {
-        MirrorWriter::with_options(path, MirrorOptions::default())
+    /// Start the lane, mirroring `source` to `path`, with nothing accepted: only an absent file,
+    /// a pristine mirror or this lane's own write may be replaced.
+    pub fn start(path: PathBuf, source: Arc<dyn MirrorSource>) -> MirrorWriter {
+        MirrorWriter::with_options(path, source, MirrorOptions::default())
     }
 
     /// The lane with its debounce named — what the tests drive, so they do not have to wait a
     /// real second to observe a real write.
-    pub fn with_timing(path: PathBuf, debounce: Duration, max_delay: Duration) -> MirrorWriter {
+    pub fn with_timing(
+        path: PathBuf,
+        source: Arc<dyn MirrorSource>,
+        debounce: Duration,
+        max_delay: Duration,
+    ) -> MirrorWriter {
         MirrorWriter::with_options(
             path,
+            source,
             MirrorOptions {
                 debounce,
                 max_delay,
@@ -296,13 +396,17 @@ impl MirrorWriter {
     }
 
     /// The lane, set up in full.
-    pub fn with_options(path: PathBuf, options: MirrorOptions) -> MirrorWriter {
+    pub fn with_options(
+        path: PathBuf,
+        source: Arc<dyn MirrorSource>,
+        options: MirrorOptions,
+    ) -> MirrorWriter {
         let (tx, rx) = mpsc::channel::<Msg>();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = Arc::clone(&status);
         let handle = std::thread::Builder::new()
             .name("nexus-log-mirror".into())
-            .spawn(move || run(path, rx, shared, options))
+            .spawn(move || run(path, source, rx, shared, options))
             .ok();
         MirrorWriter {
             tx: Some(tx),
@@ -311,10 +415,12 @@ impl MirrorWriter {
         }
     }
 
-    /// Hand the lane the log as it now stands. Never touches the disk; returns immediately.
-    pub fn submit(&self, records: Vec<Arc<QsoRecord>>) {
+    /// Tell the lane the log has changed, up to revision `rev`: its next picture holds every
+    /// change up to there. Never touches the disk; returns immediately — no copy of the log is
+    /// made or handed over.
+    pub fn dirty(&self, rev: u64) {
         if let Some(tx) = &self.tx {
-            let _ = tx.send(Msg::Write(records));
+            let _ = tx.send(Msg::Dirty(rev));
         }
     }
 
@@ -367,6 +473,9 @@ struct Written {
     /// The foreign stamp last reported, so a refusal is logged once per file and not once per
     /// debounce.
     reported: Option<FileStamp>,
+    /// The body length of this lane's last write — what the next write expects its body to be,
+    /// to within the digits of its length ([`write_streamed`]).
+    last_body: Option<u64>,
 }
 
 impl Written {
@@ -386,24 +495,35 @@ impl Written {
     }
 }
 
-fn run(path: PathBuf, rx: mpsc::Receiver<Msg>, status: Arc<Mutex<Status>>, opts: MirrorOptions) {
+fn run(
+    path: PathBuf,
+    source: Arc<dyn MirrorSource>,
+    rx: mpsc::Receiver<Msg>,
+    status: Arc<Mutex<Status>>,
+    opts: MirrorOptions,
+) {
     super::io_fence::enter_log_lane();
     let (debounce, max_delay) = (opts.debounce, opts.max_delay);
-    let mut pending: Option<Vec<Arc<QsoRecord>>> = None;
+    // The newest revision the next picture must hold, while one is owed.
+    let mut pending: Option<u64> = None;
     let mut first_queued: Option<Instant> = None;
     let mut last_queued = Instant::now();
     let mut written = Written {
         ours: None,
         accepted: opts.accepted,
         reported: None,
+        last_body: None,
+    };
+    let owe = |pending: &mut Option<u64>, rev: u64| {
+        *pending = Some(pending.map_or(rev, |p| p.max(rev)));
     };
 
     loop {
         // Nothing waiting: block until something arrives or the handle is dropped.
         let Some(t0) = first_queued else {
             match rx.recv() {
-                Ok(Msg::Write(rows)) => {
-                    pending = Some(rows);
+                Ok(Msg::Dirty(rev)) => {
+                    owe(&mut pending, rev);
                     first_queued = Some(Instant::now());
                     last_queued = Instant::now();
                     set(&status, |s| s.pending = true);
@@ -424,36 +544,79 @@ fn run(path: PathBuf, rx: mpsc::Receiver<Msg>, status: Arc<Mutex<Status>>, opts:
         let due = (last_queued + debounce).min(t0 + max_delay);
         let wait = due.saturating_duration_since(now);
         match rx.recv_timeout(wait) {
-            Ok(Msg::Write(rows)) => {
-                pending = Some(rows); // newest wins: a mirror is a picture, not a journal
+            Ok(Msg::Dirty(rev)) => {
+                owe(&mut pending, rev); // newest wins: a mirror is a picture, not a journal
                 last_queued = Instant::now();
             }
             Ok(Msg::Accept(stamp)) => written.accepted = Some(stamp),
             Ok(Msg::Flush(reply)) => {
-                if let Some(rows) = pending.take() {
-                    write_once(&path, &rows, &status, &mut written);
+                if let Some(rev) = pending {
+                    if write_when_ready(&path, &*source, rev, &status, &mut written, false) {
+                        pending = None;
+                    }
                 }
-                first_queued = None;
-                set(&status, |s| s.pending = false);
+                settle(&status, &mut pending, &mut first_queued, &mut last_queued);
                 let _ = reply.send(snapshot(&status));
             }
             Err(RecvTimeoutError::Timeout) => {
-                if let Some(rows) = pending.take() {
-                    write_once(&path, &rows, &status, &mut written);
+                if let Some(rev) = pending {
+                    if write_when_ready(&path, &*source, rev, &status, &mut written, false) {
+                        pending = None;
+                    }
                 }
-                first_queued = None;
-                set(&status, |s| s.pending = false);
+                settle(&status, &mut pending, &mut first_queued, &mut last_queued);
             }
             Err(RecvTimeoutError::Disconnected) => {
-                // The handle was dropped: write what is pending rather than losing it.
-                if let Some(rows) = pending.take() {
-                    write_once(&path, &rows, &status, &mut written);
+                // The handle was dropped: write what is pending rather than losing it — the
+                // store as it stands, if it has not taken every change by now.
+                if let Some(rev) = pending.take() {
+                    write_when_ready(&path, &*source, rev, &status, &mut written, true);
                 }
                 set(&status, |s| s.pending = false);
                 return;
             }
         }
     }
+}
+
+/// After a turn at writing: nothing owed → idle; still owed (the store was behind) → wait out a
+/// whole debounce again before the next try, as if the change had just arrived — never a try
+/// straight after the last, whatever the source answered and however fast.
+fn settle(
+    status: &Arc<Mutex<Status>>,
+    pending: &mut Option<u64>,
+    first: &mut Option<Instant>,
+    last: &mut Instant,
+) {
+    if pending.is_some() {
+        let now = Instant::now();
+        *first = Some(now);
+        *last = now;
+    } else {
+        *first = None;
+        set(status, |s| s.pending = false);
+    }
+}
+
+/// Write the picture that holds revision `rev`, once the source holds it: `true` when the turn
+/// is done with (written, or failed and reported), `false` when the source is still behind and
+/// the write is owed to a later turn. `anyway` writes the source as it stands even then — the
+/// lane's last word as its handle goes.
+fn write_when_ready(
+    path: &Path,
+    source: &dyn MirrorSource,
+    rev: u64,
+    status: &Arc<Mutex<Status>>,
+    written: &mut Written,
+    anyway: bool,
+) -> bool {
+    match source.ready(rev, READY_WAIT) {
+        Readiness::Ready | Readiness::Lost(_) => {}
+        Readiness::Behind if anyway => {}
+        Readiness::Behind => return false,
+    }
+    write_once(path, source, status, written);
+    true
 }
 
 /// One replacement of the mirror file: per-PID tmp, fsync, rename, directory sync — the same
@@ -468,12 +631,12 @@ fn run(path: PathBuf, rx: mpsc::Receiver<Msg>, status: Arc<Mutex<Status>>, opts:
 /// it smaller — the copy that catches a purge, or a log that lost rows somewhere upstream.
 fn write_once(
     path: &Path,
-    records: &[Arc<QsoRecord>],
+    source: &dyn MirrorSource,
     status: &Arc<Mutex<Status>>,
     written: &mut Written,
 ) {
-    // Everything below is disk: the head of `log.adi`, the ring snapshot, the temporary file,
-    // the rename and the folder sync.
+    // Everything below is disk: the head of `log.adi`, the store, the ring snapshot, the
+    // temporary file, the rename and the folder sync.
     super::io_fence::on_log_lane("the log.adi mirror's rewrite");
     if let Err(stamp) = written.may_replace(path) {
         if written.reported != stamp {
@@ -495,34 +658,39 @@ fn write_once(
         return;
     }
 
-    let body = mirror_adif(records);
+    // What the body will measure: this lane's last one, else the one the file on disk records.
+    let expect = written
+        .last_body
+        .or_else(|| read_marker(path).map(|(_, body)| body))
+        .unwrap_or(0);
     let tmp = path.with_extension(format!("adi.mirror{}.tmp", std::process::id()));
-    let result = (|| -> std::io::Result<Option<(u64, SystemTime)>> {
+    let result = (|| -> Result<(Option<FileStamp>, u64), String> {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        super::write_sync(&tmp, body.as_bytes())?;
+        let (file_len, body_len) = write_streamed(&tmp, source, expect)?;
         let stamp = file_stamp(&tmp);
         // The ring: best-effort, and BEFORE the rename publishes the new file, so the snapshot
         // is of the one being replaced.
         super::Logbook::snapshot_before_save(
             path,
-            body.len() as u64,
+            file_len,
             super::now_unix(),
             super::BACKUP_KEEP,
             &super::backup_total_cap,
         );
-        std::fs::rename(&tmp, path)?;
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
         super::sync_parent_dir(path);
-        Ok(stamp)
+        Ok((stamp, body_len))
     })();
 
     match result {
-        Ok(stamp) => {
+        Ok((stamp, body_len)) => {
             // The identity of what WE wrote, read back off the file rather than computed, so a
             // filesystem that rounds an mtime cannot make our own write look foreign.
             written.ours = file_stamp(path).or(stamp);
             written.reported = None;
+            written.last_body = Some(body_len);
             set(status, |s| {
                 s.writes += 1;
                 s.last_error = None;
@@ -532,9 +700,89 @@ fn write_once(
         }
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
-            set(status, |s| s.last_error = Some(e.to_string()));
+            set(status, |s| s.last_error = Some(e));
         }
     }
+}
+
+/// Write the mirror file for the log `source` holds to `tmp` — the bytes [`mirror_adif`] makes
+/// of that log — streaming it, a record at a time, and fsync it. Answers the file's length and
+/// its body's. The header records the body's length, known only at the end, so the body goes
+/// after room for the header of a body of `expect` bytes, and the header in last; when the body
+/// comes out a length with a different number of digits, it is copied behind the right header
+/// into a second file, which then takes `tmp`'s name. Holds one chunk of the log, never the
+/// whole of it.
+fn write_streamed(
+    tmp: &Path,
+    source: &dyn MirrorSource,
+    expect: u64,
+) -> Result<(u64, u64), String> {
+    let head_len = |body: u64| mirror_header(body as usize).len() as u64;
+    let io = |e: std::io::Error| e.to_string();
+    let at = head_len(expect);
+    // Read as well as written: a body behind the wrong header is read back to be copied.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(tmp)
+        .map_err(io)?;
+    let mut out = std::io::BufWriter::with_capacity(64 * 1024, file);
+    out.seek(SeekFrom::Start(at)).map_err(io)?;
+    let mut body: u64 = 0;
+    let mut failed: Option<std::io::Error> = None;
+    let mut put =
+        |out: &mut std::io::BufWriter<std::fs::File>, bytes: &[u8]| match out.write_all(bytes) {
+            Ok(()) => {
+                body += bytes.len() as u64;
+                true
+            }
+            Err(e) => {
+                failed = Some(e);
+                false
+            }
+        };
+    if put(&mut out, b"\n") {
+        source.each(&mut |r| {
+            if put(&mut out, super::adif_record_own_log(r).as_bytes()) {
+                ControlFlow::Continue(())
+            } else {
+                ControlFlow::Break(())
+            }
+        })?;
+    }
+    if let Some(e) = failed {
+        return Err(e.to_string());
+    }
+    let header = mirror_header(body as usize);
+    let mut file = out.into_inner().map_err(|e| e.error().to_string())?;
+    if header.len() as u64 == at {
+        file.seek(SeekFrom::Start(0)).map_err(io)?;
+        file.write_all(header.as_bytes()).map_err(io)?;
+        file.sync_all().map_err(io)?;
+        return Ok((at + body, body));
+    }
+    // The body's length has a different number of digits than expected: copy it, behind the
+    // header it needs, into a file of its own.
+    let again = tmp.with_extension("tmp2");
+    let result = (|| -> std::io::Result<()> {
+        let mut to = std::io::BufWriter::with_capacity(64 * 1024, std::fs::File::create(&again)?);
+        to.write_all(header.as_bytes())?;
+        file.seek(SeekFrom::Start(at))?;
+        let copied = std::io::copy(&mut std::io::Read::take(&mut file, body), &mut to)?;
+        if copied != body {
+            return Err(std::io::Error::other("the body was not all copied"));
+        }
+        to.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        drop(file);
+        std::fs::rename(&again, tmp)
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&again);
+        return Err(e.to_string());
+    }
+    Ok((header.len() as u64 + body, body))
 }
 
 fn set(status: &Arc<Mutex<Status>>, f: impl FnOnce(&mut Status)) {
@@ -592,9 +840,74 @@ mod tests {
         Logbook::load(&d.log()).records().to_vec()
     }
 
+    /// The log as a test holds it: whatever it was last handed, and always ready — a source
+    /// that can never be behind, so these tests are about the lane alone. The store's own
+    /// source is proven in the store's tests.
+    #[derive(Default)]
+    struct Held(Mutex<(u64, Vec<Arc<QsoRecord>>)>);
+
+    impl MirrorSource for Held {
+        fn ready(&self, _: u64, _: Duration) -> Readiness {
+            Readiness::Ready
+        }
+        fn each(&self, each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>) -> Result<(), String> {
+            let rows = self.0.lock().unwrap().1.clone();
+            for r in &rows {
+                if each(r).is_break() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// A lane over a [`Held`] log: `submit` hands the log its new rows and tells the lane.
+    struct Lane {
+        w: MirrorWriter,
+        held: Arc<Held>,
+    }
+
+    impl Lane {
+        fn submit(&self, rows: Vec<Arc<QsoRecord>>) {
+            let rev = {
+                let mut g = self.held.0.lock().unwrap();
+                g.0 += 1;
+                g.1 = rows;
+                g.0
+            };
+            self.w.dirty(rev);
+        }
+    }
+
+    impl std::ops::Deref for Lane {
+        type Target = MirrorWriter;
+        fn deref(&self) -> &MirrorWriter {
+            &self.w
+        }
+    }
+
+    fn lane_with_options(path: PathBuf, options: MirrorOptions) -> Lane {
+        let held = Arc::new(Held::default());
+        Lane {
+            w: MirrorWriter::with_options(path, held.clone(), options),
+            held,
+        }
+    }
+
+    fn lane_with_timing(path: PathBuf, debounce: Duration, max_delay: Duration) -> Lane {
+        lane_with_options(
+            path,
+            MirrorOptions {
+                debounce,
+                max_delay,
+                accepted: None,
+            },
+        )
+    }
+
     /// Fast timings so a test observes a real write rather than waiting a real second.
-    fn writer(path: PathBuf) -> MirrorWriter {
-        MirrorWriter::with_timing(path, Duration::from_millis(5), Duration::from_millis(50))
+    fn writer(path: PathBuf) -> Lane {
+        lane_with_timing(path, Duration::from_millis(5), Duration::from_millis(50))
     }
 
     /// The mirror is the log: every contact in it, readable by an ordinary ADIF parser.
@@ -750,7 +1063,7 @@ mod tests {
         let d = Dir::new("firstrun");
         std::fs::write(d.log(), super::super::adif_header()).unwrap();
         let accepted = file_stamp(&d.log());
-        let w = MirrorWriter::with_options(
+        let w = lane_with_options(
             d.log(),
             MirrorOptions {
                 debounce: Duration::from_millis(5),
@@ -852,7 +1165,7 @@ mod tests {
         const LEN: u64 = 20 * 1024 * 1024;
         let d = Dir::new("bigring");
         crate::logbook::tests::ring_of_four_big_copies(&d.0, LEN);
-        let w = MirrorWriter::with_options(
+        let w = lane_with_options(
             d.log(),
             MirrorOptions {
                 debounce: Duration::from_millis(5),
@@ -880,8 +1193,7 @@ mod tests {
     #[test]
     fn a_burst_of_changes_costs_one_write() {
         let d = Dir::new("debounce");
-        let w =
-            MirrorWriter::with_timing(d.log(), Duration::from_millis(60), Duration::from_secs(30));
+        let w = lane_with_timing(d.log(), Duration::from_millis(60), Duration::from_secs(30));
         let recs = rows(20);
         for _ in 0..25 {
             w.submit(recs.clone());
@@ -899,7 +1211,7 @@ mod tests {
     #[test]
     fn a_log_that_never_goes_quiet_is_still_written_within_the_cap() {
         let d = Dir::new("cap");
-        let w = MirrorWriter::with_timing(
+        let w = lane_with_timing(
             d.log(),
             Duration::from_secs(30), // a debounce that alone would never fire
             Duration::from_millis(40),
@@ -927,11 +1239,7 @@ mod tests {
     fn a_change_pending_at_shutdown_is_written_not_dropped() {
         let d = Dir::new("shutdown");
         {
-            let w = MirrorWriter::with_timing(
-                d.log(),
-                Duration::from_secs(30),
-                Duration::from_secs(30),
-            );
+            let w = lane_with_timing(d.log(), Duration::from_secs(30), Duration::from_secs(30));
             w.submit(rows(7));
             // Straight out of scope, with the change still inside its debounce window.
         }
@@ -975,5 +1283,198 @@ mod tests {
             text.contains("GENERATED"),
             "a person opening the file is told, not only a program"
         );
+    }
+
+    // ── the streamed write (SPEC-2 v3 C15) ────────────────────────────────────
+
+    /// A [`Held`] log of `n` contacts, as a source.
+    fn held(n: usize) -> (Arc<Held>, Vec<Arc<QsoRecord>>) {
+        let recs = rows(n);
+        let h = Arc::new(Held::default());
+        h.0.lock().unwrap().1 = recs.clone();
+        (h, recs)
+    }
+
+    /// ★ THE STREAMED FILE IS `mirror_adif`, BYTE FOR BYTE, WHATEVER THE LANE EXPECTED — for logs
+    /// of 0 to 400 contacts, and for expectations that are right, too small by a digit or more,
+    /// too large by many, and exactly at the powers of ten the header's length changes at. A
+    /// wrong expectation costs a copy, and leaves no second file behind.
+    #[test]
+    fn the_streamed_file_is_mirror_adif_whatever_the_lane_expected() {
+        let d = Dir::new("streamed");
+        let mut copies = 0;
+        for n in [0, 1, 9, 50, 400] {
+            let (source, recs) = held(n);
+            let want = mirror_adif(&recs);
+            // "\n", then every record: what the header records.
+            let body = 1 + recs
+                .iter()
+                .map(|r| super::super::adif_record_own_log(r).len() as u64)
+                .sum::<u64>();
+            for expect in [
+                0,
+                1,
+                9,
+                10,
+                99,
+                100,
+                9_999,
+                10_000,
+                body,
+                body * 10,
+                1 << 50,
+            ] {
+                let tmp = d.0.join(format!("t{n}-{expect}.tmp"));
+                let (file_len, body_len) = write_streamed(&tmp, &*source, expect).unwrap();
+                let got = std::fs::read(&tmp).unwrap();
+                assert!(got == want.as_bytes(), "{n} contacts, expecting {expect}");
+                assert_eq!((file_len, body_len), (want.len() as u64, body));
+                assert!(!tmp.with_extension("tmp2").exists(), "no second file left");
+                copies += usize::from(
+                    mirror_header(expect as usize).len() != mirror_header(body as usize).len(),
+                );
+            }
+        }
+        assert!(copies > 10, "premise: the copy path ran ({copies} times)");
+    }
+
+    /// A source that says whether it is ready — at once, without waiting — and fails its read
+    /// when told to. It counts how often it is asked.
+    struct Flaky {
+        rows: Vec<Arc<QsoRecord>>,
+        ready: Mutex<Readiness>,
+        fail: bool,
+        asked: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MirrorSource for Flaky {
+        fn ready(&self, _: u64, _: Duration) -> Readiness {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.ready.lock().unwrap().clone()
+        }
+        fn each(&self, each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>) -> Result<(), String> {
+            if self.fail {
+                return Err("the store could not be read".into());
+            }
+            for r in &self.rows {
+                if each(r).is_break() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// ★ A picture is written only once the source holds the change it was told about: while
+    /// the store is behind, the lane writes nothing and says a change is still pending, and asks
+    /// again only once a debounce has passed — never in a loop, even of a source that answers at
+    /// once; once it has caught up, the next turn writes it. A source that has LOST a change for
+    /// good is written as it stands — it is all the log there will be.
+    #[test]
+    fn a_source_that_is_behind_is_written_once_it_catches_up() {
+        let d = Dir::new("behind");
+        let source = Arc::new(Flaky {
+            rows: rows(4),
+            ready: Mutex::new(Readiness::Behind),
+            fail: false,
+            asked: Default::default(),
+        });
+        let w = MirrorWriter::with_timing(
+            d.log(),
+            source.clone(),
+            Duration::from_millis(5),
+            Duration::from_millis(20),
+        );
+        w.dirty(1);
+        let s = w.flush(Duration::from_secs(10));
+        assert_eq!(
+            (s.writes, s.pending),
+            (0, true),
+            "behind: nothing written, still owed"
+        );
+        assert!(!d.log().exists());
+        let before = source.asked.load(std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+        let asked = source.asked.load(std::sync::atomic::Ordering::SeqCst) - before;
+        assert!(
+            (1..=100).contains(&asked),
+            "asked again once a debounce (5 ms) had passed, not in a loop: {asked} times in 200 ms"
+        );
+        *source.ready.lock().unwrap() = Readiness::Ready;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while w.status().writes == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let s = w.status();
+        assert_eq!(
+            (s.writes, s.pending),
+            (1, false),
+            "caught up: written by itself"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.log()).unwrap(),
+            mirror_adif(&source.rows)
+        );
+
+        let lost = Arc::new(Flaky {
+            rows: rows(2),
+            ready: Mutex::new(Readiness::Lost("the disk is full".into())),
+            fail: false,
+            asked: Default::default(),
+        });
+        let d2 = Dir::new("lost");
+        let w2 = MirrorWriter::with_timing(
+            d2.log(),
+            lost.clone(),
+            Duration::from_millis(5),
+            Duration::from_millis(20),
+        );
+        w2.dirty(7);
+        assert_eq!(
+            w2.flush(Duration::from_secs(10)).writes,
+            1,
+            "lost: written as it stands"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d2.log()).unwrap(),
+            mirror_adif(&lost.rows)
+        );
+    }
+
+    /// A source that cannot be read is reported, like a disk that cannot be written, and leaves
+    /// `log.adi` exactly as it was and no temporary file behind.
+    #[test]
+    fn a_source_that_cannot_be_read_is_reported_and_changes_nothing() {
+        let d = Dir::new("unreadable");
+        std::fs::write(d.log(), mirror_adif(&rows(3))).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        let w = MirrorWriter::with_timing(
+            d.log(),
+            Arc::new(Flaky {
+                rows: rows(5),
+                ready: Mutex::new(Readiness::Ready),
+                fail: true,
+                asked: Default::default(),
+            }),
+            Duration::from_millis(5),
+            Duration::from_millis(20),
+        );
+        w.dirty(1);
+        let s = w.flush(Duration::from_secs(10));
+        assert_eq!(s.writes, 0);
+        assert!(
+            s.last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("could not be read")),
+            "{s:?}"
+        );
+        assert_eq!(std::fs::read(d.log()).unwrap(), before, "log.adi as it was");
+        let left: Vec<_> = std::fs::read_dir(&d.0)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "no temporary file: {left:?}");
     }
 }

@@ -2892,6 +2892,7 @@ mod lotw_batch_tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
 }
 
 #[cfg(test)]
@@ -12136,8 +12137,11 @@ fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, 
 /// that side, so no dates at all is the whole log, byte-identical to before. A
 /// malformed date is an ERROR, never silently ignored: dropping a bound would ship a
 /// full log the operator believes is filtered.
-#[tauri::command(async)]
-fn export_general_log(
+///
+/// Read from the logbook store with the engine lock released, on the blocking pool
+/// (`tempo_app::logexport`, SPEC-2 v3 C15).
+#[tauri::command]
+async fn export_general_log(
     state: State<'_, SharedEngine>,
     format: String,
     from: Option<String>,
@@ -12154,8 +12158,11 @@ fn export_general_log(
     // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
     let from_unix = parse(from)?.map(|b| b.0);
     let to_unix = parse(to)?.map(|b| b.1);
-    let eng = engine_lock(&state);
-    Ok(eng.export_logbook(&format, from_unix, to_unix))
+    let rows = engine_lock(&state).log_rows();
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_logbook(&rows, &format, from_unix, to_unix)
+    })
+    .await
 }
 
 /// Fields stripped from a settings backup (#28 item 4), by their serialised (camelCase) names.
@@ -12341,33 +12348,40 @@ fn import_settings_bundle(
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
-/// the UI uses to decide whether a per-operator export is worth offering at all.
-#[tauri::command(async)]
-fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.log_operators())
+/// the UI uses to decide whether a per-operator export is worth offering at all. From the store,
+/// off the engine lock (SPEC-2 v3 C15).
+#[tauri::command]
+async fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let rows = engine_lock(&state).log_rows();
+    log_folds::off_the_runtime(move || tempo_app::logexport::operators(&rows)).await
 }
 
 /// ADIF for ONE operator's contacts (#25) — POTA and Field Day both require each operator to
-/// submit their own log.
-#[tauri::command(async)]
-fn export_log_for_operator(
+/// submit their own log. From the store, off the engine lock (SPEC-2 v3 C15).
+#[tauri::command]
+async fn export_log_for_operator(
     state: State<'_, SharedEngine>,
     operator: String,
 ) -> Result<String, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.export_logbook_for_operator(&operator))
+    let rows = engine_lock(&state).log_rows();
+    log_folds::off_the_runtime(move || tempo_app::logexport::export_for_operator(&rows, &operator))
+        .await
 }
 
 /// Distinct activations present in the log — your park × UTC day × the callsign you signed,
 /// newest first. Empty for a station that has never activated, which is what the Logbook uses to
-/// decide whether to offer the per-activation export at all.
-#[tauri::command(async)]
-fn log_activations(
+/// decide whether to offer the per-activation export at all. From the store, off the engine lock
+/// (SPEC-2 v3 C15).
+#[tauri::command]
+async fn log_activations(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<tempo_app::dto::LoggedActivationDto>, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.log_activations().into_iter().map(Into::into).collect())
+    let rows = engine_lock(&state).log_rows();
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::activations(&rows)
+            .map(|found| found.into_iter().map(Into::into).collect())
+    })
+    .await
 }
 
 /// ADIF for ONE activation — the park, the UTC day and the callsign of a single submission.
@@ -12377,15 +12391,25 @@ fn log_activations(
 /// range the operator left set from a previous export would silently produce a SHORT log — the
 /// same class of failure as the per-operator export above, which is unranged for the same
 /// reason. The UI enforces the same rule at the button.
-#[tauri::command(async)]
-fn export_log_for_activation(
+///
+/// From the store, off the engine lock (SPEC-2 v3 C15).
+#[tauri::command]
+async fn export_log_for_activation(
     state: State<'_, SharedEngine>,
     reference: String,
     day_start_unix: u64,
     callsign: Option<String>,
 ) -> Result<String, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.export_logbook_for_activation(&reference, day_start_unix, callsign.as_deref()))
+    let rows = engine_lock(&state).log_rows();
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_for_activation(
+            &rows,
+            &reference,
+            day_start_unix,
+            callsign.as_deref(),
+        )
+    })
+    .await
 }
 
 /// Write export text to a file in the operator's Downloads folder and return the FULL saved path.
