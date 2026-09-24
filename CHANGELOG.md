@@ -157,6 +157,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
   it had already taken in are kept; importing the file again adds the rest without duplicating
   any.
+- **Closing Nexus while the logbook is still saving now says so, and asks before it drops
+  anything.** If you close the window while changes are still on their way to the disk — right
+  after a big import, or on a slow drive — Nexus takes the radio off the air first, as it always
+  has, then keeps the window open with **Saving your logbook…** and the number of changes still
+  to write, and closes the moment they are saved. A quick save shows nothing at all. If the disk
+  has not taken them after a minute, or refuses one, Nexus asks: **Keep trying**, or **Quit
+  without the last N changes**. It used to give up after ten seconds without a word. Restarting
+  after an update, and installing one on Windows, save the same way first.
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
