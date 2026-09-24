@@ -38,7 +38,10 @@
 //! file, renames it over the log and syncs the folder ([`on_log_lane`]); a wait for a change
 //! to commit (`LogWriter::wait_durable`, which `LogAppendReceipt::sync` and the app's
 //! `Durability::wait` go through), an append receipt's sync, a wait for a database copy, the
-//! conversion of `log.adi`, and the store's open ([`off_engine_lock`]).
+//! conversion of `log.adi`, and the store's open ([`off_engine_lock`]). And SPEC-2's read path
+//! (C12): every read of the store through its reader (`LogReader::read`) and the wait for the
+//! store to hold every change made before a read (`LogWriter::wait_committed`), which the app's
+//! `StoreReads` runs in that order.
 //!
 //! **Not fenced, each for a reason recorded where it happens** — every one of these runs under
 //! the Engine lock today, so a fence there would stop a debug build rather than prove anything:

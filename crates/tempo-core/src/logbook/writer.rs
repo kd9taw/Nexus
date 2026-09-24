@@ -594,6 +594,8 @@ struct Shared {
     /// How many times the writer has seen ANOTHER connection commit — another Nexus process
     /// sharing this data folder. See [`LogWriter::foreign_commits`].
     foreign: std::sync::atomic::AtomicU64,
+    /// The revision of the latest change submitted. See [`LogWriter::submitted_rev`].
+    submitted: std::sync::atomic::AtomicU64,
 }
 
 /// A copy of the database (see [`LogWriter::copy_database`]): where, and who is waiting.
@@ -664,6 +666,9 @@ impl LogWriter {
             rev: change.rev,
             slot: Arc::clone(&slot),
         };
+        self.shared
+            .submitted
+            .fetch_max(change.rev, std::sync::atomic::Ordering::AcqRel);
         lock(&self.shared.status).pending += 1;
         let sent = self
             .tx
@@ -749,6 +754,61 @@ impl LogWriter {
     /// What the writer is doing, for the status lane.
     pub fn status(&self) -> Status {
         lock(&self.shared.status).clone()
+    }
+
+    /// The revision of the latest change submitted, or 0 before the first — what a read that
+    /// must see every change made so far waits for ([`Self::wait_committed`]). An atomic read,
+    /// no I/O, so it is safe to take under any lock: take it where the question is asked (under
+    /// the Engine lock, beside the change), and wait with every lock released.
+    pub fn submitted_rev(&self) -> u64 {
+        self.shared
+            .submitted
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Wait until every change submitted up to revision `rev` is committed, so the store holds
+    /// all of them and a read of it sees them. At once when nothing up to `rev` is outstanding.
+    ///
+    /// It waits on the durability watermark ([`Status::durable_rev`]), not on one ticket: a
+    /// change can commit ahead of an earlier bulk one it shares no row with, and a read wants
+    /// ALL of them. A change the store lost caps the watermark for good, so a wait past it ends
+    /// as soon as nothing still in flight could move it — [`WaitError::Failed`] with the
+    /// reason, rather than a timeout nobody can do anything about.
+    ///
+    /// ⚠️ **Never call it while holding a lock**, as [`Self::wait_durable`].
+    pub fn wait_committed(
+        &self,
+        rev: u64,
+        deadline: Duration,
+    ) -> std::result::Result<Status, WaitError> {
+        io_fence::off_engine_lock("a wait for the logbook store to hold every change");
+        let start = Instant::now();
+        let mut st = lock(&self.shared.status);
+        while st.durable_rev < rev {
+            if st.state == WriteState::Failed && st.pending == 0 {
+                let why = st
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "a logbook change was not saved".into());
+                return Err(WaitError::Failed(why));
+            }
+            let left = deadline.saturating_sub(start.elapsed());
+            if left.is_zero() {
+                let status = st.clone();
+                drop(st);
+                return Err(WaitError::Timeout {
+                    waited: start.elapsed(),
+                    status,
+                });
+            }
+            let (guard, _) = self
+                .shared
+                .settled
+                .wait_timeout(st, left)
+                .unwrap_or_else(PoisonError::into_inner);
+            st = guard;
+        }
+        Ok(st.clone())
     }
 
     /// How many times the writer has seen ANOTHER connection commit to this database since it
@@ -1611,6 +1671,97 @@ mod tests {
         let st = w.flush(Duration::from_secs(60)).expect("drained");
         assert_eq!(st.pending, 0);
         assert_eq!(rows(&stored(&scratch.db())), 4_000);
+    }
+
+    // ── the committed wait (SPEC-2's read path) ─────────────────────────────
+
+    /// ★ A read that must see every change made so far waits for them with `wait_committed`,
+    /// and it returns exactly when they are on disk.
+    ///
+    /// The control is the write lock taken elsewhere: while it is held the change cannot be
+    /// committed, and the wait says so at its deadline — so the prompt return afterwards is
+    /// the commit's doing, not a wait that never waited.
+    #[test]
+    fn a_committed_wait_returns_once_every_change_up_to_it_is_on_disk() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        assert_eq!(w.submitted_rev(), 0, "nothing submitted yet");
+        w.wait_committed(0, Duration::ZERO)
+            .expect("nothing submitted, nothing to wait for");
+
+        let hold = sqlite::WriteHold::take(&scratch.db()).expect("hold the write lock");
+        let t = w.submit(change(100, vec![rec("W1AW", 1)]));
+        assert_eq!(w.submitted_rev(), 100, "the latest change submitted");
+        assert!(
+            matches!(
+                w.wait_committed(100, Duration::from_millis(200)),
+                Err(WaitError::Timeout { .. })
+            ),
+            "control: the change cannot be committed while the lock is held elsewhere"
+        );
+        assert_eq!(
+            rows(&stored(&scratch.db())),
+            0,
+            "control: nothing is stored"
+        );
+
+        drop(hold);
+        let st = w
+            .wait_committed(100, Duration::from_secs(60))
+            .expect("committed once the lock is free");
+        assert!(st.durable_rev >= 100, "{st:?}");
+        assert!(t.is_resolved(), "the change's own ticket agrees");
+        assert_eq!(
+            rows(&stored(&scratch.db())),
+            1,
+            "and another connection sees it"
+        );
+        // A later question about an earlier revision is already answered.
+        w.wait_committed(50, Duration::ZERO)
+            .expect("everything up to 50 is committed");
+    }
+
+    /// A wait past a change the store LOST ends as soon as nothing in flight could still
+    /// commit it — with the reason, not at a deadline nobody can act on. A wait below the lost
+    /// change is satisfied as usual.
+    #[test]
+    fn a_committed_wait_past_a_lost_change_ends_with_the_reason() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let good = w.submit(change(101, vec![rec("W1AW", 101)]));
+        w.wait_durable(&good, Duration::from_secs(60)).expect("ok");
+        // A row with no id cannot be addressed again, so the store refuses it.
+        let mut orphan = (*rec("K5XYZ", 500)).clone();
+        orphan.id = None;
+        let bad = w.submit(change(102, vec![Arc::new(orphan)]));
+        let _ = w.wait_durable(&bad, Duration::from_secs(60));
+
+        w.wait_committed(101, Duration::ZERO)
+            .expect("everything up to the lost change is committed");
+        let started = Instant::now();
+        match w.wait_committed(102, Duration::from_secs(30)) {
+            Err(WaitError::Failed(e)) => assert!(e.contains("K5XYZ"), "{e}"),
+            other => panic!("expected the loss to reach the waiter, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "at once, not at the deadline: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// ★ POSITIVE CONTROL for the fence: the committed wait under an Engine guard is a panic
+    /// in a debug build, as the ticket wait is.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a wait for the logbook store to hold every change ran while this thread holds"
+    )]
+    fn a_committed_wait_under_the_engine_lock_is_refused() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let _held = io_fence::EngineHeld::acquired();
+        let _ = w.wait_committed(0, Duration::ZERO);
     }
 
     /// Dropping the writer finishes what it was given. Nothing waits on these tickets, which

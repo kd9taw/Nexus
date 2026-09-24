@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tempo_core::logbook::mirror::{self, FileStamp, MirrorOptions, MirrorState, MirrorWriter};
+use tempo_core::logbook::reader::LogReader;
 use tempo_core::logbook::sqlite::{self, LogDb, Resolved};
 use tempo_core::logbook::writer::{self, Change, LogWriter, Ticket, Touched};
 use tempo_core::logbook::{migrate, Logbook, QsoRecord};
@@ -44,6 +45,8 @@ pub const DURABLE_WAIT: Duration = Duration::from_secs(60);
 /// The store, open and owning the log.
 pub struct LogStore {
     writer: Arc<LogWriter>,
+    /// Read connections to the store, opened on first use — see [`StoreReads`].
+    reader: Arc<LogReader>,
     /// Shared with a quit, which writes it with the engine lock released (see [`Unsaved`]).
     mirror: Arc<MirrorWriter>,
     log_path: PathBuf,
@@ -213,9 +216,12 @@ fn open_reporting_with(
         log_path.to_path_buf(),
         mirror_options,
     ));
+    // Opens nothing yet: a session that never reads the store costs nothing for it.
+    let reader = Arc::new(LogReader::new(&db_path));
     Ok(Opened {
         store: LogStore {
             writer,
+            reader,
             mirror,
             log_path: log_path.to_path_buf(),
             db_path,
@@ -234,6 +240,17 @@ impl LogStore {
     /// The writer, for a command that waits on tickets after releasing every lock.
     pub fn writer(&self) -> Arc<LogWriter> {
         Arc::clone(&self.writer)
+    }
+
+    /// A read of the store that will see every change this process has made to it so far —
+    /// taken here, under the engine lock, and used after it is released. Handles and one
+    /// atomic read: no I/O.
+    pub fn reads(&self) -> StoreReads {
+        StoreReads {
+            reader: Arc::clone(&self.reader),
+            writer: Arc::clone(&self.writer),
+            after: self.writer.submitted_rev(),
+        }
     }
 
     /// The database's path.
@@ -420,6 +437,65 @@ impl Durability {
                 tempo_core::logbook::LogAppendReceipt::durable(Arc::clone(&writer), t, DURABLE_WAIT)
             })
             .collect()
+    }
+}
+
+/// A read of the logbook store — SPEC-2 v3's read path, laid in C12.
+///
+/// Taken under the engine lock ([`LogStore::reads`], [`crate::engine::Engine::log_store_reads`])
+/// and used after it is released: it carries the reader, the writer, and the revision of the
+/// latest change this process had submitted when it was taken. A read through it first waits for
+/// every change up to that revision to be committed, then reads the store in ONE read
+/// transaction — so it sees every change made before the question was asked, the way a read of
+/// the log in memory always has (memory is written first), and one consistent picture of them.
+///
+/// **It never waits under a lock and never reads under one**: the wait and the read are fenced
+/// off the Engine lock ([`tempo_core::logbook::io_fence`]), and a debug build panics if either
+/// runs under it.
+///
+/// When the store has not taken every change within the wait — a stalled write, a slow disk —
+/// or has refused one, the read still happens, against the store as it stands, and says so
+/// ([`Freshness::Stale`]). An answer that is a moment old and says so beats no answer.
+#[derive(Debug, Clone)]
+pub struct StoreReads {
+    reader: Arc<LogReader>,
+    writer: Arc<LogWriter>,
+    /// Every change up to this revision was submitted before the read was asked for.
+    after: u64,
+}
+
+/// Whether a read through [`StoreReads`] saw every change made before it was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Freshness {
+    /// Every change submitted before the read was asked for is in what it saw.
+    Current,
+    /// The store had not taken them all when the wait ran out, or had refused one: the read saw
+    /// the store as it stood. Why, in the writer's words.
+    Stale(String),
+}
+
+impl StoreReads {
+    /// Wait up to `wait_up_to` for the store to hold every change made before this read was
+    /// asked for, then run `f` against it in one read transaction.
+    ///
+    /// ⚠️ Never call it holding the Engine lock; a debug build panics.
+    pub fn read<T>(
+        &self,
+        wait_up_to: Duration,
+        f: impl FnOnce(&LogDb) -> sqlite::Result<T>,
+    ) -> Result<(T, Freshness), sqlite::Error> {
+        let fresh = match self.writer.wait_committed(self.after, wait_up_to) {
+            Ok(_) => Freshness::Current,
+            Err(why) => Freshness::Stale(why.to_string()),
+        };
+        Ok((self.reader.read(f)?, fresh))
+    }
+
+    /// Every record the store holds, in log order, each as [`LogDb::load_all`] decodes it —
+    /// the log as a reader of the store sees it. What tests read in place of the copy held in
+    /// memory as that copy goes away (SPEC-2 v3, C19).
+    pub fn rows(&self, wait_up_to: Duration) -> Result<(Vec<QsoRecord>, Freshness), sqlite::Error> {
+        self.read(wait_up_to, |db| db.load_all())
     }
 }
 
@@ -1162,6 +1238,55 @@ mod tests {
         // Nothing changed, nothing to wait for.
         let (_, none) = e.with_log_tickets(|e| e.mark_qsl_card(999, true));
         assert!(none.is_empty());
+    }
+
+    // ── reading the store (SPEC-2's read path) ──────────────────────────────
+
+    /// ★ A READ OF THE STORE SEES EVERY CHANGE MADE BEFORE IT WAS ASKED FOR — the way a read of
+    /// the log in memory always has — and it is the log, row for row.
+    ///
+    /// The control is the write lock taken elsewhere: while the contact cannot be committed,
+    /// the read says it is Stale and the contact is not in what it saw — so the Current read
+    /// afterwards is the wait's doing, not a store that happened to be caught up.
+    #[test]
+    fn a_read_of_the_store_sees_every_change_made_before_it_was_asked_for() {
+        let d = Dir::new("reads");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut e = engine_on_store(&d);
+        flush(&e);
+
+        let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+        e.log_qso(qso("W1READ", 1_788_000_000));
+        let reads = e.log_store_reads().expect("the store owns the log");
+        let (rows, fresh) = reads.rows(Duration::from_millis(300)).expect("read");
+        assert!(matches!(fresh, Freshness::Stale(_)), "{fresh:?}");
+        assert_eq!(rows.len(), 10, "control: the store as it stood");
+        assert!(
+            rows.iter().all(|r| r.call != "W1READ"),
+            "control: the contact is not in the store yet"
+        );
+
+        drop(hold);
+        let (rows, fresh) = reads.rows(DURABLE_WAIT).expect("read");
+        assert_eq!(fresh, Freshness::Current);
+        same_log(&rows, e.log_records(), "a read of the store is the log");
+    }
+
+    /// ★ POSITIVE CONTROL: a read of the store under the Engine lock is a panic in a debug
+    /// build — the wait for the writer is the first thing it does, and it is fenced. Every
+    /// other read here runs with the lock released, and stays quiet.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a wait for the logbook store to hold every change ran while this thread holds"
+    )]
+    fn a_read_of_the_store_under_the_engine_lock_is_refused() {
+        let d = Dir::new("reads-fence");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        let engine = Mutex::new(engine_on_store(&d));
+        let e = engine_lock(&engine);
+        let reads = e.log_store_reads().expect("the store owns the log");
+        let _ = reads.rows(Duration::ZERO);
     }
 
     // ── property 5: no I/O under the engine lock ────────────────────────────

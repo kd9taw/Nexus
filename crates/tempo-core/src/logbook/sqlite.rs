@@ -30,7 +30,10 @@
 //! # What this module does NOT do
 //!
 //! No migration of an existing `log.adi` (C5), no writer thread (C7), no ADIF mirror (C6).
-//! It opens or creates the database, applies the schema, and converts records both ways.
+//! It opens or creates the database, applies the schema, and converts records both ways — all
+//! of them ([`LogDb::load_all`]) or the ones some ids name ([`LogDb::rows_by_ids`]), through
+//! ONE decoder and inside one read transaction — and opens the read-only connections SPEC-2's
+//! read path hands out ([`LogDb::open_reader`], pooled by [`super::reader::LogReader`]).
 //!
 //! # Where this implementation departs from SPEC-1 §v3.11, and why
 //!
@@ -80,6 +83,18 @@ const BUSY_TIMEOUT_MS: u32 = 5_000;
 /// MiB took at most 4% more. It writes no fewer bytes — that is the chunk size's job — and it is
 /// freed when the conversion's connection closes.
 const CONVERSION_CACHE_KIB: i64 = 65_536;
+
+/// How many ids or rowids one statement of a partial read ([`LogDb::rows_by_ids`]) names. A
+/// bound on statement size, not a rule: a longer list is read in several statements of this
+/// many, inside the same read transaction, and comes back in one log order.
+const ROWS_PER_STATEMENT: usize = 512;
+
+/// Which records [`LogDb::decode`] reads: every one, or those at these rowids (sorted).
+#[derive(Debug, Clone, Copy)]
+enum Rows<'a> {
+    All,
+    At(&'a [i64]),
+}
 
 /// `log_meta`, applied BEFORE [`DDL`] so the version can be read first.
 ///
@@ -632,6 +647,37 @@ impl LogDb {
         LogDb::init(conn)
     }
 
+    /// Open `path` to READ the log — the connection a [`super::reader::LogReader`] hands out,
+    /// never the writer's.
+    ///
+    /// - **It never creates a database**: no `SQLITE_OPEN_CREATE`, so a path that is not one
+    ///   is an error, and the file is left as it was.
+    /// - **It never writes**: `PRAGMA query_only`, so SQLite itself refuses any statement that
+    ///   would change the file — not this module remembering not to issue one. It is opened
+    ///   read-write all the same, because a read-only connection to a WAL database cannot open
+    ///   at all when the WAL index is absent, and this one may be the first to arrive.
+    /// - **It refuses a store of another schema version**, as [`LogDb::open`] does — and,
+    ///   unlike it, never stamps one on a database that has none.
+    pub fn open_reader(path: &Path) -> Result<LogDb> {
+        use rusqlite::OpenFlags;
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+        conn.pragma_update(None, "query_only", true)?;
+        let db = LogDb { conn };
+        match db.meta("schema_version")? {
+            Some(SCHEMA_VERSION) => Ok(db),
+            found => Err(Error::SchemaVersion {
+                found: found.unwrap_or(0),
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    }
+
     /// Build every index in [`INDEXES`] the store does not have yet, telling `progress` how many
     /// of how many are built: `(0, n)` first, then after each one. Each index is its own
     /// transaction, and an index that is already there is left as it is — so a build cut short
@@ -895,23 +941,81 @@ impl LogDb {
     /// Every record, in the order they were stored — [`Self::load_all`]'s body, which runs it in
     /// one read transaction. `between` is its test seam.
     fn read_all(&self, between: &mut dyn FnMut()) -> Result<Vec<QsoRecord>> {
+        self.decode(Rows::All, between)
+    }
+
+    /// The records these ids name, in the order they were stored — each exactly as
+    /// [`Self::load_all`] hands it back, through the same decoder, read in ONE read transaction
+    /// ([`Self::in_one_snapshot`]). An id the store does not hold is simply absent, an id asked
+    /// for twice comes back once, and the order the ids were asked in is irrelevant: the answer
+    /// is always in log order.
+    pub fn rows_by_ids(&self, ids: &[RecordId]) -> Result<Vec<QsoRecord>> {
+        self.in_one_snapshot(|db| {
+            let mut rowids = std::collections::BTreeSet::new();
+            for chunk in ids.chunks(ROWS_PER_STATEMENT) {
+                let places: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+                let mut stmt = db.conn.prepare(&format!(
+                    "SELECT rowid FROM qso WHERE id IN ({})",
+                    places.join(", ")
+                ))?;
+                let texts: Vec<String> = chunk.iter().map(RecordId::to_string).collect();
+                let mut rows = stmt.query(params_from_iter(texts.iter()))?;
+                while let Some(row) = rows.next()? {
+                    rowids.insert(row.get::<_, i64>(0)?);
+                }
+            }
+            let rowids: Vec<i64> = rowids.into_iter().collect();
+            let mut out = Vec::with_capacity(rowids.len());
+            for chunk in rowids.chunks(ROWS_PER_STATEMENT) {
+                out.extend(db.decode(Rows::At(chunk), &mut || {})?);
+            }
+            Ok(out)
+        })
+    }
+
+    /// THE decoder: the records `rows` names, in log order, each assembled from its `qso` row
+    /// and its four child tables. [`Self::load_all`] and [`Self::rows_by_ids`] both come
+    /// here, so a record cannot read back one way through one and another way through the
+    /// other. Run inside a read transaction by its callers; `between` is the load's test seam.
+    fn decode(&self, rows: Rows<'_>, between: &mut dyn FnMut()) -> Result<Vec<QsoRecord>> {
+        // The rows a child table's sweep is limited to: none, or the ones at `rows`' rowids.
+        // The rowids are integers this module read out of the store itself, written as
+        // literals — there is no text in them to escape.
+        let (of_rows, of_children) = match rows {
+            Rows::All => (String::new(), String::new()),
+            Rows::At(rowids) => {
+                let list = rowids
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (
+                    format!("WHERE rowid IN ({list})"),
+                    format!("WHERE qso_id IN (SELECT id FROM qso WHERE rowid IN ({list}))"),
+                )
+            }
+        };
         // The children come back in three sweeps rather than three queries per record: a
         // lifetime log is hundreds of thousands of rows, and 3N statement executions to
         // rebuild what 3 can is the shape of the problem this whole programme is removing.
-        let extra = self.load_extra()?;
-        let mut upload = self.load_uploads()?;
-        let mut exchange = self.load_exchange()?;
-        let mut directed = self.load_contest_adif()?;
+        let mut extra = self.load_extra(&of_children)?;
+        let mut upload = self.load_uploads(&of_children)?;
+        let mut exchange = self.load_exchange(&of_children)?;
+        let mut directed = self.load_contest_adif(&of_children)?;
         between();
 
-        let sql = format!("SELECT {} FROM qso ORDER BY rowid", QSO_COLUMNS.join(", "));
+        let sql = format!(
+            "SELECT {} FROM qso {of_rows} ORDER BY rowid",
+            QSO_COLUMNS.join(", ")
+        );
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
             let mut rec = record_from_row(row)?;
-            rec.extra = extra.get(&id).cloned().unwrap_or_default();
+            // `remove`: a `qso` row's id is its primary key, so no other row can want these.
+            rec.extra = extra.remove(&id).unwrap_or_default();
             if let Some(u) = upload.remove(&id) {
                 rec.upload = u;
             }
@@ -938,10 +1042,10 @@ impl LogDb {
     /// The passthrough, `ORDER BY name` — which is what reproduces `extra.sort()` byte for
     /// byte, SQLite's `BINARY` collation and Rust's `String` ordering both being bytewise over
     /// UTF-8, and the table's primary key making the name unique within a record.
-    fn load_extra(&self) -> Result<HashMap<String, Vec<(String, String)>>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT qso_id, name, value FROM qso_extra ORDER BY qso_id, name")?;
+    fn load_extra(&self, of: &str) -> Result<HashMap<String, Vec<(String, String)>>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT qso_id, name, value FROM qso_extra {of} ORDER BY qso_id, name"
+        ))?;
         let mut rows = stmt.query([])?;
         let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -956,10 +1060,10 @@ impl LogDb {
     /// `contest::adif::directed_columns` chose (everything I sent, then everything they
     /// sent). Alphabetical, the way [`Self::load_extra`] reads, would reorder the contest
     /// block of every export.
-    fn load_contest_adif(&self) -> Result<HashMap<String, Vec<(String, String)>>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT qso_id, tag, value FROM qso_contest_adif ORDER BY qso_id, ord")?;
+    fn load_contest_adif(&self, of: &str) -> Result<HashMap<String, Vec<(String, String)>>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT qso_id, tag, value FROM qso_contest_adif {of} ORDER BY qso_id, ord"
+        ))?;
         let mut rows = stmt.query([])?;
         let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -970,10 +1074,10 @@ impl LogDb {
         Ok(out)
     }
 
-    fn load_uploads(&self) -> Result<HashMap<String, UploadState>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT qso_id, service, outcome, when_unix, detail FROM qso_upload")?;
+    fn load_uploads(&self, of: &str) -> Result<HashMap<String, UploadState>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT qso_id, service, outcome, when_unix, detail FROM qso_upload {of}"
+        ))?;
         let mut rows = stmt.query([])?;
         let mut out: HashMap<String, UploadState> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -1008,10 +1112,11 @@ impl LogDb {
     #[allow(clippy::type_complexity)]
     fn load_exchange(
         &self,
+        of: &str,
     ) -> Result<HashMap<String, (Vec<(String, String)>, Vec<(String, String)>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT qso_id, side, slot, raw FROM contest_exchange ORDER BY qso_id, side, ord",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT qso_id, side, slot, raw FROM contest_exchange {of} ORDER BY qso_id, side, ord"
+        ))?;
         let mut rows = stmt.query([])?;
         let mut out: HashMap<String, (Vec<_>, Vec<_>)> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -3325,5 +3430,73 @@ mod tests {
         let after = LogDb::open(&path).unwrap().load_all().unwrap();
         assert_eq!(after.len(), before.len() + 1, "control: the commit landed");
         assert_eq!(after.last(), late.last(), "and the contact is whole");
+    }
+
+    // ── a partial read ───────────────────────────────────────────────────────
+
+    /// ★ `rows_by_ids` IS `load_all`, FILTERED — over 150,000 synthetic contacts carrying every
+    /// representation the store holds (contest blocks and their exchange, foreign tags, all
+    /// four upload stamps, the `""` band, portable calls). Every id is swept in windows of
+    /// 10,000, then random picks — repeated ids, ids the store never held, asked for in reverse
+    /// — and each answer is exactly the records `load_all` returns for those ids, in log order.
+    /// The windows and the larger picks cross `ROWS_PER_STATEMENT`, so the chunking is inside
+    /// the proof.
+    #[test]
+    fn rows_by_ids_is_load_all_filtered() {
+        use proptest::prelude::*;
+        use std::collections::HashSet;
+        let n = 150_000;
+        let d = CopyDir::new("byid");
+        let path = d.0.join("log.sqlite3");
+        {
+            let mut records = parse_adif(&synthetic_log(n));
+            for (i, r) in records.iter_mut().enumerate() {
+                r.id = Some(RecordId::Provisional {
+                    hash: i as u64,
+                    ordinal: 0,
+                });
+            }
+            let mut db = LogDb::open(&path).unwrap();
+            db.insert_all(records.iter().map(|r| (r, Resolved::default())))
+                .unwrap();
+        }
+        let db = LogDb::open(&path).unwrap();
+        let all = db.load_all().unwrap();
+        assert_eq!(all.len(), n, "premise: every synthetic record stored");
+        assert!(
+            all.iter().any(|r| r.contest.is_some())
+                && all.iter().any(|r| !r.extra.is_empty())
+                && all.iter().any(|r| r.upload.clublog.is_some()),
+            "premise: the fixture carries the child tables a partial read must assemble"
+        );
+        let id = |r: &QsoRecord| r.id.expect("every stored record has an id");
+
+        for window in all.chunks(10_000) {
+            let ids: Vec<RecordId> = window.iter().map(id).collect();
+            assert_eq!(db.rows_by_ids(&ids).unwrap(), window, "a window of ids");
+        }
+
+        let runner = proptest::test_runner::Config {
+            cases: 32,
+            ..proptest::test_runner::Config::default()
+        };
+        proptest!(runner, |(
+            picks in prop::collection::vec(0..n, 0..2_000),
+            strangers in 0u64..4,
+        )| {
+            let mut ids: Vec<RecordId> = picks.iter().map(|&i| id(&all[i])).collect();
+            ids.extend((0..strangers).map(|k| RecordId::Provisional {
+                hash: 10_000_000 + k,
+                ordinal: 0,
+            }));
+            ids.reverse();
+            let wanted: HashSet<RecordId> = picks.iter().map(|&i| id(&all[i])).collect();
+            let expected: Vec<QsoRecord> = all
+                .iter()
+                .filter(|r| wanted.contains(&id(r)))
+                .cloned()
+                .collect();
+            prop_assert_eq!(db.rows_by_ids(&ids).unwrap(), expected);
+        });
     }
 }

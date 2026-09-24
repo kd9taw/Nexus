@@ -22348,6 +22348,13 @@ contact yourself."
         self.station.store.as_ref().map(|s| s.writer())
     }
 
+    /// A read of the logbook store, taken under this lock and used after it is released — see
+    /// [`crate::logstore::StoreReads`]. It will see every change made to the log before this
+    /// call. `None` on the 1.13 path, where the log has no store.
+    pub fn log_store_reads(&self) -> Option<crate::logstore::StoreReads> {
+        self.station.store.as_ref().map(|s| s.reads())
+    }
+
     /// The store's mirror of `log.adi`, as it stands.
     pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
         self.station.store.as_ref().map(|s| s.mirror_status())
