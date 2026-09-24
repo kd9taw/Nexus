@@ -239,7 +239,7 @@ describe('CW: a confirmed, commandable Sub gets a SUB row in the rig strip', () 
     expect(subRow()).not.toBeNull()
   })
 
-  it('the Remote page draws no SUB row in CW either', async () => {
+  it('a browser that does not hold station control sees the row with every Sub slider dead', async () => {
     const { StationControlContext } = await import('../stationAccess')
     render(
       <StationControlContext.Provider value={false}>
@@ -250,6 +250,11 @@ describe('CW: a confirmed, commandable Sub gets a SUB row in the rig strip', () 
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(subRow()).toBeNull()
+    expect(subRow()).not.toBeNull()
+    const inputs = [...subRow()!.querySelectorAll('input[type="range"]')] as HTMLInputElement[]
+    expect(inputs.length).toBe(3)
+    for (const i of inputs) expect(i.disabled, i.getAttribute('aria-label') ?? '').toBe(true)
+    fireEvent.change(screen.getByLabelText('Sub receiver AF gain'), { target: { value: '40' } })
+    expect(setSubLevel, 'a dead slider sent a Sub level').not.toHaveBeenCalled()
   })
 })

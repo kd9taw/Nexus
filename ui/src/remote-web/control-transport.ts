@@ -206,6 +206,16 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             read = 'get_snapshot'
             break
           }
+          case 'set_sub_level': {
+            // The desktop Sub row's own call, `{ level: 'rf' | 'af' | 'sql', value }`, as one typed
+            // intent in the Remote vocabulary. Nothing else rides it: no mode, no expected value.
+            const names = { rf: 'rfGain', af: 'afGain', sql: 'squelch' } as const
+            if (!args || Object.keys(args).length !== 2 || !('level' in args) || !('value' in args) ||
+              typeof args.level !== 'string' || !Object.prototype.hasOwnProperty.call(names, args.level)) throw Error('invalidOperation')
+            action = stationAction({ action: 'radio.subLevel', level: names[args.level as keyof typeof names], value: args.value })
+            read = 'get_snapshot'
+            break
+          }
           case 'work_spot':
             if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
             // RTTY carries no tier and is its own action, for the same reason FT8/FT4 is: an older
@@ -335,6 +345,8 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if (action.action.startsWith('rotator.') && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'sstv.deleteImage' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'radio.scope' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
+        // The station took the Sub level; it never claims a read-back, because none exists.
+        if (action.action === 'radio.subLevel' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
         if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')

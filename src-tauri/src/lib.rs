@@ -14946,7 +14946,8 @@ fn set_sub_level(
     let level = tempo_app::engine::sub_controls::SubLevel::parse(&level)
         .ok_or_else(|| format!("{level:?} is not a sub receiver control"))?;
     let mut eng = engine_lock(&state);
-    eng.request_sub_level(level, value)?;
+    eng.request_sub_level(level, value)
+        .map_err(|refusal| refusal.to_string())?;
     Ok(eng.snapshot())
 }
 

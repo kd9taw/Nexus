@@ -1819,8 +1819,9 @@ export async function setRfGain(gain: number): Promise<AppSnapshot> {
  * never to Main.
  *
  * REJECTS, with the reason, where the Sub cannot be reached: no Sub offered for this radio, a
- * stage no vendor statement credits to it, or a connection that cannot name it. Desktop only —
- * the Remote operation contract carries no Sub control. */
+ * stage no vendor statement credits to it, or a connection that cannot name it. On the Remote
+ * page this same call becomes one `radio.subLevel` station intent (capability
+ * `subReceiverLevels`), refused for the same reasons by the same engine verb. */
 export async function setSubLevel(level: 'rf' | 'af' | 'sql', value: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_sub_level', { level, value })
 }

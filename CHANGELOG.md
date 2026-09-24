@@ -14,13 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frequency where Nexus knows it (the uplink during a satellite pass), and sliders for its RF gain
   and, on an IC-7610, its AF gain and squelch. The main receiver's controls are labelled **MAIN**
   while the SUB row is there. It appears when the radio runs through Nexus's own CI-V control,
-  and the sliders change only the Sub — the main receiver's controls are untouched. Nexus does
-  not read the Sub's levels back from the radio yet, so each slider shows the last value the
-  radio accepted from Nexus, and a knob turned on the radio itself is not reflected. An IC-9700
-  gets RF gain only: Icom's documentation does not say its Sub has an audio stage of its own. In
-  CW the SUB row hides with the RX DSP controls. Other dual-receiver radios (FTDX101, TS-990S,
-  IC-9100, IC-910H, FTDX5000), an Icom run through Hamlib, and every radio with one receiver look
-  exactly as before. Needs checking on a real IC-7610 and IC-9700.
+  and the sliders change only the Sub — the main receiver's controls are untouched. The Remote
+  page shows the same row, and its sliders work while you hold control of the station; a station
+  still on an older version of Nexus shows no SUB row there. Nexus does not read the Sub's levels
+  back from the radio yet, so each slider shows the last value the radio accepted from Nexus, and
+  a knob turned on the radio itself is not reflected. An IC-9700 gets RF gain only: Icom's
+  documentation does not say its Sub has an audio stage of its own. In CW the SUB row hides with
+  the RX DSP controls. Other dual-receiver radios (FTDX101, TS-990S, IC-9100, IC-910H, FTDX5000),
+  an Icom run through Hamlib, and every radio with one receiver look exactly as before. Needs
+  checking on a real IC-7610 and IC-9700.
 
 - **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
   The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for

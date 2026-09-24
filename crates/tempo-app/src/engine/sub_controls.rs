@@ -1,7 +1,9 @@
 //! ⭐ THE SUB RECEIVER'S CONTROLS — what the operator asks of the Sub, and what the radio took.
 //!
 //! The Sub's controls reach the radio by ONE road. The cockpit asks here
-//! ([`Engine::request_sub_level`]); the radio loop takes the request at receive time, never while
+//! ([`Engine::request_sub_level`]) — the desktop's Sub row directly, the Remote page through its
+//! `radio.subLevel` intent, which ends in this same verb (`Engine::queue_remote_sub_level`) and so
+//! meets every refusal below; the radio loop takes the request at receive time, never while
 //! anything is keyed, and — only when the CAT path serving the radio can NAME the Sub — sends it
 //! as `L Sub <level> <value>`. Nexus's own CI-V daemon turns that into the per-receiver command
 //! the radio documents (`29 01 …` on an IC-7610; select Sub, set, select Main on an IC-9700,
@@ -78,6 +80,39 @@ impl SubLevel {
     }
 }
 
+/// Why a Sub level request was refused — each one a reason it could not reach the Sub, so it is
+/// refused here rather than queued for a radio that could only fail it. The desktop says the
+/// sentence; the Remote contract maps each to a reason of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubLevelRefusal {
+    /// No Sub offered for this radio (UNKNOWN is never an offer, D3).
+    NoSub,
+    /// No vendor statement credits the Sub with this level's stage (D7).
+    StageNotConfirmed(SubLevel),
+    /// Not a number.
+    NotALevel,
+    /// The CAT path serving the radio cannot name the Sub, or the radio loop has not said yet.
+    NoRoute,
+}
+
+impl std::fmt::Display for SubLevelRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubLevelRefusal::NoSub => f.write_str("this radio has no sub receiver Nexus can drive"),
+            SubLevelRefusal::StageNotConfirmed(level) => write!(
+                f,
+                "{} is not confirmed for this radio's sub receiver",
+                level.token()
+            ),
+            SubLevelRefusal::NotALevel => f.write_str("not a level"),
+            SubLevelRefusal::NoRoute => f.write_str(
+                "this connection cannot reach the sub receiver — it needs Nexus's own CI-V \
+                 control of the radio",
+            ),
+        }
+    }
+}
+
 /// A Sub level the radio loop is to send — and WHOSE Sub it was taken for, so the radio's
 /// answer can only ever be credited to that radio (see [`Engine::observe_sub_level`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -130,28 +165,21 @@ impl Engine {
     /// (UNKNOWN is never an offer, D3), a stage no vendor statement credits to the Sub (D7), or a
     /// CAT path that cannot name the Sub — including one the loop has not reported yet. A request
     /// that could only fail at the radio is refused here instead of queued.
-    pub fn request_sub_level(&mut self, level: SubLevel, frac: f32) -> Result<(), String> {
+    pub fn request_sub_level(&mut self, level: SubLevel, frac: f32) -> Result<(), SubLevelRefusal> {
         let owner = self.sub_owner();
         let model = owner.1;
         if !dualrx::sub_receiver_offered(model) {
-            return Err("this radio has no sub receiver Nexus can drive".into());
+            return Err(SubLevelRefusal::NoSub);
         }
         if dualrx::stage_on(model, ReceiverId::Sub, level.stage()) != StageOwner::Own {
-            return Err(format!(
-                "{} is not confirmed for this radio's sub receiver",
-                level.token()
-            ));
+            return Err(SubLevelRefusal::StageNotConfirmed(level));
         }
         if !frac.is_finite() {
-            return Err("not a level".into());
+            return Err(SubLevelRefusal::NotALevel);
         }
         let sub = self.sub_controls.for_owner(owner);
         if sub.route != Some(true) {
-            return Err(
-                "this connection cannot reach the sub receiver — it needs Nexus's own CI-V \
-                 control of the radio"
-                    .into(),
-            );
+            return Err(SubLevelRefusal::NoRoute);
         }
         sub.pending[level.index()] = Some(frac.clamp(0.0, 1.0));
         Ok(())

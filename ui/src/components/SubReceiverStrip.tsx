@@ -25,13 +25,17 @@
 //   · one line for each honest "no": a level NOT CONFIRMED for the Sub (never "not on this
 //     radio"), and that these levels are set, not read back.
 //
-// Desktop only: the host draws it for the local station alone. The Remote operation contract
-// carries no Sub control, so the hosted page renders none.
+// The Remote page draws it too (the hosted page reuses these cockpits): its sliders call the same
+// `setSubLevel`, which the page's transport turns into one `radio.subLevel` station intent, and
+// they are live only while this browser holds control of a station that advertises
+// `subReceiverLevels` at operation v3 or later. An older station never sends `receivers`, so the
+// page draws nothing for it.
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, RadioStatus, ReceiverStatus } from '../types'
 import { setSubLevel } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
+import { useStationCapability } from '../stationAccess'
 import { formatDialMhz } from './FrequencyReadout'
 import {
   deadControlProps,
@@ -145,6 +149,9 @@ function SubLevelRow({
 }) {
   const spec = LEVELS[control.id]
   const accepted = spec ? sub[spec.field] : null
+  // Permission, not capability: always true at the desktop; on the Remote page, true only while
+  // this browser holds control of a station that takes the intent.
+  const permitted = useStationCapability('subReceiverLevels')
   const [pct, setPct] = useState(accepted != null ? Math.round(accepted * 100) : 50)
   const dragging = useRef(false)
   useEffect(() => {
@@ -154,6 +161,7 @@ function SubLevelRow({
   // draws nothing rather than a control that commands nothing.
   if (!spec) return null
   const change = (value: number) => {
+    if (!permitted) return
     setPct(value)
     void setSubLevel(spec.level, value / 100)
       .then((s) => onSnap?.(s))
@@ -164,7 +172,7 @@ function SubLevelRow({
       <label className="ph-dsplev" title={spec.title()}>
         <span>{control.plate}</span>
         <input
-          {...(dead ? deadControlProps('input', describedBy) : {})}
+          {...(dead ? deadControlProps('input', describedBy) : { disabled: !permitted })}
           type="range"
           min={0}
           max={100}

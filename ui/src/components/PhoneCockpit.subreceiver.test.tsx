@@ -256,13 +256,20 @@ describe('a confirmed dual receiver gets a Sub strip — and only one', () => {
     expect(document.querySelector('[data-receiver-plate="main"]')).toBeNull()
   })
 
-  it('the Remote page draws no Sub strip — its operation contract carries no Sub control', () => {
+  it('a browser that does not hold station control sees the row with every Sub slider dead', () => {
+    // The Remote page draws the same row (SubReceiverRemote.test.tsx drives its real operation
+    // contract); without control of a station that takes `radio.subLevel`, nothing is live.
     const snap = snapWith(dual(SUB_7610, true))
     render(
       <StationControlContext.Provider value={false}>
         <PhoneCockpit snap={snap} theme="dark" />
       </StationControlContext.Provider>,
     )
-    expect(subStrip()).toBeNull()
+    expect(subStrip()).not.toBeNull()
+    const inputs = [...subStrip()!.querySelectorAll('input[type="range"]')] as HTMLInputElement[]
+    expect(inputs.length).toBe(3)
+    for (const i of inputs) expect(i.disabled, i.getAttribute('aria-label') ?? '').toBe(true)
+    fireEvent.change(screen.getByLabelText('Sub receiver AF gain'), { target: { value: '40' } })
+    expect(mockSetSubLevel, 'a dead slider sent a Sub level').not.toHaveBeenCalled()
   })
 })

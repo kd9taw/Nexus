@@ -1653,7 +1653,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           <div className="ph-chain" role="group" aria-label={t('phone.chain.receiver.aria')}>
             {/* MAIN — drawn exactly while the SUB row below is, so a radio with one receiver
                 (or a Sub Nexus cannot command) draws nothing here and is unchanged. */}
-            {control && <MainReceiverPlate radio={snap.radio} catOk={catOk} />}
+            <MainReceiverPlate radio={snap.radio} catOk={catOk} />
             {noCatBanner('rx')}
             {/* ── IF: the passband ──────────────────────────────────────────────────
                 MOVED OUT OF THE HEADER (operator ruling, 2026-09-20). BW is an IF control
@@ -1909,12 +1909,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {absentLine('rx')}
           </div>
           {/* ⭐ THE SUB RECEIVER — a dual-receiver radio's second receiver, below Main's chain.
-              Draws NOTHING unless the snapshot offers a Sub, so every other radio's pane is
-              exactly what it was. Local station only: the Remote contract carries no Sub
-              control. A component of its own, not a widened shared one — see its header. */}
-          {control && (
-            <SubReceiverStrip radio={snap.radio} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
-          )}
+              Draws NOTHING unless the snapshot offers a Sub Nexus can command, so every other
+              radio's pane is exactly what it was. On the Remote page too: its sliders go through
+              the station's `radio.subLevel` intent. A component of its own, not a widened shared
+              one — see its header. */}
+          <SubReceiverStrip radio={snap.radio} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
         </CockpitPaneFrame>
       )}
 
