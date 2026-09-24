@@ -22247,6 +22247,17 @@ contact yourself."
         }
     }
 
+    /// What a quit still has to wait for — see [`crate::logstore::Unsaved`]. Handles only, no
+    /// I/O: the quit takes it under the lock and waits on it with the lock released. Nothing
+    /// on the 1.13 path, which wrote `log.adi` inline.
+    pub fn log_unsaved(&self) -> crate::logstore::Unsaved {
+        self.station
+            .store
+            .as_ref()
+            .map(|s| s.unsaved())
+            .unwrap_or_default()
+    }
+
     /// Run `f`, and hand back what it did together with the durability of every change it made
     /// to the log — what an operator command waits on AFTER it has released the engine lock
     /// ([`crate::logstore::Durability::wait`]). Empty on the 1.13 path, which wrote inline.
