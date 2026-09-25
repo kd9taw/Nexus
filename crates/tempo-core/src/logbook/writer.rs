@@ -139,9 +139,11 @@ pub struct Change {
     pub rev: u64,
     /// Which lane. See [`Priority`].
     pub priority: Priority,
-    /// Drop every row first.
+    /// Drop every row first — in one statement, whatever `remove` names.
     pub clear: bool,
-    /// Rows the log no longer holds.
+    /// Rows the log no longer holds. A purge's are every row it took out: the writer does not
+    /// write them, since `clear` drops every row in one statement, but the process that sent it
+    /// keeps them, and a re-send after the writer gave the purge up takes out exactly those.
     pub remove: Vec<RecordId>,
     /// Rows as the log now holds them.
     pub upsert: Vec<RowWrite>,
@@ -180,7 +182,8 @@ impl Change {
     ) -> Change {
         // A purge is one statement. Its effects name every row in the log, and turning that
         // into 150,000 addressed deletes inside one transaction is exactly the bulk write
-        // §v3.13/R8 forbids.
+        // §v3.13/R8 forbids, so the writer writes none of them. They are still its `remove`:
+        // what a re-send of it takes out, once the writer has given it up.
         let clear = matches!(op, LogOp::Clear);
         let wanted: HashSet<RecordId> = effects
             .added
@@ -216,11 +219,7 @@ impl Change {
             rev: log.revision(),
             priority: Priority::Interactive,
             clear,
-            remove: if clear {
-                Vec::new()
-            } else {
-                effects.removed.clone()
-            },
+            remove: effects.removed.clone(),
             upsert,
             marks: Watermarks::of(log),
             meta: Vec::new(),
@@ -256,7 +255,8 @@ impl Change {
     /// so the store ends up holding the same rows in the same order as memory. That order is
     /// what the next launch loads, so it is the property that matters.
     ///
-    /// A log emptied by the change is ONE statement, never a delete per row.
+    /// A log emptied by the change is ONE statement, never a delete per row: its `remove` names
+    /// every row, for a re-send, and the writer writes none of them.
     pub fn between(
         before: &[Arc<QsoRecord>],
         log: &Logbook,
@@ -270,6 +270,7 @@ impl Change {
         };
         if after.is_empty() {
             change.clear = !before.is_empty();
+            change.remove = before.iter().filter_map(|b| b.id).collect();
             return change;
         }
         let mut rows: Vec<Arc<QsoRecord>> = Vec::new();
@@ -340,7 +341,8 @@ impl Change {
     /// A row put in, or changed, is written as it now stands; one whose content did not change
     /// (an edit that set what was already there) writes nothing, as [`Self::between`] never
     /// wrote one; one taken out is removed. A purge (`clear`) is ONE statement, never a delete per
-    /// row: its pairs name every row taken out, and none of them becomes a statement.
+    /// row: its pairs name every row taken out, and they are its `remove`, which the writer does
+    /// not write — a re-send of a purge the writer gave up takes out exactly those.
     pub fn of_pairs(
         marks: Watermarks,
         clear: bool,
@@ -364,8 +366,8 @@ impl Change {
                         cq_zone,
                     });
                 }
-                (Some(b), None) if !clear => change.remove.extend(b.id),
-                (_, None) => {}
+                (Some(b), None) => change.remove.extend(b.id),
+                (None, None) => {}
             }
         }
         change
@@ -1027,7 +1029,12 @@ struct Job {
 }
 
 impl Job {
-    fn new(c: Change, slot: Arc<Slot>) -> Job {
+    fn new(mut c: Change, slot: Arc<Slot>) -> Job {
+        // A purge is ONE statement: `clear` drops every row, and the rows its `remove` names,
+        // kept for the sender's re-send, are not deleted one by one (§v3.13/R8).
+        if c.clear {
+            c.remove = Vec::new();
+        }
         let oversized = c.remove.len() + c.upsert.len() > CHUNK_ROWS;
         let mut touched: HashSet<RecordId> = c.remove.iter().copied().collect();
         touched.extend(c.upsert.iter().filter_map(|w| w.rec.id));
@@ -2190,7 +2197,9 @@ mod tests {
     }
 
     /// A purge is ONE statement. Its effects name every row in the log, and turning those
-    /// into addressed deletes would be the single-transaction bulk write §v3.13/R8 forbids.
+    /// into addressed deletes would be the single-transaction bulk write §v3.13/R8 forbids. The
+    /// change names them all the same, for the re-send of a purge the writer gave up, and the
+    /// writer writes none of them.
     #[test]
     fn a_purge_is_one_statement_and_not_a_delete_per_row() {
         let mut log = Logbook::new();
@@ -2201,11 +2210,25 @@ mod tests {
         assert_eq!(effects.removed.len(), 500, "the op did name every row");
         let change = Change::of(&LogOp::Clear, &effects, &log, |_| (None, None));
         assert!(change.clear);
-        assert!(
-            change.remove.is_empty(),
-            "one DELETE FROM qso, not 500 addressed deletes"
+        assert_eq!(
+            change.remove.len(),
+            500,
+            "the change names every row it took out"
         );
         assert!(change.upsert.is_empty());
+        let slot = Arc::new(Slot {
+            done: Mutex::new(None),
+            cv: Condvar::new(),
+        });
+        let job = Job::new(
+            Change::of(&LogOp::Clear, &effects, &log, |_| (None, None)),
+            slot,
+        );
+        let chunk = plan(&job);
+        assert!(
+            chunk.batch.clear && chunk.batch.remove.is_empty() && chunk.finishes,
+            "one DELETE FROM qso, not 500 addressed deletes"
+        );
 
         // And it really does empty the store.
         let scratch = Scratch::new();
@@ -2558,11 +2581,12 @@ mod tests {
         let c = Change::between(&before, &log, |_| (None, None));
         assert!(c.is_empty(), "an identical copy is not a change: {c:?}");
 
-        // A purge is ONE statement.
+        // A purge is ONE statement, and names every row it took out, for a re-send.
         let before = log.records().to_vec();
         log.clear();
         let c = Change::between(&before, &log, |_| (None, None));
-        assert!(c.clear && c.remove.is_empty() && c.upsert.is_empty());
+        assert!(c.clear && c.upsert.is_empty());
+        assert_eq!(c.remove.len(), before.len(), "every row it took out");
     }
 
     /// A row inserted in the MIDDLE — which no operation does today — still leaves the store
