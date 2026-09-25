@@ -415,7 +415,6 @@ mod tests {
                 let mut q = e.stored_log()[0].as_ref().clone();
                 q.band = "40m".into();
                 assert!(e.update_qso(q.id.unwrap(), q));
-                assert_eq!(e.stored_log().len(), 270);
             };
             let before = read_engine(&engine, kind).unwrap();
             let hook = engine.clone();
@@ -428,6 +427,9 @@ mod tests {
                 || read_engine(&engine, kind),
             )
             .unwrap();
+            // Counted once the read has ended: the 1.13 path's store in memory holds the edit's
+            // commit off until then.
+            assert_eq!(engine.lock().unwrap().stored_log().len(), 270);
             let after = read_engine(&engine, kind).unwrap();
             assert_eq!(during, before, "{kind:?}: the log as the read found it");
             assert_ne!(after, before, "{kind:?}: the next read has the edit");
@@ -643,7 +645,7 @@ mod tests {
             "premise: cards"
         );
         assert_summaries_are_the_old_summaries(&store, "the store");
-        assert_summaries_are_the_old_summaries(&memory(&text), "the 1.13 path");
+        assert_summaries_are_the_old_summaries(&memory(&d, &text), "the 1.13 path");
         settle(&store);
     }
 

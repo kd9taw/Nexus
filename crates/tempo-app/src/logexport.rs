@@ -189,7 +189,9 @@ fn pass(
     wait: Duration,
     take: &mut dyn FnMut(&tempo_core::logbook::QsoRecord),
 ) -> Result<Standing, String> {
-    let lacking = from.unsaved.wait(wait);
+    // What the STORE lacks, which is what the read below can lack: on the 1.13 path a change
+    // still on its way to `log.adi` is in the store already, and in the file this writes.
+    let lacking = from.unsaved.wait_stored(wait);
     // The wait for them is over: the read takes the store as it stands, without a wait of its
     // own for changes this one has already waited on.
     from.rows

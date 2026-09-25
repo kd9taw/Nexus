@@ -1337,10 +1337,12 @@ fn a_desktop_log_collision_and_a_returned_profile_do_not_repeat_remote_work() {
     let now = Instant::now();
     let request = f.command(&f.acquire(now));
     if let Request::LogManual { record, .. } = &request {
-        f.engine
-            .lock()
-            .unwrap()
-            .log_qso(record.record().unwrap().into());
+        let mut engine = f.engine.lock().unwrap();
+        engine.log_qso(record.record().unwrap().into());
+        // In log.adi, as 1.13's desktop log had written it before it returned.
+        engine
+            .flush_log_store(Duration::from_secs(60))
+            .expect("written");
     }
     let adif = std::fs::read(f.dir.join("contacts.adi")).unwrap();
     let result = f.run(&request, now).unwrap();

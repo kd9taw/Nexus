@@ -687,7 +687,7 @@ mod tests {
             .unwrap();
         assert!(count > 20, "premise: contacts of the activation: {count}");
         assert_board_is_the_old_board(&store, &board_sources(), "the store");
-        assert_board_is_the_old_board(&memory(&text), &board_sources(), "the 1.13 path");
+        assert_board_is_the_old_board(&memory(&d, &text), &board_sources(), "the 1.13 path");
         settle(&store);
     }
 

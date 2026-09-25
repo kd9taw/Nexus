@@ -96,7 +96,10 @@ mod tests {
         let text = synthetic_log(400, 0x0C19_D0A1);
         let d = Dir::new("stored-log");
         std::fs::write(d.log(), &text).unwrap();
-        for (arm, e) in [("the store", launch(&d)), ("the 1.13 path", memory(&text))] {
+        for (arm, e) in [
+            ("the store", launch(&d)),
+            ("the 1.13 path", memory(&d, &text)),
+        ] {
             e.lock().unwrap().log_qso(parse_one(
                 "<CALL:5>ZD7AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260829<TIME_ON:6>030000<EOR>",
             ));

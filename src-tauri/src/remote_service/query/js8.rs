@@ -260,13 +260,15 @@ mod tests {
                 // Both halves of the history move: the first W1AW contact becomes another
                 // station's, and the latest one gains a comment.
                 let mut e = hook.lock().unwrap();
-                let last = e.stored_log().len() - 1;
-                let mut latest = e.stored_log()[last].as_ref().clone();
+                // Both read before either edit: the store in memory holds an edit's commit off
+                // until the read ends, so a read of the log after one would wait on it.
+                let log = e.stored_log();
+                let mut latest = log[log.len() - 1].as_ref().clone();
                 assert_eq!(latest.call, "w1aw", "premise: the latest W1AW contact");
                 latest.comment = Some("CHANGED".into());
-                assert!(e.update_qso(latest.id.unwrap(), latest));
-                let mut first = e.stored_log()[0].as_ref().clone();
+                let mut first = log[0].as_ref().clone();
                 first.call = "K9ZZZ".into();
+                assert!(e.update_qso(latest.id.unwrap(), latest));
                 assert!(e.update_qso(first.id.unwrap(), first));
                 counted.set(counted.get() + 1);
             },
@@ -481,7 +483,7 @@ mod tests {
         let text = synthetic_log(3_000, 0x0C18_A758);
         let d = Dir::new("js8");
         std::fs::write(d.log(), &text).unwrap();
-        let (store, mem) = (launch(&d), memory(&text));
+        let (store, mem) = (launch(&d), memory(&d, &text));
         hear(&store);
         hear(&mem);
         let value = Cache::default().read(&store).unwrap();

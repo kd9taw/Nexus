@@ -382,6 +382,11 @@ mod tests {
     fn the_read_releases_the_engine_and_an_edit_during_it_belongs_to_the_next_read() {
         use super::super::picture::{at_seams, Seam};
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
+        // The 1.13 path: since SPEC-2 v3 C19 (D1-A) its log is in a store in memory, and the
+        // read's picture is its read transaction from its first statement on — the pass — so the
+        // edit lands after the pass, before the rows it picked are read whole.
+        let d = super::super::log_tests::Dir::new("edit-during-recall");
+        e.set_log_path(d.memory_log());
         let adif: String = (0..270)
             .map(|i| {
                 let call = if i == 0 {
@@ -399,13 +404,12 @@ mod tests {
         let counted = edits.clone();
         let result = at_seams(
             move |seam| {
-                if seam != Seam::Each {
+                if seam != Seam::Whole {
                     return;
                 }
                 let mut e = hook
                     .try_lock()
                     .expect("summary work has released station authority");
-                let count = e.stored_log().len();
                 let index = e
                     .stored_log()
                     .iter()
@@ -414,7 +418,6 @@ mod tests {
                 let mut changed = e.stored_log()[index].as_ref().clone();
                 changed.notes = Some("edited during recall".into());
                 assert!(e.update_qso(changed.id.unwrap(), changed));
-                assert_eq!(e.stored_log().len(), count);
                 counted.set(counted.get() + 1);
             },
             || read_engine(&engine, "W1AW"),
@@ -427,6 +430,9 @@ mod tests {
             1,
             "premise: the edit landed while the read ran"
         );
+        // Counted once the read has ended: the store in memory holds the edit's commit off until
+        // then.
+        assert_eq!(engine.lock().unwrap().stored_log().len(), 270);
         assert_eq!(result.1, 1);
         assert_eq!(
             result.2["latestNote"],
@@ -687,7 +693,7 @@ mod tests {
             "premise: rows carry what only a whole record holds"
         );
         assert_recall_is_the_old_recall(&store, RECALLS, "the store");
-        assert_recall_is_the_old_recall(&memory(&text), RECALLS, "the 1.13 path");
+        assert_recall_is_the_old_recall(&memory(&d, &text), RECALLS, "the 1.13 path");
         settle(&store);
     }
 
@@ -717,8 +723,11 @@ mod tests {
     #[test]
     fn a_read_past_its_budget_is_refused_as_busy() {
         use super::super::picture::{at_seams, Seam};
-        let engine =
-            super::super::log_tests::memory(&super::super::log_tests::synthetic_log(300, 0xB0D6));
+        let d = super::super::log_tests::Dir::new("budget");
+        let engine = super::super::log_tests::memory(
+            &d,
+            &super::super::log_tests::synthetic_log(300, 0xB0D6),
+        );
         let late = at_seams(
             |seam| {
                 if seam == Seam::Each {
