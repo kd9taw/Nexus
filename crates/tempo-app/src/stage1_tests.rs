@@ -880,11 +880,15 @@ mod lockstep {
 
     /// ★ 16 seeds × 40 random writes of every kind: after each, the store and the copy are Stage
     /// 1's log; every tenth, the mirror's `log.adi` is Stage 1's log, byte for byte. Premise: every
-    /// kind of write ran.
+    /// kind of write ran. `NEXUS_STAGE1_SEEDS=300` runs deeper, for a write path just changed.
     #[test]
     fn every_write_leaves_the_store_as_stage_1_would_have_left_the_log() {
+        let seeds: usize = std::env::var("NEXUS_STAGE1_SEEDS")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(16);
         let (mut ran, mut compared): (HashMap<&'static str, usize>, usize) = (HashMap::new(), 0);
-        for seed in 1..=16u64 {
+        for seed in 1..=seeds as u64 {
             let d = Dir::new(&format!("s{seed}"));
             let (mut sc, mut s1) = lockstep(&d);
             let mut rng = Rng(seed.wrapping_mul(0x0C19_D5E1));
@@ -955,8 +959,9 @@ mod lockstep {
             );
         }
         assert!(
-            compared >= 32,
-            "premise: the mirror's log.adi was compared ({compared} of 64)"
+            compared >= 2 * seeds,
+            "premise: the mirror's log.adi was compared ({compared} of {})",
+            4 * seeds
         );
     }
 }
