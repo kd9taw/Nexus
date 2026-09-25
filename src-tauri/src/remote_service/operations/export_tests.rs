@@ -41,7 +41,7 @@ fn seed(f: &Fixture) {
     ]
     .concat();
     f.engine.lock().unwrap().import_adif(&text);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 5);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 5);
 }
 
 fn run(f: &Fixture, version: u8, request: &Request) -> Result<Value, &'static str> {
@@ -168,7 +168,7 @@ fn the_file_is_the_desktops_and_nothing_else(f: &Fixture) {
     let e = f.engine.lock().unwrap();
     for call in ["K1CCC", "K1DDD", "K1EEE"] {
         assert!(
-            e.log_records().iter().any(|r| r.call == call),
+            e.stored_log().iter().any(|r| r.call == call),
             "{call} is in the log"
         );
         assert!(!text.contains(call), "{call} is not in this activation");
@@ -245,7 +245,7 @@ fn only_a_listed_activation_can_be_named_and_a_read_spends_no_command() {
     // A read spends no command: the next write still takes the same sequence.
     let after = control_state_version(&f, Instant::now(), 4);
     assert_eq!(after["nextSequence"], state["nextSequence"]);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 5);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 5);
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn a_long_activation_arrives_in_whole_chunks_and_a_file_over_the_bound_is_refuse
         })
         .collect();
     f.engine.lock().unwrap().import_adif(&long);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 400);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 400);
     let state = lease(&f);
     let (bytes, file) = download(&f, &state, &selection("US-1234", DAY));
     assert!(
@@ -481,7 +481,7 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
                 }
                 let mut e = hook.lock().unwrap();
                 let id = |e: &tempo_app::engine::Engine, call: &str| {
-                    let r = e.log_records().iter().find(|r| r.call == call);
+                    let r = e.stored_log().into_iter().find(|r| r.call == call);
                     r.and_then(|r| r.id).unwrap()
                 };
                 let moved = id(&e, "K1AAA");

@@ -30,6 +30,7 @@ mod spot;
 #[path = "transmit_tests.rs"]
 mod transmit;
 use super::*;
+use crate::remote_service::stored_log_tests::StoredLog;
 use std::sync::Arc;
 #[cfg(feature = "radio")]
 #[path = "ai_cw_tests.rs"]
@@ -989,7 +990,7 @@ fn manual_logging_requires_local_permission_and_one_controller() {
         ),
         Err("controllerBusy")
     );
-    assert!(f.engine.lock().unwrap().log_records().is_empty());
+    assert!(f.engine.lock().unwrap().stored_log().is_empty());
 }
 #[test]
 fn manual_logging_syncs_the_actual_adif_and_returns_one_receipt_on_replay() {
@@ -1009,11 +1010,11 @@ fn manual_logging_syncs_the_actual_adif_and_returns_one_receipt_on_replay() {
         result
     );
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), bytes);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     let mut reloaded = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     reloaded.set_log_path(f.dir.join("contacts.adi"));
-    assert_eq!(reloaded.log_records().len(), 1);
-    assert_eq!(reloaded.log_records()[0].call, "W1AW");
+    assert_eq!(reloaded.stored_log().len(), 1);
+    assert_eq!(reloaded.stored_log()[0].call, "W1AW");
     assert_eq!(
         serde_json::to_value(f.engine.lock().unwrap().settings()).unwrap(),
         serde_json::to_value(before).unwrap()
@@ -1047,9 +1048,9 @@ fn manual_logging_preserves_memory_and_uncertainty_on_file_failure_without_retry
     let command = f.command(&f.acquire(now));
     let result = f.run(&command, now).unwrap();
     assert_eq!(result["outcome"], "unknown");
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert_eq!(f.run(&command, now).unwrap(), result);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert!(f.dir.join("contacts.adi").is_dir());
 }
 #[test]
@@ -1086,7 +1087,7 @@ fn manual_logging_refuses_expired_windows_context_changes_and_contest_recording(
             f.run(&command, if kind == "window" { now + WINDOW } else { now }),
             Err(expected)
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
         if kind == "fieldDay" || kind == "recording" {
             let command = f.command(&f.state(now));
             assert_eq!(
@@ -1118,7 +1119,7 @@ fn manual_logging_disconnect_takeover_and_reconnect_cannot_restore_a_lease() {
         let state = f.state(now);
         assert_ne!(state["phase"], "controlling");
         assert_eq!(state["allowed"], kind != "takeover");
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
     }
 }
 #[test]
@@ -1161,7 +1162,7 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
             Err("localPermissionRequired"),
             "{revoke}"
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
     }
 }
 /// #318: a logging or station-control revoke must not fail because Core is busy — it used to
@@ -1212,7 +1213,7 @@ fn a_logging_or_station_revoke_does_not_wait_for_a_busy_core() {
         );
         assert_eq!(result, Err("localPermissionRequired"), "{grant}");
         assert!(!f.engine.lock().unwrap().rtty_armed(), "{grant}");
-        assert!(f.engine.lock().unwrap().log_records().is_empty(), "{grant}");
+        assert!(f.engine.lock().unwrap().stored_log().is_empty(), "{grant}");
         let status = f.authority.local_status();
         assert_eq!(status["controller"], Value::Null, "{grant}: lease ended");
         assert_eq!(status["devices"], json!([]), "{grant}: OTHER not granted");
@@ -1288,7 +1289,7 @@ fn manual_logging_uses_station_time_unless_the_operator_explicitly_overrides_it(
     let before = super::super::now_ms() / 1000;
     assert_eq!(f.run(&command, now).unwrap()["outcome"], "applied");
     let engine = f.engine.lock().unwrap();
-    let qso = &engine.log_records()[0];
+    let qso = &engine.stored_log()[0];
     assert!(qso.when_unix >= before && qso.when_unix <= super::super::now_ms() / 1000);
 }
 
@@ -1326,7 +1327,7 @@ fn expired_receipt_never_reopens_an_old_sequence_under_a_live_lease() {
         Err("resultExpired")
     );
     assert_eq!(f.run(&request, later), Err("resultExpired"));
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
 }
 
@@ -1345,7 +1346,7 @@ fn a_desktop_log_collision_and_a_returned_profile_do_not_repeat_remote_work() {
     let result = f.run(&request, now).unwrap();
     assert_eq!(result["outcome"], "rejected");
     assert_eq!(result["reason"], "alreadyPresent");
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
     let next = f.command(&f.state(now));
     {
