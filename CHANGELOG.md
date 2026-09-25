@@ -136,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **The Needed board now puts every station on your watch list at the top whenever it is heard.**
+  By call, prefix, country or grid, worked or not, as the WATCH tile already does on the Call
+  Roster, the Stations list and Spots. The Watch list chip shows exactly those stations. Any calls
+  left in the old hidden "Wanted watch list" setting are added to your watch list (Settings ▸ Spots
+  & Alerts) once, with a note saying so.
+
 - **Big logbooks no longer weigh on every window.** Each window now asks Nexus for just the contacts
   it shows instead of holding its own copy of the whole log. With 150,000 contacts that is about
   5 MB of a window's memory instead of 67 MB (6 MB instead of 208 MB at 500,000), the Logbook
@@ -220,6 +226,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have renamed, which is why it only ever warns.
 
 ### Fixed
+
+- **A change the logbook was too busy to save now says so.** The Logbook could report "Updated",
+  "Marked QSL sent" or "Deleted" for a change that was never saved. It now says the logbook was busy
+  and nothing changed, leaves the row and your typing as they were, and saving again retries.
 
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
