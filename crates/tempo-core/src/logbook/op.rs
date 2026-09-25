@@ -128,8 +128,8 @@ pub enum LogOp {
 /// What one op makes of the one row it names — [`LogOp::apply_to`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowAfter {
-    /// The row as the op leaves it.
-    Now(QsoRecord),
+    /// The row as the op leaves it (boxed: a row is large, and the other answers carry nothing).
+    Now(Box<QsoRecord>),
     /// The op removes the row (a delete).
     Gone,
     /// The op changes nothing here: it refuses this row (a satellite tag with a blank name), or
@@ -163,7 +163,9 @@ impl LogOp {
     pub fn apply_to(&self, row: &QsoRecord) -> RowAfter {
         let mut now = row.clone();
         match self {
-            LogOp::Edit { rec, .. } => return RowAfter::Now(super::edited(row, rec.as_ref().clone())),
+            LogOp::Edit { rec, .. } => {
+                return RowAfter::Now(Box::new(super::edited(row, rec.as_ref().clone())))
+            }
             LogOp::MarkQslSent { via, date_unix, .. } => {
                 super::qsl_sent_marked(&mut now, *via, *date_unix)
             }
@@ -181,7 +183,7 @@ impl LogOp {
                 return RowAfter::Unchanged
             }
         }
-        RowAfter::Now(now)
+        RowAfter::Now(Box::new(now))
     }
 
     /// What applying this op will cost, before it is applied — the class is a property of the
@@ -228,7 +230,7 @@ impl Logbook {
                 };
                 match op.apply_to(&self.records()[i]) {
                     RowAfter::Now(row) => {
-                        self.records_mut(class)[i] = std::sync::Arc::new(row);
+                        self.records_mut(class)[i] = std::sync::Arc::new(*row);
                         Effects::changed(class, id)
                     }
                     RowAfter::Gone => {

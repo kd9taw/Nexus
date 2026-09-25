@@ -1189,7 +1189,14 @@ fn every_answer_is_the_references_after_every_kind_of_change() {
                             r.call = g.pick(&CALLS).to_string();
                             r.band = g.pick(&BANDS).to_string();
                             r.mode = g.pick(&MODES).to_string();
-                            change(&engine, id, &[LogOp::Edit { id, rec: Box::new(r) }]);
+                            change(
+                                &engine,
+                                id,
+                                &[LogOp::Edit {
+                                    id,
+                                    rec: Box::new(r),
+                                }],
+                            );
                             "an edit"
                         }
                         2 if held.len() > 1 => {

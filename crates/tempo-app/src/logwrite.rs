@@ -120,7 +120,10 @@ pub fn edit_row(
     id: RecordId,
     edit_key: &str,
     edit: &QsoEdit,
-) -> (Result<Result<Arc<QsoRecord>, RowRefusal>, String>, Durability) {
+) -> (
+    Result<Result<Arc<QsoRecord>, RowRefusal>, String>,
+    Durability,
+) {
     let mut bad = None;
     // The row as the field edit alone leaves it: what a corrected call goes back out to the
     // connectors as, as it did when the marks were commands of their own.
@@ -132,7 +135,7 @@ pub fn edit_row(
         |e, stored| match e.station().edit_ops(id, edit_key, edit, stored) {
             Ok(Ok(ops)) => {
                 *edited.borrow_mut() = ops.first().and_then(|op| match op.apply_to(stored) {
-                    RowAfter::Now(row) => Some(row),
+                    RowAfter::Now(row) => Some(*row),
                     RowAfter::Gone | RowAfter::Unchanged => None,
                 });
                 Ok(station::ops_on(stored, &ops))
@@ -300,7 +303,8 @@ pub fn mark_lotw_uploaded_all(
             Ok(found) => found,
             Err(e) => return (Err(e), Durability::default()),
         };
-        let rows: Vec<Arc<QsoRecord>> = ids.iter().filter_map(|id| found.get(id).cloned()).collect();
+        let rows: Vec<Arc<QsoRecord>> =
+            ids.iter().filter_map(|id| found.get(id).cloned()).collect();
         let Some(pairs) = station::stamped_rows(&rows, UploadService::Lotw, &status) else {
             return (Ok(0), Durability::default());
         };

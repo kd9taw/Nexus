@@ -565,8 +565,8 @@ pub(crate) fn stamped_rows(
     rows: &[Arc<QsoRecord>],
     service: UploadService,
     status: &tempo_core::logbook::UploadStatus,
-) -> Option<Vec<(Arc<QsoRecord>, Option<Arc<QsoRecord>>)>> {
-    let pairs: Vec<(Arc<QsoRecord>, Option<Arc<QsoRecord>>)> = rows
+) -> Option<Vec<MadeRow>> {
+    let pairs: Vec<MadeRow> = rows
         .iter()
         .filter_map(|row| {
             let id = row.id?;
@@ -622,7 +622,7 @@ pub fn stamp_lotw_batch_plan(
     plan: &LogPlan,
     batch: &[LotwSigned],
     status: &tempo_core::logbook::UploadStatus,
-) -> Result<(LotwStamped, Option<Vec<(Arc<QsoRecord>, Option<Arc<QsoRecord>>)>>), String> {
+) -> Result<(LotwStamped, Option<Vec<MadeRow>>), String> {
     let ids: Vec<RecordId> = batch.iter().map(|s| s.id).collect();
     let rows = plan.rows(&ids)?;
     let mut signed: HashMap<RecordId, u64> = batch.iter().map(|s| (s.id, s.fingerprint)).collect();
@@ -650,7 +650,7 @@ pub fn stamp_lotw_batch_plan(
 pub(crate) fn fill_pairs(
     rows: &HashMap<RecordId, Arc<QsoRecord>>,
     fills: &[LogFill],
-) -> Vec<(Arc<QsoRecord>, Option<Arc<QsoRecord>>)> {
+) -> Vec<MadeRow> {
     fills
         .iter()
         .filter_map(|f| {
@@ -850,7 +850,9 @@ impl LogPlan {
         // This process's own rows the store may not have yet: appends on their way are the
         // newest rows of all, and a row changed here is read as it now stands.
         if !self.pending.is_empty() {
-            let mine = self.pending.rows_matching(|r| call_norm_of(&r.call) == norm);
+            let mine = self
+                .pending
+                .rows_matching(|r| call_norm_of(&r.call) == norm);
             let ids: Vec<RecordId> = mine.iter().filter_map(|r| r.id).collect();
             let (stored, _) = self.rows.rows_by_ids(&ids).map_err(|e| e.to_string())?;
             let stored: HashSet<RecordId> = stored.iter().filter_map(|r| r.id).collect();
@@ -864,22 +866,27 @@ impl LogPlan {
         }
         let mut hit: Option<RecordId> = None;
         self.rows
-            .each(fields, Scope::CallNorm(&norm), Order::NewestFirst, &mut |r| {
-                let Some(id) = r.id else {
-                    return ControlFlow::Continue(());
-                };
-                let accepted = match self.pending.row(id) {
-                    Some(Some(mine)) => is(&mine),
-                    Some(None) => false,
-                    None => is(r),
-                };
-                if accepted {
-                    hit = Some(id);
-                    ControlFlow::Break(())
-                } else {
-                    ControlFlow::Continue(())
-                }
-            })
+            .each(
+                fields,
+                Scope::CallNorm(&norm),
+                Order::NewestFirst,
+                &mut |r| {
+                    let Some(id) = r.id else {
+                        return ControlFlow::Continue(());
+                    };
+                    let accepted = match self.pending.row(id) {
+                        Some(Some(mine)) => is(&mine),
+                        Some(None) => false,
+                        None => is(r),
+                    };
+                    if accepted {
+                        hit = Some(id);
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )
             .map_err(|e| e.to_string())?;
         match hit {
             Some(id) => self.row(id),
@@ -908,8 +915,8 @@ pub(crate) struct RowChange {
     pub(crate) meta: Vec<(&'static str, i64)>,
 }
 
-/// A change to one row, as made: the row as the plan read it, and as the change left it
-/// (`None`: it went).
+/// A change to one row: the row as the plan read it, and as the change leaves it (`None`: the row
+/// goes) — planned, or made.
 pub type MadeRow = (Arc<QsoRecord>, Option<Arc<QsoRecord>>);
 
 /// What a plan for one row decides, handed the row as it stands: `Ok(Some)` — the change's class
@@ -926,7 +933,7 @@ pub fn ops_on(row: &QsoRecord, ops: &[LogOp]) -> Option<(OpClass, Option<QsoReco
     for op in ops {
         let Some(r) = &now else { break };
         match op.apply_to(r) {
-            RowAfter::Now(next) => now = Some(next),
+            RowAfter::Now(next) => now = Some(*next),
             RowAfter::Gone => now = None,
             RowAfter::Unchanged => continue,
         }
@@ -1356,11 +1363,7 @@ impl StationCore {
     pub fn log_view(&self) -> LogPlan {
         LogPlan {
             rows: self.log_rows(),
-            pending: self
-                .store
-                .as_ref()
-                .map(|s| s.pending())
-                .unwrap_or_default(),
+            pending: self.store.as_ref().map(|s| s.pending()).unwrap_or_default(),
             rev: self.marks.revision,
             foreign: self.store.as_ref().map(|s| s.foreign_commits()),
         }
@@ -1395,8 +1398,10 @@ impl StationCore {
             .iter()
             .filter_map(|r| r.id.filter(|id| ids.contains(id)).map(|id| (id, r)))
             .collect();
-        rows.iter()
-            .all(|r| r.id.and_then(|id| held.get(&id)).is_some_and(|h| ***h == **r))
+        rows.iter().all(|r| {
+            r.id.and_then(|id| held.get(&id))
+                .is_some_and(|h| ***h == **r)
+        })
     }
 
     /// ★ Make one change — THE way a row of the log changes (SPEC-2 v3 C19). Under the Engine
@@ -1457,7 +1462,7 @@ impl StationCore {
         &mut self,
         plan: &LogPlan,
         class: OpClass,
-        rows: Vec<(Arc<QsoRecord>, Option<Arc<QsoRecord>>)>,
+        rows: Vec<MadeRow>,
         bulk: bool,
         meta: Vec<(&'static str, i64)>,
         context: &str,
@@ -1542,13 +1547,13 @@ impl StationCore {
             Some(store) => {
                 let ticket = store.submit(Change::appended(&rows, marks, store.resolved()));
                 match (ticket, receipt) {
-                    (Some(ticket), true) => Some(vec![
-                        tempo_core::logbook::LogAppendReceipt::durable(
+                    (Some(ticket), true) => {
+                        Some(vec![tempo_core::logbook::LogAppendReceipt::durable(
                             store.writer(),
                             ticket,
                             crate::logstore::DURABLE_WAIT,
-                        ),
-                    ]),
+                        )])
+                    }
                     (Some(_), false) => Some(Vec::new()),
                     (None, _) => None,
                 }
@@ -2831,7 +2836,7 @@ impl StationCore {
                     // The row as the field edit alone leaves it — what a corrected call goes back
                     // out to the connectors as, below.
                     edited = ops.first().and_then(|op| match op.apply_to(stored) {
-                        RowAfter::Now(row) => Some(row),
+                        RowAfter::Now(row) => Some(*row),
                         RowAfter::Gone | RowAfter::Unchanged => None,
                     });
                     Ok(ops_on(stored, &ops))
@@ -3140,7 +3145,14 @@ impl StationCore {
                 return false;
             };
             if self
-                .commit_planned(&plan, OpClass::Stamp, rows, false, Vec::new(), "upload stamp")
+                .commit_planned(
+                    &plan,
+                    OpClass::Stamp,
+                    rows,
+                    false,
+                    Vec::new(),
+                    "upload stamp",
+                )
                 .is_ok()
             {
                 return true;
@@ -3324,7 +3336,14 @@ impl StationCore {
             let n = pairs.len();
             let bulk = n > tempo_core::logbook::writer::CHUNK_ROWS;
             if self
-                .commit_planned(&plan, OpClass::Stamp, pairs, bulk, Vec::new(), "lotw upload stamp")
+                .commit_planned(
+                    &plan,
+                    OpClass::Stamp,
+                    pairs,
+                    bulk,
+                    Vec::new(),
+                    "lotw upload stamp",
+                )
                 .is_ok()
             {
                 return Ok(n);
@@ -3369,7 +3388,14 @@ impl StationCore {
             };
             let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
             if self
-                .commit_planned(&plan, OpClass::Stamp, pairs, bulk, Vec::new(), "lotw upload stamp")
+                .commit_planned(
+                    &plan,
+                    OpClass::Stamp,
+                    pairs,
+                    bulk,
+                    Vec::new(),
+                    "lotw upload stamp",
+                )
                 .is_ok()
             {
                 return report;

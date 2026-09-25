@@ -4,10 +4,10 @@
 use super::*;
 use crate::dto::Tier;
 use crate::engine::{engine_lock, LogWriteOutcome};
-use crate::logstore::DURABLE_WAIT;
 use crate::logstore::tests::{
     engine_on_store, eventually, flush, id_at, legacy_log, qso, same_log, stored, Dir,
 };
+use crate::logstore::DURABLE_WAIT;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -96,7 +96,11 @@ fn a_row_another_writer_changes_under_the_plan_is_planned_again_and_both_changes
     };
     let (made, durability) = racing(hook, || change_ops(&engine, id, None, &[card(id)], "ours"));
     assert!(matches!(made, Ok(Ok(_))), "ours is made: {made:?}");
-    assert_eq!(plans.get(), 2, "planned twice: the first plan read a row that then changed");
+    assert_eq!(
+        plans.get(),
+        2,
+        "planned twice: the first plan read a row that then changed"
+    );
     durability.wait(DURABLE_WAIT).expect("on disk");
     let row = stored_row(&d, id);
     assert!(row.qsl_rcvd.card, "our card");
@@ -124,13 +128,7 @@ fn a_row_that_keeps_changing_answers_log_busy_and_changes_nothing() {
         let (engine, plans) = (Arc::clone(&engine), Rc::clone(&plans));
         move || {
             plans.set(plans.get() + 1);
-            let (made, _) = change_ops(
-                &engine,
-                id,
-                None,
-                &[qrz_stamp(id, plans.get())],
-                "theirs",
-            );
+            let (made, _) = change_ops(&engine, id, None, &[qrz_stamp(id, plans.get())], "theirs");
             assert!(matches!(made, Ok(Ok(_))), "their stamp is made");
         }
     };
@@ -139,7 +137,11 @@ fn a_row_that_keeps_changing_answers_log_busy_and_changes_nothing() {
         matches!(made, Ok(Err(RowRefusal::Busy))),
         "refused as LogBusy: {made:?}"
     );
-    assert_eq!(plans.get(), PLANS as i64, "planned {PLANS} times, and then refused");
+    assert_eq!(
+        plans.get(),
+        PLANS as i64,
+        "planned {PLANS} times, and then refused"
+    );
     assert!(durability.is_empty(), "nothing of ours to wait for");
     flush(&engine_lock(&engine));
     let row = stored_row(&d, id);
@@ -188,7 +190,11 @@ fn another_windows_change_under_the_plan_is_planned_again() {
     durability.wait(DURABLE_WAIT).expect("on disk");
     let row = stored_row(&d, id);
     assert!(row.qsl_rcvd.card, "A's card");
-    assert_eq!(row.upload.qrz.map(|s| s.when_unix), Some(9), "and B's stamp");
+    assert_eq!(
+        row.upload.qrz.map(|s| s.when_unix),
+        Some(9),
+        "and B's stamp"
+    );
 }
 
 /// The control for the test above: another window's commit to a DIFFERENT row is no reason to
@@ -209,8 +215,7 @@ fn another_windows_change_to_another_row_is_no_reason_to_plan_again() {
         move || {
             plans.set(plans.get() + 1);
             if plans.get() == 1 {
-                let (made, _) =
-                    change_ops(&b, other, None, &[qrz_stamp(other, 9)], "window B");
+                let (made, _) = change_ops(&b, other, None, &[qrz_stamp(other, 9)], "window B");
                 assert!(matches!(made, Ok(Ok(_))), "B's stamp is made");
                 flush(&engine_lock(&b));
                 assert!(
@@ -272,7 +277,11 @@ fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
     second_durable.wait(DURABLE_WAIT).expect("the second lands");
     let row = stored_row(&d, id);
     assert!(row.qsl_rcvd.card, "the first change stands");
-    assert_eq!(row.upload.qrz.map(|s| s.when_unix), Some(5), "and the second");
+    assert_eq!(
+        row.upload.qrz.map(|s| s.when_unix),
+        Some(5),
+        "and the second"
+    );
     same_log(
         &stored(&d),
         engine_lock(&engine).log_records(),
@@ -338,7 +347,9 @@ fn the_ft_auto_log_reads_nothing_from_the_store_under_the_engine_lock() {
         "the auto-log under the Engine lock took {under_lock:?} with the writer stalled"
     );
     assert!(
-        stored(&d).iter().all(|r| r.call != "W9XYZ" && r.call != "W1FT"),
+        stored(&d)
+            .iter()
+            .all(|r| r.call != "W9XYZ" && r.call != "W1FT"),
         "control: the writer really was stalled — the store holds neither contact yet"
     );
     drop(hold);
@@ -375,7 +386,7 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
         let mut g = Gen(seed);
         let mut when = 1_788_000_000u64;
         let mut last: Option<QsoRecord> = None;
-        let mut minted = 0u64;
+        let mut minted = 0u32;
         for step in 0..40 {
             let rec = match &last {
                 // The same contact handed in again moments later: the sequencer's own repeat.
@@ -398,7 +409,10 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
                     r
                 }
             };
-            let at = format!("seed {seed} step {step}: {} {} {}", rec.call, rec.band, rec.mode);
+            let at = format!(
+                "seed {seed} step {step}: {} {} {}",
+                rec.call, rec.band, rec.mode
+            );
             let duplicate = tempo_core::logbook::dedup::scan_for_duplicate(&model, &rec);
             let mut e = engine_lock(&engine);
             let outcome = if step % 2 == 0 {
@@ -435,16 +449,30 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
             minted = seq;
             let mut expected = rec;
             expected.id = Some(id);
-            assert_eq!(*row, expected, "{at}: the contact as handed in, with its id");
+            assert_eq!(
+                *row, expected,
+                "{at}: the contact as handed in, with its id"
+            );
             model.add(expected);
         }
         let e = engine_lock(&engine);
-        assert_eq!(e.log_records().len(), model.len(), "seed {seed}: nothing else was logged");
+        assert_eq!(
+            e.log_records().len(),
+            model.len(),
+            "seed {seed}: nothing else was logged"
+        );
         flush(&e);
-        same_log(&stored(&d), model.records(), &format!("seed {seed}: the store"));
+        same_log(
+            &stored(&d),
+            model.records(),
+            &format!("seed {seed}: the store"),
+        );
     }
     // Both halves of the guard ran, many times each.
-    assert!(logged >= 100 && refused >= 40, "logged {logged}, refused {refused}");
+    assert!(
+        logged >= 100 && refused >= 40,
+        "logged {logged}, refused {refused}"
+    );
 }
 
 /// ★ POSITIVE CONTROL for the proof above: a read of the store under the Engine lock is exactly
@@ -545,8 +573,11 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         // A push from a page older than the ids: the newest with its key.
                         pushed.id = None;
                     }
-                    let service = [UploadService::Qrz, UploadService::Clublog, UploadService::Eqsl]
-                        [g.below(3)];
+                    let service = [
+                        UploadService::Qrz,
+                        UploadService::Clublog,
+                        UploadService::Eqsl,
+                    ][g.below(3)];
                     let status = UploadStatus {
                         outcome: UploadOutcome::Accepted,
                         when_unix: when as i64,
@@ -559,7 +590,11 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                     let view = engine_lock(&engine).log_view();
                     let ids: Vec<RecordId> = {
                         let e = engine_lock(&engine);
-                        e.log_records().iter().filter_map(|r| r.id).take(4).collect()
+                        e.log_records()
+                            .iter()
+                            .filter_map(|r| r.id)
+                            .take(4)
+                            .collect()
                     };
                     let rows = view.rows(&ids).expect("read");
                     let signed: Vec<LotwSigned> = ids

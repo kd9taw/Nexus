@@ -846,9 +846,9 @@ mod id;
 pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
-mod op;
 #[cfg(test)]
 mod one_row_tests;
+mod op;
 pub mod query;
 pub mod reader;
 mod records;
@@ -2096,7 +2096,12 @@ impl Logbook {
 
     /// Stamp `status` on `service`'s leg of the QSO that was pushed ([`Self::stamp_target`]) —
     /// [`stamped`], the one implementation of a stamp. Returns whether a record was stamped.
-    fn stamp_pushed(&mut self, pushed: &QsoRecord, service: UploadService, status: UploadStatus) -> bool {
+    fn stamp_pushed(
+        &mut self,
+        pushed: &QsoRecord,
+        service: UploadService,
+        status: UploadStatus,
+    ) -> bool {
         match self.stamp_target(pushed) {
             Some(i) => {
                 stamped(
@@ -2677,8 +2682,7 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     // reference, a repeated tag's last copy is the one a reader keeps, and the next
     // read would put the old park back over the correction, or bring back a park the
     // operator removed.
-    if (&rec.ota.my_program, &rec.ota.my_ref) != (&old.ota.my_program, &old.ota.my_ref)
-    {
+    if (&rec.ota.my_program, &rec.ota.my_ref) != (&old.ota.my_program, &old.ota.my_ref) {
         rec.extra.retain(|(k, _)| {
             !matches!(
                 k.as_str(),
@@ -2686,12 +2690,10 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
             )
         });
     }
-    if (&rec.ota.their_program, &rec.ota.their_ref)
-        != (&old.ota.their_program, &old.ota.their_ref)
+    if (&rec.ota.their_program, &rec.ota.their_ref) != (&old.ota.their_program, &old.ota.their_ref)
     {
-        rec.extra.retain(|(k, _)| {
-            !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF")
-        });
+        rec.extra
+            .retain(|(k, _)| !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF"));
     }
     // An edit that did not touch the TIME OF DAY must not fabricate
     // time-knowledge onto an imported, time-less record — keyed on

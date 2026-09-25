@@ -204,7 +204,11 @@ pub(crate) async fn qsl_card(
     target: RowRef,
     received: bool,
 ) -> Result<RowAnswer, String> {
-    change_row(engine, target, move |id| LogOp::MarkQslCard { id, received }).await
+    change_row(engine, target, move |id| LogOp::MarkQslCard {
+        id,
+        received,
+    })
+    .await
 }
 
 /// [`crate::set_sat_tag`], by id: `satName` tags the contact, `null` removes the tag.
@@ -224,7 +228,11 @@ pub(crate) async fn sat_tag(
 ) -> Result<RowAnswer, String> {
     // Gated BEFORE the lock, as the command by row is.
     let name = sat_name_arg(sat_name.as_deref())?;
-    change_row(engine, target, move |id| LogOp::SetSatTag { id, sat_name: name }).await
+    change_row(engine, target, move |id| LogOp::SetSatTag {
+        id,
+        sat_name: name,
+    })
+    .await
 }
 
 /// [`crate::delete_qso`], by id.
@@ -244,8 +252,8 @@ pub(crate) async fn delete_row(engine: SharedEngine, target: RowRef) -> Result<R
 mod tests {
     use super::*;
     use crate::durable_command_tests::engine_on_store;
-    use tempo_app::engine::engine_lock;
     use std::path::Path;
+    use tempo_app::engine::engine_lock;
     use tempo_core::logbook::{QslVia, UploadOutcome};
 
     const COMMANDS: [&str; 5] = [

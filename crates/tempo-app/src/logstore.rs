@@ -948,8 +948,7 @@ impl Held {
     fn change(&self, rev: u64, marks: Watermarks) -> Change {
         Change {
             rev,
-            priority: if self.clear || self.remove.len() + self.upsert.len() > writer::CHUNK_ROWS
-            {
+            priority: if self.clear || self.remove.len() + self.upsert.len() > writer::CHUNK_ROWS {
                 writer::Priority::Bulk
             } else {
                 writer::Priority::Interactive

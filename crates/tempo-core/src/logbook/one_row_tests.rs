@@ -25,7 +25,11 @@ mod vec_bodies {
     use crate::logbook::{QslRcvd, QslSent, QslVia, QsoRecord, UploadState};
     use std::sync::Arc;
 
-    pub(super) fn update_record(records: &mut Vec<Arc<QsoRecord>>, index: usize, mut rec: QsoRecord) -> bool {
+    pub(super) fn update_record(
+        records: &mut Vec<Arc<QsoRecord>>,
+        index: usize,
+        mut rec: QsoRecord,
+    ) -> bool {
         match records.get(index) {
             Some(old) => {
                 // An edit is the same row, corrected: it keeps the row's identity.
@@ -220,7 +224,11 @@ mod vec_bodies {
             None => false,
         }
     }
-    pub(super) fn mark_qsl_card(records: &mut Vec<Arc<QsoRecord>>, index: usize, received: bool) -> bool {
+    pub(super) fn mark_qsl_card(
+        records: &mut Vec<Arc<QsoRecord>>,
+        index: usize,
+        received: bool,
+    ) -> bool {
         match records.get_mut(index) {
             Some(rec) => {
                 let rec = Arc::make_mut(rec);
@@ -232,7 +240,11 @@ mod vec_bodies {
             None => false,
         }
     }
-    pub(super) fn set_sat_tag(records: &mut Vec<Arc<QsoRecord>>, index: usize, sat_name: Option<&str>) -> bool {
+    pub(super) fn set_sat_tag(
+        records: &mut Vec<Arc<QsoRecord>>,
+        index: usize,
+        sat_name: Option<&str>,
+    ) -> bool {
         let name = match sat_name {
             // A tag with no name is the lone `PROP_MODE=SAT` TQSL rejects. Refused here
             // rather than written, for the same reason an empty QSL-sent code is an error
@@ -384,7 +396,9 @@ fn row(rng: &mut Rng) -> QsoRecord {
         },
         qsl_sent: QslSent {
             sent: rng.chance(30),
-            via: rng.chance(40).then(|| rng.pick(&[QslVia::Bureau, QslVia::Direct])),
+            via: rng
+                .chance(40)
+                .then(|| rng.pick(&[QslVia::Bureau, QslVia::Direct])),
             date_unix: rng.chance(40).then_some(T0),
             cleared_unix: rng.chance(20).then_some(T0 + 5),
         },
@@ -440,7 +454,9 @@ fn row(rng: &mut Rng) -> QsoRecord {
 /// One by-id op against the row at `at`, as the operator's form, a mark, a tag, a stamp or a
 /// delete sends it.
 fn op_on(lb: &Logbook, at: usize, rng: &mut Rng) -> LogOp {
-    let id = lb.records()[at].id.expect("every row the log holds carries an id");
+    let id = lb.records()[at]
+        .id
+        .expect("every row the log holds carries an id");
     match rng.below(9) {
         0..=2 => {
             // An edit: a fresh row's fields — sometimes the same call, trimmed or re-cased,
@@ -459,7 +475,9 @@ fn op_on(lb: &Logbook, at: usize, rng: &mut Rng) -> LogOp {
         }
         3 => LogOp::MarkQslSent {
             id,
-            via: rng.chance(70).then(|| rng.pick(&[QslVia::Bureau, QslVia::Direct, QslVia::Electronic])),
+            via: rng
+                .chance(70)
+                .then(|| rng.pick(&[QslVia::Bureau, QslVia::Direct, QslVia::Electronic])),
             date_unix: T0 + rng.below(100) as u64,
         },
         4 => LogOp::MarkQslCard {
@@ -468,7 +486,9 @@ fn op_on(lb: &Logbook, at: usize, rng: &mut Rng) -> LogOp {
         },
         5 => LogOp::SetSatTag {
             id,
-            sat_name: rng.pick(&[Some("SO-50"), Some(" AO-91 "), Some("   "), None]).map(str::to_string),
+            sat_name: rng
+                .pick(&[Some("SO-50"), Some(" AO-91 "), Some("   "), None])
+                .map(str::to_string),
         },
         6 | 7 => LogOp::Stamp {
             id,
@@ -631,7 +651,10 @@ fn the_parity_check_catches_a_body_that_forgot_a_field() {
     let mut caught = false;
     for _ in 0..200 {
         let mut old = row(&mut rng);
-        old.id = Some(crate::logbook::RecordId::Provisional { hash: 1, ordinal: 0 });
+        old.id = Some(crate::logbook::RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
         old.time_off_unix = Some(T0 + 999);
         let mut rec = row(&mut rng);
         rec.time_off_unix = None;

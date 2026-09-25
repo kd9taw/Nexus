@@ -10355,11 +10355,8 @@ impl Engine {
             .map(|c| c.qid.clone())
             .filter(|q| !q.is_empty())
             .collect();
-        let mut report = tempo_core::contest::plan_merge(
-            &station.log,
-            &self.settings.fd_position_id,
-            seen,
-        );
+        let mut report =
+            tempo_core::contest::plan_merge(&station.log, &self.settings.fd_position_id, seen);
         if !report.written.is_empty() {
             // Each merged contact is filled before it is written (SPEC-2 v3 D2-A), as every
             // insert is — the rows the merge appends are the copies an upload sends.
@@ -23057,9 +23054,10 @@ contact yourself."
         ops: &[tempo_core::logbook::LogOp],
         context: &str,
     ) -> bool {
-        match self.station.change_held(id, context, |_, row| {
-            Ok(crate::station::ops_on(row, ops))
-        }) {
+        match self
+            .station
+            .change_held(id, context, |_, row| Ok(crate::station::ops_on(row, ops)))
+        {
             Ok(made) => made.is_some(),
             Err(crate::station::RowRefusal::Busy) => {
                 tempo_core::applog::warn(
