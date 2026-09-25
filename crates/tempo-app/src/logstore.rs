@@ -1524,6 +1524,33 @@ mod tests {
         Mutex::new(e)
     }
 
+    /// [`launch_with_resolvers`] onto the 1.13 path: `log.adi` in `d` is the log, its rows in a
+    /// store in memory (SPEC-2 v3 C19, D1-A).
+    fn launch_on_log_file_with_resolvers(d: &Dir) -> Mutex<Engine> {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(test_country);
+        e.set_state_resolver(test_state);
+        e.set_log_path(d.log());
+        assert!(e.log_on_file(), "premise: the 1.13 path");
+        Mutex::new(e)
+    }
+
+    /// Each seed of a run on both of the store's homes: the database, and the 1.13 path's store
+    /// in memory — `(on the 1.13 path, seed)`.
+    fn on_both_homes(seeds: u64) -> impl Iterator<Item = (bool, u64)> {
+        [false, true]
+            .into_iter()
+            .flat_map(move |on_file| (1..=seeds).map(move |seed| (on_file, seed)))
+    }
+
+    fn home(on_file: bool) -> &'static str {
+        if on_file {
+            "the 1.13 path"
+        } else {
+            "the store"
+        }
+    }
+
     /// One run of the fill job, with the same resolvers.
     fn fill(e: &Mutex<Engine>, version: i64) -> crate::logfill::FillOutcome {
         crate::logfill::fill_log_store(e, version, &test_country, &test_state)
@@ -1965,8 +1992,9 @@ mod tests {
     /// ★ A PASS OVER THE STORE IS A PASS OVER THE LOG IN MEMORY — every row, every field a fold
     /// can ask for (all of them, the stamps included), in log order and newest first, and the
     /// same rows under each scope — after 12 seeded runs of 40 random changes of every kind the
-    /// app makes, fills included. The memory side is the 1.13 path's arm, which is the log as
-    /// every reader saw it before C14.
+    /// app makes, fills included, on the database and on the 1.13 path's store in memory. The
+    /// memory side is the in-memory log's arm, which is the log as every reader saw it before
+    /// C14.
     #[test]
     fn a_pass_over_the_store_is_a_pass_over_the_log_in_memory() {
         let every: Vec<&'static str> = [
@@ -2024,12 +2052,17 @@ mod tests {
             r
         };
         let mut changes = 0;
-        for seed in 1..=12u64 {
-            let d = Dir::new(&format!("rows-{seed}"));
+        for (on_file, seed) in on_both_homes(12) {
+            let d = Dir::new(&format!("rows-{on_file}-{seed}"));
             std::fs::write(d.log(), log_to_fill(12)).unwrap();
-            flush(&engine_on_store(&d));
-            let e = launch_with_resolvers(&d);
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                flush(&engine_on_store(&d));
+                launch_with_resolvers(&d)
+            };
             let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let seed = format!("{seed}, {}", home(on_file));
             for step in 0..40 {
                 random_change(&e, &mut g, step);
                 changes += 1;
@@ -2078,7 +2111,7 @@ mod tests {
             }
             assert_eq!(store.count().unwrap().0, held.len() as u64, "seed {seed}");
         }
-        assert_eq!(changes, 12 * 40);
+        assert_eq!(changes, 2 * 12 * 40);
     }
 
     /// ★ The catch-up sweep picks from the store what it picked from memory: the same contacts,
@@ -2312,22 +2345,28 @@ mod tests {
     /// the replacement characters a lossy read leaves, and then 8 seeded runs of 24 random
     /// changes of every kind the app makes (logged contacts, imports, edits, deletes, QSL cards
     /// and marks, satellite tags, connector stamps, LoTW confirmations, the fill job), compared
-    /// after every fourth. The memory side is the Logbook's own export of the log the engine
-    /// holds — what the Export button wrote before C15.
+    /// after every fourth — on the database and on the 1.13 path's store in memory. The memory
+    /// side is the Logbook's own export of the log the engine holds — what the Export button
+    /// wrote before C15.
     #[test]
     fn every_export_from_the_store_is_the_export_of_the_log_in_memory() {
         let mut compared = 0usize;
         let mut nonempty = 0usize;
-        for seed in 1..=8u64 {
-            let d = Dir::new(&format!("export-{seed}"));
+        for (on_file, seed) in on_both_homes(8) {
+            let d = Dir::new(&format!("export-{on_file}-{seed}"));
             std::fs::write(d.log(), export_fixture()).unwrap();
-            let e = launch_with_resolvers(&d);
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                launch_with_resolvers(&d)
+            };
             let _ = e.lock().unwrap().import_adif(
                 &export_records(12, 20)
                     .replace("Jean-Luc", "Jos\u{FFFD}")
                     .replace("plain", "a \u{FFFD}\u{FFFD} b"),
             );
             let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let seed = format!("{seed}, {}", home(on_file));
             for step in 0..24 {
                 random_change(&e, &mut g, step);
                 if step % 4 != 3 {
