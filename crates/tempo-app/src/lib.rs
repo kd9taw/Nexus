@@ -35,6 +35,8 @@ pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
 pub mod station;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
 pub mod update;
 pub mod watchlist;
 pub mod window_geometry;
