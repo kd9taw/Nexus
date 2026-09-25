@@ -300,7 +300,7 @@ fn lotw_fingerprint(r: &QsoRecord) -> u64 {
 ///
 /// THE rule, for the log in memory ([`StationCore::lotw_unsent_indices`]) and the store
 /// ([`lotw_unsent`]) alike.
-fn owed_to_lotw(r: &QsoRecord) -> bool {
+pub(crate) fn owed_to_lotw(r: &QsoRecord) -> bool {
     !r.award_confirmed
         && r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent())
         && r.time_known
