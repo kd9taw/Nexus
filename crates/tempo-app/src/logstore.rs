@@ -3056,6 +3056,55 @@ mod tests {
         assert!(!e.log_store_open(), "control: the 1.13 path has no store");
     }
 
+    /// ⛔ A CONTACT WRITTEN BEFORE THE LAUNCH ATTACHES THE OPERATOR'S LOG IS NOT CARRIED INTO IT
+    /// — exactly as before a new station held a store. The attach, and the fallback to
+    /// `log.adi`, REPLACE the log a station was built with: before SPEC-2 v3 C19 an empty log in
+    /// memory with nowhere to write, now an empty store in memory, and either is replaced the
+    /// same way, whatever was written into it. So the launch must write nothing before the
+    /// attach, and nothing can: src-tauri's
+    /// `nothing_can_write_the_log_before_the_launch_attaches_it` pins why. The two stations
+    /// here differ in that alone: one built as a station is now, one with its store taken away,
+    /// as a station was built before.
+    #[test]
+    fn a_contact_written_before_the_attach_is_not_carried_into_the_operator_s_log_as_before() {
+        for built_before_c19 in [false, true] {
+            for fallback in [false, true] {
+                let d = Dir::new(&format!("pre-attach-{built_before_c19}-{fallback}"));
+                std::fs::write(d.log(), legacy_log(3)).unwrap();
+                let mut sc = crate::station::StationCore::new();
+                if built_before_c19 {
+                    sc.store = None;
+                }
+                // The write the FT auto-log makes: the row in memory, then carried to disk.
+                sc.add_record(qso("W9EARLY", 1_788_300_000));
+                let early = QsoRecord::clone(sc.logbook.records().last().expect("the row"));
+                sc.append_to_log(std::slice::from_ref(&early));
+                if fallback {
+                    sc.set_log_path(d.log());
+                } else {
+                    sc.attach_store(open_fast(&d));
+                }
+                let what = format!("built before C19: {built_before_c19}, fallback: {fallback}");
+                let calls: Vec<&str> = sc.logbook.records().iter().map(|r| &*r.call).collect();
+                assert_eq!(
+                    calls.len(),
+                    3,
+                    "the operator's log, whole ({what}): {calls:?}"
+                );
+                assert!(!calls.contains(&"W9EARLY"), "and nothing else ({what})");
+                if !fallback {
+                    let store = sc.store.as_ref().expect("the operator's store");
+                    store.flush(DURABLE_WAIT).expect("written");
+                    let rows = stored(&d);
+                    assert_eq!(rows.len(), 3, "the store holds its own rows ({what})");
+                    assert!(rows.iter().all(|r| r.call != "W9EARLY"), "only ({what})");
+                }
+                let file = String::from_utf8_lossy(&std::fs::read(d.log()).unwrap()).into_owned();
+                assert!(!file.contains("W9EARLY"), "nor is it in log.adi ({what})");
+            }
+        }
+    }
+
     /// ★ POSITIVE CONTROL: a read of the store under the Engine lock is a panic in a debug
     /// build — the wait for the writer is the first thing it does, and it is fenced. Every
     /// other read here runs with the lock released, and stays quiet.

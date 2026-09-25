@@ -3464,6 +3464,104 @@ mod logbook_startup_tests {
         );
     }
 
+    /// ⛔ NOTHING CAN WRITE THE LOG BEFORE THE LAUNCH ATTACHES IT. A new engine holds an empty
+    /// store in memory until then (SPEC-2 v3 C19), and the attach replaces it, as it replaced
+    /// the empty log in memory before; a contact written into it first would be gone, as it
+    /// always would have been (tempo-app's
+    /// `a_contact_written_before_the_attach_is_not_carried_into_the_operator_s_log_as_before`).
+    /// None can be, because of the order this pins:
+    /// - the attach is made in the same hold of the engine lock that sets the resolvers, so
+    ///   from there to the attach nothing else reaches the engine;
+    /// - every writer of the log starts after it: the radio loop (the FT auto-log and the
+    ///   companion's imports), the Field Day restore and its merge, the companion source, the
+    ///   QRZ and LoTW timers, the Remote service, the RX decoders, the pounce detector, the AI CW
+    ///   decoder, the main window and the fill job;
+    /// - before the second half, `run()` and the app's builder start none of them — only the
+    ///   spot, PSK Reporter, WSPR and APRS-IS feeds, the rotator and caches, none of which writes
+    ///   the log;
+    /// - no command reaches the engine before the attach: the main window waits on a page that
+    ///   runs nothing (pinned in `the_main_window_is_shown_only_once_the_log_is_attached`), the
+    ///   pop-outs open only by its command, and the splash is granted no command and invokes
+    ///   none.
+    ///
+    /// Source-scanned, like the launch tests beside it: what is under test is the order the
+    /// launch calls things in.
+    #[test]
+    fn nothing_can_write_the_log_before_the_launch_attaches_it() {
+        let src = include_str!("lib.rs");
+        let start = body_of(src, "fn start_on_the_logbook(");
+        let attach = at(
+            start,
+            "adopt_logbook(&mut eng, &logbook_path(), logbook_store);",
+        );
+        let lock = at(start, "let mut eng = engine_lock(&engine);");
+        assert!(lock < attach, "the lock is taken before the attach");
+        let held = &start[lock..attach];
+        assert!(
+            !held.contains("drop(eng)") && !held.contains("\n    }\n"),
+            "and held until it: the attach is in the same block, with nothing releasing it"
+        );
+        let writers = [
+            "run_radio(",
+            "restore_field_day_if_enabled(",
+            "set_source(SourceKind::Companion)",
+            "sync_qrz_since(",
+            "lotw_upload_batch(",
+            "remote_service_for(",
+            "spawn_log_fill(",
+            "import_adif(",
+            "log_qso(",
+            "fd_merge_to_general(",
+        ];
+        for w in writers {
+            assert!(
+                !start[..attach].contains(w),
+                "`{w}` comes before the attach in start_on_the_logbook"
+            );
+        }
+        for w in &writers[..5] {
+            assert!(attach < at(start, w), "`{w}` starts after the attach");
+        }
+        let finish = body_of(src, "fn finish_launch(");
+        let second_half = at(finish, "start_on_the_logbook(&d, logbook_store, rest);");
+        for w in [
+            "remote_service_for(",
+            "pouncer::run(",
+            "spawn_ai_cw(",
+            "spawn_rtty_rx(",
+            "spawn_psk_rx(",
+            "spawn_aprs_rx(",
+            "spawn_sstv_rx(",
+            "send_main_window_to_the_app(&handle)",
+            "spawn_log_fill(",
+        ] {
+            assert!(second_half < at(finish, w), "`{w}` starts after the attach");
+        }
+        for (name, body) in [
+            ("run", body_of(src, "pub fn run() {")),
+            ("build_app", body_of(src, "fn build_app(")),
+        ] {
+            for w in writers {
+                assert!(
+                    !body.contains(w),
+                    "{name} starts no writer of the log: `{w}`"
+                );
+            }
+        }
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        assert_eq!(
+            caps["windows"],
+            serde_json::json!(["main", "panel-*"]),
+            "only the main window and its pop-outs are granted commands"
+        );
+        let splash = include_str!("../../ui/public/splashscreen.html");
+        assert!(
+            !splash.contains("invoke") && !splash.contains("__TAURI"),
+            "and the splash invokes none"
+        );
+    }
+
     /// ★ SPEC-2 v3 D2-A: the fill job starts once the main window is shown, and on a thread of
     /// its own — the launch does not wait for it, and the radio loop never runs it. What it does
     /// there (reads with the Engine lock free, writes once per version) is `tempo_app::logfill`'s

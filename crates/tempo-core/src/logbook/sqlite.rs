@@ -86,8 +86,11 @@ const BUSY_TIMEOUT_MS: u32 = 5_000;
 /// one thread, 0.75 ms either way. Nothing reads the statistics.
 ///
 /// It has to come before SQLite initialises, which the first connection does, so every
-/// connection this module opens comes through here first. A call too late — a connection
-/// opened elsewhere first — changes nothing.
+/// connection this module opens comes through here first. ⚠️ **It is not guaranteed:** it takes
+/// effect only when a connection this module opens is the process's FIRST use of SQLite. A
+/// connection opened any other way first initialises SQLite with the statistics on, and this
+/// call then changes nothing — `tests/sqlite_memory_statistics_control.rs` is such a process,
+/// and reads them on.
 fn quiet_memory_statistics() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
