@@ -2115,11 +2115,6 @@ body.resizing-row {
   color: #38bdf8;
   border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent);
 }
-.need-chip.need-wanted {
-  background: color-mix(in srgb, var(--need-wanted) 22%, transparent);
-  color: var(--need-wanted);
-  border: 1px solid color-mix(in srgb, var(--need-wanted) 50%, transparent);
-}
 .need-chip.need-state {
   background: color-mix(in srgb, var(--need-state) 20%, transparent);
   color: var(--need-state);
@@ -5435,9 +5430,9 @@ select optgroup {
   --need-dxped: #38bdf8; /* sky — active DXpedition */
   --need-pota: #4ade80; /* green — live POTA activator */
   --need-sota: #a78bfa; /* purple — live SOTA activator */
-  --need-wanted: #fbbf24; /* amber — on your wanted watch list */
   /* lime — on your watch list (Settings ▸ Spots & Alerts): the WATCH tile on the Call Roster,
-     the Stations list and Spots. The one hue on those rows nothing else uses — the nearest
+     the Stations list and Spots, and the same mark on the Needed board and in the band-activity
+     feed (one look for one list). The one hue on those rows nothing else uses — the nearest
      need, rarity or row-state colour is ΔE2000 ≥ 15 away here and ≥ 10 in the light ink. */
   --need-watch: #a3e635;
   /* Needed-board submode hues (RTTY/FT4 get their own so an RTTY opportunity
@@ -5468,7 +5463,6 @@ select optgroup {
   --need-dxped: #0369a1;
   --need-pota: #15803d;
   --need-sota: #6d28d9;
-  --need-wanted: #9a5b00; /* amber — on your wanted watch list */
   --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
   --need-mode-rtty: #8a5200;
   --need-mode-ft4: #0f7038;
@@ -5513,9 +5507,6 @@ select optgroup {
 }
 .need-state {
   --need-color: var(--need-state);
-}
-.need-wanted {
-  --need-color: var(--need-wanted);
 }
 .need-watch {
   --need-color: var(--need-watch);
@@ -12817,9 +12808,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* Need-tagged rows in the band-activity feed — same vocabulary + palette as the
    Needed panel so the two views read as one system. (dxped/pota/sota are icon-only and
    never colour a row; the award tier keeps the colour.) */
-.decode-row.need-wanted {
-  border-left: 3px solid var(--need-wanted);
-  background: color-mix(in srgb, var(--need-wanted) 24%, transparent);
+.decode-row.need-watch {
+  border-left: 3px solid var(--need-watch);
+  background: color-mix(in srgb, var(--need-watch) 24%, transparent);
 }
 .decode-row.need-entity {
   border-left: 3px solid var(--need-entity);
