@@ -6,7 +6,7 @@ use super::*;
 use crate::remote_service::query::log_tests::{
     edit_at, launch, memory, random_change, record_at, settle, Dir, Gen, CALLS,
 };
-use crate::remote_service::stored_log_tests::{caught_up, StoredLog};
+use crate::remote_service::stored_log_tests::StoredLog;
 use tempo_app::engine::Engine;
 use tempo_core::logbook::{Logbook, LoggedActivation};
 
@@ -176,7 +176,7 @@ fn activation_log(n: usize, seed: u64) -> String {
 /// One change to what an activation is made of, written as an edit may leave it rather than as
 /// an import cleans it: the reference in lower case, padded, or a two-fer with an empty part; the
 /// callsign in lower case and padded; the program; the time, onto a midnight or the second
-/// before one. Back once the store holds it ([`caught_up`]), as `random_change` is.
+/// before one. Back once the store holds it ([`StoredLog::caught_up`]), as `random_change` is.
 fn activation_change(e: &crate::SharedEngine, g: &mut Gen) {
     let mut eng = e.lock().unwrap();
     let len = eng.stored_log().len();
@@ -203,7 +203,7 @@ fn activation_change(e: &crate::SharedEngine, g: &mut Gen) {
     }
     edit_at(&mut eng, at, r);
     drop(eng);
-    caught_up(e);
+    e.caught_up();
 }
 
 // ── every answer, the old code's and the new code's ──────────────────────────────────────────

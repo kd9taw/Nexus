@@ -6,7 +6,7 @@
 //! before C18 made of the log in memory.
 use std::sync::{Arc, Mutex};
 
-use crate::remote_service::stored_log_tests::{caught_up, StoredLog};
+use crate::remote_service::stored_log_tests::StoredLog;
 use tempo_app::engine::Engine;
 use tempo_core::logbook::sqlite::Resolved;
 use tempo_core::logbook::{QsoRecord, UploadDetail, UploadOutcome};
@@ -338,7 +338,8 @@ pub(in crate::remote_service) fn edit_at(e: &mut Engine, at: usize, edited: QsoR
 /// already in the log), imports, edits that move a contact in time or change what a search or
 /// a recall matches, deletes, QSL cards and sent marks, satellite tags, the connectors' stamps,
 /// a LoTW confirmation with credit, and the fill job. It returns once the store holds the change
-/// ([`caught_up`]), so what a test asks next is the reader's answer, never the disk's speed.
+/// ([`StoredLog::caught_up`]), so what a test asks next is the reader's answer, never the disk's
+/// speed.
 pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
     let len = e.lock().unwrap().stored_log().len();
     let at = g.below(len);
@@ -414,5 +415,5 @@ pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut 
             );
         }
     }
-    caught_up(e);
+    e.caught_up();
 }

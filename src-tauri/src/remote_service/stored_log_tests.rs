@@ -1,86 +1,13 @@
-//! The log as a test reads it — SPEC-2 v3 C19 Part D. Once the copy of the log in memory is gone
-//! (`Engine::log_records`, `get_log` and their kin), a test asserts on what the logbook store
-//! holds, read through the same door every reader of the log uses (`Engine::log_rows`).
+//! The log as a test reads it — SPEC-2 v3 C19 Part D: tempo-app's [`StoredLog`], which src-tauri's
+//! tests reach through the `test-util` feature (a dev-dependency, never in a shipped build). Its
+//! header holds the contract: the read waits for every change made before it — a test's budget
+//! (`TEST_WAIT`), not a screen's `READ_WAIT` — and refuses rather than answer from a store whose
+//! writer is still behind; `caught_up` is the same wait for a harness about to ask a product reader
+//! about a change it has just made.
 //!
-//! ⚠️ **A test that looks at the log before its change is written must say so another way.** This
-//! read waits, as every read of the store does, for the changes made before it was asked (P4), and
-//! it refuses — panics — rather than answer from a store whose writer is still behind: an answer
-//! missing a change would pass a test that should fail. A test that stalls the writer on purpose
-//! (C12's `WriteHold`) and then inspects the log is asking a different question, and is rewritten
-//! for it, never converted.
-//!
-//! ⚠️ **It waits as long as a loaded box takes ([`TEST_WAIT`]), not `READ_WAIT`.** `READ_WAIT` is a
-//! screen's budget: past it a Remote read answers busy and a fold answers from the store as it
-//! stands, both by design, and each is tested with the writer held. A test held to it fails on a
-//! slow disk (WSL2's fsync beside two builds), not on a wrong answer — the intermittent busy and
-//! stale parity failures of 2026-09-25, reproduced by a writer slowed past it. [`caught_up`] is
-//! the same wait for a harness about to ask one of those readers about a change it just made.
-use std::ops::ControlFlow;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use tempo_app::engine::Engine;
-use tempo_app::logstore::{Freshness, LogRows};
-use tempo_core::logbook::QsoRecord;
-
-/// How long a test waits for the store's writer to hold every change made before it asks.
-pub(crate) const TEST_WAIT: Duration = Duration::from_secs(120);
-
-/// Every contact the log holds, whole and in log order: from the store once every change made
-/// before this call is written, or on the 1.13 path the log in memory.
-pub(crate) trait StoredLog {
-    /// In place of `log_records()`.
-    fn stored_log(&self) -> Vec<Arc<QsoRecord>> {
-        self.stored_log_within(TEST_WAIT)
-    }
-
-    /// [`Self::stored_log`], refused unless the writer holds every change within `wait`.
-    fn stored_log_within(&self, wait: Duration) -> Vec<Arc<QsoRecord>>;
-
-    /// The same contacts as values, in place of `get_log()`.
-    fn stored_records(&self) -> Vec<QsoRecord> {
-        self.stored_log()
-            .into_iter()
-            .map(Arc::unwrap_or_clone)
-            .collect()
-    }
-}
-
-impl StoredLog for Engine {
-    fn stored_log_within(&self, wait: Duration) -> Vec<Arc<QsoRecord>> {
-        let rows = self.log_rows();
-        let mut log = Vec::new();
-        let fresh = rows
-            .each_record(wait, &mut |r| {
-                log.push(Arc::new(r.clone()));
-                ControlFlow::Continue(())
-            })
-            .expect("the logbook store reads");
-        assert!(
-            matches!(fresh, Freshness::Current),
-            "the store's writer is still behind the changes made before this read: a test that \
-             looks at the log before its change is written must say so another way"
-        );
-        log
-    }
-}
-
-/// Wait until the store's writer holds every change made to `engine` so far — at once on the
-/// 1.13 path. What a harness calls before it asks a reader of the store about a change it has just
-/// made: the reader's own wait is `READ_WAIT`.
-pub(crate) fn caught_up(engine: &Mutex<Engine>) {
-    let rows = engine.lock().unwrap().log_rows();
-    if let LogRows::Store(reads) = rows {
-        let ((), fresh) = reads
-            .read(TEST_WAIT, |_| Ok(()))
-            .expect("the logbook store reads");
-        assert_eq!(
-            fresh,
-            Freshness::Current,
-            "the store's writer took every change within {TEST_WAIT:?}"
-        );
-    }
-}
+//! The tests below hold it to src-tauri's own fixtures: the store and the 1.13 path, the refusal,
+//! and the wait.
+pub(crate) use tempo_app::test_util::StoredLog;
 
 #[cfg(test)]
 mod tests {
@@ -88,6 +15,9 @@ mod tests {
     use crate::remote_service::query::log_tests::{
         launch, memory, parse_one, settle, synthetic_log, Dir,
     };
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempo_app::logstore::{Freshness, LogRows};
 
     /// On the store and on the 1.13 path, the read is the log in memory — every record, whole,
     /// in log order — including a contact logged a moment before it is asked (P4).
@@ -136,9 +66,9 @@ mod tests {
             .stored_log_within(Duration::from_millis(200));
     }
 
-    /// ★ `caught_up` waits for the writer: held for a moment after a contact is logged, the wait
-    /// outlasts the hold, and then a read of the store needs no wait of its own. The control: the
-    /// same read before the hold is let go is stale.
+    /// ★ [`StoredLog::caught_up`] waits for the writer: held for a moment after a contact is
+    /// logged, the wait outlasts the hold, and then a read of the store needs no wait of its own.
+    /// The control: the same read before the hold is let go is stale.
     #[test]
     fn caught_up_waits_until_the_writer_holds_every_change() {
         let d = Dir::new("stored-log-caught-up");
@@ -161,7 +91,7 @@ mod tests {
             let e = Arc::clone(&e);
             std::thread::spawn(move || {
                 let started = std::time::Instant::now();
-                caught_up(&e);
+                e.caught_up();
                 started.elapsed()
             })
         };
