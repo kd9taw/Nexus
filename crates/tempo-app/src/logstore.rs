@@ -3489,7 +3489,7 @@ pub(crate) mod tests {
         // Every step DID something — the census that keeps the comparisons above from passing
         // over a log nothing happened to.
         let held = store_rows(&new);
-        let any = |f: &dyn Fn(&QsoRecord) -> bool| held.iter().any(|r| f(r));
+        let any = |f: &dyn Fn(&QsoRecord) -> bool| held.iter().any(f);
         for (what, hit) in [
             ("logged", any(&|r| r.call == "W2NEW")),
             ("edited", any(&|r| r.name.as_deref() == Some("Edited"))),
