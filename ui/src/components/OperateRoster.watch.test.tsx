@@ -135,7 +135,7 @@ describe('the WATCH tile on the Call Roster', () => {
     expect(cell.querySelectorAll('.need-chip:not(.need-watch)')).toHaveLength(2)
   })
 
-  it('a station the STATION marks watched shows one mark — the tile — not a WANTED chip beside it', () => {
+  it('a station the STATION marks watched shows one mark — the tile — not a second WATCH beside it', () => {
     // The station puts a watched station first on the Needed board with the `Wanted` need, and the
     // roster reads the same alerts (operator 2026-09-24: "watched counts as needed").
     mount({
@@ -145,12 +145,15 @@ describe('the WATCH tile on the Call Roster', () => {
       ]),
     })
     const cell = rowOf('VP8PJ')!.querySelector('.or-need')!
-    expect(cell.querySelectorAll('.need-watch')).toHaveLength(1)
-    expect(cell.querySelector('.need-wanted'), 'the same fact twice').toBeNull()
+    const marks = cell.querySelectorAll('.need-watch')
+    expect(marks, 'the same fact twice').toHaveLength(1)
+    expect(marks[0].getAttribute('title'), 'the one mark is the tile, naming the entry').toBe('On your watch list: VP8*')
     expect(cell.querySelectorAll('.need-chip:not(.need-watch)'), 'the new one still rides').toHaveLength(1)
     // Where this window's list draws no tile (a Remote browser keeps a list of its own), the
-    // station's mark is the only one, and it stays.
-    expect(rowOf('PLAIN1')!.querySelector('.or-need .need-wanted')).not.toBeNull()
+    // station's mark is the only one, and it stays — in the tile's own look.
+    const mark = rowOf('PLAIN1')!.querySelector('.or-need .need-chip.need-watch')
+    expect(mark, "the station's mark is gone").not.toBeNull()
+    expect(mark!.textContent).toBe('WATCH')
   })
 
   it('says so in the row’s accessible name, which is what a screen reader reads for the row', () => {
