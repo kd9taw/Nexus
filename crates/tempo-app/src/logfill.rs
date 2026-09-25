@@ -24,8 +24,9 @@
 //!    chunk — so the version is on disk only once every fill is.
 //!
 //! It runs on a thread of its own, never on the radio loop, and nothing it does under the lock
-//! touches the disk or calls a resolver. On the 1.13 path (no store) it does nothing: that path
-//! fills as it always has, into `log.adi`.
+//! touches the disk or calls a resolver. On the 1.13 path it does nothing: that path fills as it
+//! always has, at the launch, into `log.adi` — its store is in memory and gone with the session,
+//! so a `fill_ver` there would name nothing the next launch could read.
 //!
 //! The resolvers are the caller's, and must be the functions the engine's own are
 //! (`Engine::set_dxcc_resolver` / `set_state_resolver`): the command layer hands both the same
@@ -62,7 +63,7 @@ pub struct FillOutcome {
 }
 
 /// Run the fill job once for resolver data `version` (see the module header). `Ok` with nothing
-/// done on the 1.13 path, which has no store.
+/// done on the 1.13 path, which fills at the launch.
 ///
 /// ⚠️ It reads the store and takes the Engine lock twice, briefly: call it on a thread of its
 /// own, with no lock held — never from the radio loop.
@@ -72,7 +73,13 @@ pub fn fill_log_store(
     country: &dyn Fn(&str) -> Option<String>,
     state: &dyn Fn(&str, Option<&str>) -> Option<String>,
 ) -> Result<FillOutcome, String> {
-    let rows = engine_lock(engine).log_rows();
+    let rows = {
+        let eng = engine_lock(engine);
+        if eng.log_on_file() {
+            return Ok(FillOutcome::default());
+        }
+        eng.log_rows()
+    };
     let LogRows::Store(reads) = rows else {
         return Ok(FillOutcome::default());
     };

@@ -320,8 +320,12 @@ const SEED: &str = "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<QSO_DATE:8>
 <CALL:5>K1ABC<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>020000<EOR>\n";
 
 fn seed(f: &Fixture) {
-    f.engine.lock().unwrap().import_adif(SEED);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    let mut e = f.engine.lock().unwrap();
+    e.import_adif(SEED);
+    assert_eq!(e.log_records().len(), 2);
+    // In the log's file, as 1.13's import had written it before it returned.
+    e.flush_log_store(std::time::Duration::from_secs(60))
+        .expect("written");
 }
 
 /// The rows exactly as the browser's log page receives them.
@@ -648,6 +652,7 @@ fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
     std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o555)).unwrap();
     let probe = std::fs::write(f.dir.join("probe"), b"x").is_err();
     let result = run(&f, &request);
+    let untouched = adif(&f) == bytes;
     std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     if !probe {
         // The write went through DESPITE 0o555, so this process is root (or holds
@@ -686,7 +691,18 @@ fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
     let result = result.unwrap();
     assert_eq!(result["outcome"], "unknown");
     assert_eq!(result["reason"], "persistenceUnconfirmed");
-    assert_eq!(adif(&f), bytes);
+    assert!(
+        untouched,
+        "the file is as it was while the folder refuses it"
+    );
+    // The edit is the log's all the same, and on the 1.13 path its lane writes it once the
+    // folder takes it — where 1.13 wrote it with its next save.
+    f.engine
+        .lock()
+        .unwrap()
+        .flush_log_store(std::time::Duration::from_secs(60))
+        .expect("written once the folder takes it");
+    assert_ne!(adif(&f), bytes, "and then the file holds the edit");
 }
 
 #[test]

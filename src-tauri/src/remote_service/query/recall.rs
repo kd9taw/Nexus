@@ -381,7 +381,9 @@ mod tests {
     fn the_read_releases_the_engine_and_an_edit_during_it_belongs_to_the_next_read() {
         use super::super::picture::{at_seams, Seam};
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
-        // The 1.13 path: the log in memory, its picture a copy of pointers.
+        // The 1.13 path: since SPEC-2 v3 C19 (D1-A) its log is in a store in memory, and the
+        // read's picture is its read transaction from its first statement on — the pass — so the
+        // edit lands after the pass, before the rows it picked are read whole.
         let d = super::super::log_tests::Dir::new("edit-during-recall");
         e.set_log_path(d.memory_log());
         let adif: String = (0..270)
@@ -401,7 +403,7 @@ mod tests {
         let counted = edits.clone();
         let result = at_seams(
             move |seam| {
-                if seam != Seam::Each {
+                if seam != Seam::Whole {
                     return;
                 }
                 let mut e = hook

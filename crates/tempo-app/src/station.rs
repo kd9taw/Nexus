@@ -788,18 +788,53 @@ impl StationCore {
         self.periods_dir.clone()
     }
 
-    /// Point the logbook at an ADIF file and load any existing contacts from it.
-    /// Called once by the shell at startup so `worked_before` highlighting and
-    /// the log view reflect prior sessions, and auto-log appends to this file.
-    ///
-    /// This is the 1.13 path: `log.adi` IS the log. The shell takes it only when the store
-    /// cannot be opened ([`Self::attach_store`] is the ordinary launch), and it is unchanged.
-    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1)
+    /// Point the logbook at an ADIF file and load any existing contacts from it — the 1.13
+    /// path, where `log.adi` IS the log's durable home. The shell takes it only when the store
+    /// cannot be opened ([`Self::attach_store`] is the ordinary launch). With no entity resolver
+    /// for the store: see [`Self::set_log_path_resolved`], which the launch uses.
     pub fn set_log_path(&mut self, path: PathBuf) {
-        self.store = None;
-        self.logbook = Logbook::load(&path);
+        self.set_log_path_resolved(
+            path,
+            Arc::new(|_: &QsoRecord| tempo_core::logbook::sqlite::Resolved::default()),
+        );
+    }
+
+    /// [`Self::set_log_path`], with cty.dat's answer for the columns the store writes beside each
+    /// contact (its entity and CQ zone), as the operator's own store is opened with.
+    ///
+    /// ★ SPEC-2 v3 C19, D1-A — the operator's "Same code, in-memory database". The contacts are
+    /// read as 1.13 read them ([`Logbook::load`]: the anchor copy, the sweep of the copies, the
+    /// scrub, the ids), then loaded into a store in this process's memory
+    /// ([`LogStore::fallback`]), so every reader of the log reads a store on either path. The
+    /// store's lane keeps `log.adi` with 1.13's rules: a pure append appended, anything else
+    /// rewritten whole, a change saved once it is in the file, and a file another machine
+    /// changed taken in before it is replaced ([`Self::take_in_log_file_changes`]).
+    ///
+    /// Should the store not open even in memory, the session runs on `log.adi` exactly as 1.13
+    /// did, with no store at all, and the diagnostic log says so.
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1)
+    pub fn set_log_path_resolved(&mut self, path: PathBuf, resolve: crate::logstore::StoreResolve) {
+        // The file as the load reads it — statted first, so a write that lands during the load
+        // leaves it unaccounted, and it is read again before anything replaces it.
+        let read = tempo_core::logbook::mirror::file_stamp(&path);
+        let log = Logbook::load(&path);
+        self.store = match LogStore::fallback(&path, read, log.records(), resolve) {
+            Ok(store) => Some(store),
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!(
+                        "log.adi could not be loaded into a store in memory ({e}); this session \
+                         writes it as 1.13 did"
+                    ),
+                );
+                None
+            }
+        };
+        self.logbook = log;
         self.minter = self.logbook.hand_over_minter();
         self.log_path = Some(path);
+        self.last_log_mtime = None;
         self.backfill_country();
         self.backfill_state();
         self.sync_hot();
@@ -926,7 +961,8 @@ impl StationCore {
     #[allow(deprecated)] // SPEC-2 C19: Stage 1's appended rows
     fn persist_appended(&mut self, count: usize) -> Option<tempo_core::logbook::writer::Ticket> {
         let change = Change::appended(&self.logbook, count, self.store.as_ref()?.resolved());
-        self.store.as_mut()?.submit(change)
+        // An append: on the 1.13 path its rows are appended to `log.adi`, as 1.13 appended them.
+        self.store.as_mut()?.submit_appended(change)
     }
 
     /// Point the Field Day contest log at its durable ADIF journal. Called once
@@ -1710,6 +1746,9 @@ impl StationCore {
     ///   not something that can be added to an ADIF other loggers also read.
     #[allow(deprecated)] // SPEC-2 C19: another window's commits (D4)
     fn recover_external_appends(&mut self) -> bool {
+        if self.on_log_file() {
+            return self.take_in_log_file_changes();
+        }
         if self.store.is_some() {
             // IN PLACE: every caller of this is about to change a row it may be holding BY
             // POSITION, and the 1.13 recovery it stands in for only ever appended, so positions
@@ -1753,6 +1792,97 @@ impl StationCore {
             self.catch_up_hot(Some(&base));
         }
         self.last_log_mtime = stamp;
+        true
+    }
+
+    /// Whether this session is on the 1.13 path with its log in a store in memory — `log.adi`
+    /// kept by the store's lane ([`LogStore::fallback`]).
+    pub(crate) fn on_log_file(&self) -> bool {
+        self.store.as_ref().is_some_and(|s| s.lane().is_some())
+    }
+
+    /// [`Self::take_in_log_file_changes`] on the 1.13 path, and nothing on the store path —
+    /// what a quit and the exit run before they wait for `log.adi`.
+    pub(crate) fn take_in_log_file_if_changed(&mut self) -> bool {
+        if !self.on_log_file() {
+            return false;
+        }
+        let took = self.take_in_log_file_changes();
+        if took {
+            self.sync_hot();
+        }
+        took
+    }
+
+    /// The 1.13 path's recovery, on the store in memory that holds its log (SPEC-2 v3 C19,
+    /// D1-A): when `log.adi` is not the file the lane last wrote or this station last took in —
+    /// another Nexus sharing the data folder appended to it, or rewrote it — merge it in as 1.13
+    /// did ([`Logbook::reconcile_disk`]: the other machine's contacts added, shared ones brought
+    /// up to date, nothing removed), hand the merge to the store, and tell the lane the file is
+    /// accounted for. Whether it read the file.
+    ///
+    /// Under the engine lock, as 1.13's was, and at the points 1.13 recovered: before a change
+    /// to rows the log holds, and on the freshness poll ([`Self::sync_shared_log_if_changed`]).
+    /// The merge's rows came from the file, so the lane writes nothing for them.
+    ///
+    /// ⚠️ One thing 1.13 never had to handle: the lane writes AFTER a change, so the file can
+    /// lag the log. While the lane is writing this log's own changes the file is not looked at.
+    /// Once the lane holds a rewrite because the file changed under it, the file is taken in
+    /// without the rows it held when this log last accounted for it
+    /// ([`LogFileWriter::holds`](tempo_core::logbook::logfile::LogFileWriter::holds)): such a row
+    /// is this log's own as it stood before the changes still owed — a contact deleted or edited
+    /// here since, which must not come back — and what another machine added is taken in. The
+    /// trade: an upgrade the other machine made to one of those rows in that moment (a
+    /// confirmation, a stamp) is not taken in; it comes back when that machine next rewrites the
+    /// file. In the same race 1.13 lost the other machine's whole write, its new contacts too.
+    /// (A contact the OTHER machine deleted still comes back with this machine's next rewrite,
+    /// as in 1.13: that one this log still holds.)
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1)
+    fn take_in_log_file_changes(&mut self) -> bool {
+        let Some(path) = self.log_path.clone() else {
+            return false;
+        };
+        let Some(lane) = self.store.as_ref().and_then(|s| s.lane()).cloned() else {
+            return false;
+        };
+        let lane_now = lane.status();
+        // The lane is writing this log's own changes: the file is in motion, and it is ours. It
+        // is looked at once the lane is done — or once the lane finds it changed by something
+        // else, and holds its rewrite for exactly this.
+        if lane_now.pending() && !lane_now.foreign_write {
+            return false;
+        }
+        // The fingerprint gate, as 1.13's, against the file the lane last wrote or accepted.
+        let stamp = tempo_core::logbook::mirror::file_stamp(&path);
+        if stamp.is_some() && stamp == lane_now.known {
+            return false;
+        }
+        // Bytes, then a lossy decode, for 1.13's reason: a CP1252 `log.adi` is not UTF-8.
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        let disk = String::from_utf8_lossy(&bytes);
+        let mut ids = HashSet::new();
+        if !disk.is_empty() {
+            let base = self.change_base();
+            // With the lane idle the file holds every change this log made, and the merge is
+            // 1.13's. With the lane still owing it changes, the file lags this log: a row it
+            // held when this log last accounted for it is this log's own, as it stood before
+            // those changes — a contact since edited or deleted here — and not another
+            // machine's news, so it is not merged back. What another machine added is.
+            let lagging = lane_now.pending();
+            ids = self
+                .logbook
+                .reconcile_disk_except(&disk, &|id| lagging && lane.holds(id));
+            if let Some(store) = self.store.as_mut() {
+                let change = Change::between(&base.rows, &self.logbook, store.resolved());
+                store.submit_quietly(change);
+            }
+            self.catch_up_hot(Some(&base));
+        }
+        if let Some(stamp) = stamp {
+            lane.accept(stamp, ids);
+        }
         true
     }
 
@@ -1864,16 +1994,9 @@ impl StationCore {
             // told, the mirror follows, and nothing here touches the disk. A receipt is the
             // change's ticket, redeemed after every lock is released.
             let ticket = self.persist_appended(recs.len())?;
-            let writer = self.store.as_ref()?.writer();
-            return Some(if receipt {
-                vec![tempo_core::logbook::LogAppendReceipt::durable(
-                    writer,
-                    ticket,
-                    crate::logstore::DURABLE_WAIT,
-                )]
-            } else {
-                Vec::new()
-            });
+            // Redeemed once the change is safe: committed, and on the 1.13 path in `log.adi`.
+            let receipt = receipt.then(|| self.store.as_ref().map(|s| s.receipt(ticket)));
+            return Some(receipt.flatten().into_iter().collect());
         }
         let path = self.log_path.clone()?;
         debug_assert!(
@@ -1949,7 +2072,7 @@ impl StationCore {
     /// as "needed" that the other radio just worked, with no save or restart required. Returns
     /// true when it actually re-read (so the caller can refresh anything derived downstream).
     pub fn sync_shared_log_if_changed(&mut self) -> bool {
-        if self.store.is_some() {
+        if self.store.is_some() && !self.on_log_file() {
             // Another window's commits, and — if the mirror has stopped because `log.adi` holds
             // something it cannot account for — that file, taken in so the mirror can resume.
             let reloaded = self.refresh_from_store(false);
@@ -2287,7 +2410,14 @@ impl StationCore {
             // the rows the log already held are the fill job's (D2-A), so nothing is backfilled
             // here. In companion mode this runs once per contact WSJT-X logs, from the radio
             // loop: it must not touch the disk, and it does not.
-            self.persist_change(base, "import_adif");
+            if merged == 0 {
+                // Only new contacts, at the end of the log: on the 1.13 path they are appended
+                // to `log.adi`, as 1.13's import appended them. The store writes the same change.
+                self.persist_appended(added.len());
+                self.catch_up_hot(Some(&base));
+            } else {
+                self.persist_change(base, "import_adif");
+            }
         } else {
             if merged > 0 {
                 self.save_log("import_adif"); // rewrites the whole log, `added` included
@@ -3091,6 +3221,9 @@ mod grid_tests {
 
         let mut sc = StationCore::new();
         sc.set_log_path(path.clone());
+        // The session with no store at all — the last resort, `log.adi` written by 1.13's own
+        // code. The 1.13 path's own twin is the test after this one.
+        sc.store = None;
         assert!(
             sc.recover_external_appends(),
             "the first look reads the file"
@@ -3119,6 +3252,71 @@ mod grid_tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// The same on the 1.13 path, its log in a store in memory (SPEC-2 v3 C19, D1-A): the file
+    /// the launch loaded is the file the lane may replace, so nothing reads it again; a companion
+    /// import of one contact is APPENDED to it, as 1.13's was — the file is the same file,
+    /// grown — and leaves it accounted, so the look before the next change does not re-read the
+    /// whole log either.
+    #[cfg(unix)]
+    #[test]
+    fn a_companion_import_on_the_1_13_path_is_appended_and_leaves_the_gate_shut() {
+        use std::os::unix::fs::MetadataExt;
+        use tempo_core::logbook::{adif_header, adif_record_own_log};
+        let dir =
+            std::env::temp_dir().join(format!("nexus_append_stamp_d1a_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                adif_header(),
+                adif_record_own_log(&rec("W1AW", "20m", "FN31"))
+            ),
+        )
+        .unwrap();
+        let mut sc = StationCore::new();
+        sc.set_log_path(path.clone());
+        let lane = std::sync::Arc::clone(sc.store.as_ref().and_then(LogStore::lane).unwrap());
+        assert!(
+            !sc.take_in_log_file_if_changed(),
+            "the file the launch read is not read again"
+        );
+        let file = std::fs::metadata(&path).unwrap().ino();
+        let (added, _, merged, _) = sc.import_adif(
+            "<EOH>\n<CALL:5>K5XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260804<TIME_ON:6>120000<EOR>\n",
+        );
+        assert_eq!(
+            (added, merged),
+            (1, 0),
+            "fixture: one contact added, none upgraded"
+        );
+        let st = lane.flush(std::time::Duration::from_secs(60));
+        assert!(!st.pending(), "{st:?}");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().ino(),
+            file,
+            "appended to the file, not a new file renamed over it"
+        );
+        let calls: Vec<String> = Logbook::load(&path)
+            .records()
+            .iter()
+            .map(|r| r.call.clone())
+            .collect();
+        assert_eq!(calls, ["W1AW", "K5XYZ"], "the contact is in it");
+        assert!(
+            !sc.take_in_log_file_if_changed(),
+            "our own append must not reopen the gate — every later call would re-read the log"
+        );
+        assert_eq!(
+            sc.logbook.len(),
+            2,
+            "and nothing was re-read or double-counted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The other half, and it is the half that must never be traded for the first:
     /// an append may carry the fingerprint forward ONLY while we can account for
     /// every byte on disk. Here a second instance wrote after our last look and we
@@ -3145,6 +3343,8 @@ mod grid_tests {
 
         let mut sc = StationCore::new();
         sc.set_log_path(path.clone());
+        // The session with no store at all: 1.13's own code (the 1.13 path's twin follows).
+        sc.store = None;
         assert!(sc.recover_external_appends(), "we hold W1AW, gate shut");
 
         // Instance A appends a contact we never see in memory.
@@ -3174,6 +3374,65 @@ mod grid_tests {
         );
         assert_eq!(on_disk.len(), 3, "...and nothing is double-logged");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The same on the 1.13 path, its log in a store in memory (SPEC-2 v3 C19, D1-A): our
+    /// contact is appended by the lane onto a file another instance appended to since we last
+    /// looked; the file is then not accounted, so the look before the next change reads it and
+    /// takes the other contact in, and the rewrite that change makes keeps it.
+    #[test]
+    fn an_append_onto_a_file_that_moved_under_us_leaves_it_unaccounted_on_the_1_13_path() {
+        use tempo_core::logbook::{adif_header, adif_record_own_log};
+        let dir =
+            std::env::temp_dir().join(format!("nexus_append_stale_d1a_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                adif_header(),
+                adif_record_own_log(&rec("W1AW", "20m", "FN31"))
+            ),
+        )
+        .unwrap();
+        let mut sc = StationCore::new();
+        sc.set_log_path(path.clone());
+        let lane = std::sync::Arc::clone(sc.store.as_ref().and_then(LogStore::lane).unwrap());
+        let wait = std::time::Duration::from_secs(60);
+
+        // Instance A appends a contact we never see in memory.
+        Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
+
+        // We log our own contact, as log_qso does: memory first, then carried to the file.
+        let mut k = rec("K5XYZ", "20m", "FN31");
+        k.id = Some(sc.logbook.add(k.clone()));
+        sc.append_to_log(std::slice::from_ref(&k));
+        let st = lane.flush(wait);
+        assert!(!st.pending(), "{st:?}");
+        assert_eq!(
+            st.known, None,
+            "a file we cannot account for is not recorded as ours"
+        );
+
+        // The next change to a contact the log holds: the look before it takes A's in.
+        let w1 = sc.logbook.records()[0].id.unwrap();
+        assert!(sc.mark_qsl_sent(w1, Some(tempo_core::logbook::QslVia::Direct)));
+        let st = lane.flush(wait);
+        assert!(!st.pending(), "{st:?}");
+        let on_disk = Logbook::load(&path);
+        let calls: Vec<&str> = on_disk.records().iter().map(|r| r.call.as_str()).collect();
+        assert!(
+            calls.contains(&"W3CCC"),
+            "another instance's append survives our rewrite (on disk: {calls:?})"
+        );
+        assert_eq!(on_disk.len(), 3, "...and nothing is double-logged");
+        assert!(
+            on_disk.records()[0].qsl_sent.sent,
+            "and our change is in it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

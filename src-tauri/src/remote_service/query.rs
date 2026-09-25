@@ -1098,10 +1098,11 @@ mod tests {
     }
 
     /// ★ ONE PICTURE: the window's two newest contacts, picked by its pass, are edited out of
-    /// the window and deleted — by the operator, committed to the store — before the pass's
-    /// whole records are read. They are still the contacts the pass picked: the window is the
-    /// log as the read found it, every row of it, on the store and on the 1.13 path. The next
-    /// read has both changes.
+    /// the window and deleted — by the operator, committed to the store (on the 1.13 path, made:
+    /// its store in memory commits them once the read ends) — before the pass's whole records
+    /// are read. They are still the contacts the pass picked: the window is the log as the read
+    /// found it, every row of it, on the store and on the 1.13 path. The next read has both
+    /// changes.
     #[test]
     fn a_contact_edited_or_deleted_between_the_pass_and_the_whole_read_is_the_one_picked() {
         use super::picture::{at_seams, Seam};
@@ -1134,8 +1135,13 @@ mod tests {
                     r.when_unix = 1_000_000_000;
                     assert!(eng.update_qso(edit, r));
                     eng.delete_qso(delete);
-                    eng.flush_log_store(std::time::Duration::from_secs(60))
-                        .expect("committed to the store");
+                    // On the store they commit while the read runs, beside its snapshot. The 1.13
+                    // path's store is in memory, where a read holds off every commit until it
+                    // ends: there they commit after it, and the next read waits for them.
+                    if arm == "store" {
+                        eng.flush_log_store(std::time::Duration::from_secs(60))
+                            .expect("committed to the store");
+                    }
                     counted.set(counted.get() + 1);
                 },
                 || log_capture(&e, "", false),

@@ -275,6 +275,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contacts, about 210 MB on 500,000, each time. `log.adi` is now written straight from the
   logbook database a few thousand contacts at a time, byte for byte the same file.
 
+- **Nexus now checks that a shared `log.adi` has not changed before it saves over it.** When two
+  computers keep one `log.adi` on a network drive, a contact one of them added while the other
+  was saving could be lost; Nexus now looks again the moment before it replaces the file, and if
+  anything else has written to it since it last looked, it reads that in first.
+
 - **With a big logbook, an upload being marked no longer makes Awards, the Needed board, the
   Journey and the statistics start over.** Each of them went through every contact again after
   every upload to QRZ, ClubLog, eQSL or LoTW was marked on a contact, although an upload changes

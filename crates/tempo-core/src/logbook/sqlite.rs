@@ -706,6 +706,48 @@ impl LogDb {
         std::path::PathBuf::from(format!("file:/nexus-log-{n}?vfs=memdb"))
     }
 
+    /// Lift the cap SQLite's `memdb` VFS puts on an in-memory store — 1 GiB unless it is raised.
+    /// A session on the 1.13 path holds the operator's whole log in one ([`LogDb::memory_name`]),
+    /// and a lifetime log must never be refused for its size: past the cap every write would
+    /// fail as "database or disk is full". Only memory itself limits it then, as it limited the
+    /// log 1.13 held. A file store has no such cap, and is left as it is.
+    pub fn lift_memory_cap(&self) -> Result<()> {
+        let mut limit: i64 = i64::MAX;
+        // SAFETY: the handle is this connection's and outlives the call; the argument is the
+        // `sqlite3_int64` the size-limit control reads, and writes the new limit back into.
+        let rc = unsafe {
+            rusqlite::ffi::sqlite3_file_control(
+                self.conn.handle(),
+                c"main".as_ptr(),
+                rusqlite::ffi::SQLITE_FCNTL_SIZE_LIMIT,
+                (&mut limit as *mut i64).cast(),
+            )
+        };
+        match rc {
+            rusqlite::ffi::SQLITE_OK | rusqlite::ffi::SQLITE_NOTFOUND => Ok(()),
+            code => Err(Error::Sql(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                Some("the in-memory store's size cap could not be lifted".into()),
+            ))),
+        }
+    }
+
+    /// The size cap of this in-memory store, in bytes — what [`LogDb::lift_memory_cap`] set.
+    #[cfg(test)]
+    fn memory_cap(&self) -> i64 {
+        let mut limit: i64 = -1;
+        // SAFETY: as in `lift_memory_cap`; a negative value only asks.
+        unsafe {
+            rusqlite::ffi::sqlite3_file_control(
+                self.conn.handle(),
+                c"main".as_ptr(),
+                rusqlite::ffi::SQLITE_FCNTL_SIZE_LIMIT,
+                (&mut limit as *mut i64).cast(),
+            );
+        }
+        limit
+    }
+
     /// Open `path` for the ONE-TIME conversion of an existing `log.adi` ([`super::migrate`]) —
     /// never for ordinary use. It differs from [`LogDb::open`] in three ways, all confined to
     /// this connection and gone when it closes:
@@ -1437,12 +1479,15 @@ pub struct WriteHold {
 }
 
 impl WriteHold {
-    /// Take the lock on the database at `path` (which must exist).
+    /// Take the lock on the database at `path` (which must exist) — a file, or a store in memory
+    /// by its name ([`LogDb::memory_name`]).
     pub fn take(path: &Path) -> Result<WriteHold> {
         quiet_memory_statistics();
         let conn = Connection::open_with_flags(
             path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                | rusqlite::OpenFlags::SQLITE_OPEN_URI
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
         conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -2550,6 +2595,25 @@ mod tests {
             0,
             "an invalid IOTA is destroyed at parse and must not come back"
         );
+    }
+
+    /// An in-memory store holds a lifetime log whatever its size: the `memdb` VFS caps one at
+    /// 1 GiB until the cap is lifted, and a store for a whole log lifts it — to nothing but memory.
+    /// A file store has no such cap, and lifting it there does nothing and fails nothing.
+    #[test]
+    fn an_in_memory_store_is_not_capped_at_a_gigabyte() {
+        let db = LogDb::open(&LogDb::memory_name()).expect("in memory");
+        assert_eq!(db.memory_cap(), 1 << 30, "premise: memdb's own cap");
+        db.lift_memory_cap().expect("lifted");
+        assert_eq!(db.memory_cap(), i64::MAX, "lifted to nothing but memory");
+
+        let dir = std::env::temp_dir().join(format!("nexus-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = LogDb::open(&dir.join("log.sqlite3")).expect("a file store");
+        file.lift_memory_cap()
+            .expect("a file store is left as it is");
+        drop(file);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⭐ **THE PROOF.** A large synthetic log survives ADIF → SQLite → ADIF byte for byte.

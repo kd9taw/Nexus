@@ -831,6 +831,16 @@ pub struct LogFiles {
     pub database: Option<PathBuf>,
 }
 
+/// What a save that may be called off did ([`Logbook::save_text`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Saved {
+    /// The file was replaced: its stamp as [`Logbook::save`] returns it — (mtime, length) of the
+    /// new file, statted before the rename.
+    Replaced(Option<(std::time::SystemTime, u64)>),
+    /// Called off the moment before the rename: the file was left as it was.
+    CalledOff,
+}
+
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
@@ -844,6 +854,7 @@ mod edit;
 pub mod hot;
 mod id;
 pub mod io_fence;
+pub mod logfile;
 pub mod migrate;
 pub mod mirror;
 mod op;
@@ -1418,14 +1429,33 @@ impl Logbook {
     /// so both sides carry the same timestamp, and the day key mis-paired two contacts
     /// with one station inside a day — see [`crate::reconcile::merge_own_disk`].
     pub fn reconcile_disk(&mut self, text: &str) {
+        let _ = self.reconcile_disk_except(text, &|_| false);
+    }
+
+    /// [`Self::reconcile_disk`], leaving out every row of the file whose id `skip` names — for
+    /// a caller that knows which rows of the file are this log's own and stale: rows it held
+    /// that the log has since changed or deleted, which are not another instance's news (the
+    /// 1.13 path's station while `logfile`'s lane still owes the file a change). Returns the ids
+    /// of every row the file holds, left out or not.
+    pub fn reconcile_disk_except(
+        &mut self,
+        text: &str,
+        skip: &dyn Fn(RecordId) -> bool,
+    ) -> std::collections::HashSet<RecordId> {
         // The ids a load of this file would give its rows: their own, or provisional from
         // their text, so two instances reading one file agree on every row's id.
         let mut rows = parse_adif_spans(text);
         id::settle_file_ids(rows.iter_mut().map(|(r, span)| (&mut r.id, *span)));
-        let incoming = rows.into_iter().map(|(r, _)| r).collect();
+        let ids = rows.iter().filter_map(|(r, _)| r.id).collect();
+        let incoming = rows
+            .into_iter()
+            .map(|(r, _)| r)
+            .filter(|r| r.id.is_none_or(|id| !skip(id)))
+            .collect();
         let before = self.records.len();
         crate::reconcile::merge_own_disk(&mut *self.records, incoming);
         self.settle_new_ids(before);
+        ids
     }
 
     /// Give every row from `from` on an id no other row holds: the one it arrived with if that
@@ -2187,7 +2217,44 @@ impl Logbook {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let body = self.adif();
+        match Self::write_whole(path, &self.adif(), now_unix, keep, total_cap, &|| true)? {
+            Saved::Replaced(stamp) => Ok(stamp),
+            // Never: nothing here calls it off.
+            Saved::CalledOff => Ok(None),
+        }
+    }
+
+    /// [`save`](Self::save) of a log held somewhere else — `body` is [`Self::adif`] of it, made
+    /// by whoever holds it — with every rule of a save: the dated snapshot, the per-process
+    /// temporary file synced before the rename, the rename, the folder synced after. What the
+    /// `log.adi` lane of a session on the 1.13 path writes from the store that holds its log
+    /// ([`logfile`]), so the file is the file [`save`](Self::save) wrote.
+    ///
+    /// `still` is asked once the new file is written and synced, the moment before the rename:
+    /// `false` calls the save off, and the file is left as it is ([`Saved::CalledOff`]).
+    pub fn save_text(path: &Path, body: &str, still: &dyn Fn() -> bool) -> std::io::Result<Saved> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Self::write_whole(
+            path,
+            body,
+            now_unix(),
+            BACKUP_KEEP,
+            &backup_total_cap,
+            still,
+        )
+    }
+
+    /// The write of a save, once the folder exists.
+    fn write_whole(
+        path: &Path,
+        body: &str,
+        now_unix: u64,
+        keep: usize,
+        total_cap: &dyn Fn(u64) -> u64,
+        still: &dyn Fn() -> bool,
+    ) -> std::io::Result<Saved> {
         // Snapshot the file we are about to replace, BEFORE the rename publishes the new one.
         // This is the only trigger — load takes no snapshot, so launch stays free of it (see
         // the module header). Best-effort by construction: it returns `()`, so nothing here can
@@ -2208,6 +2275,10 @@ impl Logbook {
         let stamp = std::fs::metadata(&tmp)
             .ok()
             .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
+        if !still() {
+            let _ = std::fs::remove_file(&tmp);
+            return Ok(Saved::CalledOff);
+        }
         std::fs::rename(&tmp, path)?;
         // …and the directory entry, so the rename itself survives the same power loss. Without
         // it the log is intact but is still the PRE-save one — a merge or a mark-all the
@@ -2215,7 +2286,7 @@ impl Logbook {
         // succeeded, so a filesystem that refuses the directory open (and Windows, which has
         // no directory handle to sync) must not turn a durability upgrade into a failed save.
         sync_parent_dir(path);
-        Ok(stamp)
+        Ok(Saved::Replaced(stamp))
     }
 
     /// Merge a confirmation/credit report (ADIF — e.g. a LoTW export) into the
@@ -4458,6 +4529,10 @@ enum Receipt {
     Durable {
         writer: Arc<writer::LogWriter>,
         ticket: writer::Ticket,
+        /// On the 1.13 path the store is in memory and `log.adi` is where the contact survives:
+        /// its lane has to have written the change too ([`logfile`]) — every change up to the
+        /// number the lane gave it.
+        file: Option<(Arc<logfile::LogFileWriter>, u64)>,
         deadline: std::time::Duration,
     },
 }
@@ -4474,6 +4549,27 @@ impl LogAppendReceipt {
             inner: Receipt::Durable {
                 writer,
                 ticket,
+                file: None,
+                deadline,
+            },
+        }
+    }
+
+    /// A receipt for an append on the 1.13 path, where the store is in memory: `sync` returns
+    /// once `ticket`'s change is committed AND in `log.adi` — every change up to `n`, the number
+    /// `file`, its lane, gave it — or fails at `deadline` saying which is still to come.
+    pub fn durable_in_file(
+        writer: Arc<writer::LogWriter>,
+        ticket: writer::Ticket,
+        file: Arc<logfile::LogFileWriter>,
+        n: u64,
+        deadline: std::time::Duration,
+    ) -> LogAppendReceipt {
+        LogAppendReceipt {
+            inner: Receipt::Durable {
+                writer,
+                ticket,
+                file: Some((file, n)),
                 deadline,
             },
         }
@@ -4493,10 +4589,20 @@ impl LogAppendReceipt {
             Receipt::Durable {
                 writer,
                 ticket,
+                file,
                 deadline,
-            } => writer
-                .wait_durable(&ticket, deadline)
-                .map_err(std::io::Error::other),
+            } => {
+                let start = std::time::Instant::now();
+                writer
+                    .wait_durable(&ticket, deadline)
+                    .map_err(std::io::Error::other)?;
+                match file {
+                    Some((file, n)) => file
+                        .wait_saved(n, deadline.saturating_sub(start.elapsed()))
+                        .map_err(std::io::Error::other),
+                    None => Ok(()),
+                }
+            }
         }
     }
 }

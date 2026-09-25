@@ -3150,7 +3150,7 @@ mod logbook_startup_tests {
         let dir = folder("network", Some(5));
         let log = dir.join("log.adi");
         let e = launch(&log, Some("an NFS share".into()), true);
-        assert!(!e.log_store_open());
+        assert!(e.log_on_file(), "the 1.13 path: log.adi is the log");
         assert_eq!(e.log_records().len(), 5, "the log is read from log.adi");
         assert!(
             e.log_store_problem().is_some_and(|p| p.contains("NFS")),
@@ -3184,7 +3184,7 @@ mod logbook_startup_tests {
         )
         .expect("log");
         let e = launch(&log, None, true);
-        assert!(!e.log_store_open());
+        assert!(e.log_on_file(), "the 1.13 path: log.adi is the log");
         let shown = e.snapshot().log_store_problem;
         assert!(
             shown
@@ -3725,7 +3725,14 @@ mod logbook_startup_tests {
 
         let mut e = Engine::new("K2DEF", "FN31", 0);
         adopt_logbook(&mut e, &log, opened);
-        assert!(!e.log_store_open(), "the session is not on the database");
+        assert!(
+            e.log_on_file(),
+            "the session is not on the database: log.adi is its log"
+        );
+        assert!(
+            !database_path(&log).is_file(),
+            "and no database file was made"
+        );
         assert_eq!(
             e.log_records().len(),
             6,
@@ -3735,6 +3742,7 @@ mod logbook_startup_tests {
         rec.id = None;
         rec.call = "W1NEW".into();
         e.log_qso(rec);
+        e.flush_log_store(Duration::from_secs(60)).expect("written");
         assert!(
             std::fs::read_to_string(&log)
                 .expect("log.adi")
@@ -4560,15 +4568,20 @@ fn open_logbook_store(
     if let Some(dir) = log.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let resolve: tempo_app::logstore::StoreResolve = Arc::new(|r| {
+    tempo_app::logstore::open_reporting(log, store_resolve(), network, progress)
+}
+
+/// cty.dat's answer for the two columns the logbook store writes beside each contact — its
+/// entity and CQ zone — for the operator's store and for the 1.13 path's store in memory alike.
+fn store_resolve() -> tempo_app::logstore::StoreResolve {
+    Arc::new(|r| {
         propagation::dxcc::resolve(&r.call).map_or_else(Default::default, |i| {
             tempo_core::logbook::sqlite::Resolved {
                 entity: Some(i.entity),
                 cq_zone: Some(i.cq_zone),
             }
         })
-    });
-    tempo_app::logstore::open_reporting(log, resolve, network, progress)
+    })
 }
 
 /// Whether opening the logbook is about to convert `log.adi`: there is a log, and no database
@@ -4674,7 +4687,7 @@ fn adopt_logbook(
                 }
                 _ => tempo_core::applog::error("logbook", &line),
             }
-            eng.set_log_path(log.to_path_buf());
+            eng.set_log_path_resolved(log.to_path_buf(), store_resolve());
             eng.note_log_store_problem(&e);
         }
     }
@@ -4703,6 +4716,9 @@ fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
         if !quit::the_quit_settled_the_logbook() {
             eng.log_resend_all();
         }
+        // On the 1.13 path, a `log.adi` another computer wrote since is taken in first: its lane
+        // does not replace a file it cannot account for, and this is the last chance to.
+        eng.log_take_in_log_file();
         eng.flush_log_store(cap)
     };
     if let Err(e) = flushed {
