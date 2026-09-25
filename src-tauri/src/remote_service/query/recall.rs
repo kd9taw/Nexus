@@ -287,10 +287,11 @@ fn read(records: &[QsoRecord], call: &str) -> Result<Capture, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     fn record(call: &str, when: u64, band: &str, mode: &str) -> QsoRecord {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
         e.import_adif(&format!("<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>", call.len(), band.len(), mode.len()));
-        let mut q = e.log_records()[0].as_ref().clone();
+        let mut q = e.stored_log()[0].as_ref().clone();
         q.when_unix = when;
         q
     }
@@ -392,7 +393,7 @@ mod tests {
             })
             .collect();
         e.import_adif(&adif);
-        assert_eq!(e.log_records().len(), 270);
+        assert_eq!(e.stored_log().len(), 270);
         let engine = std::sync::Arc::new(std::sync::Mutex::new(e));
         let (hook, edits) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
         let counted = edits.clone();
@@ -404,16 +405,16 @@ mod tests {
                 let mut e = hook
                     .try_lock()
                     .expect("summary work has released station authority");
-                let count = e.log_records().len();
+                let count = e.stored_log().len();
                 let index = e
-                    .log_records()
+                    .stored_log()
                     .iter()
                     .position(|q| q.call == "W1AW")
                     .unwrap();
-                let mut changed = e.log_records()[index].as_ref().clone();
+                let mut changed = e.stored_log()[index].as_ref().clone();
                 changed.notes = Some("edited during recall".into());
                 assert!(e.update_qso(changed.id.unwrap(), changed));
-                assert_eq!(e.log_records().len(), count);
+                assert_eq!(e.stored_log().len(), count);
                 counted.set(counted.get() + 1);
             },
             || read_engine(&engine, "W1AW"),

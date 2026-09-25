@@ -205,6 +205,7 @@ fn read_cached(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     fn fixture() -> (
@@ -271,7 +272,7 @@ mod tests {
         assert!(value["windowAgeMs"].is_null());
         let e = engine.lock().unwrap();
         assert_eq!(before.radio.tx_enabled, e.snapshot().radio.tx_enabled);
-        assert!(e.log_records().is_empty());
+        assert!(e.stored_log().is_empty());
         assert_eq!(
             e.log_revision(),
             cache.lock().unwrap().as_ref().unwrap().2.log
@@ -456,7 +457,7 @@ mod tests {
         );
         {
             let mut e = engine.lock().unwrap();
-            let pushed = e.log_records()[0].as_ref().clone();
+            let pushed = e.stored_log()[0].as_ref().clone();
             assert!(e.stamp_qrz_upload(
                 &pushed,
                 tempo_core::logbook::UploadOutcome::Accepted,

@@ -807,6 +807,7 @@ pub(crate) fn test_fresh_catalog() -> crate::TleSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     fn fixture() -> (crate::SharedEngine, Sources) {
         let settings = tempo_app::settings::Settings {
             mycall: "W1AW".into(),
@@ -821,7 +822,7 @@ mod tests {
             format!("<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<GRIDSQUARE:4>{grid}{sat}<QSO_DATE:8>20260910<TIME_ON:6>000000<EOR>\n",call.len())
         }).collect();
         engine.import_adif(&adif);
-        assert_eq!(engine.log_records().len(), 2301);
+        assert_eq!(engine.stored_log().len(), 2301);
         let mut prop = propagation::offline(crate::now_unix() - 1, "W1AW", "FN31RX09");
         prop.source = "live".into();
         let context = crate::PropContext {

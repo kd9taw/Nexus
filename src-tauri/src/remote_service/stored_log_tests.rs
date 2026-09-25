@@ -18,7 +18,16 @@ use tempo_core::logbook::QsoRecord;
 /// Every contact the log holds, whole and in log order: from the store once every change made
 /// before this call is written, or on the 1.13 path the log in memory.
 pub(crate) trait StoredLog {
+    /// In place of `log_records()`.
     fn stored_log(&self) -> Vec<Arc<QsoRecord>>;
+
+    /// The same contacts as values, in place of `get_log()`.
+    fn stored_records(&self) -> Vec<QsoRecord> {
+        self.stored_log()
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect()
+    }
 }
 
 impl StoredLog for Engine {

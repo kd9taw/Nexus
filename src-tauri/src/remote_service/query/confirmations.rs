@@ -114,6 +114,7 @@ fn project(mut report: DiagnosticsReportDto, log_count: usize) -> Result<Value, 
 mod tests {
     use super::super::{Publisher, Request};
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
     use tempo_app::dto::{ActionDto, QsoDiagnosisDto, ReasonDto};
@@ -169,7 +170,7 @@ mod tests {
             desktop.diagnoses.len() > DIAGNOSES,
             "the fixture must exceed what the panel lists"
         );
-        let before = engine.lock().unwrap().get_log();
+        let before = engine.lock().unwrap().stored_records();
         let value = read_engine(&engine).unwrap();
         assert_eq!(value["logCount"], 60);
         assert_eq!(
@@ -192,7 +193,7 @@ mod tests {
             );
         }
         assert_eq!(
-            engine.lock().unwrap().get_log(),
+            engine.lock().unwrap().stored_records(),
             before,
             "diagnosing cannot change records or upload state"
         );

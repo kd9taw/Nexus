@@ -156,6 +156,7 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::sync::Arc;
     fn engine() -> crate::SharedEngine {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
@@ -166,7 +167,7 @@ mod tests {
         e.js8_load_journal(&journal.to_string());
         assert_eq!(e.js8_heard().len(), 2);
         e.import_adif("<CALL:4>W1AW<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20260908<TIME_ON:6>010000<GRIDSQUARE:4>FN31<NAME:3>OLD<COMMENT:3>OLD<EOR>");
-        let base = e.log_records()[0].as_ref().clone();
+        let base = e.stored_log()[0].as_ref().clone();
         let adif: String = (1..2302)
             .map(|i| {
                 let mut q = base.clone();
@@ -183,7 +184,7 @@ mod tests {
             })
             .collect();
         e.import_adif(&adif);
-        assert_eq!(e.log_records().len(), 2302);
+        assert_eq!(e.stored_log().len(), 2302);
         Arc::new(std::sync::Mutex::new(e))
     }
     /// Every contact with a heard call joins its history — the latest one's fields even when
@@ -225,13 +226,13 @@ mod tests {
         {
             let mut e = engine.lock().unwrap();
             let index = e
-                .log_records()
+                .stored_log()
                 .iter()
                 .enumerate()
                 .max_by_key(|(_, q)| q.when_unix)
                 .unwrap()
                 .0;
-            let mut q = e.log_records()[index].as_ref().clone();
+            let mut q = e.stored_log()[index].as_ref().clone();
             q.comment = Some("CURRENT".into());
             assert!(e.update_qso(q.id.unwrap(), q));
         }
@@ -259,12 +260,12 @@ mod tests {
                 // Both halves of the history move: the first W1AW contact becomes another
                 // station's, and the latest one gains a comment.
                 let mut e = hook.lock().unwrap();
-                let last = e.log_records().len() - 1;
-                let mut latest = e.log_records()[last].as_ref().clone();
+                let last = e.stored_log().len() - 1;
+                let mut latest = e.stored_log()[last].as_ref().clone();
                 assert_eq!(latest.call, "w1aw", "premise: the latest W1AW contact");
                 latest.comment = Some("CHANGED".into());
                 assert!(e.update_qso(latest.id.unwrap(), latest));
-                let mut first = e.log_records()[0].as_ref().clone();
+                let mut first = e.stored_log()[0].as_ref().clone();
                 first.call = "K9ZZZ".into();
                 assert!(e.update_qso(first.id.unwrap(), first));
                 counted.set(counted.get() + 1);
@@ -296,8 +297,8 @@ mod tests {
         );
         {
             let mut e = engine.lock().unwrap();
-            let last = e.log_records().len() - 1;
-            let mut q = e.log_records()[last].as_ref().clone();
+            let last = e.stored_log().len() - 1;
+            let mut q = e.stored_log()[last].as_ref().clone();
             q.comment = Some("x".repeat(1025));
             assert!(e.update_qso(q.id.unwrap(), q));
         }

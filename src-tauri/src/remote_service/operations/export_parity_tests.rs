@@ -6,6 +6,7 @@ use super::*;
 use crate::remote_service::query::log_tests::{
     edit_at, launch, memory, random_change, record_at, settle, Dir, Gen, CALLS,
 };
+use crate::remote_service::stored_log_tests::StoredLog;
 use tempo_app::engine::Engine;
 use tempo_core::logbook::{Logbook, LoggedActivation};
 
@@ -171,7 +172,7 @@ fn activation_log(n: usize, seed: u64) -> String {
 /// before one.
 fn activation_change(e: &crate::SharedEngine, g: &mut Gen) {
     let mut eng = e.lock().unwrap();
-    let len = eng.log_records().len();
+    let len = eng.stored_log().len();
     if len == 0 {
         return;
     }
@@ -409,7 +410,7 @@ fn after_every_change_every_answer_is_the_old_answer() {
             assert_answers_are_the_old_answers(&e, false, &format!("seed {seed}, step {step}"));
             let (log, held) = {
                 let eng = e.lock().unwrap();
-                (eng.get_log(), eng.log_activations())
+                (eng.stored_records(), eng.log_activations())
             };
             raw_refs += usize::from(log.iter().any(|r| raw(r.ota.my_ref.as_deref())));
             raw_calls += usize::from(log.iter().any(|r| raw(r.station_callsign.as_deref())));

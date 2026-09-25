@@ -333,6 +333,7 @@ pub(super) fn read_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::sync::{Arc, Mutex};
     fn engine(count: usize) -> crate::SharedEngine {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
@@ -341,7 +342,7 @@ mod tests {
             format!("<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260909<TIME_ON:6>120000<LOTW_QSL_RCVD:1>Y<EOR>\n",call.len())
         }).collect();
         e.import_adif(&adif);
-        assert_eq!(e.log_records().len(), count);
+        assert_eq!(e.stored_log().len(), count);
         Arc::new(Mutex::new(e))
     }
     #[test]
@@ -350,7 +351,7 @@ mod tests {
         let engine = engine(2301);
         let (log, settings, snapshot) = {
             let e = engine.lock().unwrap();
-            (e.log_records().to_vec(), e.settings().clone(), e.snapshot())
+            (e.stored_log(), e.settings().clone(), e.snapshot())
         };
         let (hook, passes) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
         let counted = passes.clone();
@@ -388,7 +389,7 @@ mod tests {
         );
         assert!(stats.to_string().len() < 16_384);
         let e = engine.lock().unwrap();
-        assert_eq!(e.log_records(), log);
+        assert_eq!(e.stored_log(), log);
         assert_eq!(e.settings(), &settings);
         assert_eq!(e.snapshot().radio.tx_enabled, snapshot.radio.tx_enabled);
     }
@@ -411,10 +412,10 @@ mod tests {
             let engine = engine(270);
             let edit = |e: &mut tempo_app::engine::Engine| {
                 // The JA contact moves to 40 m: a new band slot, and a new byBand row.
-                let mut q = e.log_records()[0].as_ref().clone();
+                let mut q = e.stored_log()[0].as_ref().clone();
                 q.band = "40m".into();
                 assert!(e.update_qso(q.id.unwrap(), q));
-                assert_eq!(e.log_records().len(), 270);
+                assert_eq!(e.stored_log().len(), 270);
             };
             let before = read_engine(&engine, kind).unwrap();
             let hook = engine.clone();
@@ -461,7 +462,7 @@ mod tests {
         let engine = engine(1);
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].as_ref().clone();
+            let mut q = e.stored_log()[0].as_ref().clone();
             q.notes = Some("contact note ".repeat(100_000));
             q.comment = Some("private comment".into());
             assert!(e.update_qso(q.id.unwrap(), q));
@@ -472,7 +473,7 @@ mod tests {
         }
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].as_ref().clone();
+            let mut q = e.stored_log()[0].as_ref().clone();
             q.country = Some("X".repeat(TEXT_BYTES + 1));
             assert!(e.update_qso(q.id.unwrap(), q));
         }
@@ -486,7 +487,7 @@ mod tests {
         ));
         // These are inspected under the engine lock, even though only boolean
         // credit/satellite flags leave it. Bound the inspection as well as copies.
-        let original = engine.lock().unwrap().log_records()[0].as_ref().clone();
+        let original = engine.lock().unwrap().stored_log()[0].as_ref().clone();
         for satellite in [false, true] {
             let mut q = original.clone();
             q.country = None;

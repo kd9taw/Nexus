@@ -709,6 +709,7 @@ pub(super) fn configuration_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     const ID: &str = "10000000-0000-4000-8000-000000000001";
     fn request(collection: Collection) -> Request {
         Request {
@@ -766,7 +767,7 @@ mod tests {
             .map(|i| adif(&format!("K1T{i:03}"), "010000"))
             .collect();
         engine.lock().unwrap().import_adif(&data);
-        let before = engine.lock().unwrap().get_log();
+        let before = engine.lock().unwrap().stored_records();
         let mut publisher = Publisher::default();
         let now = Instant::now();
         let mut req = request(Collection::Log);
@@ -775,7 +776,7 @@ mod tests {
         assert_eq!(first["rows"].as_array().unwrap().len(), 128);
         assert_eq!(first["total"], 270);
         assert_eq!(
-            engine.lock().unwrap().get_log(),
+            engine.lock().unwrap().stored_records(),
             before,
             "reading cannot change records, confirmations or connector state"
         );

@@ -230,6 +230,7 @@ fn read_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::sync::{Arc, Mutex};
     fn sources() -> Sources {
         Sources {
@@ -275,7 +276,7 @@ mod tests {
             format!("<CALL:{}>{call}<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260909<TIME_ON:6>120000<MY_SIG:4>POTA<MY_SIG_INFO:7>US-0001<SIG:4>POTA<SIG_INFO:7>US-0002<EOR>\n", call.len())
         }).collect();
         engine.import_adif(&adif);
-        assert_eq!(engine.log_records().len(), count);
+        assert_eq!(engine.stored_log().len(), count);
         engine.set_activation("POTA", "US-0001").unwrap();
         engine.set_hunted_parks_import(vec!["US-0003".into()]);
         engine.set_hunt_target("W1AW", "POTA", "US-0004").unwrap();
@@ -321,7 +322,7 @@ mod tests {
                 rows.iter()
                     .map(|s| e.park_worked(&s.reference))
                     .collect::<Vec<_>>(),
-                e.log_records().to_vec(),
+                e.stored_log(),
             )
         };
         assert_eq!(native_count, 2301);
@@ -354,7 +355,7 @@ mod tests {
         }
         assert_eq!(value["feeds"][1]["status"], "ready");
         assert_eq!(value["feeds"][1]["spots"], json!([]));
-        assert_eq!(engine.lock().unwrap().log_records(), original);
+        assert_eq!(engine.lock().unwrap().stored_log(), original);
         {
             let mut paths = sources.live_paths.lock().unwrap();
             *paths = Default::default();
@@ -424,7 +425,7 @@ mod tests {
                     if activation {
                         e.set_activation("POTA", "US-0005").unwrap();
                     } else {
-                        let mut q = e.log_records()[0].as_ref().clone();
+                        let mut q = e.stored_log()[0].as_ref().clone();
                         q.ota.my_ref = Some("US-0005".into());
                         assert!(e.update_qso(q.id.unwrap(), q));
                     }
