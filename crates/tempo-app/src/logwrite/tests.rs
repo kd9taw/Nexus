@@ -364,6 +364,91 @@ fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
     );
 }
 
+/// ★ A CONTACT LOGGED AFTER A PURGE ON ITS WAY IS THERE TO A PLAN (SPEC-2 v3 C19). With the
+/// writer stalled, a purge is still on its way when the next contact is logged, and both say
+/// something of that contact: the purge that every row is gone, the append that it is there. The
+/// newer is the log. A plan that read the purge refused every change made by id to the new
+/// contact — a card, an edit, a delete — as a change to a contact that is gone, until the purge
+/// landed and the next change let it go. Each ordering, asserted: a contact the store holds,
+/// gone; one logged before the purge, gone; one logged after it, there; edited after it, the
+/// edit; deleted after it, gone. And once the writer clears, the store holds the same.
+#[test]
+fn a_plan_reads_a_contact_logged_after_a_purge_the_store_has_not_taken_yet() {
+    let d = Dir::new("overlay-purge");
+    let engine = shared(&d, 6);
+    // A contact by its call, as a plan finds it: the store as it stands with this process's
+    // changes laid over it, never a wait for the stalled writer.
+    let named = |call: &str| {
+        let view = engine_lock(&engine).log_view();
+        let rows = view
+            .candidates(&std::collections::BTreeSet::from([call.to_string()]))
+            .expect("read");
+        assert_eq!(rows.len(), 1, "one {call}: {rows:?}");
+        rows[0].id.expect("an id")
+    };
+    let read = |id| {
+        let view = engine_lock(&engine).log_view();
+        view.row(id).expect("read")
+    };
+    let held = named("K3ABC");
+    let hold = WriteHold::take(&d.db()).expect("stall the writer");
+
+    engine_lock(&engine).log_qso(qso("K1AAA", 1_788_000_000));
+    let before = named("K1AAA");
+    engine_lock(&engine).clear_logbook();
+    assert!(
+        stored(&d).iter().any(|r| r.id == Some(held)),
+        "control: the store still holds it"
+    );
+    assert_eq!(read(held), None, "a contact the store holds: gone");
+    assert_eq!(read(before), None, "logged before the purge: gone");
+
+    engine_lock(&engine).log_qso(qso("K1BBB", 1_788_000_060));
+    let after = named("K1BBB");
+    assert!(
+        !stored(&d).iter().any(|r| r.id == Some(after)),
+        "control: the store has not taken it"
+    );
+    let row = read(after).expect("logged after the purge: there");
+    assert_eq!(row.call, "K1BBB");
+
+    let mut edit = QsoEdit::project(&row);
+    edit.comment = Some("after the purge".into());
+    let (made, _) = edit_row(&engine, after, &QsoEdit::project(&row).key(), &edit);
+    assert!(
+        matches!(made, Ok(Ok(_))),
+        "an edit after the purge is made: {made:?}"
+    );
+    assert_eq!(
+        read(after).and_then(|r| r.comment.clone()).as_deref(),
+        Some("after the purge"),
+        "edited after the purge: the edit"
+    );
+
+    engine_lock(&engine).log_qso(qso("K1CCC", 1_788_000_120));
+    let deleted = named("K1CCC");
+    let (made, _) = change_ops(&engine, deleted, None, &[LogOp::Delete(deleted)], "delete");
+    assert!(
+        matches!(made, Ok(Ok(_))),
+        "a delete after the purge is made: {made:?}"
+    );
+    assert_eq!(read(deleted), None, "deleted after the purge: gone");
+
+    drop(hold);
+    flush(&engine_lock(&engine));
+    let rows = stored(&d);
+    assert_eq!(
+        rows.len(),
+        1,
+        "the store holds the one contact left: {rows:?}"
+    );
+    assert_eq!(rows[0].id, Some(after));
+    assert_eq!(rows[0].comment.as_deref(), Some("after the purge"));
+    for id in [held, before, deleted] {
+        assert_eq!(read(id), None, "and a plan reads the store the same");
+    }
+}
+
 /// ★ A CORRECTION BY A `RowRef` IS MADE ONLY ON THE VERSION FOUND (SPEC-2 v3 C19). The desktop's
 /// edit of the row it found by what the view showed, and a Remote browser's edit, are made by
 /// [`update_row`], which checks the edit key where the change is made — the check C16's `locate`

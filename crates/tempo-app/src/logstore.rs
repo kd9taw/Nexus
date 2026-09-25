@@ -1384,16 +1384,20 @@ impl Held {
 /// for sending again — as a plan reads them ([`LogStore::pending`], SPEC-2 v3 C19). A plan reads
 /// a row from the store; if one of these says something of it, that is the row as this process
 /// knows it, whatever the store holds, because the store has not taken it yet (or never will
-/// on its own). Each row is held by one change at most — a later change takes it over — so
-/// the answer does not depend on the order they are asked in.
+/// on its own). A later change takes a row over from an earlier one ([`LogStore::supersede`]),
+/// so a row is held by one change at most, with one exception: a purge's `clear` says EVERY row
+/// is gone and cannot let go of one, so a row written after a purge still on its way is held by
+/// two — the purge, and the change that wrote it. The newer is the row ([`Self::row`]).
 #[derive(Debug, Clone, Default)]
 pub struct Pending(Vec<(u64, Arc<Held>)>);
 
 impl Pending {
     /// What this process's changes the store may not hold say of the row `id`: `Some(Some(row))`
-    /// the row as they left it, `Some(None)` gone, `None` nothing — the store's row stands.
+    /// the row as they left it, `Some(None)` gone, `None` nothing — the store's row stands. The
+    /// newest change that says something of it answers: a contact logged after a purge still on
+    /// its way is there, not gone.
     pub fn row(&self, id: RecordId) -> Option<Option<Arc<QsoRecord>>> {
-        self.0.iter().find_map(|(_, h)| h.says(id))
+        self.0.iter().rev().find_map(|(_, h)| h.says(id))
     }
 
     /// Every row these changes wrote that `keep` accepts, in the order the changes were made.
