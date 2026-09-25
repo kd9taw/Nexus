@@ -4451,7 +4451,7 @@ mod grid_tests {
             "our own append must not reopen the gate — every later call re-parses the whole log"
         );
         assert_eq!(
-            sc.logbook.len(),
+            sc.stored_log().len(),
             2,
             "and nothing was re-read or double-counted"
         );
@@ -4516,7 +4516,7 @@ mod grid_tests {
             "our own append must not reopen the gate — every later call would re-read the log"
         );
         assert_eq!(
-            sc.logbook.len(),
+            sc.stored_log().len(),
             2,
             "and nothing was re-read or double-counted"
         );
@@ -4619,7 +4619,7 @@ mod grid_tests {
         );
 
         // The next change to a contact the log holds: the look before it takes A's in.
-        let w1 = sc.logbook.records()[0].id.unwrap();
+        let w1 = sc.stored_log()[0].id.unwrap();
         assert!(sc.mark_qsl_sent(w1, Some(tempo_core::logbook::QslVia::Direct)));
         let st = lane.flush(wait);
         assert!(!st.pending(), "{st:?}");
@@ -4662,7 +4662,7 @@ mod grid_tests {
             sc.sync_shared_log_if_changed(),
             "first look reads the shared log"
         );
-        assert_eq!(sc.logbook.len(), 1);
+        assert_eq!(sc.stored_log().len(), 1);
         assert!(
             sc.hot().grid_worked_on("JO31", "20m"),
             "X is now worked-before"
@@ -4675,7 +4675,7 @@ mod grid_tests {
         sc.last_log_mtime = None;
         assert!(sc.sync_shared_log_if_changed(), "a changed log is re-read");
         assert_eq!(
-            sc.logbook.len(),
+            sc.stored_log().len(),
             2,
             "the other instance's new QSO is folded in"
         );
