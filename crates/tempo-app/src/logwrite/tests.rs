@@ -1490,11 +1490,11 @@ fn with_country_in_store(db: &std::path::Path) -> usize {
         .count()
 }
 
-/// The fill job moves at the pace the store takes it, as the "already uploaded" declaration
-/// does: a chunk of fills is planned only once every chunk but the one made last is in the store,
-/// and the last, which carries `fill_ver`, only once every earlier fill is. On the first launch
-/// after an update it may fill every contact of a big log while every screen is loading. Here the
-/// writer is held while the first chunk is made, and let go a moment later.
+/// The fill job moves at the pace the store takes it: a chunk of fills is planned only once every
+/// chunk but the one made last is in the store — the writer takes that one while the next is
+/// planned — and the last, which carries `fill_ver`, only once every earlier fill is. On the first
+/// launch after an update it may fill every contact of a big log while every screen is loading.
+/// Here the writer is held while the first chunk is made, and let go a moment later.
 #[test]
 fn a_chunk_of_fills_is_planned_only_once_the_chunks_before_the_last_are_stored() {
     let d = Dir::new("fill-chunks-paced");
