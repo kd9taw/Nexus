@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { StationList } from './StationList'
 import { saveWatchlist, type WatchFilter } from '../watchlist'
-import type { NeedTag, Station } from '../types'
+import type { NeedAlert, NeedTag, Station } from '../types'
 
 const station = (call: string, extra: Partial<Station> = {}): Station =>
   ({
@@ -31,7 +31,7 @@ const STATIONS = [
   station('PLAIN1', { country: 'United States' }),
 ]
 
-function mount() {
+function mount(needAlertsByCall?: Map<string, NeedAlert[]>) {
   return render(
     <StationList
       stations={STATIONS}
@@ -40,6 +40,7 @@ function mount() {
       activePeer={null}
       unreadByPeer={{}}
       needByCall={new Map<string, NeedTag>()}
+      needAlertsByCall={needAlertsByCall}
       band="20m"
       feedMode="FT8"
       onSelect={() => {}}
@@ -74,6 +75,22 @@ describe('the WATCH tile on the Classic station list', () => {
     }
     expect(tileOf('VP8PJ')!.getAttribute('title')).toBe('On your watch list: VP8*')
     expect(tileOf('3Y0J')!.getAttribute('title')).toBe('On your watch list: Bouvet')
+  })
+
+  it('a station the STATION marks watched shows the tile once — not a WANTED chip beside it', () => {
+    // The station's `Wanted` need is the watch list (operator 2026-09-24: "watched counts as
+    // needed"); where this window draws the tile, a chip saying it again is noise.
+    const wanted = (call: string): NeedAlert[] => [
+      {
+        call, entity: '', band: '20m', zone: 0, tags: ['Wanted'], priority: 120,
+        headline: '', mode: 'FT8', freqMhz: null,
+      } as NeedAlert,
+    ]
+    mount(new Map([['VP8PJ', wanted('VP8PJ')], ['PLAIN1', wanted('PLAIN1')]]))
+    expect(cardOf('VP8PJ')!.querySelectorAll('.need-watch')).toHaveLength(1)
+    expect(cardOf('VP8PJ')!.querySelector('.need-chip.need-wanted')).toBeNull()
+    // No tile here (a Remote browser's own list does not name it): the station's mark stays.
+    expect(cardOf('PLAIN1')!.querySelector('.need-chip.need-wanted')).not.toBeNull()
   })
 
   it('leaves a card the list does not name alone', () => {

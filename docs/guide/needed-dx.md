@@ -18,7 +18,10 @@ are one evening's traffic, not a target.*
 
 Each row is one opportunity, ranked by value to your log:
 
-- **wanted** (120) — a call on your wanted list; nothing outranks it,
+- **watch list** (120) — a station on your watch list
+  ([Settings ▸ Spots & Alerts](settings-reference.md#spots--alerts)): by call, prefix, country or
+  grid, worked or not. It is on the board whenever it is heard, even when it advances nothing, and
+  nothing outranks it,
 - **ATNO** (all-time-new-one, 100) — an entity you've never worked,
 - **new zone** (70),
 - **new state** (60) — a state you still need for WAS,
@@ -35,7 +38,7 @@ The same vocabulary appears on the decode feed in the cockpits, so the two read 
 
 | Chip | Need type | What it means |
 |---|---|---|
-| **WANTED** | wanted | On your wanted watch list. |
+| **WANTED** | watch list | On your watch list — the Call Roster, the Stations list and Spots mark the same station with their WATCH tile. |
 | **NEW ONE** | ATNO | New DXCC entity — an all-time new one. |
 | **ZONE** | new zone | New CQ zone on this band (5BWAZ). |
 | **STATE** | new state | New US state on this band (5BWAS) — inferred from the grid, so confirm from the log. |
@@ -127,7 +130,9 @@ says what is shortening it.*
 Filters persist across restarts. **Filter** opens one row of chips in three groups:
 
 - **Need type** — All, Watch list, ATNO, New band, New mode, New zone, New grid, New state,
-  Needs confirm, then the programme chips DXped, POTA and SOTA.
+  Needs confirm, then the programme chips DXped, POTA and SOTA. **Watch list** keeps exactly the
+  stations on your watch list ([Settings ▸ Spots & Alerts](settings-reference.md#spots--alerts))
+  that are on the air, and follows an edit of the list straight away.
 - **Band** — 160 m through 2 m, multi-select. Selected means *show only these*.
 - **Mode class** — Digital, CW, Phone.
 

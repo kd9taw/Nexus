@@ -2,11 +2,12 @@
 // string comes from the catalog. What does NOT: the prefixes, grid squares and entity names the
 // placeholders offer as EXAMPLES — they are technical tokens, so they live below as
 // WATCH_EXAMPLES (the rule is in `i18n/index.ts`) — and `DXCC`, a programme's name.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   loadWatchlist,
   saveWatchlist,
   newWatchFilter,
+  WATCHLIST_CHANGED,
   type WatchFilter,
   type WatchKind,
 } from '../watchlist'
@@ -35,6 +36,14 @@ const DXCC_PROGRAM = 'DXCC'
  */
 export function WatchlistPanel() {
   const [list, setList] = useState<WatchFilter[]>(() => loadWatchlist())
+  // The list as it is NOW, not as it was when this opened: it has another writer (the one-time
+  // fold of the retired wanted list at startup), and an edit here saves this copy whole — a stale
+  // one would delete whatever that writer added.
+  useEffect(() => {
+    const resync = () => setList(loadWatchlist())
+    window.addEventListener(WATCHLIST_CHANGED, resync)
+    return () => window.removeEventListener(WATCHLIST_CHANGED, resync)
+  }, [])
   const [kind, setKind] = useState<WatchKind>('call')
   const [value, setValue] = useState('')
   const [cqOnly, setCqOnly] = useState(false)
@@ -42,7 +51,7 @@ export function WatchlistPanel() {
   const commit = (next: WatchFilter[]) => {
     setList(next)
     saveWatchlist(next)
-    window.dispatchEvent(new Event('nexus:watchlist-changed'))
+    window.dispatchEvent(new Event(WATCHLIST_CHANGED))
   }
   const add = () => {
     const v = value.trim()

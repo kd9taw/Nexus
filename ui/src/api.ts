@@ -60,6 +60,7 @@ import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } fro
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
+import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
@@ -985,6 +986,20 @@ export async function contestZoneHint(call: string): Promise<number | null> {
   return invoke<number | null>('contest_zone_hint', { call })
 }
 
+/** Empty the RETIRED wanted list — its one writer — once its entries are safely on the watch list
+ *  (`features/watchlistFold`). A whole-struct settings save cannot change the list. */
+export async function retireWantedCalls(): Promise<void> {
+  await invoke<void>('retire_wanted_calls')
+}
+
+/** Send the station the watch list — whole, identity only — so the Needed board puts its stations
+ *  first, for this window and every Remote browser (operator, 2026-09-24: "watched counts as
+ *  needed"). The main window sends it on launch and after every edit; `false` when refused (any
+ *  other window). */
+export async function setWatchList(entries: { kind: WatchKind; value: string }[]): Promise<boolean> {
+  return invoke<boolean>('set_watch_list', { entries })
+}
+
 /** The satellite names LoTW accepts, for the tag picker. The backend owns the table, so what
  *  the operator can choose is exactly what the writer will store — a typed name is a permanent
  *  record of a guess, and TQSL rejects one it does not list ("AO7" for "AO-7"). */
@@ -1006,15 +1021,18 @@ export interface KeyedRow {
   editKey: string
 }
 
-/** What a change by `RowRef` did. `applied`/`deleted` are made and on disk. `changed` and `gone`
- *  changed nothing: the contact changed since the caller read it (`current` is it now — show it,
- *  and retry against its key), or no contact has that id. An upload stamp or a confirmation never
- *  makes a contact `changed`: the key covers only what an edit can write. */
+/** What a change by `RowRef` did. `applied`/`deleted` are made and on disk. `changed`, `gone` and
+ *  `busy` changed nothing: the contact changed since the caller read it (`current` is it now — show
+ *  it, and retry against its key), or no contact has that id, or the logbook kept changing through
+ *  every attempt (`LogBusy`) — the contact is still the version the caller holds, so a retry goes
+ *  against the same key. An upload stamp or a confirmation never makes a contact `changed`: the key
+ *  covers only what an edit can write. */
 export type RowAnswer =
   | { kind: 'applied'; current: KeyedRow }
   | { kind: 'deleted' }
   | { kind: 'changed'; current: KeyedRow }
   | { kind: 'gone' }
+  | { kind: 'busy' }
 
 /** The park half of a `QsoEdit`. The form's own rule holds: with both refs empty no park is written
  *  and the stored one is kept whole; a ref carries its programme (the stored one, or POTA). */

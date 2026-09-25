@@ -2394,10 +2394,19 @@ pub struct Settings {
     #[serde(default)]
     pub blocked_calls: Vec<String>,
 
-    // --- Wanted watch list / alert filters (W1.5) ---
-    /// Operator "wanted" watch list: entries raise a LOUD need-alert when heard.
-    /// Each entry is an exact call or a trailing-`*` wildcard prefix
-    /// (e.g. `"VP8*"`, `"3Y0J"`, `"FT*"`). Empty = feature off.
+    /// RETIRED (operator 2026-09-24, "One list"): the old "Wanted watch list" (W1.5) — exact
+    /// calls or trailing-`*` prefixes (`"VP8*"`, `"3Y0J"`) that put a heard station at the top of
+    /// the Needed board. It has had no editor since 2026-07-10, when the watch list
+    /// (Settings ▸ Spots & Alerts, kept by the UI in ui-state.json) replaced it, and NOTHING reads
+    /// it now: the desktop's first launch adds its entries to the watch list
+    /// (`ui/src/features/watchlistFold.ts`) and then empties it through its one writer,
+    /// [`crate::engine::Engine::retire_wanted_calls`]. No form save can write it back
+    /// (`apply_settings_inner`); a backup restore can, and the next launch folds that in turn.
+    ///
+    /// Still a field — not a [`RETIRED_KEYS`] entry — for two reasons: the fold has to read it,
+    /// and every Remote page in the field REQUIRES the key in this station's configuration
+    /// document (`ui/src/remote-web/configuration.ts` refuses a document missing a known key), so
+    /// it is published, empty, until a page that tolerates its absence has been deployed.
     #[serde(default)]
     pub wanted_calls: Vec<String>,
 

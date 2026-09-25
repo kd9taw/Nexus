@@ -1363,6 +1363,11 @@ export const EN = {
   'logbook.change.changed':
     '{{call}} changed in another window or by a sync, so this was not saved. Here it is now — check it and try again.',
   'logbook.change.gone': '{{call}} was deleted in another window, so this was not saved.',
+  // The logbook kept changing through every attempt (the backend's LogBusy), so nothing was
+  // written — and nothing on screen changed: the row and the edit form are as the operator left
+  // them, and doing it again is the whole remedy.
+  'logbook.change.busy': 'The logbook was busy, so this change to {{call}} was not saved. Try again.',
+  'logbook.delete.busy': 'The logbook was busy, so {{call}} was not deleted. Try again.',
 
   // ── The log strip (the cockpits' LOG pane, "Log this QSO") ──────────────────────────
   // One component serves Phone, CW and Satellites, plus a Field Day variant, so these keys
@@ -1878,7 +1883,7 @@ export const EN = {
   'need.badge.pota.title': 'Live POTA activator',
   'need.badge.sota.title': 'Live SOTA activator',
   'need.badge.wanted.label': 'WANTED',
-  'need.badge.wanted.title': 'On your wanted watch list',
+  'need.badge.wanted.title': 'On your watch list',
 
   // The board/roster chip. `short` is the dense-column form — a translation needs both, and
   // the short one has to stay short.
@@ -1915,7 +1920,7 @@ export const EN = {
   'need.chip.sota.title': "Live SOTA activator — the row's call is on a summit right now",
   'need.chip.wanted.label': 'WANTED',
   'need.chip.wanted.short': 'WANT',
-  'need.chip.wanted.title': 'On your wanted watch list',
+  'need.chip.wanted.title': 'On your watch list',
 
   // ── Status roles (the colour+glyph pairing table) ───────────────────────────────────
   // `statusMeta.ts` pairs each role with a CSS token, a CVD-immune glyph and this label.
@@ -2853,6 +2858,14 @@ export const EN = {
   // for it, else the call, prefix, entity or grid as typed.
   'watchlist.tile.label': 'WATCH',
   'watchlist.tile.title': 'On your watch list: {{what}}',
+  // Shown ONCE, on the first launch after the upgrade that retired the old "Wanted watch list"
+  // setting (no editor since 2026-07-10): its entries were added to this watch list. `{{entries}}`
+  // is the calls and prefixes as the operator typed them, comma-separated.
+  'watchlist.folded': {
+    one: 'Added {{entries}} to your watch list from the old “Wanted watch list” setting, which is now retired. Change it any time in Settings ▸ Spots & Alerts.',
+    other:
+      'Added {{count}} entries to your watch list from the old “Wanted watch list” setting, which is now retired: {{entries}}. Change them any time in Settings ▸ Spots & Alerts.',
+  },
 
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do
