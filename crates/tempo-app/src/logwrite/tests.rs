@@ -289,6 +289,66 @@ fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
     );
 }
 
+/// ★ A CORRECTION BY A `RowRef` IS MADE ONLY ON THE VERSION FOUND (SPEC-2 v3 C19). The desktop's
+/// edit of the row it found by what the view showed, and a Remote browser's edit, are made by
+/// [`update_row`], which checks the edit key where the change is made — the check C16's `locate`
+/// made under the lock. A stamp since the row was found moves no edit key, so it is no reason to
+/// refuse; an edit since is, and nothing is written. The control: the key the row now carries.
+#[test]
+fn a_correction_by_an_edit_key_is_made_only_on_the_version_found() {
+    let d = Dir::new("update-row-key");
+    let engine = shared(&d, 6);
+    let id = id_at(&engine_lock(&engine), 3);
+    let key = || {
+        let view = engine_lock(&engine).log_view();
+        QsoEdit::project(&view.row(id).expect("read").expect("held")).key()
+    };
+    let correct = |key: &str, comment: &str| {
+        update_row(
+            &engine,
+            id,
+            key,
+            |row| QsoRecord {
+                comment: Some(comment.into()),
+                ..row.clone()
+            },
+            |_, (_, after)| after.clone(),
+        )
+    };
+
+    let found = key();
+    let (stamped, _) = change_ops(&engine, id, None, &[qrz_stamp(id, 7)], "a connector");
+    assert!(matches!(stamped, Ok(Ok(_))), "{stamped:?}");
+    let (made, durability) = correct(&found, "first");
+    assert!(
+        matches!(made, Ok(Ok(Some(Some(_))))),
+        "a stamp since is no reason to refuse: {made:?}"
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(stored_row(&d, id).comment.as_deref(), Some("first"));
+
+    // `found` is now the version before "first".
+    let before = stored(&d);
+    let (made, durability) = correct(&found, "second");
+    assert!(
+        matches!(made, Ok(Err(RowRefusal::Changed(_)))),
+        "an edit since is: {made:?}"
+    );
+    assert!(durability.is_empty(), "nothing to wait for");
+    flush(&engine_lock(&engine));
+    assert_eq!(stored(&d), before, "and nothing is written");
+
+    let (made, durability) = correct(&key(), "second");
+    assert!(matches!(made, Ok(Ok(Some(Some(_))))), "control: {made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(stored_row(&d, id).comment.as_deref(), Some("second"));
+    same_log(
+        &stored(&d),
+        engine_lock(&engine).log_records(),
+        "the store is the log in memory",
+    );
+}
+
 /// One decode, as the air hands it to the sequencer.
 fn heard(message: &str) -> modes::Decode {
     modes::Decode {

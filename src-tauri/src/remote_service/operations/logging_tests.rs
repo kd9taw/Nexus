@@ -2097,14 +2097,20 @@ fn a_stale_id_target_is_refused_on(store: bool) {
         assert!(e.update_qso(local.id.unwrap(), local));
     }
     let (bytes, before) = (written(&f), records(&f));
+    // Every kind of change to a row: an edit is made by a path of its own (`update_row`).
+    let mut edited = edit(&row(&f, "W1AW"));
+    edited["target"] = stale.clone();
     for sent in [
         json!({"kind":"delete","target":stale}),
         json!({"kind":"qslSent","target":stale,"via":"E"}),
+        json!({"kind":"qslCard","target":stale,"received":true}),
+        edited,
     ] {
-        let result = run(&f, &change(&f, sent)).unwrap();
+        let result = run(&f, &change(&f, sent.clone())).unwrap();
         assert_eq!(
             (result["outcome"].as_str(), result["reason"].as_str()),
-            (Some("rejected"), Some("contextChanged"))
+            (Some("rejected"), Some("contextChanged")),
+            "{sent}"
         );
         assert_eq!(written(&f), bytes);
         assert_eq!(records(&f), before);
