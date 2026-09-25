@@ -4,6 +4,9 @@ import { render, waitFor, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseRules, specificity, cmpSpec } from './cssCascade'
+// Imported here, not inside a test: loading the Logbook module (~0.6 s) then counts against no
+// test's time limit. (`vi.mock` below is hoisted above this import either way.)
+import { Logbook } from './components/Logbook'
 import type { LogQuestion } from './features/logAnswers'
 import { t } from './i18n'
 
@@ -203,7 +206,6 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
   // `moreColumns` is read from localStorage on mount (#239's "More columns" toggle), so the
   // wide table is rendered by seeding it rather than by driving the chip.
   window.localStorage.setItem('nexus.logbook.moreColumns', moreColumns ? '1' : '0')
-  const { Logbook } = await import('./components/Logbook')
   engineLog.mockResolvedValue([
     {
       call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
