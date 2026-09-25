@@ -17,8 +17,13 @@
 //! Finding a row by id is a scan here. That is no worse than the match scans the stamp paths
 //! already do, and the store that keeps an id → position index is where the index belongs —
 //! it is the thing that can maintain one across a write.
+//!
+//! **One implementation per change** (SPEC-2 v3 §4.6). What an op does to the one row it names
+//! is [`LogOp::apply_to`], a function of that row alone: [`Logbook::apply`] runs it on the row
+//! it holds, and the station runs it on the row it read from the store, planning off the Engine
+//! lock. Two callers, one body, so the two can never disagree about an edit.
 
-use super::{Logbook, OpClass, QslVia, QsoRecord, RecordId, StoredRecord, UploadStatus};
+use super::{Logbook, OpClass, QslVia, QsoRecord, RecordId, UploadStatus};
 
 /// Which connector a stamp is for. `UploadState` holds the four as fields; an op has to be
 /// able to name one.
@@ -120,7 +125,65 @@ pub enum LogOp {
     Clear,
 }
 
+/// What one op makes of the one row it names — [`LogOp::apply_to`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowAfter {
+    /// The row as the op leaves it.
+    Now(QsoRecord),
+    /// The op removes the row (a delete).
+    Gone,
+    /// The op changes nothing here: it refuses this row (a satellite tag with a blank name), or
+    /// it names no one row at all (an append, a purge).
+    Unchanged,
+}
+
 impl LogOp {
+    /// The id of the one row this op changes — `None` for the ops that name no one row (an
+    /// append, a purge).
+    pub fn target(&self) -> Option<RecordId> {
+        match self {
+            LogOp::Edit { id, .. }
+            | LogOp::MarkQslSent { id, .. }
+            | LogOp::MarkQslCard { id, .. }
+            | LogOp::SetSatTag { id, .. }
+            | LogOp::Stamp { id, .. }
+            | LogOp::Delete(id) => Some(*id),
+            LogOp::AppendOne(_) | LogOp::AppendRows(_) | LogOp::Clear => None,
+        }
+    }
+
+    /// ★ What this op makes of `row`, the row it names — THE one implementation of every change
+    /// to one contact (SPEC-2 v3 §4.6). The in-memory log runs it on the row it holds
+    /// ([`Logbook::apply`]); the station runs it on the row it read from the store, off the
+    /// Engine lock, and commits what it answers under the lock. The rules of each change live in
+    /// the function it calls, and nowhere else: [`super::edited`], [`super::qsl_sent_marked`],
+    /// [`super::qsl_card_marked`], [`super::sat_tagged`], [`super::stamped`].
+    ///
+    /// It never looks at `row`'s id: the caller found the row by it.
+    pub fn apply_to(&self, row: &QsoRecord) -> RowAfter {
+        let mut now = row.clone();
+        match self {
+            LogOp::Edit { rec, .. } => return RowAfter::Now(super::edited(row, rec.as_ref().clone())),
+            LogOp::MarkQslSent { via, date_unix, .. } => {
+                super::qsl_sent_marked(&mut now, *via, *date_unix)
+            }
+            LogOp::MarkQslCard { received, .. } => super::qsl_card_marked(&mut now, *received),
+            LogOp::SetSatTag { sat_name, .. } => {
+                if !super::sat_tagged(&mut now, sat_name.as_deref()) {
+                    return RowAfter::Unchanged;
+                }
+            }
+            LogOp::Stamp {
+                service, status, ..
+            } => super::stamped(&mut now, *service, status.clone()),
+            LogOp::Delete(_) => return RowAfter::Gone,
+            LogOp::AppendOne(_) | LogOp::AppendRows(_) | LogOp::Clear => {
+                return RowAfter::Unchanged
+            }
+        }
+        RowAfter::Now(now)
+    }
+
     /// What applying this op will cost, before it is applied — the class is a property of the
     /// op, not of what it happens to find.
     pub fn class(&self) -> OpClass {
@@ -151,44 +214,30 @@ impl Logbook {
             LogOp::AppendRows(rows) => {
                 Effects::added(class, rows.into_iter().map(|r| self.add(r)).collect())
             }
-            LogOp::Edit { id, rec } => match self.position_of(id) {
-                Some(i) if self.update_record(i, *rec) => Effects::changed(class, id),
-                _ => Effects::none(class),
-            },
-            LogOp::MarkQslSent { id, via, date_unix } => match self.position_of(id) {
-                Some(i) if self.mark_qsl_sent(i, via, date_unix) => Effects::changed(class, id),
-                _ => Effects::none(class),
-            },
-            LogOp::MarkQslCard { id, received } => match self.position_of(id) {
-                Some(i) if self.mark_qsl_card(i, received) => Effects::changed(class, id),
-                _ => Effects::none(class),
-            },
-            LogOp::SetSatTag { id, sat_name } => match self.position_of(id) {
-                Some(i) if self.set_sat_tag(i, sat_name.as_deref()) => Effects::changed(class, id),
-                _ => Effects::none(class),
-            },
-            LogOp::Stamp {
-                id,
-                service,
-                status,
-            } => match self.position_of(id) {
-                Some(i) => {
-                    let row = self.records_mut(class)[i].write();
-                    let slot = match service {
-                        UploadService::Lotw => &mut row.upload.lotw,
-                        UploadService::Eqsl => &mut row.upload.eqsl,
-                        UploadService::Qrz => &mut row.upload.qrz,
-                        UploadService::Clublog => &mut row.upload.clublog,
-                    };
-                    *slot = Some(status);
-                    Effects::changed(class, id)
+            LogOp::Edit { .. }
+            | LogOp::MarkQslSent { .. }
+            | LogOp::MarkQslCard { .. }
+            | LogOp::SetSatTag { .. }
+            | LogOp::Stamp { .. }
+            | LogOp::Delete(_) => {
+                let Some(id) = op.target() else {
+                    return Effects::none(class);
+                };
+                let Some(i) = self.position_of(id) else {
+                    return Effects::none(class);
+                };
+                match op.apply_to(&self.records()[i]) {
+                    RowAfter::Now(row) => {
+                        self.records_mut(class)[i] = std::sync::Arc::new(row);
+                        Effects::changed(class, id)
+                    }
+                    RowAfter::Gone => {
+                        self.records.write_as(class).remove(i);
+                        Effects::removed(class, vec![id])
+                    }
+                    RowAfter::Unchanged => Effects::none(class),
                 }
-                None => Effects::none(class),
-            },
-            LogOp::Delete(id) => match self.position_of(id) {
-                Some(i) if self.delete(i) => Effects::removed(class, vec![id]),
-                _ => Effects::none(class),
-            },
+            }
             LogOp::Clear => {
                 let ids: Vec<RecordId> = self.records().iter().filter_map(|r| r.id).collect();
                 self.clear();
