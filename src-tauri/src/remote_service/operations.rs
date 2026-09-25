@@ -1051,6 +1051,30 @@ impl Authority {
         engine: &crate::SharedEngine,
         now: Instant,
     ) -> Result<Value, &'static str> {
+        self.handle_found(
+            (connection, version),
+            session,
+            device,
+            request,
+            engine,
+            now,
+            None,
+        )
+    }
+    /// [`Self::handle_version`], given `found`: a log change's key target as [`logging::find`]
+    /// found it with every lock released, when the request is taken again from the top with it
+    /// (see the log change below).
+    #[allow(clippy::too_many_arguments)] // `handle_version`'s own, and what its first pass found
+    fn handle_found(
+        &self,
+        (connection, version): (u64, u8),
+        session: &str,
+        device: &str,
+        request: &Request,
+        engine: &crate::SharedEngine,
+        now: Instant,
+        found: Option<Option<crate::log_by_id::RowRef>>,
+    ) -> Result<Value, &'static str> {
         if matches!(request, Request::StopTransmit { .. }) {
             if version != 4 {
                 return Err("stationUnsupported");
@@ -1179,7 +1203,13 @@ impl Authority {
                 if l.id != *lease_id || l.session != session || l.device != device {
                     return Err("notController");
                 }
-                export::respond(&engine, selection.as_ref(), *index)
+                // The log's handles under the Engine lock, and nothing more: the list and the
+                // file are read from the store with BOTH locks released, so neither the radio
+                // loop nor another browser's operation waits behind the read.
+                let rows = engine.log_rows();
+                drop(engine);
+                drop(c);
+                export::respond(&rows, selection.as_ref(), *index)
             }
             Request::ProgramExport {
                 station_boot_id,
@@ -1339,11 +1369,36 @@ impl Authority {
                     if !change.valid(super::now_ms() / 1000) {
                         return Err("invalidRecord");
                     }
+                    // A key target's contact is found in the store with BOTH locks released —
+                    // a read of the log never runs under the Engine lock — and the request is
+                    // then taken again from the top with it, every check above made again
+                    // against the station as it stands by then. Nothing has advanced, so a read
+                    // the store's writer is still behind is `stationBusy`, as a busy Engine is.
+                    // `prepare_change` checks what was found, under the lock (`logging::locate`).
+                    if let (Some(target @ logging::Target::Key(_)), None) =
+                        (change.target(), &found)
+                    {
+                        let rows = engine.log_rows();
+                        drop(engine);
+                        drop(c);
+                        let row =
+                            logging::find(&rows, target).map_err(export::in_operation_words)?;
+                        return self.handle_found(
+                            (connection, version),
+                            session,
+                            device,
+                            request,
+                            shared_engine,
+                            now,
+                            Some(row),
+                        );
+                    }
                     // The commit boundary, as for a manual entry: a rewrite begun here cannot be
                     // rolled back by a disconnect, and its receipt answers any replay.
                     self.advance(&mut c)?;
                     c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                    let prepared = logging::prepare_change(&mut engine, change);
+                    let prepared =
+                        logging::prepare_change(&mut engine, change, found.flatten().as_ref());
                     drop(engine);
                     // Engine is released, and so is Core: the receipt goes in as in flight first,
                     // so a replay meanwhile is told the station is busy rather than posting twice,
