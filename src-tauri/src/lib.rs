@@ -345,9 +345,12 @@ mod whole_log_reader_tests {
             "one fold for every reader"
         );
 
-        engine_lock(&engine).import_adif(
+        tempo_app::logwrite::import_adif(
+            &engine,
             "<CALL:5>ZL1AB<BAND:3>15m<MODE:2>CW<QSO_DATE:8>20260109<TIME_ON:6>080000<EOR>\n",
-        );
+        )
+        .0
+        .expect("the import is made");
         let (after, _) = needs_kept(&engine, &tallies).expect("the log reads");
         assert_eq!(
             observed(&after),
@@ -2995,8 +2998,12 @@ mod lotw_batch_tests {
     #[test]
     fn a_contact_with_no_known_time_is_never_signed() {
         let (dir, engine, ids) = station("lotw-timeless", 3);
-        let _ = engine_lock(&engine)
-            .import_adif("<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n");
+        tempo_app::logwrite::import_adif(
+            &engine,
+            "<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n",
+        )
+        .0
+        .expect("the import is made");
         let (at, timeless) = {
             let eng = engine_lock(&engine);
             let at = eng
@@ -18400,17 +18407,17 @@ fn read_need_alerts(
 #[tauri::command]
 async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
     let engine = Arc::clone(&state);
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19): the rows of the
+    // file's calls are read off the store, never under the lock.
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let (added, skipped, updated, total) = eng.import_adif(&text);
-            Ok(ImportStats {
-                added,
-                skipped,
-                updated,
-                total,
-            })
-        })
+        let (made, durability) = tempo_app::logwrite::import_adif(&engine, &text);
+        let made = made.map(|(added, skipped, updated, total)| ImportStats {
+            added,
+            skipped,
+            updated,
+            total,
+        });
+        (made, durability)
     })
     .await
 }
@@ -18436,8 +18443,8 @@ async fn sync_lotw_report(
         {
             let engine = Arc::clone(&state);
             durable_command(move || {
-                let mut eng = engine_lock(&engine);
-                eng.with_log_tickets(|eng| Ok(eng.merge_lotw_report(&text).into()))
+                let (summary, durability) = tempo_app::logwrite::merge_lotw_report(&engine, &text);
+                (summary.map(Into::into), durability)
             })
             .await
         },
@@ -20375,38 +20382,40 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // high-water (re-lock: the fetch ran without the engine lock held). Take the log's rows in
     // the same lock, then release: the own-echo lower bound (the oldest in-flight upload) is
     // read from the store once the merge is on disk.
-    let ((mut result, rows), merged): ((LotwSyncResult, tempo_app::logstore::LogRows), _) = {
+    //
+    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
+    // cursor is advanced once it is made.
+    let (summary, merged) = tempo_app::logwrite::merge_lotw_report(state, &body);
+    let mut result: LotwSyncResult = summary?.into();
+    let rows = {
         let mut eng = engine_lock(state);
-        eng.with_log_tickets(|eng| {
-            let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
-            if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-                // Advance the cursor ONLY if (a) the download is structurally complete —
-                // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-                // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-                // advancing would make the next `qso_qslsince` pull skip them forever (the
-                // merge above already ran, so keeping the old cursor just re-fetches the
-                // tail — reconcile is idempotent) — AND (b) the username is still the one
-                // this download used. If `set_settings` changed it during the (lock-free)
-                // fetch, it already reset the cursor to a full pull for the new identity —
-                // this high-water belongs to the old query, so binding it would risk
-                // skipping records on the next incremental pull. Persist via a narrow
-                // setter so the sync never disturbs live operation (no mode reset /
-                // TX-queue clear).
-                if is_complete_lotw_body(&body)
-                    && eng.settings().lotw_username.trim() == used_username.trim()
-                {
-                    let updated = eng.set_lotw_cursor(high_water);
-                    if let Err(e) = updated.save(&settings_path()) {
-                        conn_log(
-                            "LoTW",
-                            "error",
-                            format!("failed to persist the sync cursor: {e}"),
-                        );
-                    }
+        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+            // Advance the cursor ONLY if (a) the download is structurally complete —
+            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+            // advancing would make the next `qso_qslsince` pull skip them forever (the
+            // merge above already ran, so keeping the old cursor just re-fetches the
+            // tail — reconcile is idempotent) — AND (b) the username is still the one
+            // this download used. If `set_settings` changed it during the (lock-free)
+            // fetch, it already reset the cursor to a full pull for the new identity —
+            // this high-water belongs to the old query, so binding it would risk
+            // skipping records on the next incremental pull. Persist via a narrow
+            // setter so the sync never disturbs live operation (no mode reset /
+            // TX-queue clear).
+            if is_complete_lotw_body(&body)
+                && eng.settings().lotw_username.trim() == used_username.trim()
+            {
+                let updated = eng.set_lotw_cursor(high_water);
+                if let Err(e) = updated.save(&settings_path()) {
+                    conn_log(
+                        "LoTW",
+                        "error",
+                        format!("failed to persist the sync cursor: {e}"),
+                    );
                 }
             }
-            (summary, eng.log_rows())
-        })
+        }
+        eng.log_rows()
     }; // engine lock released before the second network fetch
        // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
     merged
@@ -20439,12 +20448,22 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
-                let (promoted, echoed) = engine_lock(state)
-                    .with_log_tickets(|eng| eng.merge_lotw_own_echo(&b, now_unix()));
-                result.promoted = promoted;
-                echoed
-                    .wait(tempo_app::logstore::DURABLE_WAIT)
-                    .map_err(durability_failed)?;
+                // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
+                let (promoted, echoed) =
+                    tempo_app::logwrite::merge_lotw_own_echo(state, &b, now_unix());
+                match promoted {
+                    Ok(promoted) => {
+                        result.promoted = promoted;
+                        echoed
+                            .wait(tempo_app::logstore::DURABLE_WAIT)
+                            .map_err(durability_failed)?;
+                    }
+                    Err(e) => conn_log(
+                        "LoTW",
+                        "error",
+                        format!("the own-QSO report was not merged: {e}"),
+                    ),
+                }
             }
             Ok(_) => conn_log(
                 "LoTW",
@@ -20880,12 +20899,13 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // complete — a truncated download must not skip unreceived records — AND (b) the
     // username is unchanged since this sync started (an in-flight change already
     // reset the cursor for the new account).
-    let (summary, merged) = {
+    //
+    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
+    // cursor is advanced once it is made.
+    let (summary, merged) = tempo_app::logwrite::merge_eqsl_report(state, &body);
+    let summary: LotwSyncResult = summary?.into();
+    {
         let mut eng = engine_lock(state);
-        let (summary, merged) = eng.with_log_tickets(|eng| {
-            let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
-            summary
-        });
         if tempo_core::eqsl::is_complete_eqsl_body(&body)
             && eng.settings().eqsl_username.trim() == used_username.trim()
         {
@@ -20894,8 +20914,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
                 eprintln!("tempo: failed to persist eQSL cursor: {e}");
             }
         }
-        (summary, merged)
-    };
+    }
     // On disk before the sync says so — off the lock, on the blocking pool.
     merged
         .wait(tempo_app::logstore::DURABLE_WAIT)
@@ -20996,6 +21015,12 @@ const QRZ_SYNC_UNREACHABLE: ConnDetail = conn_detail!(
     "the sync never reached QRZ — check the network, and whether antivirus or a proxy is \
      inspecting HTTPS traffic. This session's connection log has the exact message."
 );
+/// QRZ's logbook arrived and could not be merged: the log kept changing while the merge was
+/// planned, or could not be read (SPEC-2 v3 C19). Nothing was changed. Nexus's own words.
+const QRZ_SYNC_NOT_MERGED: ConnDetail = conn_detail!(
+    "QRZ's logbook arrived, but Nexus could not merge it into yours — the logbook kept changing \
+     while the merge was prepared, or could not be read. Nothing was changed; sync again to retry."
+);
 /// The sync merged, and the merge could not be shown to be on disk. Nexus's own words.
 const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
     "the sync merged QRZ's logbook into yours, but Nexus could not confirm the result was saved \
@@ -21068,8 +21093,12 @@ fn sync_qrz_since(
     if !fetched.ok {
         return Err(qrz_fetch_refused(fetched.reason));
     }
-    let ((added, summary), merged) =
-        engine_lock(engine).with_log_tickets(|eng| eng.merge_qrz_report(&fetched.adif));
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
+    let (made, merged) = tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
+    let (added, summary) = made.map_err(|e| QrzSyncFailure {
+        detail: QRZ_SYNC_NOT_MERGED,
+        message: ScreenReason::new(e),
+    })?;
     // The operator's sync button waits for the merge to reach the disk; the hourly automatic
     // sync does not (its next run would find the same state either way).
     if wait {
@@ -24054,19 +24083,20 @@ async fn fd_merge_to_general(
 ) -> Result<(FdMergeReportDto, AppSnapshot), String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let report = eng.fd_merge_to_general()?;
+        // The merge's "already there" is read off the store with the Engine lock released, and
+        // the merge made under it (SPEC-2 v3 C19).
+        let (report, durability) = tempo_app::logwrite::fd_merge_to_general(&engine);
+        let answer = report.map(|report| {
             // ONE snapshot, taken after the merge and read for both answers. Two would be two
             // full logbook sweeps under the engine mutex — the shape that stalled the
             // waterfall — and the policy cannot change across the merge anyway.
-            let snap = eng.snapshot();
+            let snap = engine_lock(&engine).snapshot();
             let queued = snap
                 .field_day
                 .as_ref()
                 .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
                 .unwrap_or(false);
-            Ok((
+            (
                 FdMergeReportDto {
                     added: report.added(),
                     already: report.already,
@@ -24074,8 +24104,9 @@ async fn fd_merge_to_general(
                     queued,
                 },
                 snap,
-            ))
-        })
+            )
+        });
+        (answer, durability)
     })
     .await
 }
@@ -25733,16 +25764,15 @@ async fn import_pota_log(
     text: String,
 ) -> Result<PotaStampResult, String> {
     let engine = Arc::clone(&state);
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let (stamped, already, unmatched) = eng.import_pota_log(&text);
-            Ok(PotaStampResult {
-                stamped,
-                already,
-                unmatched,
-            })
-        })
+        let (made, durability) = tempo_app::logwrite::import_pota_log(&engine, &text);
+        let made = made.map(|(stamped, already, unmatched)| PotaStampResult {
+            stamped,
+            already,
+            unmatched,
+        });
+        (made, durability)
     })
     .await
 }

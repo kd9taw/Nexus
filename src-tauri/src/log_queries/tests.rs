@@ -1245,7 +1245,9 @@ fn every_answer_is_the_references_after_every_kind_of_change() {
                         _ => {
                             let r = random_record(&mut g, 200 + step);
                             let text = adif_header() + &adif_record_own_log(&r);
-                            engine_lock(&engine).import_adif(&text);
+                            tempo_app::logwrite::import_adif(&engine, &text)
+                                .0
+                                .expect("the import is made");
                             "an import"
                         }
                     }
