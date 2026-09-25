@@ -1441,14 +1441,14 @@ fn on_the_1_13_path_every_chunk_is_in_log_adi_when_the_declaration_is_saved() {
     );
 }
 
-/// The declaration moves at the pace the store takes it: a chunk is planned only once every chunk
-/// but the one made last is in the store — the writer takes that one while the next is planned.
-/// So its changes never pile up in flight, where each later commit, under the Engine lock, and
-/// each later plan's read would look through them row by row: a backlog the size of the log on a
-/// big one, since the store's writer takes a few thousand rows a second. Here the writer is held
-/// while the first chunk is made, and let go a moment later.
+/// The declaration moves at the pace the store takes it: each chunk is in the store before the
+/// next is planned. So its changes never pile up in flight, where each later commit, under the
+/// Engine lock, and each later plan's read would look through them row by row — a backlog the
+/// size of the log on a big one, since the store's writer takes a few thousand rows a second.
+/// Here the writer is held while the first chunk is made, and let go a moment later: the second
+/// chunk is planned only once the first is in the store.
 #[test]
-fn a_chunk_is_planned_only_once_the_chunks_before_the_last_are_stored() {
+fn each_chunk_is_in_the_store_before_the_next_is_planned() {
     let d = Dir::new("lotw-chunks-paced");
     // Ten owed: the first of the eleven has no known time.
     let engine = shared(&d, 11);
@@ -1471,15 +1471,10 @@ fn a_chunk_is_planned_only_once_the_chunks_before_the_last_are_stored() {
         mark_lotw_uploaded_in_chunks(&engine, 1_900_000_000, 3)
     });
     assert_eq!(made, Ok(10), "every owed contact is stamped");
-    let seen = seen.borrow().clone();
-    assert_eq!(seen.len(), 4, "four chunks planned once each: {seen:?}");
     assert_eq!(
-        seen[1], 0,
-        "premise: the writer was held while the second chunk was planned"
-    );
-    assert!(
-        seen[2] >= 3 && seen[3] >= 6,
-        "each chunk planned once the chunks before the last made are in the store: {seen:?}"
+        *seen.borrow(),
+        [0, 3, 6, 9],
+        "each chunk planned once the chunks before it are in the store"
     );
     durability.wait(DURABLE_WAIT).expect("on disk");
 }
