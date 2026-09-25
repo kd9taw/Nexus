@@ -5458,9 +5458,11 @@ mod hot_parity_tests {
         }
     }
 
-    /// Every answer the hot index gives, against the code it replaced.
+    /// Every answer the hot index gives, against the code it replaced — run over the log the
+    /// store holds (SPEC-2 v3 C19: the oracle is the store's rows, not the log in memory).
     fn assert_parity(sc: &StationCore, rng: &mut Rng, what: &str) {
-        let log = &sc.logbook;
+        let log = Logbook::from_store(sc.stored_records());
+        let log = &log;
         // The oracles.
         let calls = log.worked_call_set();
         let bands = log.worked_band_set(false);
@@ -5609,12 +5611,23 @@ mod hot_parity_tests {
         );
     }
 
+    /// The watermarks the store holds, once it holds every change the station has made — written
+    /// in the transaction of each change's last chunk, as the station moved them.
+    fn stored_marks(sc: &StationCore) -> Option<i64> {
+        let store = sc.store.as_ref().expect("a store");
+        store
+            .reads()
+            .read(crate::test_util::TEST_WAIT, |db| db.meta("revision"))
+            .expect("the store reads")
+            .0
+    }
+
     /// ★ Seeded random runs of every write the station makes, with the oracles asked after each
     /// — and every change, the stamps and the merges included, followed row by row through ONE
     /// door ([`StationCore::follow`], SPEC-2 v3 C19): after every write the index already holds
     /// the log, before anything asks it — there is no catch-up from the log left to hide a write
-    /// that went around it (the control below) — and the watermarks the station keeps are the
-    /// log's own.
+    /// that went around it (the control below) — and a change the store took moved the
+    /// station's watermarks, which every view keyed on them reads.
     #[test]
     fn the_station_answers_as_before_c13_through_every_write_path_without_a_rebuild() {
         for seed in 0..24u64 {
@@ -5627,18 +5640,23 @@ mod hot_parity_tests {
             // below is followed into its sweep too.
             assert!(sc.worked_since(T0 + 1_000, &FD).is_some());
             for step in 0..60 {
+                let before = (sc.marks(), stored_marks(&sc));
                 let what = change(&mut sc, &mut rng);
                 let at = format!("seed {seed} step {step}: {what}");
                 assert_eq!(
                     sc.hot.lock().expect("not poisoned").at(),
-                    Some(sc.logbook.revision()),
+                    Some(sc.marks().revision),
                     "{at}: the index does not hold the log — the write was not followed"
                 );
-                assert_eq!(
-                    (sc.marks(), sc.log_tick()),
-                    (sc.logbook.marks(), sc.logbook.revision() as u32),
-                    "{at}: the station's watermarks, or the snapshot's tick, are not the log's"
-                );
+                let stored = stored_marks(&sc);
+                if stored != before.1 {
+                    assert_eq!(
+                        stored,
+                        Some(sc.marks().revision as i64),
+                        "{at}: the store took a change the station's watermarks did not follow"
+                    );
+                    assert_ne!(sc.marks(), before.0, "{at}: the watermarks moved");
+                }
                 assert_parity(&sc, &mut rng, &at);
             }
         }
