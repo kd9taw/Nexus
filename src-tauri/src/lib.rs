@@ -4470,7 +4470,10 @@ fn open_logbook_store(
             }
         })
     });
-    tempo_app::logstore::open_reporting(log, resolve, network, progress)
+    // The hot index is built here too, from the rows as they load, keyed by the resolver the
+    // station is given at the attach — so the attach does not build it under the lock.
+    let hot = tempo_app::logstore::HotBuild::keyed_by(Some(country_resolver()));
+    tempo_app::logstore::open_reporting(log, resolve, network, Some(hot), progress)
 }
 
 /// Whether opening the logbook is about to convert `log.adi`: there is a log, and no database
@@ -4547,7 +4550,7 @@ fn adopt_logbook(
     eng: &mut Engine,
     log: &Path,
     opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
-) {
+) -> Option<tempo_app::logstore::SessionRows> {
     match opened {
         Ok(opened) => {
             let what = match opened.outcome {
@@ -4565,7 +4568,7 @@ fn adopt_logbook(
                 ),
             };
             tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
-            eng.attach_log_store(opened);
+            eng.attach_log_store(opened)
         }
         Err(e) => {
             let why = e.to_string();
@@ -4578,6 +4581,7 @@ fn adopt_logbook(
             }
             eng.set_log_path(log.to_path_buf());
             eng.note_log_store_problem(&e);
+            None
         }
     }
 }
@@ -6889,6 +6893,15 @@ fn subdivision_hint(call: &str, grid: Option<&str>) -> Option<String> {
 /// a filled row the row an insert would have written.
 fn country_of(call: &str) -> Option<String> {
     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+}
+
+/// [`country_of`], as the ONE shared resolver the launch hands both the station and the store's
+/// build of the hot index ([`open_logbook_store`]): the same `Arc` is how the station knows the
+/// index the store built off the lock is keyed as it keys its own (SPEC-2 v3 C19).
+fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
+    static SHARED: std::sync::LazyLock<Arc<tempo_app::station::DxccResolve>> =
+        std::sync::LazyLock::new(|| Arc::new(country_of));
+    Arc::clone(&SHARED)
 }
 
 /// The version of the resolvers' data the logbook's country and state fills are written for —
@@ -11843,20 +11856,32 @@ fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterRe
 /// | "fieldday-sp". Returns the refreshed snapshot.
 #[tauri::command(async)]
 fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    // Refuse to enter a keying structured mode without the identity its messages need,
-    // so the operator gets a clear reason instead of a silently-suppressed over. The
-    // mode plugin decides which tiers are gated (Capabilities::structured_identity —
-    // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
-    // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
-    // fieldday-sp are passive on entry (the backstop covers TX).
-    match mode.as_str() {
-        "qso-run" => eng.structured_tx_ready(true)?,
-        "fieldday-run" => eng.structured_tx_ready(false)?,
-        _ => {}
-    }
-    eng.set_mode(&mode)?;
-    Ok(eng.snapshot())
+    // A switch that opens a contest session — Field Day entered from another mode — has the
+    // session's rows read from the logbook first, off the lock, and opens the session with its
+    // dupe sweep in the same hold of the lock as the switch (SPEC-2 v3 C19). Every other switch
+    // reads nothing and runs as it always has.
+    tempo_app::engine::with_session_rows(
+        &state,
+        |eng| eng.mode_opens_session(&mode),
+        |eng, rows| {
+            // Refuse to enter a keying structured mode without the identity its messages need,
+            // so the operator gets a clear reason instead of a silently-suppressed over. The
+            // mode plugin decides which tiers are gated (Capabilities::structured_identity —
+            // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
+            // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
+            // fieldday-sp are passive on entry (the backstop covers TX).
+            match mode.as_str() {
+                "qso-run" => eng.structured_tx_ready(true)?,
+                "fieldday-run" => eng.structured_tx_ready(false)?,
+                _ => {}
+            }
+            eng.set_mode(&mode)?;
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            Ok(eng.snapshot())
+        },
+    )
 }
 
 /// Current operator/station settings.
@@ -12007,67 +12032,78 @@ fn apply_and_persist(
     // save, so it reads this mirror rather than a spawn-time capture.
     set_operator_qth(&mycall, &mygrid);
 
-    let snap = {
-        let mut eng = engine_lock(&state);
-        // The LoTW sync cursor is bound to the exact query (notably the username);
-        // if the username changed, reset it to a full pull so a config edit can't
-        // silently skip confirmations.
-        if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
-            settings.lotw_last_qsl.clear();
-        }
-        // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-        if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-            settings.eqsl_last_sync.clear();
-        }
-        // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
-        let cur = eng.settings();
-        if cur.clublog_email != settings.clublog_email
-            || cur.clublog_callsign != settings.clublog_callsign
-            || cur.clublog_api_key != settings.clublog_api_key
-        {
-            CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Same shape for the automatic LoTW batch: everything its suspension could have been
-        // ABOUT lives in these four fields, so touching any of them is the operator saying
-        // "I fixed it". Without this the operator corrects their Station Location, saves,
-        // and nothing ever restarts — the latch is session-wide and there is no other way
-        // out of it short of a relaunch.
-        if cur.lotw_station_location != settings.lotw_station_location
-            || cur.lotw_use_adif_location != settings.lotw_use_adif_location
-            || cur.tqsl_path != settings.tqsl_path
-            || cur.lotw_auto_upload != settings.lotw_auto_upload
-        {
-            LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-            LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Keep the live DXpedition layer's most-wanted key current (Settings
-        // override, else the build's baked application key).
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &settings.clublog_api_key,
-        ));
-        // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
-        // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
-        // copies), so saving the raw form here would write a roster that diverges from the engine and
-        // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
-        // light verb does.
-        if authoritative_roster {
-            // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
-            // live roster here would leave a factory reset with every radio it promised to erase.
-            eng.apply_restored_settings(settings);
-        } else {
-            eng.apply_settings(settings);
-        }
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: failed to persist settings: {e}");
-        }
-        // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
-        // turning it off here actually stops the launch picker (the base config drives that, and
-        // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
-        if active_profile().is_some() {
-            persist_simultaneous_to_base(eng.settings().simultaneous_radios);
-        }
-        eng.snapshot()
-    }; // release the engine lock before spawning feed threads
+    // A save that turns the Field Day master on while Field Day is not running re-enters it,
+    // opening a contest session: the session's rows are read from the logbook first, off the
+    // lock, and the session is opened with its dupe sweep in the same hold of the lock as the
+    // save (SPEC-2 v3 C19). Every other save reads nothing.
+    let opens_session = settings.fd_active;
+    let snap = tempo_app::engine::with_session_rows(
+        &state,
+        |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
+        |eng, rows| {
+            // The LoTW sync cursor is bound to the exact query (notably the username);
+            // if the username changed, reset it to a full pull so a config edit can't
+            // silently skip confirmations.
+            if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
+                settings.lotw_last_qsl.clear();
+            }
+            // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
+            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
+                settings.eqsl_last_sync.clear();
+            }
+            // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
+            let cur = eng.settings();
+            if cur.clublog_email != settings.clublog_email
+                || cur.clublog_callsign != settings.clublog_callsign
+                || cur.clublog_api_key != settings.clublog_api_key
+            {
+                CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Same shape for the automatic LoTW batch: everything its suspension could have been
+            // ABOUT lives in these four fields, so touching any of them is the operator saying
+            // "I fixed it". Without this the operator corrects their Station Location, saves,
+            // and nothing ever restarts — the latch is session-wide and there is no other way
+            // out of it short of a relaunch.
+            if cur.lotw_station_location != settings.lotw_station_location
+                || cur.lotw_use_adif_location != settings.lotw_use_adif_location
+                || cur.tqsl_path != settings.tqsl_path
+                || cur.lotw_auto_upload != settings.lotw_auto_upload
+            {
+                LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+                LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Keep the live DXpedition layer's most-wanted key current (Settings
+            // override, else the build's baked application key).
+            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
+                &settings.clublog_api_key,
+            ));
+            // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
+            // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
+            // copies), so saving the raw form here would write a roster that diverges from the engine and
+            // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
+            // light verb does.
+            if authoritative_roster {
+                // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
+                // live roster here would leave a factory reset with every radio it promised to erase.
+                eng.apply_restored_settings(settings);
+            } else {
+                eng.apply_settings(settings);
+            }
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            if let Err(e) = eng.settings().save(&settings_path()) {
+                eprintln!("tempo: failed to persist settings: {e}");
+            }
+            // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
+            // turning it off here actually stops the launch picker (the base config drives that, and
+            // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
+            if active_profile().is_some() {
+                persist_simultaneous_to_base(eng.settings().simultaneous_radios);
+            }
+            eng.snapshot()
+        },
+    ); // release the engine lock before spawning feed threads
        // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -26731,8 +26767,10 @@ fn start_on_the_logbook(
         let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
-        // the initial worked-entity index is populated.
-        eng.set_dxcc_resolver(country_of);
+        // the initial worked-entity index is populated. The SAME shared resolver the store
+        // keyed the hot index with when it opened, so the attach below installs that index
+        // rather than building one under this lock.
+        eng.set_dxcc_resolver_shared(country_resolver());
         // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
         // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
         // function is the whole point of the fix: the worked side used to have no resolver at
@@ -26844,7 +26882,8 @@ fn start_on_the_logbook(
                 .and_then(|m| m.get(&call.to_uppercase()).copied())
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
-        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
+        // The rows a Field Day session restored below is swept from, set aside by the open.
+        let session_rows = adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -26881,6 +26920,11 @@ fn start_on_the_logbook(
         // merge finds the journal. This is the ONLY auto-entry, and only because
         // the operator left `fd_active` on — no date/default path ever sets it.
         eng.restore_field_day_if_enabled();
+        // A session restored just now is swept from the rows the open set aside — not from the
+        // log, under this lock (SPEC-2 v3 C19).
+        if let Some(rows) = session_rows {
+            eng.open_session_from(rows);
+        }
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation
