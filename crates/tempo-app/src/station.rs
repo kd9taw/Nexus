@@ -721,6 +721,10 @@ pub(crate) struct ChangeBase {
 /// times again (SPEC-2 v3 §4.6).
 pub const PLANS: usize = 4;
 
+/// Past this many calls, a bulk change's candidate rows are found in one pass over the log rather
+/// than a look-up per call ([`LogPlan::candidates`]): a whole foreign `log.adi` names most of it.
+const CANDIDATE_SEEKS: usize = 2_000;
+
 /// This process's recent changes to the log, newest last, each by the revision it left the log
 /// at — what a commit's precondition reads ([`StationCore::unchanged_since`], SPEC-2 v3 §4.6). A
 /// change reaches it where every change reaches the hot index ([`StationCore::follow`]).
@@ -730,14 +734,19 @@ pub const PLANS: usize = 4;
 /// hundred changes go by.
 #[derive(Debug, Default)]
 struct Recent {
-    /// `(revision, the rows it touched)` — `None` for a change of more rows than [`RECENT_ROWS`]
-    /// (a merge, an import, a purge, another window's commits taken in, a write the station did
-    /// not make), which a plan reads as touching every row.
-    changes: VecDeque<(u64, Option<Vec<RecordId>>)>,
+    /// `(revision, the rows it touched)` — each row as it stood before the change and as the
+    /// change left it, by id and by call as the store keys one
+    /// ([`tempo_core::logbook::sqlite::call_norm_of`]) — `None` for a change of more rows than
+    /// [`RECENT_ROWS`] (a merge, an import, a purge, another window's commits taken in, a write
+    /// the station did not make), which a plan reads as touching every row.
+    changes: VecDeque<(u64, Option<Vec<Touched>>)>,
     /// The revision of the newest change that has left `changes`: a plan taken before it can no
     /// longer be checked.
     floor: u64,
 }
+
+/// One row a change touched, as [`Recent`] keeps it: its id, and its call as the store keys one.
+type Touched = (Option<RecordId>, String);
 
 /// How many changes [`Recent`] keeps.
 const RECENT_CHANGES: usize = 256;
@@ -750,8 +759,9 @@ impl Recent {
         let rows = (pairs.len() <= RECENT_ROWS).then(|| {
             pairs
                 .iter()
-                .flat_map(|(b, a)| [b.as_ref().and_then(|r| r.id), a.as_ref().and_then(|r| r.id)])
+                .flat_map(|(b, a)| [b, a])
                 .flatten()
+                .map(|r| (r.id, tempo_core::logbook::sqlite::call_norm_of(&r.call)))
                 .collect()
         });
         self.push(revision, rows);
@@ -762,7 +772,7 @@ impl Recent {
         self.push(revision, None);
     }
 
-    fn push(&mut self, revision: u64, rows: Option<Vec<RecordId>>) {
+    fn push(&mut self, revision: u64, rows: Option<Vec<Touched>>) {
         self.changes.push_back((revision, rows));
         while self.changes.len() > RECENT_CHANGES {
             if let Some((gone, _)) = self.changes.pop_front() {
@@ -773,15 +783,32 @@ impl Recent {
 
     /// Whether no change since `revision` touched any of `ids`.
     fn untouched_since(&self, revision: u64, ids: &[RecordId]) -> bool {
+        self.untouched_since_by(revision, |(id, _)| id.is_some_and(|id| ids.contains(&id)))
+    }
+
+    /// Whether no change since `revision` touched any of `ids`, or a row whose call is one of
+    /// `calls` (as the store keys a call: [`tempo_core::logbook::sqlite::call_norm_of`]) — a bulk
+    /// change's precondition: a row added or changed under a call it read is a row it did not
+    /// plan on.
+    fn untouched_since_calls(
+        &self,
+        revision: u64,
+        ids: &HashSet<RecordId>,
+        calls: &std::collections::BTreeSet<String>,
+    ) -> bool {
+        self.untouched_since_by(revision, |(id, call)| {
+            id.is_some_and(|id| ids.contains(&id)) || calls.contains(call)
+        })
+    }
+
+    /// Whether no change since `revision` touched a row `hits` names.
+    fn untouched_since_by(&self, revision: u64, hits: impl Fn(&Touched) -> bool) -> bool {
         revision >= self.floor
             && self
                 .changes
                 .iter()
                 .filter(|(at, _)| *at > revision)
-                .all(|(_, rows)| {
-                    rows.as_ref()
-                        .is_some_and(|rows| !rows.iter().any(|id| ids.contains(id)))
-                })
+                .all(|(_, rows)| rows.as_ref().is_some_and(|rows| !rows.iter().any(&hits)))
     }
 }
 
@@ -904,6 +931,152 @@ impl LogPlan {
             None => Ok(None),
         }
     }
+
+    /// Every merge identity the log holds (`APP_NEXUS_QID`, a contest row's `qid`) as this process
+    /// knows the log ([`Self::rows`]): what the Field Day merge reads to skip a row already there
+    /// — one narrow pass over the store's `contest_qid`, whatever the log's size.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn merge_identities(&self) -> Result<HashSet<String>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+        const QIDS: Narrow = Narrow {
+            columns: &["contest_qid"],
+            uploads: false,
+        };
+        let qid = |r: &QsoRecord| {
+            r.contest
+                .as_deref()
+                .map(|c| c.qid.clone())
+                .filter(|q| !q.is_empty())
+        };
+        let mut seen = HashSet::new();
+        let mut keep = |r: &QsoRecord| {
+            // This process's own version of the row, where one is on its way: a row it deleted
+            // is not there, and one it changed carries what the change left.
+            match r.id.and_then(|id| self.pending.row(id)) {
+                Some(Some(mine)) => seen.extend(qid(&mine)),
+                Some(None) => {}
+                None => seen.extend(qid(r)),
+            }
+            ControlFlow::Continue(())
+        };
+        match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| {
+                    db.each_narrow(QIDS, Scope::All, Order::Log, &mut keep)
+                })
+                .map(|_| ()),
+            memory => memory
+                .each(QIDS, Scope::All, Order::Log, &mut keep)
+                .map(|_| ()),
+        }
+        .map_err(|e| e.to_string())?;
+        // Rows on their way the store has not taken at all.
+        seen.extend(
+            self.pending
+                .rows_matching(|r| qid(r).is_some())
+                .iter()
+                .filter_map(|r| qid(r)),
+        );
+        Ok(seen)
+    }
+
+    /// The rows of the log whose call is one `calls` names — each a call as the store keys it,
+    /// trimmed and ASCII-uppercased ([`tempo_core::logbook::sqlite::call_norm_of`]) — as this
+    /// process knows them ([`Self::rows`]), in log order: the CANDIDATE SUB-LOG a bulk change is
+    /// planned on (SPEC-2 v3 §4.6, C19 Part B), read by the `qso_callhist` index.
+    ///
+    /// ★ It holds every row a bulk change can pair with a row it brings. Every matcher those
+    /// changes use compares calls up to ASCII case — untrimmed (`reconcile`'s keys, the import's
+    /// dedup key) or with `eq_ignore_ascii_case` (the POTA stamps) — and two calls equal under
+    /// either are equal trimmed and ASCII-uppercased: they share a `call_norm`. A call with
+    /// characters outside ASCII is no exception, since ASCII case leaves those alone on both
+    /// sides alike.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn candidates(
+        &self,
+        calls: &std::collections::BTreeSet<String>,
+    ) -> Result<Vec<Arc<QsoRecord>>, String> {
+        self.candidates_seeking(calls, CANDIDATE_SEEKS)
+    }
+
+    /// [`Self::candidates`], looking each call up in the store only while there are no more than
+    /// `seeks` of them — a test's handle on the one-pass read.
+    fn candidates_seeking(
+        &self,
+        calls: &std::collections::BTreeSet<String>,
+        seeks: usize,
+    ) -> Result<Vec<Arc<QsoRecord>>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
+        const CALL_ONLY: Narrow = Narrow {
+            columns: &["call"],
+            uploads: false,
+        };
+        let mut ids: Vec<RecordId> = Vec::new();
+        let mut keep = |r: &QsoRecord| {
+            if calls.contains(&call_norm_of(&r.call)) {
+                ids.extend(r.id);
+            }
+            ControlFlow::Continue(())
+        };
+        match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| {
+                    if calls.len() > seeks {
+                        // Too many calls to look each up (a whole foreign log.adi): one pass.
+                        return db.each_narrow(CALL_ONLY, Scope::All, Order::Log, &mut keep);
+                    }
+                    for call in calls {
+                        db.each_narrow(CALL_ONLY, Scope::CallNorm(call), Order::Log, &mut keep)?;
+                    }
+                    Ok(())
+                })
+                .map(|_| ()),
+            // The 1.13 path: its log is in memory, and one pass finds the same rows.
+            memory => memory
+                .each(CALL_ONLY, Scope::All, Order::Log, &mut keep)
+                .map(|_| ()),
+        }
+        .map_err(|e| e.to_string())?;
+        // This process's rows on their way that carry one of these calls now: an append the store
+        // has not taken yet, or a row an edit gave one of these calls — read by id below, so a row
+        // the store holds keeps its place in the log.
+        let mine = self
+            .pending
+            .rows_matching(|r| calls.contains(&call_norm_of(&r.call)));
+        ids.extend(mine.iter().filter_map(|r| r.id));
+        let stored = match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| db.rows_by_ids(&ids))
+                .map(|(found, _)| found),
+            memory => memory.rows_by_ids(&ids).map(|(found, _)| found),
+        }
+        .map_err(|e| e.to_string())?;
+        let mut seen: HashSet<RecordId> = HashSet::with_capacity(stored.len());
+        let mut rows = Vec::with_capacity(stored.len());
+        for r in stored {
+            let Some(id) = r.id else { continue };
+            seen.insert(id);
+            let row = match self.pending.row(id) {
+                Some(Some(mine)) => mine,
+                Some(None) => continue,
+                None => Arc::new(r),
+            };
+            // A row an edit on its way took off these calls is not one of theirs any more.
+            if calls.contains(&call_norm_of(&row.call)) {
+                rows.push(row);
+            }
+        }
+        // Appends the store has not taken: the newest rows of all, in the order they were made.
+        rows.extend(
+            mine.into_iter()
+                .filter(|r| r.id.is_some_and(|id| seen.insert(id))),
+        );
+        Ok(rows)
+    }
 }
 
 /// Why a planned change was not made: a row it read is not the row it read any more — changed
@@ -951,6 +1124,190 @@ pub fn ops_on(row: &QsoRecord, ops: &[LogOp]) -> Option<(OpClass, Option<QsoReco
         class = Some(class.map_or(op.class(), |c| wider(c, op.class())));
     }
     class.map(|c| (c, now))
+}
+
+/// A bulk change planned on the candidate sub-log ([`plan_on_candidates`]): what it read, and what
+/// it makes of it (SPEC-2 v3 §4.6, C19 Part B). Made under the Engine lock by
+/// [`StationCore::commit_bulk`], only while nothing it read — and no row of a call it read — has
+/// changed since.
+#[derive(Debug)]
+pub(crate) struct Planned {
+    /// The rows it read, each as it read them.
+    read: Vec<Arc<QsoRecord>>,
+    /// The calls whose rows it read, as the store keys a call: a change since to a row of one of
+    /// them — an append included — plans again.
+    calls: std::collections::BTreeSet<String>,
+    /// The ids rows it appends brought and keep, which the log held nowhere when it looked: one
+    /// taken since plans again.
+    kept: Vec<RecordId>,
+    /// What it changes: each held row it upgrades (as it read it, as it leaves it), in log order,
+    /// then each row it appends — whose id is `None` until the commit mints one.
+    pairs: Vec<RowPair>,
+    /// What a change to a held row is.
+    class: OpClass,
+}
+
+impl Planned {
+    /// Whether it changes nothing: no row upgraded and none appended.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// How many held rows it upgrades.
+    pub(crate) fn upgraded(&self) -> usize {
+        self.pairs
+            .iter()
+            .filter(|(before, _)| before.is_some())
+            .count()
+    }
+}
+
+/// ★ Plan a bulk change — an import, a report merge, the POTA stamps — on the candidate sub-log:
+/// the rows of the log whose call is one of `calls` (the calls of the rows it brings,
+/// [`LogPlan::candidates`]), handed to `op`, THE implementation of the change as it has always run
+/// on the whole log (`Logbook::import_adif_with`, `Logbook::merge_report`, …), on a log holding
+/// only those rows. Every row the change can pair with is one of them, so it decides exactly
+/// what it would decide over the whole log.
+///
+/// `ids` are the ids the rows it brings carry. A row keeps its own id only where the whole log
+/// holds that id nowhere — the rule `op` applies, which the sub-log alone cannot see — and every
+/// other row it appends is minted an id when the change is made. `class` is what a change to a
+/// held row is. What `op` answered, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_on_candidates<R>(
+    plan: &LogPlan,
+    calls: impl IntoIterator<Item = String>,
+    ids: &[RecordId],
+    class: OpClass,
+    op: impl FnOnce(&mut Logbook) -> R,
+) -> Result<(R, Planned), String> {
+    let calls: std::collections::BTreeSet<String> = calls
+        .into_iter()
+        .map(|c| tempo_core::logbook::sqlite::call_norm_of(&c))
+        .collect();
+    let read = plan.candidates(&calls)?;
+    let held = plan.rows(ids)?;
+    let free: HashSet<RecordId> = ids
+        .iter()
+        .filter(|id| !held.contains_key(id))
+        .copied()
+        .collect();
+    let mut sub = Logbook::new();
+    sub.replace_rows(read.clone());
+    let out = op(&mut sub);
+    let after = sub.records();
+    let mut pairs: Vec<RowPair> = read
+        .iter()
+        .zip(after)
+        .filter(|(b, a)| !Arc::ptr_eq(b, a) && ***b != ***a)
+        .map(|(b, a)| (Some(Arc::clone(b)), Some(Arc::clone(a))))
+        .collect();
+    let mut kept = Vec::new();
+    let mut taken = HashSet::new();
+    for a in after.iter().skip(read.len()) {
+        let mut row = QsoRecord::clone(a);
+        match row.id {
+            Some(id) if free.contains(&id) && taken.insert(id) => kept.push(id),
+            _ => row.id = None,
+        }
+        pairs.push((None, Some(Arc::new(row))));
+    }
+    Ok((
+        out,
+        Planned {
+            read,
+            calls,
+            kept,
+            pairs,
+            class,
+        },
+    ))
+}
+
+/// The calls and the ids of the records an ADIF text holds: what a bulk change bringing them is
+/// planned by ([`plan_on_candidates`]).
+fn calls_and_ids(text: &str) -> (Vec<String>, Vec<RecordId>) {
+    let rows = tempo_core::logbook::parse_adif(text);
+    let ids = rows.iter().filter_map(|r| r.id).collect();
+    (rows.into_iter().map(|r| r.call).collect(), ids)
+}
+
+/// An ADIF import planned ([`plan_on_candidates`]): the contacts the log lacks appended, the ones
+/// it holds upgraded from the rows restating them — `Logbook::import_adif`, on the rows of the
+/// text's calls. `(added, skipped, merged)`, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_import(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, usize, usize), Planned), String> {
+    let (calls, ids) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
+        let (added, skipped, merged) = log.import_adif(text);
+        (added.len(), skipped, merged)
+    })
+}
+
+/// A confirmation report planned (LoTW's, eQSL's): the logged contacts it matches upgraded —
+/// `Logbook::merge_report`, on the rows of the report's calls. Its summary, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_report(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<(tempo_core::reconcile::ReconcileSummary, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.merge_report(text)
+    })
+}
+
+/// A downloaded logbook planned (QRZ's fetch): its contacts the log lacks appended, and the ones it
+/// holds upgraded — `Logbook::merge_downloaded`, on the rows of the download's calls. How many it
+/// added and its summary, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_download(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, tempo_core::reconcile::ReconcileSummary), Planned), String> {
+    let (calls, ids) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
+        let (added, summary) = log.merge_downloaded(text);
+        (added.len(), summary)
+    })
+}
+
+/// A pota.app export's park references planned onto the logged contacts they match —
+/// `Logbook::stamp_ota_refs`, on the rows of the export's calls. `(stamped, already, unmatched)`,
+/// and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_ota_refs(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, usize, usize), Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.stamp_ota_refs(text)
+    })
+}
+
+/// LoTW's own-QSO report planned: the uploads it shows LoTW holds promoted to accepted, and the
+/// ones already accepted stamped again with its time — `Logbook::merge_own_echo`, on the rows of
+/// the report's calls. How many were newly promoted, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_own_echo(
+    plan: &LogPlan,
+    text: &str,
+    when_unix: i64,
+) -> Result<(usize, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Stamp, |log| {
+        log.merge_own_echo(text, when_unix)
+    })
 }
 
 /// The wider of two classes of change to held rows — the one whose watermarks cover both. Every
@@ -1285,7 +1642,7 @@ impl StationCore {
     /// un-confirmed. So a 1.13 instance's new contacts arrive; its edits arrive as the import
     /// rules have always treated a restated contact, and a contact it deleted stays — the
     /// visible trades a shared `log.adi` has always made, and never a contact lost.
-    #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the take-in runs under the lock (the launch's attach, the freshness poll), so it checks the log in memory; it moves into the open path
     pub(crate) fn take_in_log_file(
         &mut self,
         text: &str,
@@ -1321,7 +1678,7 @@ impl StationCore {
     /// [`Self::persist_change`]) — a copy of pointers, never of a record. The index and the
     /// watermarks are brought up to the log first, so these are the rows the index holds and the
     /// pairs start from them.
-    #[allow(deprecated)] // SPEC-2 C19: Stage 1's before-picture of every change
+    #[allow(deprecated)] // SPEC-2 C19 (C, the cut): the 1.13 backfills, the take-in and another window's reload measure their change against the log in memory
     fn change_base(&mut self) -> ChangeBase {
         self.sync_hot();
         ChangeBase {
@@ -1333,7 +1690,7 @@ impl StationCore {
     /// from `base` go to the writer thread — a channel send, no I/O — and the mirror lane is
     /// told. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was. Either
     /// way the hot index follows the change, row by row, from `base`.
-    #[allow(deprecated)] // SPEC-2 C19: Stage 1's diff of every change
+    #[allow(deprecated)] // SPEC-2 C19 (C, the cut): the 1.13 backfills, the take-in and another window's reload measure their change against the log in memory
     fn persist_change(&mut self, base: ChangeBase, context: &str) {
         match &self.store {
             Some(store) => {
@@ -1436,6 +1793,14 @@ impl StationCore {
         })
     }
 
+    /// Whether the log has not changed at all since `plan` was taken — here or in another window:
+    /// the precondition of a change whose plan read something no row by row check can hold (the
+    /// Field Day merge's "already there", read off every row's merge identity).
+    pub(crate) fn unchanged_at_all_since(&self, plan: &LogPlan) -> bool {
+        self.marks.revision == plan.rev
+            && self.store.as_ref().map(|s| s.foreign_commits()) == plan.foreign
+    }
+
     /// ★ Make one change — THE way a row of the log changes (SPEC-2 v3 C19). Under the Engine
     /// lock, no I/O: the station's watermarks move by the change's class; the log in memory
     /// follows it (until the cut); the hot index follows its pairs ([`Self::follow`]); and it
@@ -1457,10 +1822,20 @@ impl StationCore {
                 c.meta = change.meta;
                 store.submit(c)
             }
-            // The 1.13 path: `log.adi` rewritten whole, as it always was — for a change that
-            // touched a row; one that touched none (a purge of an empty log) writes nothing.
+            // The 1.13 path, as it always was: rows only appended are appended to `log.adi`;
+            // any other change rewrites it whole; a change that touched no row (a purge of an
+            // empty log) writes nothing.
             None => {
-                if change.clear || !change.pairs.is_empty() {
+                if !change.clear && change.pairs.iter().all(|(before, _)| before.is_none()) {
+                    let rows: Vec<QsoRecord> = change
+                        .pairs
+                        .iter()
+                        .filter_map(|(_, after)| after.as_deref().cloned())
+                        .collect();
+                    if !rows.is_empty() {
+                        self.append_to_log_file(&rows, false);
+                    }
+                } else {
                     self.save_log(context);
                 }
                 None
@@ -1478,6 +1853,16 @@ impl StationCore {
         self.sync_hot();
         let mut marks = self.marks;
         marks.mark(change.class);
+        // A change that also appends rows after the rows it changed (an import's new contacts
+        // beside the ones it upgraded) moves an append's watermarks too, after its own.
+        if change.class != OpClass::Append
+            && change
+                .pairs
+                .iter()
+                .any(|(before, after)| before.is_none() && after.is_some())
+        {
+            marks.mark(OpClass::Append);
+        }
         self.logbook.follow(&change.pairs, change.clear, marks);
         self.follow(&change.pairs, marks);
         marks
@@ -1516,6 +1901,75 @@ impl StationCore {
             },
             context,
         ))
+    }
+
+    /// ★ Make a bulk change planned off the Engine lock on the candidate sub-log
+    /// ([`plan_on_candidates`]) — under it, in the writer's bulk lane. [`Stale`], changing
+    /// nothing, when a row it read has changed since, a row of a call it read was added or
+    /// changed, an id it keeps was taken, or another window committed: the caller plans again.
+    ///
+    /// Each row it appends is filled (its country and US state, SPEC-2 v3 D2-A) and given an id
+    /// here, as every insert is — the station mints the ones it did not keep its own of. A change
+    /// that only appends is an append; one that upgrades held rows is `planned`'s class, and its
+    /// appends move an append's watermarks after it ([`Self::make`]). What it made: the ticket,
+    /// and the rows it appended, as appended.
+    pub(crate) fn commit_bulk(
+        &mut self,
+        plan: &LogPlan,
+        planned: Planned,
+        context: &str,
+    ) -> Result<
+        (
+            Option<tempo_core::logbook::writer::Ticket>,
+            Vec<Arc<QsoRecord>>,
+        ),
+        Stale,
+    > {
+        let mut ids: HashSet<RecordId> = planned.read.iter().filter_map(|r| r.id).collect();
+        ids.extend(&planned.kept);
+        if !self
+            .recent
+            .untouched_since_calls(plan.rev, &ids, &planned.calls)
+            || self.store.as_ref().map(|s| s.foreign_commits()) != plan.foreign
+        {
+            return Err(Stale);
+        }
+        #[cfg(debug_assertions)]
+        self.check_plan_against_memory(&planned.read);
+        let class = if planned.upgraded() == 0 {
+            OpClass::Append
+        } else {
+            planned.class
+        };
+        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+        let mut appended = Vec::new();
+        let mut pairs = Vec::with_capacity(planned.pairs.len());
+        for (before, after) in planned.pairs {
+            match (before, after) {
+                (None, Some(row)) => {
+                    let mut row = QsoRecord::clone(&row);
+                    fill_with(&mut row, country, state);
+                    if row.id.is_none() {
+                        row.id = Some(self.minter.mint());
+                    }
+                    let row = Arc::new(row);
+                    appended.push(Arc::clone(&row));
+                    pairs.push((None, Some(row)));
+                }
+                pair => pairs.push(pair),
+            }
+        }
+        let ticket = self.commit(
+            RowChange {
+                class,
+                pairs,
+                clear: false,
+                bulk: true,
+                meta: Vec::new(),
+            },
+            context,
+        );
+        Ok((ticket, appended))
     }
 
     /// The P6 oracle, in a debug build: every row a plan read off the store — this process's own
@@ -1939,7 +2393,7 @@ impl StationCore {
 
     /// The station's position id, which the ids of the contacts it logs from now on carry (see
     /// [`RecordId`]); 0 until the profile has one.
-    #[allow(deprecated)] // SPEC-2 C19: the in-memory log still mints the rows its imports add (B)
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the log in memory still mints the rows a take-in of log.adi and the 1.13 recovery add
     pub(crate) fn set_posid(&mut self, posid: u32) {
         self.minter.set_posid(posid);
         self.logbook.set_posid(posid);
@@ -1979,12 +2433,10 @@ impl StationCore {
     /// ★ THE way a change to the log reaches the hot index (SPEC-2 v3 C19): `pairs`, the rows it
     /// took out and put in ([`RowPair`]), and `now`, the watermarks it left the log at, which the
     /// station keeps from here. Every change the station makes ends here — the append
-    /// ([`Self::append`]), every change it commits ([`Self::commit`]), and each bulk change still
-    /// measured against a [`ChangeBase`] ([`Self::persist_change`]) — so the index hears of each
-    /// as it is made, row by row.
-    ///
-    /// A bulk change is still made on the in-memory log until it plans its own (C19 Part B2), and
-    /// `now` is then the log's watermarks after it.
+    /// ([`Self::append`]), every change it commits ([`Self::commit`]), and each change still made
+    /// on the log in memory and measured against a [`ChangeBase`] (a take-in of `log.adi`, the
+    /// 1.13 backfills, another window's reload: [`Self::persist_change`]) — so the index hears of
+    /// each as it is made, row by row. For those last, `now` is the log's watermarks after it.
     #[allow(deprecated)] // SPEC-2 C19: a debug build checks the index against the in-memory log
     pub(crate) fn follow(&mut self, pairs: &[RowPair], now: Watermarks) {
         self.recent.note(now.revision, pairs);
@@ -3012,112 +3464,65 @@ impl StationCore {
     /// snapshot derives real "needs" from the enlarged log (and roster B4
     /// highlighting updates).
     ///
-    /// Two write paths, because the import has two effects. New contacts are
-    /// APPENDED (cheap, and all an import used to do). But an import also upgrades
-    /// records already in the log — the confirmations and credits a LoTW/eQSL/QRZ
-    /// download restates — and an append cannot express a change to a record that
-    /// is already in the file. Those need the full rewrite, or the confirmations
-    /// live in memory until the next save and are lost outright if the app exits
-    /// first.
+    /// Two effects in ONE change: new contacts are APPENDED, and the records already in the
+    /// log that the import restates — the confirmations and credits a LoTW/eQSL/QRZ download
+    /// carries — are upgraded in place. Planned on the rows of the calls it brings
+    /// ([`plan_import`]), in one breath here; a command plans it with the Engine lock released
+    /// ([`crate::logwrite::import_adif`]).
     ///
-    /// That second path is why this now recovers first, like every other full-log
-    /// rewrite in this file. An append-only import was concurrency-safe by
-    /// construction and was the one exemption from the contract above; the moment it
-    /// could `rename()` a whole log over the file, the exemption stopped holding and
-    /// a stale copy silently deleted a second instance's QSOs.
-    ///
-    /// ORDER — before the MERGE, not merely before the WRITE, matching every sibling
-    /// site and the "BEFORE their mutation" requirement on
-    /// [`Self::recover_external_appends`]. A confirmation report is about contacts
-    /// already logged, and some of them may be logged only by the OTHER instance. Run
-    /// first, and such a row matches the recovered record and confirms it. Run after,
-    /// and the merge — looking at a log that does not contain it yet — reads the same
-    /// row as a brand-new contact and logs it a second time. So the late order costs
-    /// a duplicate and a lost confirmation even though it saves the file.
+    /// ORDER — another instance's commits are taken in before the import is planned
+    /// ([`Self::log_plan`]), as before every change. A confirmation report is about contacts
+    /// already logged, some of them perhaps only by the OTHER instance: taken in first, such a
+    /// row matches the recovered record and confirms it; after, the import reads it as a
+    /// brand-new contact and logs it a second time.
     ///
     /// A new row's COUNTRY and STATE are resolved BEFORE it joins the log, so it is appended
     /// complete — and an imported US contact carries its state from the moment it is imported,
     /// in the store as on every screen (SPEC-2 v3 D2-A). Companion mode imports one record per
-    /// contact WSJT-X logs, and WSJT-X writes no COUNTRY: filled afterwards by the backfill,
-    /// every such contact was an in-place write — a rewrite of the log's revision (a full
-    /// reload for every log view) and a whole-log `save` of log.adi, fsync included, per
-    /// contact.
-    #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
+    /// contact WSJT-X logs, and WSJT-X writes no COUNTRY: filled afterwards, every such contact
+    /// was an in-place write — a rewrite of the log's revision (a full reload for every log view)
+    /// and a whole-log `save` of log.adi, fsync included, per contact.
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
-        let (added, skipped, merged) = self
-            .logbook
-            .import_adif_with(text, |r| fill_with(r, country, state));
-        if self.store.is_some() {
-            // With the store the import and the rows it upgraded are ONE change of rows — no
-            // whole-log rewrite, whatever the import touched. Its new rows arrived filled, and
-            // the rows the log already held are the fill job's (D2-A), so nothing is backfilled
-            // here. In companion mode this runs once per contact WSJT-X logs, from the radio
-            // loop: it must not touch the disk, and it does not.
-            self.persist_change(base, "import_adif");
-        } else {
-            if merged > 0 {
-                self.save_log("import_adif"); // rewrites the whole log, `added` included
-            } else {
-                self.append_to_log_file(&added, false);
-            }
-            self.catch_up_hot(Some(&base));
-            self.backfill_country();
-        }
-        self.sync_hot();
-        (added.len(), skipped, merged, self.logbook.len())
+        let (added, skipped, merged) =
+            match self.bulk("import_adif", |plan| plan_import(plan, text)) {
+                Ok((counts, _)) => counts,
+                Err(e) => {
+                    tempo_core::applog::error("logbook", &format!("an import was not made: {e}"));
+                    (0, 0, 0)
+                }
+            };
+        self.backfill_after_bulk();
+        (added, skipped, merged, self.log_len())
     }
 
     /// Reconcile a confirmation/credit report (ADIF — e.g. a LoTW export) INTO the
     /// existing log: monotonically upgrade matched QSOs' confirmation + credit
-    /// (which a plain dedup-import would skip and lose), rewrite the ADIF file, and
-    /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
+    /// (which a plain dedup-import would skip and lose), and return the reconcile summary
+    /// (newly confirmed/credited + unmatched orphans). Planned on the rows of the report's calls
+    /// ([`plan_report`]).
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let summary = self.logbook.merge_report(text);
+        let summary = self.bulk_or_log("merge_lotw_report", |plan| plan_report(plan, text));
         self.last_lotw_reconcile = Some(summary.clone());
-        self.persist_change(base, "merge_lotw_report");
         summary
     }
 
     /// Stamp POTA/SOTA park refs from a pota.app hunter/activator export onto matching
     /// existing QSOs (stamp-only: never creates records, never overwrites a ref — the
     /// reviewed-adds half is a separate feature). Returns (stamped, already, unmatched).
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn import_pota_log(&mut self, text: &str) -> (usize, usize, usize) {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let out = self.logbook.stamp_ota_refs(text);
-        if out.0 > 0 {
-            self.persist_change(base, "import_pota_log");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        out
+        self.bulk_or_log("import_pota_log", |plan| plan_ota_refs(plan, text))
     }
 
     /// Merge a LoTW own-QSO report (`qso_qsl=no`) INTO the log: promote in-flight
     /// uploads (Pending / never-marked) to `Accepted` where LoTW confirms it holds
     /// your record — the step that turns a just-uploaded QSO into "waiting on the
     /// partner" (R2) and clears false "never uploaded" (R1) for out-of-band uploads.
-    /// Persists the log on any change. Returns the count newly promoted.
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
+    /// Persists the log when one is promoted ([`plan_own_echo`]). Returns the count newly
+    /// promoted.
     pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let promoted = self.logbook.merge_own_echo(text, when_unix);
-        if promoted > 0 {
-            self.persist_change(base, "merge_lotw_own_echo");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        promoted
+        self.bulk_or_log("merge_lotw_own_echo", |plan| {
+            plan_own_echo(plan, text, when_unix)
+        })
     }
 
     /// Record a QRZ Logbook push outcome on the just-pushed QSO (`upload.qrz`), so
@@ -3224,62 +3629,89 @@ impl StationCore {
     /// as [`Self::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
     /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let summary = self.logbook.merge_report(text);
+        let summary = self.bulk_or_log("merge_eqsl_report", |plan| plan_report(plan, text));
         self.last_eqsl_reconcile = Some(summary.clone());
-        self.persist_change(base, "merge_eqsl_report");
         summary
     }
 
     /// Two-way QRZ Logbook sync: merge a QRZ **FETCH** ADIF (the operator's whole
     /// book) INTO the log. QRZ returns both QSOs the operator logged elsewhere (e.g.
-    /// a phone app in the field) AND confirmation status, so this runs two passes:
-    /// first import genuinely-new QSOs (deduped), then reconcile confirmations onto
-    /// the QSOs already present. A QRZ-native confirmation (`APP_QRZLOG_STATUS`) lands
-    /// `confirmed` but NOT `award_confirmed`, by construction of the `qrz` channel, so
-    /// it can't inflate DXCC/WAS counts. Returns `(added, reconcile_summary)`.
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
+    /// a phone app in the field) AND confirmation status, so this adds the QSOs QRZ has that
+    /// we lack AND upgrades confirmations on the ones already present, in ONE consume-once
+    /// pass keyed identically, so a mode-spelling difference (e.g. a phone QSO re-uploaded as
+    /// USB vs our SSB) can't double-log the same contact ([`plan_download`]). A QRZ-native
+    /// confirmation (`APP_QRZLOG_STATUS`) lands `confirmed` but NOT `award_confirmed`, by
+    /// construction of the `qrz` channel, so it can't inflate DXCC/WAS counts. Returns
+    /// `(added, reconcile_summary)`.
     pub fn merge_qrz_report(
         &mut self,
         text: &str,
     ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
-        self.recover_external_appends();
-        // ONE consume-once pass: add the QSOs QRZ has that we lack AND upgrade
-        // confirmations on the ones already present, keyed identically so a mode-
-        // spelling difference (e.g. a phone QSO re-uploaded as USB vs our SSB) can't
-        // double-log the same contact. A full save then captures both the appended
-        // rows and the reconciled confirmations.
-        let base = self.change_base();
-        let before = self.logbook.len();
-        let (added, summary) = self.logbook.merge_downloaded(text);
+        let (added, summary) =
+            self.bulk_or_log("merge_qrz_report", |plan| plan_download(plan, text));
         self.last_qrz_reconcile = Some(summary.clone());
-        if self.store.is_some() {
-            // One change of rows: the merge's adds and upgrades. The merge appends the contacts
-            // it adds, and each is filled here, before it is written (SPEC-2 v3 D2-A); the rows
-            // the log already held are the fill job's.
-            if self.logbook.len() > before {
-                let (country, state) =
-                    (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
-                for r in self
-                    .logbook
-                    .records_mut(OpClass::Upgrade)
-                    .iter_mut()
-                    .skip(before)
-                {
-                    fill_with(Arc::make_mut(r), country, state);
-                }
+        self.backfill_after_bulk();
+        (added, summary)
+    }
+
+    /// ★ Plan a bulk change on the candidate sub-log and make it, in one breath — for an owner
+    /// holding the station with no Engine guard (a test's own station or engine; a command
+    /// plans with the lock released, [`crate::logwrite`]). Planned again while what it read keeps
+    /// changing, [`PLANS`] plans in all. What the plan answered and the rows it appended, or why
+    /// not.
+    pub(crate) fn bulk<R>(
+        &mut self,
+        context: &str,
+        mut plan_it: impl FnMut(&LogPlan) -> Result<(R, Planned), String>,
+    ) -> Result<(R, Vec<Arc<QsoRecord>>), String> {
+        for _ in 0..PLANS {
+            let plan = self.log_plan();
+            let (out, planned) = plan_it(&plan)?;
+            if planned.is_empty() {
+                return Ok((out, Vec::new()));
             }
-            self.persist_change(base, "merge_qrz_report");
-        } else {
-            self.save_log("merge_qrz_report");
-            self.catch_up_hot(Some(&base));
+            if let Ok((_, appended)) = self.commit_bulk(&plan, planned, context) {
+                return Ok((out, appended));
+            }
+        }
+        Err(LOG_BUSY.into())
+    }
+
+    /// [`Self::bulk`] for a change whose answer is a report: one that could not be made says so
+    /// in the diagnostic log and answers an empty report.
+    fn bulk_or_log<R: Default>(
+        &mut self,
+        context: &str,
+        plan_it: impl FnMut(&LogPlan) -> Result<(R, Planned), String>,
+    ) -> R {
+        match self.bulk(context, plan_it) {
+            Ok((out, _)) => out,
+            Err(e) => {
+                tempo_core::applog::error("logbook", &format!("{context} was not made: {e}"));
+                R::default()
+            }
+        }
+    }
+
+    /// After a bulk change on the 1.13 path, what it has always done next: the backfill of every
+    /// record's country, from the resolver. The store's rows are filled another way (SPEC-2 v3
+    /// D2-A): each insert fills its own, and the fill job the ones an older build left.
+    pub(crate) fn backfill_after_bulk(&mut self) {
+        if self.store.is_none() {
             self.backfill_country();
         }
-        self.sync_hot();
-        (added.len(), summary)
+    }
+
+    /// How many contacts the log holds — read with no Engine guard, as a count of the store is.
+    fn log_len(&self) -> usize {
+        match self.log_rows().count() {
+            Ok((n, _)) => n as usize,
+            Err(e) => {
+                tempo_core::applog::error("logbook", &format!("the log could not be counted: {e}"));
+                0
+            }
+        }
     }
 
     /// A clone of all logbook records (oldest-first / newest-last).
@@ -4587,9 +5019,9 @@ mod hot_parity_tests {
         assert_parity(&sc, &mut rng, "a write around the station, then an edit");
     }
 
-    /// The station mints the ids of the contacts it logs (SPEC-2 v3 C19) under its position id,
-    /// and the in-memory log's own minter — which still mints the rows an import adds — carries
-    /// the same position under a nonce of its own, so the two never hand out one id.
+    /// The station mints every id the log hands out (SPEC-2 v3 C19) — the contacts it logs and
+    /// the rows an import adds (C19 Part B) — under its position id and from one sequence, so no
+    /// two rows are ever handed one id.
     #[test]
     fn what_the_station_logs_and_what_an_import_adds_are_minted_under_one_position() {
         let mut rng = Rng(3);
@@ -4609,14 +5041,19 @@ mod hot_parity_tests {
         match (logged, imported) {
             (
                 RecordId::Minted {
-                    posid: a, nonce: x, ..
+                    posid: a,
+                    nonce: x,
+                    seq: m,
                 },
                 RecordId::Minted {
-                    posid: b, nonce: y, ..
+                    posid: b,
+                    nonce: y,
+                    seq: n,
                 },
             ) => {
                 assert_eq!((a, b), (0x00c0_ffee, 0x00c0_ffee), "the station's position");
-                assert_ne!(x, y, "under nonces of their own");
+                assert_eq!(x, y, "one minter");
+                assert!(n > m, "the import's id is the next in its sequence");
             }
             other => panic!("both minted here: {other:?}"),
         }
@@ -4641,3 +5078,6 @@ mod hot_parity_tests {
         assert!(sc.is_duplicate(&sc.logbook.records()[0].as_ref().clone()));
     }
 }
+
+#[cfg(test)]
+mod bulk_tests;
