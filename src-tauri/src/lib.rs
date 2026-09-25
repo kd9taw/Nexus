@@ -2846,8 +2846,9 @@ mod lotw_batch_tests {
         (dir, engine, ids)
     }
 
-    /// Each contact's LoTW outcome by id, as memory holds it and as the store does. `None` for
-    /// a contact the log no longer holds; `Some(None)` for one never stamped.
+    /// Each contact's LoTW outcome by id, as the station reads the log and as the database holds
+    /// it on a connection of its own. `None` for a contact the log no longer holds; `Some(None)`
+    /// for one never stamped.
     fn outcomes(
         dir: &Path,
         engine: &SharedEngine,
@@ -2857,7 +2858,7 @@ mod lotw_batch_tests {
         let stored = tempo_core::logbook::sqlite::LogDb::open(&db)
             .and_then(|d| d.load_all())
             .expect("read the store");
-        let eng = engine_lock(engine);
+        let read = engine.stored_log();
         let of = |rows: &mut dyn Iterator<Item = &QsoRecord>| {
             let rows: Vec<&QsoRecord> = rows.collect();
             ids.iter()
@@ -2869,7 +2870,7 @@ mod lotw_batch_tests {
                 .collect()
         };
         [
-            of(&mut eng.log_records().iter().map(|r| r.as_ref())),
+            of(&mut read.iter().map(|r| r.as_ref())),
             of(&mut stored.iter()),
         ]
     }
@@ -2925,7 +2926,7 @@ mod lotw_batch_tests {
         );
 
         let pending = Some(Some(UploadOutcome::Pending));
-        for (held, what) in outcomes(dir, engine, ids).iter().zip(["memory", "store"]) {
+        for (held, what) in outcomes(dir, engine, ids).iter().zip(["read", "database"]) {
             assert_eq!(
                 held,
                 &vec![None, pending, Some(None), pending],
@@ -2966,7 +2967,7 @@ mod lotw_batch_tests {
         let pending = Some(Some(UploadOutcome::Pending));
         for (held, what) in outcomes(&dir, &engine, &ids)
             .iter()
-            .zip(["memory", "store"])
+            .zip(["read", "database"])
         {
             assert_eq!(
                 held,
@@ -3646,8 +3647,8 @@ mod logbook_startup_tests {
 
     /// ★ THE LAUNCH WINDOW, WHAT IF (SPEC-2 v3 C19). A contact written between the engine's creation
     /// and the attach — which the order above rules out, and a debug build refuses — would be in
-    /// no log afterwards: not in the log the attach hands the session (in memory and in its
-    /// store), not in `log.adi`, and not at the next launch. On the database and on the 1.13 path
+    /// no log afterwards: not in the log the attach hands the session (its store), not in
+    /// `log.adi`, and not at the next launch. On the database and on the 1.13 path
     /// alike, through the launch's own calls, and as before C19, when the engine's log before the
     /// attach was an empty log in memory with nowhere to write.
     #[test]
@@ -3681,17 +3682,16 @@ mod logbook_startup_tests {
             );
             adopt_logbook(&mut e, &log, opened);
             assert_eq!(e.log_on_file(), network.is_some(), "premise: {path}");
-            let held: Vec<String> = e.log_records().iter().map(|r| r.call.clone()).collect();
-            assert_eq!(held.len(), 3, "{path}: the operator's log, whole: {held:?}");
-            assert!(!held.contains(&"W9EARLY".to_string()), "{path}: {held:?}");
-            let mut stored = Vec::new();
-            e.log_rows()
-                .each_record(Duration::from_secs(60), &mut |r| {
-                    stored.push(r.call.clone());
-                    std::ops::ControlFlow::Continue(())
-                })
-                .expect("the store reads");
-            assert_eq!(stored, held, "{path}: nor in its store");
+            let stored: Vec<String> = e.stored_log().iter().map(|r| r.call.clone()).collect();
+            assert_eq!(
+                stored.len(),
+                3,
+                "{path}: the operator's log, whole: {stored:?}"
+            );
+            assert!(
+                !stored.contains(&"W9EARLY".to_string()),
+                "{path}: not in the log the attach hands the session: {stored:?}"
+            );
             e.flush_log_store(Duration::from_secs(60)).expect("written");
             let file = std::fs::read_to_string(&log).expect("log.adi");
             assert!(!file.contains("W9EARLY"), "{path}: nor in log.adi");
