@@ -25,17 +25,47 @@
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tempo_core::logbook::QsoRecord;
 
 use crate::engine::{engine_lock, Engine};
-use crate::logstore::{Freshness, LogRows, READ_WAIT};
+use crate::logstore::{Freshness, LogRows};
 use crate::station::StationCore;
 
+/// How long a test's read waits for the store's writer: a test's budget, not a screen's.
+/// `READ_WAIT` is what a screen waits before it shows the store as it stands; a loaded machine can
+/// take longer than that to write a change, and a test that failed then would be failing the
+/// machine, not the code. As long as the harnesses' `flush_log_store` waits.
+pub const TEST_WAIT: Duration = Duration::from_secs(120);
+
 /// Every contact the log holds, whole and in log order: from the store once every change made
-/// before this call is written, or on the 1.13 path the log in memory.
+/// before the call is written, or on the no-store path the log in memory.
 pub trait StoredLog {
-    fn stored_log(&self) -> Vec<Arc<QsoRecord>>;
+    /// The log's handles, taken as every reader takes them — for the engine a command shares,
+    /// under the Engine lock for that moment alone — and read by the methods below with the lock
+    /// released.
+    fn log_handles(&self) -> LogRows;
+
+    /// The log, once the store holds every change made before this call — waiting up to `wait`
+    /// for the writer, and refusing (a panic) past it rather than answer without a change.
+    fn stored_log_within(&self, wait: Duration) -> Vec<Arc<QsoRecord>> {
+        let mut log = Vec::new();
+        let fresh = self
+            .log_handles()
+            .each_record(wait, &mut |r| {
+                log.push(Arc::new(r.clone()));
+                ControlFlow::Continue(())
+            })
+            .expect("the logbook store reads");
+        behind_is_refused(fresh, wait);
+        log
+    }
+
+    /// [`Self::stored_log_within`] a test's budget ([`TEST_WAIT`]).
+    fn stored_log(&self) -> Vec<Arc<QsoRecord>> {
+        self.stored_log_within(TEST_WAIT)
+    }
 
     /// [`Self::stored_log`], each record owned — for a test whose values meet a `Vec<QsoRecord>`
     /// (an expected list, a `Logbook` built from them).
@@ -45,41 +75,48 @@ pub trait StoredLog {
             .map(Arc::unwrap_or_clone)
             .collect()
     }
+
+    /// The same wait, with no read of the rows: once this returns, the store holds every change
+    /// made before it was called — for a harness about to ask a product reader, which waits only a
+    /// screen's `READ_WAIT`, about a change it has just made.
+    fn caught_up(&self) {
+        caught_up_within(self.log_handles(), TEST_WAIT);
+    }
 }
 
-/// The pass behind [`StoredLog::stored_log`], over handles taken already.
-fn read(rows: LogRows) -> Vec<Arc<QsoRecord>> {
-    let mut log = Vec::new();
+/// [`StoredLog::caught_up`], waiting up to `wait`: a pass that stops at the first row, so all it
+/// costs is the wait for the writer.
+fn caught_up_within(rows: LogRows, wait: Duration) {
     let fresh = rows
-        .each_record(READ_WAIT, &mut |r| {
-            log.push(Arc::new(r.clone()));
-            ControlFlow::Continue(())
-        })
+        .each_record(wait, &mut |_| ControlFlow::Break(()))
         .expect("the logbook store reads");
+    behind_is_refused(fresh, wait);
+}
+
+/// A read that did not see every change made before it was asked is refused, never answered.
+fn behind_is_refused(fresh: Freshness, wait: Duration) {
     assert!(
         matches!(fresh, Freshness::Current),
-        "the store's writer is still behind the changes made before this read: a test that \
-         looks at the log before its change is written must say so another way"
+        "the store's writer is still behind the changes made before this read after {wait:?}: a \
+         test that looks at the log before its change is written must say so another way"
     );
-    log
 }
 
 impl StoredLog for Engine {
-    fn stored_log(&self) -> Vec<Arc<QsoRecord>> {
-        read(self.log_rows())
+    fn log_handles(&self) -> LogRows {
+        self.log_rows()
     }
 }
 
 impl StoredLog for Mutex<Engine> {
-    fn stored_log(&self) -> Vec<Arc<QsoRecord>> {
-        let rows = engine_lock(self).log_rows();
-        read(rows)
+    fn log_handles(&self) -> LogRows {
+        engine_lock(self).log_rows()
     }
 }
 
 impl StoredLog for StationCore {
-    fn stored_log(&self) -> Vec<Arc<QsoRecord>> {
-        read(self.log_rows())
+    fn log_handles(&self) -> LogRows {
+        self.log_rows()
     }
 }
 
@@ -116,6 +153,7 @@ mod tests {
             assert_eq!(e.station().stored_log(), held, "{arm}: the station's own");
             let owned: Vec<QsoRecord> = held.iter().map(|r| QsoRecord::clone(r)).collect();
             assert_eq!(e.stored_records(), owned, "{arm}: each record owned");
+            e.caught_up();
             let shared = Mutex::new(e);
             assert_eq!(
                 shared.stored_log(),
@@ -136,6 +174,18 @@ mod tests {
         let mut e = engine_on_store(&d);
         let _hold = tempo_core::logbook::sqlite::WriteHold::take(&d.db()).unwrap();
         e.log_qso(qso("ZD7AA", 1_788_000_000));
-        let _ = e.stored_log();
+        let _ = e.stored_log_within(Duration::from_millis(200));
+    }
+
+    /// The same control for the wait with no read.
+    #[test]
+    #[should_panic(expected = "the store's writer is still behind")]
+    fn a_wait_the_writer_is_behind_is_refused() {
+        let d = Dir::new("stored-log-behind");
+        std::fs::write(d.log(), legacy_log(20)).unwrap();
+        let mut e = engine_on_store(&d);
+        let _hold = tempo_core::logbook::sqlite::WriteHold::take(&d.db()).unwrap();
+        e.log_qso(qso("ZD7AA", 1_788_000_000));
+        caught_up_within(e.log_handles(), Duration::from_millis(200));
     }
 }
