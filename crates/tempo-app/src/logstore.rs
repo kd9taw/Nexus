@@ -5449,6 +5449,32 @@ pub(crate) mod tests {
         }
     }
 
+    /// A `log.adi` with each minted id's nonce blanked (`RecordId::Minted`, `posid:nonce:seq`):
+    /// two sessions mint under nonces of their own, the one place two files of the same log may
+    /// differ, and not a difference in what they hold. Same length; the bytes are compared.
+    fn nonces_aside(file: &[u8]) -> String {
+        let text = String::from_utf8_lossy(file);
+        let tag = "<APP_NEXUS_ID:";
+        let mut out = String::with_capacity(text.len());
+        let mut rest = &*text;
+        while let Some(at) = rest.find(tag) {
+            let (head, tail) = rest.split_at(at);
+            out.push_str(head);
+            let close = tail.find('>').map_or(tail.len(), |i| i + 1);
+            out.push_str(&tail[..close]);
+            let value = &tail.as_bytes()[close..];
+            if value.len() > 26 && value[8] == b':' && value[25] == b':' {
+                out.push_str(&tail[close..close + 9]);
+                out.push_str("NONCE-----------");
+                rest = &tail[close + 25..];
+            } else {
+                rest = &tail[close..];
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
     /// ★ THE 1.13 PATH WRITES `log.adi` AS 1.13 WROTE IT (SPEC-2 v3 C19, D1-A). Two sessions on
     /// one starting `log.adi`: one on the 1.13 path, its log in a store in memory and the file
     /// kept by the lane; one with its store taken away, the file written by 1.13's own code, the
@@ -5481,31 +5507,6 @@ pub(crate) mod tests {
         let same_file = |d: &Dir, pinned: &Path| {
             std::fs::read(pinned).unwrap() == std::fs::read(d.log()).unwrap()
         };
-        // Each session mints under a nonce of its own (`RecordId::Minted`,
-        // `posid:nonce:seq`): the one place the two files may differ, and not a difference in
-        // what they hold. Blanked, same length, before the bytes are compared.
-        fn nonces_aside(file: &[u8]) -> String {
-            let text = String::from_utf8_lossy(file);
-            let tag = "<APP_NEXUS_ID:";
-            let mut out = String::with_capacity(text.len());
-            let mut rest = &*text;
-            while let Some(at) = rest.find(tag) {
-                let (head, tail) = rest.split_at(at);
-                out.push_str(head);
-                let close = tail.find('>').map_or(tail.len(), |i| i + 1);
-                out.push_str(&tail[..close]);
-                let value = &tail.as_bytes()[close..];
-                if value.len() > 26 && value[8] == b':' && value[25] == b':' {
-                    out.push_str(&tail[close..close + 9]);
-                    out.push_str("NONCE-----------");
-                    rest = &tail[close + 25..];
-                } else {
-                    rest = &tail[close..];
-                }
-            }
-            out.push_str(rest);
-            out
-        }
         let (mut steps, mut rewrites, mut in_place) = (0, 0, 0);
         for seed in 1..=8u64 {
             let (a, b) = (
@@ -5564,6 +5565,132 @@ pub(crate) mod tests {
         assert!(
             rewrites > 0 && in_place > 0,
             "control: the runs both rewrote and appended ({rewrites} rewrites, {in_place} in place)"
+        );
+    }
+
+    /// ★ THE FT AUTO-LOG ON THE 1.13 PATH LOGS WHAT 1.13 LOGGED (the FT gate's parity, SPEC-2 v3
+    /// C19 D1-A). The funnel every logged contact passes through — the sequencer's `log_qso` and
+    /// the synced `log_qso_for_sync` — driven with repeats inside and outside the duplicate
+    /// window, in lockstep on two sessions over the same `log.adi`: one on the 1.13 path (its log
+    /// in a store in memory, the file kept by the lane) and one with no store at all, the file
+    /// written by 1.13's own code. At every step: the same answer to the caller (refused as a
+    /// duplicate, or logged with one receipt); the contact in the log the moment the call
+    /// returns, as the same record under the next id the station mints; once the receipt is
+    /// redeemed, the contact in `log.adi`; and the two files the same bytes, written the same way.
+    #[test]
+    fn the_ft_auto_log_on_the_1_13_path_logs_what_1_13_logged() {
+        use crate::engine::LogWriteOutcome;
+        const CALLS: [&str; 3] = ["W1AW", "JA1AA", "DL1AB"];
+        const BANDS: [(&str, f64); 2] = [("20m", 14.074), ("40m", 7.074)];
+        const MODES: [&str; 2] = ["FT8", "FT4"];
+        let (mut logged, mut refused) = (0, 0);
+        for seed in 0..6u64 {
+            let (a, b) = (
+                Dir::new(&format!("ft113-lane-{seed}")),
+                Dir::new(&format!("ft113-old-{seed}")),
+            );
+            let mut lane = Engine::new("K2DEF", "FN31", 0);
+            lane.set_log_path(a.log());
+            let mut old = Engine::new("K2DEF", "FN31", 0);
+            old.set_log_path(b.log());
+            old.without_log_store();
+            assert!(lane.log_on_file() && !old.log_store_open(), "premise");
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut when = 1_788_000_000u64;
+            let mut last: Option<QsoRecord> = None;
+            for step in 0..40 {
+                let rec = match &last {
+                    // The same contact handed in again moments later: the sequencer's repeat.
+                    Some(prev) if g.below(4) == 0 => {
+                        let mut again = prev.clone();
+                        again.id = None;
+                        again.when_unix += 15;
+                        again
+                    }
+                    _ => {
+                        when += [30, 90, 200, 400][g.below(4)];
+                        let mut r = qso(CALLS[g.below(CALLS.len())], when);
+                        let (band, freq) = BANDS[g.below(BANDS.len())];
+                        r.band = band.into();
+                        r.freq_mhz = freq;
+                        r.mode = MODES[g.below(MODES.len())].into();
+                        r.station_callsign = Some("K2DEF".into());
+                        r
+                    }
+                };
+                last = Some(rec.clone());
+                let at = format!(
+                    "seed {seed} step {step}: {} {} {}",
+                    rec.call, rec.band, rec.mode
+                );
+                let synced = step % 2 == 1;
+                let (held_a, held_b) = (lane.log_records().len(), old.log_records().len());
+                let outcomes = [&mut lane, &mut old].map(|e| {
+                    if synced {
+                        Some(e.log_qso_for_sync(rec.clone()))
+                    } else {
+                        e.log_qso(rec.clone());
+                        None
+                    }
+                });
+                let [oa, ob] = outcomes;
+                let refused_here = lane.log_records().len() == held_a;
+                assert_eq!(
+                    refused_here,
+                    old.log_records().len() == held_b,
+                    "{at}: refused by both, or logged by both"
+                );
+                match (oa, ob) {
+                    (Some(LogWriteOutcome::Duplicate), Some(LogWriteOutcome::Duplicate)) => {}
+                    (
+                        Some(LogWriteOutcome::PendingSync(ra)),
+                        Some(LogWriteOutcome::PendingSync(rb)),
+                    ) => {
+                        assert_eq!((ra.len(), rb.len()), (1, 1), "{at}: one receipt each");
+                        for r in ra.into_iter().chain(rb) {
+                            r.sync().unwrap_or_else(|e| panic!("{at}: redeemed: {e}"));
+                        }
+                        // Redeemed: the contact is in log.adi, before any flush.
+                        for (d, what) in [(&a, "the 1.13 path"), (&b, "1.13")] {
+                            let last = Logbook::load(&d.log()).records().last().cloned();
+                            assert_eq!(
+                                last.map(|r| (r.call.clone(), r.when_unix)),
+                                Some((rec.call.clone(), rec.when_unix)),
+                                "{at}: {what}: the redeemed contact is in log.adi"
+                            );
+                        }
+                    }
+                    (None, None) => {}
+                    (oa, ob) => panic!(
+                        "{at}: the caller heard different answers: {:?} / {:?}",
+                        oa.map(|o| matches!(o, LogWriteOutcome::Duplicate)),
+                        ob.map(|o| matches!(o, LogWriteOutcome::Duplicate))
+                    ),
+                }
+                if refused_here {
+                    refused += 1;
+                    continue;
+                }
+                logged += 1;
+                same_log_across(lane.log_records(), old.log_records(), &at);
+                let row = lane.log_records().last().cloned().expect("logged");
+                let mut expected = rec;
+                expected.id = row.id;
+                assert_eq!(
+                    *row, expected,
+                    "{at}: the contact as handed in, with its id"
+                );
+                flush(&lane);
+                assert_eq!(
+                    nonces_aside(&std::fs::read(a.log()).unwrap_or_default()),
+                    nonces_aside(&std::fs::read(b.log()).unwrap_or_default()),
+                    "{at}: log.adi is the file 1.13 wrote"
+                );
+            }
+        }
+        assert!(
+            logged >= 60 && refused >= 20,
+            "logged {logged}, refused {refused}"
         );
     }
 
