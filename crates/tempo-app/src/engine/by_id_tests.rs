@@ -46,14 +46,19 @@ fn contact(n: u64, call: &str) -> QsoRecord {
 /// An engine whose log holds exactly `rows`, each under its own id — appended as the station
 /// appends a contact (into the log in memory, its index and the engine's store, keeping the id a
 /// row brings), so a read of the log finds them there.
+///
+/// The premise is on the contacts, not every field: the store keeps the QSL channels and derives
+/// the confirmation flags from them, so a fixture's hand-set flag comes back as its channels say.
 fn engine_holding(rows: &[QsoRecord]) -> Engine {
     let mut e = Engine::new("K2DEF", "FN31", 0);
     let _ = e.station.append(rows.to_vec(), false);
     e.station.sync_hot();
-    let held: Vec<QsoRecord> = e.stored_log().iter().map(|r| QsoRecord::clone(r)).collect();
+    let contacts =
+        |rows: &[QsoRecord]| -> Vec<_> { rows.iter().map(|r| (r.id, r.call.clone())).collect() };
     assert_eq!(
-        held, rows,
-        "premise: the log holds exactly the contacts given"
+        contacts(&e.stored_records()),
+        contacts(rows),
+        "premise: the log holds exactly the contacts given, each under its own id"
     );
     e
 }

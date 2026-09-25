@@ -168,11 +168,10 @@ fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
         "planned again: the first plan read the contact before the take-in changed it"
     );
     durability.wait(DURABLE_WAIT).expect("in log.adi");
-    let held = engine_lock(&engine)
-        .log_records()
-        .iter()
+    let held = engine
+        .stored_records()
+        .into_iter()
         .find(|r| r.id == Some(id))
-        .map(|r| QsoRecord::clone(r))
         .expect("held");
     assert!(
         held.qsl_rcvd.card && held.qsl_rcvd.lotw,
