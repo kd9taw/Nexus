@@ -55,7 +55,6 @@ import { classifyViewport } from './useViewport'
 vi.mock('./api', () => {
   const fn = () => vi.fn().mockResolvedValue(undefined)
   return {
-    getLog: vi.fn().mockResolvedValue([]),
     getSettings: vi.fn().mockResolvedValue(null),
     setSettings: fn(), exportLog: fn(), openPanelWindow: fn(),
     deleteQsoById: fn(), editQsoById: fn(), exportGeneralLog: fn(), importAdif: fn(),

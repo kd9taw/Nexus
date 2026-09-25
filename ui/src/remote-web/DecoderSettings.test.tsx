@@ -19,7 +19,7 @@ vi.mock('../api', async importOriginal => {
   return { ...Object.fromEntries(Object.entries(actual).map(([key, value]) => [key, typeof value === 'function' ? vi.fn(async () => ({})) : value])),
     getJs8State: vi.fn(async () => { if (!reading.current) throw Error('readingUnavailable'); return reading.current }),
     js8SetSpeed: vi.fn(async () => reading.current),
-    getLog: vi.fn(async () => []), getLicensedBandPlan: vi.fn(async () => []), getSettings: vi.fn(async () => ({})) }
+    getLicensedBandPlan: vi.fn(async () => []), getSettings: vi.fn(async () => ({})) }
 })
 vi.mock('./useJs8Context', () => ({ useJs8Context: () => ({ remote: true, value: null, loading: false, refresh: () => {} }) }))
 vi.mock('../components/Waterfall', () => ({ Waterfall: () => <div/> }))

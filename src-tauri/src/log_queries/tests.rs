@@ -266,7 +266,7 @@ fn a_page_names_its_query_its_revisions_and_its_rows() {
         assert_eq!(
             row["entity"].as_str(),
             resolve(row["call"].as_str().unwrap()).as_deref(),
-            "the row carries its live entity, as get_log's rows do"
+            "the row carries its live entity, as every row the UI is handed does"
         );
     }
 }
@@ -932,7 +932,7 @@ fn random_record(g: &mut Gen, n: u64) -> QsoRecord {
 }
 
 /// The log the UI's answers were computed from: the copy in memory, in log order — what
-/// `get_log` handed every window. The engine answers from the store when the store owns the log,
+/// every window was handed before C17. The engine answers from the store when the store owns the log,
 /// so the parity holds the store's rows to the copy as well as the answers to the UI's.
 fn log_of(engine: &SharedEngine) -> Vec<QsoRecord> {
     engine_lock(engine)

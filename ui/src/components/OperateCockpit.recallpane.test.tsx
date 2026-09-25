@@ -34,7 +34,6 @@ const resolved: QrzLookup = {
 }
 
 vi.mock('../api', () => ({
-  getLog: vi.fn(async () => []),
   qrzLookup: vi.fn(async () => resolved),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),

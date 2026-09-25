@@ -19,7 +19,7 @@
 //   follow(t)  The change feed: a view reports its window's snapshot `logTick`, which the engine
 //              moves on EVERY change to the log (station.rs `log_tick`). A tick the held answers do
 //              not reflect means they are stale; `undefined` is a view with no snapshot, which is
-//              answered with a refresh (the old `useSharedLog(undefined)` rule).
+//              answered with a refresh.
 //   ask(q)     One answer, as of now — for a view that reads once and keeps what it got, and for
 //              an action (a push needs the row).
 //   subscribe  Held answers changed.
@@ -71,7 +71,7 @@ export function __resetLogSourceForTests(): void {
  * (the view then shows `emptyAnswer(q)`, what it showed while the log loaded before).
  *
  * `q = null` is a view that is not reading (remote mode, a hidden roster): it asks for nothing and
- * reports no tick, as `useSharedLog(tick, false)` did.
+ * reports no tick.
  */
 export function useLogAnswer<Q extends LogQuestion>(q: Q | null, logTick: number | undefined): AnswerTo<Q> | undefined {
   const source = current
@@ -87,8 +87,8 @@ export function useLogAnswer<Q extends LogQuestion>(q: Q | null, logTick: number
     [source, key],
   )
   const answer = useSyncExternalStore(source.subscribe, read)
-  // The change feed first, on exactly the old dependencies — the tick and whether the view reads —
-  // so a new question (a keystroke in a call box) is never a new request on the whole-log path.
+  // The change feed first, on exactly the tick and whether the view reads — so a new question (a
+  // keystroke in a call box) asks that question alone, and re-asks nothing else.
   useEffect(() => {
     if (reading) source.follow(logTick)
   }, [source, reading, logTick])

@@ -118,7 +118,6 @@ vi.mock('./api', async () => {
   out.getBandPlan = vi.fn().mockResolvedValue([])
   out.getNeedAlerts = vi.fn().mockResolvedValue([])
   out.getAllSpots = vi.fn().mockResolvedValue([])
-  out.getLog = vi.fn().mockResolvedValue([])
   out.parksCount = vi.fn().mockResolvedValue(0)
   out.huntedParksCount = vi.fn().mockResolvedValue(0)
   // Read through the global for the same reason as the snapshot: this factory runs while

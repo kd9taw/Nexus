@@ -8,14 +8,16 @@
 // answers are pinned elsewhere (the goldens; the per-view suites). What only a wiring test can see
 // is the QUESTION: the arguments the old calls took, field for field, and the gates — a strip in a
 // running contest, or on a Remote browser, never read the general log, and must still ask nothing.
-// A recording source around the real adapter lists every question a view puts to it.
+// A recording source around the window's own kind of source — asking an engine that answers over a
+// small log (features/logAnswers.testkit) — lists every question a view puts to it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import { OperateCockpit } from './OperateCockpit'
 import { setLogSource, type LogSource } from '../features/logSource'
-import { wholeLogSource } from '../features/wholeLogSource'
+import { createAskingLogSource } from '../features/askingLogSource'
+import { answerAs } from '../features/logAnswers.testkit'
 import type { LogQuestion } from '../features/logAnswers'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
@@ -26,7 +28,6 @@ vi.mock('../api', async (importOriginal) => {
   for (const k of Object.keys(actual)) auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => null) : actual[k]
   return {
     ...auto,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: LOG })),
     qrzLookup: vi.fn(async () => null),
     resolveEntity: vi.fn(async () => 'United States'),
     searchParks: vi.fn(async () => []),
@@ -43,14 +44,18 @@ const LOG = [
   { call: 'W1ABC', country: 'United States', band: '40m', freqMhz: 7.03, mode: 'CW', whenUnix: 1_700_000_000, confirmed: true, awardConfirmed: false },
 ] as unknown as LoggedQso[]
 
-/** Every question put to the real adapter, in order. */
+/** Every question put to the source, in order. */
 const asked: LogQuestion[] = []
-const recording: LogSource = {
-  ...wholeLogSource,
-  peek: (q) => {
-    asked.push(q)
-    return wholeLogSource.peek(q)
-  },
+/** A fresh source for each test: the engine's answers over LOG, each question recorded as it is read. */
+function recording(): LogSource {
+  const real = createAskingLogSource(async (q) => answerAs(q, LOG))
+  return {
+    ...real,
+    peek: (q) => {
+      asked.push(q)
+      return real.peek(q)
+    },
+  }
 }
 const lastOf = <K extends LogQuestion['kind']>(kind: K) =>
   [...asked].reverse().find((q) => q.kind === kind) as Extract<LogQuestion, { kind: K }> | undefined
@@ -82,7 +87,7 @@ const snapWith = (over: Record<string, unknown> = {}) =>
 
 beforeEach(() => {
   asked.length = 0
-  setLogSource(recording)
+  setLogSource(recording())
   globalThis.ResizeObserver = class {
     observe() {}
     disconnect() {}

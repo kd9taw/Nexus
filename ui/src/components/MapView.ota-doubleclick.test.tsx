@@ -39,7 +39,6 @@ vi.mock('../api', () => ({
   getDeclination: vi.fn(async () => null),
   getPca: vi.fn(async () => null),
   getSatellites: vi.fn(async () => null),
-  getLog: vi.fn(async () => []),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
   // The transmit-capable surface — spied so the test can PROVE the gesture never reaches

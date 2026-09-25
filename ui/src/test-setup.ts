@@ -100,7 +100,7 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
 }
 
 /** MODULE CACHES DO NOT OUTLIVE A TEST. A module that holds state across renders
- *  (features/logStore — the window's one copy of the log) registers its reset in this set
+ *  (features/logSource — the window's source of log answers) registers its reset in this set
  *  when it loads, and every test ends by running them. Without it, the log one test loaded
  *  answers the next test's first read, and whether a test sees its own fixture depends on
  *  which test ran before it.

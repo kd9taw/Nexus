@@ -17,8 +17,7 @@ import fixture from '../remote-web/__fixtures__/insights.json'
 vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
-  getLog: vi.fn(async () => []), getLogStats: vi.fn(async () => fixture.geography),
-  getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: [] })),
+  getLogStats: vi.fn(async () => fixture.geography),
   getJourney: vi.fn(async () => { throw new Error('unsupported') }),
   uploadLotwReportByIds: vi.fn(), qrzPushQso: vi.fn(), clublogPushQso: vi.fn(), eqslPushQso: vi.fn(),
 }))

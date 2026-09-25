@@ -23,7 +23,6 @@ vi.mock('../api', () => ({
   contestEntryReset: vi.fn(() => Promise.resolve({})),
   contestIMoved: vi.fn(() => Promise.resolve({})),
   logQso: vi.fn(() => Promise.resolve({})),
-  getLog: vi.fn(() => Promise.resolve([])),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
   qrzLookup: vi.fn(() => Promise.resolve(null)),

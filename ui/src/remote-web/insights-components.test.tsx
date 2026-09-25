@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AwardsJourney } from '../components/AwardsJourney'
 import { StatsView } from '../components/StatsView'
-import { askLog, getAwards, getConfirmationDiagnostics, getLog, getLogDelta, getLogStats, uploadLotwReport, uploadLotwReportByIds } from '../api'
+import { askLog, getAwards, getConfirmationDiagnostics, getLogStats, uploadLotwReport, uploadLotwReportByIds } from '../api'
 import type { LogQuestion } from '../features/logAnswers'
 import type { DiagnosticsReport } from '../types'
 import fixture from './__fixtures__/insights.json'
@@ -11,8 +11,7 @@ import fixture from './__fixtures__/insights.json'
 vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
-  getLog: vi.fn(async () => []), getLogStats: vi.fn(async () => fixture.geography),
-  getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: [] })),
+  getLogStats: vi.fn(async () => fixture.geography),
   // The engine, over an empty log.
   askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, [])),
   getJourney: vi.fn(async () => { throw new Error('unsupported') }),
@@ -25,8 +24,6 @@ it('renders the existing official award cards and chase filters from a remote su
   await screen.findByText(/2301/)
   expect(getAwards).not.toHaveBeenCalled()
   expect(getConfirmationDiagnostics).not.toHaveBeenCalled()
-  expect(getLog).not.toHaveBeenCalled()
-  expect(getLogDelta).not.toHaveBeenCalled()
   expect(askLog).not.toHaveBeenCalled()
   const journey = screen.getByRole('tab', { name: 'Journey' }) as HTMLButtonElement
   expect(journey.disabled).toBe(true)
@@ -39,8 +36,6 @@ it('renders the existing official award cards and chase filters from a remote su
 it('renders full-log Statistics using the supplied totals and the existing charts', async () => {
   const { container } = render(<StatsView observation={{ statistics: fixture.statistics, geography: fixture.geography }} />)
   expect((await screen.findAllByText('2301')).length).toBeGreaterThan(0)
-  expect(getLog).not.toHaveBeenCalled()
-  expect(getLogDelta).not.toHaveBeenCalled()
   expect(askLog).not.toHaveBeenCalled()
   expect(getLogStats).not.toHaveBeenCalled()
   expect(container.querySelectorAll('.stats-bar-fill').length).toBeGreaterThan(5)
@@ -59,8 +54,6 @@ it('preserves the native award and statistics read paths', async () => {
   render(<StatsView />)
   await waitFor(() => expect(getLogStats).toHaveBeenCalledOnce())
   await waitFor(() => expect(askLog).toHaveBeenCalledWith({ kind: 'statistics' }))
-  expect(getLogDelta).not.toHaveBeenCalled()
-  expect(getLog).not.toHaveBeenCalled()
 })
 
 it('renders station diagnostics beside an observed summary with every action as guidance, not a button', async () => {
@@ -79,8 +72,6 @@ it('renders station diagnostics beside an observed summary with every action as 
   expect([...view.container.querySelectorAll('.conf-act')].map(e => e.textContent)).toHaveLength(3)
   expect(screen.getByText('12')).toBeTruthy()
   expect(getConfirmationDiagnostics).not.toHaveBeenCalled()
-  expect(getLog).not.toHaveBeenCalled()
-  expect(getLogDelta).not.toHaveBeenCalled()
   expect(uploadLotwReport).not.toHaveBeenCalled()
   expect(uploadLotwReportByIds).not.toHaveBeenCalled()
   // Control: the same report on the desktop path — where the engine names each contact by id —

@@ -433,9 +433,8 @@ export function Logbook({
    *  the pencil beside it is still the one editing path, so there is one writer. */
   const [viewing, setViewing] = useState<LoggedQso | null>(null)
   const editingKey = editing?.key ?? null
-  // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
-  // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
-  // oldest-first, which the test user disliked).
+  // Column sort — the order the engine cuts the list's pages in (`features/logQuery`). Default
+  // newest-first (the log's own order is oldest-first, which the test user disliked).
   // Re-spot a logged contact to the cluster (row 📢): seeded with the row's call,
   // frequency and mode (operator ask 2026-07-21).
   const [spotSeed, setSpotSeed] = useState<{ call: string; freq: number; mode: string } | null>(null)
@@ -1007,8 +1006,7 @@ export function Logbook({
   // source that answers one question at a time (C17a's) left the list EMPTY for a frame or more,
   // "no contacts match" with it, and in a browser the scroll then fell back to the top of the pane,
   // the globe band in view and the search box pulled down the screen under the operator's typing.
-  // A newer order of one list already waited this way (the swap, below). The whole-log source
-  // answers in the same render, so there nothing ever waits.
+  // A newer order of one list already waited this way (the swap, below).
   const kept = control && onScreen === null && latestRev === null ? shown : null
   /** The query of the list ON SCREEN: the new one, or — while its first page is on its way — the old. */
   const listKey = kept ? kept.queryKey : queryKey

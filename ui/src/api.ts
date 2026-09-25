@@ -972,22 +972,6 @@ export async function logQso(record: LoggedQso): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('log_qso', { record })
 }
 
-/** Read the general ADIF logbook. */
-export async function getLog(): Promise<LoggedQso[]> {
-  return invoke<LoggedQso[]>('get_log')
-}
-
-/** What changed in the log since the caller's copy (see `getLogDelta`). */
-export interface LogDelta { revision: number; full: boolean; rows: LoggedQso[] }
-
-/** The log since a copy the caller already holds: `sinceRevision` is the `revision` that copy's
- *  answer carried, `haveCount` its length. `full: false` → `rows` are exactly the records appended
- *  after it (`haveCount..end`, in log order); `full: true` → `rows` is the whole log. The window's
- *  one caller is features/logStore. */
-export async function getLogDelta(sinceRevision: number, haveCount: number): Promise<LogDelta> {
-  return invoke<LogDelta>('get_log_delta', { sinceRevision, haveCount })
-}
-
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
  * identity the "new one" badge keys on (never the QRZ country string). */
 export async function resolveEntity(call: string): Promise<string | null> {

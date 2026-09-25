@@ -34,9 +34,6 @@ vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
     ...old,
-    getLogDelta: vi.fn(async () => {
-      throw new Error('this suite reads the log through its own source')
-    }),
     editQsoById: vi.fn(),
     markQslSentById: vi.fn(),
     markQslCardById: vi.fn(),

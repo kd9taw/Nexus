@@ -26,9 +26,6 @@ import type { LoggedQso } from '../types'
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
-    getLogDelta: vi.fn(async () => {
-      throw new Error('the asking source never reads the whole log')
-    }),
     deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
