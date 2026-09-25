@@ -116,6 +116,9 @@ const MIGRATED = [
   // The words for a LoTW upload that skipped contacts, which the Logbook and the Awards
   // upload buttons share — born migrated.
   'features/lotwSkips.ts',
+  // The words for an export that lacks recent changes the logbook database did not hold yet,
+  // which the Logbook's exports and Settings' WRL export share — born migrated.
+  'features/exportLacks.ts',
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
   'components/LogEntry.tsx',

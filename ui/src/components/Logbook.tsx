@@ -4,19 +4,20 @@
 // prints — callsign, band, mode, frequency, RST, park reference, QSL letters. Those are wire
 // formats, identical in every language. See the invariant-token rule in `i18n/index.ts`.
 
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { LoggedActivation, LoggedQso } from '../types'
+import type { LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
-import { modeKey } from '../features/callHistory'
-import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
-import { lotwBacklog } from '../features/lotwBacklog'
+import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
+import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
+import { logSource, useLogAnswer, useLogAnswers, useLogPages } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
+import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 
@@ -211,14 +212,6 @@ const QSL_MENU_LABEL = 'QSL▸'
 /** The satellite tag menu. `SAT` is the ADIF `PROP_MODE` value itself, not a word. */
 const SAT_MENU_LABEL = 'SAT▸'
 
-function fmtUtc(whenUnix: number): string {
-  const d = new Date(whenUnix * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(
-    d.getUTCHours(),
-  )}:${p(d.getUTCMinutes())}Z`
-}
-
 function fmtReport(v: string | null): string {
   return v && v.trim() !== '' ? v : '—'
 }
@@ -258,35 +251,22 @@ function parseReport(s: string): string | null {
   return t === '' ? null : t
 }
 
-// Sortable columns. `band` sorts by frequency (more meaningful than the label string).
-type SortKey = 'call' | 'country' | 'band' | 'freq' | 'mode' | 'sent' | 'rcvd' | 'time' | 'park' | 'qsl'
-function sortVal(q: LoggedQso, k: SortKey): string | number {
-  switch (k) {
-    case 'call':
-      return q.call.toUpperCase()
-    case 'country':
-      return (q.country ?? '').toUpperCase()
-    case 'band':
-    case 'freq':
-      return q.freqMhz
-    case 'mode':
-      return q.mode.toUpperCase()
-    case 'sent':
-      return (q.rstSent ?? '').toUpperCase()
-    case 'rcvd':
-      return (q.rstRcvd ?? '').toUpperCase()
-    case 'time':
-      return q.whenUnix
-    case 'park':
-      return (q.ota?.theirRef ?? q.ota?.myRef ?? '').toUpperCase()
-    case 'qsl':
-      return q.awardConfirmed ? 2 : q.confirmed ? 1 : 0
-  }
-}
-/** Sensible default direction when switching TO a column: text ascending, numeric/time descending. */
-function defaultAsc(k: SortKey): boolean {
-  return k === 'call' || k === 'country' || k === 'mode' || k === 'sent' || k === 'rcvd' || k === 'park'
-}
+// The columns' sort and the search box's filter are `features/logQuery` — the ONE copy the list's
+// source runs, so what a page holds is exactly what this view used to sort and filter itself.
+type SortKey = LogSortKey
+
+/** Rows per Logbook page: what the list asks its source for at a time (SPEC-2 v2 §6). */
+const LOG_PAGE = 128
+/** A row's height before it is measured: its 22 px buttons plus padding. */
+const ROW_ESTIMATE = 43
+/** Rows the list renders beyond the viewport on each side (the virtualizer's `overscan`). */
+const OVERSCAN = 12
+/** Pages the list keeps of the orders it has read — the order on screen, and one coming. */
+const HELD_PAGES = 64
+/** The Logbook's LoTW-backlog question — the same one every render. */
+const LOTW_BACKLOG = { kind: 'lotwBacklog' } as const satisfies LogQuestion
+/** How many contacts the log holds: the count badge, the purge warning, the exports' gates. */
+const LOG_SIZE = { kind: 'logSize' } as const satisfies LogQuestion
 
 import { useStationControl } from '../stationAccess'
 import { useRemoteLog } from '../remote-web/useRemoteLog'
@@ -309,14 +289,17 @@ export function Logbook({
   const canEdit = useLogChange('logEdit')
   const canLog = useLogChange('log.manual')
   const canQsl = useLogChange('qslMarks')
-  // The desktop reads the window's one shared copy of the log (features/logStore). It follows
-  // `logTick`, so the list reloads when the log changes under this view — a Remote browser's
-  // delete or edit, another instance's contact, a connector stamp. The rows are addressed by
-  // key, so a stale list is refused rather than acted on; following the tick is what keeps that
-  // refusal rare. A Remote browser shows the page of rows the station sent (below).
-  const sharedLog = useSharedLog(logTick, control)
+  // The desktop asks `LogSource` for the pages of the list it shows (below, after the sort and
+  // search state they are cut by). The source follows `logTick`, so the list moves when the log
+  // changes under this view — a Remote browser's delete or edit, another instance's contact, a
+  // connector stamp. The rows are addressed by key, so a stale list is refused rather than acted
+  // on; following the tick is what keeps that refusal rare. A Remote browser shows the page of
+  // rows the station sent (`observedLog`, below).
   const [observedLog, setLog] = useState<LoggedQso[]>([])
-  const log = control ? (sharedLog ?? NO_LOG) : observedLog
+  // The whole log's size, not the list's: the count badge, the purge warning, the exports and the
+  // globe key on it. A Remote browser counts the rows the station sent, as it always did.
+  const nativeLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick) ?? emptyAnswer(LOG_SIZE)
+  const logSize = control ? nativeLogSize : observedLog.length
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
     call: '',
@@ -351,7 +334,7 @@ export function Logbook({
     // before the log has loaded, and the extra state update it lands shifts the first few
     // renders. That is what put the Purge button's disabled read on the wrong side of a
     // waitFor in Logbook.test.tsx — a real timing change, not a flaky test.
-    if (!control || log.length === 0) {
+    if (!control || logSize === 0) {
       setOperators((prev) => (prev.length === 0 ? prev : []))
       return
     }
@@ -363,7 +346,7 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the split
-  }, [log.length, control])
+  }, [logSize, control])
   // The satellites LoTW accepts, for the row's tag picker. A fixed backend table, so it is
   // fetched once rather than per log change — and it is a PICKER because TQSL matches
   // SAT_NAME against its own list and rejects anything else, which through the compliant
@@ -381,7 +364,7 @@ export function Logbook({
   const [activations, setActivations] = useState<LoggedActivation[]>([])
   const [activationKey, setActivationKey] = useState('')
   useEffect(() => {
-    if (log.length === 0) {
+    if (logSize === 0) {
       setActivations((prev) => (prev.length === 0 ? prev : []))
       return
     }
@@ -394,7 +377,7 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the per-activation export
-  }, [log.length])
+  }, [logSize])
   const [qrzBusy, setQrzBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [search, setSearch] = useState('')
@@ -437,16 +420,16 @@ export function Logbook({
     text: string
     result: QrzCorrectResult | null
   } | null>(null)
-  // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
-  // The row being edited, AS THE OPERATOR OPENED IT — not `log[index]` read back at save time.
-  // The list reloads under an open form (a Remote delete, a connector stamp), and after a
-  // delete above it the same index names a different contact; the target of the edit, and the
-  // fields the form did not carry, come from this row. `index` only marks the row in the list.
-  const [editing, setEditing] = useState<{ index: number; row: LoggedQso } | null>(null)
+  // The row being edited, AS THE OPERATOR OPENED IT — never read back from the list at save time.
+  // The list moves under an open form (a Remote delete, a connector stamp), and after a delete
+  // above it the same place names a different contact; the target of the edit, and the fields
+  // the form did not carry, come from this row. `key` (its id) only marks the row in the list,
+  // and follows it wherever the list puts it. null = the form logs a NEW QSO.
+  const [editing, setEditing] = useState<{ key: string; row: LoggedQso } | null>(null)
   /** The contact open in the detail view (#313 — "there's no View capability"). Read-only:
    *  the pencil beside it is still the one editing path, so there is one writer. */
   const [viewing, setViewing] = useState<LoggedQso | null>(null)
-  const editIndex = editing?.index ?? null
+  const editingKey = editing?.key ?? null
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
   // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
   // oldest-first, which the test user disliked).
@@ -482,9 +465,9 @@ export function Logbook({
     }
   }
 
-  // After this view's own write: bring the shared copy up to date now, not on the next tick.
+  // After this view's own write: bring the list up to date now, not on the next tick.
   const load = useCallback(() => {
-    if (control) refreshSharedLog()
+    if (control) logSource().refresh()
   }, [control])
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
@@ -549,8 +532,10 @@ export function Logbook({
   }
 
   // QSOs not yet sent to LoTW, and the date-only ones LoTW can never match (features/
-  // lotwBacklog). Once per log, not once per render: this view re-renders on every snapshot.
-  const { unsent: unsentLotw, timeless: timelessLotw } = useMemo(() => lotwBacklog(log), [log])
+  // lotwBacklog), asked of the log — once per change to it, never once per render: this view
+  // re-renders on every snapshot.
+  const { unsent: unsentLotw, timeless: timelessLotw } =
+    useLogAnswer(control ? LOTW_BACKLOG : null, logTick) ?? emptyAnswer(LOTW_BACKLOG)
 
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
@@ -624,9 +609,9 @@ export function Logbook({
   const exportRangeBad = exportFromBad || exportToBad
 
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
-  const startEdit = (q: LoggedQso, i: number) => {
+  const startEdit = (q: LoggedQso, key: string) => {
     setErr(null)
-    setEditing({ index: i, row: q })
+    setEditing({ key, row: q })
     setDraft({
       call: q.call,
       grid: q.grid ?? '',
@@ -882,7 +867,8 @@ export function Logbook({
   // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
   const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
 
-  const onDelete = async (q: LoggedQso, i: number) => {
+  /** Ask, then delete: whether the contact was deleted. */
+  const onDelete = async (q: LoggedQso, key: string): Promise<boolean> => {
     if (
       !(await confirmDialog({
         title: t('logbook.delete.heading', { call: q.call, band: q.band }),
@@ -891,23 +877,26 @@ export function Logbook({
         danger: true,
       }))
     )
-      return
+      return false
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'delete', target: await logTarget(q) })
       if (outcome?.outcome === 'applied') {
         pushToast(t('logbook.delete.done', { call: q.call }), 'success')
-        if (editIndex === i) cancelForm()
+        if (editingKey === key) cancelForm()
         remoteLog.refresh(at)
+        return true
       }
-      return
+      return false
     }
     const snap = await withErrorToast(() => deleteQso(q), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
-      if (editIndex === i) cancelForm()
+      if (editingKey === key) cancelForm()
       load()
+      return true
     }
+    return false
   }
 
   const closePurge = () => {
@@ -930,41 +919,76 @@ export function Logbook({
     }
   }
 
-  const matchesSearch = useCallback(
-    (q: LoggedQso): boolean => {
-      if (needsConfirmOnly && q.awardConfirmed) return false
-      const t = deferredSearch.trim().toLowerCase()
-      if (!t) return true
-      return (
-        q.call.toLowerCase().includes(t) ||
-        (q.country?.toLowerCase().includes(t) ?? false) ||
-        (q.grid?.toLowerCase().includes(t) ?? false) ||
-        q.band.toLowerCase().includes(t) ||
-        q.mode.toLowerCase().includes(t) ||
-        // …and under the name the operator thinks in. A phone contact carries the sideband
-        // it was worked on, so searching "ssb" would otherwise miss every USB/LSB row —
-        // Nexus's own phone contacts, and any imported from a logger that spells it that
-        // way. The raw spelling above still matches, so "usb" finds the USB rows alone.
-        modeKey(q.mode).toLowerCase().includes(t) ||
-        fmtUtc(q.whenUnix).toLowerCase().includes(t)
-      )
-    },
-    [deferredSearch, needsConfirmOnly],
+  // What the list shows: the search and the chip (the deferred search, so typing stays responsive
+  // on a big log) and the sorted column. The desktop asks its source for the list in PAGES of this
+  // order — the first here, for the count; the rest below, for the rows on screen — and holds only
+  // those. A page is cut by `features/logQuery`, the filter and sort this view used to run itself.
+  const query = useMemo<LogQuery>(
+    () => ({ sort: sortKey, asc: sortAsc, search: deferredSearch, needsConfirmOnly }),
+    [sortKey, sortAsc, deferredSearch, needsConfirmOnly],
+  )
+  const queryKey = logQueryKey(query)
+  const latestFirst = useLogAnswer(control ? { kind: 'page', query, offset: 0, limit: LOG_PAGE } : null, logTick)
+  // A Remote browser's rows are the page the station sent, searched and filtered there: they are
+  // only put in this view's order (newest first — the headers are off there), exactly as before.
+  const remoteOrder = useMemo(
+    () => (control ? [] : logOrder(observedLog, { ...query, search: '', needsConfirmOnly: false })),
+    [control, observedLog, query],
   )
 
-  // Filter + sort ONCE per data/criteria change (not on every render, e.g. the frequent dial-poll
-  // re-renders). `i` is the backend get_log index, kept glued to each record so edit/delete/mark
-  // still target the right row regardless of display order.
-  const rows = useMemo(() => {
-    const out = log.map((q, i) => ({ q, i })).filter(({ q }) => !control || matchesSearch(q))
-    out.sort((a, b) => {
-      const av = sortVal(a.q, sortKey)
-      const bv = sortVal(b.q, sortKey)
-      const cmp = av < bv ? -1 : av > bv ? 1 : a.q.whenUnix - b.q.whenUnix
-      return sortAsc ? cmp : -cmp
-    })
-    return out
-  }, [log, matchesSearch, sortKey, sortAsc, control])
+  // THE LIST ON SCREEN IS ONE ORDER, AND IT IS SWAPPED WHOLE (v2 R4, R5). The source may already
+  // hold a newer order than the list shows — a contact was logged, a row deleted. The list keeps
+  // showing the order it has until EVERYTHING the new one needs is here: its first page (the
+  // count), where the rows under the operator went (`locate`, below), and the pages that place
+  // shows. Then it swaps in ONE render and is placed before the browser paints. A source that
+  // answers one question at a time used to have the list swap on the first answer and wait for the
+  // rest with the new rows at the old scroll: the row under the pointer sat 43 px off for as long
+  // as they took (measured in Chrome: 1 frame at local speed, 10 at 150 ms).
+  //
+  // So the list keeps the pages it has read, by (query, order, offset) — the order on screen stays
+  // here while the source moves on — and `shown` names the order it shows. A NEW list (the first,
+  // a new sort or search) is shown as it comes, as before; only a change within one list waits.
+  const held = useRef(new Map<string, LogPage>())
+  const pageKey = (qk: string, orderRev: number, offset: number) => `${qk}|${orderRev}|${offset}`
+  const remember = (page: LogPage | undefined) => {
+    if (!page) return
+    const k = pageKey(logQueryKey(page.query), page.orderRev, page.offset)
+    const had = held.current.get(k)
+    // Never back in content: an older read of the same rows in the same order is not applied (R4).
+    if (had && had !== page && had.contentRev > page.contentRev) return
+    held.current.delete(k)
+    held.current.set(k, page)
+    for (const oldest of held.current.keys()) {
+      if (held.current.size <= HELD_PAGES) break
+      held.current.delete(oldest)
+    }
+  }
+  const recall = (orderRev: number, offset: number, qk = queryKey) => {
+    const k = pageKey(qk, orderRev, offset)
+    const page = held.current.get(k)
+    if (page) {
+      held.current.delete(k)
+      held.current.set(k, page)
+    }
+    return page
+  }
+  remember(latestFirst)
+  const [shown, setShown] = useState<{ queryKey: string; orderRev: number } | null>(null)
+  const latestRev = latestFirst && logQueryKey(latestFirst.query) === queryKey ? latestFirst.orderRev : null
+  const onScreen = shown?.queryKey === queryKey ? shown.orderRev : null
+  // A NEW LIST IS SHOWN ONCE ITS FIRST PAGE IS HERE. Until then the list on screen stays — the old
+  // sort or search, for the moment the new one takes to answer — where it used to be taken away: a
+  // source that answers one question at a time (C17a's) left the list EMPTY for a frame or more,
+  // "no contacts match" with it, and in a browser the scroll then fell back to the top of the pane,
+  // the globe band in view and the search box pulled down the screen under the operator's typing.
+  // A newer order of one list already waited this way (the swap, below). The whole-log source
+  // answers in the same render, so there nothing ever waits.
+  const kept = control && onScreen === null && latestRev === null ? shown : null
+  /** The query of the list ON SCREEN: the new one, or — while its first page is on its way — the old. */
+  const listKey = kept ? kept.queryKey : queryKey
+  const showingRev = kept ? kept.orderRev : (onScreen ?? latestRev)
+  const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
+  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)) : remoteOrder.length
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -972,7 +996,7 @@ export function Logbook({
   // D#278: the operator's own switch (Settings ▸ Appearance ▸ Workspace). Off = no band at all,
   // and the table starts at the top.
   const [globeWanted] = useLogbookGlobe()
-  const globeShown = control && globeOk && globeWanted && log.length > 0
+  const globeShown = control && globeOk && globeWanted && logSize > 0
 
   // #162: rows whose Comment is opened to its full length, keyed like the row itself. The column
   // clips to one line; clicking the comment wraps it in place (the virtualizer measures the
@@ -993,15 +1017,404 @@ export function Logbook({
   const rowsWrapRef = useRef<HTMLDivElement>(null)
   const [listOffset, setListOffset] = useState(0)
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: listTotal,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 43, // ~row height; measureElement corrects per row
+    estimateSize: () => ROW_ESTIMATE, // ~row height; measureElement corrects per row
     overscan: 12,
     // The globe band + sticky search/header block sit INSIDE the scroll container
     // above the rows (globe scrolls away; search+headers pin). scrollMargin tells the
     // virtualizer how far into the scroll space the list starts — MEASURED, because
     // the sticky block's height isn't a constant; the row transform subtracts it back.
     scrollMargin: listOffset,
+  })
+
+  // v2 §6 R5 — THE ROWS UNDER THE OPERATOR STAY PUT. When the log changes under the list (the
+  // sequencer logs a contact, another writer deletes one), rows appear or vanish above the view and
+  // every row below them changes place: the list used to slide a row under the pointer, so a click
+  // meant for one contact's ✎ or ✕ could land on its neighbour. After every commit the rows at the
+  // top edge of the view are noted — keys and pixel offsets (`anchor`). While a newer order is
+  // pending, the first of them still in it is located there, and the list is swapped in placed so
+  // that row sits exactly where it was (its successor holds if the row itself was deleted). A view
+  // showing the list's first row is not held: a new contact appears at the top, as it always did.
+  const anchor = useRef<{ rows: { key: string; delta: number }[]; atTop: boolean } | null>(null)
+  const placement = useRef<{ index: number; delta: number } | null>(null)
+  const justPlaced = useRef(false)
+
+  // AN OPEN ROW'S HEIGHT GOES WITH IT (a bug older than this list). The list keeps each row's
+  // measured height by the row's PLACE, and measures a row only when it mounts or resizes — so a
+  // row that stays mounted while its place changes keeps its height at the old place. Every closed
+  // row is as tall as the next, so that costs nothing, except for an OPEN row (a comment or note
+  // opened to full length): after the order changed, its height stayed where it had been — a gap
+  // there — and it was drawn into a closed row's height at its new place, its note under the rows
+  // below, until the rows remounted. So the list knows where each open row's height sits
+  // (`openAt`: its place in the order on screen), and a swap moves the height with it (in the
+  // placing effect below, before the view is placed).
+  const openAt = useRef<{ queryKey: string; at: Map<string, number> }>({ queryKey, at: new Map() })
+  if (openAt.current.queryKey !== listKey) openAt.current = { queryKey: listKey, at: new Map() }
+  /** The open rows' heights to move, taken as a swap is decided and applied in the render that
+   *  shows the new order (when the list is its new length), before that render is placed. */
+  const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
+  // …and A NEW LIST IS MEASURED AFRESH (the same bug, when the list is replaced rather than moved):
+  // a new sort or search, or — in a Remote browser — the page the station sends coming back, which
+  // is how a contact logged at the station arrives there. The heights kept by place were measured
+  // for the old list. A row drawn in both stays mounted and is not measured again; a row mounting at
+  // a place the old list measured takes that place's height until the browser reports its own, a
+  // frame later. So while a row was open, its height stayed at its old place, over another row, and
+  // the open row was drawn into a closed row's height. The first time a new list is drawn while a
+  // row is open, the old list's heights are dropped and the rows drawn are measured, in the placing
+  // effect below, before the paint. `drawnList` names the list on screen: the query's (once its
+  // first page is here), or the Remote page's rows.
+  const drawnList = control ? (showingRev === null ? null : listKey) : observedLog.length ? observedLog : null
+  const heightsFor = useRef<string | LoggedQso[] | null>(null)
+
+  const virtualRows = rowVirtualizer.getVirtualItems()
+  const held0 = anchor.current
+  const anchorRows = pendingRev !== null && held0 !== null && !held0.atTop ? held0.rows : []
+  // While a swap is pending: where the anchor rows went, and where the open rows went.
+  const openKeys = pendingRev === null ? [] : [...openAt.current.at.keys()].filter((key) => openComments.has(key))
+  const locateKeys = [...new Set([...anchorRows.map((row) => row.key), ...openKeys])]
+  const located = useLogAnswers(
+    locateKeys.map((key): LogQuestion => ({ kind: 'locate', query, id: key })),
+    logTick,
+    control,
+  ) as readonly (LogLocate | undefined)[]
+  const placeOf = new Map(locateKeys.map((key, k) => [key, located[k]] as const))
+  // Where the list will stand in the pending order: `undefined` while that is not known yet;
+  // `index: null` keeps the scroll (at the top, or when no anchor row survived).
+  let target: { index: number | null; delta: number } | undefined
+  if (pendingRev !== null) {
+    target = { index: null, delta: 0 }
+    for (const row of anchorRows) {
+      const at = placeOf.get(row.key)
+      if (!at || at.orderRev !== pendingRev) {
+        target = undefined
+        break
+      }
+      if (at.index !== null) {
+        target = { index: at.index, delta: row.delta }
+        break
+      }
+    }
+  }
+  const openPlacesKnown = openKeys.every((key) => placeOf.get(key)?.orderRev === pendingRev)
+  // The pages that place shows (the viewport there, overscan included) — asked for now, with the
+  // pages of the rows on screen, so the swap waits for nothing it will draw.
+  const offsetsOf = (first: number, last: number) => {
+    const out: number[] = []
+    for (let o = Math.floor(Math.max(0, first) / LOG_PAGE) * LOG_PAGE; o <= last; o += LOG_PAGE) out.push(o)
+    return out
+  }
+  // The pages the view shows — of the list on screen's own query only: while an old list is kept
+  // (above), the new query is asked for its first page and nothing else.
+  const visibleOffsets = control && !kept ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
+  const pendingTotal = pendingRev === null ? 0 : (recall(pendingRev, 0)?.total ?? 0)
+  const targetOffsets =
+    target === undefined || pendingTotal === 0
+      ? []
+      : target.index === null
+        ? visibleOffsets.filter((o) => o < pendingTotal)
+        : offsetsOf(
+            target.index - OVERSCAN,
+            Math.min(
+              pendingTotal - 1,
+              target.index + Math.ceil((scrollRef.current?.clientHeight ?? 0) / ROW_ESTIMATE) + 1 + OVERSCAN,
+            ),
+          )
+  const pages = useLogPages(
+    control ? query : null,
+    [...new Set([...visibleOffsets, ...targetOffsets])].filter((o) => o > 0),
+    LOG_PAGE,
+    logTick,
+  )
+  pages.forEach((page) => remember(page))
+  const ready =
+    pendingRev !== null &&
+    target !== undefined &&
+    openPlacesKnown &&
+    [0, ...targetOffsets].every((o) => recall(pendingRev, o) !== undefined)
+  const rowAt = (i: number): { q: LoggedQso; key: string } | undefined => {
+    if (!control) {
+      const pos = remoteOrder[i]
+      return pos === undefined ? undefined : { q: observedLog[pos], key: rowKeyAt(observedLog, pos) }
+    }
+    if (showingRev === null) return undefined
+    const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
+    const page = recall(showingRev, offset, listKey)
+    if (!page) return undefined
+    const k = i - offset
+    return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
+  }
+
+  /** The height closed rows are drawn at: the one most of the rows drawn now have. */
+  const closedHeight = () => {
+    const seen = new Map<number, number>()
+    for (const item of virtualRows) {
+      const row = rowAt(item.index)
+      if (row && !openComments.has(row.key)) seen.set(item.size, (seen.get(item.size) ?? 0) + 1)
+    }
+    let size = ROW_ESTIMATE
+    let most = 0
+    for (const [h, n] of seen)
+      if (n > most) {
+        size = h
+        most = n
+      }
+    return size
+  }
+
+  // THE KEYBOARD GRID (v2 §6). The list is ONE Tab stop — a row, held by id so the operator's place
+  // survives a newer order — and grid-local keys move it (no global shortcuts): ↑/↓ a row, PgUp/PgDn
+  // a visible page, Home/End the first/last contact; Enter edits the contact, Delete asks the
+  // existing delete question, Esc closes the form (the question closes itself). A key on a row's own
+  // control (its QSL menu, its buttons) stays that control's. The row the keys land on is scrolled
+  // in whole, under the pinned search box and headers, and focused once it is drawn; a row whose
+  // page has not landed is a placeholder, which holds the focus until it does.
+  const keysId = useId()
+  const [focusKey, setFocusKey] = useState<string | null>(null)
+  const [focusTo, setFocusTo] = useState<number | null>(null)
+  /** The row whose Enter opened the form (the keyboard goes back to it when it closes), and
+   *  whether the keyboard is still to go INTO the form. */
+  const formFromGrid = useRef<string | null>(null)
+  const formWanted = useRef(false)
+  /** A contact deleted from the keys: the focus waits for the row that takes its place. */
+  const focusAfter = useRef<string | null>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  /** The pinned search box + headers' height, as of the last commit. */
+  const stickyH = useRef(0)
+  /** Where rows start to be SEEN, in the list's coordinates, at scroll `top`: under the sticky
+   *  block, or at the list's own top while the globe band is still in view. */
+  const floorAt = (top: number) => Math.max(top + stickyH.current, rowVirtualizer.options.scrollMargin)
+  const firstSeen = virtualRows.find((v) => v.end > floorAt(rowVirtualizer.scrollOffset ?? 0) && rowAt(v.index))
+  const tabStop =
+    focusKey !== null && virtualRows.some((v) => rowAt(v.index)?.key === focusKey)
+      ? focusKey
+      : firstSeen
+        ? (rowAt(firstSeen.index)?.key ?? null)
+        : null
+  /** Put the keyboard on row `index`: seen whole, then focused once drawn (the effect below). */
+  const moveFocus = (index: number) => {
+    const el = scrollRef.current
+    const item = rowVirtualizer.measurementsCache[index]
+    if (el && item) {
+      const floor = floorAt(el.scrollTop)
+      let top = el.scrollTop
+      if (item.start < floor) top = el.scrollTop - (floor - item.start)
+      else if (item.end > el.scrollTop + el.clientHeight) top = item.end - el.clientHeight
+      if (top !== el.scrollTop) {
+        el.scrollTop = top
+        rowVirtualizer.scrollOffset = el.scrollTop // drawn there by the next render, not a frame on
+      }
+    }
+    setFocusTo(index)
+  }
+  const gridStep = (key: string, index: number): number | null => {
+    const page = Math.max(1, Math.floor(((scrollRef.current?.clientHeight ?? 0) - stickyH.current) / ROW_ESTIMATE))
+    switch (key) {
+      case 'ArrowDown':
+        return index + 1
+      case 'ArrowUp':
+        return index - 1
+      case 'PageDown':
+        return index + page
+      case 'PageUp':
+        return index - page
+      case 'Home':
+        return 0
+      case 'End':
+        return listTotal - 1
+      default:
+        return null
+    }
+  }
+  const onGridKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    if (!target.classList.contains('logbook-row')) return
+    const index = Number(target.dataset.index)
+    const to = gridStep(e.key, index)
+    if (to !== null) {
+      e.preventDefault()
+      moveFocus(Math.max(0, Math.min(listTotal - 1, to)))
+      return
+    }
+    const row = rowAt(index)
+    if (e.key === 'Escape' && showForm) {
+      e.preventDefault()
+      cancelForm()
+    } else if (row && (control || canEdit) && (e.key === 'Enter' || e.key === 'Delete')) {
+      e.preventDefault()
+      if (e.key === 'Delete') {
+        // The question takes the keyboard (a dialog puts it nowhere when it closes); the answer
+        // gives it back to this place in the list: the same contact, or — once it is gone — the one
+        // that takes its place.
+        void onDelete(row.q, row.key).then((deleted) => {
+          focusAfter.current = deleted ? row.key : null
+          setFocusTo(index)
+        })
+      } else {
+        formFromGrid.current = row.key
+        formWanted.current = true
+        startEdit(row.q, row.key)
+      }
+    }
+  }
+  // The keys' row, focused once it is drawn.
+  useLayoutEffect(() => {
+    stickyH.current = scrollRef.current?.querySelector<HTMLElement>('.log-sticky')?.offsetHeight ?? 0
+    const wrap = rowsWrapRef.current
+    if (focusTo === null || !wrap) return
+    const at = Math.min(focusTo, listTotal - 1)
+    if (focusAfter.current !== null && rowAt(at)?.key === focusAfter.current) return
+    focusAfter.current = null
+    const el = ([...wrap.children] as HTMLElement[]).find((c) => c.dataset.index === String(at))
+    if (!el) return
+    // Only while the keyboard is still the grid's: on a row, or lost with a row scrolled away.
+    const active = document.activeElement
+    if (active && active !== document.body && !wrap.contains(active)) {
+      setFocusTo(null)
+      return
+    }
+    el.focus({ preventScroll: true })
+    if (!el.classList.contains('placeholder')) setFocusTo(null)
+  })
+  // Enter from the grid: the keyboard goes into the form, and back to that row when it closes.
+  useEffect(() => {
+    if (showForm && formWanted.current) {
+      formWanted.current = false
+      formRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus()
+    } else if (!showForm && formFromGrid.current !== null) {
+      const key = formFromGrid.current
+      formFromGrid.current = null
+      const at = virtualRows.find((v) => rowAt(v.index)?.key === key)
+      if (at) moveFocus(at.index)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the form opening and closing only
+  }, [showForm])
+
+  // The swapped-in order is placed after the render that shows it, before the browser paints —
+  // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
+  // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
+  useLayoutEffect(() => {
+    // A new list drawn (`drawnList`, above). While a row is open, the old list's heights are dropped
+    // and the rows drawn now measured — without scrolling: where the view goes is decided below.
+    if (drawnList !== null && heightsFor.current !== drawnList) {
+      const replaced = heightsFor.current !== null
+      heightsFor.current = drawnList
+      if (replaced && openComments.size > 0) {
+        const adjust = rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange
+        rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+        try {
+          rowVirtualizer.measure()
+          rowVirtualizer.getVirtualItems() // the table at the estimate, then each drawn row's own height
+          for (const el of rowsWrapRef.current?.children ?? []) {
+            const index = (el as HTMLElement).dataset.index
+            if (index !== undefined) rowVirtualizer.resizeItem(Number(index), (el as HTMLElement).offsetHeight)
+          }
+        } finally {
+          rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
+        }
+        rowVirtualizer.getVirtualItems()
+      }
+      // BACK TO THE TOP on a new sort, search or filter (v2 §6): the rows the operator was looking
+      // at are not where they were, or not in this list at all. The new list's first row goes to the
+      // top of the list, under the search box and the headers, which stay put — the globe band above
+      // them is not brought back, or the box being typed in would jump. A view that has not scrolled
+      // into the list is there already. (A newer order of the SAME list is not a new list: the swap
+      // keeps the rows under the operator where they are, R5.) A Remote browser's new page is left
+      // as it was: it empties while it loads.
+      const el = scrollRef.current
+      const rows = rowsWrapRef.current
+      const sticky = el?.querySelector<HTMLElement>('.log-sticky')
+      if (replaced && control && el && rows && sticky) {
+        const top = Math.max(0, rows.offsetTop - sticky.offsetHeight)
+        if (el.scrollTop > top) {
+          el.scrollTop = top
+          // …and drawn there by the render that follows, not when the scroll is reported: so the rows
+          // noted under the operator are the new list's first rows, and a newer order arriving now
+          // keeps the view at the top (R5's rule for a view at the top).
+          rowVirtualizer.scrollOffset = el.scrollTop
+          justPlaced.current = true
+        }
+      }
+    }
+    const moving = heightMoves.current
+    heightMoves.current = null
+    if (moving) {
+      // Each vacated place gets a closed row's height, each new place the open row's own, through
+      // the list's own `resizeItem` — its scroll adjustment held off: the swap places the view.
+      // (A state change in a layout effect is drawn before the paint, so this lands in one frame.)
+      const landing = new Set(moving.moves.map((m) => m.to))
+      const adjust = rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange
+      rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+      try {
+        for (const m of moving.moves) if (!landing.has(m.from)) rowVirtualizer.resizeItem(m.from, moving.closed)
+        for (const m of moving.moves) if (m.to !== null) rowVirtualizer.resizeItem(m.to, m.size)
+      } finally {
+        rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
+      }
+      for (const m of moving.moves) {
+        if (m.to === null) openAt.current.at.delete(m.key)
+        else openAt.current.at.set(m.key, m.to)
+      }
+      rowVirtualizer.getVirtualItems() // the list's table, recomputed with the moved heights
+    }
+    const p = placement.current
+    placement.current = null
+    const el = scrollRef.current
+    if (!p || !control || !el) return
+    const start =
+      rowVirtualizer.measurementsCache[p.index]?.start ?? p.index * ROW_ESTIMATE + rowVirtualizer.options.scrollMargin
+    el.scrollTop = start - p.delta
+    justPlaced.current = true
+  })
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!control || !el) return
+    // Where each open row's height sits: its place among the rows drawn now (a row is measured
+    // where it mounts; a swap moves the height with it). Closed rows are forgotten.
+    const at = openAt.current.at
+    for (const key of [...at.keys()]) if (!openComments.has(key)) at.delete(key)
+    for (const item of virtualRows) {
+      const row = rowAt(item.index)
+      if (row && openComments.has(row.key)) at.set(row.key, item.index)
+    }
+    // The view was just placed: the rows noted now would be read at the old place. The scroll
+    // that placing causes renders again, and they are noted then.
+    if (justPlaced.current) {
+      justPlaced.current = false
+      return
+    }
+    const top = el.scrollTop
+    const rows: { key: string; delta: number }[] = []
+    let atTop = true
+    for (const item of virtualRows) {
+      if (item.end <= top) continue
+      const row = rowAt(item.index)
+      if (!row) continue
+      if (rows.length === 0) atTop = item.index === 0
+      rows.push({ key: row.key, delta: item.start - top })
+      if (rows.length === 8) break
+    }
+    anchor.current = { rows, atTop }
+  })
+  // The swap: a new list is recorded as it is shown; a newer order within the list is swapped in
+  // once `ready`, with its placement — a state change in a layout effect re-renders before paint.
+  useLayoutEffect(() => {
+    if (!control || latestRev === null) return
+    if (onScreen === null) {
+      setShown({ queryKey, orderRev: latestRev })
+      return
+    }
+    if (!ready || pendingRev === null || target === undefined) return
+    const moves: { key: string; from: number; to: number | null; size: number }[] = []
+    for (const key of openKeys) {
+      const from = openAt.current.at.get(key)
+      const to = placeOf.get(key)?.index ?? null
+      const size = from === undefined ? undefined : rowVirtualizer.measurementsCache[from]?.size
+      if (from !== undefined && size !== undefined && to !== from) moves.push({ key, from, to, size })
+    }
+    heightMoves.current = moves.length ? { closed: closedHeight(), moves } : null
+    placement.current = target.index === null ? null : { index: target.index, delta: target.delta }
+    setShown({ queryKey, orderRev: pendingRev })
   })
 
   // Measure where the rows actually start inside .log-scroll (globe + sticky block).
@@ -1216,7 +1629,7 @@ export function Logbook({
       <div className="panel-header log-header">
         <div className="log-title">
           <h2>{t('logbook.title')}</h2>
-          <span className="count-badge">{remoteLog?.total ?? log.length}</span>
+          <span className="count-badge">{remoteLog?.total ?? logSize}</span>
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
         {!control && remoteLog && (canLog || showForm) && (
@@ -1403,15 +1816,17 @@ export function Logbook({
           <button
             type="button"
             className="export-btn"
-            disabled={log.length === 0 || exportRangeBad}
+            disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('adif', exportFrom, exportTo)
+                const exported = await exportGeneralLog('adif', exportFrom, exportTo)
+                const text = exported.text
                 // Count what the file actually holds — with a date range the log length lies.
                 const n = (text.match(/<eor>/gi) ?? []).length
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.adi`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
               }, t('logbook.export.failed'))
             }
             title={
@@ -1470,15 +1885,17 @@ export function Logbook({
                   withErrorToast(async () => {
                     const a = activations.find((x) => activationKeyOf(x) === activationKey)
                     if (!a) return
-                    const text = await exportLogForActivation(
+                    const exported = await exportLogForActivation(
                       a.reference,
                       a.dayStartUnix,
                       a.callsign ?? null,
                     )
+                    const text = exported.text
                     // Count what the file actually holds, as the ranged export does.
                     const n = (text.match(/<eor>/gi) ?? []).length
                     const path = await saveTextToDownloads(activationFilename(a), text)
                     pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                    sayExportLacks([exported])
                   }, t('logbook.export.failed'))
                 }
                 title={t('logbook.export.activation.buttonTitle')}
@@ -1500,16 +1917,20 @@ export function Logbook({
                 withErrorToast(async () => {
                   const stamp = new Date().toISOString().slice(0, 10)
                   const saved: string[] = []
+                  const exported: LogExport[] = []
                   for (const op of operators) {
-                    const text = await exportLogForOperator(op)
+                    const file = await exportLogForOperator(op)
+                    exported.push(file)
                     const safe = op.replace(/[^A-Za-z0-9]+/g, '-')
-                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, text))
+                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, file.text))
                   }
                   // The combined file as well, always: it is the only one that carries contacts
                   // logged with no operator set, and it is what the station itself uploads.
                   const all = await exportGeneralLog('adif')
-                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all))
+                  exported.push(all)
+                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all.text))
                   pushToast(t('logbook.export.perOperator.done', { count: saved.length }), 'success')
+                  sayExportLacks(exported)
                 }, t('logbook.export.failed'))
               }
               title={t('logbook.export.perOperator.title', { operators: operators.join(', ') })}
@@ -1520,15 +1941,17 @@ export function Logbook({
           <button
             type="button"
             className="export-btn"
-            disabled={log.length === 0 || exportRangeBad}
+            disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('csv', exportFrom, exportTo)
+                const exported = await exportGeneralLog('csv', exportFrom, exportTo)
+                const text = exported.text
                 // Rows minus the header — with a date range the log length lies.
                 const n = Math.max(0, text.trim().split('\n').length - 1)
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.csv`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
               }, t('logbook.export.failed'))
             }
             title={
@@ -1579,7 +2002,7 @@ export function Logbook({
             type="button"
             className="export-btn danger"
             onClick={() => setShowPurge(true)}
-            disabled={log.length === 0}
+            disabled={logSize === 0}
             title={t('logbook.purge.title')}
           >
             {t('logbook.purge.label')}
@@ -1590,7 +2013,16 @@ export function Logbook({
 
       {remoteLog && operations && <RemoteLogCheck client={operations} />}
       {(control || remoteLog) && showForm && (
-        <form className="logbook-form" onSubmit={submit}>
+        <form
+          className="logbook-form"
+          onSubmit={submit}
+          ref={formRef}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.preventDefault()
+            cancelForm()
+          }}
+        >
           <div className="logbook-form-grid">
             <label className="logbook-field logbook-field-call">
               <span>{t('logbook.field.call.label')}</span>
@@ -1779,7 +2211,7 @@ export function Logbook({
                 commands address a logged record. Shack only: a Remote edit is one change keyed by
                 the row it started from, and the two follow-ups would each need the key of the row
                 the previous write produced; the hosted row menu already offers both marks by key. */}
-            {editIndex !== null && !remoteLog && (
+            {editingKey !== null && !remoteLog && (
               <>
                 <div className="logbook-field">
                   <label htmlFor="logbook-qsl-sent">{t('logbook.field.qslSent.label')}</label>
@@ -1821,22 +2253,32 @@ export function Logbook({
           </div>
           <div className="logbook-form-actions">
             {err && <span className="settings-error" role="alert">{err}</span>}
-            {editIndex !== null && (
+            {editingKey !== null && (
               <span className="logbook-editing-note">{t('logbook.form.editingNote')}</span>
             )}
             <button type="submit" className="settings-save" disabled={!draft.call.trim()}>
-              {editIndex !== null ? t('logbook.form.save') : t('logbook.form.log')}
+              {editingKey !== null ? t('logbook.form.save') : t('logbook.form.log')}
             </button>
           </div>
         </form>
       )}
 
-      <div className={`log-table logbook-table${moreColumns ? ' wide' : ''}`} role="table">
+      <div
+        className={`log-table logbook-table${moreColumns ? ' wide' : ''}`}
+        role="grid"
+        aria-rowcount={listTotal + 1}
+        aria-describedby={keysId}
+      >
+        {/* The grid's keys, for a screen reader: four whole sentences, never one glued. */}
+        <p id={keysId} className="sr-only">
+          <span>{t('logbook.keys.move')}</span> <span>{t('logbook.keys.edit')}</span>{' '}
+          <span>{t('logbook.keys.delete')}</span> <span>{t('logbook.keys.close')}</span>
+        </p>
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
             <div className="log-globe-band">
               <Suspense fallback={<div className="log-globe-loading">{t('logbook.globe.loading')}</div>}>
-                <QsoGlobe qsos={log} />
+                <QsoGlobe logTick={logTick} />
               </Suspense>
             </div>
           )}
@@ -1845,7 +2287,7 @@ export function Logbook({
           <div className="log-sticky">
       <div className="log-searchbar">
         {remoteLog && <>
-          <span role="status">{remoteLog.phase === 'loading' ? t('remote.collectionLoading') : remoteLog.phase === 'unavailable' ? t('remote.collectionUnavailable') : t('remote.logPage', { start: remoteLog.total ? remoteLog.offset + 1 : 0, end: remoteLog.offset + log.length, total: remoteLog.total })}</span>
+          <span role="status">{remoteLog.phase === 'loading' ? t('remote.collectionLoading') : remoteLog.phase === 'unavailable' ? t('remote.collectionUnavailable') : t('remote.logPage', { start: remoteLog.total ? remoteLog.offset + 1 : 0, end: remoteLog.offset + observedLog.length, total: remoteLog.total })}</span>
           {remoteLog.retained < remoteLog.total && <span>{t('remote.logWindow', { count: remoteLog.retained })}</span>}
           <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasPrevious} onClick={remoteLog.previous}>{t('remote.previousPage')}</button>
           <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasNext} onClick={() => void remoteLog.next()}>{t('remote.nextPage')}</button>
@@ -1889,7 +2331,7 @@ export function Logbook({
           </button>
         )}
       </div>
-        <div className="log-row logbook-row head" role="row">
+        <div className="log-row logbook-row head" role="row" aria-rowindex={1}>
           {th(t('logbook.column.call'), 'call')}
           {th(t('logbook.column.country'), 'country')}
           {th(t('logbook.column.band'), 'band')}
@@ -1927,21 +2369,57 @@ export function Logbook({
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
-          {log.length === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
-          {log.length > 0 && rows.length === 0 && (
+          {logSize === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
+          {logSize > 0 && listTotal === 0 && (
             <p className="empty">{t('logbook.emptySearch', { query: deferredSearch.trim() })}</p>
           )}
-          {rows.length > 0 && (
+          {listTotal > 0 && (
             <div
               ref={rowsWrapRef}
               className="log-rows"
               style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+              onKeyDown={onGridKey}
             >
-              {rowVirtualizer.getVirtualItems().map((vrow) => {
-                const { q, i } = rows[vrow.index]
+              {virtualRows.map((vrow) => {
+                // A row whose page is still on its way: its place, kept, until the page lands.
+                const row = rowAt(vrow.index)
+                const placed = {
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  // scrollMargin is baked into vrow.start (the globe band above);
+                  // subtract it because rows are positioned within THIS container,
+                  // which document flow already places below the band.
+                  transform: `translateY(${vrow.start - rowVirtualizer.options.scrollMargin}px)`,
+                } as const
+                if (!row)
+                  return (
+                    <div
+                      className="log-row logbook-row placeholder"
+                      role="row"
+                      aria-busy="true"
+                      aria-rowindex={vrow.index + 2}
+                      tabIndex={-1}
+                      key={`placeholder-${vrow.index}`}
+                      data-index={vrow.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={placed}
+                    >
+                      <span className="log-cell">{t('logbook.rows.loading')}</span>
+                      {/* The row buttons' own box, unseen: a row's height is its 22 px buttons
+                          plus padding, so a placeholder holding one is exactly as tall as the row
+                          it stands for — nothing below it moves when the row lands, and the list
+                          never measures a short row it then has to correct. */}
+                      <span className="log-cell log-rowactions" aria-hidden="true">
+                        <span className="log-rowbtn" style={{ visibility: 'hidden' }} />
+                      </span>
+                    </div>
+                  )
+                const { q, key } = row
                 return (
                   <div
-                    className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
+                    className={`log-row logbook-row${editingKey === key ? ' editing' : ''}`}
                     // ⛔ DOUBLE-CLICK, NOT A TENTH BUTTON. A view button in the action cluster
                     // was built first and MEASURED: ten controls need ~318 px of button plus
                     // nine gaps against a 336 px track floor, and the harness reported
@@ -1954,21 +2432,17 @@ export function Logbook({
                     onDoubleClick={() => setViewing(q)}
                     title={t('logbook.row.view.title', { call: q.call })}
                     role="row"
-                    // The backend index `i` is unique per record → collision-proof even for two
-                    // identical QSOs (double-clicked Log in the same second). Rows are stateless
-                    // divs, so key churn after a delete-shift costs nothing.
-                    key={`${q.call}-${q.whenUnix}-${i}`}
+                    // The row's key is its id: unique per record — collision-proof even for two
+                    // identical QSOs (double-clicked Log in the same second) — and it FOLLOWS the
+                    // row when the list moves, so an open comment or the edit mark stays on it.
+                    key={key}
                     data-index={vrow.index}
+                    aria-rowindex={vrow.index + 2}
+                    tabIndex={key === tabStop ? 0 : -1}
+                    onFocus={() => setFocusKey(key)}
                     ref={rowVirtualizer.measureElement}
                     style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      // scrollMargin is baked into vrow.start (the globe band above);
-                      // subtract it because rows are positioned within THIS container,
-                      // which document flow already places below the band.
-                      transform: `translateY(${vrow.start - rowVirtualizer.options.scrollMargin}px)`,
+                      ...placed,
                       // Stripe by REAL index (inline beats the nth-child rule, which would otherwise
                       // stripe by render order and appear to "move" as the virtual window scrolls).
                       background: vrow.index % 2 ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)' : 'transparent',
@@ -2099,7 +2573,7 @@ export function Logbook({
                   </>
                 )}
                 <span
-                  className={`log-cell log-note${openComments.has(`${q.call}-${q.whenUnix}-${i}`) ? ' expanded' : ''}`}
+                  className={`log-cell log-note${openComments.has(key) ? ' expanded' : ''}`}
                   title={[
                     (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
                     (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
@@ -2116,9 +2590,9 @@ export function Logbook({
                     <button
                       type="button"
                       className="log-note-flag"
-                      aria-expanded={openComments.has(`${q.call}-${q.whenUnix}-${i}`)}
+                      aria-expanded={openComments.has(key)}
                       aria-label={t('logbook.row.notes.readAria')}
-                      onClick={() => toggleComment(`${q.call}-${q.whenUnix}-${i}`)}
+                      onClick={() => toggleComment(key)}
                     >
                       📝
                     </button>
@@ -2129,8 +2603,8 @@ export function Logbook({
                     <button
                       type="button"
                       className="log-note-text"
-                      aria-expanded={openComments.has(`${q.call}-${q.whenUnix}-${i}`)}
-                      onClick={() => toggleComment(`${q.call}-${q.whenUnix}-${i}`)}
+                      aria-expanded={openComments.has(key)}
+                      onClick={() => toggleComment(key)}
                     >
                       {(q.comment ?? '').trim()}
                     </button>
@@ -2143,7 +2617,7 @@ export function Logbook({
                       not rendered at all, so the single line the column gets still belongs to
                       the comment — the note is multi-line free text and would win a fight for
                       it. Open, it takes a line of its own below (`flex: 1 0 100%`). */}
-                  {openComments.has(`${q.call}-${q.whenUnix}-${i}`) && (q.notes ?? '').trim() && (
+                  {openComments.has(key) && (q.notes ?? '').trim() && (
                     <span className="log-note-private">{(q.notes ?? '').trim()}</span>
                   )}
                 </span>
@@ -2312,7 +2786,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn"
-                    onClick={() => startEdit(q, i)}
+                    onClick={() => startEdit(q, key)}
                     title={t('logbook.row.edit', { call: q.call })}
                     aria-label={t('logbook.row.edit', { call: q.call })}
                   >
@@ -2321,7 +2795,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn danger"
-                    onClick={() => onDelete(q, i)}
+                    onClick={() => onDelete(q, key)}
                     title={t('logbook.row.delete', { call: q.call })}
                     aria-label={t('logbook.row.delete', { call: q.call })}
                   >
@@ -2350,7 +2824,7 @@ export function Logbook({
               <span className="logconfirm-sub danger">{t('logbook.purge.irreversible')}</span>
             </div>
             <p className="purge-warn">
-              <T k="logbook.purge.warn" tags={{ b: <strong /> }} vals={{ count: log.length }} />
+              <T k="logbook.purge.warn" tags={{ b: <strong /> }} vals={{ count: logSize }} />
             </p>
             {/* The sync cursors are the non-obvious half of a purge, and getting it wrong cost an
                 operator his whole confirmation history: each cursor means "I already hold every
@@ -2389,7 +2863,7 @@ export function Logbook({
                 onClick={onPurge}
                 disabled={purging || purgeText.trim().toUpperCase() !== PURGE_WORD}
               >
-                {purging ? t('logbook.purge.busy') : t('logbook.purge.confirm', { count: log.length })}
+                {purging ? t('logbook.purge.busy') : t('logbook.purge.confirm', { count: logSize })}
               </button>
             </div>
           </div>

@@ -171,6 +171,16 @@ function stationRow(call: string): HTMLElement {
 }
 
 describe('the call-activity roster carries JS8Call’s DX columns', () => {
+  it('a hidden roster asks the log nothing (the join is paid only while the view is visible)', async () => {
+    const { getLogDelta } = await import('../api')
+    vi.mocked(getLogDelta).mockClear()
+    await renderCockpit({ active: false })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(getLogDelta, 'a hidden JS8 roster read the log').not.toHaveBeenCalled()
+  })
+
   it('renders distance, azimuth, ✓ worked-before, name and comment for a heard station', async () => {
     await renderCockpit()
     const row = stationRow('W0IND')

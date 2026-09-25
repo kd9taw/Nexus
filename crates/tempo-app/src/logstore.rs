@@ -9,8 +9,9 @@
 //! 1. the change is made in memory (unchanged code, unchanged rules);
 //! 2. the rows it touched are handed to the writer thread
 //!    ([`tempo_core::logbook::writer::LogWriter`]) — a channel send, **no I/O**;
-//! 3. the log as it now stands is handed to the mirror lane, which rewrites `log.adi` from it,
-//!    debounced, on its own thread — **no I/O**;
+//! 3. the mirror lane is told the change's revision, and rewrites `log.adi` from the store once
+//!    the store holds it — debounced, on its own thread, a chunk of the log at a time (SPEC-2 v3
+//!    C15) — **no I/O** here;
 //! 4. an operator command, having released every lock, waits for its own change to commit
 //!    ([`Durability::wait`]). The FT auto-log never waits.
 //!
@@ -29,7 +30,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tempo_core::logbook::mirror::{self, FileStamp, MirrorOptions, MirrorState, MirrorWriter};
+use tempo_core::logbook::mirror::{
+    self, FileStamp, MirrorOptions, MirrorState, MirrorWriter, StoreSource,
+};
 use tempo_core::logbook::reader::LogReader;
 use tempo_core::logbook::sqlite::{self, LogDb, Resolved};
 use tempo_core::logbook::writer::{self, Change, LogWriter, Refusal, Ticket, Touched};
@@ -219,12 +222,14 @@ fn open_reporting_with(
 
     let writer = Arc::new(LogWriter::start(db));
     let synced_foreign = writer.foreign_commits();
-    let mirror = Arc::new(MirrorWriter::with_options(
-        log_path.to_path_buf(),
-        mirror_options,
-    ));
     // Opens nothing yet: a session that never reads the store costs nothing for it.
     let reader = Arc::new(LogReader::new(&db_path));
+    // The mirror pictures the store itself, streamed off a read connection (SPEC-2 v3 C15).
+    let mirror = Arc::new(MirrorWriter::with_options(
+        log_path.to_path_buf(),
+        Arc::new(StoreSource::new(Arc::clone(&reader), Arc::clone(&writer))),
+        mirror_options,
+    ));
     Ok(Opened {
         store: LogStore {
             writer,
@@ -285,23 +290,24 @@ impl LogStore {
         }
     }
 
-    /// Hand one change to the writer, and the log as it now stands to the mirror. Never touches
-    /// the disk. A change that writes nothing is not sent, and has no ticket.
-    pub(crate) fn submit(&mut self, change: Change, log: &Logbook) -> Option<Ticket> {
+    /// Hand one change to the writer, and its revision to the mirror. Never touches the disk. A
+    /// change that writes nothing is not sent, and has no ticket.
+    pub(crate) fn submit(&mut self, change: Change) -> Option<Ticket> {
         if change.is_empty() {
             return None;
         }
         self.collect(Instant::now());
-        let ticket = self.send(change, log, 0);
+        let ticket = self.send(change, 0);
         if let Some(c) = &mut self.collector {
             c.push(ticket.clone());
         }
         Some(ticket)
     }
 
-    /// Hand a change to the writer and the log to the mirror, and keep the change in flight —
-    /// `resends` times sent again already. No I/O.
-    fn send(&mut self, change: Change, log: &Logbook, resends: u32) -> Ticket {
+    /// Hand a change to the writer and its revision to the mirror, and keep the change in flight
+    /// — `resends` times sent again already. No I/O, and no copy of the log: the mirror reads the
+    /// store once it holds the change.
+    fn send(&mut self, change: Change, resends: u32) -> Ticket {
         let touched = Touched::of(&change);
         let ticket = self.writer.submit(change);
         self.inflight.push(InFlight {
@@ -309,7 +315,7 @@ impl LogStore {
             touched,
             resends,
         });
-        self.mirror.submit(log.records().to_vec());
+        self.mirror.dirty(ticket.revision());
         ticket
     }
 
@@ -396,7 +402,7 @@ impl LogStore {
             if change.is_empty() {
                 continue;
             }
-            self.send(change, log, d.resends + 1);
+            self.send(change, d.resends + 1);
             sent += 1;
         }
         tempo_core::applog::info(
@@ -504,11 +510,11 @@ impl LogStore {
         self.mirror.accept(stamp);
     }
 
-    /// Hand the log as it stands to the mirror, changing nothing in the store — for a `log.adi`
+    /// Have the mirror picture the store as it stands, changing nothing in it — for a `log.adi`
     /// that is not the store's own picture yet (the file a conversion read, one just taken in),
     /// so the next launch finds a mirror and has nothing to read or take in.
-    pub(crate) fn refresh_mirror(&self, log: &Logbook) {
-        self.mirror.submit(log.records().to_vec());
+    pub(crate) fn refresh_mirror(&self) {
+        self.mirror.dirty(self.writer.submitted_rev());
     }
 
     /// What a quit still has to wait for (see [`Unsaved`]): this process's changes the writer
@@ -654,6 +660,136 @@ impl StoreReads {
     /// memory as that copy goes away (SPEC-2 v3, C19).
     pub fn rows(&self, wait_up_to: Duration) -> Result<(Vec<QsoRecord>, Freshness), sqlite::Error> {
         self.read(wait_up_to, |db| db.load_all())
+    }
+}
+
+/// How long a pass over the log ([`LogRows`]) waits for the writer to take the changes made
+/// before it was asked for, before it reads the store as it stands and says so
+/// ([`Freshness::Stale`]). The writer commits a change within one disk flush; this is for the
+/// moment a bulk write is ahead of it.
+pub const READ_WAIT: Duration = Duration::from_secs(2);
+
+/// The log's rows, for a pass over them — SPEC-2 v3's **C14**. Taken under the Engine lock
+/// ([`crate::engine::Engine::log_rows`]: handles, or a copy of pointers) and read after it is
+/// released.
+///
+/// ONE way for every fold, lookup and sweep to reach the log, whichever holds it this session,
+/// so each of them is written once.
+#[derive(Debug, Clone)]
+pub enum LogRows {
+    /// The logbook store, which owns the log. A pass first waits for every change made before
+    /// this was taken to be committed (P4: a question asked straight after a contact is logged
+    /// sees it), then reads in ONE read transaction.
+    Store(StoreReads),
+    /// The 1.13 path, when the store was refused and the session runs on `log.adi`: the log in
+    /// memory, as a copy of its pointers. SPEC-2 v3 D1 moves that path onto an in-memory
+    /// database of the store's own shape (C19), and this arm goes with it.
+    Memory(Vec<Arc<QsoRecord>>),
+}
+
+impl LogRows {
+    /// Hand `each` every row `scope` names, in `order`, with (at least) `narrow`'s fields
+    /// filled; `each` answering [`std::ops::ControlFlow::Break`] ends the pass. Whether it saw
+    /// every change made before the rows were taken is the answer.
+    ///
+    /// On the 1.13 path the rows are whole records, and `scope` is applied to them by the
+    /// store's own definition of it — the same rows the store would name.
+    ///
+    /// ⚠️ **Never call it holding the Engine lock** — it reads the disk, or passes over the
+    /// whole log; a debug build panics ([`tempo_core::logbook::io_fence`]).
+    pub fn each(
+        &self,
+        narrow: sqlite::Narrow,
+        scope: sqlite::Scope<'_>,
+        order: sqlite::Order,
+        each: &mut dyn FnMut(&QsoRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<Freshness, sqlite::Error> {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("a pass over the log's rows");
+        match self {
+            LogRows::Store(reads) => reads
+                .read(READ_WAIT, |db| db.each_narrow(narrow, scope, order, each))
+                .map(|((), fresh)| fresh),
+            LogRows::Memory(rows) => {
+                let named = |r: &QsoRecord| match scope {
+                    sqlite::Scope::All => true,
+                    sqlite::Scope::Since(t) => r.when_unix >= t,
+                    sqlite::Scope::CallNorm(call) => sqlite::call_norm_of(&r.call) == call,
+                };
+                let mut visit = |r: &Arc<QsoRecord>| named(r) && each(r).is_break();
+                match order {
+                    sqlite::Order::Log => {
+                        let _ = rows.iter().any(&mut visit);
+                    }
+                    sqlite::Order::NewestFirst => {
+                        let _ = rows.iter().rev().any(&mut visit);
+                    }
+                }
+                Ok(Freshness::Current)
+            }
+        }
+    }
+
+    /// Hand `each` every record of the log, WHOLE, in log order — the store streamed a chunk at a
+    /// time ([`LogDb::each_record`]), so a pass holds one chunk of the log and never the whole of
+    /// it; on the 1.13 path, the log in memory. `each` answering
+    /// [`std::ops::ControlFlow::Break`] ends the pass. What the exports read (SPEC-2 v3 C15).
+    ///
+    /// The store's pass first waits up to `wait` for every change made before the rows were
+    /// taken, as [`StoreReads::read`] does.
+    ///
+    /// ⚠️ Never under the Engine lock, as [`Self::each`].
+    pub fn each_record(
+        &self,
+        wait: Duration,
+        each: &mut dyn FnMut(&QsoRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<Freshness, sqlite::Error> {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("a pass over the log's rows");
+        match self {
+            LogRows::Store(reads) => reads
+                .read(wait, |db| {
+                    db.each_record(sqlite::RECORD_CHUNK, &mut |r| each(&r))
+                })
+                .map(|((), fresh)| fresh),
+            LogRows::Memory(rows) => {
+                let _ = rows.iter().any(|r| each(r).is_break());
+                Ok(Freshness::Current)
+            }
+        }
+    }
+
+    /// The whole records these ids name, in log order — [`LogDb::rows_by_ids`] on the store.
+    /// An id the log does not hold is simply absent.
+    ///
+    /// ⚠️ Never under the Engine lock, as [`Self::each`].
+    pub fn rows_by_ids(
+        &self,
+        ids: &[tempo_core::logbook::RecordId],
+    ) -> Result<(Vec<QsoRecord>, Freshness), sqlite::Error> {
+        match self {
+            LogRows::Store(reads) => reads.read(READ_WAIT, |db| db.rows_by_ids(ids)),
+            LogRows::Memory(rows) => {
+                tempo_core::logbook::io_fence::whole_log_off_engine_lock(
+                    "a pass over the log's rows",
+                );
+                let wanted: std::collections::HashSet<_> = ids.iter().collect();
+                let found = rows
+                    .iter()
+                    .filter(|r| r.id.as_ref().is_some_and(|id| wanted.contains(id)))
+                    .map(|r| QsoRecord::clone(r))
+                    .collect();
+                Ok((found, Freshness::Current))
+            }
+        }
+    }
+
+    /// How many contacts the log holds.
+    ///
+    /// ⚠️ Never under the Engine lock, as [`Self::each`].
+    pub fn count(&self) -> Result<(u64, Freshness), sqlite::Error> {
+        match self {
+            LogRows::Store(reads) => reads.read(READ_WAIT, |db| db.row_count()),
+            LogRows::Memory(rows) => Ok((rows.len() as u64, Freshness::Current)),
+        }
     }
 }
 
@@ -819,7 +955,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
-    use tempo_core::logbook::{adif_header, adif_record_own_log, sqlite::WriteHold, QslVia};
+    use tempo_core::logbook::{
+        adif_header, adif_record_own_log, sqlite::WriteHold, QslVia, QsoEdit,
+    };
 
     /// A data folder of the test's own, gone with the value.
     pub(crate) struct Dir(pub(crate) PathBuf);
@@ -1009,6 +1147,13 @@ mod tests {
         e.flush_log_store(Duration::from_secs(60)).expect("written");
     }
 
+    /// The id of the contact at `at` in `e`'s log: how a test names a row it picked by place.
+    pub(crate) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+        e.log_records()[at]
+            .id
+            .expect("every row the log holds carries an id")
+    }
+
     // ── the owner ───────────────────────────────────────────────────────────
 
     /// ★ The switchover. An operator's existing `log.adi` is converted, the log the app holds
@@ -1026,7 +1171,7 @@ mod tests {
         assert!(e.log_store_open());
         same_log(e.log_records(), expected.records(), "held after the open");
         same_log(&stored(&d), expected.records(), "stored after the open");
-        // The conversion hands the log to the mirror lane, which writes after its debounce, so
+        // The conversion tells the mirror lane, which writes after its debounce, so
         // `log.adi` is the operator's original only until that write lands. Reading it straight
         // after the open raced the lane — green on a quick machine, red on a loaded CI runner.
         // Settle the lane, then hold the file to what the conversion makes it.
@@ -1091,41 +1236,126 @@ mod tests {
         out
     }
 
-    /// ★ PROPERTY 7 — LAUNCH WRITES NOTHING. A log whose rows the country backfill can fill,
-    /// opened for the SECOND time (the ordinary launch): the fill happens — every view reads it
-    /// — and not one byte of the store, of `log.adi`, of the safety copies or of the ring
-    /// changes.
-    ///
-    /// The positive control is the 1.13 path: the same log, the same backfill, through
-    /// `set_log_path`, rewrites `log.adi` — so this picture of the disk CAN see a launch write,
-    /// and the store's launch really made none.
-    #[test]
-    fn launch_writes_nothing_even_when_the_backfills_fill_rows() {
-        let d = Dir::new("launch");
-        std::fs::write(d.log(), legacy_log(50)).unwrap();
-        // The first launch converts (the one write a launch is allowed, once ever).
-        {
-            let e = engine_on_store(&d);
-            flush(&e);
-        }
-        let before = disk_picture(&d);
-        {
-            let mut e = Engine::new("K2DEF", "FN31", 0);
-            e.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
-            e.attach_log_store(open_fast(&d));
-            assert!(
-                e.log_records().iter().all(|r| r
-                    .country
-                    .as_deref()
-                    .is_some_and(|c| c.starts_with("Entity of"))),
-                "premise: the backfill filled every row, in memory"
-            );
-            flush(&e);
-        }
-        assert_eq!(disk_picture(&d), before, "the launch wrote nothing at all");
+    // ── the fills (SPEC-2 v3 D2-A) ──────────────────────────────────────────
 
-        // The control: the 1.13 path, the same log, the same backfill.
-        let legacy = Dir::new("launch-legacy");
+    /// The resolvers the fill tests hand the engine AND the fill job — one function each, as
+    /// the command layer hands both the same functions. A `Q` call has no country; only a `K`
+    /// call has a state.
+    fn test_country(call: &str) -> Option<String> {
+        (!call.starts_with('Q')).then(|| format!("Entity of {call}"))
+    }
+    fn test_state(call: &str, _grid: Option<&str>) -> Option<String> {
+        call.starts_with('K').then(|| "WI".to_string())
+    }
+
+    /// A launch with the resolvers set before the log is adopted, as the shell's is.
+    fn launch_with_resolvers(d: &Dir) -> Mutex<Engine> {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(test_country);
+        e.set_state_resolver(test_state);
+        e.attach_log_store(open_fast(d));
+        Mutex::new(e)
+    }
+
+    /// One run of the fill job, with the same resolvers.
+    fn fill(e: &Mutex<Engine>, version: i64) -> crate::logfill::FillOutcome {
+        crate::logfill::fill_log_store(e, version, &test_country, &test_state)
+            .expect("the fill job runs")
+    }
+
+    /// A log.adi of `legacy_log(n)` plus a contact no resolver can place a country for, and one
+    /// it can place a country but no state for.
+    fn log_to_fill(n: usize) -> String {
+        legacy_log(n)
+            + "<CALL:5>Q1ZZZ<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010101<EOR>\n\
+               <CALL:5>DL1XX<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010202<EOR>\n"
+    }
+
+    /// ★ D2-A — THE STORE HOLDS EXACTLY WHAT THE SCREENS SHOW. A log an older build left unfilled
+    /// (here: converted with no resolvers) is opened by a launch that has them:
+    ///
+    /// - the attach fills nothing and writes nothing — memory is the store, row for row;
+    /// - the fill job writes every country and state the resolvers can place, into memory and
+    ///   the store alike, and records the version it filled for;
+    /// - the next run at that version reads nothing and writes nothing — a launch writes
+    ///   nothing once its fills are saved;
+    /// - a new version (a new cty.dat, a new FCC file, a new build) reads again, and finds only
+    ///   what no resolver can place.
+    ///
+    /// The control is the 1.13 path, which still rewrites `log.adi` when its backfill fills.
+    #[test]
+    fn the_launch_fills_nothing_and_the_fill_job_saves_the_fills_once() {
+        let d = Dir::new("fill-once");
+        std::fs::write(d.log(), log_to_fill(40)).unwrap();
+        // The conversion, by a launch with no resolvers: every row unfilled in the store.
+        flush(&engine_on_store(&d));
+        let converted = disk_picture(&d);
+        let e = launch_with_resolvers(&d);
+        {
+            let eng = e.lock().unwrap();
+            assert!(
+                eng.log_records()
+                    .iter()
+                    .all(|r| r.country.is_none() && r.state.is_none()),
+                "the attach filled nothing"
+            );
+            same_log(eng.log_records(), &stored(&d), "memory is the store");
+            flush(&eng);
+        }
+        assert_eq!(disk_picture(&d), converted, "and wrote nothing");
+
+        let done = fill(&e, 7);
+        assert_eq!(
+            done,
+            crate::logfill::FillOutcome {
+                current: false,
+                lacking: 42,
+                filled: 41,
+            },
+            "every contact lacked a field; all but the Q call gained one"
+        );
+        flush(&e.lock().unwrap());
+        {
+            let eng = e.lock().unwrap();
+            same_log(
+                eng.log_records(),
+                &stored(&d),
+                "the store holds exactly what the screens show",
+            );
+            for r in eng.log_records() {
+                assert_eq!(r.country, test_country(&r.call), "{}", r.call);
+                assert_eq!(r.state, test_state(&r.call, None), "{}", r.call);
+            }
+        }
+        let meta = |k| LogDb::open(&d.db()).unwrap().meta(k).unwrap();
+        assert_eq!(meta(crate::logfill::FILL_VER), Some(7));
+
+        let settled = disk_picture(&d);
+        assert_eq!(
+            fill(&e, 7),
+            crate::logfill::FillOutcome {
+                current: true,
+                ..Default::default()
+            }
+        );
+        flush(&e.lock().unwrap());
+        assert_eq!(
+            disk_picture(&d),
+            settled,
+            "a launch whose fills are saved writes nothing"
+        );
+
+        let again = fill(&e, 8);
+        assert_eq!(
+            (again.current, again.lacking, again.filled),
+            (false, 2, 0),
+            "a new version reads again, and finds only what no resolver can place"
+        );
+        flush(&e.lock().unwrap());
+        assert_eq!(meta(crate::logfill::FILL_VER), Some(8));
+
+        // The control: the 1.13 path, the same log, the same backfill, rewrites log.adi.
+        let legacy = Dir::new("fill-legacy");
         std::fs::write(legacy.log(), legacy_log(50)).unwrap();
         let _ = tempo_core::logbook::Logbook::load(&legacy.log()); // anchor + sweep marker
         let before = std::fs::read(legacy.log()).unwrap();
@@ -1137,6 +1367,1067 @@ mod tests {
             before,
             "control: the 1.13 launch DOES rewrite log.adi when the backfill fills"
         );
+    }
+
+    /// ★ D2-A: an imported US contact carries its state from the moment it is imported — in the
+    /// store as in memory — where it used to gain it in memory only, at the next launch.
+    #[test]
+    fn an_imported_us_contact_carries_its_state_from_the_import() {
+        let d = Dir::new("import-state");
+        let e = launch_with_resolvers(&d);
+        e.lock().unwrap().import_adif(
+            "<CALL:5>K9ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>120000<EOR>\n",
+        );
+        flush(&e.lock().unwrap());
+        let rows = stored(&d);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state.as_deref(), Some("WI"), "in the store");
+        assert_eq!(rows[0].country.as_deref(), Some("Entity of K9ABC"));
+        same_log(e.lock().unwrap().log_records(), &rows, "and on the screens");
+    }
+
+    /// ★ D2-A: EVERY insert fills country and state before it writes — a logged contact, an
+    /// import, a QRZ download's new contacts, a Field Day merge and a `log.adi` taken in at
+    /// launch — so no reader of the store ever finds a contact the screens would have filled.
+    #[test]
+    fn every_insert_path_writes_its_fills_with_the_contact() {
+        // A `log.adi` taken in at launch: written over the mirror between two launches.
+        let d = Dir::new("insert-fills");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        flush(&engine_on_store(&d)); // converted (unfilled — the fill job's, not this test's)
+        std::fs::write(
+            d.log(),
+            legacy_log(3)
+                + "<CALL:5>K8TAK<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260911<TIME_ON:6>010101<EOR>\n",
+        )
+        .unwrap();
+        let e = launch_with_resolvers(&d);
+        {
+            let mut eng = e.lock().unwrap();
+            // A logged contact.
+            eng.log_qso(qso("K7LOG", 1_788_000_000));
+            // An import.
+            eng.import_adif(
+                "<CALL:5>K6IMP<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>130000<EOR>\n",
+            );
+            // A QRZ download's contact the log lacked.
+            let _ = eng.merge_qrz_report(
+                "<CALL:5>K5QRZ<BAND:3>15m<MODE:3>SSB<QSO_DATE:8>20260909<TIME_ON:6>140000\
+                 <APP_QRZLOG_STATUS:1>C<EOR>\n",
+            );
+            flush(&eng);
+        }
+        let rows = stored(&d);
+        for call in ["K8TAK", "K7LOG", "K6IMP", "K5QRZ"] {
+            let r = rows
+                .iter()
+                .find(|r| r.call == call)
+                .unwrap_or_else(|| panic!("premise: {call} is in the store"));
+            assert_eq!(r.country, test_country(call), "{call}'s country, written");
+            assert_eq!(r.state.as_deref(), Some("WI"), "{call}'s state, written");
+        }
+        same_log(
+            e.lock().unwrap().log_records(),
+            &rows,
+            "the store is what the screens show",
+        );
+
+        // A Field Day merge into the general log.
+        let d = Dir::new("insert-fills-fd");
+        let e = launch_with_resolvers(&d);
+        {
+            let mut eng = e.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_position_id = "a1b2c3d4".into();
+            eng.apply_settings(s);
+            eng.set_mode("fieldday-run").unwrap();
+            assert!(eng.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+            assert!(eng.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+            assert_eq!(eng.fd_merge_to_general().unwrap().added(), 2);
+            flush(&eng);
+        }
+        let rows = stored(&d);
+        let merged = |call: &str| rows.iter().find(|r| r.call == call).cloned().unwrap();
+        assert_eq!(merged("K1ABC").state.as_deref(), Some("WI"));
+        assert_eq!(merged("K1ABC").country, test_country("K1ABC"));
+        assert_eq!(merged("W1AW").country, test_country("W1AW"));
+        assert_eq!(
+            merged("W1AW").state,
+            None,
+            "a call no resolver places stays empty"
+        );
+        same_log(
+            e.lock().unwrap().log_records(),
+            &rows,
+            "the store is what the screens show",
+        );
+    }
+
+    /// A fill lands only where the field is still empty: a contact given a state since the job
+    /// read it keeps that state, and one deleted since is left deleted. (No resolvers here: an
+    /// edit fills a missing country itself, which would hide what this is about.)
+    #[test]
+    fn a_fill_lands_only_where_the_field_is_still_empty() {
+        let d = Dir::new("fill-race");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        flush(&engine_on_store(&d));
+        let mut eng = engine_on_store(&d);
+        let ids: Vec<_> = eng.log_records().iter().map(|r| r.id.unwrap()).collect();
+        // Since the job read them: the operator set row 0's state, and deleted row 2.
+        let mut edited = QsoRecord::clone(&eng.log_records()[0]);
+        edited.state = Some("MA".into());
+        assert!(eng.update_qso(ids[0], edited));
+        assert!(eng.delete_qso(ids[2]));
+        let fills: Vec<crate::station::LogFill> = ids
+            .iter()
+            .map(|id| crate::station::LogFill {
+                id: *id,
+                country: Some("Found".into()),
+                state: Some("WI".into()),
+            })
+            .collect();
+        assert_eq!(
+            eng.apply_log_fills(&fills, 3),
+            2,
+            "rows 0 and 1 gained a field"
+        );
+        flush(&eng);
+        let held: Vec<(Option<String>, Option<String>)> = eng
+            .log_records()
+            .iter()
+            .map(|r| (r.country.clone(), r.state.clone()))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (Some("Found".into()), Some("MA".into())),
+                (Some("Found".into()), Some("WI".into())),
+            ],
+            "the operator's state kept; the deleted contact not brought back"
+        );
+        same_log(
+            eng.log_records(),
+            &stored(&d),
+            "and the store holds the same",
+        );
+    }
+
+    /// ★ C13 × C14: the fill job's write is a change the station follows row by row, as it follows
+    /// every other — so the contact and the snapshot after it pay no pass over the log for it. A
+    /// fill is an Upgrade, and the hot index rebuilds from the whole log, under the Engine lock,
+    /// after any Upgrade it is not walked through.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn the_fill_jobs_write_costs_the_next_contact_no_pass_over_the_log() {
+        use tempo_core::logbook::hot::HOT_REBUILDS;
+        let d = Dir::new("fill-hot");
+        std::fs::write(d.log(), log_to_fill(3)).unwrap();
+        flush(&engine_on_store(&d)); // converted with no resolvers: left for the fill job
+        let e = launch_with_resolvers(&d);
+        let _ = e.lock().unwrap().snapshot();
+        HOT_REBUILDS.with(|c| c.set(0));
+        let outcome = fill(&e, 3);
+        assert!(
+            outcome.filled > 0,
+            "premise: the job filled contacts ({outcome:?})"
+        );
+        let mut eng = e.lock().unwrap();
+        eng.log_qso(qso("K7NEXT", 1_788_000_000));
+        let _ = eng.snapshot();
+        assert_eq!(
+            HOT_REBUILDS.with(|c| c.get()),
+            0,
+            "the fills were walked, not rebuilt over"
+        );
+    }
+
+    /// ★ The fill job never waits and never reads under the Engine lock. With the store's write
+    /// lock held elsewhere and a contact submitted, the job's read waits for that contact (P4)
+    /// — and the Engine lock is free the whole time it waits. The control shows the wait was
+    /// real: the job cannot finish while the write lock is held.
+    #[test]
+    fn the_fill_job_waits_and_reads_with_the_engine_lock_free() {
+        let d = Dir::new("fill-lock");
+        std::fs::write(d.log(), legacy_log(4)).unwrap();
+        flush(&engine_on_store(&d));
+        let e = std::sync::Arc::new(launch_with_resolvers(&d));
+        let hold = WriteHold::take(&d.db()).unwrap();
+        e.lock().unwrap().log_qso(qso("K4WAIT", 1_788_000_000));
+        let job = {
+            let e = std::sync::Arc::clone(&e);
+            std::thread::spawn(move || fill(&e, 11))
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !job.is_finished(),
+            "control: the job is waiting for the held write"
+        );
+        for _ in 0..10 {
+            assert!(
+                e.try_lock().is_ok(),
+                "the Engine lock is free while the job waits"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(hold);
+        let done = job.join().unwrap();
+        assert_eq!(
+            done.filled, 4,
+            "the converted rows; the logged one arrived filled"
+        );
+    }
+
+    // ── the log's rows, for a pass over them (SPEC-2 v3 C14) ────────────────
+
+    /// A small deterministic generator: a failing case is reproducible from its seed alone.
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    /// One random change of the kinds the app makes to the log, applied to `e` — a logged
+    /// contact, an import (sometimes of a contact the log holds), an edit, a delete, a QSL card,
+    /// a QSL-sent mark, a satellite tag, connector stamps, a LoTW report's confirmation, or the
+    /// fill job.
+    fn random_change(e: &Mutex<Engine>, g: &mut Gen, step: u64) {
+        const CALLS: [&str; 6] = ["K1ABC", "W9XYZ", "DL1AB", "Q1ZZZ", "K2DEF/P", "JA1AA"];
+        let call = CALLS[g.below(CALLS.len())];
+        let when = 1_788_000_000 + step * 60;
+        let len = e.lock().unwrap().log_records().len();
+        let at = g.below(len);
+        match g.below(10) {
+            0 => e.lock().unwrap().log_qso(qso(call, when)),
+            1 => {
+                let _ = e.lock().unwrap().import_adif(&format!(
+                    "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>{:06}\
+                     <APP_TEMPO_UL_QRZ:19>accepted|1788000500<EOR>\n",
+                    call.len(),
+                    step % 240_000
+                ));
+            }
+            2 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let mut r = QsoRecord::clone(&eng.log_records()[at]);
+                if g.below(2) == 0 {
+                    r.band = "40m".into();
+                } else {
+                    r.call = call.into();
+                }
+                let id = id_at(&eng, at);
+                eng.update_qso(id, r);
+            }
+            3 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.delete_qso(id);
+            }
+            4 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.mark_qsl_card(id, g.below(2) == 0);
+            }
+            5 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.mark_qsl_sent(id, Some(tempo_core::logbook::QslVia::Bureau));
+            }
+            6 if len > 0 => {
+                let sat = (g.below(2) == 0).then_some("RS-44");
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.set_sat_tag(id, sat);
+            }
+            7 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let pushed = QsoRecord::clone(&eng.log_records()[at]);
+                let outcome = if g.below(2) == 0 {
+                    tempo_core::logbook::UploadOutcome::Accepted
+                } else {
+                    tempo_core::logbook::UploadOutcome::Rejected
+                };
+                eng.stamp_qrz_upload(&pushed, outcome, when as i64, None);
+                eng.stamp_clublog_upload(&pushed, outcome, when as i64 + 1, None);
+            }
+            8 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let r = QsoRecord::clone(&eng.log_records()[at]);
+                let text = tempo_core::logbook::adif_record(&r)
+                    .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
+                let _ = eng.merge_lotw_report(&text);
+            }
+            _ => {
+                let _ = fill(e, (step % 3) as i64);
+            }
+        }
+    }
+
+    /// Every record a pass hands out, whole enough to compare.
+    fn pass(
+        rows: &LogRows,
+        narrow: sqlite::Narrow,
+        scope: sqlite::Scope<'_>,
+        order: sqlite::Order,
+    ) -> Vec<QsoRecord> {
+        let mut out = Vec::new();
+        rows.each(narrow, scope, order, &mut |r| {
+            out.push(r.clone());
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the pass reads");
+        out
+    }
+
+    /// ★ A PASS OVER THE STORE IS A PASS OVER THE LOG IN MEMORY — every row, every field a fold
+    /// can ask for (all of them, the stamps included), in log order and newest first, and the
+    /// same rows under each scope — after 12 seeded runs of 40 random changes of every kind the
+    /// app makes, fills included. The memory side is the 1.13 path's arm, which is the log as
+    /// every reader saw it before C14.
+    #[test]
+    fn a_pass_over_the_store_is_a_pass_over_the_log_in_memory() {
+        let every: Vec<&'static str> = [
+            "call",
+            "band",
+            "mode",
+            "freq_mhz",
+            "freq_rx_mhz",
+            "when_unix",
+            "time_off_unix",
+            "time_known",
+            "grid",
+            "country",
+            "state",
+            "name",
+            "qth",
+            "comment",
+            "notes",
+            "rst_sent",
+            "rst_rcvd",
+            "tx_power",
+            "dxcc",
+            "prop_mode",
+            "sat_name",
+            "operator",
+            "station_callsign",
+            "my_grid",
+            "my_rig",
+            "qsl_card_rcvd_raw",
+            "lotw_rcvd_raw",
+            "eqsl_rcvd_raw",
+            "qrz_status_raw",
+            "qsl_sent",
+            "qsl_sent_via",
+            "qsl_sent_date_unix",
+            "qsl_sent_cleared_unix",
+            "credit_granted",
+            "credit_submitted",
+            "ota_my_program",
+            "ota_my_ref",
+            "ota_their_program",
+            "ota_their_ref",
+            "ota_iota",
+        ]
+        .to_vec();
+        let whole = sqlite::Narrow {
+            columns: Box::leak(every.into_boxed_slice()),
+            uploads: true,
+        };
+        // A whole record as a pass hands it: the passthrough and the contest block are never read.
+        let as_passed = |r: &QsoRecord| {
+            let mut r = r.clone();
+            r.extra.clear();
+            r.contest = None;
+            r
+        };
+        let mut changes = 0;
+        for seed in 1..=12u64 {
+            let d = Dir::new(&format!("rows-{seed}"));
+            std::fs::write(d.log(), log_to_fill(12)).unwrap();
+            flush(&engine_on_store(&d));
+            let e = launch_with_resolvers(&d);
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..40 {
+                random_change(&e, &mut g, step);
+                changes += 1;
+            }
+            let (store, memory) = {
+                let eng = e.lock().unwrap();
+                (eng.log_rows(), LogRows::Memory(eng.log_records().to_vec()))
+            };
+            assert!(matches!(store, LogRows::Store(_)), "premise: the store's");
+            let held: Vec<QsoRecord> = e
+                .lock()
+                .unwrap()
+                .log_records()
+                .iter()
+                .map(|r| as_passed(r))
+                .collect();
+            for order in [sqlite::Order::Log, sqlite::Order::NewestFirst] {
+                let from_store = pass(&store, whole, sqlite::Scope::All, order);
+                let mut want = held.clone();
+                if order == sqlite::Order::NewestFirst {
+                    want.reverse();
+                }
+                assert_eq!(
+                    from_store, want,
+                    "seed {seed}, {order:?}: every row, every field"
+                );
+            }
+            let ids = |v: Vec<QsoRecord>| v.into_iter().map(|r| r.id).collect::<Vec<_>>();
+            let times: Vec<u64> = held.iter().map(|r| r.when_unix).collect();
+            let calls: Vec<String> = held.iter().map(|r| sqlite::call_norm_of(&r.call)).collect();
+            for t in times.iter().copied().take(6).chain([0, u64::MAX]) {
+                let scope = sqlite::Scope::Since(t);
+                assert_eq!(
+                    ids(pass(&store, whole, scope, sqlite::Order::Log)),
+                    ids(pass(&memory, whole, scope, sqlite::Order::Log)),
+                    "seed {seed}: since {t}"
+                );
+            }
+            for c in calls.iter().take(6) {
+                let scope = sqlite::Scope::CallNorm(c);
+                assert_eq!(
+                    ids(pass(&store, whole, scope, sqlite::Order::Log)),
+                    ids(pass(&memory, whole, scope, sqlite::Order::Log)),
+                    "seed {seed}: call {c}"
+                );
+            }
+            assert_eq!(store.count().unwrap().0, held.len() as u64, "seed {seed}");
+        }
+        assert_eq!(changes, 12 * 40);
+    }
+
+    /// ★ The catch-up sweep picks from the store what it picked from memory: the same contacts,
+    /// whole, in log order, each with the legs it is short of — and the room caps it. The oracle
+    /// is the pick as `StationCore::requeue_failed_uploads` made it before C14, verbatim.
+    #[test]
+    fn the_catch_up_sweep_picks_from_the_store_what_it_picked_from_memory() {
+        use crate::engine::upload_legs;
+        let d = Dir::new("catch-up");
+        std::fs::write(d.log(), log_to_fill(20)).unwrap();
+        flush(&engine_on_store(&d));
+        let e = launch_with_resolvers(&d);
+        let mut g = Gen(0xC0FF_EE14);
+        for step in 0..60 {
+            random_change(&e, &mut g, step);
+        }
+        let (store, memory, held) = {
+            let eng = e.lock().unwrap();
+            let held = eng.log_records().to_vec();
+            (eng.log_rows(), LogRows::Memory(held.clone()), held)
+        };
+        let old = |legs: u8, room: usize| -> Vec<(QsoRecord, u8)> {
+            held.iter()
+                .filter_map(|r| match crate::station::unsent_legs(r, legs) {
+                    0 => None,
+                    owed => Some((QsoRecord::clone(r), owed)),
+                })
+                .take(room)
+                .collect()
+        };
+        for legs in [
+            upload_legs::QRZ,
+            upload_legs::CLUBLOG,
+            upload_legs::QRZ | upload_legs::EQSL,
+            upload_legs::ALL,
+        ] {
+            for room in [0, 1, 5, 256] {
+                let from_store = crate::station::catch_up_records(&store, legs, room).unwrap();
+                let from_memory = crate::station::catch_up_records(&memory, legs, room).unwrap();
+                assert_eq!(from_store, old(legs, room), "legs {legs:#b}, room {room}");
+                assert_eq!(from_memory, old(legs, room), "legs {legs:#b}, room {room}");
+                assert!(from_store.len() <= room);
+            }
+        }
+        assert!(
+            !crate::station::catch_up_records(&store, upload_legs::QRZ, 256)
+                .unwrap()
+                .is_empty(),
+            "premise: something is owed"
+        );
+    }
+
+    // ── the exports, read from the store (SPEC-2 v3 C15) ─────────────────────
+
+    /// One tag, `<NAME:len>value`, with the length in bytes as ADIF counts it.
+    fn tag(f: &mut String, name: &str, value: &str) {
+        f.push_str(&format!("<{name}:{}>{value}", value.len()));
+    }
+
+    /// `n` contacts over three UTC days carrying everything an export writes: Field Day contest
+    /// rows with their exchange, foreign tags no build models, private notes, operators and
+    /// station calls in other spellings, activations including a two-fer, and text a CSV has to
+    /// quote. `day` picks the first of the three days.
+    fn export_records(n: usize, day: u32) -> String {
+        let mut s = String::new();
+        for i in 0..n {
+            let mut f = String::new();
+            tag(
+                &mut f,
+                "CALL",
+                ["W1AW", "K1ABC/P", "DL1ZZZ", "VP2E/AA9A", "JA1XYZ"][i % 5],
+            );
+            tag(
+                &mut f,
+                "QSO_DATE",
+                &format!("202609{:02}", day + (i % 3) as u32),
+            );
+            tag(
+                &mut f,
+                "TIME_ON",
+                ["000000", "235959", "120000", "013000"][i % 4],
+            );
+            tag(&mut f, "BAND", ["20m", "40m", "2m"][i % 3]);
+            tag(&mut f, "MODE", ["FT8", "SSB", "CW"][i % 3]);
+            tag(
+                &mut f,
+                "FREQ",
+                ["14.074000", "7.150000", "144.174000"][i % 3],
+            );
+            tag(&mut f, "NAME", ["Jean-Luc", "Ünïcödé", "Bob, Jr."][i % 3]);
+            tag(&mut f, "COMMENT", ["tnx \"73\"", "a,b", "plain"][i % 3]);
+            if i % 5 == 0 {
+                tag(&mut f, "NOTES", "private, \"quoted\"\nline two");
+            }
+            if i % 4 != 3 {
+                tag(&mut f, "OPERATOR", ["kd9taw", " W1AW ", "K9OP"][i % 4 % 3]);
+            }
+            if i % 3 == 0 {
+                tag(&mut f, "STATION_CALLSIGN", ["KD9TAW", "N0CLUB"][i % 2]);
+            }
+            if i % 2 == 0 {
+                tag(&mut f, "MY_SIG", ["POTA", "pota"][i % 4 / 2]);
+                tag(
+                    &mut f,
+                    "MY_SIG_INFO",
+                    ["US-0001", "US-0001,US-0002", "us-0003"][i % 3],
+                );
+            }
+            if i % 4 == 0 {
+                tag(&mut f, "CONTEST_ID", "ARRL-FIELD-DAY");
+                tag(&mut f, "APP_NEXUS_SESSION", "ARRL-FIELD-DAY:WI");
+                tag(
+                    &mut f,
+                    "APP_NEXUS_QID",
+                    &format!("ARRL-FIELD-DAY:WI:a1b2c3d4:{day}{i}"),
+                );
+                tag(&mut f, "STX", "42");
+                tag(&mut f, "SRX", "7");
+                tag(&mut f, "STX_STRING", "2A WI");
+                tag(&mut f, "SRX_STRING", "1D EMA");
+                tag(&mut f, "APP_NEXUS_MYEX", "CLASS::2A;SECTION::WI");
+                tag(
+                    &mut f,
+                    "APP_NEXUS_EX",
+                    "CLASS::1D;SECTION::EMA;QTH::Lorain%3B%3A%25 Co",
+                );
+            }
+            if i % 3 == 1 {
+                tag(&mut f, "APP_OTHERLOG_F0", "x");
+                tag(&mut f, "APP_OTHERLOG_F1", "ünïcödé ✓");
+            }
+            if i % 6 == 2 {
+                tag(&mut f, "APP_TEMPO_UL_CLUBLOG", "duplicate|1700000004|");
+                tag(&mut f, "LOTW_QSL_RCVD", "Y");
+            }
+            s.push_str(&f);
+            s.push_str("<EOR>\n");
+        }
+        s
+    }
+
+    /// The operator's `log.adi` for the export tests, as bytes: the committed CP1253 fixture's
+    /// three contacts — NOT UTF-8, so they are read lossily, as a real one would be — then 60
+    /// contacts of [`export_records`].
+    fn export_fixture() -> Vec<u8> {
+        let mut bytes =
+            include_bytes!("../../tempo-core/tests/fixtures/logbook-cp1253.adi").to_vec();
+        bytes.extend_from_slice(export_records(60, 10).as_bytes());
+        bytes
+    }
+
+    /// Every export and split the Logbook offers of `rows`, labelled by what was asked: ADIF and
+    /// CSV whole and bounded at contact times and a second either side, every operator in
+    /// `log` in other spellings and one nobody is, every activation it lists and some it does
+    /// not.
+    fn every_export(
+        rows: &crate::logexport::Source,
+        log: &tempo_core::logbook::Logbook,
+    ) -> Vec<(String, String)> {
+        use crate::logexport as x;
+        let mut out = Vec::new();
+        let mut bounds: Vec<Option<u64>> = vec![None];
+        let recs = log.records();
+        for r in [recs.first(), recs.get(recs.len() / 2), recs.last()]
+            .into_iter()
+            .flatten()
+        {
+            bounds.extend([r.when_unix - 1, r.when_unix, r.when_unix + 1].map(Some));
+        }
+        for format in ["adif", "csv", "CSV", "Adif"] {
+            for &from in &bounds {
+                for &to in &bounds {
+                    let text = x::export_logbook(rows, format, from, to).expect("exports");
+                    out.push((format!("{format} {from:?}..{to:?}"), text.text));
+                }
+            }
+        }
+        let mut ops = log.operators();
+        ops.extend(["kd9taw", " w1aw", "NOBODY", ""].map(String::from));
+        out.push((
+            "operators".into(),
+            format!("{:?}", x::operators(rows).unwrap()),
+        ));
+        for op in &ops {
+            let text = x::export_for_operator(rows, op).expect("exports");
+            out.push((format!("operator {op:?}"), text.text));
+        }
+        out.push((
+            "activations".into(),
+            format!("{:?}", x::activations(rows).unwrap()),
+        ));
+        let mut asks: Vec<(String, u64, Option<String>)> = log
+            .activations()
+            .into_iter()
+            .map(|a| (a.reference, a.day_start_unix, a.callsign))
+            .collect();
+        let day = recs
+            .first()
+            .map_or(0, |r| r.when_unix - r.when_unix % 86_400);
+        asks.extend([
+            ("us-0001".into(), day + 3_600, Some(" kd9taw ".into())),
+            ("US-0002".into(), day, None),
+            ("".into(), day, Some("KD9TAW".into())),
+            ("US-9999".into(), day, Some("KD9TAW".into())),
+        ]);
+        for (reference, day, call) in &asks {
+            let text =
+                x::export_for_activation(rows, reference, *day, call.as_deref()).expect("exports");
+            out.push((
+                format!("activation {reference:?} {day} {call:?}"),
+                text.text,
+            ));
+        }
+        out
+    }
+
+    /// The same asks of the log in memory through the Logbook's own exports — the Stage 1
+    /// answer, whose rules are the ones every export ran before C15 (tempo-core's
+    /// `export_rule_tests` holds them to the old code byte for byte).
+    fn every_export_in_memory(log: &tempo_core::logbook::Logbook) -> Vec<(String, String)> {
+        every_export(
+            &crate::logexport::Source::of_rows(LogRows::Memory(log.records().to_vec())),
+            log,
+        )
+    }
+
+    /// ★ EVERY EXPORT FROM THE STORE IS THE EXPORT OF THE LOG IN MEMORY, BYTE FOR BYTE — every
+    /// format, range and split of a log converted from an operator's `log.adi` that is not all
+    /// UTF-8, carrying contest rows with their exchange, foreign tags, private notes, operators,
+    /// station calls and activations, then an import through the engine of more of the same with
+    /// the replacement characters a lossy read leaves, and then 8 seeded runs of 24 random
+    /// changes of every kind the app makes (logged contacts, imports, edits, deletes, QSL cards
+    /// and marks, satellite tags, connector stamps, LoTW confirmations, the fill job), compared
+    /// after every fourth. The memory side is the Logbook's own export of the log the engine
+    /// holds — what the Export button wrote before C15.
+    #[test]
+    fn every_export_from_the_store_is_the_export_of_the_log_in_memory() {
+        let mut compared = 0usize;
+        let mut nonempty = 0usize;
+        for seed in 1..=8u64 {
+            let d = Dir::new(&format!("export-{seed}"));
+            std::fs::write(d.log(), export_fixture()).unwrap();
+            let e = launch_with_resolvers(&d);
+            let _ = e.lock().unwrap().import_adif(
+                &export_records(12, 20)
+                    .replace("Jean-Luc", "Jos\u{FFFD}")
+                    .replace("plain", "a \u{FFFD}\u{FFFD} b"),
+            );
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..24 {
+                random_change(&e, &mut g, step);
+                if step % 4 != 3 {
+                    continue;
+                }
+                let (store, log) = {
+                    let eng = e.lock().unwrap();
+                    assert!(
+                        matches!(eng.log_rows(), LogRows::Store(_)),
+                        "premise: the store's rows"
+                    );
+                    let held: Vec<QsoRecord> = eng
+                        .log_records()
+                        .iter()
+                        .map(|r| QsoRecord::clone(r))
+                        .collect();
+                    (
+                        crate::logexport::Source::of(&eng),
+                        tempo_core::logbook::Logbook::from_store(held),
+                    )
+                };
+                let want = every_export_in_memory(&log);
+                let got = every_export(&store, &log);
+                assert_eq!(got.len(), want.len());
+                for ((label, a), (_, b)) in got.iter().zip(&want) {
+                    assert!(
+                        a == b,
+                        "seed {seed}, step {step}: {label} from the store differs from memory\n\
+                         store:  {a:.400}\nmemory: {b:.400}"
+                    );
+                    nonempty += usize::from(a.matches("<EOR>").count() > 0);
+                    compared += 1;
+                }
+                // Premises: the log carries what the ruling is about.
+                let recs = log.records();
+                assert!(recs.iter().any(|r| r.contest.is_some()), "contest rows");
+                assert!(recs.iter().any(|r| !r.extra.is_empty()), "foreign tags");
+                assert!(recs.iter().any(|r| r.notes.is_some()), "private notes");
+                assert!(
+                    recs.iter()
+                        .any(|r| r.name.as_deref().is_some_and(|n| n.contains('\u{FFFD}'))),
+                    "the lossy read's replacement characters"
+                );
+            }
+        }
+        assert!(compared > 5_000, "{compared}");
+        assert!(nonempty > 2_000, "the exports held contacts: {nonempty}");
+    }
+
+    /// ★ AN EXPORT THE STORE HAS NOT CAUGHT UP WITH IS WRITTEN, AND SAYS HOW MANY CHANGES IT
+    /// LACKS (the operator's pick). With the store's write lock held elsewhere (a write taking its
+    /// time), a contact logged just before the export is not in the store yet: the export is the
+    /// store as it stands — without the contact — and counts the one change still on its way, so
+    /// the screen can say so. The control is the same export once the store has it, which holds
+    /// it and counts nothing.
+    #[test]
+    fn an_export_the_store_has_not_caught_up_with_is_written_and_counts_what_it_lacks() {
+        let d = Dir::new("export-behind");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let e = launch_with_resolvers(&d);
+        flush(&e.lock().unwrap());
+        let hold = WriteHold::take(&d.db()).unwrap();
+        let source = {
+            let mut eng = e.lock().unwrap();
+            eng.log_qso(qso("W9LATE", 1_788_100_000));
+            crate::logexport::Source::of(&eng)
+        };
+        let kind = || tempo_core::logbook::ExportKind::Adif {
+            from: None,
+            to: None,
+        };
+        let behind = crate::logexport::export_waiting(&source, kind(), Duration::from_millis(300))
+            .expect("an export is written while a change is on its way");
+        assert_eq!(
+            (behind.saving, behind.held),
+            (1, 0),
+            "and it counts the change it lacks, as still being saved"
+        );
+        assert!(!behind.text.contains("W9LATE"), "the store as it stands");
+        assert_eq!(
+            behind.text.matches("<EOR>").count(),
+            5,
+            "every contact the store holds"
+        );
+        drop(hold);
+        let caught_up = crate::logexport::export_waiting(&source, kind(), Duration::from_secs(60))
+            .expect("control: once the store has it");
+        assert!(caught_up.text.contains("W9LATE"), "the export holds it");
+        assert_eq!(
+            (caught_up.saving, caught_up.held),
+            (0, 0),
+            "and lacks nothing"
+        );
+    }
+
+    /// ★ AN EXPORT WAITS ABOUT TEN SECONDS FOR A STUCK CHANGE, THEN WRITES THE RESCUE FILE (the
+    /// operator's ruling). With the store's write lock held elsewhere, a contact logged just
+    /// before the export cannot land — the writer keeps trying for about 21 s before it gives up —
+    /// so the export waits out its own bound, measured here, then writes the store as it stands
+    /// and counts the change it lacks. The bound that shipped before was a minute: the same export
+    /// sat until the writer gave up, which the upper end of the measurement tells apart.
+    #[test]
+    fn an_export_waits_about_ten_seconds_for_a_stuck_change_then_writes_the_rescue_file() {
+        let d = Dir::new("export-wait");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let e = launch_with_resolvers(&d);
+        flush(&e.lock().unwrap());
+        let hold = WriteHold::take(&d.db()).unwrap();
+        let source = {
+            let mut eng = e.lock().unwrap();
+            eng.log_qso(qso("W9STUCK", 1_788_100_000));
+            crate::logexport::Source::of(&eng)
+        };
+        let asked = Instant::now();
+        let written = crate::logexport::export_logbook(&source, "adif", None, None)
+            .expect("the rescue file is written");
+        let waited = asked.elapsed();
+        assert!(
+            waited >= Duration::from_millis(9_900) && waited < Duration::from_secs(15),
+            "the export waited about ten seconds for the stuck change: {waited:?}"
+        );
+        assert_eq!(
+            (written.saving, written.held),
+            (1, 0),
+            "and counts it, as still being saved"
+        );
+        assert!(!written.text.contains("W9STUCK"), "the store as it stands");
+        assert_eq!(
+            written.text.matches("<EOR>").count(),
+            5,
+            "every contact the store holds"
+        );
+        drop(hold);
+        let saved = crate::logexport::export_logbook(&source, "adif", None, None)
+            .expect("control: once the store has it");
+        assert!(saved.text.contains("W9STUCK"), "the export holds it");
+        assert_eq!((saved.saving, saved.held), (0, 0), "and lacks nothing");
+    }
+
+    // ── the mirror, read from the store (SPEC-2 v3 C15) ──────────────────────
+
+    /// ★ THE MIRROR IS STAGE 1'S, BYTE FOR BYTE — after the conversion of an operator's
+    /// `log.adi` that is not all UTF-8 and carries contest rows, foreign tags and private notes,
+    /// an import through the engine, and 6 seeded runs of 30 random changes of every kind the app
+    /// makes (fills included), `log.adi` is at every fifth change exactly the file Stage 1's
+    /// mirror made of the log in memory: `mirror_adif` of it. Stage 1 wrote from memory; the lane
+    /// now reads the store.
+    #[test]
+    fn the_mirror_is_stage_1s_after_every_kind_of_change() {
+        let mut compared = 0usize;
+        for seed in 1..=6u64 {
+            let d = Dir::new(&format!("mirror-{seed}"));
+            std::fs::write(d.log(), export_fixture()).unwrap();
+            let e = launch_with_resolvers(&d);
+            let _ = e
+                .lock()
+                .unwrap()
+                .import_adif(&export_records(10, 20).replace("plain", "a \u{FFFD} b"));
+            let mut g = Gen(seed.wrapping_mul(0xA24B_AED4_963E_E407) | 1);
+            for step in 0..30 {
+                random_change(&e, &mut g, step);
+                if step % 5 != 4 {
+                    continue;
+                }
+                let want = {
+                    let eng = e.lock().unwrap();
+                    flush(&eng);
+                    mirror::mirror_adif(eng.log_records())
+                };
+                let got = std::fs::read(d.log()).unwrap();
+                assert!(
+                    got == want.as_bytes(),
+                    "seed {seed}, step {step}: log.adi is not Stage 1's mirror of the log"
+                );
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 36);
+    }
+
+    /// ★ The mirror pictures a change only once the store holds it. With the store's write lock
+    /// held elsewhere — for longer than the mirror waits for the store in one turn, so that turn
+    /// ends with the store still behind — a contact is logged: the mirror, told of it, writes
+    /// nothing — a picture without the contact is not a picture of the log — and says a change
+    /// is still owed. Once the store has it, the mirror writes it by itself.
+    #[test]
+    fn the_mirror_waits_for_the_store_to_hold_the_change() {
+        let d = Dir::new("mirror-waits");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        let e = launch_with_resolvers(&d);
+        flush(&e.lock().unwrap());
+        let status = || {
+            e.lock()
+                .unwrap()
+                .log_mirror_status()
+                .expect("the store's mirror")
+        };
+        let writes = || status().writes;
+        let before = writes();
+        let hold = WriteHold::take(&d.db()).unwrap();
+        e.lock().unwrap().log_qso(qso("W9LATE", 1_788_100_000));
+        std::thread::sleep(mirror::READY_WAIT + Duration::from_millis(600));
+        let held = status();
+        assert_eq!(
+            held.writes, before,
+            "no picture without the contact: {held:?}"
+        );
+        assert!(held.pending, "and the change is still owed");
+        assert!(!std::fs::read_to_string(d.log()).unwrap().contains("W9LATE"));
+        drop(hold);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while writes() == before && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            writes() > before,
+            "the mirror wrote it once the store had it"
+        );
+        assert!(std::fs::read_to_string(d.log()).unwrap().contains("W9LATE"));
+    }
+
+    // ── the LoTW batch, read from the store (SPEC-2 v3 C15) ──────────────────
+
+    /// The batch file as the upload built it before C15 — `Engine::lotw_upload_adif`'s body,
+    /// verbatim but for `self`: the contacts the batch names in the log in memory, in that order.
+    fn lotw_adif_before(recs: &[QsoRecord], adif_loc: bool, call: &str, grid: &str) -> String {
+        let mut out = tempo_core::logbook::adif_header();
+        for r in recs {
+            if adif_loc {
+                out.push_str(&tempo_core::logbook::adif_record_with_station(
+                    r, call, grid,
+                ));
+            } else {
+                out.push_str(&tempo_core::logbook::adif_record(r));
+            }
+        }
+        out
+    }
+
+    /// ★ THE LoTW BATCH FROM THE STORE IS THE BATCH THE LOG IN MEMORY MADE — after the export
+    /// fixture, contacts with no known time, and 6 seeded runs of 30 random changes with LoTW
+    /// stamps of every outcome mixed in (and the operator's "already uploaded" declaration now
+    /// and then), the default batch read from the store is exactly the contacts
+    /// `lotw_unsent_ids` names in memory: the same records, the same file handed to TQSL in
+    /// both location modes (against the pre-C15 builder), the same ids and fingerprints for the
+    /// stamp, and the same answer to "is anything owed?".
+    #[test]
+    fn the_lotw_batch_from_the_store_is_the_batch_the_log_in_memory_made() {
+        use tempo_core::logbook::{UploadDetail, UploadOutcome};
+        let mut checked = 0usize;
+        let mut owed_seen = 0usize;
+        for seed in 1..=6u64 {
+            let d = Dir::new(&format!("lotw-{seed}"));
+            std::fs::write(d.log(), export_fixture()).unwrap();
+            let e = launch_with_resolvers(&d);
+            // Contacts with no known time of day: never owed.
+            let _ = e.lock().unwrap().import_adif(
+                "<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n\
+                 <CALL:5>N1TIM<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260916<EOR>\n",
+            );
+            let mut g = Gen(seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
+            for step in 0..30 {
+                random_change(&e, &mut g, step);
+                {
+                    let mut eng = e.lock().unwrap();
+                    let len = eng.log_records().len();
+                    match g.below(6) {
+                        0 | 1 if len > 0 => {
+                            let outcome = [
+                                UploadOutcome::Pending,
+                                UploadOutcome::Accepted,
+                                UploadOutcome::Duplicate,
+                                UploadOutcome::Rejected,
+                                UploadOutcome::AuthFail,
+                            ][g.below(5)];
+                            let at = id_at(&eng, g.below(len));
+                            eng.stamp_lotw_upload(
+                                &[at],
+                                outcome,
+                                1_788_000_000 + step as i64,
+                                Some(UploadDetail::RecordRefused).filter(|_| g.below(2) == 0),
+                            );
+                        }
+                        2 if step % 11 == 10 => {
+                            eng.mark_lotw_uploaded_all();
+                        }
+                        _ => {}
+                    }
+                }
+                if step % 3 != 2 {
+                    continue;
+                }
+                let (rows, ids, memory, signed_before) = {
+                    let eng = e.lock().unwrap();
+                    let ids = eng.lotw_unsent_ids();
+                    let memory: Vec<QsoRecord> = eng
+                        .log_records()
+                        .iter()
+                        .filter(|r| r.id.is_some_and(|id| ids.contains(&id)))
+                        .map(|r| QsoRecord::clone(r))
+                        .collect();
+                    (eng.log_rows(), ids.clone(), memory, eng.lotw_signed(&ids))
+                };
+                let from_store = crate::station::lotw_unsent(&rows).expect("the store reads");
+                assert!(
+                    from_store == memory,
+                    "seed {seed}, step {step}: the store's batch differs from memory's"
+                );
+                for adif_loc in [false, true] {
+                    assert_eq!(
+                        crate::station::lotw_batch_adif(&from_store, adif_loc, "KD9TAW", "EN52"),
+                        lotw_adif_before(&memory, adif_loc, "KD9TAW", "EN52"),
+                        "seed {seed}, step {step}: the file TQSL signs (location in ADIF: {adif_loc})"
+                    );
+                }
+                let signed: Vec<crate::station::LotwSigned> = from_store
+                    .iter()
+                    .filter_map(crate::station::LotwSigned::of)
+                    .collect();
+                assert_eq!(
+                    signed, signed_before,
+                    "seed {seed}, step {step}: the stamp's rows"
+                );
+                assert_eq!(
+                    crate::station::lotw_owed(&rows).unwrap(),
+                    !ids.is_empty(),
+                    "seed {seed}, step {step}: is anything owed"
+                );
+                owed_seen += usize::from(!ids.is_empty());
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 60);
+        assert!(
+            owed_seen > 20,
+            "premise: batches with contacts in them ({owed_seen})"
+        );
+    }
+
+    /// The contacts a list of ids names, read from the store, come back in the order the ids name
+    /// them — not log order — with a contact the log does not hold left out and one named twice
+    /// there twice: exactly what the log in memory answers for the same ids, on the store and on
+    /// the 1.13 path alike. What a LoTW batch chosen by id signs (`station::rows_named`).
+    #[test]
+    fn the_rows_a_list_of_ids_names_come_back_in_the_order_it_names_them() {
+        let d = Dir::new("rows-named");
+        std::fs::write(d.log(), export_fixture()).unwrap();
+        let e = launch_with_resolvers(&d);
+        let (rows, held) = {
+            let eng = e.lock().unwrap();
+            (eng.log_rows(), eng.log_records().to_vec())
+        };
+        assert!(matches!(rows, LogRows::Store(_)), "premise: the store's");
+        let ids: Vec<tempo_core::logbook::RecordId> = held.iter().filter_map(|r| r.id).collect();
+        assert_eq!(ids.len(), held.len(), "premise: every contact has an id");
+        let never = tempo_core::logbook::RecordId::Minted {
+            posid: 0xdead,
+            nonce: 1,
+            seq: 999_999,
+        };
+        assert!(!ids.contains(&never), "premise: an id the log never held");
+        // Newest first, one named twice, one the log never held.
+        let asked = [ids[40], ids[7], never, ids[52], ids[7], ids[0]];
+        let memory: Vec<QsoRecord> = asked
+            .iter()
+            .filter_map(|id| held.iter().find(|r| r.id == Some(*id)))
+            .map(|r| QsoRecord::clone(r))
+            .collect();
+        assert_eq!(memory.len(), 5, "premise: one left out, one twice");
+        let from_store = crate::station::rows_named(&rows, &asked).expect("the store reads");
+        assert!(from_store == memory, "the store answers as memory does");
+        let from_memory = crate::station::rows_named(&LogRows::Memory(held.clone()), &asked)
+            .expect("the log in memory reads");
+        assert!(from_memory == memory, "and so does the 1.13 path");
     }
 
     /// ⛔ PROPERTY 7, the launch after the conversion. Left as the file it was converted from,
@@ -1331,7 +2622,7 @@ mod tests {
                 Box::new(|e| {
                     let mut r = QsoRecord::clone(&e.log_records()[3]);
                     r.name = Some("Edited".into());
-                    assert!(e.update_qso(3, r));
+                    assert!(e.update_qso(r.id.unwrap(), r));
                 }),
             ),
             (
@@ -1339,23 +2630,51 @@ mod tests {
                 Box::new(|e| {
                     let mut r = QsoRecord::clone(&e.log_records()[4]);
                     r.call = "K4FIX".into();
-                    assert!(e.update_qso(4, r));
+                    assert!(e.update_qso(r.id.unwrap(), r));
                 }),
             ),
             (
                 "qsl sent",
-                Box::new(|e| assert!(e.mark_qsl_sent(5, Some(QslVia::Bureau)))),
+                Box::new(|e| assert!(e.mark_qsl_sent(id_at(e, 5), Some(QslVia::Bureau)))),
             ),
             (
                 "qsl withdrawn",
-                Box::new(|e| assert!(e.mark_qsl_sent(5, None))),
+                Box::new(|e| assert!(e.mark_qsl_sent(id_at(e, 5), None))),
             ),
-            ("card", Box::new(|e| assert!(e.mark_qsl_card(6, true)))),
+            (
+                "card",
+                Box::new(|e| assert!(e.mark_qsl_card(id_at(e, 6), true))),
+            ),
             (
                 "sat",
-                Box::new(|e| assert!(e.set_sat_tag(7, Some("AO-91")))),
+                Box::new(|e| assert!(e.set_sat_tag(id_at(e, 7), Some("AO-91")))),
             ),
-            ("delete", Box::new(|e| assert!(e.delete_qso(8)))),
+            ("delete", Box::new(|e| assert!(e.delete_qso(id_at(e, 8))))),
+            (
+                "form edit",
+                Box::new(|e| {
+                    let id = id_at(e, 20);
+                    let stored = e.logged_row(id).expect("held");
+                    let key = QsoEdit::project(&stored).key();
+                    let mut edit = QsoEdit::project(&stored);
+                    edit.comment = Some("the form's edit".into());
+                    edit.qsl_sent_via = Some("D".into());
+                    edit.qsl_card = true;
+                    assert_eq!(e.edit_qso(id, &key, &edit), Ok(Ok(())));
+                }),
+            ),
+            (
+                "lotw batch",
+                Box::new(|e| {
+                    let signed = e.lotw_signed(&[id_at(e, 21), id_at(e, 22)]);
+                    e.stamp_lotw_batch(
+                        &signed,
+                        tempo_core::logbook::UploadOutcome::Pending,
+                        1_788_000_111,
+                        None,
+                    );
+                }),
+            ),
             (
                 "import",
                 Box::new(|e| {
@@ -1432,7 +2751,7 @@ mod tests {
                 "lotw stamp",
                 Box::new(|e| {
                     e.stamp_lotw_upload(
-                        &[9, 10],
+                        &[id_at(e, 9), id_at(e, 10)],
                         tempo_core::logbook::UploadOutcome::Pending,
                         1_788_000_000,
                         None,
@@ -1472,6 +2791,23 @@ mod tests {
             ("qsl withdrawn", any(&|r| r.qsl_sent.cleared_unix.is_some())),
             ("card", any(&|r| r.qsl_rcvd.card)),
             ("sat", any(&|r| r.sat_name.as_deref() == Some("AO-91"))),
+            (
+                "form edit",
+                any(&|r| {
+                    r.comment.as_deref() == Some("the form's edit")
+                        && r.qsl_sent.via == Some(QslVia::Direct)
+                        && r.qsl_rcvd.card
+                }),
+            ),
+            (
+                "lotw batch",
+                any(&|r| {
+                    r.upload
+                        .lotw
+                        .as_ref()
+                        .is_some_and(|u| u.when_unix == 1_788_000_111)
+                }),
+            ),
             ("imported", any(&|r| r.call == "K9ZZZ")),
             (
                 "import upgraded",
@@ -1542,7 +2878,7 @@ mod tests {
         let d = Dir::new("durable");
         std::fs::write(d.log(), legacy_log(10)).unwrap();
         let mut e = engine_on_store(&d);
-        let (ok, durability) = e.with_log_tickets(|e| e.mark_qsl_card(3, true));
+        let (ok, durability) = e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 3), true));
         assert!(ok);
         assert_eq!(durability.len(), 1, "one change, one ticket");
         durability.wait(DURABLE_WAIT).expect("durable");
@@ -1554,8 +2890,71 @@ mod tests {
         );
 
         // Nothing changed, nothing to wait for.
-        let (_, none) = e.with_log_tickets(|e| e.mark_qsl_card(999, true));
+        let nowhere = tempo_core::logbook::RecordId::Provisional {
+            hash: 999,
+            ordinal: 0,
+        };
+        let (_, none) = e.with_log_tickets(|e| e.mark_qsl_card(nowhere, true));
         assert!(none.is_empty());
+    }
+
+    /// ★ SPEC-2 C16: THE LOGBOOK FORM'S WHOLE EDIT IS ONE COMMIT. The fields, the QSL-sent mark
+    /// and the paper-card mark the form changes are one change — one ticket, one write — where
+    /// the form used to send three commands, each its own write, with a window between each for
+    /// another writer's change to land in. On disk, all three are there when the wait returns.
+    ///
+    /// The control is the same edit sent as those three commands, on the row beside it: three
+    /// tickets. So the one ticket above is the edit being one change, not a count that cannot
+    /// tell one change from three.
+    #[test]
+    fn the_form_s_whole_edit_is_one_commit() {
+        let d = Dir::new("one-commit");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut e = engine_on_store(&d);
+        flush(&e);
+        let form = |stored: &QsoRecord| {
+            let mut edit = QsoEdit::project(stored);
+            edit.name = Some("Edited".into());
+            edit.qsl_sent_via = Some("B".into());
+            edit.qsl_card = true;
+            edit
+        };
+
+        let id = id_at(&e, 3);
+        let stored = e.logged_row(id).expect("held");
+        let (key, edit) = (QsoEdit::project(&stored).key(), form(&stored));
+        let (done, durability) = e.with_log_tickets(|e| e.edit_qso(id, &key, &edit));
+        assert_eq!(done, Ok(Ok(())));
+        assert_eq!(durability.len(), 1, "the whole edit is one change");
+        durability.wait(DURABLE_WAIT).expect("durable");
+        let row = stored_row(&d, id);
+        assert_eq!(
+            (row.name.as_deref(), row.qsl_sent.via, row.qsl_rcvd.card),
+            (Some("Edited"), Some(QslVia::Bureau), true),
+            "all three are on disk when the one wait returns"
+        );
+
+        let id = id_at(&e, 4);
+        let mut rec = QsoRecord::clone(&e.logged_row(id).expect("held"));
+        rec.name = Some("Edited".into());
+        let (_, three) = e.with_log_tickets(|e| {
+            e.update_qso(id, rec)
+                && e.mark_qsl_sent(id, Some(QslVia::Bureau))
+                && e.mark_qsl_card(id, true)
+        });
+        assert_eq!(
+            three.len(),
+            3,
+            "control: the form's three commands are three changes"
+        );
+    }
+
+    /// The row `id` as the store holds it, read through a connection of the test's own.
+    fn stored_row(d: &Dir, id: tempo_core::logbook::RecordId) -> QsoRecord {
+        stored(d)
+            .into_iter()
+            .find(|r| r.id == Some(id))
+            .expect("stored")
     }
 
     // ── reading the store (SPEC-2's read path) ──────────────────────────────
@@ -1626,8 +3025,8 @@ mod tests {
         let durability = {
             let mut e = engine_lock(&engine);
             let (_, a) = e.with_log_tickets(|e| e.log_qso(qso("W1STALL", 1_788_000_000)));
-            let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(2, true));
-            let (_, c) = e.with_log_tickets(|e| e.delete_qso(5));
+            let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 2), true));
+            let (_, c) = e.with_log_tickets(|e| e.delete_qso(id_at(e, 5)));
             assert_eq!((a.len(), b.len(), c.len()), (1, 1, 1));
             vec![a, b, c]
         };
@@ -1680,7 +3079,7 @@ mod tests {
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let engine = shared_on_store(&d);
         let mut e = engine_lock(&engine);
-        let (_, durability) = e.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        let (_, durability) = e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 1), true));
         let _ = durability.wait(DURABLE_WAIT); // `e` is still held
     }
 
@@ -1694,7 +3093,7 @@ mod tests {
         let engine = shared_on_store(&d);
         let durability = {
             let mut e = engine_lock(&engine);
-            e.with_log_tickets(|e| e.mark_qsl_card(1, true)).1
+            e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 1), true)).1
         };
         durability
             .wait(DURABLE_WAIT)
@@ -1754,7 +3153,7 @@ mod tests {
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let engine = shared_on_store(&d);
         let mut raw = engine.lock().unwrap();
-        let (_, durability) = raw.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        let (_, durability) = raw.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 1), true));
         assert_eq!(
             tempo_core::logbook::io_fence::engine_guards_held(),
             0,
@@ -1832,7 +3231,7 @@ mod tests {
         );
 
         let hold = WriteHold::take(&d.db()).expect("stall the store");
-        assert!(e.mark_qsl_card(3, true));
+        assert!(e.mark_qsl_card(id_at(&e, 3), true));
         let unsaved = e.log_unsaved();
         assert!(!unsaved.is_empty(), "control: a change on its way is seen");
         assert_eq!(
@@ -1895,7 +3294,7 @@ mod tests {
         flush(&e);
         assert!(e.log_unsaved().is_empty(), "premise: all written");
 
-        assert!(e.mark_qsl_card(4, true));
+        assert!(e.mark_qsl_card(id_at(&e, 4), true));
         let unsaved = e.log_unsaved();
         assert!(
             unsaved.wait(DURABLE_WAIT).saved(),
@@ -1942,7 +3341,7 @@ mod tests {
 
         let hold = WriteHold::take(&d.db()).expect("stall the store");
         let good = Change::appended(&log, 1, |_| (None, None));
-        opened.store.submit(good, &log).expect("a ticket");
+        opened.store.submit(good).expect("a ticket");
         let mut orphan = qso("K5ORPHAN", 1_788_000_100);
         orphan.id = None;
         let refused = Change {
@@ -1950,7 +3349,7 @@ mod tests {
             upsert: vec![sqlite::RowWrite::new(Arc::new(orphan))],
             ..Change::default()
         };
-        opened.store.submit(refused, &log).expect("a ticket");
+        opened.store.submit(refused).expect("a ticket");
         let unsaved = opened.store.unsaved();
         assert_eq!(
             unsaved.standing().pending,
@@ -1996,7 +3395,7 @@ mod tests {
     ) -> Option<Ticket> {
         let effects = log.apply(op.clone());
         let change = Change::of(&op, &effects, log, |_| (None, None));
-        store.submit(change, log)
+        store.submit(change)
     }
 
     /// Wait (up to `secs`) until the writer has finished with `t`.
@@ -2031,7 +3430,7 @@ mod tests {
             upsert: vec![sqlite::RowWrite::new(Arc::new(orphan))],
             ..Change::default()
         };
-        let t = store.submit(refused, &log).expect("a ticket");
+        let t = store.submit(refused).expect("a ticket");
         assert!(resolved(&t, 30), "the writer gives up on it");
         let r = t.refusal().expect("refused");
         assert!(!r.retryable, "a row with no id is refused every time");
@@ -2059,6 +3458,56 @@ mod tests {
             "the quit asks about it: {s:?}"
         );
         assert!(!store.unsaved().is_empty(), "so a quit is held for it");
+    }
+
+    /// An export counts a change the store refused for what it is APART from the changes still
+    /// being saved: those will land, this one never will, and the screen says which. The file is
+    /// the store as it stands, without it. The control is the same export before the refusal,
+    /// which lacks nothing.
+    #[test]
+    fn an_export_counts_a_change_refused_for_good_apart_from_the_changes_still_saving() {
+        let d = Dir::new("export-held");
+        let mut opened = open_fast(&d);
+        let log = log_of(&mut opened);
+        let store = &mut opened.store;
+        let adif = || tempo_core::logbook::ExportKind::Adif {
+            from: None,
+            to: None,
+        };
+        let export = |store: &LogStore| {
+            crate::logexport::export_waiting(
+                &crate::logexport::Source::of_store(store),
+                adif(),
+                Duration::from_millis(200),
+            )
+            .expect("an export is written")
+        };
+        let before = export(store);
+        assert_eq!(
+            (before.saving, before.held),
+            (0, 0),
+            "control: nothing lacking"
+        );
+
+        let mut orphan = qso("K5ORPHAN", 1_788_000_100);
+        orphan.id = None;
+        let refused = Change {
+            rev: log.revision() + 1,
+            upsert: vec![sqlite::RowWrite::new(Arc::new(orphan))],
+            ..Change::default()
+        };
+        let t = store.submit(refused).expect("a ticket");
+        assert!(resolved(&t, 30), "the writer gives up on it");
+        assert!(!t.refusal().expect("refused").retryable, "for good");
+
+        let after = export(store);
+        assert_eq!(
+            (after.saving, after.held),
+            (0, 1),
+            "counted as held, not as still being saved"
+        );
+        assert!(!after.text.contains("K5ORPHAN"), "and not in the file");
+        assert_eq!(after.text, before.text, "the store as it stands");
     }
 
     /// ★ A change the database dropped for a reason that can pass is sent again FROM MEMORY once
@@ -2156,6 +3605,12 @@ mod tests {
     /// retry ladder (about 21 s — this test waits it out), the writer drops the change, and the
     /// engine keeps it: the snapshot says so, the quit counts it as a change that sending again
     /// can save, and sending it again lands it once the database is free.
+    ///
+    /// And a read of the store follows it too: stale while the change is held — it truly is not
+    /// saved — and current again once the re-send has landed it, so the folds keep their answers
+    /// again rather than reading the whole log at every ask for the rest of the session. An export
+    /// (the operator's pick) is written all the while — the rescue a failing disk needs — and
+    /// counts the change it lacks until the re-send lands it.
     #[test]
     fn the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so() {
         let d = Dir::new("resend-busy");
@@ -2165,7 +3620,7 @@ mod tests {
         assert_eq!(e.snapshot().log_save_trouble, None, "control: no trouble");
 
         let hold = WriteHold::take(&d.db()).expect("another program holds the database");
-        assert!(e.mark_qsl_card(3, true));
+        assert!(e.mark_qsl_card(id_at(&e, 3), true));
         let dropped = eventually_for(Duration::from_secs(60), || {
             e.log_unsaved().standing().retryable == 1
         });
@@ -2174,10 +3629,62 @@ mod tests {
         assert_eq!((trouble.retrying, trouble.held), (1, 0), "{trouble:?}");
         assert!(trouble.reason.contains("locked"), "{trouble:?}");
         assert_eq!(e.log_resend_due(), 0, "not sent again the moment it drops");
+        let adif = || tempo_core::logbook::ExportKind::Adif {
+            from: None,
+            to: None,
+        };
+        let held = crate::logexport::export_waiting(
+            &crate::logexport::Source::of(&e),
+            adif(),
+            Duration::from_millis(200),
+        )
+        .expect("an export while the change is held is written — the rescue a failing disk needs");
+        assert_eq!(
+            (held.saving, held.held),
+            (1, 0),
+            "and counts the change it lacks, as still being saved: it is sent again"
+        );
+        assert!(
+            !held.text.contains("<QSL_RCVD:1>Y"),
+            "the store as it stands, without the change"
+        );
+        let read = |e: &Engine| {
+            e.log_rows()
+                .each_record(Duration::from_millis(100), &mut |_| {
+                    std::ops::ControlFlow::Continue(())
+                })
+                .expect("the store reads")
+        };
+        assert!(
+            matches!(read(&e), Freshness::Stale(_)),
+            "a read while the change is held is stale: it truly is not saved"
+        );
+        assert!(
+            !e.log_unsaved().is_empty(),
+            "a quit waits for it (what the close's logbook_waiting asks)"
+        );
 
         drop(hold);
         assert_eq!(e.log_resend_all(), 1, "sent again, from memory");
         assert!(e.log_unsaved().wait(DURABLE_WAIT).saved(), "and it lands");
+        flush(&e);
+        assert!(
+            e.log_unsaved().is_empty(),
+            "and a quit has nothing left to wait for, log.adi included"
+        );
+        let saved = crate::logexport::export_waiting(
+            &crate::logexport::Source::of(&e),
+            adif(),
+            DURABLE_WAIT,
+        )
+        .expect("an export once the re-send has landed the change");
+        assert!(saved.text.contains("<QSL_RCVD:1>Y"), "carries the change");
+        assert_eq!((saved.saving, saved.held), (0, 0), "and lacks nothing");
+        assert_eq!(
+            read(&e),
+            Freshness::Current,
+            "a read once the re-send has landed the change is current again"
+        );
         let id = e.log_records()[3].id;
         assert!(
             stored(&d)
@@ -2338,15 +3845,10 @@ mod tests {
             None
         ));
         flush(&a);
-        let at = b
-            .log_records()
-            .iter()
-            .position(|r| r.id == target.id)
-            .unwrap();
         // Wait until B's writer has SEEN A's stamp commit — without B polling — so the change
         // below is the case under test: a foreign commit B has not yet folded in.
         assert!(eventually(|| b.log_store_foreign_pending()));
-        assert!(b.mark_qsl_card(at, true));
+        assert!(b.mark_qsl_card(target.id.unwrap(), true));
         flush(&b);
         let row = stored(&d)
             .into_iter()
@@ -2359,20 +3861,11 @@ mod tests {
         );
 
         // A edits a row's CALL; B sees an edit, not a new contact beside the old one.
-        let at = a
-            .log_records()
-            .iter()
-            .position(|r| r.call == "K5ABC")
-            .unwrap();
-        let mut edited = QsoRecord::clone(&a.log_records()[at]);
+        let mut edited = find(&a, "K5ABC").unwrap();
         edited.call = "K5ABD".into();
-        assert!(a.update_qso(at, edited));
+        assert!(a.update_qso(edited.id.unwrap(), edited));
         // A deletes a row; B must not bring it back.
-        let gone = a
-            .log_records()
-            .iter()
-            .position(|r| r.call == "K7ABC")
-            .unwrap();
+        let gone = find(&a, "K7ABC").and_then(|r| r.id).unwrap();
         assert!(a.delete_qso(gone));
         flush(&a);
         assert!(eventually(|| {
@@ -2393,13 +3886,14 @@ mod tests {
         same_log(&stored(&d), a.log_records(), "and so does the store");
     }
 
-    /// ⛔ A POSITION HELD ACROSS ANOTHER WINDOW'S DELETE STILL NAMES ITS CONTACT. The Logbook
-    /// and the Remote find a row, then change it by position, in one hold of the engine lock —
-    /// and the change first folds in whatever another window committed. A fold-in that removed
-    /// the other window's deleted row would shift every row after it, and the change would land
-    /// on a different contact. So the fold-in a change makes moves nothing; the deleted row
-    /// lingers until the next freshness poll, which may move rows because nobody holds a
-    /// position across it.
+    /// ⛔ A POSITION HELD ACROSS ANOTHER WINDOW'S DELETE STILL NAMES ITS CONTACT. Until SPEC-2's
+    /// C16 the Logbook and the Remote found a row, then changed it by position, in one hold of
+    /// the engine lock — and the change first folds in whatever another window committed. A
+    /// fold-in that removed the other window's deleted row would shift every row after it, and
+    /// the change would land on a different contact. So the fold-in a change makes moves
+    /// nothing; the deleted row lingers until the next freshness poll, which may move rows
+    /// because nobody holds a position across it. Every change is addressed by id since C16, so
+    /// nothing holds a position any more; this pins the in-place fold-in until it goes (§4.7).
     #[test]
     fn a_position_held_across_another_windows_delete_still_names_its_contact() {
         let d = Dir::new("positions");
@@ -2408,12 +3902,15 @@ mod tests {
         let mut b = engine_on_store(&d);
         let target = QsoRecord::clone(&b.log_records()[5]);
 
-        assert!(a.delete_qso(1), "A deletes a row ABOVE B's target");
+        assert!(
+            a.delete_qso(id_at(&a, 1)),
+            "A deletes a row ABOVE B's target"
+        );
         flush(&a);
         assert!(eventually(|| b.log_store_foreign_pending()));
 
-        // B changes the row it holds position 5 for — without polling first.
-        assert!(b.mark_qsl_card(5, true));
+        // B changes the row at position 5, by its id — without polling first.
+        assert!(b.mark_qsl_card(target.id.unwrap(), true));
         assert_eq!(
             b.log_records()[5].id,
             target.id,
@@ -2446,42 +3943,50 @@ mod tests {
         same_log(b.log_records(), a.log_records(), "the two windows agree");
     }
 
-    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S LAUNCH FILL. A launch fills countries
-    /// in memory and writes nothing, so the store holds those rows unfilled — and a re-read
-    /// takes the store's copy of every row this window has no change in flight for. With
-    /// nothing more, the other window's next contact would cost this one every country its
-    /// launch filled in, until a restart: awards and the needed board reading blanks.
-    ///
-    /// Both re-reads: the freshness poll's, which may move rows, and the in-place one a change
-    /// makes first.
+    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S FILLS — and a window opened before
+    /// them takes them in. The fills are in the store (D2-A), so a re-read of it — the freshness
+    /// poll's, which may move rows, and the in-place one a change makes first — brings them
+    /// with every row it takes; the other window's own contacts arrive filled, because it fills
+    /// before it writes.
     #[test]
-    fn another_windows_commit_keeps_this_ones_launch_fill() {
+    fn another_windows_commit_keeps_this_ones_fills() {
         let d = Dir::new("refill");
         std::fs::write(d.log(), legacy_log(6)).unwrap();
-        flush(&engine_on_store(&d)); // the conversion
-        let mut a = Engine::new("K2DEF", "FN31", 0);
-        a.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
-        a.attach_log_store(open_fast(&d));
-        let unfilled = |e: &Engine| {
-            e.log_records()
+        flush(&engine_on_store(&d)); // the conversion: every row unfilled
+        let a = launch_with_resolvers(&d);
+        // A window opened before the fills were saved.
+        let early = launch_with_resolvers(&d);
+        assert_eq!(
+            fill(&a, 1).filled,
+            6,
+            "premise: the fill job filled every row"
+        );
+        flush(&a.lock().unwrap());
+        let unfilled = |e: &Mutex<Engine>| {
+            e.lock()
+                .unwrap()
+                .log_records()
                 .iter()
                 .filter(|r| r.country.is_none())
                 .map(|r| r.call.clone())
                 .collect::<Vec<_>>()
         };
-        assert!(
-            unfilled(&a).is_empty(),
-            "premise: the launch filled every row"
+        assert_eq!(unfilled(&a), Vec::<String>::new(), "premise: A filled them");
+        assert_eq!(
+            unfilled(&early).len(),
+            6,
+            "premise: the early window has not"
         );
-        assert!(
-            stored(&d).iter().all(|r| r.country.is_none()),
-            "premise: in memory only"
-        );
-
-        let mut b = engine_on_store(&d);
-        b.log_qso(qso("W1AAA", 1_788_000_000));
-        flush(&b);
         assert!(eventually(|| {
+            early.lock().unwrap().sync_shared_log_if_changed();
+            unfilled(&early).is_empty()
+        }));
+
+        let b = launch_with_resolvers(&d);
+        b.lock().unwrap().log_qso(qso("W1AAA", 1_788_000_000));
+        flush(&b.lock().unwrap());
+        assert!(eventually(|| {
+            let mut a = a.lock().unwrap();
             a.sync_shared_log_if_changed();
             find(&a, "W1AAA").is_some()
         }));
@@ -2491,18 +3996,28 @@ mod tests {
             "after the freshness poll's re-read, every row carries its country — the new one too"
         );
 
-        b.log_qso(qso("W2BBB", 1_788_000_100));
-        flush(&b);
-        assert!(eventually(|| a.log_store_foreign_pending()));
+        b.lock().unwrap().log_qso(qso("W2BBB", 1_788_000_100));
+        flush(&b.lock().unwrap());
+        assert!(eventually(|| a.lock().unwrap().log_store_foreign_pending()));
+        let first = id_at(&a.lock().unwrap(), 0);
         assert!(
-            a.mark_qsl_card(0, true),
+            a.lock().unwrap().mark_qsl_card(first, true),
             "a change, which re-reads in place"
         );
-        assert!(find(&a, "W2BBB").is_some(), "premise: the change re-read");
+        assert!(
+            find(&a.lock().unwrap(), "W2BBB").is_some(),
+            "premise: the change re-read"
+        );
         assert_eq!(
             unfilled(&a),
             Vec::<String>::new(),
             "after a change's in-place re-read, likewise"
+        );
+        flush(&a.lock().unwrap());
+        same_log(
+            a.lock().unwrap().log_records(),
+            &stored(&d),
+            "and A shows what the store holds",
         );
     }
 
@@ -2518,11 +4033,15 @@ mod tests {
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let mut a = engine_on_store(&d);
         let mut b = engine_on_store(&d);
-        let signed = a.lotw_signed(&[0, 1, 2, 3, 4]);
+        let ids: Vec<_> = (0..5).map(|at| id_at(&a, at)).collect();
+        let signed = a.lotw_signed(&ids);
         assert_eq!(signed.len(), 5, "premise: A hands TQSL five contacts");
 
         let deleted = b.log_records()[2].id;
-        assert!(b.delete_qso(2), "B deletes one while A's TQSL runs");
+        assert!(
+            b.delete_qso(deleted.unwrap()),
+            "B deletes one while A's TQSL runs"
+        );
         flush(&b);
         assert!(eventually(|| a.log_store_foreign_pending()));
         let done = a.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_000, None);
@@ -2542,6 +4061,74 @@ mod tests {
             (4, 0, 1),
             "four stamped; the deleted contact is counted gone"
         );
+    }
+
+    /// ★ THE DIAGNOSIS NAMES THE CONTACTS IT READ — in the gap where another window has deleted a
+    /// row this window still shows (C17a; what the Awards view uploads by, once it uploads by id).
+    /// Since C14 the confirmation diagnostics read the store, so their positions are the store's;
+    /// this window's log in memory keeps the deleted row until its next re-read, so a position
+    /// looked up there names the contact after it. The report's ids are those of the rows the
+    /// diagnosis read — the contacts it is about — never the deleted one; and its positions,
+    /// looked up here, name other contacts: the control that the gap is real.
+    #[test]
+    fn the_diagnosis_names_its_contacts_while_this_window_still_shows_a_deleted_row() {
+        let d = Dir::new("diag-gap");
+        std::fs::write(d.log(), legacy_log(8)).unwrap();
+        let a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let gone = id_at(&b, 2);
+        assert!(b.delete_qso(gone));
+        flush(&b);
+        // A has seen B's commit and has not re-read: it still shows the deleted contact.
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        assert!(
+            a.log_records().iter().any(|r| r.id == Some(gone)),
+            "premise: this window still shows the deleted contact"
+        );
+
+        let report = a
+            .confirmation_diagnostics_inputs()
+            .diagnose_named(1_800_000_000, |_| None)
+            .expect("the store reads");
+        let rows = stored(&d);
+        let id_of = |i: usize| rows.get(i).and_then(|r| r.id).map(|id| id.to_string());
+        let bucket = report
+            .buckets
+            .iter()
+            .find(|b| b.qso_indices.len() > 2)
+            .expect("premise: a bucket of contacts past the deleted one's place");
+        let ids = bucket
+            .qso_ids
+            .clone()
+            .expect("the desktop's report names its contacts");
+        assert_eq!(
+            ids,
+            bucket
+                .qso_indices
+                .iter()
+                .map(|&i| id_of(i))
+                .collect::<Vec<_>>(),
+            "each id is the contact the diagnosis read at that position"
+        );
+        assert!(
+            !ids.contains(&Some(gone.to_string())),
+            "and never the deleted one"
+        );
+        assert!(!report.diagnoses.is_empty(), "premise: contacts diagnosed");
+        for diag in &report.diagnoses {
+            let r = &rows[diag.index];
+            assert_eq!(diag.id, r.id.map(|id| id.to_string()), "row {}", diag.index);
+            assert_eq!(diag.call.as_deref(), Some(r.call.as_str()));
+        }
+        // The control: the same positions, looked up in this window's log in memory, name other
+        // contacts — the deleted one among them — which an upload by position would sign.
+        let by_position: Vec<Option<String>> = a
+            .ids_at_positions(&bucket.qso_indices)
+            .into_iter()
+            .map(|id| Some(id.to_string()))
+            .collect();
+        assert_ne!(by_position, ids, "the gap is real");
+        assert!(by_position.contains(&Some(gone.to_string())));
     }
 
     // ── a log.adi the store does not account for ────────────────────────────
@@ -2879,7 +4466,7 @@ mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.attach_log_store(opened);
         same_log(e.log_records(), source.records(), "every contact, once");
-        // Attached, the log goes to the mirror lane, which writes after its debounce: asserting
+        // Attached, the mirror lane is told, and writes after its debounce: asserting
         // `log.adi` unchanged HERE raced the lane. Settle it, then hold the file to what the
         // completed conversion makes it, with the operator's own copy kept beside it.
         flush(&e);

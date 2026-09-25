@@ -31,8 +31,9 @@
 //!
 //! No migration of an existing `log.adi` (C5), no writer thread (C7), no ADIF mirror (C6).
 //! It opens or creates the database, applies the schema, and converts records both ways — all
-//! of them ([`LogDb::load_all`]) or the ones some ids name ([`LogDb::rows_by_ids`]), through
-//! ONE decoder and inside one read transaction — and opens the read-only connections SPEC-2's
+//! of them ([`LogDb::load_all`]), the ones some ids name ([`LogDb::rows_by_ids`]), or every row
+//! a pass over the log visits with only the fields it reads ([`LogDb::each_narrow`]) — through
+//! ONE decoder and inside one read transaction, and opens the read-only connections SPEC-2's
 //! read path hands out ([`LogDb::open_reader`], pooled by [`super::reader::LogReader`]).
 //!
 //! # Where this implementation departs from SPEC-1 §v3.11, and why
@@ -58,10 +59,11 @@
 
 use super::{
     ContestFields, Logbook, Ota, QslRcvd, QslSent, QslVia, QsoRecord, RecordId, UploadDetail,
-    UploadOutcome, UploadState, UploadStatus,
+    UploadOutcome, UploadState, UploadStatus, Watermarks,
 };
 use rusqlite::{params, params_from_iter, Connection};
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -89,11 +91,73 @@ const CONVERSION_CACHE_KIB: i64 = 65_536;
 /// many, inside the same read transaction, and comes back in one log order.
 const ROWS_PER_STATEMENT: usize = 512;
 
-/// Which records [`LogDb::decode`] reads: every one, or those at these rowids (sorted).
+/// How many whole records one step of a streamed read ([`LogDb::each_record`]) decodes and holds
+/// at once — what bounds the memory a pass over the whole log costs, whatever the log's size: a
+/// few thousand contacts of a few KB each, never the hundreds of megabytes of a lifetime log.
+pub const RECORD_CHUNK: usize = 4_096;
+
+/// Which records [`LogDb::decode`] reads: every one, those at these rowids (sorted), or those
+/// whose rowid is above `after` and at most `last`.
 #[derive(Debug, Clone, Copy)]
 enum Rows<'a> {
     All,
     At(&'a [i64]),
+    Span { after: i64, last: i64 },
+}
+
+/// What a narrow read ([`LogDb::each_narrow`]) fills of each record — SPEC-2 v3's **C14**.
+///
+/// A pass over the whole log that reads five fields of each contact has no use for the other
+/// sixty, nor for every contact's passthrough, and a lifetime log decoded whole is the hundreds
+/// of megabytes Stage 2 exists to stop holding. So a pass names the columns it reads and is
+/// handed records with exactly those filled, by THE decoder ([`record_from_row`], the one
+/// [`LogDb::load_all`] uses). Every other field is left as a record with nothing in it has it:
+/// empty text, `None`, `false`, `0`. The passthrough and the contest exchange are never read.
+#[derive(Debug, Clone, Copy)]
+pub struct Narrow {
+    /// The `qso` columns to read, by their names in the schema ([`QSO_COLUMNS`]). The id is
+    /// always read. A name the schema does not have is an error, never a column quietly left
+    /// empty.
+    pub columns: &'static [&'static str],
+    /// Whether to read the upload stamps (`qso_upload`) as well.
+    pub uploads: bool,
+}
+
+/// Which rows a narrow read visits.
+///
+/// ⚠️ **Each is a question the store can answer from an index, never a caller's own rule.**
+/// SPEC-2 v3 P2: SQL narrows, Rust decides. A caller whose test is "the same call" or "today"
+/// reads the rows its scope names and still applies its own test to every one of them — a
+/// scope only has to be WIDER than that test, and each variant says why it is.
+#[derive(Debug, Clone, Copy)]
+pub enum Scope<'a> {
+    /// Every row.
+    All,
+    /// The rows logged at or after this instant (`when_unix >= t`, the `qso_recent` index) —
+    /// exactly the rows any "since t" test keeps, since it is the same comparison on the same
+    /// stored number.
+    Since(u64),
+    /// The rows whose stored `call_norm` — the call trimmed and ASCII-uppercased when it was
+    /// written — is this string (the `qso_callhist` index). Pass it normalised the same way
+    /// ([`call_norm_of`]). It holds every row an exact call test can accept: a call equal to a
+    /// trimmed callsign, ASCII case aside, has no whitespace at either end, so its stored
+    /// `call_norm` is that callsign ASCII-uppercased.
+    CallNorm(&'a str),
+}
+
+/// Which way a narrow read walks the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    /// Log order: the order the rows were stored in, which is the order the log holds them in.
+    Log,
+    /// Log order reversed — the newest row first.
+    NewestFirst,
+}
+
+/// A callsign as the store keys it in `call_norm`: trimmed, then ASCII-uppercased. What a
+/// [`Scope::CallNorm`] is asked with.
+pub fn call_norm_of(call: &str) -> String {
+    call_norm(call)
 }
 
 /// `log_meta`, applied BEFORE [`DDL`] so the version can be read first.
@@ -302,6 +366,11 @@ const INDEXES: [&str; 9] = [
     "CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw)",
     "CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC)",
 ];
+
+/// The reads behind the UI's log questions (SPEC-2 v3 C17a): the order vectors, rows by rowid,
+/// the call index.
+mod query_reads;
+pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
 
 /// Every `qso` column the store writes, **in bind order**.
 ///
@@ -526,37 +595,11 @@ impl RowWrite {
     }
 }
 
-/// The five watermarks, as `log_meta` holds them.
-///
-/// They survive into SQLite rather than being replaced by a bare "the table changed" because
-/// every cache over the log keys on one of them — see [`super::OpClass`] for which class moves
-/// which. Written in the SAME transaction as the rows they describe, so a watermark read back
-/// out of the database names the state the database is actually in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Watermarks {
-    /// Moves on every change.
-    pub revision: u64,
-    /// The last change that was not an append at the end.
-    pub content_rev: u64,
-    /// The last change a derived index over the rows' content must be rebuilt for.
-    pub index_rev: u64,
-    /// The last change that moved a row's identifying fields.
-    pub key_rev: u64,
-    /// The last change a plan built on an earlier snapshot cannot be rebased over.
-    pub shape_rev: u64,
-}
-
 impl Watermarks {
     /// The log's watermarks as they stand. Take it under whatever lock guards the log, in the
     /// same breath as the change it describes.
     pub fn of(log: &Logbook) -> Watermarks {
-        Watermarks {
-            revision: log.revision(),
-            content_rev: log.content_rev(),
-            index_rev: log.index_rev(),
-            key_rev: log.key_rev(),
-            shape_rev: log.shape_rev(),
-        }
+        log.marks()
     }
 
     /// The `log_meta` keys, in a fixed order so a stored database always reads the same way.
@@ -594,6 +637,9 @@ pub struct Batch<'a> {
     /// finish its change. A watermark must never run AHEAD of the rows — a cache keyed on one
     /// that does serves a stale answer, where one that lags only costs a rebuild.
     pub marks: Option<Watermarks>,
+    /// Other `log_meta` keys, set in the same transaction — a change's own facts about its
+    /// rows, on its last chunk only, like the watermarks (`fill_ver`, SPEC-2 v3 D2-A).
+    pub meta: &'a [(&'static str, i64)],
 }
 
 /// The logbook's database.
@@ -898,6 +944,15 @@ impl LogDb {
                     set.execute(params![k, v])?;
                 }
             }
+            if !b.meta.is_empty() {
+                let mut set = tx.prepare(
+                    "INSERT INTO log_meta (k, v) VALUES (?1, ?2)
+                     ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                )?;
+                for (k, v) in b.meta {
+                    set.execute(params![k, v])?;
+                }
+            }
         }
         tx.commit()?;
         Ok(())
@@ -973,28 +1028,62 @@ impl LogDb {
         })
     }
 
+    /// Hand `each` every record the store holds, WHOLE, in log order — each exactly as
+    /// [`Self::load_all`] hands it back, through the same decoder — `chunk` records at a time,
+    /// inside ONE read transaction ([`Self::in_one_snapshot`]). SPEC-2 v3 §4.5: what the exports
+    /// and the `log.adi` mirror read.
+    ///
+    /// A pass holds one chunk of the log, never the whole of it, and sees one picture of the
+    /// store whatever commits meanwhile. A chunk is a run of rowids, and its children are read
+    /// by that same run — a range of the rowid's own index for every table, not a list of the
+    /// run's rowids. `each` answering [`ControlFlow::Break`] ends the pass there.
+    pub fn each_record(
+        &self,
+        chunk: usize,
+        each: &mut dyn FnMut(QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        self.each_record_observed(chunk, each, &mut || {})
+    }
+
+    /// [`Self::each_record`], with `between` run after each chunk is handed out — the seam a test
+    /// uses to commit in the middle of a pass.
+    fn each_record_observed(
+        &self,
+        chunk: usize,
+        each: &mut dyn FnMut(QsoRecord) -> ControlFlow<()>,
+        between: &mut dyn FnMut(),
+    ) -> Result<()> {
+        let chunk = i64::try_from(chunk.max(1)).unwrap_or(i64::MAX);
+        self.in_one_snapshot(|db| {
+            // The rowid that ends the next run of `chunk` rows. No row's rowid is `i64::MIN`
+            // (SQLite hands out rowids from 1, and a copy keeps them positive).
+            let mut next = db.conn.prepare(
+                "SELECT max(rowid) FROM \
+                 (SELECT rowid FROM qso WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)",
+            )?;
+            let mut after = i64::MIN;
+            loop {
+                let last: Option<i64> = next.query_row(params![after, chunk], |r| r.get(0))?;
+                let Some(last) = last else {
+                    return Ok(());
+                };
+                for rec in db.decode(Rows::Span { after, last }, &mut || {})? {
+                    if each(rec).is_break() {
+                        return Ok(());
+                    }
+                }
+                between();
+                after = last;
+            }
+        })
+    }
+
     /// THE decoder: the records `rows` names, in log order, each assembled from its `qso` row
     /// and its four child tables. [`Self::load_all`] and [`Self::rows_by_ids`] both come
     /// here, so a record cannot read back one way through one and another way through the
     /// other. Run inside a read transaction by its callers; `between` is the load's test seam.
     fn decode(&self, rows: Rows<'_>, between: &mut dyn FnMut()) -> Result<Vec<QsoRecord>> {
-        // The rows a child table's sweep is limited to: none, or the ones at `rows`' rowids.
-        // The rowids are integers this module read out of the store itself, written as
-        // literals — there is no text in them to escape.
-        let (of_rows, of_children) = match rows {
-            Rows::All => (String::new(), String::new()),
-            Rows::At(rowids) => {
-                let list = rowids
-                    .iter()
-                    .map(i64::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                (
-                    format!("WHERE rowid IN ({list})"),
-                    format!("WHERE qso_id IN (SELECT id FROM qso WHERE rowid IN ({list}))"),
-                )
-            }
-        };
+        let (of_rows, of_children) = decode_filters(rows);
         // The children come back in three sweeps rather than three queries per record: a
         // lifetime log is hundreds of thousands of rows, and 3N statement executions to
         // rebuild what 3 can is the shape of the problem this whole programme is removing.
@@ -1084,24 +1173,12 @@ impl LogDb {
             let id: String = row.get(0)?;
             let service: String = row.get(1)?;
             let code: String = row.get(2)?;
-            // A code this build does not know is dropped, exactly as `take_upload` drops it on
-            // the ADIF side — the filter that cleans a store an earlier build poisoned.
-            let Some(outcome) = UploadOutcome::from_code(&code) else {
+            let detail: Option<String> = row.get(4)?;
+            let Some(st) = stamp_of(&code, row.get(3)?, detail.as_deref()) else {
                 continue;
             };
-            let detail: Option<String> = row.get(4)?;
-            let st = UploadStatus {
-                outcome,
-                when_unix: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                detail: detail.as_deref().and_then(UploadDetail::from_code),
-            };
-            let slot = out.entry(id).or_default();
-            match service.as_str() {
-                "lotw" => slot.lotw = Some(st),
-                "eqsl" => slot.eqsl = Some(st),
-                "qrz" => slot.qrz = Some(st),
-                "clublog" => slot.clublog = Some(st),
-                _ => {}
+            if let Some(slot) = stamp_slot(out.entry(id).or_default(), &service) {
+                *slot = Some(st);
             }
         }
         Ok(out)
@@ -1129,6 +1206,177 @@ impl LogDb {
             } else {
                 slot.1.push(pair);
             }
+        }
+        Ok(out)
+    }
+
+    /// Hand `each` every row `scope` names, in `order`, with only `narrow`'s fields filled —
+    /// one record at a time, never the log's rows held together — inside ONE read transaction
+    /// ([`Self::in_one_snapshot`]), so the pass sees one picture of the store whatever commits
+    /// meanwhile. `each` answering [`ControlFlow::Break`] ends the pass there.
+    ///
+    /// **The decoder is [`record_from_row`], unchanged.** The statement selects every column of
+    /// [`QSO_COLUMNS`] in its place, and a column `narrow` does not name is selected as the
+    /// value a record with nothing in that field reads back as ([`Self::empty_values`]), so the
+    /// one decoder reads a narrow row exactly as it reads a whole one. The upload stamps, when
+    /// asked for, arrive through a join, one row per stamp, and are read by the same
+    /// [`stamp_of`] the whole-record load uses.
+    pub fn each_narrow(
+        &self,
+        narrow: Narrow,
+        scope: Scope<'_>,
+        order: Order,
+        each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, each))
+    }
+
+    /// The statement a narrow read runs, and the value its one parameter is bound to, if it has
+    /// one. Its own function so a test can ask SQLite how it plans exactly this statement.
+    fn narrow_sql(
+        &self,
+        narrow: Narrow,
+        scope: Scope<'_>,
+        order: Order,
+    ) -> Result<(String, Option<rusqlite::types::Value>)> {
+        if let Some(unknown) = narrow.columns.iter().find(|c| !QSO_COLUMNS.contains(c)) {
+            return Err(Error::Sql(rusqlite::Error::InvalidColumnName(
+                (*unknown).to_string(),
+            )));
+        }
+        let empty = self.empty_values()?;
+        let mut projection = Vec::with_capacity(QSO_COLUMNS.len());
+        for c in QSO_COLUMNS {
+            if *c == "id" || narrow.columns.contains(c) {
+                projection.push(format!("q.{c}"));
+            } else {
+                // A column the table does not define cannot be selected at all; saying so here
+                // beats the decoder reading a NULL into a field that cannot hold one.
+                let value = empty
+                    .get(*c)
+                    .ok_or_else(|| rusqlite::Error::InvalidColumnName((*c).to_string()))?;
+                projection.push((*value).to_string());
+            }
+        }
+        let (stamps, join) = if narrow.uploads {
+            (
+                ", u.service, u.outcome, u.when_unix, u.detail",
+                " LEFT JOIN qso_upload u ON u.qso_id = q.id",
+            )
+        } else {
+            ("", "")
+        };
+        // ⚠️ Each narrowing scope NAMES its index. Left to itself, SQLite answers
+        // `… WHERE when_unix >= ? ORDER BY rowid` by scanning the whole table in rowid order to
+        // spare itself a sort — measured by the plan test below — which would make today's
+        // contacts cost the whole log. Every store a reader sees has its indexes: an ordinary
+        // open builds any that are missing, and a conversion builds them before it is done.
+        let (index, filter, bound): (&str, &str, Option<rusqlite::types::Value>) = match scope {
+            Scope::All => ("", "", None),
+            // A stored time is never above `i64::MAX` (`stamp` refuses one), so a bound past it
+            // names no row — which is what `i64::MAX` asks for.
+            Scope::Since(t) => (
+                " INDEXED BY qso_recent",
+                " WHERE q.when_unix >= ?1",
+                Some(rusqlite::types::Value::Integer(
+                    i64::try_from(t).unwrap_or(i64::MAX),
+                )),
+            ),
+            Scope::CallNorm(call) => (
+                " INDEXED BY qso_callhist",
+                " WHERE q.call_norm = ?1",
+                Some(rusqlite::types::Value::Text(call.to_string())),
+            ),
+        };
+        let direction = match order {
+            Order::Log => "",
+            Order::NewestFirst => " DESC",
+        };
+        let sql = format!(
+            "SELECT {}{stamps}, q.rowid FROM qso q{index}{join}{filter} ORDER BY q.rowid{direction}",
+            projection.join(", ")
+        );
+        Ok((sql, bound))
+    }
+
+    /// [`Self::each_narrow`]'s body, which it runs in one read transaction.
+    fn narrow_pass(
+        &self,
+        narrow: Narrow,
+        scope: Scope<'_>,
+        order: Order,
+        each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        let (sql, bound) = self.narrow_sql(narrow, scope, order)?;
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = match &bound {
+            Some(v) => stmt.query([v])?,
+            None => stmt.query([])?,
+        };
+        let stamp_at = QSO_COLUMNS.len();
+        let rowid_at = stamp_at + if narrow.uploads { 4 } else { 0 };
+        // The record being assembled: a row with several stamps arrives as several joined rows,
+        // one after another, all with its rowid.
+        let mut current: Option<(i64, QsoRecord)> = None;
+        while let Some(row) = rows.next()? {
+            let rowid: i64 = row.get(rowid_at)?;
+            if current.as_ref().is_none_or(|(at, _)| *at != rowid) {
+                if let Some((_, rec)) = current.take() {
+                    if each(&rec).is_break() {
+                        return Ok(());
+                    }
+                }
+                let mut rec = record_from_row(row)?;
+                // The same emptiness test `decode` applies: an all-empty block is no contest.
+                if rec.contest.as_deref().is_some_and(contest_is_empty) {
+                    rec.contest = None;
+                }
+                current = Some((rowid, rec));
+            }
+            if narrow.uploads {
+                // NULL when the join found no stamp for the row.
+                if let Some(service) = row.get::<_, Option<String>>(stamp_at)? {
+                    let code: String = row.get(stamp_at + 1)?;
+                    let detail: Option<String> = row.get(stamp_at + 3)?;
+                    if let (Some(st), Some((_, rec))) = (
+                        stamp_of(&code, row.get(stamp_at + 2)?, detail.as_deref()),
+                        current.as_mut(),
+                    ) {
+                        if let Some(slot) = stamp_slot(&mut rec.upload, &service) {
+                            *slot = Some(st);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((_, rec)) = current {
+            let _ = each(&rec);
+        }
+        Ok(())
+    }
+
+    /// What each `qso` column is read as when a narrow read does not ask for it: the value a
+    /// record with nothing in that field decodes to — `''` or `0` where the column is
+    /// `NOT NULL`, `NULL` everywhere else. Read off the table's own definition rather than
+    /// listed a second time beside [`QSO_COLUMNS`], so a column added to the schema cannot be
+    /// missing from here.
+    fn empty_values(&self) -> Result<HashMap<String, &'static str>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, type, \"notnull\" FROM pragma_table_info('qso')")?;
+        let mut rows = stmt.query([])?;
+        let mut out = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(0)?;
+            let kind: String = row.get(1)?;
+            let not_null: bool = row.get(2)?;
+            let value = match (not_null, kind.to_ascii_uppercase().as_str()) {
+                (true, "TEXT") => "''",
+                (true, "INTEGER") => "0",
+                (true, "REAL") => "0.0",
+                _ => "NULL",
+            };
+            out.insert(name, value);
         }
         Ok(out)
     }
@@ -1446,6 +1694,30 @@ fn bind_children(
     Ok(())
 }
 
+/// One `qso_upload` row's stamp back: `None` for an outcome code this build does not know,
+/// which is dropped exactly as `take_upload` drops it on the ADIF side — the filter that cleans
+/// a store an earlier build poisoned. The one reading of a stamp, for the whole-record decoder
+/// ([`LogDb::load_uploads`]) and the narrow one ([`LogDb::each_narrow`]) alike.
+fn stamp_of(code: &str, when_unix: Option<i64>, detail: Option<&str>) -> Option<UploadStatus> {
+    Some(UploadStatus {
+        outcome: UploadOutcome::from_code(code)?,
+        when_unix: when_unix.unwrap_or(0),
+        detail: detail.and_then(UploadDetail::from_code),
+    })
+}
+
+/// Which of a record's four stamps a `qso_upload` row's `service` names — `None` for a service
+/// this build does not know, whose row is read and set nowhere.
+fn stamp_slot<'a>(u: &'a mut UploadState, service: &str) -> Option<&'a mut Option<UploadStatus>> {
+    match service {
+        "lotw" => Some(&mut u.lotw),
+        "eqsl" => Some(&mut u.eqsl),
+        "qrz" => Some(&mut u.qrz),
+        "clublog" => Some(&mut u.clublog),
+        _ => None,
+    }
+}
+
 /// The four connectors that leave a per-QSO stamp, and the token each is stored under.
 fn upload_states(u: &UploadState) -> [(&'static str, &Option<UploadStatus>); 4] {
     [
@@ -1590,6 +1862,37 @@ fn bind_qso(id: &str, r: &QsoRecord, resolved: Resolved<'_>) -> Vec<rusqlite::ty
 /// One `qso` row back, **in [`QSO_COLUMNS`] order**. Read [`bind_qso`] beside it.
 ///
 /// `extra`, `upload` and the exchange are filled by the caller from their own sweeps.
+/// The `WHERE` clauses [`LogDb::decode`] reads `rows` with: the `qso` table's, and the one its
+/// four child tables share. Empty for every row.
+///
+/// The rowids are integers this module read out of the store itself, written as literals —
+/// there is no text in them to escape.
+fn decode_filters(rows: Rows<'_>) -> (String, String) {
+    match rows {
+        Rows::All => (String::new(), String::new()),
+        Rows::At(rowids) => {
+            let list = rowids
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            (
+                format!("WHERE rowid IN ({list})"),
+                format!("WHERE qso_id IN (SELECT id FROM qso WHERE rowid IN ({list}))"),
+            )
+        }
+        // A range of the rowid's own B-tree, parent and children alike: one statement per table,
+        // whatever the span's size, rather than a list of every rowid in it.
+        Rows::Span { after, last } => {
+            let span = format!("rowid > {after} AND rowid <= {last}");
+            (
+                format!("WHERE {span}"),
+                format!("WHERE qso_id IN (SELECT id FROM qso WHERE {span})"),
+            )
+        }
+    }
+}
+
 fn record_from_row(row: &rusqlite::Row<'_>) -> Result<QsoRecord> {
     let id: String = row.get(0)?;
     let text = |i: usize| -> Result<Option<String>> { Ok(row.get(i)?) };
@@ -3071,6 +3374,7 @@ mod tests {
             remove: &[],
             upsert: &write,
             marks: None,
+            meta: &[],
         };
         db.apply(batch()).expect("first write");
         db.apply(batch()).expect("the same row written again");
@@ -3498,5 +3802,643 @@ mod tests {
                 .collect();
             prop_assert_eq!(db.rows_by_ids(&ids).unwrap(), expected);
         });
+    }
+
+    // ── a narrow read ────────────────────────────────────────────────────────
+
+    /// A store of `n` synthetic records — every representation the schema carries — plus three
+    /// hand-made rows whose calls differ from `W1AW` only by ASCII case and by whitespace, which
+    /// is what the call scope is about. With what `load_all` reads back from it.
+    fn narrow_fixture(n: usize) -> (LogDb, Vec<QsoRecord>) {
+        let mut records = parse_adif(&synthetic_log(n));
+        for call in ["w1aw", "W1AW ", " W1Aw"] {
+            let mut r = records[0].clone();
+            r.call = call.to_string();
+            records.push(r);
+        }
+        for (i, r) in records.iter_mut().enumerate() {
+            r.id = Some(RecordId::Provisional {
+                hash: i as u64,
+                ordinal: 0,
+            });
+        }
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert_all(records.iter().map(|r| (r, Resolved::default())))
+            .unwrap();
+        let all = db.load_all().unwrap();
+        (db, all)
+    }
+
+    /// Every record a narrow read hands out, in the order it hands them.
+    fn narrow_all(db: &LogDb, narrow: Narrow, scope: Scope<'_>, order: Order) -> Vec<QsoRecord> {
+        let mut out = Vec::new();
+        db.each_narrow(narrow, scope, order, &mut |r| {
+            out.push(r.clone());
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        out
+    }
+
+    /// What a narrow read of `columns` must hand back for the whole record `full`: its id, each
+    /// named field as the whole record has it, and every other field empty; never the
+    /// passthrough nor the contest exchange; the stamps only when asked for.
+    ///
+    /// ⚠️ Built from the column NAMES, one field at a time, and independently of the positions
+    /// the decoder reads them at — so a column read into the wrong field, or left out, shows as
+    /// a difference here rather than agreeing with itself.
+    fn only(full: &QsoRecord, columns: &[&str], uploads: bool) -> QsoRecord {
+        let has = |c: &str| columns.contains(&c);
+        let text = |c: &str, v: &Option<String>| if has(c) { v.clone() } else { None };
+        let qsl_rcvd = QslRcvd {
+            card: has("qsl_card_rcvd_raw") && full.qsl_rcvd.card,
+            lotw: has("lotw_rcvd_raw") && full.qsl_rcvd.lotw,
+            eqsl: has("eqsl_rcvd_raw") && full.qsl_rcvd.eqsl,
+            qrz: has("qrz_status_raw") && full.qsl_rcvd.qrz,
+        };
+        let contest = full
+            .contest
+            .as_deref()
+            .map(|c| ContestFields {
+                session: if has("contest_session_id") {
+                    c.session.clone()
+                } else {
+                    String::new()
+                },
+                contest_id: if has("contest_id") {
+                    c.contest_id.clone()
+                } else {
+                    String::new()
+                },
+                qid: if has("contest_qid") {
+                    c.qid.clone()
+                } else {
+                    String::new()
+                },
+                stx: c.stx.filter(|_| has("stx")),
+                stx_string: text("stx_string", &c.stx_string),
+                srx: c.srx.filter(|_| has("srx")),
+                srx_string: text("srx_string", &c.srx_string),
+                sent: Vec::new(),
+                rcvd: Vec::new(),
+                adif: Vec::new(),
+            })
+            .filter(|c| !contest_is_empty(c))
+            .map(Box::new);
+        QsoRecord {
+            id: full.id,
+            call: if has("call") {
+                full.call.clone()
+            } else {
+                String::new()
+            },
+            grid: text("grid", &full.grid),
+            country: text("country", &full.country),
+            state: text("state", &full.state),
+            band: if has("band") {
+                full.band.clone()
+            } else {
+                String::new()
+            },
+            freq_mhz: if has("freq_mhz") { full.freq_mhz } else { 0.0 },
+            freq_rx_mhz: full.freq_rx_mhz.filter(|_| has("freq_rx_mhz")),
+            mode: if has("mode") {
+                full.mode.clone()
+            } else {
+                String::new()
+            },
+            rst_sent: text("rst_sent", &full.rst_sent),
+            rst_rcvd: text("rst_rcvd", &full.rst_rcvd),
+            name: text("name", &full.name),
+            qth: text("qth", &full.qth),
+            comment: text("comment", &full.comment),
+            notes: text("notes", &full.notes),
+            tx_power: full.tx_power.filter(|_| has("tx_power")),
+            when_unix: if has("when_unix") { full.when_unix } else { 0 },
+            time_known: has("time_known") && full.time_known,
+            time_off_unix: full.time_off_unix.filter(|_| has("time_off_unix")),
+            // Derived from the channels read, as the decoder derives them.
+            confirmed: qsl_rcvd.any(),
+            award_confirmed: qsl_rcvd.award(),
+            qsl_rcvd,
+            qsl_sent: QslSent {
+                sent: has("qsl_sent") && full.qsl_sent.sent,
+                via: full.qsl_sent.via.filter(|_| has("qsl_sent_via")),
+                date_unix: full
+                    .qsl_sent
+                    .date_unix
+                    .filter(|_| has("qsl_sent_date_unix")),
+                cleared_unix: full
+                    .qsl_sent
+                    .cleared_unix
+                    .filter(|_| has("qsl_sent_cleared_unix")),
+            },
+            credit_granted: if has("credit_granted") {
+                full.credit_granted.clone()
+            } else {
+                Vec::new()
+            },
+            credit_submitted: if has("credit_submitted") {
+                full.credit_submitted.clone()
+            } else {
+                Vec::new()
+            },
+            upload: if uploads {
+                full.upload.clone()
+            } else {
+                UploadState::default()
+            },
+            ota: Ota {
+                my_program: text("ota_my_program", &full.ota.my_program),
+                my_ref: text("ota_my_ref", &full.ota.my_ref),
+                their_program: text("ota_their_program", &full.ota.their_program),
+                their_ref: text("ota_their_ref", &full.ota.their_ref),
+                iota: text("ota_iota", &full.ota.iota),
+            },
+            dxcc: full.dxcc.filter(|_| has("dxcc")),
+            prop_mode: text("prop_mode", &full.prop_mode),
+            sat_name: text("sat_name", &full.sat_name),
+            operator: text("operator", &full.operator),
+            station_callsign: text("station_callsign", &full.station_callsign),
+            my_grid: text("my_grid", &full.my_grid),
+            my_rig: text("my_rig", &full.my_rig),
+            extra: Vec::new(),
+            contest,
+        }
+    }
+
+    /// The column lists the store's folds read (SPEC-2 v3 C14), as they are written in the app.
+    const FOLD_COLUMNS: &[(&[&str], bool)] = &[
+        // the needs model
+        (
+            &[
+                "call",
+                "band",
+                "mode",
+                "grid",
+                "state",
+                "qsl_card_rcvd_raw",
+                "lotw_rcvd_raw",
+                "eqsl_rcvd_raw",
+                "qrz_status_raw",
+                "prop_mode",
+            ],
+            false,
+        ),
+        // the awards
+        (
+            &[
+                "call",
+                "band",
+                "mode",
+                "qsl_card_rcvd_raw",
+                "lotw_rcvd_raw",
+                "eqsl_rcvd_raw",
+                "qrz_status_raw",
+                "credit_granted",
+                "state",
+                "grid",
+                "ota_iota",
+                "prop_mode",
+            ],
+            false,
+        ),
+        // the diagnosis
+        (
+            &[
+                "call",
+                "band",
+                "mode",
+                "when_unix",
+                "state",
+                "qsl_card_rcvd_raw",
+                "lotw_rcvd_raw",
+                "eqsl_rcvd_raw",
+                "qrz_status_raw",
+                "credit_granted",
+            ],
+            true,
+        ),
+        // the statistics; the upload health; the fill job
+        (&["call"], false),
+        (&[], true),
+        (&["call", "grid", "country", "state"], false),
+    ];
+
+    /// ★ A NARROW READ IS THE WHOLE RECORD WITH ONLY ITS FIELDS FILLED — for each column list a
+    /// fold reads, for every column at once, for none, and for 48 random lists with and without
+    /// the stamps, over 3,000 synthetic records carrying every representation the schema has.
+    /// Compared as whole records (`QsoRecord`'s own equality), never through an export, which
+    /// may leave an empty field out.
+    #[test]
+    fn a_narrow_read_is_the_whole_record_with_only_its_fields_filled() {
+        let (db, all) = narrow_fixture(3_000);
+        let every: Vec<&str> = QSO_COLUMNS.iter().copied().filter(|c| *c != "id").collect();
+        let every: &'static [&'static str] = Box::leak(every.into_boxed_slice());
+        let mut lists: Vec<(&'static [&'static str], bool)> = FOLD_COLUMNS.to_vec();
+        lists.push((every, true));
+        lists.push((every, false));
+        lists.push((&[], false));
+        let mut g = Gen(0x5EED_C0DE_0000_0014);
+        for _ in 0..48 {
+            let pick: Vec<&str> = every.iter().copied().filter(|_| g.chance(2)).collect();
+            lists.push((Box::leak(pick.into_boxed_slice()), g.chance(2)));
+        }
+        for (columns, uploads) in lists {
+            let narrow = Narrow { columns, uploads };
+            let got = narrow_all(&db, narrow, Scope::All, Order::Log);
+            let want: Vec<QsoRecord> = all.iter().map(|f| only(f, columns, uploads)).collect();
+            assert_eq!(got.len(), want.len(), "{columns:?}: every row");
+            for (g, w) in got.iter().zip(&want) {
+                assert_eq!(g, w, "{columns:?} (stamps: {uploads})");
+            }
+        }
+        // Premises, so none of the above passed on emptiness: every field a fold reads is
+        // filled somewhere in the fixture, and a narrow record is not the whole one.
+        let needs = FOLD_COLUMNS[0].0;
+        for c in needs {
+            let filled = |r: &QsoRecord| only(r, &[c], false) != only(r, &[], false);
+            assert!(all.iter().any(filled), "premise: {c} is filled somewhere");
+        }
+        assert!(all
+            .iter()
+            .any(|r| r.upload.lotw.is_some() && r.upload.clublog.is_some()));
+        let full_width: Narrow = Narrow {
+            columns: every,
+            uploads: true,
+        };
+        assert!(
+            narrow_all(&db, full_width, Scope::All, Order::Log)
+                .iter()
+                .zip(&all)
+                .any(|(n, f)| n != f),
+            "premise: even every column is not the whole record — the passthrough stays behind"
+        );
+    }
+
+    /// ★ Each scope names exactly its rows: `Since(t)` for every time the fixture holds (and one
+    /// past them all), `CallNorm(c)` for every stored call — including the three that differ
+    /// from `W1AW` only by case and whitespace, all of which `W1AW` names — and for one no row
+    /// has.
+    #[test]
+    fn a_narrow_read_visits_exactly_the_rows_its_scope_names() {
+        let (db, all) = narrow_fixture(2_000);
+        const TIMES: Narrow = Narrow {
+            columns: &["call", "when_unix"],
+            uploads: true,
+        };
+        let ids = |rs: &[QsoRecord]| rs.iter().map(|r| r.id).collect::<Vec<_>>();
+        let mut times: Vec<u64> = all.iter().map(|r| r.when_unix).collect();
+        times.sort_unstable();
+        times.dedup();
+        for t in times.iter().copied().chain([0, u64::MAX]) {
+            let want: Vec<_> = all
+                .iter()
+                .filter(|r| r.when_unix >= t)
+                .map(|r| r.id)
+                .collect();
+            assert_eq!(
+                ids(&narrow_all(&db, TIMES, Scope::Since(t), Order::Log)),
+                want,
+                "since {t}"
+            );
+        }
+        let calls: std::collections::BTreeSet<String> =
+            all.iter().map(|r| call_norm_of(&r.call)).collect();
+        for c in calls.iter().map(String::as_str).chain(["N0NE"]) {
+            let want: Vec<_> = all
+                .iter()
+                .filter(|r| call_norm_of(&r.call) == c)
+                .map(|r| r.id)
+                .collect();
+            assert_eq!(
+                ids(&narrow_all(&db, TIMES, Scope::CallNorm(c), Order::Log)),
+                want,
+                "call {c}"
+            );
+        }
+        let w1aw = narrow_all(&db, TIMES, Scope::CallNorm("W1AW"), Order::Log);
+        for spelled in ["w1aw", "W1AW ", " W1Aw", "W1AW"] {
+            assert!(
+                w1aw.iter().any(|r| r.call == spelled),
+                "premise: {spelled:?} is named by W1AW"
+            );
+        }
+        assert!(times.len() > 3, "premise: the fixture has several times");
+    }
+
+    /// Newest first is log order reversed, and a pass stops where it is told — the join path
+    /// (stamps) included, where one record arrives as several rows.
+    #[test]
+    fn a_narrow_read_walks_newest_first_and_stops_where_it_is_told() {
+        let (db, all) = narrow_fixture(600);
+        const CALLS: Narrow = Narrow {
+            columns: &["call"],
+            uploads: true,
+        };
+        let newest: Vec<_> = narrow_all(&db, CALLS, Scope::All, Order::NewestFirst)
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        let mut want: Vec<_> = all.iter().map(|r| r.id).collect();
+        want.reverse();
+        assert_eq!(newest, want);
+        for uploads in [false, true] {
+            let mut seen = Vec::new();
+            db.each_narrow(
+                Narrow {
+                    columns: &["call"],
+                    uploads,
+                },
+                Scope::All,
+                Order::Log,
+                &mut |r| {
+                    seen.push(r.clone());
+                    if seen.len() == 7 {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )
+            .unwrap();
+            assert_eq!(seen.len(), 7, "stamps: {uploads}");
+            for (s, f) in seen.iter().zip(&all) {
+                assert_eq!(
+                    s,
+                    &only(f, &["call"], uploads),
+                    "each whole, stamps: {uploads}"
+                );
+            }
+        }
+    }
+
+    /// ★ A narrow read is ONE picture of the store: a contact committed by another connection in
+    /// the middle of the pass is not in it. The control is a pass begun after the commit, which
+    /// sees the contact.
+    #[test]
+    fn a_narrow_read_is_one_picture_whatever_commits_during_it() {
+        let d = CopyDir::new("narrow-picture");
+        let path = d.0.join("log.sqlite3");
+        let before = copy_rows(8, 11_000);
+        let mut writer = live_store(&path, &before);
+        let late = copy_rows(1, 12_000);
+        let reader = LogDb::open(&path).unwrap();
+        const CALLS: Narrow = Narrow {
+            columns: &["call"],
+            uploads: true,
+        };
+        let mut seen = 0;
+        reader
+            .each_narrow(CALLS, Scope::All, Order::Log, &mut |_| {
+                if seen == 0 {
+                    writer
+                        .insert_all(late.iter().map(|r| (r, Resolved::default())))
+                        .expect("the other connection commits");
+                }
+                seen += 1;
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+        assert_eq!(seen, before.len(), "one pass, one picture");
+        assert_eq!(
+            narrow_all(&reader, CALLS, Scope::All, Order::Log).len(),
+            before.len() + 1,
+            "control: a pass begun after the commit sees it"
+        );
+    }
+
+    /// A column the schema does not have is an error — never a field quietly left empty.
+    #[test]
+    fn a_narrow_read_of_a_column_the_schema_lacks_is_an_error() {
+        let (db, _) = narrow_fixture(3);
+        let err = db
+            .each_narrow(
+                Narrow {
+                    columns: &["call", "calll"],
+                    uploads: false,
+                },
+                Scope::All,
+                Order::Log,
+                &mut |_| ControlFlow::Continue(()),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("calll"), "{err}");
+    }
+
+    /// The two narrowing scopes are answered from their indexes — `qso_recent` for a time, and
+    /// `qso_callhist` for a call — which is what makes today's hunted parks and one station's
+    /// history cost their own rows, not the log's. The control is the plain scope, which reads
+    /// the table in its own order and names neither.
+    #[test]
+    fn each_narrowing_scope_is_answered_from_its_index() {
+        let (db, _) = narrow_fixture(50);
+        let plan = |scope: Scope<'_>| -> String {
+            let (sql, bound) = db
+                .narrow_sql(
+                    Narrow {
+                        columns: &["call", "when_unix"],
+                        uploads: true,
+                    },
+                    scope,
+                    Order::Log,
+                )
+                .unwrap();
+            let mut stmt = db
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let params: Vec<&rusqlite::types::Value> = bound.iter().collect();
+            let details: Vec<String> = stmt
+                .query_map(params_from_iter(params), |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(|d| d.unwrap())
+                .collect();
+            details.join(" | ")
+        };
+        let since = plan(Scope::Since(1_700_000_000));
+        assert!(since.contains("qso_recent"), "{since}");
+        let call = plan(Scope::CallNorm("W1AW"));
+        assert!(call.contains("qso_callhist"), "{call}");
+        let all = plan(Scope::All);
+        assert!(
+            !all.contains("qso_recent") && !all.contains("qso_callhist"),
+            "control: {all}"
+        );
+    }
+
+    // ── a streamed read of whole records ─────────────────────────────────────
+
+    /// Every record a streamed read hands out, in the order it hands them.
+    fn streamed(db: &LogDb, chunk: usize) -> Vec<QsoRecord> {
+        let mut out = Vec::new();
+        db.each_record(chunk, &mut |r| {
+            out.push(r);
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        out
+    }
+
+    /// ★ A STREAMED READ IS `load_all`, WHATEVER THE CHUNK — every record whole (contest blocks
+    /// and their exchange, foreign tags, all four upload stamps), in log order, over a store
+    /// with holes in its rowids (every seventh row deleted, and a run of forty), for chunks from
+    /// one row to more than the log holds. An empty store hands out nothing.
+    #[test]
+    fn a_streamed_read_is_load_all_whatever_the_chunk() {
+        let (mut db, all) = narrow_fixture(3_000);
+        let gone: Vec<RecordId> = all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 7 == 3 || (1_000..1_040).contains(i))
+            .filter_map(|(_, r)| r.id)
+            .collect();
+        db.apply(Batch {
+            remove: &gone,
+            ..Batch::default()
+        })
+        .unwrap();
+        let held = db.load_all().unwrap();
+        assert_eq!(held.len(), all.len() - gone.len(), "premise: the holes");
+        assert!(
+            held.iter().any(|r| r.contest.is_some())
+                && held.iter().any(|r| !r.extra.is_empty())
+                && held.iter().any(|r| r.upload.clublog.is_some()),
+            "premise: the rows carry every child table"
+        );
+        for chunk in [
+            1,
+            2,
+            7,
+            500,
+            RECORD_CHUNK,
+            held.len(),
+            held.len() + 1,
+            usize::MAX,
+        ] {
+            assert!(streamed(&db, chunk) == held, "chunk {chunk}");
+        }
+        let empty = LogDb::open_in_memory().unwrap();
+        assert!(streamed(&empty, 7).is_empty());
+    }
+
+    /// A streamed read stops where it is told, and hands out nothing after.
+    #[test]
+    fn a_streamed_read_stops_where_it_is_told() {
+        let (db, all) = narrow_fixture(100);
+        for stop_after in [1, 6, 7, 8, 50] {
+            let mut seen = Vec::new();
+            db.each_record(7, &mut |r| {
+                seen.push(r);
+                if seen.len() == stop_after {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .unwrap();
+            assert_eq!(seen, all[..stop_after], "stop after {stop_after}");
+        }
+    }
+
+    /// ★ One pass, one picture: another connection deletes a row the pass has not reached and
+    /// adds one after the last, between two chunks, and the pass still hands out exactly the
+    /// rows that were there when it began. The control is a pass begun after the commit.
+    #[test]
+    fn a_streamed_read_is_one_picture_whatever_commits_during_it() {
+        let d = CopyDir::new("stream-picture");
+        let path = d.0.join("log.sqlite3");
+        let before = copy_rows(9, 21_000);
+        let mut writer = live_store(&path, &before);
+        let late = copy_rows(1, 22_000);
+        let reader = LogDb::open(&path).unwrap();
+        let mut seen = Vec::new();
+        let mut committed = false;
+        reader
+            .each_record_observed(
+                2,
+                &mut |r| {
+                    seen.push(r.id);
+                    ControlFlow::Continue(())
+                },
+                &mut || {
+                    if !committed {
+                        committed = true;
+                        writer
+                            .apply(Batch {
+                                remove: &[before[7].id.unwrap()],
+                                ..Batch::default()
+                            })
+                            .unwrap();
+                        writer
+                            .insert_all(late.iter().map(|r| (r, Resolved::default())))
+                            .unwrap();
+                    }
+                },
+            )
+            .unwrap();
+        assert!(
+            committed,
+            "premise: the other connection committed mid-pass"
+        );
+        let ids = |rs: &[QsoRecord]| rs.iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(seen, ids(&before), "one pass, one picture");
+        let after = streamed(&reader, 2);
+        assert_eq!(after.len(), before.len(), "control: one gone, one added");
+        assert!(
+            !ids(&after).contains(&before[7].id) && ids(&after).contains(&late[0].id),
+            "control: a pass begun after the commit sees it"
+        );
+    }
+
+    /// A chunk's rows and their children are read by a range of the rowid's own index — never a
+    /// scan of a table, whatever the log's size. The control is the whole-log read, which scans
+    /// the parent table as it should.
+    #[test]
+    fn a_chunk_is_read_by_a_range_of_the_rowid() {
+        let (db, _) = narrow_fixture(50);
+        let plan = |sql: String| -> String {
+            let mut stmt = db
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let details: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(|d| d.unwrap())
+                .collect();
+            details.join(" | ")
+        };
+        let (of_rows, of_children) = decode_filters(Rows::Span {
+            after: 10,
+            last: 20,
+        });
+        let parent = plan(format!("SELECT id FROM qso {of_rows} ORDER BY rowid"));
+        assert!(
+            parent.contains("USING INTEGER PRIMARY KEY") && !parent.contains("SCAN qso"),
+            "{parent}"
+        );
+        for child in [
+            "qso_extra",
+            "qso_upload",
+            "contest_exchange",
+            "qso_contest_adif",
+        ] {
+            let p = plan(format!(
+                "SELECT qso_id FROM {child} {of_children} ORDER BY qso_id"
+            ));
+            assert!(
+                p.contains(&format!("SEARCH {child} USING"))
+                    && !p.contains(&format!("SCAN {child}")),
+                "{child}: {p}"
+            );
+            assert!(
+                p.contains("USING INTEGER PRIMARY KEY") && !p.contains("SCAN qso"),
+                "{child}'s rows are found by the range: {p}"
+            );
+        }
+        let (whole, _) = decode_filters(Rows::All);
+        let control = plan(format!("SELECT id FROM qso {whole} ORDER BY rowid"));
+        assert!(control.contains("SCAN qso"), "control: {control}");
     }
 }

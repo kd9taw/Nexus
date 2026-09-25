@@ -30,8 +30,9 @@ import type {
 } from '../types'
 import { isRxOnly, isBeacon } from '../types'
 import type { NeedBandScopes } from '../features/needs'
-import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
-import { NO_LOG, useSharedLog } from '../features/logStore'
+import { bandKey, modeKey } from '../features/callHistory'
+import { emptyAnswer } from '../features/logAnswers'
+import { useLogAnswer } from '../features/logSource'
 import { contestDupe } from '../features/contestDupe'
 import { bandLabelForMhz } from '../band'
 import {
@@ -1736,10 +1737,6 @@ function OperateRecall({
   onShowCall?: (call: string) => void
 }) {
   const cu = call.trim().toUpperCase()
-  // Follows `logTick` (#282): the sequencer logs in the background with the SAME station still
-  // on the card, and a card that read the log only on a call change left "New DXCC!" standing
-  // over a contact that was already in the log until the operator clicked someone else.
-  const log = useSharedLog(snap.logTick) ?? NO_LOG
   const [book, setBook] = useState<QrzLookup | null>(null)
   const [entity, setEntity] = useState<string | null>(null)
 
@@ -1793,16 +1790,31 @@ function OperateRecall({
   // Gated on `fdActive` as well as the snapshot block, so switching the contest off clears
   // the badge on the spot rather than waiting for a snapshot that has dropped `fieldDay`.
   const fdDupe = contestDupe(fdActive ? snap.fieldDay : null, cu, snap.radio.band, 'DIG')
-  const hist = useMemo(
-    () => callHistory(log, cu, snap.radio.band, mode, snap.b4MatchMode ?? false),
-    [log, cu, snap.radio.band, mode, snap.b4MatchMode],
-  )
+  // The card's answers follow `logTick` (#282): the sequencer logs in the background with the
+  // SAME station still on the card, and a card that read the log only on a call change left
+  // "New DXCC!" standing over a contact that was already in the log until the operator clicked
+  // someone else. Until the window has an answer the card shows the empty log's history (none),
+  // and no need badge (below).
+  const histQuestion = {
+    kind: 'callHistory',
+    call: cu,
+    band: snap.radio.band,
+    mode,
+    matchMode: snap.b4MatchMode ?? false,
+  } as const
+  const hist = useLogAnswer(histQuestion, snap.logTick) ?? emptyAnswer(histQuestion)
   // The roster's country is cty.dat-resolved from the call, like `resolveEntity` — so it is
   // the right thing to stand in with while that request is in flight, and the badges do not
   // flicker through "new one" on the way to the truth.
   const entityForBadge = entity ?? station?.country ?? book?.country ?? null
-  const newEntity = useMemo(() => isNewEntity(log, entityForBadge), [log, entityForBadge])
-  const slots = useMemo(() => entitySlots(log, entityForBadge), [log, entityForBadge])
+  // `null` and '' are one answer to both old functions: no entity, nothing new, no slots. NO NEED
+  // BADGE UNTIL ITS ANSWER IS HERE: the empty log's answer stands in until then, and it calls every
+  // entity new — "New DXCC!" over a worked one while the log loaded (C17D).
+  const entityQuestion = { kind: 'entity', entity: entityForBadge ?? '' } as const
+  const entityAnswered = useLogAnswer(entityQuestion, snap.logTick)
+  const entityAnswer = entityAnswered ?? emptyAnswer(entityQuestion)
+  const newEntity = entityAnswered !== undefined && entityAnswer.newEntity
+  const slots = entityAnswer.slots
   const liveBand = bandKey({ band: snap.radio.band, freqMhz: snap.radio.dialMhz })
   const newBandSlot =
     slots.workedEver &&

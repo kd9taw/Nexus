@@ -714,6 +714,55 @@ pub struct UploadHealth {
     pub clublog: SourceHealth,
 }
 
+impl UploadHealth {
+    /// Fold one contact's stamps in — [`Logbook::upload_health`]'s step, taken in log order.
+    /// Its own function so a pass that reads the log a row at a time (a read of the store)
+    /// runs the same rule; of two failures at one instant the first in the log names the why.
+    pub fn add(&mut self, r: &QsoRecord) {
+        for (src, status) in [
+            (&mut self.lotw, &r.upload.lotw),
+            (&mut self.eqsl, &r.upload.eqsl),
+            (&mut self.qrz, &r.upload.qrz),
+            (&mut self.clublog, &r.upload.clublog),
+        ] {
+            // `when_unix == 0` is not a date. The ADIF reader synthesises an
+            // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
+            // with no time to give it — counting those would tell every operator with
+            // an imported legacy log that their last LoTW upload was 1 Jan 1970.
+            let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
+                continue;
+            };
+            if s.outcome.is_sent() {
+                // `Duplicate` counts as a success on purpose: the service telling us
+                // it already has the QSO proves both the credentials and the record.
+                if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
+                    src.last_success_unix = Some(s.when_unix);
+                }
+            } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
+                src.last_failure_unix = Some(s.when_unix);
+                src.last_failure_detail = s.detail;
+            }
+        }
+    }
+}
+
+/// When a contact's LoTW upload is awaiting the echo (`Pending`), the contact's time — what
+/// [`Logbook::oldest_pending_lotw_date`] takes the least of. `None` for any other contact.
+pub fn lotw_pending_since(r: &QsoRecord) -> Option<u64> {
+    matches!(
+        r.upload.lotw.as_ref().map(|s| s.outcome),
+        Some(UploadOutcome::Pending)
+    )
+    .then_some(r.when_unix)
+}
+
+/// A contact time as the UTC `YYYY-MM-DD` an own-QSO pull is bounded by — see
+/// [`Logbook::oldest_pending_lotw_date`].
+pub fn lotw_pull_date(unix: u64) -> String {
+    let (y, m, d, ..) = datetime_utc(unix);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Per-source outbound upload state. Absent (`None`) = never attempted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UploadState {
@@ -792,11 +841,13 @@ pub struct Logbook {
 
 pub mod dedup;
 mod edit;
+pub mod hot;
 mod id;
 pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
 mod op;
+pub mod query;
 pub mod reader;
 mod records;
 pub mod sqlite;
@@ -804,8 +855,8 @@ pub mod writer;
 pub use edit::{OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, UploadService};
-pub use records::OpClass;
 use records::Records;
+pub use records::{OpClass, Watermarks};
 
 impl Logbook {
     pub fn new() -> Self {
@@ -835,7 +886,7 @@ impl Logbook {
     /// be cached against it and can never outlive the records it describes. It stays below
     /// 2^53, so it survives a round trip through a JS number (see `logbook::records`).
     pub fn revision(&self) -> u64 {
-        self.records.revision()
+        self.records.marks().revision
     }
     /// Whether every change since this log stood at `revision` was an append ([`Self::add`],
     /// or an import that only added rows): the records it held then are, unchanged and in the
@@ -843,7 +894,7 @@ impl Logbook {
     /// stamp is a rewrite and answers false from then on, as does a revision this log never
     /// held after its last rewrite.
     pub fn appended_only_since(&self, revision: u64) -> bool {
-        self.records.appended_only_since(revision)
+        self.records.marks().appended_only_since(revision)
     }
     /// Mutable access to the records under the [`OpClass`] the caller vouches for — the
     /// narrower the class, the more derived state survives the write. Write a record through
@@ -857,19 +908,24 @@ impl Logbook {
     /// affect it.
     ///
     /// [`Self::content_rev`] is the one [`Self::appended_only_since`] reads; it is exposed in
-    /// its own right so the five can be stored together ([`sqlite::Watermarks`]), which is
-    /// what lets a watermark be durable alongside the rows it describes.
+    /// its own right so the five can be stored together ([`Self::marks`]), which is what lets a
+    /// watermark be durable alongside the rows it describes.
     pub fn content_rev(&self) -> u64 {
-        self.records.content_rev()
+        self.records.marks().content_rev
     }
     pub fn index_rev(&self) -> u64 {
-        self.records.index_rev()
+        self.records.marks().index_rev
     }
     pub fn key_rev(&self) -> u64 {
-        self.records.key_rev()
+        self.records.marks().key_rev
     }
     pub fn shape_rev(&self) -> u64 {
-        self.records.shape_rev()
+        self.records.marks().shape_rev
+    }
+    /// All five watermarks as they stand, together — what the store writes beside the rows
+    /// ([`sqlite::LogDb::apply`]), and what the station keeps as the log's (SPEC-2 v3 C19).
+    pub fn marks(&self) -> Watermarks {
+        self.records.marks()
     }
     pub fn len(&self) -> usize {
         self.records.len()
@@ -891,12 +947,27 @@ impl Logbook {
         self.minter.set_posid(posid);
     }
 
+    /// Hand the minter of this log's ids to the owner that mints them from now on: the station,
+    /// which keeps minting when the in-memory log is gone (SPEC-2 v3 C19). The log keeps a copy
+    /// under a nonce of its own, as a copied log's is, for the rows it still adds itself (an
+    /// import, a merge), so the two never hand out one id.
+    ///
+    /// The minter handed over is the one the load drew, clear of every nonce the rows it read
+    /// already carry.
+    pub fn hand_over_minter(&mut self) -> Minter {
+        let own = self.minter.clone();
+        std::mem::replace(&mut self.minter, own)
+    }
+
     /// Replace the human-entered fields of the record at `index` (a correction —
     /// e.g. a busted call or wrong band). The sync-DERIVED state (confirmed /
     /// award_confirmed / credit / upload) is preserved from the existing record so
     /// an edit can never fabricate a confirmation; the next reconcile re-validates
     /// it against the corrected key. Returns false if `index` is out of range.
-    pub fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
         match self.records.get(index) {
             Some(old) => {
                 // An edit is the same row, corrected: it keeps the row's identity.
@@ -1082,7 +1153,15 @@ impl Logbook {
     /// shadowed by their own correction.
     ///
     /// Returns false if `index` is out of range. Pure — call [`save`](Self::save) to persist.
-    pub fn mark_qsl_sent(&mut self, index: usize, via: Option<QslVia>, date_unix: u64) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn mark_qsl_sent(
+        &mut self,
+        index: usize,
+        via: Option<QslVia>,
+        date_unix: u64,
+    ) -> bool {
         match self.records.write_as(OpClass::Stamp).get_mut(index) {
             Some(rec) => {
                 Arc::make_mut(rec).qsl_sent = match via {
@@ -1117,10 +1196,20 @@ impl Logbook {
     /// has matched, this can also clear — an operator who ticks the wrong row must be able to
     /// untick it. A later service sync cannot silently undo the correction either: merge ORs
     /// per source, and no service reports the card field.
-    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+    ///
+    /// `confirmed` and `award_confirmed` follow the channels, as the parser, the store and
+    /// `log.adi` all read them back: every fold counts a contact by `award_confirmed`, so a
+    /// card that set only its channel counted for nothing until a restart re-read the log.
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
-                Arc::make_mut(rec).qsl_rcvd.card = received;
+                let rec = Arc::make_mut(rec);
+                rec.qsl_rcvd.card = received;
+                rec.confirmed = rec.qsl_rcvd.any();
+                rec.award_confirmed = rec.qsl_rcvd.award();
                 true
             }
             None => false,
@@ -1148,7 +1237,10 @@ impl Logbook {
     /// holding a second copy of it. The caller gates the name; this stores what it is given.
     ///
     /// Returns false when `index` names no row, and when the name is blank.
-    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
         let name = match sat_name {
             // A tag with no name is the lone `PROP_MODE=SAT` TQSL rejects. Refused here
             // rather than written, for the same reason an empty QSL-sent code is an error
@@ -1188,7 +1280,10 @@ impl Logbook {
     /// Remove the record at `index` (a mis-logged contact). Returns false if out of
     /// range. NOTE: this shifts the indices of all later records — callers that hold
     /// indices must reload after a delete.
-    pub fn delete(&mut self, index: usize) -> bool {
+    ///
+    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
+    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    pub(crate) fn delete(&mut self, index: usize) -> bool {
         if index < self.records.len() {
             self.records.write_as(OpClass::Structural).remove(index);
             true
@@ -2251,30 +2346,7 @@ impl Logbook {
     pub fn upload_health(&self) -> UploadHealth {
         let mut h = UploadHealth::default();
         for r in &self.records {
-            for (src, status) in [
-                (&mut h.lotw, &r.upload.lotw),
-                (&mut h.eqsl, &r.upload.eqsl),
-                (&mut h.qrz, &r.upload.qrz),
-                (&mut h.clublog, &r.upload.clublog),
-            ] {
-                // `when_unix == 0` is not a date. The ADIF reader synthesises an
-                // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
-                // with no time to give it — counting those would tell every operator with
-                // an imported legacy log that their last LoTW upload was 1 Jan 1970.
-                let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
-                    continue;
-                };
-                if s.outcome.is_sent() {
-                    // `Duplicate` counts as a success on purpose: the service telling us
-                    // it already has the QSO proves both the credentials and the record.
-                    if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
-                        src.last_success_unix = Some(s.when_unix);
-                    }
-                } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
-                    src.last_failure_unix = Some(s.when_unix);
-                    src.last_failure_detail = s.detail;
-                }
-            }
+            h.add(r);
         }
         h
     }
@@ -2286,18 +2358,9 @@ impl Logbook {
     pub fn oldest_pending_lotw_date(&self) -> Option<String> {
         self.records
             .iter()
-            .filter(|r| {
-                matches!(
-                    r.upload.lotw.as_ref().map(|s| s.outcome),
-                    Some(UploadOutcome::Pending)
-                )
-            })
-            .map(|r| r.when_unix)
+            .filter_map(|r| lotw_pending_since(r))
             .min()
-            .map(|unix| {
-                let (y, m, d, ..) = datetime_utc(unix);
-                format!("{y:04}-{m:02}-{d:02}")
-            })
+            .map(lotw_pull_date)
     }
 
     /// The whole logbook as ADIF text (header + records).
@@ -2311,24 +2374,20 @@ impl Logbook {
     /// export (#98): an operator uploading "just this weekend's activation" was
     /// hand-editing the full file.
     pub fn adif_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
-        let mut s = adif_header();
-        for r in self.records_in_range(from_unix, to_unix) {
-            // The operator exporting their own logbook — a backup that dropped their private
-            // notes would lose them for good on the next re-import.
-            s.push_str(&adif_record_own_log(r));
-        }
-        s
+        self.export(ExportKind::Adif {
+            from: from_unix,
+            to: to_unix,
+        })
     }
 
-    /// Records whose start time falls in `[from, to]` (inclusive; absent = unbounded).
-    fn records_in_range(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-    ) -> impl Iterator<Item = &QsoRecord> {
-        self.records.iter().map(|r| &**r).filter(move |r| {
-            from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
-        })
+    /// The export `kind` of this log: every record through [`Export`], in log order — the one
+    /// place each export's rule lives, whichever holds the log.
+    fn export(&self, kind: ExportKind) -> String {
+        let mut e = Export::new(kind);
+        for r in &self.records {
+            e.add(r);
+        }
+        e.finish()
     }
 
     /// Every distinct operator in the log, uppercased and sorted (#25).
@@ -2343,16 +2402,11 @@ impl Logbook {
     /// named after the station would claim someone said something they never did. Callers that
     /// need those records have the combined export, which is every record either way.
     pub fn operators(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
-            .records
-            .iter()
-            .filter_map(|r| r.operator.as_deref())
-            .map(|o| o.trim().to_ascii_uppercase())
-            .filter(|o| !o.is_empty())
-            .collect();
-        v.sort();
-        v.dedup();
-        v
+        let mut ops = Operators::default();
+        for r in &self.records {
+            ops.add(r);
+        }
+        ops.finish()
     }
 
     /// The log as ADIF, containing ONLY the contacts `operator` made.
@@ -2363,19 +2417,7 @@ impl Logbook {
     /// an empty log is a real answer, and an export that silently produced the whole log instead
     /// would upload one operator's contacts under another's name.
     pub fn adif_for_operator(&self, operator: &str) -> String {
-        let want = operator.trim().to_ascii_uppercase();
-        let mut s = adif_header();
-        for r in &self.records {
-            let is_theirs = r
-                .operator
-                .as_deref()
-                .map(|o| o.trim().to_ascii_uppercase() == want)
-                .unwrap_or(false);
-            if is_theirs {
-                s.push_str(&adif_record_own_log(r));
-            }
-        }
-        s
+        self.export(ExportKind::Operator(operator.to_string()))
     }
 
     /// Every distinct activation in the log — YOUR reference × UTC day × the callsign it was
@@ -2398,51 +2440,11 @@ impl Logbook {
     /// than being defaulted to the current call — same ruling as [`Self::operators`]: inventing
     /// a callsign would claim the operator signed something they never did.
     pub fn activations(&self) -> Vec<LoggedActivation> {
-        type Key = (String, u64, Option<String>);
-        let mut seen: std::collections::HashMap<Key, (Option<String>, usize)> =
-            std::collections::HashMap::new();
+        let mut found = Activations::default();
         for r in &self.records {
-            let call = worked_under(r);
-            let day = day_start(r.when_unix);
-            for reference in my_refs(r) {
-                let slot = seen
-                    .entry((reference, day, call.clone()))
-                    .or_insert((None, 0));
-                if slot.0.is_none() {
-                    slot.0 = r
-                        .ota
-                        .my_program
-                        .as_deref()
-                        .map(|p| p.trim().to_ascii_uppercase())
-                        .filter(|p| !p.is_empty());
-                }
-                slot.1 += 1;
-            }
+            found.add(r);
         }
-        let mut out: Vec<LoggedActivation> = seen
-            .into_iter()
-            .map(|((reference, day_start_unix, callsign), (program, qsos))| {
-                let (y, mo, d, ..) = datetime_utc(day_start_unix);
-                LoggedActivation {
-                    program,
-                    reference,
-                    day_start_unix,
-                    date: format!("{y:04}-{mo:02}-{d:02}"),
-                    callsign,
-                    qsos,
-                }
-            })
-            .collect();
-        // Newest first — the activation the operator just finished is the one they came to
-        // export. Reference then callsign break a tie so two parks on one day list in a stable
-        // order instead of the hash map's.
-        out.sort_by(|a, b| {
-            b.day_start_unix
-                .cmp(&a.day_start_unix)
-                .then_with(|| a.reference.cmp(&b.reference))
-                .then_with(|| a.callsign.cmp(&b.callsign))
-        });
-        out
+        found.finish()
     }
 
     /// The log as ADIF containing ONLY one activation's contacts: `reference`, worked on the UTC
@@ -2471,30 +2473,11 @@ impl Logbook {
         day_start_unix: u64,
         callsign: Option<&str>,
     ) -> String {
-        let want = reference.trim().to_ascii_uppercase();
-        let day = day_start(day_start_unix);
-        let want_call = callsign
-            .map(|c| c.trim().to_ascii_uppercase())
-            .filter(|c| !c.is_empty());
-        let mut s = adif_header();
-        if want.is_empty() {
-            return s;
-        }
-        for r in &self.records {
-            if r.when_unix < day || r.when_unix >= day + 86_400 {
-                continue;
-            }
-            if worked_under(r) != want_call {
-                continue;
-            }
-            if !my_refs(r).contains(&want) {
-                continue;
-            }
-            let mut one = QsoRecord::clone(r);
-            one.ota.my_ref = Some(want.clone());
-            s.push_str(&adif_record_own_log(&one));
-        }
-        s
+        self.export(ExportKind::Activation {
+            reference: reference.to_string(),
+            day_start_unix,
+            callsign: callsign.map(str::to_string),
+        })
     }
 
     /// The whole logbook as RFC-4180 CSV (for spreadsheet / quick export).
@@ -2504,29 +2487,252 @@ impl Logbook {
 
     /// CSV restricted to `[from_unix, to_unix]` — same contract as [`Self::adif_in_range`].
     pub fn csv_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
-        let mut s =
-            String::from("Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,Name,QTH,Comment,DateTimeUTC,Confirmed\n");
-        for r in self.records_in_range(from_unix, to_unix) {
-            let (y, mo, d, h, mi, se) = datetime_utc(r.when_unix);
-            let dt = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}Z");
-            let cells = [
-                csv_cell(&r.call),
-                csv_cell(r.grid.as_deref().unwrap_or("")),
-                csv_cell(&r.band),
-                format!("{:.6}", r.freq_mhz),
-                csv_cell(&r.mode),
-                csv_cell(r.rst_sent.as_deref().unwrap_or("")),
-                csv_cell(r.rst_rcvd.as_deref().unwrap_or("")),
-                csv_cell(r.name.as_deref().unwrap_or("")),
-                csv_cell(r.qth.as_deref().unwrap_or("")),
-                csv_cell(r.comment.as_deref().unwrap_or("")),
-                dt,
-                if r.confirmed { "Y" } else { "N" }.to_string(),
-            ];
-            s.push_str(&cells.join(","));
-            s.push('\n');
+        self.export(ExportKind::Csv {
+            from: from_unix,
+            to: to_unix,
+        })
+    }
+}
+
+/// Which export an [`Export`] builds: the Logbook's four, each with the bounds its caller chose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportKind {
+    /// ADIF of the QSOs whose start time falls in `[from, to]` — inclusive, either bound absent
+    /// = unbounded, both absent = the whole log (#98). [`Logbook::adif_in_range`].
+    Adif { from: Option<u64>, to: Option<u64> },
+    /// RFC-4180 CSV of the same range. [`Logbook::csv_in_range`].
+    Csv { from: Option<u64>, to: Option<u64> },
+    /// ADIF of ONE operator's contacts (#25). [`Logbook::adif_for_operator`].
+    Operator(String),
+    /// ADIF of ONE activation — a reference, the UTC day containing `day_start_unix`, and the
+    /// callsign it was worked under. [`Logbook::adif_for_activation`].
+    Activation {
+        reference: String,
+        day_start_unix: u64,
+        callsign: Option<String>,
+    },
+}
+
+/// One export, built a contact at a time, in log order — THE rules of the Logbook's exports,
+/// written once for whoever holds the log: [`Logbook`] hands it its records, and a reader of the
+/// logbook store hands it the rows it streams (SPEC-2 v3 C15), so the two cannot come out
+/// different. The operator's own copy of every record ([`adif_record_own_log`]): a backup that
+/// dropped their private notes would lose them for good on the next re-import.
+#[derive(Debug, Clone)]
+pub struct Export {
+    rule: ExportRule,
+    out: String,
+}
+
+/// An [`ExportKind`] with its bounds normalised once, before the first record.
+#[derive(Debug, Clone)]
+enum ExportRule {
+    Adif {
+        from: Option<u64>,
+        to: Option<u64>,
+    },
+    Csv {
+        from: Option<u64>,
+        to: Option<u64>,
+    },
+    Operator {
+        want: String,
+    },
+    /// `want` is empty for an activation that names no reference, which holds no contact.
+    Activation {
+        want: String,
+        day: u64,
+        want_call: Option<String>,
+    },
+}
+
+impl Export {
+    /// An export of `kind`, holding its header and no record yet.
+    pub fn new(kind: ExportKind) -> Export {
+        let (rule, out) = match kind {
+            ExportKind::Adif { from, to } => (ExportRule::Adif { from, to }, adif_header()),
+            ExportKind::Csv { from, to } => (
+                ExportRule::Csv { from, to },
+                String::from(
+                    "Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,Name,QTH,Comment,DateTimeUTC,\
+                     Confirmed\n",
+                ),
+            ),
+            ExportKind::Operator(operator) => (
+                ExportRule::Operator {
+                    want: operator.trim().to_ascii_uppercase(),
+                },
+                adif_header(),
+            ),
+            ExportKind::Activation {
+                reference,
+                day_start_unix,
+                callsign,
+            } => (
+                ExportRule::Activation {
+                    want: reference.trim().to_ascii_uppercase(),
+                    day: day_start(day_start_unix),
+                    want_call: callsign
+                        .map(|c| c.trim().to_ascii_uppercase())
+                        .filter(|c| !c.is_empty()),
+                },
+                adif_header(),
+            ),
+        };
+        Export { rule, out }
+    }
+
+    /// Take the next record of the log, in log order: written if the export holds it.
+    pub fn add(&mut self, r: &QsoRecord) {
+        let in_range = |from: Option<u64>, to: Option<u64>| {
+            from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
+        };
+        match &self.rule {
+            ExportRule::Adif { from, to } => {
+                if in_range(*from, *to) {
+                    self.out.push_str(&adif_record_own_log(r));
+                }
+            }
+            ExportRule::Csv { from, to } => {
+                if in_range(*from, *to) {
+                    let (y, mo, d, h, mi, se) = datetime_utc(r.when_unix);
+                    let dt = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}Z");
+                    let cells = [
+                        csv_cell(&r.call),
+                        csv_cell(r.grid.as_deref().unwrap_or("")),
+                        csv_cell(&r.band),
+                        format!("{:.6}", r.freq_mhz),
+                        csv_cell(&r.mode),
+                        csv_cell(r.rst_sent.as_deref().unwrap_or("")),
+                        csv_cell(r.rst_rcvd.as_deref().unwrap_or("")),
+                        csv_cell(r.name.as_deref().unwrap_or("")),
+                        csv_cell(r.qth.as_deref().unwrap_or("")),
+                        csv_cell(r.comment.as_deref().unwrap_or("")),
+                        dt,
+                        if r.confirmed { "Y" } else { "N" }.to_string(),
+                    ];
+                    self.out.push_str(&cells.join(","));
+                    self.out.push('\n');
+                }
+            }
+            ExportRule::Operator { want } => {
+                let is_theirs = r
+                    .operator
+                    .as_deref()
+                    .map(|o| o.trim().to_ascii_uppercase() == *want)
+                    .unwrap_or(false);
+                if is_theirs {
+                    self.out.push_str(&adif_record_own_log(r));
+                }
+            }
+            ExportRule::Activation {
+                want,
+                day,
+                want_call,
+            } => {
+                if want.is_empty()
+                    || r.when_unix < *day
+                    || r.when_unix >= *day + 86_400
+                    || worked_under(r) != *want_call
+                    || !my_refs(r).contains(want)
+                {
+                    return;
+                }
+                let mut one = QsoRecord::clone(r);
+                one.ota.my_ref = Some(want.clone());
+                self.out.push_str(&adif_record_own_log(&one));
+            }
         }
-        s
+    }
+
+    /// The export's text.
+    pub fn finish(self) -> String {
+        self.out
+    }
+}
+
+/// The distinct operators of a log, taken a contact at a time — [`Logbook::operators`]' rule,
+/// for whoever holds the log. Holds the distinct names, never the records.
+#[derive(Debug, Clone, Default)]
+pub struct Operators(std::collections::BTreeSet<String>);
+
+impl Operators {
+    /// Take the next record of the log.
+    pub fn add(&mut self, r: &QsoRecord) {
+        if let Some(o) = r.operator.as_deref() {
+            let o = o.trim().to_ascii_uppercase();
+            if !o.is_empty() {
+                self.0.insert(o);
+            }
+        }
+    }
+
+    /// Every distinct operator, uppercased and sorted.
+    pub fn finish(self) -> Vec<String> {
+        self.0.into_iter().collect()
+    }
+}
+
+/// An activation's key — your reference, its UTC day, the callsign it was worked under — and
+/// what [`Activations`] keeps against it: the program its first contact named, and how many.
+type ActivationKey = (String, u64, Option<String>);
+type ActivationTally = (Option<String>, usize);
+
+/// The distinct activations of a log, taken a contact at a time IN LOG ORDER —
+/// [`Logbook::activations`]' rule, for whoever holds the log. Holds one entry per activation,
+/// never the records. The order matters: an activation's program is its first contact's.
+#[derive(Debug, Clone, Default)]
+pub struct Activations(std::collections::HashMap<ActivationKey, ActivationTally>);
+
+impl Activations {
+    /// Take the next record of the log.
+    pub fn add(&mut self, r: &QsoRecord) {
+        let call = worked_under(r);
+        let day = day_start(r.when_unix);
+        for reference in my_refs(r) {
+            let slot = self
+                .0
+                .entry((reference, day, call.clone()))
+                .or_insert((None, 0));
+            if slot.0.is_none() {
+                slot.0 = r
+                    .ota
+                    .my_program
+                    .as_deref()
+                    .map(|p| p.trim().to_ascii_uppercase())
+                    .filter(|p| !p.is_empty());
+            }
+            slot.1 += 1;
+        }
+    }
+
+    /// Every activation, newest first.
+    pub fn finish(self) -> Vec<LoggedActivation> {
+        let mut out: Vec<LoggedActivation> = self
+            .0
+            .into_iter()
+            .map(|((reference, day_start_unix, callsign), (program, qsos))| {
+                let (y, mo, d, ..) = datetime_utc(day_start_unix);
+                LoggedActivation {
+                    program,
+                    reference,
+                    day_start_unix,
+                    date: format!("{y:04}-{mo:02}-{d:02}"),
+                    callsign,
+                    qsos,
+                }
+            })
+            .collect();
+        // Newest first — the activation the operator just finished is the one they came to
+        // export. Reference then callsign break a tie so two parks on one day list in a stable
+        // order instead of the hash map's.
+        out.sort_by(|a, b| {
+            b.day_start_unix
+                .cmp(&a.day_start_unix)
+                .then_with(|| a.reference.cmp(&b.reference))
+                .then_with(|| a.callsign.cmp(&b.callsign))
+        });
+        out
     }
 }
 
@@ -9552,6 +9758,43 @@ mod qsl_card_tests {
         assert!(!lb.records[0].qsl_sent.sent);
     }
 
+    /// ★ #152's missing half: a card marked received COUNTS, at once. The award, needs and
+    /// Journey folds read the record's `award_confirmed`, not its channels — and a mark that set
+    /// only the channel left the contact uncounted until a restart read it back, since the store
+    /// and `log.adi` both derive the two flags from the channels. The test above asks
+    /// `qsl_rcvd.award()`, which no fold reads, so it passed all along. Found by SPEC-2 C14's
+    /// parity test, where the store answered one way and memory the other.
+    #[test]
+    fn a_card_marked_received_counts_at_once_and_an_untick_takes_back_only_the_card() {
+        let mut lb = Logbook::default();
+        lb.records.push(rec());
+        assert!(lb.mark_qsl_card(0, true));
+        assert!(
+            lb.records[0].award_confirmed && lb.records[0].confirmed,
+            "the flags the folds read"
+        );
+        assert!(lb.mark_qsl_card(0, false));
+        assert!(!lb.records[0].award_confirmed && !lb.records[0].confirmed);
+
+        // An untick takes back only what the card gave: an eQSL confirmation stays.
+        let mut eqsl = rec();
+        eqsl.qsl_rcvd.eqsl = true;
+        eqsl.confirmed = true;
+        lb.records.push(eqsl);
+        assert!(lb.mark_qsl_card(1, true));
+        assert!(lb.records[1].award_confirmed);
+        assert!(lb.mark_qsl_card(1, false));
+        assert!(lb.records[1].confirmed && !lb.records[1].award_confirmed);
+
+        // Each record reads as the store and `log.adi` read it back.
+        for r in lb.records.iter() {
+            assert_eq!(
+                (r.confirmed, r.award_confirmed),
+                (r.qsl_rcvd.any(), r.qsl_rcvd.award())
+            );
+        }
+    }
+
     /// Out of range is false, not a panic — the UI holds indices that shift under it.
     #[test]
     fn an_index_that_is_gone_reports_false() {
@@ -10946,5 +11189,310 @@ mod private_note_tests {
                  the emitter dropped it or this test has stopped being able to tell: {outbound}"
             );
         }
+    }
+}
+
+/// ★ SPEC-2 v3 C15: the export rules moved out of [`Logbook`] into [`Export`], [`Operators`] and
+/// [`Activations`], so a reader of the logbook store runs them too. Nothing about their output
+/// may change: the ruling is that an export is byte-identical. The oracles below are the four
+/// export bodies and the two splits AS THEY WERE before the move, verbatim but for `self`, and
+/// every export of random logs — ranges bounded at contact times and a second either side,
+/// every operator in the log in other spellings, every activation listed and some that are not
+/// — is compared with them byte for byte.
+#[cfg(test)]
+mod export_rule_tests {
+    use super::*;
+
+    // ── the oracles: each body as it was before C15 ──────────────────────────
+
+    fn records_in_range_old(
+        lb: &Logbook,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> impl Iterator<Item = &QsoRecord> {
+        lb.records.iter().map(|r| &**r).filter(move |r| {
+            from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
+        })
+    }
+
+    fn adif_in_range_old(lb: &Logbook, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
+        let mut s = adif_header();
+        for r in records_in_range_old(lb, from_unix, to_unix) {
+            s.push_str(&adif_record_own_log(r));
+        }
+        s
+    }
+
+    fn operators_old(lb: &Logbook) -> Vec<String> {
+        let mut v: Vec<String> = lb
+            .records
+            .iter()
+            .filter_map(|r| r.operator.as_deref())
+            .map(|o| o.trim().to_ascii_uppercase())
+            .filter(|o| !o.is_empty())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    fn adif_for_operator_old(lb: &Logbook, operator: &str) -> String {
+        let want = operator.trim().to_ascii_uppercase();
+        let mut s = adif_header();
+        for r in &lb.records {
+            let is_theirs = r
+                .operator
+                .as_deref()
+                .map(|o| o.trim().to_ascii_uppercase() == want)
+                .unwrap_or(false);
+            if is_theirs {
+                s.push_str(&adif_record_own_log(r));
+            }
+        }
+        s
+    }
+
+    fn activations_old(lb: &Logbook) -> Vec<LoggedActivation> {
+        type Key = (String, u64, Option<String>);
+        let mut seen: std::collections::HashMap<Key, (Option<String>, usize)> =
+            std::collections::HashMap::new();
+        for r in &lb.records {
+            let call = worked_under(r);
+            let day = day_start(r.when_unix);
+            for reference in my_refs(r) {
+                let slot = seen
+                    .entry((reference, day, call.clone()))
+                    .or_insert((None, 0));
+                if slot.0.is_none() {
+                    slot.0 = r
+                        .ota
+                        .my_program
+                        .as_deref()
+                        .map(|p| p.trim().to_ascii_uppercase())
+                        .filter(|p| !p.is_empty());
+                }
+                slot.1 += 1;
+            }
+        }
+        let mut out: Vec<LoggedActivation> = seen
+            .into_iter()
+            .map(|((reference, day_start_unix, callsign), (program, qsos))| {
+                let (y, mo, d, ..) = datetime_utc(day_start_unix);
+                LoggedActivation {
+                    program,
+                    reference,
+                    day_start_unix,
+                    date: format!("{y:04}-{mo:02}-{d:02}"),
+                    callsign,
+                    qsos,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.day_start_unix
+                .cmp(&a.day_start_unix)
+                .then_with(|| a.reference.cmp(&b.reference))
+                .then_with(|| a.callsign.cmp(&b.callsign))
+        });
+        out
+    }
+
+    fn adif_for_activation_old(
+        lb: &Logbook,
+        reference: &str,
+        day_start_unix: u64,
+        callsign: Option<&str>,
+    ) -> String {
+        let want = reference.trim().to_ascii_uppercase();
+        let day = day_start(day_start_unix);
+        let want_call = callsign
+            .map(|c| c.trim().to_ascii_uppercase())
+            .filter(|c| !c.is_empty());
+        let mut s = adif_header();
+        if want.is_empty() {
+            return s;
+        }
+        for r in &lb.records {
+            if r.when_unix < day || r.when_unix >= day + 86_400 {
+                continue;
+            }
+            if worked_under(r) != want_call {
+                continue;
+            }
+            if !my_refs(r).contains(&want) {
+                continue;
+            }
+            let mut one = QsoRecord::clone(r);
+            one.ota.my_ref = Some(want.clone());
+            s.push_str(&adif_record_own_log(&one));
+        }
+        s
+    }
+
+    fn csv_in_range_old(lb: &Logbook, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
+        let mut s = String::from(
+            "Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,Name,QTH,Comment,DateTimeUTC,Confirmed\n",
+        );
+        for r in records_in_range_old(lb, from_unix, to_unix) {
+            let (y, mo, d, h, mi, se) = datetime_utc(r.when_unix);
+            let dt = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}Z");
+            let cells = [
+                csv_cell(&r.call),
+                csv_cell(r.grid.as_deref().unwrap_or("")),
+                csv_cell(&r.band),
+                format!("{:.6}", r.freq_mhz),
+                csv_cell(&r.mode),
+                csv_cell(r.rst_sent.as_deref().unwrap_or("")),
+                csv_cell(r.rst_rcvd.as_deref().unwrap_or("")),
+                csv_cell(r.name.as_deref().unwrap_or("")),
+                csv_cell(r.qth.as_deref().unwrap_or("")),
+                csv_cell(r.comment.as_deref().unwrap_or("")),
+                dt,
+                if r.confirmed { "Y" } else { "N" }.to_string(),
+            ];
+            s.push_str(&cells.join(","));
+            s.push('\n');
+        }
+        s
+    }
+
+    // ── random logs ──────────────────────────────────────────────────────────
+
+    /// A seeded xorshift: the same log for the same seed, every run.
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+            from[self.below(from.len())]
+        }
+        fn maybe(&mut self, from: &[&str]) -> Option<String> {
+            let i = self.below(from.len() + 1);
+            from.get(i).map(|s| s.to_string())
+        }
+    }
+
+    /// Three UTC days, starting on a day boundary.
+    const DAY0: u64 = 1_788_220_800;
+
+    fn random_log(g: &mut Gen) -> Logbook {
+        let mut lb = Logbook::default();
+        let n = g.below(60);
+        for i in 0..n {
+            // Every contact on one of three days; some exactly at midnight or a second before.
+            let when = match g.below(4) {
+                0 => DAY0 + 86_400 * g.below(3) as u64,
+                1 => DAY0 + 86_400 * (1 + g.below(2) as u64) - 1,
+                _ => DAY0 + g.below(3 * 86_400) as u64,
+            };
+            let mut r = parse_adif(
+                "<CALL:4>W1AW<QSO_DATE:8>20260901<TIME_ON:6>120000<BAND:3>20m<MODE:3>FT8<EOR>",
+            )
+            .remove(0);
+            r.id = Some(RecordId::Provisional {
+                hash: i as u64,
+                ordinal: 0,
+            });
+            r.call = g
+                .pick(&["W1AW", "K2DEF", "VE3XYZ", "JA1ABC/P", "DL2ZZZ"])
+                .into();
+            r.band = g.pick(&["20m", "40m", "2m"]).into();
+            r.mode = g.pick(&["FT8", "SSB", "CW"]).into();
+            r.freq_mhz = [14.074, 7.0305, 144.174][g.below(3)];
+            r.when_unix = when;
+            r.grid = g.maybe(&["FN31", "EM10ab", ""]);
+            r.name = g.maybe(&["José", "Bob, Jr.", "say \"hi\""]);
+            r.qth = g.maybe(&["Line\nbreak", "Paris"]);
+            r.comment = g.maybe(&["a,b", "plain", ""]);
+            r.notes = g.maybe(&["private note"]);
+            r.rst_sent = g.maybe(&["-10", "59"]);
+            r.rst_rcvd = g.maybe(&["-15", "599"]);
+            r.confirmed = g.below(2) == 0;
+            r.operator = g.maybe(&["w1abc", " W1ABC ", "K9OP", "", "   "]);
+            r.station_callsign = g.maybe(&["KD9TAW", " kd9taw", "N0CLUB", ""]);
+            r.ota.my_ref = g.maybe(&["US-1234", "us-1234,US-5678", "US-5678; ", " ; ", ""]);
+            r.ota.my_program = g.maybe(&["pota", "SOTA", ""]);
+            r.extra = if g.below(3) == 0 {
+                vec![("APP_OTHER_X".into(), "1".into())]
+            } else {
+                Vec::new()
+            };
+            lb.records.push(r);
+        }
+        lb
+    }
+
+    /// ★ Every export of 60 random logs, and both splits, byte for byte as before the move.
+    #[test]
+    fn every_export_and_split_is_what_it_was() {
+        let mut compared = 0usize;
+        let mut nonempty = 0usize;
+        for seed in 1..=60u64 {
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let lb = random_log(&mut g);
+            // Ranges: open, and bounded at every contact's time and a second either side.
+            let mut bounds: Vec<Option<u64>> = vec![None];
+            for r in lb.records.iter().take(6) {
+                bounds.extend([r.when_unix - 1, r.when_unix, r.when_unix + 1].map(Some));
+            }
+            for &from in &bounds {
+                for &to in &bounds {
+                    assert_eq!(
+                        lb.adif_in_range(from, to),
+                        adif_in_range_old(&lb, from, to),
+                        "seed {seed}: adif {from:?}..{to:?}"
+                    );
+                    assert_eq!(
+                        lb.csv_in_range(from, to),
+                        csv_in_range_old(&lb, from, to),
+                        "seed {seed}: csv {from:?}..{to:?}"
+                    );
+                    compared += 2;
+                }
+            }
+            assert_eq!(lb.adif(), adif_in_range_old(&lb, None, None));
+            assert_eq!(lb.csv(), csv_in_range_old(&lb, None, None));
+            assert_eq!(lb.operators(), operators_old(&lb), "seed {seed}: operators");
+            let mut ops = operators_old(&lb);
+            ops.extend(["w1abc", " W1ABC", "nobody", "", " "].map(String::from));
+            for op in &ops {
+                let got = lb.adif_for_operator(op);
+                assert_eq!(got, adif_for_operator_old(&lb, op), "seed {seed}: {op:?}");
+                nonempty += usize::from(got != adif_header());
+                compared += 1;
+            }
+            let listed = activations_old(&lb);
+            assert_eq!(lb.activations(), listed, "seed {seed}: activations");
+            let mut asks: Vec<(String, u64, Option<String>)> = listed
+                .iter()
+                .map(|a| (a.reference.clone(), a.day_start_unix, a.callsign.clone()))
+                .collect();
+            asks.extend([
+                ("us-1234".into(), DAY0 + 3_600, Some(" kd9taw ".into())),
+                ("US-5678".into(), DAY0 + 86_400, None),
+                ("".into(), DAY0, Some("KD9TAW".into())),
+                ("US-9999".into(), DAY0, Some("KD9TAW".into())),
+            ]);
+            for (reference, day, call) in &asks {
+                let got = lb.adif_for_activation(reference, *day, call.as_deref());
+                assert_eq!(
+                    got,
+                    adif_for_activation_old(&lb, reference, *day, call.as_deref()),
+                    "seed {seed}: {reference:?} {day} {call:?}"
+                );
+                nonempty += usize::from(got != adif_header());
+                compared += 1;
+            }
+        }
+        // Premises, so the comparisons above were not all of empty files.
+        assert!(compared > 20_000, "{compared}");
+        assert!(nonempty > 200, "the splits held contacts: {nonempty}");
     }
 }

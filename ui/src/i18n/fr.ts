@@ -1923,6 +1923,12 @@ export const FR: PartialCatalog = {
   "logbook.delete.heading": "Supprimer le QSO avec {{call}} sur {{band}} ?",
   "logbook.empty": "Aucun contact enregistré pour l'instant.",
   "logbook.emptySearch": "Aucun contact ne correspond à “{{query}}”.",
+  "logbook.rows.loading": "Chargement…",
+  // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.keys.move": "↑ et ↓ passent d’un contact à l’autre, Pg préc. et Pg suiv. d’une page à l’autre, Début et Fin vont au premier et au dernier.",
+  "logbook.keys.edit": "Entrée modifie le contact.",
+  "logbook.keys.delete": "Suppr demande s’il faut supprimer le contact.",
+  "logbook.keys.close": "Échap ferme le formulaire de modification ou la question.",
   "logbook.export.rangeInvalid": "Saisissez la plage en dates UTC ({{date}}), ou laissez les champs vides pour tout le journal.",
   "logbook.export.adif.label": "Exporter ADIF",
   "logbook.export.adif.title": "Enregistrer tout le journal en fichier ADIF dans votre dossier Téléchargements",
@@ -1935,6 +1941,9 @@ export const FR: PartialCatalog = {
   "logbook.export.from.label": "du",
   "logbook.export.from.title": "N'exporter que les QSO à partir de cette date UTC (vide = depuis le début)",
   "logbook.export.perOperator.done": "{{count}} fichiers exportés → Téléchargements",
+  // Machine translation, not yet reviewed by a speaker (SPEC-2 C15, 2026-09-24).
+  "logbook.export.lacks.saving": { "one": "{{count}} modification récente manque dans l’export : Nexus l’enregistre encore dans le journal.", "other": "{{count}} modifications récentes manquent dans l’export : Nexus les enregistre encore dans le journal." },
+  "logbook.export.lacks.held": { "one": "{{count}} modification refusée par le journal manque dans l’export. Nexus la garde en mémoire pour cette session et vous la signale quand vous quittez.", "other": "{{count}} modifications refusées par le journal manquent dans l’export. Nexus les garde en mémoire pour cette session et vous les signale quand vous quittez." },
   "logbook.export.activation.label": "activation",
   "logbook.export.activation.title": "Choisir un jour de parc à exporter dans le fichier attendu par POTA — un parc, un jour UTC, un indicatif",
   "logbook.export.activation.none": "aucune",

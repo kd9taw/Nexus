@@ -2115,6 +2115,20 @@ export interface LoggedActivation {
   qsos: number
 }
 
+/** A Logbook export (mirror of the Rust LogExportDto): the file, and the recent changes it lacks
+ *  because the logbook database did not hold them yet. The file is written either way — what the
+ *  database holds — and the screen says what it lacks. */
+export interface LogExport {
+  /** The file. */
+  text: string
+  /** Changes still being saved: on their way to the database, or sent again until it takes
+   *  them. */
+  saving: number
+  /** Changes the database refused for what they are: kept in memory for the session, and asked
+   *  about when Nexus quits. */
+  held: number
+}
+
 /** Per-source upload status (mirror of the Rust UploadStatusDto). */
 export interface UploadStatus {
   /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */
@@ -2705,6 +2719,8 @@ export interface DiagAction {
   call?: string
   otherIndex?: number
   untilUnix?: number
+  /** The id of the contact at `otherIndex` — the desktop's report only (SPEC-2 v3 C17a). */
+  otherId?: string
 }
 export interface DiagReason {
   code: string
@@ -2717,11 +2733,21 @@ export interface QsoDiagnosis {
   award: string
   status: string
   reasons: DiagReason[]
+  /** The desktop's report names the diagnosed contact (SPEC-2 v2 §3, C17a): its id — ask for its
+   *  row, upload it by id — and the call, band, mode and time its list shows. Absent from the
+   *  Remote's report. */
+  id?: string
+  call?: string
+  band?: string
+  mode?: string
+  whenUnix?: number
 }
 export interface DiagActionBucket {
   kind: string
   count: number
   qsoIndices: number[]
+  /** The id of each contact at `qsoIndices`, in the same order — the desktop's report only. */
+  qsoIds?: (string | null)[]
 }
 /** One entity a single award-grade fix away from a new slot / new entity. */
 export interface OneAway {

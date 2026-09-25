@@ -7,6 +7,7 @@
 // kind, the pack id. The LABEL beside each of those moved; the token did not.
 import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
+import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
@@ -148,6 +149,8 @@ const gridOk = isValidGrid
  */
 export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide }: Props) {
   const [step, setStep] = useState(0) // 0 station · 1 rig · 2 log · 3 goals
+  // Closed, the keyboard goes back to where the wizard was opened from (focusReturn.ts).
+  const returnFocus = useFocusReturn(true)
 
   // --- Step 3: optional ADIF log import (seeds worked-before / needs / awards) ---
   const [importStats, setImportStats] = useState<ImportStats | null>(null)
@@ -620,6 +623,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       }}
       title={t('setup.title')}
       hideTitle
+      onCloseAutoFocus={returnFocus}
     >
       <div
         className="wizard-dots"

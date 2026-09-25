@@ -28,6 +28,8 @@ pub mod fd_scoreboard;
 pub mod fdbridge;
 pub mod fdevent;
 pub mod keyboard;
+pub mod logexport;
+pub mod logfill;
 pub mod logstore;
 pub mod privileges;
 pub mod remote_control;

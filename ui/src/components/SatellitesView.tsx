@@ -93,6 +93,7 @@ import { T } from '../i18n/T'
 import { MapView } from './MapView'
 import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
+import { useFocusReturn } from '../focusReturn'
 import { useTheme } from '../useTheme'
 
 interface Props {
@@ -2281,6 +2282,8 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
     ageDays: number
     proceed: () => void
   } | null>(null)
+  // Closed, the keyboard goes back to the Work button it was asked from (focusReturn.ts).
+  const armConfirmReturn = useFocusReturn(armConfirm != null)
   // Which rig the engine's held pick bound to, and what it actually wrote.
   // ENGINE truth off the same read-back the hold uses — a binding drawn from
   // the last local click would name a rig the engine no longer drives (the
@@ -4475,6 +4478,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
           if (!o) setArmConfirm(null)
         }}
         title={t('sat.armConfirm.title')}
+        onCloseAutoFocus={armConfirmReturn}
         description={
           armConfirm
             ? t('sat.armConfirm.body', {

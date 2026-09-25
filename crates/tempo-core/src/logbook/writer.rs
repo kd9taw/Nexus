@@ -66,8 +66,8 @@
 //! (C6). This is the mechanism and its proof.
 
 use super::io_fence;
-use super::sqlite::{self, Batch, LogDb, RowWrite, Watermarks};
-use super::{Effects, LogOp, Logbook, QsoRecord, RecordId};
+use super::sqlite::{self, Batch, LogDb, RowWrite};
+use super::{Effects, LogOp, Logbook, QsoRecord, RecordId, Watermarks};
 use crate::applog;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
@@ -148,6 +148,12 @@ pub struct Change {
     /// The log's watermarks after the change, written in the same transaction as its last
     /// chunk.
     pub marks: Watermarks,
+    /// `log_meta` keys this change sets, in the same transaction as its last chunk — a fact
+    /// about the rows the change writes that must never be on disk without them (the fill job's
+    /// `fill_ver`, SPEC-2 v3 D2-A). A change carrying only these still writes, so it is not
+    /// [`Self::is_empty`]. ⚠️ A re-send from memory ([`Self::resend`]) does not carry them: the
+    /// job that set them runs again, and finds its rows already written.
+    pub meta: Vec<(&'static str, i64)>,
 }
 
 impl Change {
@@ -217,6 +223,7 @@ impl Change {
             },
             upsert,
             marks: Watermarks::of(log),
+            meta: Vec::new(),
         }
     }
 
@@ -400,6 +407,7 @@ impl Change {
                     remove: Vec::new(),
                     upsert: log.records().iter().map(row).collect(),
                     marks: Watermarks::of(log),
+                    meta: Vec::new(),
                 },
                 Touched::Rows(ids) => {
                     let mut change = Change {
@@ -426,7 +434,7 @@ impl Change {
     /// Whether this change writes anything at all. An empty change still moves the
     /// watermarks, so it is only skipped by a caller that knows nothing changed.
     pub fn is_empty(&self) -> bool {
-        !self.clear && self.remove.is_empty() && self.upsert.is_empty()
+        !self.clear && self.remove.is_empty() && self.upsert.is_empty() && self.meta.is_empty()
     }
 }
 
@@ -714,8 +722,9 @@ pub struct Status {
     ///
     /// Not "the highest revision committed": an interactive write can be on disk while an
     /// earlier bulk one is still being chunked, and this watermark does not claim otherwise.
-    /// A single change's own durability is its [`Ticket`]. Monotone, and permanently capped
-    /// by the first change the store ever lost.
+    /// A single change's own durability is its [`Ticket`]. Monotone, and capped by the first
+    /// change the store lost and has not taken since: sent again under its own revision
+    /// ([`Change::resend`]) and landed, a lost change no longer holds it back.
     pub durable_rev: u64,
     /// Changes submitted and not yet resolved.
     pub pending: usize,
@@ -932,9 +941,10 @@ impl LogWriter {
     ///
     /// It waits on the durability watermark ([`Status::durable_rev`]), not on one ticket: a
     /// change can commit ahead of an earlier bulk one it shares no row with, and a read wants
-    /// ALL of them. A change the store lost caps the watermark for good, so a wait past it ends
-    /// as soon as nothing still in flight could move it — [`WaitError::Failed`] with the
-    /// reason, rather than a timeout nobody can do anything about.
+    /// ALL of them. A change the store lost caps the watermark until its rows are sent again
+    /// and land ([`Change::resend`]), so a wait past it ends as soon as nothing still in flight
+    /// could move it — [`WaitError::Failed`] with the reason, rather than a timeout nobody can
+    /// do anything about.
     ///
     /// ⚠️ **Never call it while holding a lock**, as [`Self::wait_durable`].
     pub fn wait_committed(
@@ -1041,6 +1051,7 @@ struct Job {
     remove: Vec<RecordId>,
     upsert: Vec<RowWrite>,
     marks: Watermarks,
+    meta: Vec<(&'static str, i64)>,
     slot: Arc<Slot>,
     /// Every row this job writes or drops — what decides whether another job may overtake
     /// it. Built once, here, rather than per comparison: a bulk job is compared against on
@@ -1065,6 +1076,7 @@ impl Job {
             remove: c.remove,
             upsert: c.upsert,
             marks: c.marks,
+            meta: c.meta,
             slot,
             touched,
             cursor: Cursor::default(),
@@ -1085,7 +1097,7 @@ struct Chunk<'a> {
 /// Removals go first and upserts follow, so a change that deletes a row and re-adds its id
 /// cannot have the two in the wrong order. The watermarks ride the LAST chunk only: a
 /// watermark that ran ahead of the rows would be a cache key that lies, where one that lags
-/// only costs a rebuild.
+/// only costs a rebuild. The change's `log_meta` keys ride with them, for the same reason.
 fn plan(job: &Job) -> Chunk<'_> {
     let from = job.cursor.removed;
     let removed = (from + CHUNK_ROWS).min(job.remove.len());
@@ -1103,6 +1115,7 @@ fn plan(job: &Job) -> Chunk<'_> {
             remove: &job.remove[from..removed],
             upsert: &job.upsert[up_from..upserted],
             marks: finishes.then_some(job.marks),
+            meta: if finishes { &job.meta } else { &[] },
         },
         removed,
         upserted,
@@ -1186,9 +1199,11 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     // watermark.
     let mut unresolved: BTreeSet<u64> = BTreeSet::new();
     let mut highest_ok: u64 = 0;
-    // The first revision the store lost. The watermark never passes it, because everything
-    // after it describes a store that is missing a change.
-    let mut lost: Option<u64> = None;
+    // The revisions the store lost and has not taken since. The watermark never passes the
+    // first of them, because everything after it describes a store that is missing a change.
+    // A change sent again under a lost revision (`Change::resend`: the rows as memory holds them
+    // then) repairs that loss when it lands, and the watermark moves on past it.
+    let mut lost: BTreeSet<u64> = BTreeSet::new();
     let mut closed = false;
 
     loop {
@@ -1261,7 +1276,8 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     .expect("the job pick() chose is in the queue");
                 unresolved.remove(&job.rev);
                 highest_ok = highest_ok.max(job.rev);
-                settle(shared, &unresolved, highest_ok, lost, None);
+                lost.remove(&job.rev);
+                settle(shared, &unresolved, highest_ok, lost.first().copied(), None);
                 resolve(&job.slot, Ok(()));
             }
             Err(refusal) => {
@@ -1269,7 +1285,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     .remove(i)
                     .expect("the job pick() chose is in the queue");
                 unresolved.remove(&job.rev);
-                lost = Some(lost.map_or(job.rev, |first| first.min(job.rev)));
+                lost.insert(job.rev);
                 applog::error(
                     "logdb",
                     &format!(
@@ -1281,7 +1297,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     shared,
                     &unresolved,
                     highest_ok,
-                    lost,
+                    lost.first().copied(),
                     Some(refusal.reason.clone()),
                 );
                 resolve(&job.slot, Err(refusal));
@@ -1733,34 +1749,55 @@ mod tests {
     /// going red the moment the lane stops working (lane gone ⇒ `fast` ≈ `fifo` ⇒ ratio 1).
     /// Both terms are measured on the same box in the same run, so load moves them together.
     ///
-    /// The absolute requirement has not been dropped — it is the second assertion, at a
-    /// ceiling no plausible load reaches, and the print below is what to read for the real
-    /// number on real hardware. The mechanism itself is held down WITHOUT a clock at all by
+    /// The absolute requirement has not been dropped — it is the last assertion, at a ceiling
+    /// no plausible load reaches, and the print below is what to read for the real number on
+    /// real hardware. The mechanism itself is held down WITHOUT a clock at all by
     /// `a_contest_qso_overtakes_a_bulk_write_it_shares_no_row_with`.
+    ///
+    /// ⚠️ **BEST OF THREE, EACH LANE.** One race per lane went red on a loaded CI runner with
+    /// the lane working: 164 ms against 322 ms, 1.96×, a load spike on the one interactive
+    /// race (it is 12–36 ms unloaded). So each lane is raced three times, interleaved so a load
+    /// that comes and goes falls on both, and the best of each is compared: load only ever
+    /// adds time, so a lane's best race is the one nearest what the lane really does. It is
+    /// still no easier to pass with the lane gone: then no race of the interactive write can
+    /// overtake anything, its best is the bulk write's time, and the ratio is ~1.
     #[test]
     fn a_contest_insert_is_durable_while_a_bulk_write_runs() {
-        let s = Scratch::new();
-        let (fast, unfinished) = race(&s, false, Priority::Interactive);
-        assert!(
-            unfinished,
-            "the premise: the bulk write was still in flight"
-        );
-
-        let s = Scratch::new();
-        let (fifo, _) = race(&s, false, Priority::Bulk);
+        const TRIALS: usize = 3;
+        // Per trial: the insert in the interactive lane, whether the bulk write was still in
+        // flight when it landed, and the same insert queued behind the bulk write.
+        let trials: Vec<(Duration, bool, Duration)> = (0..TRIALS)
+            .map(|_| {
+                let s = Scratch::new();
+                let (fast, unfinished) = race(&s, false, Priority::Interactive);
+                let s = Scratch::new();
+                let (fifo, _) = race(&s, false, Priority::Bulk);
+                (fast, unfinished, fifo)
+            })
+            .collect();
+        let fast = trials.iter().map(|t| t.0).min().expect("a trial");
+        let fifo = trials.iter().map(|t| t.2).min().expect("a trial");
 
         println!(
-            "contest insert: {fast:?} in the interactive lane, {fifo:?} behind the bulk write"
+            "contest insert: best {fast:?} in the interactive lane, best {fifo:?} behind the bulk \
+             write; (lane, bulk in flight, behind) per trial: {trials:?}"
         );
         assert!(
             fifo > Duration::from_millis(50),
             "the control: without the lane the same insert must miss the budget, took {fifo:?} \
-             — if it did not, the bulk write is too small to be measuring anything"
+             at best — if it did not, the bulk write is too small to be measuring anything \
+             (trials: {trials:?})"
         );
         assert!(
             fast * 2 < fifo,
-            "the lane bought nothing: the contest insert took {fast:?} against {fifo:?} behind \
-             the bulk write, so it is being queued with it rather than let in between its chunks"
+            "the lane bought nothing: the contest insert took {fast:?} at best against {fifo:?} \
+             behind the bulk write, so it is being queued with it rather than let in between its \
+             chunks (trials: {trials:?})"
+        );
+        assert!(
+            trials.iter().all(|t| t.1),
+            "the premise: in every trial the bulk write was still in flight when the contest \
+             insert landed (trials: {trials:?})"
         );
         assert!(
             fast < Duration::from_secs(1),
@@ -2070,6 +2107,68 @@ mod tests {
             .expect("everything up to 50 is committed");
     }
 
+    /// ★ A LOST CHANGE SENT AGAIN LIFTS THE WATERMARK ONCE IT LANDS. The store loses revisions
+    /// 102 and 104 and takes 103 and 105: the watermark stops at 101, and a read that must see
+    /// 105 hears the loss — those changes truly are not saved. Their rows are sent again under
+    /// the revisions they first went out with, which is what the log's owner does
+    /// (`Change::resend`), one at a time: the watermark rises to just below the loss still
+    /// standing, then past everything, and a read of the store is current again.
+    #[test]
+    fn a_lost_change_sent_again_lifts_the_watermark_once_it_lands() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let ok = |rev: u64, call: &str, n: u64| {
+            let t = w.submit(change(rev, vec![rec(call, n)]));
+            w.wait_durable(&t, Duration::from_secs(60))
+                .expect("it lands");
+        };
+        let lose = |rev: u64, call: &str, n: u64| {
+            // A row with no id cannot be addressed again, so the store refuses it.
+            let mut orphan = (*rec(call, n)).clone();
+            orphan.id = None;
+            let t = w.submit(change(rev, vec![Arc::new(orphan)]));
+            assert!(
+                w.wait_durable(&t, Duration::from_secs(60)).is_err(),
+                "premise: {rev} is lost"
+            );
+        };
+        ok(101, "W1AW", 101);
+        lose(102, "K5XYZ", 500);
+        ok(103, "DL1ABC", 501);
+        lose(104, "JA1ZZZ", 502);
+        ok(105, "VK2AA", 503);
+        assert_eq!(w.status().durable_rev, 101, "capped below the first loss");
+        assert!(
+            matches!(
+                w.wait_committed(105, Duration::ZERO),
+                Err(WaitError::Failed(_))
+            ),
+            "a read that must see 105 hears the loss: those changes are not saved"
+        );
+
+        ok(102, "K5XYZ", 500);
+        assert_eq!(
+            w.status().durable_rev,
+            103,
+            "102 landed: the watermark rises to just below the loss still standing"
+        );
+        assert!(
+            matches!(
+                w.wait_committed(105, Duration::ZERO),
+                Err(WaitError::Failed(_))
+            ),
+            "104 is still not saved"
+        );
+        w.wait_committed(103, Duration::ZERO)
+            .expect("everything up to 103 is in the store");
+
+        ok(104, "JA1ZZZ", 502);
+        assert_eq!(w.status().durable_rev, 105, "every change is in the store");
+        w.wait_committed(105, Duration::ZERO)
+            .expect("so a read of it is current again");
+        assert_eq!(rows(&stored(&scratch.db())), 5);
+    }
+
     /// A wait past a change the store LOST ends as soon as nothing in flight could still
     /// commit it — with the reason, not at a deadline nobody can act on. A wait below the lost
     /// change is satisfied as usual.
@@ -2371,6 +2470,7 @@ mod tests {
             remove: &c.remove,
             upsert: &c.upsert,
             marks: Some(c.marks),
+            meta: &c.meta,
         })
         .expect("the store accepts the change");
     }
@@ -2740,5 +2840,66 @@ mod tests {
         for (i, r) in held.iter().enumerate() {
             assert_eq!(merged[i].id, r.id, "row {i} did not move");
         }
+    }
+
+    /// The `log_meta` value `k` as a second connection reads it.
+    fn meta_of(conn: &Connection, k: &str) -> Option<i64> {
+        conn.query_row("SELECT v FROM log_meta WHERE k = ?1", [k], |r| r.get(0))
+            .ok()
+    }
+
+    /// ★ A CHANGE'S `log_meta` KEYS LAND WITH ITS LAST CHUNK (SPEC-2 v3 D2-A: `fill_ver` must
+    /// never be on disk without the fills it names). A bulk change of several chunks carries its
+    /// key to disk only when its last chunk commits — a chunk short of that shows the rows so far
+    /// and no key; a change of nothing but a key is written; and a change the store refuses
+    /// writes none of its keys.
+    #[test]
+    fn a_changes_meta_keys_land_with_its_last_chunk_and_never_without_it() {
+        let scratch = Scratch::new();
+        // The last chunk is refused (a row with no id), so the rows before it are on disk and the
+        // key must not be: the chunks that committed are the evidence the key was withheld.
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let mut batch: Vec<Arc<QsoRecord>> = (0..(CHUNK_ROWS as u64 * 2))
+            .map(|n| rec("W1AW", n))
+            .collect();
+        let mut orphan = (*rec("K5XYZ", 99_999)).clone();
+        orphan.id = None;
+        batch.push(Arc::new(orphan));
+        let refused = w.submit(Change {
+            meta: vec![("fill_ver", 7)],
+            ..change(1, batch).in_bulk()
+        });
+        assert!(w.wait_durable(&refused, Duration::from_secs(60)).is_err());
+        let conn = stored(&scratch.db());
+        assert_eq!(
+            rows(&conn),
+            (CHUNK_ROWS * 2) as i64,
+            "premise: the chunks before the refused one committed"
+        );
+        assert_eq!(meta_of(&conn, "fill_ver"), None, "and the key did not");
+
+        // The same change whole: the key is on disk with it.
+        let whole: Vec<Arc<QsoRecord>> = (0..(CHUNK_ROWS as u64 * 2 + 1))
+            .map(|n| rec("W1AW", 10_000 + n))
+            .collect();
+        let ok = w.submit(Change {
+            meta: vec![("fill_ver", 8)],
+            ..change(2, whole).in_bulk()
+        });
+        w.wait_durable(&ok, Duration::from_secs(60))
+            .expect("stored");
+        assert_eq!(meta_of(&stored(&scratch.db()), "fill_ver"), Some(8));
+
+        // A change of nothing but a key is a change: it is not empty, and it is written.
+        let key_only = Change {
+            meta: vec![("fill_ver", 9)],
+            ..change(3, Vec::new())
+        };
+        assert!(!key_only.is_empty(), "a key alone still writes");
+        let t = w.submit(key_only);
+        w.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert_eq!(meta_of(&stored(&scratch.db()), "fill_ver"), Some(9));
+        // Control: a change of nothing at all is empty, as it always was.
+        assert!(change(4, Vec::new()).is_empty());
     }
 }

@@ -527,9 +527,11 @@ describe('per-activation export', () => {
     ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
       fn(),
     )
-    ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue(
-      'Nexus logbook\n<EOH>\n<CALL:5>W9AAA<EOR>\n',
-    )
+    ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: 'Nexus logbook\n<EOH>\n<CALL:5>W9AAA<EOR>\n',
+      saving: 0,
+      held: 0,
+    })
     ;(api.saveTextToDownloads as ReturnType<typeof vi.fn>).mockResolvedValue('/dl/x.adi')
     const { container } = mountWith([MORNING, AFTERNOON])
     const sel = await waitFor(() => {
@@ -565,7 +567,11 @@ describe('per-activation export', () => {
     ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
       fn(),
     )
-    ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue('<EOH>\n')
+    ;(api.exportLogForActivation as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: '<EOH>\n',
+      saving: 0,
+      held: 0,
+    })
     ;(api.saveTextToDownloads as ReturnType<typeof vi.fn>).mockResolvedValue('/dl/x.adi')
     const portable = { ...MORNING, callsign: 'KD9TAW/P' }
     const { container } = mountWith([portable])

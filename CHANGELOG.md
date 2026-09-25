@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Logbook now works from the keyboard.** Tab into the list, then the arrow keys, Page Up and
+  Page Down, and Home and End move through your contacts; Enter edits the one you are on, and Delete
+  asks before deleting it. A Remote browser without the station's edit rights can move through the
+  list but not edit or delete.
 - **The Sub receiver of an IC-7610 or IC-9700 now has its own row on the Phone and CW screens.**
   In Phone's Receiver pane and in CW's rig controls, a **SUB** row shows the second receiver: its
   frequency where Nexus knows it (the uplink during a satellite pass), and sliders for its RF gain
@@ -146,6 +150,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **Sorting, searching or filtering the Logbook now takes you back to the first contact.** The list
+  used to stay at the same scroll depth, showing whatever contacts had landed there in the new
+  order. A contact logged while you are scrolled down still leaves the rows you are looking at
+  exactly where they are.
+
 - **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
   Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
   confirmation, every edit — and on a big log that rewrite was long enough to make the radio and
@@ -157,10 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy; on Windows it says Nexus is already moving the logbook and will open by itself.
   `log.adi` stays where it always was and keeps up with every change, a moment later, so other
   loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
-  longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
-  data folder on a network drive keeps the log in `log.adi` alone, as before, and so does a start
-  where the database cannot be opened. Either way Nexus says so once on screen, with the reason
-  and what to do.
+  longer rewrites the log. The country and US state Nexus shows for a contact that arrived
+  without them are now saved into the log, in the background once the window is up — on the
+  first start of each new version and the first start after a new country or callsign file
+  arrives — so the database and `log.adi` hold exactly what you see. Quitting waits for the last
+  change to reach the disk. A data folder on a network drive keeps the log in `log.adi` alone, as
+  before, and so does a start where the database cannot be opened. Either way Nexus says so once
+  on screen, with the reason and what to do.
   Two radio windows on one data folder now see each other's corrections and deletions as they
   are: a contact corrected in one window is corrected in the other, not logged a second time
   beside the old one, and a contact deleted in one stays deleted instead of coming back when the
@@ -227,6 +239,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Logbook no longer slides contacts out from under the pointer when the log changes.** With
+  the list scrolled down, a contact the FT sequencer logged went in above everything on screen and
+  pushed every row below it down by a row's height, so a click aimed at one contact's ✎ or ✕ could
+  land on its neighbour. A contact deleted from another window or a Remote browser slid them the
+  other way. The rows you are looking at now stay exactly where they are. At the top of the list
+  nothing changes: a new contact still appears there, as it always did.
+
+- **The Logbook's edit mark and an open comment stay on their own contact.** When a contact above
+  them was deleted from another window or a Remote browser, both moved onto the neighbouring
+  contact. They now stay with the contact you opened them on.
+
+- **Awards can push a contact you logged after opening it.** Under "Confirmations — why isn't
+  this credited?", the Push to QRZ, ClubLog or eQSL button looked the contact up in the copy of
+  the log Awards took when it opened, so a contact logged since then answered "Could not find
+  that QSO in the log". It now sends the contact the diagnosis names.
+
+- **An open comment in the Logbook no longer leaves a gap, or gets covered, when the log changes.**
+  With a contact's comment or note open, a contact logged or deleted above it left a blank gap
+  where the open row had been, or drew the rows below over its note, until those rows were drawn
+  again. Sorting or searching the list did the same. The open row now keeps its height in its new
+  place. In a Remote browser's Logbook, an open row also no longer flickers out of place for a moment
+  when the page refreshes with a new contact.
+
+- **The callsign card no longer shows "New DXCC!" for a country you have already worked while the
+  log is still loading.** On the log strip and the Operate card, the need badge now appears once the
+  log has answered for that call.
+
+- **After a question or a dialog closes, the keyboard goes back to where you were.** Answering a
+  confirmation, or closing the Getting started guide, the setup wizard, a contact's details, the
+  CHIRP how-to, the satellite question or the logbook-saving notice, left the keyboard on the page
+  itself, so the next Tab started again from the top. It now returns to the button you opened it
+  from, and after a delete to the same button on the next item.
+
+- **A paper QSL card you mark as received now counts toward your awards straight away.** Ticking
+  the card in the Logbook recorded the card but not the confirmation that Awards, the Needed
+  board and the Journey count, so the new confirmation only appeared after Nexus was restarted.
+  It now counts the moment you tick it, and unticking a card ticked by mistake takes the credit
+  back just as quickly.
+
+- **A contact you import now carries its US state from the moment it is imported.** Nexus works
+  out the state from the callsign for a US contact that arrives without one. For an import, a QRZ
+  download or a Field Day merge that used to happen only after the next restart. It now happens
+  as the contact arrives, as it always did for a contact you log yourself.
+
+- **Exporting a big logbook, or starting a LoTW upload, no longer makes the radio wait.** The
+  ADIF and CSV exports (the whole log, a date range, one operator or one activation) and the
+  lists of operators and activations to choose from went through every contact while the radio
+  waited for them, and so did the LoTW upload while it gathered the contacts to sign — a pause
+  the decoder and the waterfall felt on a log of a hundred thousand contacts. They now read the
+  logbook database while the radio carries on, and the files are the same, byte for byte. If a
+  change you made is not in the database ten seconds after you ask for an export — still on its
+  way, or refused by the disk — the file is still written with what the database holds, so an
+  export still rescues your log from a failing disk, and Nexus tells you how many recent changes
+  the file is missing and whether they are still being saved.
+
+- **Keeping `log.adi` up to date no longer needs memory the size of your log.** Every change
+  used to build the whole file in memory before writing it — about 64 MB on a log of 150,000
+  contacts, about 210 MB on 500,000, each time. `log.adi` is now written straight from the
+  logbook database a few thousand contacts at a time, byte for byte the same file.
+
+- **With a big logbook, an upload being marked no longer makes Awards, the Needed board, the
+  Journey and the statistics start over.** Each of them went through every contact again after
+  every upload to QRZ, ClubLog, eQSL or LoTW was marked on a contact, although an upload changes
+  none of them. They now read the logbook database, and only when a contact, a confirmation or
+  an edit could change what they show.
+
 - **Logging a Field Day contact no longer makes the radio wait for the disk.** Every Field Day
   contact rewrites the contest journal, and that write used to finish on the disk before the
   radio could go on — including when the FT sequencer logged a contact itself, in the middle of
@@ -257,6 +335,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at 500,000. Each now takes a list of the contacts, which costs about a millisecond, lets go,
   and does its work after. The Needed board, a satellite pass and the pounce alert also share one
   picture of what is worked and needed instead of each rebuilding it on every refresh.
+
+- **With a big logbook, logging a contact no longer holds up the radio afterwards.** After every
+  contact, the next screen refresh rebuilt the worked-before (B4) marks from the whole log; after
+  an upload to QRZ, ClubLog or eQSL, the next contact rebuilt the NEW DXCC, NEW GRID and NEW PARK
+  marks, looking up the country of every contact again; after an edit or a delete, the next
+  contact rebuilt the duplicate check; and during a contact with a station whose grid was not yet
+  known, every refresh searched the whole log for it. Each happened while holding the lock the
+  radio needs every 20 ms — up to a third of a second at 150,000 contacts. All of these are now
+  kept up to date one contact at a time. A side effect: after a LoTW download or a POTA park
+  import, the "confirmed on this band" filter and the NEW PARK marks now change straight away,
+  where they used to wait for the next logged contact.
 
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the

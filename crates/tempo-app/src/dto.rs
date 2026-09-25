@@ -2601,6 +2601,31 @@ impl From<tempo_core::logbook::LoggedActivation> for LoggedActivationDto {
     }
 }
 
+/// A Logbook export — serde mirror of `crate::logexport::Exported`: the file, and the changes
+/// made before the export was asked for that the logbook database did not hold yet, so the file
+/// lacks. The operator's ruling (SPEC-2 v3 C15) is that the file is written anyway — the rescue a
+/// failing disk needs — and the screen says how many it lacks. Both `0`: nothing to say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogExportDto {
+    pub text: String,
+    /// Still being saved: on their way to the database, or sent again until it takes them.
+    pub saving: u32,
+    /// Refused by the database for what they are: kept in memory for the session and asked
+    /// about when Nexus quits.
+    pub held: u32,
+}
+
+impl From<crate::logexport::Exported> for LogExportDto {
+    fn from(e: crate::logexport::Exported) -> Self {
+        LogExportDto {
+            text: e.text,
+            saving: e.saving as u32,
+            held: e.held as u32,
+        }
+    }
+}
+
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
     fn from(r: tempo_core::logbook::QsoRecord) -> Self {
         LoggedQso {
@@ -2890,6 +2915,10 @@ pub struct ActionDto {
     pub other_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub until_unix: Option<i64>,
+    /// The id of the contact at `other_index` — the twin a duplicate is to be reviewed against —
+    /// on the desktop's report only ([`DiagnosticsReportDto::name_rows`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_id: Option<String>,
 }
 
 impl From<tempo_core::diagnostics::Action> for ActionDto {
@@ -2907,6 +2936,7 @@ impl From<tempo_core::diagnostics::Action> for ActionDto {
             call: None,
             other_index: None,
             until_unix: None,
+            other_id: None,
         };
         match a {
             A::UploadToLotw => d.kind = "uploadToLotw".into(),
@@ -2999,6 +3029,12 @@ impl From<tempo_core::diagnostics::Reason> for ReasonDto {
 }
 
 /// A per-QSO diagnosis row.
+///
+/// `index` is the contact's LOG POSITION; the desktop's report also names it by its id and shows
+/// it as its list does (SPEC-2 v2 §3, C17a), so the Awards view can act on it — ask for its row,
+/// upload it — without holding the log. Those five are absent from a report that has not been
+/// named ([`DiagnosticsReportDto::name_rows`]): the Remote's report is sent without them, to pages
+/// whose parser admits no other field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QsoDiagnosisDto {
@@ -3006,6 +3042,16 @@ pub struct QsoDiagnosisDto {
     pub award: String,
     pub status: String,
     pub reasons: Vec<ReasonDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_unix: Option<u64>,
 }
 
 impl From<tempo_core::diagnostics::QsoDiagnosis> for QsoDiagnosisDto {
@@ -3022,6 +3068,11 @@ impl From<tempo_core::diagnostics::QsoDiagnosis> for QsoDiagnosisDto {
                 S::PendingLag => "pendingLag".into(),
             },
             reasons: d.reasons.into_iter().map(ReasonDto::from).collect(),
+            id: None,
+            call: None,
+            band: None,
+            mode: None,
+            when_unix: None,
         }
     }
 }
@@ -3033,6 +3084,10 @@ pub struct ActionBucketDto {
     pub kind: String,
     pub count: usize,
     pub qso_indices: Vec<usize>,
+    /// The id of each contact at `qso_indices`, in the same order — on the desktop's report only
+    /// ([`DiagnosticsReportDto::name_rows`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qso_ids: Option<Vec<Option<String>>>,
 }
 
 /// One entity a single award-grade fix away from a new slot / new entity.
@@ -3067,6 +3122,7 @@ impl From<tempo_core::diagnostics::DiagnosticsReport> for DiagnosticsReportDto {
                     kind: b.kind,
                     count: b.count,
                     qso_indices: b.qso_indices,
+                    qso_ids: None,
                 })
                 .collect(),
             one_away: r
@@ -3080,6 +3136,35 @@ impl From<tempo_core::diagnostics::DiagnosticsReport> for DiagnosticsReportDto {
                 .collect(),
             waiting_on_partner: r.waiting_on_partner,
             pending_lag: r.pending_lag,
+        }
+    }
+}
+
+impl DiagnosticsReportDto {
+    /// Name every contact the report points at by its id — and show each diagnosed contact as
+    /// its list shows it — from what the diagnosis read: `rows` and their `ids`, in log order,
+    /// where its indices point (SPEC-2 v2 §3, C17a). A position they do not hold is left
+    /// unnamed.
+    pub fn name_rows(
+        &mut self,
+        rows: &[tempo_core::diagnostics::DiagRow],
+        ids: &[Option<tempo_core::logbook::RecordId>],
+    ) {
+        let id = |i: usize| ids.get(i).copied().flatten().map(|id| id.to_string());
+        for d in &mut self.diagnoses {
+            if let Some(r) = rows.get(d.index) {
+                d.id = id(d.index);
+                d.call = Some(r.call.clone());
+                d.band = Some(r.band.clone());
+                d.mode = Some(r.mode.clone());
+                d.when_unix = Some(r.when_unix);
+            }
+            for reason in &mut d.reasons {
+                reason.action.other_id = reason.action.other_index.and_then(id);
+            }
+        }
+        for b in &mut self.buckets {
+            b.qso_ids = Some(b.qso_indices.iter().map(|&i| id(i)).collect());
         }
     }
 }
@@ -3851,6 +3936,22 @@ mod tests {
         }
         let back: Js8State = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+    }
+
+    /// ⭐ An export's wire keys, as `LogExport` in the UI reads them: the file, and each of the
+    /// two counts under its own name — crossed, the screen would call a change the database
+    /// refused for good one that is still being saved.
+    #[test]
+    fn an_export_reaches_the_screen_with_each_count_under_its_own_name() {
+        let d = LogExportDto::from(crate::logexport::Exported {
+            text: "<EOR>".into(),
+            saving: 2,
+            held: 1,
+        });
+        assert_eq!(
+            serde_json::to_value(&d).unwrap(),
+            serde_json::json!({ "text": "<EOR>", "saving": 2, "held": 1 })
+        );
     }
 }
 

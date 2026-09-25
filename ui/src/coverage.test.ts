@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { workedGridSet } from './coverage'
+import { answerFrom } from './features/logAnswers'
 import type { LoggedQso } from './types'
 
 const q = (grid: string | null | undefined): LoggedQso =>
@@ -40,5 +41,18 @@ describe('workedGridSet', () => {
 
   it('is empty for an empty log', () => {
     expect(workedGridSet([]).size).toBe(0)
+  })
+})
+
+// The map's and the globe's coverage layers now ask `LogSource` for the worked squares instead of
+// reducing the whole log themselves (SPEC-2 v3 C17b). The answer must be this set — the same
+// squares in the same first-seen order, which is the order both layers draw in.
+describe('the worked-grids answer the coverage layers read', () => {
+  it('is workedGridSet, square for square and in order', () => {
+    const log = [q('fn31pr'), q(' EN52 '), q('FN31'), q(null), q('JO3'), q('jo31ab'), q('EN52aa'), q('')]
+    const answer = answerFrom(log, { kind: 'workedGrids' }, 1)
+    expect(answer).toEqual([...workedGridSet(log)])
+    expect(new Set(answer)).toEqual(workedGridSet(log))
+    expect(answer, 'the fixture must reach the fold, the trim and the skip').toEqual(['FN31', 'EN52', 'JO31'])
   })
 })

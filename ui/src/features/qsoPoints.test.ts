@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { qsoGridPoints } from './qsoPoints'
+import { gridCountsToPoints, qsoGridCounts, qsoGridPoints } from './qsoPoints'
+import { gridToLatLon } from '../grid'
 import type { LoggedQso } from '../types'
 
 function q(p: Partial<LoggedQso>): LoggedQso {
@@ -55,5 +56,52 @@ describe('qsoGridPoints', () => {
     expect(p.lat).toBeLessThan(42)
     expect(p.lng).toBeGreaterThan(-74)
     expect(p.lng).toBeLessThan(-72)
+  })
+})
+
+// The reduction was split in two (SPEC-2 v3 C17b): the counted squares are what a `LogSource`
+// answers, the placing stays in the UI. ORACLE is the one-piece function as it stood
+// (qsoPoints.ts at d5be14ea), pasted unchanged; the composition must equal it.
+describe('qsoGridPoints split into counting and placing', () => {
+  function ORACLE(qsos: LoggedQso[], band: string) {
+    const acc = new Map<string, { n: number; band: string; when: number }>()
+    for (const q of qsos) {
+      if (band !== 'all' && q.band !== band) continue
+      const gr = (q.grid ?? '').trim().toUpperCase()
+      if (gr.length < 4) continue
+      const key = gr.slice(0, 4)
+      const cur = acc.get(key)
+      if (cur) {
+        cur.n += 1
+        if (q.whenUnix >= cur.when) {
+          cur.when = q.whenUnix
+          cur.band = q.band
+        }
+      } else {
+        acc.set(key, { n: 1, band: q.band, when: q.whenUnix })
+      }
+    }
+    const pts: { lat: number; lng: number; n: number; band: string }[] = []
+    acc.forEach((v, gr) => {
+      const ll = gridToLatLon(gr)
+      if (ll) pts.push({ lat: ll.lat, lng: ll.lon, n: v.n, band: v.band })
+    })
+    return pts
+  }
+
+  it('equals the one-piece reduction on mixed input, every band filter', () => {
+    const log = [
+      q({ grid: 'FN31pr', band: '20m', whenUnix: 5 }),
+      q({ grid: ' fn31 ', band: '40m', whenUnix: 5 }), // equal time: the later row wins the colour
+      q({ grid: 'EM64', band: '2m', whenUnix: 9 }),
+      q({ grid: 'ZZ99', band: '2m', whenUnix: 1 }), // a square the parser cannot place
+      q({ grid: 'FN', band: '20m' }),
+      q({ grid: null, band: '20m' }),
+    ]
+    for (const band of ['all', '20m', '40m', '2m', '6m']) {
+      expect(qsoGridPoints(log, band), band).toEqual(ORACLE(log, band))
+      expect(gridCountsToPoints(qsoGridCounts(log, band)), band).toEqual(ORACLE(log, band))
+    }
+    expect(qsoGridCounts(log, 'all').map((c) => c.grid)).toEqual(['FN31', 'EM64', 'ZZ99'])
   })
 })

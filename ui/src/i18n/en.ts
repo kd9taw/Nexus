@@ -971,6 +971,21 @@ export const EN = {
   // `{{operators}}` is a comma-joined list of CALLSIGNS.
   'logbook.export.perOperator.title': 'One ADIF per operator ({{operators}}) plus the combined log',
   'logbook.export.perOperator.done': 'Exported {{count}} files → Downloads',
+  // An export the logbook database had not caught up with. The file is written anyway — what
+  // the database holds, the rescue a failing disk needs (the operator's ruling) — and these say
+  // what it lacks, each as a toast of its own with its own count, because they are different
+  // news: changes still being saved will land; a change the database refused for good will
+  // not. "The export" rather than "this file": the per-operator export writes several at once.
+  'logbook.export.lacks.saving': {
+    one: '{{count}} recent change is not in the export: Nexus is still saving it to the logbook.',
+    other:
+      '{{count}} recent changes are not in the export: Nexus is still saving them to the logbook.',
+  },
+  'logbook.export.lacks.held': {
+    one: '{{count}} change the logbook refused is not in the export. Nexus keeps it in memory for this session and asks about it when you quit.',
+    other:
+      '{{count}} changes the logbook refused are not in the export. Nexus keeps them in memory for this session and asks about them when you quit.',
+  },
 
   // Per-ACTIVATION export — POTA's unit is a park on a UTC day, not a date range.
   'logbook.export.activation.label': 'activation',
@@ -1221,6 +1236,14 @@ export const EN = {
   'logbook.field.qslCard.label': 'Card received',
   'logbook.empty': 'No logged contacts yet.',
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
+  // A row of the list whose page is still on its way from the log (SPEC-2 C17b).
+  'logbook.rows.loading': 'Loading…',
+  // The keyboard grid's keys (v2 §6), read to a screen reader as the grid's description: four
+  // WHOLE sentences, never one glued. Key names are tokens, as `memories.add.hint` has them.
+  'logbook.keys.move': '↑ and ↓ move between contacts, PgUp and PgDn a page at a time, Home and End to the first and the last.',
+  'logbook.keys.edit': 'Enter edits the contact.',
+  'logbook.keys.delete': 'Delete asks whether to delete the contact.',
+  'logbook.keys.close': 'Esc closes the edit form or the question.',
 
   // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
   'logbook.row.park.worked': '{{program}} {{ref}} (worked)',

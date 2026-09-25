@@ -2,12 +2,12 @@
 //! Contents remain private here so every write passes through DerefMut.
 //!
 //! The same choke point keeps the log's REVISION, and four narrower watermarks beside it, each
-//! naming the revision at which one KIND of change last happened ([`OpClass`]). A result cached
-//! against a watermark cannot outlive what it was built from, and a cache whose inputs a change
-//! did not touch survives that change instead of being thrown away: an upload stamp moves no
-//! index, so the worked-before sets and the awards fold stand. A reader holding the first `n`
-//! rows of an older revision can still be told whether those rows stand
-//! ([`Records::appended_only_since`]).
+//! naming the revision at which one KIND of change last happened ([`OpClass`], [`Watermarks`]).
+//! A result cached against a watermark cannot outlive what it was built from, and a cache whose
+//! inputs a change did not touch survives that change instead of being thrown away: an upload
+//! stamp moves no index, so the worked-before sets and the awards fold stand. A reader holding
+//! the first `n` rows of an older revision can still be told whether those rows stand
+//! ([`Watermarks::appended_only_since`]).
 //!
 //! Each record is held behind an `Arc`, so a SNAPSHOT of the log is a copy of pointers
 //! ([`super::Logbook::snapshot`]): a reader takes one under the lock and does its real work
@@ -85,62 +85,52 @@ pub enum OpClass {
     Structural,
 }
 
-/// A read token becomes obsolete before any mutable access to the vector. The
-/// wrapper covers indexing, mutable slices and all Vec methods, including future
-/// mutation sites. It does not change records, ADIF, reconciliation or saves.
-/// A reader retains its Arc, so a later allocation cannot reuse that identity.
-#[derive(Debug, Clone)]
-pub(super) struct Records {
-    values: Vec<Arc<QsoRecord>>,
-    token: Arc<()>,
-    /// Moves on every write (see the module header).
-    revision: u64,
-    /// The last write that was not an append at the end — so the rows held at any revision
+/// The five watermarks: the revision at which each kind of change last happened (see
+/// [`OpClass`] for which class moves which). The log's own ([`super::Logbook::marks`]), the ones
+/// the station keeps beside it (SPEC-2 v3 C19: they outlive the in-memory log), and the ones
+/// `log_meta` stores in the same transaction as the rows they describe
+/// ([`super::sqlite::LogDb::apply`]) are all this one type.
+///
+/// They survive into SQLite rather than being replaced by a bare "the table changed" because
+/// every cache over the log keys on one of them. A watermark read back out of the database names
+/// the state the database is actually in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Watermarks {
+    /// Moves on every change.
+    pub revision: u64,
+    /// The last change that was not an append at the end — so the rows held at any revision
     /// from here up are still held, unchanged and in order.
-    content_rev: u64,
-    /// The last write a derived index over the rows' content must be rebuilt (or, for an
+    pub content_rev: u64,
+    /// The last change a derived index over the rows' content must be rebuilt (or, for an
     /// append, extended) for.
-    index_rev: u64,
-    /// The last write that moved a row's identifying fields, by adding, editing or removing
+    pub index_rev: u64,
+    /// The last change that moved a row's identifying fields, by adding, editing or removing
     /// one — what a key-based index (worked-before, dedup) reads.
-    key_rev: u64,
-    /// The last write a plan built on an earlier snapshot cannot be rebased over: a row edited
+    pub key_rev: u64,
+    /// The last change a plan built on an earlier snapshot cannot be rebased over: a row edited
     /// or removed. An append can be rebased over (the plan re-checks its adds against the
     /// tail) and a stamp or an upgrade can be re-applied (both are monotone), so neither moves
     /// this.
-    shape_rev: u64,
+    pub shape_rev: u64,
 }
-impl Records {
-    pub(super) fn read_token(&self) -> Arc<()> {
-        self.token.clone()
+
+impl Watermarks {
+    /// A new log's: a rewrite of whatever came before it, so every watermark stands at one fresh
+    /// revision and nothing built against an earlier one survives.
+    pub fn fresh() -> Self {
+        let revision = next_revision();
+        Self {
+            revision,
+            content_rev: revision,
+            index_rev: revision,
+            key_rev: revision,
+            shape_rev: revision,
+        }
     }
-    pub(super) fn revision(&self) -> u64 {
-        self.revision
-    }
-    pub(super) fn content_rev(&self) -> u64 {
-        self.content_rev
-    }
-    pub(super) fn index_rev(&self) -> u64 {
-        self.index_rev
-    }
-    pub(super) fn key_rev(&self) -> u64 {
-        self.key_rev
-    }
-    pub(super) fn shape_rev(&self) -> u64 {
-        self.shape_rev
-    }
-    /// Mutable access to the records under a class the caller VOUCHES FOR: the narrower the
-    /// class, the more derived state survives the write. [`DerefMut`] is the same access with
-    /// no claim made, and costs the widest one.
-    pub(super) fn write_as(&mut self, class: OpClass) -> &mut Vec<Arc<QsoRecord>> {
-        self.mark(class);
-        &mut self.values
-    }
-    /// Take the next revision and move the watermarks this class moves (see [`OpClass`]).
-    /// Every write in this module ends here, so a watermark can only move with one.
-    fn mark(&mut self, class: OpClass) -> u64 {
+    /// Take the next revision and move the watermarks `class` moves (see [`OpClass`]) — the one
+    /// place a watermark moves.
+    pub fn mark(&mut self, class: OpClass) -> u64 {
         use OpClass::*;
-        self.obsolete_read_token();
         self.revision = next_revision();
         if class != Append {
             self.content_rev = self.revision;
@@ -156,12 +146,44 @@ impl Records {
         }
         self.revision
     }
-    /// Whether every write since these records stood at `revision` was an append: the rows
-    /// held then are, unchanged and in order, the first rows held now. False for any revision
-    /// they did not hold after their last rewrite, including one from their future or from a
-    /// log they replaced.
-    pub(super) fn appended_only_since(&self, revision: u64) -> bool {
+    /// Whether every change since the log stood at `revision` was an append: the rows held then
+    /// are, unchanged and in order, the first rows held now. False for any revision it did not
+    /// hold after its last rewrite, including one from its future or from a log it replaced.
+    pub fn appended_only_since(&self, revision: u64) -> bool {
         self.content_rev <= revision && revision <= self.revision
+    }
+}
+
+/// A read token becomes obsolete before any mutable access to the vector. The
+/// wrapper covers indexing, mutable slices and all Vec methods, including future
+/// mutation sites. It does not change records, ADIF, reconciliation or saves.
+/// A reader retains its Arc, so a later allocation cannot reuse that identity.
+#[derive(Debug, Clone)]
+pub(super) struct Records {
+    values: Vec<Arc<QsoRecord>>,
+    token: Arc<()>,
+    /// Move on every write (see the module header).
+    marks: Watermarks,
+}
+impl Records {
+    pub(super) fn read_token(&self) -> Arc<()> {
+        self.token.clone()
+    }
+    pub(super) fn marks(&self) -> Watermarks {
+        self.marks
+    }
+    /// Mutable access to the records under a class the caller VOUCHES FOR: the narrower the
+    /// class, the more derived state survives the write. [`DerefMut`] is the same access with
+    /// no claim made, and costs the widest one.
+    pub(super) fn write_as(&mut self, class: OpClass) -> &mut Vec<Arc<QsoRecord>> {
+        self.mark(class);
+        &mut self.values
+    }
+    /// Take the next revision and move the watermarks this class moves (see [`OpClass`]).
+    /// Every write in this module ends here, so a watermark can only move with one.
+    fn mark(&mut self, class: OpClass) -> u64 {
+        self.obsolete_read_token();
+        self.marks.mark(class)
     }
     /// Append one record at the end, the one write that is not a rewrite. An inherent method,
     /// so `records.push(..)` resolves here before it could reach `Vec::push` through
@@ -187,7 +209,7 @@ impl From<Vec<QsoRecord>> for Records {
     fn from(values: Vec<QsoRecord>) -> Self {
         // A new log is a rewrite of whatever came before it: no earlier revision can
         // claim its rows, and nothing built against one survives.
-        let revision = next_revision();
+        let marks = Watermarks::fresh();
         // ⚠️ `shrink_to_fit` is load-bearing. Rust's in-place collection builds these pointers
         // IN the buffer `values` came in — and keeps that buffer's capacity, sized for 840-byte
         // records, to hold 8-byte pointers. A lifetime log would then carry a dead allocation as
@@ -197,11 +219,7 @@ impl From<Vec<QsoRecord>> for Records {
         Self {
             values,
             token: Arc::new(()),
-            revision,
-            content_rev: revision,
-            index_rev: revision,
-            key_rev: revision,
-            shape_rev: revision,
+            marks,
         }
     }
 }

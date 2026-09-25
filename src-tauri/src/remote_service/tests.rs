@@ -573,7 +573,7 @@ fn cloud_runtime_probe() {
                 (
                     e.settings().mycall.clone(),
                     e.settings().mygrid.clone(),
-                    e.log_read_token(),
+                    e.log_revision(),
                 )
             };
             let mut prop = propagation::offline(crate::now_unix(), &call, &grid);
@@ -739,7 +739,7 @@ fn cloud_runtime_probe() {
             let context = crate::PropContext {
                 call: e.settings().mycall.clone(),
                 grid: e.settings().mygrid.clone(),
-                log: e.log_read_token(),
+                log: e.log_revision(),
             };
             let result = json!({ "boardJson": serde_json::to_string(&snapshot.dxpeditions).unwrap(), "source": snapshot.source, "asOf": snapshot.as_of });
             *prop_cache.lock().unwrap() = Some((Instant::now(), snapshot, context));
@@ -810,7 +810,8 @@ fn cloud_runtime_probe() {
             let report = tempo_app::dto::DiagnosticsReportDto::from(
                 e.confirmation_diagnostics(crate::now_unix(), |call| {
                     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-                }),
+                })
+                .expect("the test's log reads"),
             );
             let log_count = e.get_log().len();
             drop(e);

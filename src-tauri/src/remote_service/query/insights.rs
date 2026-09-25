@@ -1,11 +1,12 @@
-//! Full-log display summaries. Only short, revision-checked field copies hold
-//! the engine lock; award resolution and counting run on the query worker.
+//! Full-log display summaries, read from one picture of the log off the engine lock (see
+//! `picture`); award resolution and counting run on the query worker.
 //! Nothing here can write contacts, inspect credentials or start a connector.
 use super::Collection;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, TryLockError};
+use std::sync::TryLockError;
 use std::time::{Duration, Instant};
+use tempo_core::logbook::sqlite::Narrow;
 use tempo_core::logbook::QsoRecord;
 
 const TEXT_BYTES: usize = 256;
@@ -16,6 +17,28 @@ const LOG_ROWS: usize = 1_000_000;
 // input for unusual imported band/grid/IOTA labels; repeated values count too.
 const READ_TEXT_BYTES: usize = 32 * 1024 * 1024;
 const TIME_CLIP_SECONDS: u64 = 8_640_000_000_000;
+
+/// What the summaries read of every contact — [`Row::copy`]'s inputs, and the four
+/// confirmation channels its `confirmed`, `award_confirmed` and channel flags are read from.
+const SUMMARIES: Narrow = Narrow {
+    columns: &[
+        "call",
+        "band",
+        "mode",
+        "country",
+        "state",
+        "grid",
+        "ota_iota",
+        "when_unix",
+        "credit_granted",
+        "prop_mode",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: false,
+};
 
 // Deliberately excludes names, notes, upload diagnostics and arbitrary ADIF
 // extensions. Large irrelevant log fields cannot inflate the transient copy.
@@ -238,14 +261,6 @@ pub(super) fn read_engine(
     engine: &crate::SharedEngine,
     collection: Collection,
 ) -> Result<Value, &'static str> {
-    read_chunks(engine, collection, |_| {})
-}
-#[allow(deprecated)] // SPEC-2 C18: Remote from the store
-fn read_chunks(
-    engine: &crate::SharedEngine,
-    collection: Collection,
-    mut after_chunk: impl FnMut(usize),
-) -> Result<Value, &'static str> {
     if !matches!(collection, Collection::Awards | Collection::Statistics) {
         return Err("applicationUnsupported");
     }
@@ -260,34 +275,26 @@ fn read_chunks(
             Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
         }
     };
-    let (token, count, my_call) = {
+    let (rows, my_call) = {
         let e = lock()?;
-        if e.log_records().len() > LOG_ROWS || e.settings().mycall.len() > TEXT_BYTES {
+        if e.settings().mycall.len() > TEXT_BYTES {
             return Err("applicationTooLarge");
         }
-        (
-            e.log_read_token(),
-            e.log_records().len(),
-            e.settings().mycall.clone(),
-        )
+        (e.log_rows(), e.settings().mycall.clone())
     };
     let mut awards = propagation::Awards::new();
     awards.set_home_call(&my_call);
     let mut stats = Statistics::default();
     let mut geo = propagation::stats::LogStatsAccumulator::new(&my_call);
     let mut text_bytes = 0;
-    for offset in (0..count).step_by(128) {
-        let rows = {
-            let e = lock()?;
-            if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
-                return Err("applicationBusy");
-            }
-            e.log_records()[offset..(offset + 128).min(count)]
-                .iter()
-                .map(|q| Row::copy(q))
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        for row in rows {
+    let count = super::picture::read(&rows, |log| {
+        let count = log.count()?;
+        if count > LOG_ROWS {
+            return Err("applicationTooLarge");
+        }
+        log.each(SUMMARIES, &mut |pick, q| {
+            super::picture::within(deadline, pick)?;
+            let row = Row::copy(q)?;
             text_bytes += row.text_bytes;
             if text_bytes > READ_TEXT_BYTES {
                 return Err("applicationTooLarge");
@@ -298,12 +305,13 @@ fn read_chunks(
                 stats.append(&row)?;
                 geo.add(&row.call)
             }
-        }
-        after_chunk(offset);
-    }
+            Ok(())
+        })?;
+        Ok(count)
+    })?;
     {
         let e = lock()?;
-        if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+        if e.settings().mycall != my_call {
             return Err("applicationBusy");
         }
     }
@@ -325,7 +333,7 @@ fn read_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     fn engine(count: usize) -> crate::SharedEngine {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
         let adif: String = (0..count).map(|i| {
@@ -338,21 +346,28 @@ mod tests {
     }
     #[test]
     fn full_log_summaries_match_native_awards_and_geography_beyond_the_display_window() {
+        use super::super::picture::{at_seams, Seam};
         let engine = engine(2301);
         let (log, settings, snapshot) = {
             let e = engine.lock().unwrap();
             (e.log_records().to_vec(), e.settings().clone(), e.snapshot())
         };
-        let mut chunks = 0;
-        let awards = read_chunks(&engine, Collection::Awards, |_| {
-            assert!(
-                engine.try_lock().is_ok(),
-                "the read must release the engine between chunks"
-            );
-            chunks += 1;
-        })
+        let (hook, passes) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
+        let counted = passes.clone();
+        let awards = at_seams(
+            move |seam| {
+                if seam == Seam::Each {
+                    assert!(
+                        hook.try_lock().is_ok(),
+                        "the read must not hold the engine while it passes over the log"
+                    );
+                    counted.set(counted.get() + 1);
+                }
+            },
+            || read_engine(&engine, Collection::Awards),
+        )
         .unwrap();
-        assert_eq!(chunks, 18);
+        assert_eq!(passes.get(), 1, "one pass over the whole log");
         assert_eq!(awards["logCount"], 2301);
         assert_eq!(
             awards["awards"],
@@ -377,28 +392,66 @@ mod tests {
         assert_eq!(e.settings(), &settings);
         assert_eq!(e.snapshot().radio.tx_enabled, snapshot.radio.tx_enabled);
     }
+    /// An edit landing while a summary is read is not half in it, and does not refuse it: the
+    /// summary is the log the read found, and the next read has the edit. A home call changed
+    /// while it is read still refuses it — the summary is only ever the operator's own.
     #[test]
-    fn both_summaries_refuse_same_length_edits_and_changed_home_identity() {
+    fn an_edit_during_a_summary_belongs_to_the_next_one_and_a_changed_home_identity_refuses_it() {
+        use super::super::picture::{at_seams, Seam};
+        let band_count = |v: &Value, band: &str| -> Value {
+            let rows = v["statistics"]["byBand"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            rows.iter()
+                .find(|r| r["label"] == band)
+                .map_or(json!(0), |r| r["count"].clone())
+        };
         for kind in [Collection::Awards, Collection::Statistics] {
             let engine = engine(270);
-            let changed = read_chunks(&engine, kind, |offset| {
-                if offset == 0 {
-                    let mut e = engine.try_lock().unwrap();
-                    let mut q = e.log_records()[0].as_ref().clone();
-                    q.notes = Some("edited while reading".into());
-                    assert!(e.update_qso(0, q));
-                    assert_eq!(e.log_records().len(), 270);
-                }
-            });
-            assert!(matches!(changed, Err("applicationBusy")));
-            let changed = read_chunks(&engine, kind, |offset| {
-                if offset == 0 {
-                    let mut e = engine.try_lock().unwrap();
-                    let mut settings = e.settings().clone();
-                    settings.mycall = "JA1ABC".into();
-                    e.apply_settings(settings);
-                }
-            });
+            let edit = |e: &mut tempo_app::engine::Engine| {
+                // The JA contact moves to 40 m: a new band slot, and a new byBand row.
+                let mut q = e.log_records()[0].as_ref().clone();
+                q.band = "40m".into();
+                assert!(e.update_qso(q.id.unwrap(), q));
+                assert_eq!(e.log_records().len(), 270);
+            };
+            let before = read_engine(&engine, kind).unwrap();
+            let hook = engine.clone();
+            let during = at_seams(
+                move |seam| {
+                    if seam == Seam::Each {
+                        edit(&mut hook.lock().unwrap());
+                    }
+                },
+                || read_engine(&engine, kind),
+            )
+            .unwrap();
+            let after = read_engine(&engine, kind).unwrap();
+            assert_eq!(during, before, "{kind:?}: the log as the read found it");
+            assert_ne!(after, before, "{kind:?}: the next read has the edit");
+            if kind == Collection::Statistics {
+                assert_eq!(
+                    (band_count(&during, "20m"), band_count(&during, "40m")),
+                    (json!(270), json!(0))
+                );
+                assert_eq!(
+                    (band_count(&after, "20m"), band_count(&after, "40m")),
+                    (json!(269), json!(1))
+                );
+            }
+            let hook = engine.clone();
+            let changed = at_seams(
+                move |seam| {
+                    if seam == Seam::Each {
+                        let mut e = hook.lock().unwrap();
+                        let mut settings = e.settings().clone();
+                        settings.mycall = "JA1ABC".into();
+                        e.apply_settings(settings);
+                    }
+                },
+                || read_engine(&engine, kind),
+            );
             assert!(matches!(changed, Err("applicationBusy")));
             assert_eq!(read_engine(&engine, kind).unwrap()["logCount"], 270);
         }
@@ -411,7 +464,7 @@ mod tests {
             let mut q = e.log_records()[0].as_ref().clone();
             q.notes = Some("contact note ".repeat(100_000));
             q.comment = Some("private comment".into());
-            assert!(e.update_qso(0, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         for kind in [Collection::Awards, Collection::Statistics] {
             let read = read_engine(&engine, kind).unwrap().to_string();
@@ -421,7 +474,7 @@ mod tests {
             let mut e = engine.lock().unwrap();
             let mut q = e.log_records()[0].as_ref().clone();
             q.country = Some("X".repeat(TEXT_BYTES + 1));
-            assert!(e.update_qso(0, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         assert!(matches!(
             read_engine(&engine, Collection::Statistics),
@@ -442,7 +495,7 @@ mod tests {
             } else {
                 q.credit_granted = vec!["DXCC".into(); 65];
             }
-            assert!(engine.lock().unwrap().update_qso(0, q));
+            assert!(engine.lock().unwrap().update_qso(q.id.unwrap(), q));
             assert!(matches!(
                 read_engine(&engine, Collection::Awards),
                 Err("applicationTooLarge")
@@ -463,6 +516,173 @@ mod tests {
         assert_eq!(
             read_engine(&engine, Collection::Awards).unwrap()["logCount"],
             1
+        );
+    }
+
+    // ── the summaries from the store, held to the code before C18 ────────────────────────
+    //
+    // SPEC-2 v3 C18: the award summary and the statistics read one picture of the logbook
+    // store now. The oracle is the code before C18, VERBATIM — its chunked read of the log in
+    // memory, with the same row copy and folds — beside the store that log mirrors.
+
+    fn old_read_chunks(
+        engine: &crate::SharedEngine,
+        collection: Collection,
+        mut after_chunk: impl FnMut(usize),
+    ) -> Result<Value, &'static str> {
+        if !matches!(collection, Collection::Awards | Collection::Statistics) {
+            return Err("applicationUnsupported");
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let lock = || loop {
+            if Instant::now() >= deadline {
+                return Err("applicationBusy");
+            }
+            match tempo_app::engine::engine_try_lock(engine) {
+                Ok(e) => return Ok(e),
+                Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
+            }
+        };
+        let (token, count, my_call) = {
+            let e = lock()?;
+            if e.log_records().len() > LOG_ROWS || e.settings().mycall.len() > TEXT_BYTES {
+                return Err("applicationTooLarge");
+            }
+            (
+                e.log_read_token(),
+                e.log_records().len(),
+                e.settings().mycall.clone(),
+            )
+        };
+        let mut awards = propagation::Awards::new();
+        awards.set_home_call(&my_call);
+        let mut stats = Statistics::default();
+        let mut geo = propagation::stats::LogStatsAccumulator::new(&my_call);
+        let mut text_bytes = 0;
+        for offset in (0..count).step_by(128) {
+            let rows = {
+                let e = lock()?;
+                if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+                    return Err("applicationBusy");
+                }
+                e.log_records()[offset..(offset + 128).min(count)]
+                    .iter()
+                    .map(|q| Row::copy(q))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            for row in rows {
+                text_bytes += row.text_bytes;
+                if text_bytes > READ_TEXT_BYTES {
+                    return Err("applicationTooLarge");
+                }
+                if collection == Collection::Awards {
+                    row.award(&mut awards)
+                } else {
+                    stats.append(&row)?;
+                    geo.add(&row.call)
+                }
+            }
+            after_chunk(offset);
+        }
+        {
+            let e = lock()?;
+            if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+                return Err("applicationBusy");
+            }
+        }
+        let result = if collection == Collection::Awards {
+            json!({ "logCount": count, "awards": awards.summary() })
+        } else {
+            json!({ "logCount": count, "statistics": stats.finish(), "geography": geo.summary() })
+        };
+        if Instant::now() >= deadline {
+            return Err("applicationBusy");
+        }
+        // One indivisible result: no truncation can masquerade as full-log totals.
+        if result.to_string().len() > super::super::PAGE_BYTES / 2 {
+            return Err("applicationTooLarge");
+        }
+        Ok(result)
+    }
+
+    use super::super::log_tests::{launch, memory, settle, synthetic_log, Dir, Gen};
+
+    fn assert_summaries_are_the_old_summaries(e: &crate::SharedEngine, what: &str) {
+        for kind in [Collection::Awards, Collection::Statistics] {
+            let old = old_read_chunks(e, kind, |_| {}).map(|v| v.to_string());
+            let new = read_engine(e, kind).map(|v| v.to_string());
+            assert!(
+                new == old,
+                "{what}: the {kind:?} summary differs\nstore:  {new:.600?}\nmemory: {old:.600?}"
+            );
+        }
+    }
+
+    /// ★ PARITY: both summaries of 3,000 contacts — every band, mode, year, state and entity,
+    /// all four confirmation channels, DXCC credit, IOTA and satellites — read from the store
+    /// and from the 1.13 path, are byte for byte the summaries the log in memory gave.
+    #[test]
+    fn the_summaries_read_from_the_store_are_the_summaries_of_the_log_in_memory() {
+        let text = synthetic_log(3_000, 0x0C18_A1A5);
+        let d = Dir::new("insights");
+        std::fs::write(d.log(), &text).unwrap();
+        let store = launch(&d);
+        let awards = read_engine(&store, Collection::Awards).unwrap();
+        assert!(
+            awards["awards"]["dxccCredited"].as_u64().unwrap() > 0,
+            "premise: credit"
+        );
+        let stats = read_engine(&store, Collection::Statistics).unwrap();
+        assert!(stats["statistics"]["byState"]
+            .as_array()
+            .is_some_and(|s| !s.is_empty()));
+        assert!(
+            stats["statistics"]["qsl"]["card"].as_u64().unwrap() > 0,
+            "premise: cards"
+        );
+        assert_summaries_are_the_old_summaries(&store, "the store");
+        assert_summaries_are_the_old_summaries(&memory(&text), "the 1.13 path");
+        settle(&store);
+    }
+
+    /// ★ THE PROPERTY: after every one of 24 random changes to each of eight seeded logs, both
+    /// summaries read from the store are the summaries of the log in memory.
+    #[test]
+    fn after_every_change_the_summaries_read_from_the_store_are_the_old_summaries() {
+        for seed in 1..=8u64 {
+            let d = Dir::new(&format!("insights-prop-{seed}"));
+            std::fs::write(d.log(), synthetic_log(200, seed * 7_368_787)).unwrap();
+            let e = launch(&d);
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..24u64 {
+                super::super::log_tests::random_change(&e, &mut g, step);
+                assert_summaries_are_the_old_summaries(&e, &format!("seed {seed}, step {step}"));
+            }
+            settle(&e);
+        }
+    }
+
+    /// ★ THE BUDGET IS KEPT: a read of the log still has the two seconds the chunked read had,
+    /// from before it takes the Engine lock. One whose pass would start past them — held up
+    /// here at the start of its pass — is refused as busy, the answer the chunked read gave one
+    /// that ran long, not answered late. The control: the same read, on time, answers.
+    #[test]
+    fn a_read_past_its_budget_is_refused_as_busy() {
+        use super::super::picture::{at_seams, Seam};
+        let engine = engine(300);
+        let late = at_seams(
+            |seam| {
+                if seam == Seam::Each {
+                    std::thread::sleep(std::time::Duration::from_millis(2_050));
+                }
+            },
+            || read_engine(&engine, Collection::Awards),
+        );
+        assert!(matches!(late, Err("applicationBusy")));
+        assert!(
+            read_engine(&engine, Collection::Awards).is_ok(),
+            "control: on time, it answers"
         );
     }
 }

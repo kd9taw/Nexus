@@ -32,7 +32,7 @@ vi.mock('../api', () => {
   return {
     getLog,
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    exportGeneralLog: vi.fn(async () => '<eor>\n'),
+    exportGeneralLog: vi.fn(async () => ({ text: '<eor>\n', saving: 0, held: 0 })),
     saveTextToDownloads: vi.fn(async () => '/tmp/nexus-log.adi'),
     deleteQso: noop(), importAdif: noop(), editQso: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: noop(),
