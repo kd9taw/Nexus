@@ -34,6 +34,8 @@ pub mod logwrite;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
+#[cfg(test)]
+mod stage1_tests;
 pub mod station;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;

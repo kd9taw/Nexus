@@ -333,6 +333,7 @@ pub(super) fn read_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::sync::{Arc, Mutex};
     fn engine(count: usize) -> crate::SharedEngine {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
@@ -341,7 +342,7 @@ mod tests {
             format!("<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260909<TIME_ON:6>120000<LOTW_QSL_RCVD:1>Y<EOR>\n",call.len())
         }).collect();
         e.import_adif(&adif);
-        assert_eq!(e.log_records().len(), count);
+        assert_eq!(e.stored_log().len(), count);
         Arc::new(Mutex::new(e))
     }
     #[test]
@@ -350,7 +351,7 @@ mod tests {
         let engine = engine(2301);
         let (log, settings, snapshot) = {
             let e = engine.lock().unwrap();
-            (e.log_records().to_vec(), e.settings().clone(), e.snapshot())
+            (e.stored_log(), e.settings().clone(), e.snapshot())
         };
         let (hook, passes) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
         let counted = passes.clone();
@@ -388,7 +389,7 @@ mod tests {
         );
         assert!(stats.to_string().len() < 16_384);
         let e = engine.lock().unwrap();
-        assert_eq!(e.log_records(), log);
+        assert_eq!(e.stored_log(), log);
         assert_eq!(e.settings(), &settings);
         assert_eq!(e.snapshot().radio.tx_enabled, snapshot.radio.tx_enabled);
     }
@@ -411,10 +412,9 @@ mod tests {
             let engine = engine(270);
             let edit = |e: &mut tempo_app::engine::Engine| {
                 // The JA contact moves to 40 m: a new band slot, and a new byBand row.
-                let mut q = e.log_records()[0].as_ref().clone();
+                let mut q = e.stored_log()[0].as_ref().clone();
                 q.band = "40m".into();
                 assert!(e.update_qso(q.id.unwrap(), q));
-                assert_eq!(e.log_records().len(), 270);
             };
             let before = read_engine(&engine, kind).unwrap();
             let hook = engine.clone();
@@ -427,6 +427,9 @@ mod tests {
                 || read_engine(&engine, kind),
             )
             .unwrap();
+            // Counted once the read has ended: the 1.13 path's store in memory holds the edit's
+            // commit off until then.
+            assert_eq!(engine.lock().unwrap().stored_log().len(), 270);
             let after = read_engine(&engine, kind).unwrap();
             assert_eq!(during, before, "{kind:?}: the log as the read found it");
             assert_ne!(after, before, "{kind:?}: the next read has the edit");
@@ -461,7 +464,7 @@ mod tests {
         let engine = engine(1);
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].as_ref().clone();
+            let mut q = e.stored_log()[0].as_ref().clone();
             q.notes = Some("contact note ".repeat(100_000));
             q.comment = Some("private comment".into());
             assert!(e.update_qso(q.id.unwrap(), q));
@@ -472,7 +475,7 @@ mod tests {
         }
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].as_ref().clone();
+            let mut q = e.stored_log()[0].as_ref().clone();
             q.country = Some("X".repeat(TEXT_BYTES + 1));
             assert!(e.update_qso(q.id.unwrap(), q));
         }
@@ -486,7 +489,7 @@ mod tests {
         ));
         // These are inspected under the engine lock, even though only boolean
         // credit/satellite flags leave it. Bound the inspection as well as copies.
-        let original = engine.lock().unwrap().log_records()[0].as_ref().clone();
+        let original = engine.lock().unwrap().stored_log()[0].as_ref().clone();
         for satellite in [false, true] {
             let mut q = original.clone();
             q.country = None;
@@ -544,16 +547,20 @@ mod tests {
                 Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
             }
         };
-        let (token, count, my_call) = {
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old algorithm against the new reader over the same rows, and whether the
+        // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+        // picture, so the old read's log token has nothing left to check.
+        let log = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
+        let (count, my_call) = {
             let e = lock()?;
-            if e.log_records().len() > LOG_ROWS || e.settings().mycall.len() > TEXT_BYTES {
+            if log.len() > LOG_ROWS || e.settings().mycall.len() > TEXT_BYTES {
                 return Err("applicationTooLarge");
             }
-            (
-                e.log_read_token(),
-                e.log_records().len(),
-                e.settings().mycall.clone(),
-            )
+            (log.len(), e.settings().mycall.clone())
         };
         let mut awards = propagation::Awards::new();
         awards.set_home_call(&my_call);
@@ -563,10 +570,10 @@ mod tests {
         for offset in (0..count).step_by(128) {
             let rows = {
                 let e = lock()?;
-                if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+                if e.settings().mycall != my_call {
                     return Err("applicationBusy");
                 }
-                e.log_records()[offset..(offset + 128).min(count)]
+                log[offset..(offset + 128).min(count)]
                     .iter()
                     .map(|q| Row::copy(q))
                     .collect::<Result<Vec<_>, _>>()?
@@ -587,7 +594,7 @@ mod tests {
         }
         {
             let e = lock()?;
-            if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+            if e.settings().mycall != my_call {
                 return Err("applicationBusy");
             }
         }

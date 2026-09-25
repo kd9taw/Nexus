@@ -600,7 +600,7 @@ pub fn logbook_save_choice(keep_trying: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable_command_tests::{card_at, engine_on_store};
+    use crate::durable_command_tests::{card_at, engine_on_store, id_at};
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::{mpsc, Arc};
@@ -619,9 +619,10 @@ mod tests {
     }
 
     /// Whether row `row`'s QSL-card mark is in the database, read through a connection of the
-    /// test's own.
+    /// test's own — the row named without waiting for the writer ([`id_at`]), which would wait
+    /// the change onto the disk before this looks for it there.
     fn marked_on_disk(dir: &Path, engine: &SharedEngine, row: usize) -> bool {
-        let id = engine_lock(engine).log_records()[row].id;
+        let id = Some(id_at(engine, row));
         LogDb::open(&database_path(&dir.join("log.adi")))
             .and_then(|d| d.load_all())
             .expect("read")

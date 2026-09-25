@@ -709,6 +709,7 @@ pub(super) fn configuration_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     const ID: &str = "10000000-0000-4000-8000-000000000001";
     fn request(collection: Collection) -> Request {
         Request {
@@ -766,7 +767,7 @@ mod tests {
             .map(|i| adif(&format!("K1T{i:03}"), "010000"))
             .collect();
         engine.lock().unwrap().import_adif(&data);
-        let before = engine.lock().unwrap().get_log();
+        let before = engine.lock().unwrap().stored_records();
         let mut publisher = Publisher::default();
         let now = Instant::now();
         let mut req = request(Collection::Log);
@@ -775,7 +776,7 @@ mod tests {
         assert_eq!(first["rows"].as_array().unwrap().len(), 128);
         assert_eq!(first["total"], 270);
         assert_eq!(
-            engine.lock().unwrap().get_log(),
+            engine.lock().unwrap().stored_records(),
             before,
             "reading cannot change records, confirmations or connector state"
         );
@@ -968,12 +969,13 @@ mod tests {
         search: &str,
         unconfirmed: bool,
     ) -> Result<(Vec<Value>, usize, Value), &'static str> {
-        // A copy of the log's pointers under the lock; the scan (every row, and with a
-        // search five lowercased fields each) runs after it is released.
-        let records = tempo_app::engine::engine_try_lock(engine)
-            .map_err(|_| "applicationBusy")?
-            .log_snapshot()
-            .records;
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old window against the new over the same rows, and whether the store
+        // holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
+        let records = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
         tempo_core::logbook::io_fence::whole_log_off_engine_lock("Remote's log window");
         let (rows, total) = old_log_window(&records, search, unconfirmed);
         let rows = rows

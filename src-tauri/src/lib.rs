@@ -224,6 +224,7 @@ mod whole_log_reader_tests {
     //! asserts, in a debug build, that no Engine guard is held while it runs
     //! (`io_fence::whole_log_off_engine_lock`).
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use propagation::model::{Band, ModeClass};
     use propagation::OperatorNeeds;
 
@@ -244,14 +245,17 @@ mod whole_log_reader_tests {
     fn engine_with_log() -> SharedEngine {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.import_adif(LOG);
-        assert_eq!(e.get_log().len(), 9, "premise: every contact imported");
+        assert_eq!(e.stored_log().len(), 9, "premise: every contact imported");
         Arc::new(Mutex::new(e))
     }
 
-    /// The needs fold as every reader made it before C12, verbatim: a clone of the log, folded.
+    /// The needs fold as every reader made it before C12, verbatim: a clone of the log, folded —
+    /// the log as the store holds it ([`StoredLog`]), in place of the copy in memory: these tests
+    /// hold the old fold against the new over the same rows, and whether the store holds what the
+    /// old write path wrote (P6) is the Stage-1 lockstep suite's job.
     fn needs_the_old_way(engine: &SharedEngine) -> propagation::LogNeeds {
         let mut needs = propagation::LogNeeds::new();
-        let log = engine_lock(engine).get_log();
+        let log = engine.lock().unwrap().stored_records();
         for q in log {
             needs.add_qso(
                 &q.call,
@@ -379,9 +383,10 @@ mod whole_log_reader_tests {
     fn the_log_statistics_are_the_old_ones() {
         let engine = engine_with_log();
         let old = {
-            let eng = engine_lock(&engine);
-            let my_call = eng.settings().mycall.clone();
-            let calls: Vec<String> = eng.get_log().into_iter().map(|q| q.call).collect();
+            let my_call = engine_lock(&engine).settings().mycall.clone();
+            // The log as the store holds it, as `needs_the_old_way` reads it.
+            let log = engine.lock().unwrap().stored_records();
+            let calls: Vec<String> = log.into_iter().map(|q| q.call).collect();
             propagation::compute_log_stats(&calls, &my_call)
         };
         assert!(old.total > 0, "premise: there is something to count");
@@ -396,7 +401,8 @@ mod whole_log_reader_tests {
         let engine = engine_with_log();
         let old = |peer: &str| {
             let mut best: Option<(u64, String)> = None;
-            let log = engine_lock(&engine).get_log();
+            // The log as the store holds it, as `needs_the_old_way` reads it.
+            let log = engine.lock().unwrap().stored_records();
             for q in log {
                 if q.call.eq_ignore_ascii_case(peer) {
                     if let Some(g) = q
@@ -440,7 +446,7 @@ mod whole_log_reader_tests {
                     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
                 })
                 .expect("the log reads");
-            (direct, e.log_snapshot().records)
+            (direct, e.stored_log())
         };
         assert!(
             !direct.one_away.is_empty(),
@@ -2646,11 +2652,20 @@ mod durable_command_tests {
         (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
     }
 
-    /// The id of the contact at `at`: how a test names a row it picked by place.
-    pub(super) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
-        e.log_records()[at]
-            .id
-            .expect("every row the log holds carries an id")
+    /// The id of the contact at `at`: how a test names a row it picked by place. Read from the
+    /// store as it stands, WITHOUT waiting for the changes on their way: these tests stall the
+    /// writer on purpose and check the disk themselves, and what is on its way is a mark, which
+    /// moves no row. A read that waited would hang on the stall, or wait a change onto the disk
+    /// before the test looks for it there.
+    pub(super) fn id_at(engine: &SharedEngine, at: usize) -> tempo_core::logbook::RecordId {
+        let rows = engine.lock().unwrap().log_rows();
+        let mut ids = Vec::new();
+        rows.each_record(Duration::ZERO, &mut |r| {
+            ids.push(r.id);
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the store reads");
+        ids[at].expect("every row the log holds carries an id")
     }
 
     /// `op` on the contact `id`, made the way a command makes it: planned with the Engine lock
@@ -2666,7 +2681,7 @@ mod durable_command_tests {
 
     /// Mark a paper card on the contact at `at` — a change for a test to hold on a stalled disk.
     pub(super) fn card_at(engine: &SharedEngine, at: usize) -> bool {
-        let id = id_at(&engine_lock(engine), at);
+        let id = id_at(engine, at);
         by_command(
             engine,
             id,
@@ -2706,7 +2721,7 @@ mod durable_command_tests {
         for i in 0..WAITS {
             let engine = std::sync::Arc::clone(&engine);
             let body = move || {
-                let id = id_at(&engine_lock(&engine), i);
+                let id = id_at(&engine, i);
                 let (made, durability) = by_command(
                     &engine,
                     id,
@@ -2780,7 +2795,7 @@ mod durable_command_tests {
         let eng = std::sync::Arc::clone(&engine);
         let marked = rt
             .block_on(durable_command(move || {
-                let id = id_at(&engine_lock(&eng), 4);
+                let id = id_at(&eng, 4);
                 let (made, durability) = by_command(
                     &eng,
                     id,
@@ -2792,7 +2807,7 @@ mod durable_command_tests {
         assert!(marked);
         // Read through a connection of the test's own: the change is already there.
         let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
-        let id = engine_lock(&engine).log_records()[4].id;
+        let id = Some(id_at(&engine, 4));
         let row = tempo_core::logbook::sqlite::LogDb::open(&db)
             .and_then(|d| d.load_all())
             .expect("read")
@@ -2808,6 +2823,7 @@ mod durable_command_tests {
 mod lotw_batch_tests {
     use super::durable_command_tests::engine_on_store;
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use tempo_core::logbook::{QsoRecord, RecordId, UploadOutcome};
 
     /// A store-backed engine with `n` signable contacts and a Station Location to sign with.
@@ -2818,7 +2834,11 @@ mod lotw_batch_tests {
             let mut s = eng.settings().clone();
             s.lotw_station_location = "Home".into();
             eng.apply_settings(s);
-            eng.log_records()
+            drop(eng);
+            engine
+                .lock()
+                .unwrap()
+                .stored_log()
                 .iter()
                 .map(|r| r.id.expect("a held row has an id"))
                 .collect()
@@ -2925,7 +2945,7 @@ mod lotw_batch_tests {
     fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
         let (dir, engine, ids) = station("lotw-edit", 4);
         let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
-            let mut fixed = QsoRecord::clone(&engine_lock(&engine).log_records()[1]);
+            let mut fixed = QsoRecord::clone(&engine.lock().unwrap().stored_log()[1]);
             fixed.call = "K1DUX".into();
             let edit = tempo_core::logbook::LogOp::Edit {
                 id: ids[1],
@@ -3005,13 +3025,12 @@ mod lotw_batch_tests {
         .0
         .expect("the import is made");
         let (at, timeless) = {
-            let eng = engine_lock(&engine);
-            let at = eng
-                .log_records()
+            let log = engine.lock().unwrap().stored_log();
+            let at = log
                 .iter()
                 .position(|r| r.call == "N0TIM")
                 .expect("imported");
-            let r = &eng.log_records()[at];
+            let r = &log[at];
             assert!(!r.time_known, "premise: a contact with no known time");
             (at, r.id.expect("an id"))
         };
@@ -3045,8 +3064,9 @@ mod lotw_batch_tests {
 
 #[cfg(test)]
 mod logbook_startup_tests {
-    use super::durable_command_tests::{card_at, engine_on_store};
+    use super::durable_command_tests::{card_at, engine_on_store, id_at};
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::time::{Duration, Instant};
     use tempo_core::logbook::migrate::database_path;
     use tempo_core::logbook::sqlite::{LogDb, WriteHold};
@@ -3127,7 +3147,7 @@ mod logbook_startup_tests {
                 "the database owns the log: {:?}",
                 e.log_store_problem()
             );
-            assert_eq!(e.log_records().len(), 25);
+            assert_eq!(e.stored_log().len(), 25);
             e.flush_log_store(Duration::from_secs(60)).expect("written");
         }
         assert!(database_path(&log).is_file(), "converted");
@@ -3140,7 +3160,7 @@ mod logbook_startup_tests {
             let e = launch(&log, None, true);
             assert!(e.log_store_open());
             assert!(
-                e.log_records().iter().all(|r| r.country.is_some() == saved),
+                e.stored_log().iter().all(|r| r.country.is_some() == saved),
                 "the attach fills nothing: every row is what the database holds"
             );
             let e = Mutex::new(e);
@@ -3148,7 +3168,7 @@ mod logbook_startup_tests {
                 .expect("the fill job runs");
             let e = e.into_inner().unwrap_or_else(|p| p.into_inner());
             assert!(
-                e.log_records().iter().all(|r| r.country.is_some()),
+                e.stored_log().iter().all(|r| r.country.is_some()),
                 "and after the fill job every row carries its country"
             );
             e.flush_log_store(Duration::from_secs(60)).expect("written");
@@ -3195,7 +3215,7 @@ mod logbook_startup_tests {
         let log = dir.join("log.adi");
         let e = launch(&log, Some("an NFS share".into()), true);
         assert!(e.log_on_file(), "the 1.13 path: log.adi is the log");
-        assert_eq!(e.log_records().len(), 5, "the log is read from log.adi");
+        assert_eq!(e.stored_log().len(), 5, "the log is read from log.adi");
         assert!(
             e.log_store_problem().is_some_and(|p| p.contains("NFS")),
             "and the reason is kept: {:?}",
@@ -3267,17 +3287,16 @@ mod logbook_startup_tests {
     fn quitting_writes_what_is_on_its_way_and_never_hangs() {
         let (dir, engine) = engine_on_store("quit", 10);
         let db = database_path(&dir.join("log.adi"));
-        let id = engine_lock(&engine).log_records()[3].id;
+        let id = id_at(&engine, 3);
         let marked = || {
             LogDb::open(&db)
                 .and_then(|d| d.load_all())
                 .expect("read")
                 .into_iter()
-                .find(|r| r.id == id)
+                .find(|r| r.id == Some(id))
                 .is_some_and(|r| r.qsl_rcvd.card)
         };
         let hold = WriteHold::take(&db).expect("stall the store");
-        let id = id.expect("an id");
         assert!(
             super::durable_command_tests::by_command(
                 &engine,
@@ -3320,7 +3339,7 @@ mod logbook_startup_tests {
             .log_store_writer()
             .expect("the store is open");
         let marked = |to: &Path, row: usize| {
-            let id = engine_lock(&engine).log_records()[row].id;
+            let id = Some(id_at(&engine, row));
             LogDb::open(&database_path(&to.join("log.adi")))
                 .and_then(|d| d.load_all())
                 .expect("the copy opens")
@@ -3659,7 +3678,7 @@ mod logbook_startup_tests {
             };
             e.log_qso(early);
             assert_eq!(
-                e.log_records().len(),
+                e.stored_log().len(),
                 1,
                 "premise: written before the attach"
             );
@@ -3682,7 +3701,8 @@ mod logbook_startup_tests {
             drop(e);
             let next = launch(&log, network.clone(), false);
             assert_eq!(next.log_on_file(), network.is_some(), "premise: {path}");
-            let calls: Vec<&str> = next.log_records().iter().map(|r| &*r.call).collect();
+            let next_log = next.stored_log();
+            let calls: Vec<&str> = next_log.iter().map(|r| &*r.call).collect();
             assert_eq!(calls.len(), 3, "{path}: the next launch: {calls:?}");
             assert!(
                 !calls.contains(&"W9EARLY"),
@@ -3864,11 +3884,11 @@ mod logbook_startup_tests {
             "and no database file was made"
         );
         assert_eq!(
-            e.log_records().len(),
+            e.stored_log().len(),
             6,
             "it holds the whole log, from log.adi"
         );
-        let mut rec = (*e.log_records()[0]).clone();
+        let mut rec = (*e.stored_log()[0]).clone();
         rec.id = None;
         rec.call = "W1NEW".into();
         e.log_qso(rec);
@@ -22112,6 +22132,7 @@ fn stamp_subject(
 #[cfg(test)]
 mod stamp_subject_tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use tempo_core::logbook::{adif_record, Logbook, QsoRecord, UploadOutcome};
 
     /// One contact with W1TWIN on 20 m FT8, at `time` UTC on 2026-09-10, not yet in a log.
@@ -22139,7 +22160,7 @@ mod stamp_subject_tests {
         e.log_qso(twin("144000"));
         let _ = e.take_pending_uploads();
         // The older twin, pushed first, as the worker hands it to a push …
-        let queued = QsoRecord::clone(&e.get_log()[0]);
+        let queued = QsoRecord::clone(&e.stored_log()[0]);
         let dto = LoggedQso::from(queued);
         let named = dto.id.clone();
         assert!(named.is_some(), "premise: the DTO names the row");
@@ -22160,7 +22181,7 @@ mod stamp_subject_tests {
         unnamed.log_qso(twin("104000"));
         unnamed.log_qso(twin("144000"));
         assert!(unnamed.stamp_qrz_upload(&rec, UploadOutcome::Accepted, 1, None));
-        let log = unnamed.get_log();
+        let log = unnamed.stored_log();
         assert!(
             log[1].upload.qrz.is_some() && log[0].upload.qrz.is_none(),
             "control: without the id the stamp lands on the newer twin"
@@ -22172,7 +22193,7 @@ mod stamp_subject_tests {
             1,
             None
         ));
-        let log = e.get_log();
+        let log = e.stored_log();
         assert!(
             log[0].upload.qrz.is_some(),
             "the contact that was pushed carries the stamp"
@@ -29816,6 +29837,8 @@ fn winlink_disconnect() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::remote_service::stored_log_tests::StoredLog;
+
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
     /// `BACKUP_REDACTED_FIELDS` can only name credentials this build knows about. With
     /// `Settings::unknown` preserving a newer build's keys through save/load, an API key that
@@ -34167,7 +34190,7 @@ mod tests {
         );
         e.log_qso(pass_qso("W1AW", "FN31", "70cm", 436.795));
 
-        let logged = &e.get_log()[0];
+        let logged = &e.stored_log()[0];
         // THE STAMP IS LIVE (2026-08-10): logged on the held bird's downlink, the record
         // carries the PAIR, and the name is the designator TQSL matches.
         assert_eq!(logged.prop_mode.as_deref(), Some("SAT"));
@@ -34221,7 +34244,7 @@ mod tests {
         let mut e = engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
         e.log_qso(pass_qso("W1AW", "FN31", "2m", 145.960));
 
-        let logged = &e.get_log()[0];
+        let logged = &e.stored_log()[0];
         // The stamp fires on the 2 m downlink exactly as on 70 cm — the wrong-credit
         // defect (bird grids feeding terrestrial 2 m VUCC) is dead.
         assert_eq!(logged.prop_mode.as_deref(), Some("SAT"));
@@ -34322,7 +34345,7 @@ mod tests {
             let mut e =
                 engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
             e.log_qso(pass_qso("W1AW", "FN31", band, mhz));
-            let logged = &e.get_log()[0];
+            let logged = &e.stored_log()[0];
             let s = awards_fold_over(logged);
             // THE PASSBAND GATE, censused across every label the app can produce
             // (2026-08-10): AO-91's downlink is 145.960 MHz, so exactly the 2 m row
@@ -36555,11 +36578,14 @@ mod tests {
         s
     }
 
-    /// EXACTLY the fold `get_awards` runs over the logbook.
+    /// EXACTLY the fold `get_awards` runs over the logbook — over the log as the store holds it
+    /// ([`StoredLog`]), in place of the copy in memory: these tests hold the old fold against the
+    /// new over the same rows, and whether the store holds what the old write path wrote (P6) is
+    /// the Stage-1 lockstep suite's job.
     fn awards_of(e: &tempo_app::engine::Engine) -> propagation::AwardSummary {
         let mut awards = propagation::Awards::new();
         awards.set_home_call(&e.settings().mycall);
-        for q in e.get_log() {
+        for q in e.stored_log() {
             let credited = q.credit_granted.iter().any(|c| c.starts_with("DXCC"));
             awards.add_qso(
                 &q.call,
@@ -37433,9 +37459,8 @@ mod tests {
     ) -> Option<(String, String)> {
         crate::call_station_on(&engine, &hunter_cache(feed), call, None, None, None, None)
             .expect("the call itself goes through");
-        let mut eng = engine_lock(&engine);
-        eng.log_qso(park_rec(call, None, crate::now_unix()));
-        let log = eng.get_log();
+        engine_lock(&engine).log_qso(park_rec(call, None, crate::now_unix()));
+        let log = engine.lock().unwrap().stored_log();
         let rec = log
             .iter()
             .find(|r| r.call == call)
@@ -37697,7 +37722,7 @@ mod tests {
             "the hunt tagged the contact"
         );
         let id = e
-            .get_log()
+            .stored_log()
             .iter()
             .find(|r| r.call == "K1ABC/P")
             .and_then(|r| r.id)
@@ -38234,7 +38259,7 @@ mod tests {
         assert_ne!(*awards, *empty, "fixture: the contact counts");
         assert_eq!(
             *awards,
-            super::awards_for_records(&engine_lock(&engine).get_log(), "KD9TAW"),
+            super::awards_for_records(&engine.lock().unwrap().stored_records(), "KD9TAW"),
             "the kept summary is the fresh fold"
         );
         assert_eq!(
@@ -38256,7 +38281,7 @@ mod tests {
         assert_eq!(folds(), 1, "only the Journey reads the streak setting");
 
         // A rewrite moves them all, as an append does.
-        let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
+        let mut edited = engine.lock().unwrap().stored_log()[0].as_ref().clone();
         edited.band = "40m".into();
         let id = edited.id.unwrap();
         let (made, _) = tempo_app::logwrite::change_ops(
