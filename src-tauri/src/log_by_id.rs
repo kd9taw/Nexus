@@ -725,7 +725,7 @@ mod tests {
             ),
         ];
         // (file, function, why a position is right there)
-        let allowed: [(&str, &str, &str); 11] = [
+        let allowed: [(&str, &str, &str); 10] = [
             (
                 "tempo-core op.rs",
                 "position_of",
@@ -756,18 +756,17 @@ mod tests {
             (
                 "lib.rs",
                 "upload_lotw_report",
-                "C17a: the Awards buckets' positions",
+                "C19: a batch chosen by position is refused",
             ),
             (
                 "lib.rs",
                 "upload_lotw_report_impl",
-                "C17a: the Awards buckets' positions",
+                "C19: a batch chosen by position is refused",
             ),
-            ("lib.rs", "chosen", "C17a: the Awards buckets' positions"),
             (
-                "tempo-app engine.rs",
-                "ids_at_positions",
-                "C17a: the Awards buckets' positions",
+                "lib.rs",
+                "chosen",
+                "C19: a batch chosen by position is refused",
             ),
         ];
         let mut found = Vec::new();

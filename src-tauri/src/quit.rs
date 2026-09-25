@@ -187,18 +187,19 @@ pub(crate) fn save_the_logbook(
     outcome
 }
 
-/// What the quit waits on, taken under a brief Engine lock — handles only, no I/O. First, every
-/// change the database refused for a reason that can pass is sent again from memory, whatever
-/// its own wait: the operator is leaving, and this is its last chance ([`Engine::log_resend_all`]).
-/// Everything after runs with the lock released.
+/// What the quit waits on, taken under a brief Engine lock — handles only, no I/O. First, on the
+/// 1.13 path, a `log.adi` another computer wrote since is taken in, read with the lock released,
+/// so its lane can write what it holds instead of waiting for a freshness poll the quit will not
+/// see ([`sync_shared_log`]). Then every change the database refused for a reason that can pass is
+/// sent again from memory, whatever its own wait: the operator is leaving, and this is its last
+/// chance ([`Engine::log_resend_all`]). Everything after runs with the lock released.
 ///
+/// [`sync_shared_log`]: tempo_app::engine::sync_shared_log
 /// [`Engine::log_resend_all`]: tempo_app::engine::Engine::log_resend_all
 fn take_what_to_save(engine: &SharedEngine) -> tempo_app::logstore::Unsaved {
+    tempo_app::engine::sync_shared_log(engine);
     let mut eng = engine_lock(engine);
     eng.log_resend_all();
-    // On the 1.13 path, a `log.adi` another computer wrote since is taken in, so its lane can
-    // write what it holds instead of waiting for a freshness poll the quit will not see.
-    eng.log_take_in_log_file();
     eng.log_unsaved()
 }
 
@@ -498,11 +499,10 @@ fn quit_then(
 /// the radio has stopped. Nothing is sent again here: the visible save already did that, and
 /// asked. Bounded by `cap`; what is still not on disk then is written to the diagnostic log.
 pub(crate) fn flush_logbook_unlocked(engine: &SharedEngine, cap: Duration) {
-    let unsaved = {
-        let mut eng = engine_lock(engine);
-        eng.log_take_in_log_file();
-        eng.log_unsaved()
-    };
+    // On the 1.13 path, a `log.adi` another computer wrote since is taken in first, read with the
+    // Engine lock released.
+    tempo_app::engine::sync_shared_log(engine);
+    let unsaved = engine_lock(engine).log_unsaved();
     let s = unsaved.wait(cap);
     if !s.saved() {
         tempo_core::applog::error(

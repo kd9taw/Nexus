@@ -2891,9 +2891,7 @@ mod lotw_batch_tests {
     /// returns.
     #[test]
     fn a_contact_deleted_while_tqsl_runs_moves_no_stamp_onto_another() {
-        // Both ways a batch is chosen by hand: by position (the Awards view's buttons) and by id.
-        let (dir, engine, ids) = station("lotw-delete", 4);
-        a_delete_mid_batch(&dir, &engine, &ids, LotwPick::Positions(vec![0, 1, 3]));
+        // A batch chosen by hand, by id: a choice by position is refused (SPEC-2 v3 C19).
         let (dir, engine, ids) = station("lotw-delete-by-id", 4);
         let chosen = LotwPick::Ids(vec![ids[0], ids[1], ids[3]]);
         a_delete_mid_batch(&dir, &engine, &ids, chosen);
@@ -2991,16 +2989,16 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The command's two ways of choosing, as the UI sends them: nothing is the default batch,
-    /// positions are the Awards buckets', ids are ids — and both at once, or an id the station
-    /// never handed out, is refused.
+    /// The command's ways of choosing, as the UI sends them: nothing is the default batch, ids
+    /// are ids — and positions, both at once, or an id the station never handed out, are refused.
     #[test]
     fn the_command_reads_its_choice_as_sent() {
         let id: RecordId = "00000000:0123456789abcdef:1".parse().expect("an id");
         assert_eq!(LotwPick::chosen(None, None), Ok(LotwPick::Unsent));
         assert_eq!(
             LotwPick::chosen(Some(vec![2, 0]), None),
-            Ok(LotwPick::Positions(vec![2, 0]))
+            Err(LOTW_BY_POSITION.to_string()),
+            "a choice by position is refused"
         );
         assert_eq!(
             LotwPick::chosen(None, Some(vec![id.to_string()])),
@@ -3012,7 +3010,7 @@ mod lotw_batch_tests {
 
     /// A contact with no known time of day is never signed — LoTW matches on time, so it could
     /// never confirm — whether the batch is the default one, read from the store (SPEC-2 v3
-    /// C15), or chosen by hand, by id or by position. The file TQSL is handed holds every other
+    /// C15), or chosen by hand, by id. The file TQSL is handed holds every other
     /// contact, and the report counts them. Once they are sent, nothing is owed: the timeless
     /// contact is not a reason to start TQSL.
     #[test]
@@ -3024,20 +3022,15 @@ mod lotw_batch_tests {
         )
         .0
         .expect("the import is made");
-        let (at, timeless) = {
+        let timeless = {
             let log = engine.lock().unwrap().stored_log();
-            let at = log
-                .iter()
-                .position(|r| r.call == "N0TIM")
-                .expect("imported");
-            let r = &log[at];
+            let r = log.iter().find(|r| r.call == "N0TIM").expect("imported");
             assert!(!r.time_known, "premise: a contact with no known time");
-            (at, r.id.expect("an id"))
+            r.id.expect("an id")
         };
         for (what, pick, sent) in [
             ("the default batch", LotwPick::Unsent, 3),
             ("by id", LotwPick::Ids(vec![ids[0], timeless, ids[2]]), 2),
-            ("by position", LotwPick::Positions(vec![0, at, 1]), 2),
         ] {
             let mut file = String::new();
             let report = lotw_upload_batch_with(&engine, pick, true, |_, args| {
@@ -3576,7 +3569,7 @@ mod logbook_startup_tests {
         );
         let writers = [
             "run_radio(",
-            "restore_field_day_if_enabled(",
+            "resume_field_day(",
             "set_source(SourceKind::Companion)",
             "sync_qrz_since(",
             "lotw_upload_batch(",
@@ -3595,6 +3588,10 @@ mod logbook_startup_tests {
         for w in &writers[..5] {
             assert!(attach < at(start, w), "`{w}` starts after the attach");
         }
+        assert!(
+            at(start, "resume_field_day(") < at(start, "run_radio("),
+            "Field Day is resumed, or given up, before the radio loop starts"
+        );
         let finish = body_of(src, "fn finish_launch(");
         let second_half = at(finish, "start_on_the_logbook(&d, logbook_store, rest);");
         for w in [
@@ -4811,7 +4808,7 @@ fn adopt_logbook(
     eng: &mut Engine,
     log: &Path,
     opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
-) -> Option<tempo_app::logstore::SessionRows> {
+) {
     match opened {
         Ok(opened) => {
             let what = match opened.outcome {
@@ -4829,7 +4826,10 @@ fn adopt_logbook(
                 ),
             };
             tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
-            eng.attach_log_store(opened)
+            // The rows it sets aside for a contest session are not taken: the launch reads the
+            // session's rows once its lock is released, after the attach has taken in any
+            // `log.adi` another program wrote ([`resume_field_day`]).
+            let _ = eng.attach_log_store(opened);
         }
         Err(e) => {
             let why = e.to_string();
@@ -4842,7 +4842,6 @@ fn adopt_logbook(
             }
             eng.set_log_path_resolved(log.to_path_buf(), store_resolve());
             eng.note_log_store_problem(&e);
-            None
         }
     }
 }
@@ -4862,6 +4861,10 @@ const LOG_FLUSH_ON_EXIT: std::time::Duration = std::time::Duration::from_secs(10
 /// is sent again from memory first, inside the same cap, unless a held quit already settled
 /// the logbook with the operator.
 fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
+    // On the 1.13 path, a `log.adi` another computer wrote since is taken in first, read with the
+    // Engine lock released: its lane does not replace a file it cannot account for, and this is
+    // the last chance to.
+    tempo_app::engine::sync_shared_log(engine);
     let flushed = {
         let mut eng = engine_lock(engine);
         // A change the database refused for a reason that can pass gets one more chance — sent
@@ -4870,9 +4873,6 @@ fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
         if !quit::the_quit_settled_the_logbook() {
             eng.log_resend_all();
         }
-        // On the 1.13 path, a `log.adi` another computer wrote since is taken in first: its lane
-        // does not replace a file it cannot account for, and this is the last chance to.
-        eng.log_take_in_log_file();
         eng.flush_log_store(cap)
     };
     if let Err(e) = flushed {
@@ -5760,6 +5760,17 @@ where
 {
     let engine = Arc::clone(engine);
     tauri::async_runtime::spawn_blocking(move || f(engine_lock(&engine)))
+        .await
+        .map_err(|e| format!("engine task failed: {e}"))
+}
+
+/// The freshness poll ([`tempo_app::engine::sync_shared_log`]) on the blocking pool: another
+/// window's commits and a `log.adi` something else wrote, taken in with the Engine lock released
+/// for every read. What a command about the log's freshness runs before it takes the lock — two
+/// atomic reads when nothing changed, a rebuild of the hot index off the lock when something did.
+async fn sync_shared_log(engine: &SharedEngine) -> Result<bool, String> {
+    let engine = Arc::clone(engine);
+    tauri::async_runtime::spawn_blocking(move || tempo_app::engine::sync_shared_log(&engine))
         .await
         .map_err(|e| format!("engine task failed: {e}"))
 }
@@ -9878,11 +9889,11 @@ async fn get_sat_pass_needs(
     const STALE_DAYS: f64 = 30.0;
     let hours = hours.clamp(1, 72);
     let kept = tallies.needs.clone();
+    // Two-instance freshness: the other radio's fresh QSOs taken in before needs are computed,
+    // with the Engine lock released for every read.
+    sync_shared_log(&state).await?;
     let (mygrid, needs) = {
-        let mut eng = engine_lock(&state);
-        // Two-instance freshness: fold the other radio's fresh QSOs in before
-        // computing needs (mtime-gated stat — cheap when unchanged).
-        eng.sync_shared_log_if_changed();
+        let eng = engine_lock(&state);
         // The needs model every reader shares ([`NeedsKept`]); folded, when it must be, on the
         // blocking task below, with the engine lock released.
         (eng.settings().mygrid.clone(), needs_capture(&eng, &kept))
@@ -10013,16 +10024,20 @@ async fn get_sat_sked(
     if peer.is_empty() {
         return Err("Enter the other station's grid square or callsign".into());
     }
+    let by_call = !propagation::geo::is_logged_grid(&peer);
+    if by_call {
+        // Another window's contacts taken in first, with the Engine lock released.
+        sync_shared_log(&state).await?;
+    }
     let (mygrid, logged) = {
-        let mut eng = engine_lock(&state);
+        let eng = engine_lock(&state);
         let mygrid = eng.settings().mygrid.clone();
-        let logged = if propagation::geo::is_logged_grid(&peer) {
-            None
-        } else {
+        let logged = if by_call {
             // A callsign: the log is the one place this app already knows where another
             // station is — read from the logbook store after the lock is released.
-            eng.sync_shared_log_if_changed();
             Some(eng.log_rows())
+        } else {
+            None
         };
         (mygrid, logged)
     };
@@ -12123,7 +12138,8 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
     // A switch that opens a contest session — Field Day entered from another mode — has the
     // session's rows read from the logbook first, off the lock, and opens the session with its
     // dupe sweep in the same hold of the lock as the switch (SPEC-2 v3 C19). Every other switch
-    // reads nothing and runs as it always has.
+    // reads nothing and runs as it always has. The outer `Err` is the refusal: the logbook too busy
+    // to read the session's rows ([`tempo_app::engine::SESSION_BUSY`]), and nothing was switched.
     tempo_app::engine::with_session_rows(
         &state,
         |eng| eng.mode_opens_session(&mode),
@@ -12145,7 +12161,7 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
             }
             Ok(eng.snapshot())
         },
-    )
+    )?
 }
 
 /// Current operator/station settings.
@@ -12268,41 +12284,99 @@ fn apply_and_persist(
     // empty), so clearing the node list to go RBN-only actually sticks — otherwise `load`'s
     // upgrade seed would re-inject the stale legacy host on the next launch.
     settings.cluster_host = settings.cluster_hosts.first().cloned().unwrap_or_default();
-    // Live, so an operator can start a diagnostic session mid-flight without restarting — the
-    // thing being chased is usually happening right now.
-    tempo_core::applog::set_debug(settings.diag_debug_log);
-    // The LoTW-mark resolver reads its recency window from this atomic.
-    LOTW_MAX_AGE_DAYS.store(
-        settings.lotw_max_age_days,
-        std::sync::atomic::Ordering::Relaxed,
-    );
     // Capture the feed config before `settings` moves into the engine.
     // `cluster_active()`, not the raw setting: Unassisted mode must also stop the
     // cluster/RBN feeds from STARTING, not just discard what they deliver.
     let cluster_active = settings.cluster_active();
-    // Keep the feed threads' mirror in step with whatever was just saved, and record the
-    // posture. `force: false` — Save runs constantly, so only real changes are journaled.
-    UNASSISTED.store(
-        settings.unassisted_mode,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    journal_assistance(&settings, "settings saved", false);
     let node_config = cluster_nodes::NodeConfig::of(&settings);
     let cluster_ssid = settings.cluster_ssid.clone();
     let mycall = settings.mycall.clone();
     let mygrid = settings.mygrid.clone();
     let opening_regional = settings.opening_regional;
-    // The spot buffer's voice ranking is QTH-relative and the feed threads outlive a
-    // save, so it reads this mirror rather than a spawn-time capture.
-    set_operator_qth(&mycall, &mygrid);
+    // The engine lock is released again before the feed threads are touched.
+    let snap = save_and_publish(&state, settings, authoritative_roster)?;
+    // Resolve the authoritative merged profile after the Engine commit.
+    sync_rotctld(&state);
 
-    // A save that turns the Field Day master on while Field Day is not running re-enters it,
-    // opening a contest session: the session's rows are read from the logbook first, off the
-    // lock, and the session is opened with its dupe sweep in the same hold of the lock as the
-    // save (SPEC-2 v3 C19). Every other save reads nothing.
+    // The live feeds (cluster telnet login, PSKR MQTT topic filters) are BOUND to
+    // the callsign — a changed call tears them down, clears old-call buffers, and
+    // restarts them under the new call (background drain; ~3 s blackout). The
+    // decision is made under ONE lock (no TOCTOU between rapid saves), the drain
+    // is single-flight (a second change during a drain doesn't spawn a second
+    // drain — the in-flight one re-reads the LATEST settings at its end), and an
+    // emptied callsign also tears down (the restart then no-ops via is_real_call).
+    // The cluster LOGIN identity, not the bare callsign: the SSID is part of what the node
+    // is told at login, so changing it has to tear the sessions down and log in again —
+    // otherwise setting it appears to do nothing at all until the next launch. PSKR is
+    // restarted with them, which costs the same ~3 s blackout an operator already accepts
+    // for a callsign edit they just made deliberately.
+    let feed_identity = tempo_net::cluster::login_call(&mycall, &cluster_ssid);
+    let call_changed = {
+        let mut prev = PREV_FEED_CALL.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = !prev.is_empty() && *prev != feed_identity;
+        *prev = feed_identity;
+        changed
+    };
+    if call_changed {
+        // The propagation cache + refetch back-off are keyed to the OLD identity.
+        // Drop both so the new callsign refetches live immediately — no previous
+        // identity's openings served from a warm cache, and no back-off delay
+        // carried over (otherwise a new call could wait up to PROP_TTL_SECS).
+        if let Ok(mut g) = cache.lock() {
+            *g = None;
+        }
+        if let Ok(mut g) = PROP_FETCH_BACKOFF.lock() {
+            *g = None;
+        }
+        if !FEED_RESTART_IN_FLIGHT.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            restart_live_feeds(
+                state.inner().clone(),
+                spots.inner().clone(),
+                live_paths.inner().clone(),
+                region_paths.0.clone(),
+                health.inner().clone(),
+            );
+        }
+        // In-flight drain re-reads current settings at its end — nothing to do.
+        return Ok(snap);
+    }
+
+    // Published only here and not before the rename check above: a callsign change leaves the
+    // node settings to the drain, which re-reads the latest and publishes them itself.
+    cluster_nodes::set_config(node_config);
+    if cluster_active {
+        start_cluster_feeds(spots.inner(), &mycall, &cluster_ssid, health.inner(), false);
+    }
+    // Reconnects only when the server, filter, callsign or uplink actually changed — the login
+    // line carries all of them, so any edit to one needs a fresh session.
+    sync_aprs_is_feed(state.inner());
+    start_pskr_feed(live_paths.inner(), &mycall, health.inner());
+    start_wspr_feed(live_paths.inner(), &mycall);
+    if opening_regional {
+        start_pskr_region_feed(region_paths.inner(), &mycall, &mygrid);
+    }
+    Ok(snap)
+}
+
+/// A save's settings applied to the engine and persisted — with the contest session they open, if
+/// any — and then published beyond the engine: the log level, the LoTW window, the feed threads'
+/// assistance mirror and its journal, the QTH the spot ranking reads.
+///
+/// A save that turns the Field Day master on while Field Day is not running re-enters it, opening
+/// a contest session: the session's rows are read from the logbook first, off the lock, and the
+/// session is opened with its dupe sweep in the same hold of the lock as the save (SPEC-2 v3 C19).
+/// Every other save reads nothing. When the logbook is too busy to read them, the save is refused
+/// whole ([`tempo_app::engine::SESSION_BUSY`]): nothing applied, persisted or published, and the
+/// form keeps what the operator typed.
+fn save_and_publish(
+    engine: &SharedEngine,
+    mut settings: Settings,
+    authoritative_roster: bool,
+) -> Result<AppSnapshot, String> {
+    let published = settings.clone();
     let opens_session = settings.fd_active;
     let snap = tempo_app::engine::with_session_rows(
-        &state,
+        engine,
         |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
         |eng, rows| {
             // The LoTW sync cursor is bound to the exact query (notably the username);
@@ -12367,68 +12441,191 @@ fn apply_and_persist(
             }
             eng.snapshot()
         },
-    ); // release the engine lock before spawning feed threads
-       // Resolve the authoritative merged profile after the Engine commit.
-    sync_rotctld(&state);
+    )?;
+    // Live, so an operator can start a diagnostic session mid-flight without restarting — the
+    // thing being chased is usually happening right now.
+    tempo_core::applog::set_debug(published.diag_debug_log);
+    // The LoTW-mark resolver reads its recency window from this atomic.
+    LOTW_MAX_AGE_DAYS.store(
+        published.lotw_max_age_days,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    // Keep the feed threads' mirror in step with whatever was just saved, and record the
+    // posture. `force: false` — Save runs constantly, so only real changes are journaled.
+    UNASSISTED.store(
+        published.unassisted_mode,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    journal_assistance(&published, "settings saved", false);
+    // The spot buffer's voice ranking is QTH-relative and the feed threads outlive a
+    // save, so it reads this mirror rather than a spawn-time capture.
+    set_operator_qth(&published.mycall, &published.mygrid);
+    Ok(snap)
+}
 
-    // The live feeds (cluster telnet login, PSKR MQTT topic filters) are BOUND to
-    // the callsign — a changed call tears them down, clears old-call buffers, and
-    // restarts them under the new call (background drain; ~3 s blackout). The
-    // decision is made under ONE lock (no TOCTOU between rapid saves), the drain
-    // is single-flight (a second change during a drain doesn't spawn a second
-    // drain — the in-flight one re-reads the LATEST settings at its end), and an
-    // emptied callsign also tears down (the restart then no-ops via is_real_call).
-    // The cluster LOGIN identity, not the bare callsign: the SSID is part of what the node
-    // is told at login, so changing it has to tear the sessions down and log in again —
-    // otherwise setting it appears to do nothing at all until the next launch. PSKR is
-    // restarted with them, which costs the same ~3 s blackout an operator already accepts
-    // for a callsign edit they just made deliberately.
-    let feed_identity = tempo_net::cluster::login_call(&mycall, &cluster_ssid);
-    let call_changed = {
-        let mut prev = PREV_FEED_CALL.lock().unwrap_or_else(|e| e.into_inner());
-        let changed = !prev.is_empty() && *prev != feed_identity;
-        *prev = feed_identity;
-        changed
-    };
-    if call_changed {
-        // The propagation cache + refetch back-off are keyed to the OLD identity.
-        // Drop both so the new callsign refetches live immediately — no previous
-        // identity's openings served from a warm cache, and no back-off delay
-        // carried over (otherwise a new call could wait up to PROP_TTL_SECS).
-        if let Ok(mut g) = cache.lock() {
-            *g = None;
-        }
-        if let Ok(mut g) = PROP_FETCH_BACKOFF.lock() {
-            *g = None;
-        }
-        if !FEED_RESTART_IN_FLIGHT.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            restart_live_feeds(
-                state.inner().clone(),
-                spots.inner().clone(),
-                live_paths.inner().clone(),
-                region_paths.0.clone(),
-                health.inner().clone(),
+/// A command that opens a contest session, and the launch that resumes one, when the logbook is
+/// too busy to read the session's rows (SPEC-2 v3 C19: the operator's "retry briefly, then
+/// refuse").
+#[cfg(test)]
+mod contest_session_tests {
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::time::{Duration, Instant};
+
+    /// A contact logged while another program holds the logbook database's write lock: it cannot
+    /// reach the store while the hold lasts, so no read of the log is the log's until it goes.
+    fn held_up(engine: &SharedEngine, dir: &Path) -> tempo_core::logbook::sqlite::WriteHold {
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let hold = tempo_core::logbook::sqlite::WriteHold::take(&db)
+            .expect("another program holds the database");
+        let mut log = tempo_core::logbook::Logbook::new();
+        log.import_adif(
+            "<CALL:5>K9NEW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260925<TIME_ON:6>120000<EOR>",
+        );
+        let mut rec = tempo_core::logbook::QsoRecord::clone(&log.records()[0]);
+        rec.id = None;
+        engine_lock(engine).log_qso(rec);
+        hold
+    }
+
+    /// ★ A SAVE REFUSED FOR A BUSY LOGBOOK CHANGES NOTHING. A save that turns the Field Day master
+    /// on reads the contest session's rows first; with the logbook held by another program, that
+    /// read cannot be the log's, and the save is refused whole — nothing applied or persisted, and
+    /// nothing it publishes beyond the engine moved: the log level, the LoTW window, the
+    /// assistance mirror and its journal, the QTH the spot ranking reads.
+    #[test]
+    fn a_settings_save_refused_for_a_busy_logbook_changes_nothing() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("save-refused", 3);
+        let hold = held_up(&engine, &dir);
+        assert_eq!(
+            tempo_app::engine::with_session_rows(&engine, |_| true, |_, _| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "premise: the session's rows cannot be read"
+        );
+        let published = || {
+            (
+                tempo_core::applog::debug_enabled(),
+                LOTW_MAX_AGE_DAYS.load(Relaxed),
+                UNASSISTED.load(Relaxed),
+                ASSISTANCE_JOURNAL
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .len(),
+            )
+        };
+        let before = published();
+        let held = engine_lock(&engine).settings().clone();
+        let mut form = held.clone();
+        form.fd_active = true;
+        form.fd_class = "1D".into();
+        form.fd_section = "EMA".into();
+        form.diag_debug_log = !before.0;
+        form.lotw_max_age_days = before.1 + 4321;
+        form.unassisted_mode = !before.2;
+        form.mycall = "W9SAVE".into();
+        form.mygrid = "EN52".into();
+
+        assert_eq!(
+            save_and_publish(&engine, form, false).map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "the save is refused"
+        );
+        assert_eq!(
+            published(),
+            before,
+            "nothing published: the log level, the LoTW window, the assistance mirror and its \
+             journal"
+        );
+        assert_ne!(
+            OPERATOR_QTH.lock().unwrap_or_else(|e| e.into_inner()).0,
+            "W9SAVE",
+            "nor the QTH the spot ranking reads"
+        );
+        let eng = engine_lock(&engine);
+        assert_eq!(eng.settings().mycall, held.mycall, "nothing applied");
+        assert!(!eng.settings().fd_active, "the master is still off");
+        assert!(
+            eng.mode_opens_session("fieldday-sp"),
+            "and Field Day was not entered"
+        );
+        drop(eng);
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An engine on a store of its own, with the Field Day master left on — the station a launch
+    /// resumes Field Day on — and not in Field Day yet.
+    fn field_day_left_on(tag: &str) -> (PathBuf, SharedEngine) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-resume-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        std::fs::write(dir.join("log.adi"), tempo_core::logbook::adif_header()).expect("log");
+        let opened = tempo_app::logstore::open(
+            &dir.join("log.adi"),
+            std::sync::Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let settings = Settings {
+            fd_active: true,
+            fd_class: "1D".into(),
+            fd_section: "EMA".into(),
+            ..Default::default()
+        };
+        let mut e = Engine::with_settings(settings);
+        let _ = e.attach_log_store(opened);
+        (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
+    }
+
+    /// ★ A LAUNCH WHOSE LOGBOOK IS BUSY STARTS WITHOUT FIELD DAY, AND SAYS SO. The operator left
+    /// the Field Day master on; at launch another program holds the logbook, with a contact stuck
+    /// behind it. The launch tries as long as a switch does — three reads of the session's rows,
+    /// each waiting up to twice `SESSION_READ_WAIT`, about three seconds — so the radio loop's
+    /// start waits no longer than that; then it starts without the session (no session means no
+    /// contest dupes, never wrong ones) and the screen says so. The control: once the logbook is
+    /// free, the same restore resumes Field Day.
+    #[test]
+    fn a_launch_whose_logbook_is_busy_starts_without_field_day_and_says_so() {
+        let (dir, engine) = field_day_left_on("busy");
+        assert!(
+            engine_lock(&engine).restore_opens_session(),
+            "premise: the launch resumes Field Day"
+        );
+        let hold = held_up(&engine, &dir);
+        let started = Instant::now();
+        resume_field_day(&engine);
+        let took = started.elapsed();
+        let bound = 3 * 2 * tempo_app::logstore::SESSION_READ_WAIT;
+        assert!(
+            took < bound + Duration::from_secs(2),
+            "the radio loop starts within the switch's tries: {took:?}"
+        );
+        {
+            let eng = engine_lock(&engine);
+            assert!(
+                eng.restore_opens_session(),
+                "Field Day was not resumed on a log it could not read"
+            );
+            assert_eq!(
+                eng.snapshot().upload_note.as_deref(),
+                Some(tempo_app::engine::SESSION_NOT_RESUMED),
+                "and the screen says so"
             );
         }
-        // In-flight drain re-reads current settings at its end — nothing to do.
-        return Ok(snap);
+        drop(hold);
+        engine_lock(&engine)
+            .flush_log_store(Duration::from_secs(60))
+            .expect("the contact lands once the hold goes");
+        resume_field_day(&engine);
+        assert!(
+            !engine_lock(&engine).restore_opens_session(),
+            "control: once the logbook is free, the same restore resumes Field Day"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // Published only here and not before the rename check above: a callsign change leaves the
-    // node settings to the drain, which re-reads the latest and publishes them itself.
-    cluster_nodes::set_config(node_config);
-    if cluster_active {
-        start_cluster_feeds(spots.inner(), &mycall, &cluster_ssid, health.inner(), false);
-    }
-    // Reconnects only when the server, filter, callsign or uplink actually changed — the login
-    // line carries all of them, so any edit to one needs a fresh session.
-    sync_aprs_is_feed(state.inner());
-    start_pskr_feed(live_paths.inner(), &mycall, health.inner());
-    start_wspr_feed(live_paths.inner(), &mycall);
-    if opening_regional {
-        start_pskr_region_feed(region_paths.inner(), &mycall, &mygrid);
-    }
-    Ok(snap)
 }
 
 /// Tear down the callsign-bound live feeds (cluster telnet + PSKR MQTT + region)
@@ -18158,12 +18355,12 @@ async fn get_need_alerts(
         spots.inner().clone(),
         ota_cache.inner().clone(),
     );
-    with_engine(&state, move |mut eng| {
-        // Two-instance freshness: if the OTHER radio just logged/confirmed something in the
-        // shared log, fold it in BEFORE computing needs — otherwise this (possibly monitoring)
-        // radio would flag a DXCC/state/grid as needed that the other one already worked.
-        // Mtime-gated, so this is a cheap `stat` whenever the file is unchanged.
-        eng.sync_shared_log_if_changed();
+    // Two-instance freshness: if the OTHER radio just logged/confirmed something in the shared
+    // log, it is taken in BEFORE needs are computed — otherwise this (possibly monitoring) radio
+    // would flag a DXCC/state/grid as needed that the other one already worked. Read with the
+    // Engine lock released; two atomic reads when nothing changed.
+    sync_shared_log(&state).await?;
+    with_engine(&state, move |eng| {
         read_need_alerts(eng, &needs, &live_paths, &region_paths, &spots, &ota_cache)
     })
     .await?
@@ -20786,17 +20983,21 @@ enum LotwPick {
     Unsent,
     /// The contacts these ids name (SPEC-2 v2 §3).
     Ids(Vec<tempo_core::logbook::RecordId>),
-    /// The contacts at these positions in the log as it stands: the Awards view's per-bucket
-    /// buttons, until each diagnosis carries its contact's id.
-    Positions(Vec<usize>),
 }
 
+/// What the command answers a batch chosen by position (SPEC-2 v3 C19): a place in the log names
+/// a contact only until another writer deletes above it, and every view that chooses contacts
+/// sends their ids.
+const LOTW_BY_POSITION: &str =
+    "Contacts are chosen for LoTW by their ids, not by their place in the log.";
+
 impl LotwPick {
-    /// The command's two ways of choosing, of which it takes at most one.
+    /// The command's way of choosing: every contact owed, or the ones these ids name. A choice by
+    /// position is refused ([`LOTW_BY_POSITION`]).
     fn chosen(indices: Option<Vec<usize>>, ids: Option<Vec<String>>) -> Result<Self, String> {
         match (indices, ids) {
             (None, None) => Ok(Self::Unsent),
-            (Some(at), None) => Ok(Self::Positions(at)),
+            (Some(_), None) => Err(LOTW_BY_POSITION.into()),
             (None, Some(ids)) => ids
                 .iter()
                 .map(|id| id.parse().map_err(|()| format!("'{id}' names no contact.")))
@@ -20847,14 +21048,11 @@ fn lotw_upload_batch_with(
                     .into(),
             );
         }
-        // A batch chosen by hand names its contacts: by id, or — the Awards view's per-bucket
-        // buttons, until they send the report's ids — by position in the log as it stands, turned
-        // into ids here, in the same hold of the lock as the positions. The contacts themselves
-        // are read from the store once the lock is released, as the default batch's are.
+        // A batch chosen by hand names its contacts by id. The contacts themselves are read from
+        // the store once the lock is released, as the default batch's are.
         let chosen = match pick {
             LotwPick::Unsent => None,
             LotwPick::Ids(ids) => Some(ids),
-            LotwPick::Positions(at) => Some(eng.ids_at_positions(&at)),
         };
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
@@ -27160,6 +27358,33 @@ pub fn run() {
     });
 }
 
+/// Restore-on-launch (spec §1.1): if the operator left the Field Day master switch on, re-enter FD
+/// (passive S&P) so a crash/restart during a 24-hour contest comes back operating and the durable
+/// journal restores the contest log. After `set_fd_log_path`, so the merge finds the journal. This
+/// is the ONLY auto-entry, and only because the operator left `fd_active` on — no date/default path
+/// ever sets it.
+///
+/// The session's rows are read with the launch's lock released, once the attach has taken in any
+/// `log.adi` another program wrote, and the session opens with its sweep or not at all (SPEC-2 v3
+/// C19). A logbook too busy to read them after a few seconds of tries
+/// ([`tempo_app::engine::with_session_rows_at_launch`]) starts the station without Field Day — no
+/// session means no contest dupes, never wrong ones — and the screen says so
+/// ([`tempo_app::engine::SESSION_NOT_RESUMED`]); the operator switches it on again.
+fn resume_field_day(engine: &SharedEngine) {
+    if let Err(why) = tempo_app::engine::with_session_rows_at_launch(
+        engine,
+        |eng| eng.restore_opens_session(),
+        |eng, rows| {
+            eng.restore_field_day_if_enabled();
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+        },
+    ) {
+        engine_lock(engine).note_upload(why, false);
+    }
+}
+
 /// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
 /// logbook is open.
 ///
@@ -27306,7 +27531,7 @@ fn start_on_the_logbook(
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
         // The rows a Field Day session restored below is swept from, set aside by the open.
-        let session_rows = adopt_logbook(&mut eng, &logbook_path(), logbook_store);
+        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -27335,18 +27560,6 @@ fn start_on_the_logbook(
         eng.set_pending_qso_path(pending_qso_path());
         if let Ok(text) = std::fs::read_to_string(pending_qso_path()) {
             eng.load_pending_qso_json(&text);
-        }
-        // Restore-on-launch (spec §1.1): if the operator left the Field Day
-        // master switch on, re-enter FD (passive S&P) so a crash/restart during a
-        // 24-hour contest comes back operating and the durable journal (set just
-        // above) restores the contest log. Must follow set_fd_log_path so the
-        // merge finds the journal. This is the ONLY auto-entry, and only because
-        // the operator left `fd_active` on — no date/default path ever sets it.
-        eng.restore_field_day_if_enabled();
-        // A session restored just now is swept from the rows the open set aside — not from the
-        // log, under this lock (SPEC-2 v3 C19).
-        if let Some(rows) = session_rows {
-            eng.open_session_from(rows);
         }
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
@@ -27378,6 +27591,8 @@ fn start_on_the_logbook(
             }
         }
     }
+    // Field Day, if the operator left it on — after the attach, and before the radio loop starts.
+    resume_field_day(&engine);
 
     // Decay + persist the grid-activity census on a slow cadence (10 min): the
     // decay keeps a one-off DXpedition from permanently un-raring a water grid,
