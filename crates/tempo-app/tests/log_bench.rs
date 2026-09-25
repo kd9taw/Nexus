@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::{engine_lock, Engine};
-use tempo_app::logstore::{self, DURABLE_WAIT, READ_WAIT};
+use tempo_app::logstore::{self, Freshness, READ_WAIT};
 use tempo_app::logwrite;
 use tempo_app::station::{LogFill, LotwSigned};
 use tempo_core::logbook::sqlite::Resolved;
@@ -291,9 +291,24 @@ fn rows_every(engine: &Mutex<Engine>, stride: usize) -> Vec<QsoRecord> {
 
 /// Wait, with the lock released, until the store holds every change made so far.
 fn settle(engine: &Mutex<Engine>) {
-    let rows = engine_lock(engine).log_rows();
-    rows.count().expect("the log reads");
+    let started = Instant::now();
+    loop {
+        let rows = engine_lock(engine).log_rows();
+        let (_, fresh) = rows.count().expect("the log reads");
+        if matches!(fresh, Freshness::Current) {
+            return;
+        }
+        assert!(
+            started.elapsed() < BEHIND,
+            "the store's writer is still behind after {BEHIND:?}: is the machine loaded?"
+        );
+    }
 }
+
+/// How long the bench waits for the store's writer before it gives up. A bench, not a gate, and
+/// run on a machine that may be busy: a change is not in doubt because the disk is slow, only
+/// the bench's numbers are, so it waits rather than fail on the first slow flush.
+const BEHIND: Duration = Duration::from_secs(600);
 
 /// A report restating `rows` with `extra` tags on each.
 fn restating(rows: &[QsoRecord], extra: &str) -> String {
@@ -388,7 +403,12 @@ fn bench(n: usize) -> Vec<String> {
             "{n} rows: a logged contact made a {largest} B allocation, a whole log's worth"
         ));
     }
+    let started = Instant::now();
     settle(&shared);
+    println!(
+        "  the store's writer took {:.2} s more to hold the 200 contacts",
+        started.elapsed().as_secs_f64()
+    );
 
     for _ in 0..5 {
         let _ = engine_lock(&shared).snapshot();
@@ -409,7 +429,7 @@ fn bench(n: usize) -> Vec<String> {
             .id
             .expect("every row carries an id")
     };
-    let wait = |d: logstore::Durability| d.wait(DURABLE_WAIT).expect("on disk");
+    let wait = |d: logstore::Durability| d.wait(BEHIND).expect("on disk");
     for i in 0..5 {
         let (made, d) = logwrite::change_ops(
             &shared,
