@@ -1025,7 +1025,7 @@ mod tests {
             "premise: rows carry what only a whole record holds"
         );
         assert_the_window_is_the_old_window(&store, SEARCHES, "the store");
-        assert_the_window_is_the_old_window(&memory(&text), SEARCHES, "the 1.13 path");
+        assert_the_window_is_the_old_window(&memory(&d, &text), SEARCHES, "the 1.13 path");
         settle(&store);
     }
 
@@ -1108,7 +1108,7 @@ mod tests {
         let text = synthetic_log(400, 0x00C1_8AB7);
         let d = Dir::new("between");
         std::fs::write(d.log(), &text).unwrap();
-        for (arm, e) in [("store", launch(&d)), ("1.13 path", memory(&text))] {
+        for (arm, e) in [("store", launch(&d)), ("1.13 path", memory(&d, &text))] {
             let before = bytes(old_log_capture(&e, "", false));
             let (rows, _, _) = old_log_capture(&e, "", false).unwrap();
             let place = |id: &Value| -> tempo_core::logbook::RecordId {

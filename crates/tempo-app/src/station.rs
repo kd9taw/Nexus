@@ -581,10 +581,12 @@ pub struct StationCore {
                 that moves it"
     )]
     pub(crate) logbook: Logbook,
-    /// The store that owns the log on disk, once [`Self::attach_store`] has run — see
-    /// [`crate::logstore`]. `None` is the 1.13 path, where the log IS `log.adi`, appended to and
-    /// rewritten whole: what a session falls back to when the store cannot be opened, and what
-    /// the tests that pin `log.adi`'s own behaviour still drive through [`Self::set_log_path`].
+    /// The store that owns the log — see [`crate::logstore`]. A new station holds an empty one
+    /// in memory ([`LogStore::in_memory`]) until the launch gives it the operator's
+    /// ([`Self::attach_store`]). `None` is the 1.13 path, where the log IS `log.adi`, appended
+    /// to and rewritten whole: what a session falls back to when the store cannot be opened, and
+    /// what the tests that pin `log.adi`'s own behaviour still drive through
+    /// [`Self::set_log_path`].
     pub(crate) store: Option<LogStore>,
     /// Why the store is not in use this session, when it was asked for and could not be opened.
     pub(crate) store_problem: Option<crate::dto::LogStoreProblem>,
@@ -683,9 +685,31 @@ pub struct StationCore {
     pub(crate) sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
 }
 
+/// The log a new station holds until the launch gives it the operator's: an empty store in memory
+/// (SPEC-2 v3 C19, D1-A), so every station keeps its log in a store and a pass over it has one
+/// home to read. It resolves no entity: the operator's store is opened with cty.dat's resolver,
+/// and this one is replaced by it. Opening one costs about a millisecond. Should SQLite fail to
+/// open even an in-memory database, the station starts store-less, as every station did before,
+/// and says so in the diagnostic log.
+fn empty_store() -> Option<LogStore> {
+    let resolve: crate::logstore::StoreResolve =
+        Arc::new(|_: &QsoRecord| tempo_core::logbook::sqlite::Resolved::default());
+    match LogStore::in_memory(resolve) {
+        Ok(store) => Some(store),
+        Err(e) => {
+            tempo_core::applog::error(
+                "logbook",
+                &format!("an empty logbook store could not be opened in memory: {e}"),
+            );
+            None
+        }
+    }
+}
+
 impl StationCore {
-    /// A fresh station: empty log, no paths, no injected resolvers. The shell wires the
-    /// real ones in at startup (log path, cty.dat/rarity/LoTW resolvers, journals).
+    /// A fresh station: an empty log in an empty store in memory, no paths, no injected
+    /// resolvers. The shell wires the real ones in at startup (the operator's store, cty.dat /
+    /// rarity / LoTW resolvers, journals).
     #[allow(deprecated)] // SPEC-2 C19: the station is built around the in-memory log
     pub(crate) fn new() -> Self {
         Self {
@@ -699,7 +723,7 @@ impl StationCore {
             upload_ok: false,
             upload_tick: 0,
             logbook: Logbook::new(),
-            store: None,
+            store: empty_store(),
             store_problem: None,
             store_lingering: false,
             hot: Default::default(),
@@ -772,7 +796,7 @@ impl StationCore {
             outcome,
         } = opened;
         self.logbook = Logbook::from_store(records);
-        self.log_path = Some(store.log_path().to_path_buf());
+        self.log_path = store.log_path().map(Path::to_path_buf);
         self.last_log_mtime = None;
         self.store = Some(store);
         self.store_problem = None;
@@ -1887,7 +1911,9 @@ impl StationCore {
         let Some(store) = self.store.as_ref() else {
             return false;
         };
-        let status = store.mirror_status();
+        let Some(status) = store.mirror_status() else {
+            return false;
+        };
         if !status.foreign_write {
             return false;
         }
@@ -3093,6 +3119,8 @@ mod grid_tests {
         let x = rec("DL1ABC", "20m", "JO31");
         write(std::slice::from_ref(&x));
         let mut sc = StationCore::new();
+        // The 1.13 path: `log.adi` is the log, and there is no store.
+        sc.store = None;
         sc.log_path = Some(path.clone());
 
         // First look (last mtime = None) folds X in and indexes it.

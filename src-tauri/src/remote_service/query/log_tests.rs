@@ -35,6 +35,10 @@ impl Dir {
     pub(super) fn db(&self) -> std::path::PathBuf {
         self.0.join("log.sqlite3")
     }
+    /// The `log.adi` of a session on the 1.13 path ([`memory`]), beside the store's own.
+    pub(super) fn memory_log(&self) -> std::path::PathBuf {
+        self.0.join("memory.adi")
+    }
 }
 impl Drop for Dir {
     fn drop(&mut self) {
@@ -248,11 +252,13 @@ pub(super) fn launch(d: &Dir) -> crate::SharedEngine {
     Arc::new(Mutex::new(e))
 }
 
-/// The same log on the 1.13 path: no store, the log in memory.
-pub(super) fn memory(adif: &str) -> crate::SharedEngine {
+/// The same log on the 1.13 path: no store, the log in memory — a session whose store could not
+/// be opened, keeping its log in its own `log.adi` in `d` ([`Dir::memory_log`]).
+pub(super) fn memory(d: &Dir, adif: &str) -> crate::SharedEngine {
     let mut e = Engine::new(MY_CALL, "EN52", 0);
     e.set_dxcc_resolver(test_country);
     e.set_state_resolver(test_state);
+    e.set_log_path(d.memory_log());
     e.import_adif(adif);
     assert!(!e.log_store_open(), "premise: the 1.13 path");
     Arc::new(Mutex::new(e))

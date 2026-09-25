@@ -51,8 +51,9 @@ pub struct LogStore {
     /// Read connections to the store, opened on first use — see [`StoreReads`].
     reader: Arc<LogReader>,
     /// Shared with a quit, which writes it with the engine lock released (see [`Unsaved`]).
-    mirror: Arc<MirrorWriter>,
-    log_path: PathBuf,
+    /// `None` for a store with no `log.adi` beside it — see [`LogStore::in_memory`].
+    mirror: Option<Arc<MirrorWriter>>,
+    log_path: Option<PathBuf>,
     db_path: PathBuf,
     resolve: StoreResolve,
     /// This process's changes the writer has not finished with, and the rows each touched.
@@ -234,8 +235,8 @@ fn open_reporting_with(
         store: LogStore {
             writer,
             reader,
-            mirror,
-            log_path: log_path.to_path_buf(),
+            mirror: Some(mirror),
+            log_path: Some(log_path.to_path_buf()),
             db_path,
             resolve,
             inflight: Vec::new(),
@@ -251,6 +252,27 @@ fn open_reporting_with(
 }
 
 impl LogStore {
+    /// An empty store in this process's memory ([`LogDb::memory_name`]), with its writer and
+    /// its reads and no `log.adi` beside it — the log of an engine no launch has given one.
+    pub(crate) fn in_memory(resolve: StoreResolve) -> Result<LogStore, sqlite::Error> {
+        let db_path = LogDb::memory_name();
+        let writer = Arc::new(LogWriter::start(LogDb::open(&db_path)?));
+        let synced_foreign = writer.foreign_commits();
+        Ok(LogStore {
+            writer,
+            reader: Arc::new(LogReader::new(&db_path)),
+            mirror: None,
+            log_path: None,
+            db_path,
+            resolve,
+            inflight: Vec::new(),
+            dropped: Vec::new(),
+            last_refusal: None,
+            synced_foreign,
+            collector: None,
+        })
+    }
+
     /// The writer, for a command that waits on tickets after releasing every lock.
     pub fn writer(&self) -> Arc<LogWriter> {
         Arc::clone(&self.writer)
@@ -272,14 +294,14 @@ impl LogStore {
         &self.db_path
     }
 
-    /// The `log.adi` this store mirrors to.
-    pub fn log_path(&self) -> &Path {
-        &self.log_path
+    /// The `log.adi` this store mirrors to, if it has one.
+    pub fn log_path(&self) -> Option<&Path> {
+        self.log_path.as_deref()
     }
 
-    /// The mirror's state, for a caller that surfaces a refusal.
-    pub fn mirror_status(&self) -> mirror::Status {
-        self.mirror.status()
+    /// The mirror's state, for a caller that surfaces a refusal — `None` with no mirror.
+    pub fn mirror_status(&self) -> Option<mirror::Status> {
+        self.mirror.as_ref().map(|m| m.status())
     }
 
     /// cty.dat's answer as the store writes it.
@@ -315,7 +337,9 @@ impl LogStore {
             touched,
             resends,
         });
-        self.mirror.dirty(ticket.revision());
+        if let Some(m) = &self.mirror {
+            m.dirty(ticket.revision());
+        }
         ticket
     }
 
@@ -507,14 +531,18 @@ impl LogStore {
 
     /// The store has taken in the `log.adi` with `stamp`: the mirror may replace it now.
     pub(crate) fn accept_log_file(&self, stamp: FileStamp) {
-        self.mirror.accept(stamp);
+        if let Some(m) = &self.mirror {
+            m.accept(stamp);
+        }
     }
 
     /// Have the mirror picture the store as it stands, changing nothing in it — for a `log.adi`
     /// that is not the store's own picture yet (the file a conversion read, one just taken in),
     /// so the next launch finds a mirror and has nothing to read or take in.
     pub(crate) fn refresh_mirror(&self) {
-        self.mirror.dirty(self.writer.submitted_rev());
+        if let Some(m) = &self.mirror {
+            m.dirty(self.writer.submitted_rev());
+        }
     }
 
     /// What a quit still has to wait for (see [`Unsaved`]): this process's changes the writer
@@ -529,7 +557,7 @@ impl LogStore {
         Unsaved {
             changes: Durability::new(Some(self.writer()), tickets),
             held: self.held(),
-            mirror: Some(Arc::clone(&self.mirror)),
+            mirror: self.mirror.clone(),
         }
     }
 
@@ -541,10 +569,13 @@ impl LogStore {
             .flush(deadline)
             .map(|_| ())
             .map_err(|e| e.to_string());
-        let mirrored = self.mirror.flush(deadline);
+        let mirrored = self.mirror.as_ref().map(|m| m.flush(deadline));
         logged?;
-        match mirrored.last_error {
-            Some(e) if mirrored.pending => Err(format!("log.adi was not brought up to date: {e}")),
+        match mirrored {
+            Some(m) if m.pending => match m.last_error {
+                Some(e) => Err(format!("log.adi was not brought up to date: {e}")),
+                None => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -2987,6 +3018,42 @@ mod tests {
         let (rows, fresh) = reads.rows(DURABLE_WAIT).expect("read");
         assert_eq!(fresh, Freshness::Current);
         same_log(&rows, e.log_records(), "a read of the store is the log");
+    }
+
+    /// ★ A NEW STATION KEEPS ITS LOG IN A STORE (SPEC-2 v3 C19, D1-A): an empty one in this
+    /// process's memory, with no file behind it and no `log.adi` beside it, until the launch
+    /// gives it the operator's. A contact it logs is in that store, where every pass over the
+    /// log reads it. The control: the 1.13 path, which leaves the store for `log.adi`.
+    #[test]
+    fn a_new_station_keeps_its_log_in_an_empty_store_in_memory() {
+        let sc = crate::station::StationCore::new();
+        let store = sc.store.as_ref().expect("a new station holds a store");
+        let name = store.db_path().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("file:/nexus-log-") && name.ends_with("?vfs=memdb"),
+            "in memory: {name}"
+        );
+        assert!(!store.db_path().exists(), "no file behind it");
+        assert!(store.log_path().is_none(), "and no log.adi beside it");
+        assert!(store.mirror_status().is_none(), "so nothing to mirror");
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(e.log_store_open(), "an engine's station too");
+        e.log_qso(qso("W1NEW", 1_788_200_000));
+        let mut calls = Vec::new();
+        let fresh = e
+            .log_rows()
+            .each_record(DURABLE_WAIT, &mut |r| {
+                calls.push(r.call.clone());
+                std::ops::ControlFlow::Continue(())
+            })
+            .expect("the store reads");
+        assert_eq!(fresh, Freshness::Current);
+        assert_eq!(calls, ["W1NEW"], "the contact is in the store");
+
+        let d = Dir::new("new-station");
+        e.set_log_path(d.log());
+        assert!(!e.log_store_open(), "control: the 1.13 path has no store");
     }
 
     /// ★ POSITIVE CONTROL: a read of the store under the Engine lock is a panic in a debug

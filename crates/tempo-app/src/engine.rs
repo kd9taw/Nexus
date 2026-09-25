@@ -22667,7 +22667,7 @@ contact yourself."
 
     /// The store's mirror of `log.adi`, as it stands.
     pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
-        self.station.store.as_ref().map(|s| s.mirror_status())
+        self.station.store.as_ref().and_then(|s| s.mirror_status())
     }
 
     /// Write everything submitted to the store, and the mirror, waiting up to `deadline` —

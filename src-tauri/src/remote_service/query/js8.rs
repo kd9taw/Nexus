@@ -480,7 +480,7 @@ mod tests {
         let text = synthetic_log(3_000, 0x0C18_A758);
         let d = Dir::new("js8");
         std::fs::write(d.log(), &text).unwrap();
-        let (store, mem) = (launch(&d), memory(&text));
+        let (store, mem) = (launch(&d), memory(&d, &text));
         hear(&store);
         hear(&mem);
         let value = Cache::default().read(&store).unwrap();

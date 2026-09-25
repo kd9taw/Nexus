@@ -47,6 +47,8 @@ fn engine_holding(rows: &[QsoRecord]) -> Engine {
     for r in rows {
         e.station.logbook.add(r.clone());
     }
+    // Carried to the engine's store as an append is, so a read of the log finds them there.
+    e.station.append_to_log(rows);
     e.station.sync_hot();
     e
 }

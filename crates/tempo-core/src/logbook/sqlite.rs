@@ -78,6 +78,32 @@ pub const SCHEMA_VERSION: i64 = 1;
 /// real wait in milliseconds; this is the ceiling, not the expectation.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// Turn SQLite's memory statistics off, once, before this process opens its first connection —
+/// SQLite's own recommended setting (`SQLITE_DEFAULT_MEMSTATUS=0`). With them on, every
+/// allocation SQLite makes takes one process-wide mutex to count itself, so connections working
+/// at once on different threads queue on it. Measured, 960 empty in-memory stores opened on 32
+/// threads: 35 ms of CPU each with the statistics (30 s of it system time), 3 ms without; on
+/// one thread, 0.75 ms either way. Nothing reads the statistics.
+///
+/// It has to come before SQLite initialises, which the first connection does, so every
+/// connection this module opens comes through here first. A call too late — a connection
+/// opened elsewhere first — changes nothing.
+fn quiet_memory_statistics() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: `sqlite3_config` must not run beside another SQLite call, and outside this
+        // crate's tests none can: every connection is opened through this module, after this
+        // returns (the `Once` holds any other opener until it has), and nothing else in the
+        // process links this SQLite. Too late, it answers SQLITE_MISUSE and changes nothing.
+        unsafe {
+            rusqlite::ffi::sqlite3_config(
+                rusqlite::ffi::SQLITE_CONFIG_MEMSTATUS,
+                0 as std::os::raw::c_int,
+            );
+        }
+    });
+}
+
 /// The page cache of the one-time conversion's connection, in KiB — 64 MiB, against SQLite's
 /// default of 2,000 KiB. Measured: the conversion's chunks are big, their rows land at random
 /// places in the primary keys, and in 2 MB the key pages were evicted and read back over and
@@ -678,6 +704,7 @@ impl LogDb {
     /// Open `path`, creating and initialising it if it is not there yet — every table and every
     /// index, building any index the file does not have.
     pub fn open(path: &Path) -> Result<LogDb> {
+        quiet_memory_statistics();
         let db = LogDb::init(Connection::open(path)?)?;
         db.build_indexes(&mut |_, _| {})?;
         Ok(db)
@@ -685,9 +712,21 @@ impl LogDb {
 
     /// An in-memory database, for tests and for a caller that wants the schema without a file.
     pub fn open_in_memory() -> Result<LogDb> {
+        quiet_memory_statistics();
         let db = LogDb::init(Connection::open_in_memory()?)?;
         db.build_indexes(&mut |_, _| {})?;
         Ok(db)
+    }
+
+    /// The name of a new in-memory store: a database held in this process's memory and shared
+    /// by every connection that opens the name — [`LogDb::open`] for the writer,
+    /// [`LogDb::open_reader`] for the reads (SQLite's `memdb` VFS) — and gone when the last of
+    /// them closes. No two calls in one process name the same database.
+    pub fn memory_name() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        std::path::PathBuf::from(format!("file:/nexus-log-{n}?vfs=memdb"))
     }
 
     /// Open `path` for the ONE-TIME conversion of an existing `log.adi` ([`super::migrate`]) —
@@ -711,6 +750,7 @@ impl LogDb {
     /// - **A bigger page cache**, [`CONVERSION_CACHE_KIB`], so the key pages a big chunk keeps
     ///   coming back to stay in memory instead of being evicted and read back.
     pub fn open_for_conversion(path: &Path) -> Result<LogDb> {
+        quiet_memory_statistics();
         let conn = Connection::open(path)?;
         // Before `init`, so every write this connection makes — the version stamp and the tables
         // of a new store included — is made under them. Both are this connection's alone.
@@ -732,6 +772,7 @@ impl LogDb {
     ///   unlike it, never stamps one on a database that has none.
     pub fn open_reader(path: &Path) -> Result<LogDb> {
         use rusqlite::OpenFlags;
+        quiet_memory_statistics();
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -1421,6 +1462,7 @@ pub struct WriteHold {
 impl WriteHold {
     /// Take the lock on the database at `path` (which must exist).
     pub fn take(path: &Path) -> Result<WriteHold> {
+        quiet_memory_statistics();
         let conn = Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1472,6 +1514,7 @@ pub fn copy_database(src: &Path, dst: &Path) -> Result<u64> {
 /// compared — the seam a test uses to commit in exactly the window the retry exists for.
 fn copy_database_observed(src: &Path, dst: &Path, between: &mut dyn FnMut(usize)) -> Result<u64> {
     use rusqlite::OpenFlags;
+    quiet_memory_statistics();
     let conn = Connection::open_with_flags(
         src,
         OpenFlags::SQLITE_OPEN_READ_WRITE
