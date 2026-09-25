@@ -3895,6 +3895,8 @@ export const DE: PartialCatalog = {
   "watchlist.add.submit": "Hinzufügen",
   "watchlist.tile.label": "BEOB.",
   "watchlist.tile.title": "Auf der Beobachtungsliste: {{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": { "one": "{{entries}} wurde aus der alten Einstellung „Wanted watch list“, die jetzt entfällt, zu deiner Beobachtungsliste hinzugefügt. Ändern kannst du sie jederzeit unter Einstellungen ▸ Spots & Alarme.", "other": "{{count}} Einträge wurden aus der alten Einstellung „Wanted watch list“, die jetzt entfällt, zu deiner Beobachtungsliste hinzugefügt: {{entries}}. Ändern kannst du sie jederzeit unter Einstellungen ▸ Spots & Alarme." },
   "hideCalls.chip.label": "Rufz. ausblenden",
   "hideCalls.chip.title": "Rufzeichen (oder Präfixe im Stil VP8*) in diesem Bereich ausblenden — nur ein Anzeigefilter; Dekodierung, Logbuch, Alarme und der Auto-Responder bleiben unberührt",
   "hideCalls.head": "Diese Rufzeichen ausblenden",

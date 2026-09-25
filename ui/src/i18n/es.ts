@@ -6104,6 +6104,8 @@ export const ES: PartialCatalog = {
   "watchlist.item.remove.title": "Quitar de la lista de vigilancia",
   "watchlist.tile.label": "VIGIL.",
   "watchlist.tile.title": "En tu lista de vigilancia: {{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": { "one": "Se añadió {{entries}} a tu lista de vigilancia desde el antiguo ajuste «Wanted watch list», que ya no se usa. Puedes cambiarla cuando quieras en Ajustes ▸ Spots y alertas.", "other": "Se añadieron {{count}} entradas a tu lista de vigilancia desde el antiguo ajuste «Wanted watch list», que ya no se usa: {{entries}}. Puedes cambiarlas cuando quieras en Ajustes ▸ Spots y alertas." },
   "waterfall.canvas.title": "El clic fija la RX (WSJT-X) · Shift+clic fija la TX · {{mod}}+clic fija las dos",
   "waterfall.dss.off.title": "Cambiar a la vista 3D de espectro apilado (una perspectiva rodante de las últimas ~96 filas)",
   "waterfall.dss.on.title": "Cambiar a la cascada plana en 2D",

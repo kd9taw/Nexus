@@ -6104,6 +6104,8 @@ export const FR: PartialCatalog = {
   "watchlist.item.remove.title": "Retirer de la liste de veille",
   "watchlist.tile.label": "VEILLE",
   "watchlist.tile.title": "Dans votre liste de veille : {{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": { "one": "{{entries}} a été ajouté à votre liste de veille depuis l'ancien réglage « Wanted watch list », désormais retiré. Vous pouvez le modifier à tout moment dans Réglages ▸ Spots et alertes.", "other": "{{count}} entrées ont été ajoutées à votre liste de veille depuis l'ancien réglage « Wanted watch list », désormais retiré : {{entries}}. Vous pouvez les modifier à tout moment dans Réglages ▸ Spots et alertes." },
   "waterfall.canvas.title": "Clic = RX (WSJT-X) · Maj+clic = TX · {{mod}}+clic = les deux",
   "waterfall.dss.off.title": "Passer à la vue 3D en spectres empilés (une perspective glissante des ~96 dernières lignes)",
   "waterfall.dss.on.title": "Revenir à la cascade 2D plate",

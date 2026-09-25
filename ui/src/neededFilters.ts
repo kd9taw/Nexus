@@ -66,15 +66,28 @@ export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
   'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'newPark', 'confirm', 'dxped', 'pota', 'sota',
 ]
 
-/** True when the alert matches the given filter set (all filters AND together). */
-export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedAlert[] {
+/** True when the alert matches the given filter set (all filters AND together).
+ *
+ * `watched` answers the Watch list chip: whether the operator's watch list names this row's
+ * station — by call or prefix, DXCC entity or grid, the WATCH tile's own matcher
+ * (`watchlist.ts` `watchedEntry`). The board's rows carry no watch-list tag of their own: the
+ * station's `Wanted` tag came from the old hidden list, retired 2026-09-24. A row an OLDER station
+ * still tags `Wanted` keeps matching the chip through the tag map, as it always did. */
+export function filterAlerts(
+  alerts: NeedAlert[],
+  filters: NeededFilters,
+  watched: (a: NeedAlert) => boolean = () => false,
+): NeedAlert[] {
+  const wantWatched = filters.needTypes.includes('wanted')
   return alerts.filter((a) => {
     // ---- Need-type multi-select (OR across the picked buckets; empty = all) ----
     if (filters.needTypes.length > 0) {
-      const matches = a.tags.some((t) => {
-        const bucket = TAG_TO_BUCKET[t]
-        return bucket !== undefined && filters.needTypes.includes(bucket)
-      })
+      const matches =
+        a.tags.some((t) => {
+          const bucket = TAG_TO_BUCKET[t]
+          return bucket !== undefined && filters.needTypes.includes(bucket)
+        }) ||
+        (wantWatched && watched(a))
       if (!matches) return false
     }
 

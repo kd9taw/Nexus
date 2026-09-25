@@ -2327,6 +2327,10 @@ export interface NeedAlert {
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */
   gridRarity?: GridRarity | null
+  /** The station's grid as its evidence carried it (the operator's own decodes, a spot's grid),
+   * absent otherwise — so a GRID watch-list entry can name the row, as it names the same station
+   * on the roster. Absent from a station older than the field. */
+  grid?: string | null
   /** The park or summit this row is an ACTIVATION of, when it is one. Working the row sets the
    *  hunt target with it — the way HUNT and a map double-click do — so the contact it leads to is
    *  logged with the reference. Absent/null on every other need: a row that names no activation
@@ -3892,7 +3896,11 @@ export interface Settings {
    * whole-struct settings save deliberately cannot change it. */
   blockedCalls?: string[]
   // --- Wanted watch list / alert filters (W1.5) ---
-  /** Watch list: exact calls or trailing-* wildcard prefixes that raise a loud alert. */
+  /** RETIRED (2026-09-24): the old "Wanted watch list" — exact calls or trailing-* prefixes —
+   * with no editor since the watch list (`watchlist.ts`) replaced it. Read once, by the fold that
+   * adds its entries to the watch list (`features/watchlistFold`), then emptied through its one
+   * writer (`retireWantedCalls`); a whole-struct settings save cannot change it. Still sent by the
+   * station, because every Remote page in the field requires the key. */
   wantedCalls: string[]
   /** Pounce — how rare a spot must be before Nexus interrupts you the moment it appears. */
   pounceThreshold?: 'off' | 'atno' | 'atnoOrZone' | 'atnoZoneOrState'

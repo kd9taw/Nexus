@@ -985,6 +985,12 @@ export async function contestZoneHint(call: string): Promise<number | null> {
   return invoke<number | null>('contest_zone_hint', { call })
 }
 
+/** Empty the RETIRED wanted list — its one writer — once its entries are safely on the watch list
+ *  (`features/watchlistFold`). A whole-struct settings save cannot change the list. */
+export async function retireWantedCalls(): Promise<void> {
+  await invoke<void>('retire_wanted_calls')
+}
+
 /** The satellite names LoTW accepts, for the tag picker. The backend owns the table, so what
  *  the operator can choose is exactly what the writer will store — a typed name is a permanent
  *  record of a guess, and TQSL rejects one it does not list ("AO7" for "AO-7"). */

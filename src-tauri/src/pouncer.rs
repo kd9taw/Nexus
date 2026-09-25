@@ -89,26 +89,23 @@ pub fn channel() -> (PounceTx, Receiver<SpotHint>) {
 }
 
 /// The operator's worked sets — the needs model every reader shares ([`crate::NeedsKept`]),
-/// folded again only when the log has moved — and the watch list. Call on the slow cadence.
+/// folded again only when the log has moved. Call on the slow cadence.
 ///
-/// Under the engine lock only the freshness check, the kept model or the log's rows, and the
-/// watch list; a fold, when one is needed, reads the logbook store after the lock is released.
+/// Under the engine lock only the freshness check and the kept model or the log's rows; a fold,
+/// when one is needed, reads the logbook store after the lock is released.
 /// It used to clone every record and fold them all under the lock, every minute a spot came in.
 /// `None` when the engine or the store cannot be read: the detector keeps the model it has.
 fn snapshot_needs(
     engine: &Arc<Mutex<Engine>>,
     kept: &crate::NeedsKept,
-) -> Option<(Arc<propagation::LogNeeds>, Vec<String>)> {
-    let (capture, wanted) = {
+) -> Option<Arc<propagation::LogNeeds>> {
+    let capture = {
         let mut eng = tempo_app::engine::engine_lock_result(engine).ok()?;
         eng.sync_shared_log_if_changed();
-        (
-            crate::needs_capture(&eng, kept),
-            eng.settings().wanted_calls.clone(),
-        )
+        crate::needs_capture(&eng, kept)
     };
     match crate::needs_finish(capture, kept) {
-        Ok(needs) => Some((needs, wanted)),
+        Ok(needs) => Some(needs),
         Err(e) => {
             tempo_core::applog::warn("pounce", &format!("the needs model was not refreshed: {e}"));
             None
@@ -135,7 +132,7 @@ pub fn run(
     mut on_fire: impl FnMut(Pounce),
 ) {
     let mut gate = PounceGate::new();
-    let mut needs: Option<(Arc<propagation::LogNeeds>, Vec<String>)> = None;
+    let mut needs: Option<Arc<propagation::LogNeeds>> = None;
     let mut needs_at: i64 = 0;
     let mut last_prune: i64 = 0;
 
@@ -155,7 +152,7 @@ pub fn run(
                 gate.prune(now);
             }
         }
-        let Some((ref n, ref _wanted)) = needs else {
+        let Some(ref n) = needs else {
             continue;
         };
         let Some(heard) =
@@ -266,9 +263,9 @@ mod tests {
         );
         let tallies = crate::LogTallies::default();
         crate::LOG_TALLIES.with(|c| c.set(0));
-        let (pounce, _) = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
+        let pounce = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
         let (board, _) = crate::needs_kept(&engine, &tallies).expect("the log reads");
-        let (again, _) = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
+        let again = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
         assert!(
             Arc::ptr_eq(&pounce, &board) && Arc::ptr_eq(&board, &again),
             "one model for every reader"

@@ -2853,6 +2853,14 @@ export const EN = {
   // for it, else the call, prefix, entity or grid as typed.
   'watchlist.tile.label': 'WATCH',
   'watchlist.tile.title': 'On your watch list: {{what}}',
+  // Shown ONCE, on the first launch after the upgrade that retired the old "Wanted watch list"
+  // setting (no editor since 2026-07-10): its entries were added to this watch list. `{{entries}}`
+  // is the calls and prefixes as the operator typed them, comma-separated.
+  'watchlist.folded': {
+    one: 'Added {{entries}} to your watch list from the old “Wanted watch list” setting, which is now retired. Change it any time in Settings ▸ Spots & Alerts.',
+    other:
+      'Added {{count}} entries to your watch list from the old “Wanted watch list” setting, which is now retired: {{entries}}. Change them any time in Settings ▸ Spots & Alerts.',
+  },
 
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do

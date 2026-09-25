@@ -1868,6 +1868,8 @@ export const JA: PartialCatalog = {
   "watchlist.add.submit": "追加",
   "watchlist.tile.label": "ウォッチ",
   "watchlist.tile.title": "ウォッチリストに登録済み：{{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": "廃止された旧設定「Wanted watch list」から{{count}}件（{{entries}}）をウォッチリストに追加しました。設定 ▸ スポットとアラートでいつでも変更できます。",
   "hideCalls.chip.label": "コール非表示",
   "hideCalls.chip.title": "このパネルからコールサイン（VP8* 形式のプレフィックスも可）を非表示にします — 表示上のフィルターのみで、デコード・記録・アラート・自動応答には影響しません",
   "hideCalls.head": "非表示にするコールサイン",

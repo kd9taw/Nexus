@@ -16274,6 +16274,22 @@ fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// Empty the RETIRED wanted list — its ONE writer (operator 2026-09-24, "One list"). The desktop
+/// calls this once the list's entries are on the watch list and that is on disk
+/// (`ui/src/features/watchlistFold.ts`); `Engine::apply_settings` keeps the live value against
+/// every form payload, so a surface holding a settings snapshot from before the fold cannot write
+/// the old entries back for the next launch to fold again.
+///
+/// A failed save is an error, not a log line: the caller then leaves the old list to the next
+/// launch, which folds nothing twice.
+#[tauri::command(async)]
+fn retire_wanted_calls(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let mut eng = engine_lock(&state);
+    eng.retire_wanted_calls()
+        .save(&settings_path())
+        .map_err(|e| format!("could not save the settings: {e}"))
+}
+
 /// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
 /// write path for it. A NARROW write, and here the narrowness is the point rather than the
 /// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
@@ -17875,8 +17891,6 @@ fn read_need_alerts(
     // the same station: they read the same alerts, and those alerts read this.
     let hunted_rows = eng.log_rows();
     let snap = eng.snapshot();
-    // Operator "wanted" watch list (W1.5) — captured before the lock drops.
-    let wanted_calls = eng.settings().wanted_calls.clone();
     let confirm_tier = eng.settings().alert_confirm_tier;
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
@@ -18157,55 +18171,10 @@ fn read_need_alerts(
         // Re-sort: an activation that is ALSO a new one must land among the new ones.
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
-    // Wanted watch list (W1.5): a station on the operator's list must top the
-    // board even if it advances no award. This aggregated needs path carries no
-    // per-spot CQ status or SNR, so the cq_only/min_snr gates can't be honored
-    // here — the operator-facing controls for them are intentionally not shipped
-    // (only wanted_calls). We pass is_cq=true / snr=None so every watch-list hit
-    // surfaces; `wanted_match`/`wanted_alert` treat unknown SNR as passing.
-    if !wanted_calls.is_empty() {
-        let wcfg = propagation::WantedConfig {
-            calls: &wanted_calls,
-            cq_only: false,
-            min_snr: None,
-        };
-        // (a) Decorate existing rows that are on the watch list — loud, on top.
-        for a in &mut alerts {
-            if !a.tags.contains(&propagation::NeedTag::Wanted)
-                && propagation::wanted_match(&a.call, true, None, &wcfg)
-            {
-                a.tags.insert(0, propagation::NeedTag::Wanted);
-                a.priority = a.priority.max(120);
-                a.headline = format!("Wanted · {}", a.headline);
-            }
-        }
-        // (b) Surface a loud row for a wanted heard station that produced no
-        //     alert (an already-worked entity you still want to catch).
-        for h in &heard {
-            let up = h.call.to_ascii_uppercase();
-            if up == me_up || alerts.iter().any(|a| a.call == up && a.band == h.band) {
-                continue;
-            }
-            if let Some(mut a) = propagation::wanted_alert(
-                &h.call,
-                &h.band,
-                &h.mode,
-                h.grid.as_deref(),
-                true,
-                None,
-                &wcfg,
-                &*needs,
-                &needs.slots(),
-            ) {
-                // wanted_alert doesn't know the spot metadata — carry it over.
-                a.freq_mhz = h.freq_mhz;
-                a.admitted_at = h.admitted_at;
-                a.evidence = h.evidence.clone();
-                alerts.push(a);
-            }
-        }
-        alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
-    }
+    // The board carries no watch-list rows of its own: the old wanted list that fed them is
+    // retired (operator 2026-09-24, "One list"). Its Watch list chip filters these rows by the
+    // watch list the operator edits (Settings ▸ Spots & Alerts), matched in the window exactly as
+    // the WATCH tile matches the roster, the Stations list and Spots.
     Ok(alerts)
 }
 
@@ -28578,6 +28547,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_rtty_macros,
             set_psk_macros,
             set_beta_updates,
+            retire_wanted_calls,
             set_launch_at_login,
             answer_remote_autostart_offer,
             set_fd_operator,
@@ -36617,6 +36587,75 @@ mod tests {
             board_park(&alerts, "K1ABC", "CW"),
             None,
             "…and then it is ambiguous, so the freshness filter is what decided the case above"
+        );
+    }
+
+    /// An engine whose settings carry the RETIRED wanted list — as an old settings.json, or a
+    /// restored backup, still does — so the board can be asked whether it reads it.
+    fn with_old_wanted_list(
+        mut e: tempo_app::engine::Engine,
+        list: &[&str],
+        confirm_tier: bool,
+    ) -> tempo_app::engine::Engine {
+        let mut s = e.settings().clone();
+        s.wanted_calls = list.iter().map(|c| c.to_string()).collect();
+        s.alert_confirm_tier = confirm_tier;
+        e.apply_restored_settings(s);
+        e
+    }
+
+    /// THE BOARD NO LONGER READS THE OLD WANTED LIST (operator 2026-09-24, "One list"). It had no
+    /// editor since the watch list replaced it, and went on tagging `Wanted` from settings.json:
+    /// a list the operator could neither see nor change. Its entries now join the watch list on the
+    /// first launch (the desktop's `features/watchlistFold`), and the board's Watch list chip
+    /// filters by the watch list, the one the operator edits.
+    #[test]
+    fn the_needed_board_does_not_tag_from_the_retired_wanted_list() {
+        let engine = with_old_wanted_list(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+            &["VK9*", "W1AW"],
+            true,
+        );
+        let alerts = needed_board_for(engine, &["VK9XX", "W1AW", "K1ABC"], &[]);
+        // Positive control: the board is there, and the listed stations are on it as the needs
+        // they are (an empty log: every station is a new one).
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "no VK9XX row: {alerts:?}"
+        );
+        let wanted: Vec<&str> = alerts
+            .iter()
+            .filter(|a| {
+                a.tags.contains(&propagation::NeedTag::Wanted) || a.headline.starts_with("Wanted")
+            })
+            .map(|a| a.call.as_str())
+            .collect();
+        assert!(
+            wanted.is_empty(),
+            "rows tagged from the retired wanted list: {wanted:?}"
+        );
+    }
+
+    /// …nor ADDS a row for a listed station that is no need at all. The old list surfaced every
+    /// heard station on it, worked or not; with the list retired, the board shows needs, and the
+    /// watch list marks a watched station on the roster, the Stations list and Spots.
+    #[test]
+    fn the_needed_board_adds_no_row_for_a_worked_station_on_the_retired_list() {
+        let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
+        worked.mode = "CW".into();
+        worked.when_unix = (crate::now_unix() - 3_600) as u64;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(worked);
+        // The confirmation tier off, so a worked, unconfirmed W1AW is no need of any kind.
+        let engine = with_old_wanted_list(e, &["W1AW"], false);
+        let alerts = needed_board_for(engine, &["W1AW", "VK9XX"], &[]);
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "control: the board is there: {alerts:?}"
+        );
+        assert!(
+            !alerts.iter().any(|a| a.call == "W1AW"),
+            "a row for a worked station, from the retired list: {alerts:?}"
         );
     }
 

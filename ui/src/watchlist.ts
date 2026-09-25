@@ -35,9 +35,10 @@ export interface WatchFilter {
 }
 
 const STORAGE_KEY = 'nexus.watchlist'
-/** Dispatched by the Settings manager (`WatchlistPanel`) after every edit; App's alert path and
- *  `useWatchMatch` both re-read the list on it. */
-const WATCHLIST_CHANGED = 'nexus:watchlist-changed'
+/** Dispatched by every writer of the list after it saves — the Settings manager
+ *  (`WatchlistPanel`) and the one-time fold of the retired wanted list (`features/watchlistFold`);
+ *  App's alert path, `useWatchMatch` and the manager itself re-read the list on it. */
+export const WATCHLIST_CHANGED = 'nexus:watchlist-changed'
 
 /** Escape a string for literal use inside a RegExp. */
 function escapeRegex(s: string): string {

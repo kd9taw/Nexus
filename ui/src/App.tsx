@@ -61,6 +61,7 @@ import { announce } from './announce'
 import { Announcer } from './components/Announcer'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { loadWatchlist, type WatchFilter } from './watchlist'
+import { foldRetiredWantedList } from './features/watchlistFold'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { useScale } from './useScale'
@@ -1174,6 +1175,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     window.addEventListener('nexus:watchlist-changed', resync)
     return () => window.removeEventListener('nexus:watchlist-changed', resync)
   }, [])
+  // The retired "Wanted watch list" setting joins the watch list, once (operator, 2026-09-24:
+  // "One list"; features/watchlistFold). The desktop only: this computer's watch list is the one
+  // the entries belong on — a Remote browser's list is its own.
+  useEffect(() => {
+    if (remote) return
+    void foldRetiredWantedList()
+  }, [remote])
   const [onboardDismissed, setOnboardDismissed] = useState<boolean>(
     () => localStorage.getItem(ONBOARD_KEY) === '1',
   )

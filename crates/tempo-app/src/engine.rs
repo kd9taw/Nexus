@@ -5181,6 +5181,12 @@ impl Engine {
         // with what the computer does at the next sign-in.
         let live_launch_at_login = self.settings.launch_at_login;
         let live_remote_autostart_offer_answered = self.settings.remote_autostart_offer_answered;
+        // The RETIRED wanted list (operator 2026-09-24, "One list"): read once by the desktop's
+        // fold into the watch list and then emptied by its one writer, `retire_wanted_calls`. A
+        // form payload is a snapshot that may predate the fold, and writing its copy back would
+        // have the next launch fold the old entries in AGAIN — returning one the operator had
+        // removed from the watch list since. No form owns it; a restore/reset does (below).
+        let live_wanted_calls = std::mem::take(&mut self.settings.wanted_calls);
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -5264,6 +5270,7 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            self.settings.wanted_calls = live_wanted_calls;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
@@ -5623,6 +5630,14 @@ impl Engine {
             .map(|c| c.trim().to_ascii_uppercase())
             .filter(|c| !c.is_empty() && seen.insert(c.clone()))
             .collect();
+    }
+
+    /// Empty the RETIRED wanted list — its one writer. The desktop calls this once the list's
+    /// entries are safely on the watch list (`ui/src/features/watchlistFold.ts`); nothing reads
+    /// the list otherwise, and no form payload can write it (see `apply_settings_inner`).
+    pub fn retire_wanted_calls(&mut self) -> &Settings {
+        self.settings.wanted_calls.clear();
+        &self.settings
     }
 
     /// ⛔ **THE ONE WRITER of the beta-channel opt-in** (Settings ▸ App updates). A NARROW
@@ -29222,6 +29237,61 @@ mod tests {
             e.settings().beta_updates,
             "a payload that never mentioned the beta channel silently opted the operator out"
         );
+    }
+
+    /// ⛔ **No form payload may write the RETIRED wanted list** (operator 2026-09-24, "One
+    /// list"). The desktop folds the old hidden list into the watch list on its first launch and
+    /// then empties it through its one writer. A surface that read the settings before that — the
+    /// APRS cockpit keeps its copy for the whole session — posts the old entries back with any
+    /// control it saves; the next launch would fold them into the watch list AGAIN, bringing back
+    /// an entry the operator removed from the watch list in between.
+    #[test]
+    fn a_form_save_cannot_bring_back_the_retired_wanted_list() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.settings().wanted_calls.is_empty(),
+            "baseline: nothing to fold"
+        );
+        // A snapshot from a surface that read the settings before the fold emptied the list.
+        let mut stale = e.settings().clone();
+        stale.wanted_calls = vec!["VP8*".into(), "3Y0J".into()];
+        e.apply_settings(stale);
+        assert!(
+            e.settings().wanted_calls.is_empty(),
+            "a stale form payload wrote the retired wanted list back: {:?}",
+            e.settings().wanted_calls
+        );
+    }
+
+    /// The other half of the contract, and the positive control for the test above: a RESTORE is
+    /// the whole truth, as for every other one-writer field. An old backup's list comes back, and
+    /// the next launch folds it into the (restored) watch list — the same decision loading that
+    /// backup's settings.json makes, so the restore needs no migration of its own.
+    #[test]
+    fn a_restore_brings_the_old_list_back_for_the_next_launch_to_fold() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut bundle = e.settings().clone();
+        bundle.wanted_calls = vec!["VP8*".into()];
+        e.apply_restored_settings(bundle);
+        assert_eq!(e.settings().wanted_calls, vec!["VP8*".to_string()]);
+    }
+
+    /// The retired list's one writer does empty it — the positive control for the form test
+    /// above, which would otherwise pass on a list nothing can change.
+    #[test]
+    fn retire_wanted_calls_is_the_writer_that_empties_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut bundle = e.settings().clone();
+        bundle.wanted_calls = vec!["VP8*".into(), "3Y0J".into()];
+        e.apply_restored_settings(bundle);
+        let before_the_fold = e.settings().clone();
+        assert!(
+            e.retire_wanted_calls().wanted_calls.is_empty(),
+            "the verb empties it"
+        );
+        // …and a snapshot from before it cannot put the entries back.
+        e.apply_settings(before_the_fold);
+        assert!(e.settings().wanted_calls.is_empty());
     }
 
     /// The positive control for both tests above: the switch must still work. Without this,
