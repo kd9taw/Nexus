@@ -517,9 +517,17 @@ mod tests {
                 Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
             }
         };
-        let (token, count, my_call, my_grid, activation, hunt, hunted_count) = {
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old algorithm against the new reader over the same rows, and whether the
+        // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+        // picture, so the old read's log token has nothing left to check.
+        let log = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
+        let (count, my_call, my_grid, activation, hunt, hunted_count) = {
             let e = lock()?;
-            if e.log_records().len() > LOG_ROWS
+            if log.len() > LOG_ROWS
                 || e.settings().mycall.len() > TEXT
                 || e.settings().mygrid.len() > TEXT
             {
@@ -542,8 +550,7 @@ mod tests {
                 }
             }
             (
-                e.log_read_token(),
-                e.log_records().len(),
+                log.len(),
                 e.settings().mycall.clone(),
                 e.settings().mygrid.clone(),
                 activation,
@@ -574,8 +581,7 @@ mod tests {
             }
         }
         let unchanged = |e: &tempo_app::engine::Engine| {
-            Arc::ptr_eq(&token, &e.log_read_token())
-                && e.settings().mycall == my_call
+            e.settings().mycall == my_call
                 && e.settings().mygrid == my_grid
                 && e.activation() == activation
         };
@@ -587,7 +593,7 @@ mod tests {
                     if !unchanged(&e) {
                         return Err("applicationBusy");
                     }
-                    qso_count += e.log_records()[offset..(offset + 128).min(count)]
+                    qso_count += log[offset..(offset + 128).min(count)]
                         .iter()
                         .filter(|q| q.ota.my_ref.as_deref() == Some(reference.as_str()))
                         .count();

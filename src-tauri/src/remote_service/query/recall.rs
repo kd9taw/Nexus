@@ -583,40 +583,23 @@ mod tests {
         call: &str,
         mut after_chunk: impl FnMut(usize),
     ) -> Result<Capture, &'static str> {
-        use std::sync::{Arc, TryLockError};
-        use std::time::{Duration, Instant};
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let lock = || loop {
-            if Instant::now() >= deadline {
-                return Err("applicationBusy");
-            }
-            match tempo_app::engine::engine_try_lock(engine) {
-                Ok(e) => return Ok(e),
-                Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
-            }
-        };
-        let (token, count) = {
-            let e = lock()?;
-            (e.log_read_token(), e.log_records().len())
-        };
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old algorithm against the new reader over the same rows, and whether the
+        // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+        // picture, so the old read's log token has nothing left to check.
+        let log = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
+        let count = log.len();
         let mut result = OldAccumulator::new(call);
         for offset in (0..count).step_by(128) {
-            let rows = {
-                let e = lock()?;
-                if !Arc::ptr_eq(&token, &e.log_read_token()) {
-                    return Err("applicationBusy");
-                }
-                e.log_records()[offset..(offset + 128).min(count)].to_vec()
-            };
+            let rows = log[offset..(offset + 128).min(count)].to_vec();
             // DXCC resolution and summary work cannot hold the engine mutex. The
             // token check refuses even same-length edits between chunks; no mixed
             // log may be reported as complete or used to claim a new entity.
             result.append(&rows, offset)?;
             after_chunk(offset);
-        }
-        if !Arc::ptr_eq(&token, &lock()?.log_read_token()) {
-            return Err("applicationBusy");
         }
         Ok(result.finish())
     }

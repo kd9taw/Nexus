@@ -26,9 +26,12 @@ trait Before {
     ) -> String;
 }
 
+/// Over the log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+/// tests hold the old answers against the new over the same rows, and whether the store holds
+/// what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
 impl Before for Engine {
     fn log_activations(&self) -> Vec<LoggedActivation> {
-        Logbook::from_store(self.get_log()).activations()
+        Logbook::from_store(self.stored_records()).activations()
     }
     fn export_logbook_for_activation(
         &self,
@@ -36,7 +39,11 @@ impl Before for Engine {
         day_start_unix: u64,
         callsign: Option<&str>,
     ) -> String {
-        Logbook::from_store(self.get_log()).adif_for_activation(reference, day_start_unix, callsign)
+        Logbook::from_store(self.stored_records()).adif_for_activation(
+            reference,
+            day_start_unix,
+            callsign,
+        )
     }
 }
 

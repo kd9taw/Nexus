@@ -547,16 +547,20 @@ mod tests {
                 Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
             }
         };
-        let (token, count, my_call) = {
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old algorithm against the new reader over the same rows, and whether the
+        // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+        // picture, so the old read's log token has nothing left to check.
+        let log = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
+        let (count, my_call) = {
             let e = lock()?;
-            if e.log_records().len() > LOG_ROWS || e.settings().mycall.len() > TEXT_BYTES {
+            if log.len() > LOG_ROWS || e.settings().mycall.len() > TEXT_BYTES {
                 return Err("applicationTooLarge");
             }
-            (
-                e.log_read_token(),
-                e.log_records().len(),
-                e.settings().mycall.clone(),
-            )
+            (log.len(), e.settings().mycall.clone())
         };
         let mut awards = propagation::Awards::new();
         awards.set_home_call(&my_call);
@@ -566,10 +570,10 @@ mod tests {
         for offset in (0..count).step_by(128) {
             let rows = {
                 let e = lock()?;
-                if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+                if e.settings().mycall != my_call {
                     return Err("applicationBusy");
                 }
-                e.log_records()[offset..(offset + 128).min(count)]
+                log[offset..(offset + 128).min(count)]
                     .iter()
                     .map(|q| Row::copy(q))
                     .collect::<Result<Vec<_>, _>>()?
@@ -590,7 +594,7 @@ mod tests {
         }
         {
             let e = lock()?;
-            if !Arc::ptr_eq(&token, &e.log_read_token()) || e.settings().mycall != my_call {
+            if e.settings().mycall != my_call {
                 return Err("applicationBusy");
             }
         }

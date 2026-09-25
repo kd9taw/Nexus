@@ -19,12 +19,16 @@ use std::sync::{Arc, Mutex};
 /// A position is never the answer: one kept from an earlier read is stale the moment the
 /// OTHER writer deletes above it, and acting on it deleted or rewrote a different contact.
 /// Another instance's changes are folded in first, so the answer is about the log as it is.
+///
+/// A key target is found in the log as the store holds it ([`StoredLog`]), in place of the copy
+/// in memory: these tests hold the old search against the new over the same rows, and whether
+/// the store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
 fn old_locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
     engine.sync_shared_log_if_changed();
     match target {
         Target::Key(t) => engine
-            .log_records()
-            .iter()
+            .stored_log()
+            .into_iter()
             .find(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
             .and_then(|r| r.id),
         Target::Id(t) => {

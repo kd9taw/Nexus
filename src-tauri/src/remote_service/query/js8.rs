@@ -318,7 +318,9 @@ mod tests {
 
     #[derive(Default)]
     struct OldCache {
-        token: Option<Arc<()>>,
+        /// The log the history was read from — the store's rows, where the old cache kept the
+        /// copy's read token.
+        log: Option<Vec<Arc<tempo_core::logbook::QsoRecord>>>,
         calls: Vec<String>,
         history: BTreeMap<String, History>,
     }
@@ -342,22 +344,23 @@ mod tests {
                     Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
                 }
             };
-            let (token, count, heard, class) = {
+            // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+            // tests hold the old algorithm against the new reader over the same rows, and whether the
+            // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+            // picture, so the old read's log token has nothing left to check.
+            let log = engine
+                .lock()
+                .map_err(|_| "applicationUnavailable")?
+                .stored_log();
+            let (count, heard, class) = {
                 let e = lock()?;
-                if e.log_records().len() > 1_000_000 {
+                if log.len() > 1_000_000 {
                     return Err("applicationTooLarge");
                 }
-                (
-                    e.log_read_token(),
-                    e.log_records().len(),
-                    calls(&e)?,
-                    e.settings().license_class,
-                )
+                (log.len(), calls(&e)?, e.settings().license_class)
             };
-            let unchanged = |e: &tempo_app::engine::Engine| {
-                Arc::ptr_eq(&token, &e.log_read_token()) && e.settings().license_class == class
-            };
-            if self.token.as_ref().is_none_or(|t| !Arc::ptr_eq(t, &token)) || self.calls != heard {
+            let unchanged = |e: &tempo_app::engine::Engine| e.settings().license_class == class;
+            if self.log.as_ref() != Some(&log) || self.calls != heard {
                 let mut history: BTreeMap<_, _> = heard
                     .iter()
                     .map(|c| (c.clone(), History::default()))
@@ -372,7 +375,7 @@ mod tests {
                                 return Err("applicationBusy");
                             }
                             let mut rows = Vec::new();
-                            for q in &e.log_records()[offset..(offset + 128).min(count)] {
+                            for q in &log[offset..(offset + 128).min(count)] {
                                 if q.call.len() > 128 {
                                     return Err("applicationTooLarge");
                                 }
@@ -415,7 +418,7 @@ mod tests {
                         return Err("applicationBusy");
                     }
                 }
-                self.token = Some(token.clone());
+                self.log = Some(log.clone());
                 self.calls = heard.clone();
                 self.history = history;
             }

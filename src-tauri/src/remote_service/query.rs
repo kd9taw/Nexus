@@ -969,12 +969,13 @@ mod tests {
         search: &str,
         unconfirmed: bool,
     ) -> Result<(Vec<Value>, usize, Value), &'static str> {
-        // A copy of the log's pointers under the lock; the scan (every row, and with a
-        // search five lowercased fields each) runs after it is released.
-        let records = tempo_app::engine::engine_try_lock(engine)
-            .map_err(|_| "applicationBusy")?
-            .log_snapshot()
-            .records;
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old window against the new over the same rows, and whether the store
+        // holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
+        let records = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
         tempo_core::logbook::io_fence::whole_log_off_engine_lock("Remote's log window");
         let (rows, total) = old_log_window(&records, search, unconfirmed);
         let rows = rows
