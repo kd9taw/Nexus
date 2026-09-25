@@ -59,7 +59,7 @@
 
 use super::{
     ContestFields, Logbook, Ota, QslRcvd, QslSent, QslVia, QsoRecord, RecordId, UploadDetail,
-    UploadOutcome, UploadState, UploadStatus,
+    UploadOutcome, UploadState, UploadStatus, Watermarks,
 };
 use rusqlite::{params, params_from_iter, Connection};
 use std::collections::HashMap;
@@ -595,37 +595,11 @@ impl RowWrite {
     }
 }
 
-/// The five watermarks, as `log_meta` holds them.
-///
-/// They survive into SQLite rather than being replaced by a bare "the table changed" because
-/// every cache over the log keys on one of them — see [`super::OpClass`] for which class moves
-/// which. Written in the SAME transaction as the rows they describe, so a watermark read back
-/// out of the database names the state the database is actually in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Watermarks {
-    /// Moves on every change.
-    pub revision: u64,
-    /// The last change that was not an append at the end.
-    pub content_rev: u64,
-    /// The last change a derived index over the rows' content must be rebuilt for.
-    pub index_rev: u64,
-    /// The last change that moved a row's identifying fields.
-    pub key_rev: u64,
-    /// The last change a plan built on an earlier snapshot cannot be rebased over.
-    pub shape_rev: u64,
-}
-
 impl Watermarks {
     /// The log's watermarks as they stand. Take it under whatever lock guards the log, in the
     /// same breath as the change it describes.
     pub fn of(log: &Logbook) -> Watermarks {
-        Watermarks {
-            revision: log.revision(),
-            content_rev: log.content_rev(),
-            index_rev: log.index_rev(),
-            key_rev: log.key_rev(),
-            shape_rev: log.shape_rev(),
-        }
+        log.marks()
     }
 
     /// The `log_meta` keys, in a fixed order so a stored database always reads the same way.
