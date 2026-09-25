@@ -757,6 +757,34 @@ pub fn band_directed_reply(f: Frame) -> Frame {
     }
 }
 
+/// Does `model` read a band's DIAL and MODE by name — `25 <band>` / `26 <band>`, where the
+/// band byte is `00` = MAIN and `01` = SUB whichever band the operator has selected?
+///
+/// | Model | Answer | Source |
+/// |---|---|---|
+/// | IC-7610 | yes | A7380-7EX-4 p. 13: "Main or Sub band's frequency settings" (`25`) and "Main or Sub band's operating mode and filter settings" (`26`), each `00: MAIN`, `01: SUB` |
+/// | IC-9700 | **no** | A7508-3EX-4 p. 24: its `25`/`26` name the SELECTED or UNSELECTED VFO, so `25 00` follows the selection — the very thing this read exists to escape |
+/// | IC-7300 / IC-705 / IC-905 | no | not offered a Sub receiver at all ([`crate::dualrx`]); nothing to name |
+///
+/// Neither command carries the band-directed mark (A7380-7EX-4 p. 9): the band is their OWN
+/// first data byte. That is why this is a table of its own rather than a row of
+/// [`band_directed_supported`] — `29 00 03` is not a command the radio lists.
+pub fn reads_band_by_name(model: IcomModel) -> bool {
+    matches!(model, IcomModel::Ic7610)
+}
+
+/// Read `band`'s dial by name (`25 <band>`, [`BAND_MAIN`] / [`BAND_SUB`]). The reply is
+/// `25 <band>` and the 5-byte BCD frequency — see [`parse_band_freq`]. Only where
+/// [`reads_band_by_name`]: on an IC-9700 the same bytes read the SELECTED VFO.
+pub fn read_band_freq(radio: u8, band: u8) -> Frame {
+    Frame::command(radio, 0x25, &[band])
+}
+/// Read `band`'s mode by name (`26 <band>`). The reply is `26 <band> <mode> <data> <filter>`
+/// — see [`parse_band_mode`]. Same model rule as [`read_band_freq`].
+pub fn read_band_mode(radio: u8, band: u8) -> Frame {
+    Frame::command(radio, 0x26, &[band])
+}
+
 // ---- scope CONTROL (command 0x27 sub 14/15/19) — set the RIG's panadapter, not the stream ----
 // Byte layouts verified against Hamlib (rigs/icom/icom.c). On dual-receiver rigs (IC-9700/7610)
 // each of these takes a leading Main/Sub selector byte (`main_sub` = Some(0x00) for Main); single-
@@ -832,6 +860,28 @@ pub fn parse_mode(f: &Frame) -> Option<(Mode, Option<u8>)> {
     if (f.cmd == 0x04 || f.cmd == 0x01) && !f.data.is_empty() {
         let mode = Mode::from_byte(f.data[0])?;
         Some((mode, f.data.get(1).copied()))
+    } else {
+        None
+    }
+}
+/// The frequency (Hz) from a [`read_band_freq`] reply: `25 <band>` + 5-byte BCD. `None` for a
+/// reply naming the OTHER band — the Sub's dial must never be read as Main's.
+pub fn parse_band_freq(f: &Frame, band: u8) -> Option<u64> {
+    (f.cmd == 0x25 && f.data.first() == Some(&band) && f.data.len() >= 6)
+        .then(|| bcd_to_freq(&f.data[1..6]))
+}
+/// `(mode, filter)` from a [`read_band_mode`] reply: `26 <band> <mode> <data> <filter>`
+/// (A7380-7EX-4 p. 13). `None` for a reply naming the other band.
+///
+/// ⚠️ THE DATA BYTE (`00` off, `01`–`03` = D1–D3) IS READ PAST, ON PURPOSE. The mode name the
+/// broker reports is built exactly as it was from a `04` read — the plain mode, PKT only from a
+/// received `1A 06` — and the cockpit compares that name against the mode Nexus commanded to
+/// flag a mismatch. Starting to read the flag here would change that name in every data mode,
+/// which is a different change from reading it off the right receiver.
+pub fn parse_band_mode(f: &Frame, band: u8) -> Option<(Mode, Option<u8>)> {
+    if f.cmd == 0x26 && f.data.first() == Some(&band) && f.data.len() >= 2 {
+        let mode = Mode::from_byte(f.data[1])?;
+        Some((mode, f.data.get(3).copied()))
     } else {
         None
     }
@@ -1654,6 +1704,100 @@ mod tests {
         // It is not a bool func and not a 0x14 level.
         assert_eq!(func_sub("PREAMP"), None);
         assert_eq!(level_sub("PREAMP"), None);
+    }
+
+    /// ⭐ THE BY-NAME DIAL AND MODE READ THEIR OWN BAND AND NOTHING ELSE (A7380-7EX-4 p. 13).
+    ///
+    /// `25 <band>` / `26 <band>` carry the band in their first data byte and the reply names it
+    /// back, so a reply naming the Sub must never read as Main's — that is the selection-
+    /// following this read exists to remove, arriving by another door.
+    #[test]
+    fn the_by_name_dial_and_mode_read_their_own_band_and_nothing_else() {
+        // Only the IC-7610 names MAIN/SUB this way; the IC-9700's same bytes name the SELECTED
+        // VFO (A7508-3EX-4 p. 24), and the one-receiver rigs have nothing to name.
+        assert!(reads_band_by_name(IcomModel::Ic7610));
+        for m in [
+            IcomModel::Ic9700,
+            IcomModel::Ic7300,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+        ] {
+            assert!(!reads_band_by_name(m), "{m:?}");
+        }
+        assert_eq!(
+            read_band_freq(0x98, BAND_MAIN).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x25, 0x00, 0xFD]
+        );
+        assert_eq!(
+            read_band_mode(0x98, BAND_MAIN).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x26, 0x00, 0xFD]
+        );
+
+        // Frequency: `25 00` + 5-byte BCD, least significant pair first (p. 10).
+        let main = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x25, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD,
+        ])
+        .unwrap();
+        assert_eq!(parse_band_freq(&main, BAND_MAIN), Some(14_074_000));
+        let sub = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x25, 0x01, 0x00, 0x40, 0x07, 0x07, 0x00, 0xFD,
+        ])
+        .unwrap();
+        assert_eq!(
+            parse_band_freq(&sub, BAND_MAIN),
+            None,
+            "the Sub's dial is not Main's"
+        );
+        assert_eq!(parse_band_freq(&sub, BAND_SUB), Some(7_074_000));
+        let plain = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x03, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD,
+        ])
+        .unwrap();
+        assert_eq!(
+            parse_band_freq(&plain, BAND_MAIN),
+            None,
+            "a `03` reply names no band"
+        );
+        let short = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x25, 0x00, 0x00, 0x40, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_freq(&short, BAND_MAIN),
+            None,
+            "a truncated reply is no reading"
+        );
+
+        // Mode: `26 00 <mode> <data> <filter>`. The filter comes back; the DATA byte does not
+        // change the answer (see `parse_band_mode`).
+        let usb_d1 =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x00, 0x01, 0x01, 0x02, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_mode(&usb_d1, BAND_MAIN),
+            Some((Mode::Usb, Some(0x02)))
+        );
+        let usb =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x00, 0x01, 0x00, 0x02, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_mode(&usb, BAND_MAIN),
+            parse_band_mode(&usb_d1, BAND_MAIN)
+        );
+        let sub_lsb =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x01, 0x00, 0x00, 0x01, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_mode(&sub_lsb, BAND_MAIN),
+            None,
+            "the Sub's mode is not Main's"
+        );
+        assert_eq!(
+            parse_band_mode(&sub_lsb, BAND_SUB),
+            Some((Mode::Lsb, Some(0x01)))
+        );
+        // PSK (`12`) is a mode this table has no name for — no reading, exactly as from `04`.
+        let psk =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x00, 0x12, 0x00, 0x01, 0xFD]).unwrap();
+        assert_eq!(parse_band_mode(&psk, BAND_MAIN), None);
+        assert_eq!(
+            parse_mode(&Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x04, 0x12, 0x01, 0xFD]).unwrap()),
+            None
+        );
     }
 
     /// THE STEP LISTS, AND WHERE EVERY NUMBER CAME FROM. An attenuator is not a slider: it

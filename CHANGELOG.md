@@ -211,7 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pressing it saves them.
 - **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
   notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
-  with the Sub band selected on the radio (the frequency and mode still follow the selected band).
+  with the Sub band selected on the radio. The frequency and mode Nexus shows are now Main's too,
+  so selecting the Sub band on the radio, or tuning it, no longer moves them. A frequency or mode
+  change made from Nexus still goes to whichever band is selected on the radio. Needs checking on
+  a real IC-7610.
 - **On a cross-band satellite pass, the licence check and the band strip follow the band you
   transmit on.** On an IC-9700 or IC-905 using native CI-V the uplink goes out on the Sub band,
   so the band strip now shades the phone segment of the uplink's band rather than the

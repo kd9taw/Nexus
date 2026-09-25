@@ -503,6 +503,15 @@ pub(crate) mod tests_support {
         /// address: the IC-9700's reference (A7508-3EX-4) has no command `29` at all, so
         /// at `0xA2` the fixture refuses it the way that table says the rig would.
         pub cmd29: bool,
+        /// Does this radio read a band's dial and mode BY NAME — `25 <band>` / `26 <band>`
+        /// with `00` = MAIN and `01` = SUB, whichever band is selected (IC-7610 CI-V Reference
+        /// Guide A7380-7EX-4, p. 13)? True only at the IC-7610's address. The IC-9700's
+        /// `25`/`26` name the SELECTED or UNSELECTED VFO instead (A7508-3EX-4, p. 24); that
+        /// read is not modelled and is NAKed here, because nothing sends it to that radio.
+        pub dial_by_band: bool,
+        /// Fault injection — swallow the next N by-name dial/mode READ replies (`25`/`26`
+        /// above): a lost CI-V reply, so the read times out while the rig's state stands.
+        pub drop_dial_reads: u32,
         /// Which band each command ACTED on, in arrival order: `(on_sub, cmd, data)`. A
         /// `29`-wrapped command is recorded UNWRAPPED, under the band it named; every other
         /// command under the selection at the moment it arrived. This is the witness for
@@ -620,6 +629,29 @@ pub(crate) mod tests_support {
                 None
             }
             (0x0F, _) => None, // duplex shift
+            // A band's dial or mode READ BY NAME (`25 <band>` / `26 <band>`, no value): the
+            // IC-7610's form, `00` MAIN / `01` SUB whichever band is selected (A7380-7EX-4
+            // p. 13), the reply naming the band back. See [`Regs::dial_by_band`].
+            (0x25 | 0x26, Some(band @ (0x00 | 0x01))) if r.dial_by_band && data.len() == 1 => {
+                let sub = band == 0x01;
+                // Recorded under the band it NAMED, like a `29`-wrapped command — the entry
+                // pushed above assumed the selection, which this command does not use.
+                if let Some(last) = r.acted.last_mut() {
+                    last.0 = sub;
+                }
+                if r.drop_dial_reads > 0 {
+                    r.drop_dial_reads -= 1;
+                    return Some((SILENT, Vec::new()));
+                }
+                if cmd == 0x25 {
+                    let mut d = vec![band];
+                    d.extend_from_slice(&freq_to_bcd(if sub { r.sub_hz } else { r.main_hz }));
+                    Some((0x25, d))
+                } else {
+                    let m = if sub { r.sub_mode } else { r.main_mode };
+                    Some((0x26, vec![band, m, u8::from(r.data_mode), 0x01]))
+                }
+            }
             // The unselected VFO of the CURRENT band — write-only here.
             (0x25, Some(0x01)) if data.len() >= 6 => {
                 r.unselected_hz = bcd_to_freq(&data[1..]);
@@ -883,6 +915,8 @@ pub(crate) mod tests_support {
                         smeter_raw: 120, // S9 — what every existing reading expects
                         sub_smeter_raw: 60,
                         cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
+                        dial_by_band: addr == 0x98, // `25`/`26` name MAIN/SUB on the IC-7610 only
+                        drop_dial_reads: 0,
                         acted: Vec::new(),
                         wire: Vec::new(),
                         log: Vec::new(),
