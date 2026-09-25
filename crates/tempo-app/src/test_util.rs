@@ -36,6 +36,15 @@ use crate::station::StationCore;
 /// before this call is written, or on the 1.13 path the log in memory.
 pub trait StoredLog {
     fn stored_log(&self) -> Vec<Arc<QsoRecord>>;
+
+    /// [`Self::stored_log`], each record owned — for a test whose values meet a `Vec<QsoRecord>`
+    /// (an expected list, a `Logbook` built from them).
+    fn stored_records(&self) -> Vec<QsoRecord> {
+        self.stored_log()
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect()
+    }
 }
 
 /// The pass behind [`StoredLog::stored_log`], over handles taken already.
@@ -105,6 +114,8 @@ mod tests {
                 "{arm}: logged just now"
             );
             assert_eq!(e.station().stored_log(), held, "{arm}: the station's own");
+            let owned: Vec<QsoRecord> = held.iter().map(|r| QsoRecord::clone(r)).collect();
+            assert_eq!(e.stored_records(), owned, "{arm}: each record owned");
             let shared = Mutex::new(e);
             assert_eq!(
                 shared.stored_log(),
