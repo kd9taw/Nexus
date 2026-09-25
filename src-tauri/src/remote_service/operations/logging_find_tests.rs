@@ -35,11 +35,17 @@ fn old_locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
 }
 
 /// The new code's answer, as the change path gets it: the log's rows under the Engine lock, the
-/// search with it released, and the check under it again.
+/// search with it released, and the found version still the contact's when the change is made
+/// (the check `change_found` makes, asked of the store here).
 fn new_locate(e: &crate::SharedEngine, target: &Target) -> Option<RecordId> {
     let rows = e.lock().unwrap().log_rows();
     let found = find(&rows, target).expect("the log reads")?;
-    locate(&mut e.lock().unwrap(), &found)
+    let id = found.id.parse().ok()?;
+    let view = e.lock().unwrap().log_view();
+    view.row(id)
+        .expect("the log reads")
+        .filter(|row| tempo_app::station::StationCore::fresh_row(row, &found.edit_key).is_ok())
+        .map(|_| id)
 }
 
 // ── logs with ties and twins ─────────────────────────────────────────────────────────────────
@@ -216,7 +222,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
     };
     let (r, t) = first(&e);
     let found = search(&e, &t);
-    assert_eq!(locate(&mut e.lock().unwrap(), &found), r.id, "control");
+    assert_eq!(locate(&e.lock().unwrap(), &found), r.id, "control");
 
     // A stamp lands between the two: the same version, so it stands.
     assert!(e.lock().unwrap().stamp_qrz_upload(
@@ -225,7 +231,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
         1_789_000_000,
         None
     ));
-    assert_eq!(locate(&mut e.lock().unwrap(), &found), r.id);
+    assert_eq!(locate(&e.lock().unwrap(), &found), r.id);
 
     // An edit lands between the two: another version, refused.
     let (r, t) = first(&e);
@@ -233,7 +239,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
     let mut edited = r.clone();
     edited.comment = Some("changed at the shack".into());
     assert!(e.lock().unwrap().update_qso(r.id.unwrap(), edited));
-    assert_eq!(locate(&mut e.lock().unwrap(), &found), None);
+    assert_eq!(locate(&e.lock().unwrap(), &found), None);
     settle(&e);
 }
 

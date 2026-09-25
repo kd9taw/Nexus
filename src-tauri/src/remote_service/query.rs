@@ -1259,7 +1259,7 @@ mod tests {
             let found = find(&log, &seen_target(&seen))
                 .expect("the log reads")
                 .unwrap_or_else(|| panic!("the change path finds the row it served: {row}"));
-            let at = locate(&mut store.lock().unwrap(), &found)
+            let at = locate(&store.lock().unwrap(), &found)
                 .unwrap_or_else(|| panic!("and it is still that contact: {row}"));
             assert_eq!(Some(at.to_string()), seen.id, "the contact it served");
         }

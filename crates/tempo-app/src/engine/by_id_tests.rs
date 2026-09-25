@@ -319,7 +319,11 @@ fn the_one_change_stores_what_the_form_s_three_commands_stored() {
 
         three_commands(&mut old, id, &held, &edit, draft);
         let key = QsoEdit::project(&held).key();
-        assert_eq!(new.edit_qso(id, &key, &edit), Ok(Ok(())), "{}", draft.what);
+        assert!(
+            matches!(new.edit_qso(id, &key, &edit), Ok(Ok(_))),
+            "{}",
+            draft.what
+        );
 
         let rows = |e: &Engine| -> Vec<QsoRecord> {
             e.log_records()
@@ -374,7 +378,7 @@ fn a_change_by_id_lands_on_its_contact_after_a_delete_above_it() {
     );
     let mut edit = QsoEdit::project(&e.logged_row(target).expect("held"));
     edit.name = Some("Edited".into());
-    assert_eq!(e.edit_qso(target, &key, &edit), Ok(Ok(())));
+    assert!(matches!(e.edit_qso(target, &key, &edit), Ok(Ok(_))));
     assert!(e.mark_qsl_sent(target, Some(QslVia::Bureau)));
     assert!(e.mark_qsl_card(target, true));
     assert!(e.set_sat_tag(target, Some("AO-91")));
@@ -435,9 +439,8 @@ fn a_change_to_a_gone_or_changed_contact_is_refused_and_changes_nothing() {
 
     // A stamp lands between the read and the edit: not refused.
     assert!(e.stamp_qrz_upload(&held, UploadOutcome::Accepted, 1_788_000_000, None));
-    assert_eq!(
-        e.edit_qso(id, &key, &mine),
-        Ok(Ok(())),
+    assert!(
+        matches!(e.edit_qso(id, &key, &mine), Ok(Ok(_))),
         "a stamp refuses nothing"
     );
 

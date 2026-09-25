@@ -12,7 +12,9 @@ use tempo_app::engine::engine_try_lock;
 use tempo_core::logbook::query::{
     reference, BandsInLog, GridCounts, LogStatCounter, LotwBacklog, WorkedGrids,
 };
-use tempo_core::logbook::{adif_header, adif_record_own_log, QsoEdit, UploadOutcome};
+use tempo_core::logbook::{
+    adif_header, adif_record_own_log, LogOp, QsoEdit, UploadOutcome, UploadService, UploadStatus,
+};
 
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────
 
@@ -271,6 +273,16 @@ fn a_page_names_its_query_its_revisions_and_its_rows() {
     }
 }
 
+/// Whether a change by id with the edit key `key` would be taken now: the contact `id` is still
+/// the version whose key it is — asked of the store with the Engine lock released, as a change
+/// asks it.
+fn key_taken(engine: &SharedEngine, id: RecordId, key: &str) -> bool {
+    let view = engine_lock(engine).log_view();
+    view.row(id)
+        .expect("the log reads")
+        .is_some_and(|row| tempo_app::station::StationCore::fresh_row(&row, key).is_ok())
+}
+
 /// ★ A PAGE HANDS OUT EACH ROW'S EDIT KEY (SPEC-2 v2 §1): the key a change by id is checked
 /// against (`QsoEdit::key`, never computed by the UI). The Logbook sends it back with the row's
 /// id, so the key a page gives must be the one the change accepts — on both homes of the log —
@@ -308,7 +320,7 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
             let id: RecordId = id.as_str().unwrap().parse().unwrap();
             let key = key.as_str().expect("an edit key is text");
             assert!(
-                engine_lock(&engine).fresh_log_row(id, key).is_ok(),
+                key_taken(&engine, id, key),
                 "{home}: {id}'s key from the page is refused"
             );
         }
@@ -317,11 +329,11 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
         let id: RecordId = keys[2].as_str().unwrap().parse().unwrap();
         let before = edit_keys[2].as_str().unwrap().to_string();
         assert!(
-            engine_lock(&engine).mark_qsl_card(id, true),
+            change(&engine, id, &[LogOp::MarkQslCard { id, received: true }]),
             "premise: marked"
         );
         assert!(
-            engine_lock(&engine).fresh_log_row(id, &before).is_err(),
+            !key_taken(&engine, id, &before),
             "{home}: the key of a row that changed since is accepted"
         );
         let after = page();
@@ -331,7 +343,7 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
         );
         let now = after["editKeys"][2].as_str().unwrap();
         assert_ne!(now, before, "{home}: the page still hands out the old key");
-        assert!(engine_lock(&engine).fresh_log_row(id, now).is_ok());
+        assert!(key_taken(&engine, id, now));
     }
 }
 
@@ -339,6 +351,29 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
 
 fn snapshot_tick(engine: &SharedEngine) -> u32 {
     engine_lock(engine).snapshot().log_tick
+}
+
+/// The contact `id` as the log holds it — read with the Engine lock released, as every read of
+/// the store is.
+fn logged(engine: &SharedEngine, id: RecordId) -> QsoRecord {
+    let view = engine_lock(engine).log_view();
+    QsoRecord::clone(&view.row(id).expect("the log reads").expect("held"))
+}
+
+/// `ops` made on the contact `id` as a command makes them: planned with the Engine lock released,
+/// made under it ([`tempo_app::logwrite`]). Whether they were made.
+fn change(engine: &SharedEngine, id: RecordId, ops: &[LogOp]) -> bool {
+    let (made, _) = tempo_app::logwrite::change_ops(engine, id, None, ops, "test");
+    matches!(made, Ok(Ok(_)))
+}
+
+/// A connector's upload status: accepted at `when_unix`.
+fn accepted(when_unix: i64) -> UploadStatus {
+    UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix,
+        detail: None,
+    }
 }
 
 /// ★ `orderRev` IS THE INDEX REVISION. An upload stamp moves the rows' content and not their
@@ -370,9 +405,9 @@ fn order_rev_survives_a_stamp_and_moves_on_an_edit() {
     let tick = snapshot_tick(&engine);
     let target = golden_id("fx05");
     let stamped = {
-        let mut e = engine_lock(&engine);
-        let row = QsoRecord::clone(&e.logged_row(target).expect("held"));
-        e.stamp_qrz_upload(&row, UploadOutcome::Accepted, 1_790_000_000, None)
+        let row = logged(&engine, target);
+        tempo_app::logwrite::stamp_push(&engine, &row, UploadService::Qrz, accepted(1_790_000_000))
+            .0
     };
     assert!(stamped, "premise: the stamp landed");
     assert_ne!(snapshot_tick(&engine), tick, "the change feed moved");
@@ -397,10 +432,13 @@ fn order_rev_survives_a_stamp_and_moves_on_an_edit() {
 
     let tick = snapshot_tick(&engine);
     {
-        let mut e = engine_lock(&engine);
-        let mut fixed = QsoRecord::clone(&e.logged_row(target).expect("held"));
+        let mut fixed = logged(&engine, target);
         fixed.call = "AA1AAA".into();
-        assert!(e.update_qso(target, fixed));
+        let edit = LogOp::Edit {
+            id: target,
+            rec: Box::new(fixed),
+        };
+        assert!(change(&engine, target, &[edit]));
     }
     assert_ne!(snapshot_tick(&engine), tick, "the change feed moved");
     let after_edit = page(&queries);
@@ -498,12 +536,10 @@ fn a_fold_is_kept_until_what_it_reads_moves() {
         .into_iter()
         .find(|r| !r.award_confirmed && r.upload.lotw.is_none() && r.time_known)
         .expect("premise: an unsent contact");
-    engine_lock(&engine).stamp_lotw_upload(
-        &[unsent.id.unwrap()],
-        UploadOutcome::Accepted,
-        1_790_000_000,
-        None,
-    );
+    let signed = tempo_app::station::LotwSigned::of(&unsent).expect("an id");
+    let (done, _) =
+        tempo_app::logwrite::stamp_lotw_batch(&engine, &[signed], &accepted(1_790_000_000));
+    assert_eq!(done.stamped, 1, "premise: the stamp landed");
     let after_stamp = asked();
     assert_eq!(after_stamp, expected(&log_of(&engine)));
     assert_eq!(folded(), 6, "the backlog alone folded again");
@@ -514,13 +550,12 @@ fn a_fold_is_kept_until_what_it_reads_moves() {
 
     // A logged contact moves them all.
     {
-        let mut e = engine_lock(&engine);
-        let mut r = QsoRecord::clone(&e.logged_row(golden_id("fx01")).expect("a row"));
+        let mut r = logged(&engine, golden_id("fx01"));
         r.id = None;
         r.call = "N0FOLD".into();
         r.grid = Some("AA00".into());
         r.when_unix = 1_800_000_000;
-        e.log_qso(r);
+        engine_lock(&engine).log_qso(r);
     }
     assert_eq!(asked(), expected(&log_of(&engine)));
     assert_eq!(folded(), 11, "every fold folded again");
@@ -583,7 +618,7 @@ fn a_deleted_contact_is_gone_from_every_answer() {
             .clone()
     };
     assert!(located(&queries).is_number(), "premise: it has a place");
-    assert!(engine_lock(&engine).delete_qso(gone));
+    assert!(change(&engine, gone, &[LogOp::Delete(gone)]));
     assert_eq!(located(&queries), Value::Null);
     let row = ask(
         &queries,
@@ -620,12 +655,11 @@ fn a_contact_just_logged_is_in_the_next_answer() {
     let default = json!({"sort": "time", "asc": false, "search": "", "needsConfirmOnly": false});
     for n in 0..5 {
         {
-            let mut e = engine_lock(&engine);
-            let mut r = QsoRecord::clone(&e.logged_row(golden_id("fx01")).expect("a row"));
+            let mut r = logged(&engine, golden_id("fx01"));
             r.id = None;
             r.call = format!("N{n}NEW");
             r.when_unix = 1_800_000_000 + n;
-            e.log_qso(r);
+            engine_lock(&engine).log_qso(r);
         }
         let page = ask(
             &queries,
@@ -665,12 +699,11 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
     let db = tempo_core::logbook::migrate::database_path(&d.log());
     let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
     {
-        let mut e = engine_lock(&engine);
-        let mut r = QsoRecord::clone(&e.logged_row(golden_id("fx02")).expect("a row"));
+        let mut r = logged(&engine, golden_id("fx02"));
         r.id = None;
         r.call = "N9STALL".into();
         r.when_unix += 60;
-        e.log_qso(r);
+        engine_lock(&engine).log_qso(r);
     }
     let started = std::time::Instant::now();
     let answer = std::thread::scope(|s| {
@@ -722,13 +755,12 @@ fn a_fold_read_before_the_writer_caught_up_is_not_kept() {
     let db = tempo_core::logbook::migrate::database_path(&d.log());
     let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
     {
-        let mut e = engine_lock(&engine);
-        let mut r = QsoRecord::clone(&e.logged_row(golden_id("fx02")).expect("a row"));
+        let mut r = logged(&engine, golden_id("fx02"));
         r.id = None;
         r.call = "N9STALL".into();
         r.grid = Some("AA00".into());
         r.when_unix += 60;
-        e.log_qso(r);
+        engine_lock(&engine).log_qso(r);
     }
     let grids = || ask(&queries, &engine, json!({"kind": "workedGrids"}), &resolve);
     let stale = grids();
@@ -1151,49 +1183,61 @@ fn every_answer_is_the_references_after_every_kind_of_change() {
             let mut before = (snapshot_tick(&engine), log_of(&engine));
             for step in 0..10 {
                 let what = {
-                    let mut e = engine_lock(&engine);
-                    let held: Vec<QsoRecord> = e
-                        .log_records()
-                        .iter()
-                        .map(|r| QsoRecord::clone(r))
-                        .collect();
+                    let held = log_of(&engine);
                     let pick = |g: &mut Gen| held[g.below(held.len())].id.unwrap();
+                    // Each change as a command makes it: a change to a row the log holds is
+                    // planned with the Engine lock released and made under it.
                     match g.below(7) {
                         0 => {
                             let r = random_record(&mut g, 100 + step);
-                            e.log_qso(r);
+                            engine_lock(&engine).log_qso(r);
                             "a logged contact"
                         }
                         1 if !held.is_empty() => {
                             let id = pick(&mut g);
-                            let mut r = QsoRecord::clone(&e.logged_row(id).unwrap());
+                            let mut r = logged(&engine, id);
                             r.call = g.pick(&CALLS).to_string();
                             r.band = g.pick(&BANDS).to_string();
                             r.mode = g.pick(&MODES).to_string();
-                            e.update_qso(id, r);
+                            change(
+                                &engine,
+                                id,
+                                &[LogOp::Edit {
+                                    id,
+                                    rec: Box::new(r),
+                                }],
+                            );
                             "an edit"
                         }
                         2 if held.len() > 1 => {
-                            e.delete_qso(pick(&mut g));
+                            let id = pick(&mut g);
+                            change(&engine, id, &[LogOp::Delete(id)]);
                             "a delete"
                         }
                         3 if !held.is_empty() => {
-                            let r = QsoRecord::clone(&e.logged_row(pick(&mut g)).unwrap());
-                            e.stamp_qrz_upload(&r, UploadOutcome::Accepted, 1, None);
+                            let r = logged(&engine, pick(&mut g));
+                            tempo_app::logwrite::stamp_push(
+                                &engine,
+                                &r,
+                                UploadService::Qrz,
+                                accepted(1),
+                            );
                             "an upload stamp"
                         }
                         4 if !held.is_empty() => {
-                            e.mark_qsl_card(pick(&mut g), true);
+                            let id = pick(&mut g);
+                            change(&engine, id, &[LogOp::MarkQslCard { id, received: true }]);
                             "a paper card"
                         }
                         5 if !held.is_empty() => {
                             let id = pick(&mut g);
-                            let stored = QsoEdit::project(&e.logged_row(id).unwrap());
+                            let stored = QsoEdit::project(&logged(&engine, id));
                             let mut edit = stored.clone();
                             edit.call = g.pick(&CALLS).to_string();
                             edit.mode = g.pick(&MODES).to_string();
                             edit.qsl_card = !edit.qsl_card;
-                            e.edit_qso(id, &stored.key(), &edit)
+                            tempo_app::logwrite::edit_row(&engine, id, &stored.key(), &edit)
+                                .0
                                 .expect("the edit is one the form can make")
                                 .expect("the row is as it was read");
                             "an edit from the Logbook's form"
@@ -1201,7 +1245,7 @@ fn every_answer_is_the_references_after_every_kind_of_change() {
                         _ => {
                             let r = random_record(&mut g, 200 + step);
                             let text = adif_header() + &adif_record_own_log(&r);
-                            e.import_adif(&text);
+                            engine_lock(&engine).import_adif(&text);
                             "an import"
                         }
                     }
@@ -1489,12 +1533,11 @@ fn log_query_bench() {
     let (_, entity_cold) = run(json!({"kind": "entity", "entity": "Japan"}));
     let (_, entity_warm) = run(json!({"kind": "entity", "entity": "Canada"}));
     {
-        let mut e = engine_lock(&engine);
-        let mut r = QsoRecord::clone(&e.logged_row(id.parse().unwrap()).unwrap());
+        let mut r = logged(&engine, id.parse().unwrap());
         r.id = None;
         r.call = "JA1NEW".into();
         r.when_unix += 10;
-        e.log_qso(r);
+        engine_lock(&engine).log_qso(r);
     }
     let (_, entity_after_append) = run(json!({"kind": "entity", "entity": "Japan"}));
     let (_, rows_at) = run(json!({"kind": "rowsAt", "indices": [0, 10, n / 3, n / 2, n - 1]}));
@@ -1509,11 +1552,11 @@ fn log_query_bench() {
     let (_, stats_cold) = run(json!({"kind": "statistics"}));
     let (_, stats_warm) = run(json!({"kind": "statistics"}));
     let (_, backlog_cold) = run(json!({"kind": "lotwBacklog"}));
-    engine_lock(&engine).stamp_lotw_upload(
-        &[id.parse().unwrap()],
-        UploadOutcome::Accepted,
-        1_790_000_000,
-        None,
+    let signed = tempo_app::station::LotwSigned::of(&logged(&engine, id.parse().unwrap()));
+    tempo_app::logwrite::stamp_lotw_batch(
+        &engine,
+        &[signed.expect("an id")],
+        &accepted(1_790_000_000),
     );
     let (_, backlog_after_stamp) = run(json!({"kind": "lotwBacklog"}));
     let (_, grids_after_stamp) = run(json!({"kind": "workedGrids"}));

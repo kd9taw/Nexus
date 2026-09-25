@@ -10358,7 +10358,7 @@ impl Engine {
     /// default**, on only when the operator turned it on for this session, and only to
     /// the destinations that session names. Queued as `CatchUp`, because a weekend's
     /// contacts arriving at once are history, not news.
-    #[allow(deprecated)] // SPEC-2 C19: the contest merge checks the whole log first
+    #[allow(deprecated)] // SPEC-2 C19 (B2): the contest merge's "already there" reads the merge identities from the log in memory
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Field Day mode is not active".into());
@@ -10367,16 +10367,22 @@ impl Engine {
         // EMPTY whenever the switch is off — so "default OFF" is one function's
         // property and not a flag every caller has to remember to check.
         let legs = upload_legs::mask_for(station.log.session.upload_destinations());
-        let mut report = tempo_core::contest::merge_into_general(
-            &station.log,
-            &self.settings.fd_position_id,
-            &mut self.station.logbook,
-        );
+        // Every merge identity the general log holds: a row whose qid is already there is
+        // skipped, which is what makes the merge safe to run twice.
+        let seen: std::collections::HashSet<String> = self
+            .station
+            .logbook
+            .records()
+            .iter()
+            .filter_map(|r| r.contest.as_deref())
+            .map(|c| c.qid.clone())
+            .filter(|q| !q.is_empty())
+            .collect();
+        let mut report =
+            tempo_core::contest::plan_merge(&station.log, &self.settings.fd_position_id, seen);
         if !report.written.is_empty() {
             // Each merged contact is filled before it is written (SPEC-2 v3 D2-A), as every
-            // insert is: the rows the merge just appended, and the copies an upload sends. Still
-            // the merge's append — the same rows, in the same hold of the lock, before anyone can
-            // have read them — so it is claimed as one.
+            // insert is — the rows the merge appends are the copies an upload sends.
             let (country, state) = (
                 self.station.dxcc_resolve.as_deref(),
                 self.station.state_resolve.as_deref(),
@@ -10384,22 +10390,16 @@ impl Engine {
             for rec in &mut report.written {
                 crate::station::fill_with(rec, country, state);
             }
-            let held = self
+            // The merge's append — the station's, as every contact's (SPEC-2 v3 C19): ids
+            // minted, the hot index told, the writer handed the rows. No SQL.
+            let (written, _) = self
                 .station
-                .logbook
-                .records_mut(tempo_core::logbook::OpClass::Append);
-            let from = held.len().saturating_sub(report.written.len());
-            for r in &mut held[from..] {
-                crate::station::fill_with(Arc::make_mut(r), country, state);
-            }
-            // MEMORY FIRST, then the append that stamps the shared log's freshness
-            // fingerprint — the same order and the same reason as `log_qso`.
-            self.station.append_to_log(&report.written);
+                .append(std::mem::take(&mut report.written), false);
+            report.written = written;
             for rec in &report.written {
                 self.station
                     .requeue_upload_at(rec.clone(), legs, 0, 0, UploadOrigin::CatchUp);
             }
-            self.station.sync_hot();
         }
         tempo_core::applog::info(
             "contest",
@@ -11398,22 +11398,14 @@ impl Engine {
                 self.station.pending_hunt = None;
             }
         }
-        // MEMORY FIRST — see the contract on `StationCore::append_to_log`. `save`
-        // rewrites the whole log from memory, and the append below stamps the
-        // fingerprint that says disk and memory agree. In the other order that claim
-        // is false until the end of this function, and an unwind inside it (the two
-        // `spawn`s below are the live candidates) leaves the contact on disk, out of
-        // memory and unrecoverable — the next rewrite deletes it.
-        // The log mints the row's id; this copy, which the append and every queue below
-        // carry, carries it too.
-        rec.id = Some(self.station.add_record(rec.clone()));
-        // Through the station's append (not a bare `Logbook::append`) so the shared
-        // log's freshness fingerprint moves with the file. Skip it and the recovery
-        // gate misses on the next upload stamp / Needed-board poll and re-parses the
-        // whole log — once per contact, on every contact.
-        let persisted = self
-            .station
-            .append_to_log_checked(std::slice::from_ref(&rec), sync);
+        // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
+        // row, and the writer is handed it — a channel send. NO SQL and no pass over the log,
+        // so the radio loop never waits on the disk (the FT gate): the duplicate guard above
+        // was the hot index's answer. On the 1.13 path the row is the log in memory's before it
+        // is appended to `log.adi` (memory first — see `StationCore::append`). This copy, which
+        // every queue below carries, carries the id the log gave it.
+        let (mut appended, persisted) = self.station.append(vec![rec], sync);
+        let rec = appended.pop().expect("one contact in, one out");
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
         // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
@@ -11440,9 +11432,6 @@ impl Engine {
             attempts: 0,
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
         });
-        // The hot index takes the new row: added to its station, its B4 keys and its badges —
-        // no pass over the log.
-        self.station.sync_hot();
         match persisted {
             Some(receipts) if sync => LogWriteOutcome::PendingSync(receipts),
             _ => LogWriteOutcome::Unconfirmed,
@@ -11570,10 +11559,14 @@ impl Engine {
     /// for a test that owns its engine. The upload itself reads its batch from the store.
     #[cfg(test)]
     pub fn lotw_upload_adif(&self, ids: &[tempo_core::logbook::RecordId]) -> String {
-        let batch: Vec<QsoRecord> = self
+        let rows = self
             .station
-            .rows_of(ids)
+            .log_view()
+            .rows(ids)
+            .expect("the test's log can be read");
+        let batch: Vec<QsoRecord> = ids
             .iter()
+            .filter_map(|id| rows.get(id))
             .map(|r| QsoRecord::clone(r))
             .collect();
         crate::station::lotw_batch_adif(
@@ -11588,8 +11581,11 @@ impl Engine {
     /// as ALREADY on LoTW — the operator's declaration that an imported legacy log was uploaded
     /// through another tool (Ham2K Polo, TQSL, etc.). Stamps them `Accepted` so they drop out of
     /// the unsent count and a bulk upload never re-pushes them. Returns how many were marked.
+    ///
+    /// In one breath, for an engine held with no Engine guard (a test's): the command picks and
+    /// stamps with the lock released ([`crate::logwrite::mark_lotw_uploaded_all`]).
     pub fn mark_lotw_uploaded_all(&mut self) -> usize {
-        let ids = self.station.lotw_unsent_ids();
+        let ids = self.lotw_unsent_ids();
         let n = ids.len();
         if n > 0 {
             self.station.stamp_lotw_upload(
@@ -22462,7 +22458,7 @@ contact yourself."
     }
 
     #[cfg(test)]
-    fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
+    pub(crate) fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.
         let decodes: Vec<modes::Decode> = self.hound_split(decodes.to_vec());
         let decodes = &decodes[..];
@@ -22746,9 +22742,29 @@ contact yourself."
         self.station.log_rows()
     }
 
-    /// See [`StationCore::apply_log_fills`] — the fill job's write (SPEC-2 v3 D2-A).
+    /// See [`StationCore::apply_log_fills`] — the fill job's write (SPEC-2 v3 D2-A), planned and
+    /// made in one breath for an engine held with no Engine guard; the job itself plans with the
+    /// lock released ([`crate::logwrite::fill`]).
     pub fn apply_log_fills(&mut self, fills: &[crate::station::LogFill], fill_ver: i64) -> usize {
         self.station.apply_log_fills(fills, fill_ver)
+    }
+
+    /// The station, for the log's write path ([`crate::logwrite`]): a plan taken under this
+    /// lock, and a planned change made under it.
+    pub(crate) fn station_mut(&mut self) -> &mut StationCore {
+        &mut self.station
+    }
+
+    /// The station, for the log's write path's decisions ([`crate::logwrite`]) and for a test in
+    /// another module that asks it directly.
+    pub(crate) fn station(&self) -> &StationCore {
+        &self.station
+    }
+
+    /// What a change to the log planned off the Engine lock reads — see
+    /// [`StationCore::log_plan`]. Taken under this lock, read after it is released.
+    pub fn log_plan(&mut self) -> crate::station::LogPlan {
+        self.station.log_plan()
     }
 
     /// The store's mirror of `log.adi`, as it stands.
@@ -22769,26 +22785,24 @@ contact yourself."
         }
     }
 
-    /// Send again, from memory, the logbook changes the database refused for a reason that can
-    /// pass, each once its wait is up — the automatic retry, which the snapshot poll drives. How
-    /// many went out. No I/O: a channel send each, like any change. See
+    /// Send again the logbook changes the database refused for a reason that can pass, each
+    /// once its wait is up, with the rows each holds — the automatic retry, which the snapshot
+    /// poll drives. How many went out. No I/O: a channel send each, like any change. See
     /// [`crate::logstore::LogStore::resend`].
-    #[allow(deprecated)] // SPEC-2 C19: the retry re-sends refused rows as memory holds them
     pub fn log_resend_due(&mut self) -> usize {
-        let station = &mut self.station;
-        match station.store.as_mut() {
-            Some(store) => store.resend(&station.logbook, false, std::time::Instant::now()),
+        let marks = self.station.marks();
+        match self.station.store.as_mut() {
+            Some(store) => store.resend(marks, false, std::time::Instant::now()),
             None => 0,
         }
     }
 
     /// [`Self::log_resend_due`] for every such change now, whatever its wait — a quit, and the
     /// quit's Keep trying.
-    #[allow(deprecated)] // SPEC-2 C19: the retry re-sends refused rows as memory holds them
     pub fn log_resend_all(&mut self) -> usize {
-        let station = &mut self.station;
-        match station.store.as_mut() {
-            Some(store) => store.resend(&station.logbook, true, std::time::Instant::now()),
+        let marks = self.station.marks();
+        match self.station.store.as_mut() {
+            Some(store) => store.resend(marks, true, std::time::Instant::now()),
             None => 0,
         }
     }
@@ -22857,12 +22871,6 @@ contact yourself."
     /// See [`StationCore::set_dxcc_resolver_shared`].
     pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<crate::station::DxccResolve>) {
         self.station.set_dxcc_resolver_shared(resolve)
-    }
-
-    /// The station, for a test in another module that asks it directly.
-    #[cfg(test)]
-    pub(crate) fn station(&self) -> &StationCore {
-        &self.station
     }
 
     /// See [`StationCore::set_state_resolver`].
@@ -23040,27 +23048,22 @@ contact yourself."
     /// the operator has ever run, and last weekend's correction must not rewrite this
     /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
     pub fn update_qso(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
-        if !self.station.update_qso(id, rec) {
+        let Some(after) = self.station.update_row(id, rec) else {
             return false;
-        }
-        self.correct_contest_row(id);
+        };
+        self.correct_contest_row(&after);
         true
     }
 
     /// The Field Day half of an edit: the contest log's own row, corrected to the general log's
-    /// edited contact `id` — see [`Self::update_qso`] for why this join lives here.
-    fn correct_contest_row(&mut self, id: tempo_core::logbook::RecordId) {
-        let Some((qid, call, band)) = self.station.row(id).map(|r| {
-            (
-                r.contest
-                    .as_deref()
-                    .map_or(String::new(), |c| c.qid.clone()),
-                r.call.clone(),
-                r.band.clone(),
-            )
-        }) else {
-            return;
-        };
+    /// edited contact `row`, as the edit left it — see [`Self::update_qso`] for why this join
+    /// lives here.
+    pub(crate) fn correct_contest_row(&mut self, row: &QsoRecord) {
+        let qid = row
+            .contest
+            .as_deref()
+            .map_or(String::new(), |c| c.qid.clone());
+        let (call, band) = (row.call.clone(), row.band.clone());
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
                 // Unconditional for a row this session owns: the band is a dupe-key
@@ -23080,30 +23083,62 @@ contact yourself."
         id: tempo_core::logbook::RecordId,
         edit_key: &str,
         edit: &tempo_core::logbook::QsoEdit,
-    ) -> Result<Result<(), crate::station::RowRefusal>, String> {
-        let done = self.station.edit_qso(id, edit_key, edit)?;
-        if done.is_ok() {
-            self.correct_contest_row(id);
-        }
-        Ok(done)
+    ) -> Result<Result<std::sync::Arc<QsoRecord>, crate::station::RowRefusal>, String> {
+        Ok(match self.station.edit_qso(id, edit_key, edit)? {
+            Ok((_, Some(after))) => {
+                self.correct_contest_row(&after);
+                Ok(after)
+            }
+            Ok((_, None)) => Err(crate::station::RowRefusal::Gone),
+            Err(refusal) => Err(refusal),
+        })
     }
 
-    /// The contact the log holds under `id`, if any.
+    /// The contact the log holds under `id`, if any, as this process knows it — read from the
+    /// store, with this process's changes still on their way to it laid over it
+    /// ([`crate::station::LogPlan::row`]).
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock (a debug build panics). A command takes
+    /// [`Self::log_view`] under the lock and reads after releasing it; a change it made answers
+    /// with the row the change left ([`crate::logwrite`]).
     pub fn logged_row(
         &self,
         id: tempo_core::logbook::RecordId,
     ) -> Option<std::sync::Arc<QsoRecord>> {
-        self.station.row(id)
+        match self.station.log_view().row(id) {
+            Ok(row) => row,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("a contact could not be read from the logbook: {e}"),
+                );
+                None
+            }
+        }
     }
 
-    /// See [`StationCore::fresh_row`]: the contact `id`, if it is still the version whose edit
-    /// key is `edit_key`.
+    /// See [`StationCore::log_view`]: what a read of rows by id takes under the lock and reads
+    /// after it is released.
+    pub fn log_view(&self) -> crate::station::LogPlan {
+        self.station.log_view()
+    }
+
+    /// The contact `id`, if it is still the version whose edit key is `edit_key`, by
+    /// [`StationCore::fresh_row`]'s rule — read from the store as [`Self::logged_row`] reads it.
+    /// A change made by a `RowRef` makes this check itself, on the row it planned on
+    /// ([`crate::logwrite`]); this answers the same question outside a change.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock (a debug build panics).
     pub fn fresh_log_row(
-        &mut self,
+        &self,
         id: tempo_core::logbook::RecordId,
         edit_key: &str,
     ) -> Result<std::sync::Arc<QsoRecord>, crate::station::RowRefusal> {
-        self.station.fresh_row(id, edit_key)
+        let row = self
+            .logged_row(id)
+            .ok_or(crate::station::RowRefusal::Gone)?;
+        StationCore::fresh_row(&row, edit_key)?;
+        Ok(row)
     }
 
     /// See [`StationCore::mark_qsl_sent`]. `None` = the operator withdrawing the mark.
@@ -23337,29 +23372,48 @@ contact yourself."
         self.station.diagnostics_inputs()
     }
 
-    /// See [`StationCore::lotw_unsent_ids`].
+    /// The contacts owed to LoTW, by id, in log order ([`crate::station::lotw_unsent_ids`]) —
+    /// read from the store, for an engine held with no Engine guard (a test's).
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
     pub fn lotw_unsent_ids(&self) -> Vec<tempo_core::logbook::RecordId> {
-        self.station.lotw_unsent_ids()
+        crate::station::lotw_unsent_ids(&self.log_rows()).unwrap_or_else(|e| {
+            tempo_core::applog::error(
+                "logbook",
+                &format!("the contacts owed to LoTW could not be read: {e}"),
+            );
+            Vec::new()
+        })
     }
 
-    /// See [`StationCore::stamp_lotw_upload`].
+    /// See [`StationCore::stamp_lotw_upload`]: how many were stamped.
     pub fn stamp_lotw_upload(
         &mut self,
         ids: &[tempo_core::logbook::RecordId],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
-    ) {
+    ) -> usize {
         self.station
             .stamp_lotw_upload(ids, outcome, when_unix, detail)
     }
 
-    /// See [`StationCore::lotw_signed`].
+    /// The contacts `ids` names as a LoTW batch hands them to TQSL: each one's id and its
+    /// fingerprint as the upload serialises it, in the order `ids` names them — read from the
+    /// store, for an engine held with no Engine guard (a test's; the upload takes them from the
+    /// batch it read, [`crate::station::LotwSigned::of`]). A contact the log no longer holds is
+    /// left out.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
     pub fn lotw_signed(
         &self,
         ids: &[tempo_core::logbook::RecordId],
     ) -> Vec<crate::station::LotwSigned> {
-        self.station.lotw_signed(ids)
+        let rows = self.station.log_view().rows(ids).unwrap_or_default();
+        ids.iter()
+            .filter_map(|id| rows.get(id))
+            .filter_map(|r| crate::station::LotwSigned::of(r))
+            .collect()
     }
 
     /// The ids of the contacts at `positions` in the log as it stands — the LEGACY input of a

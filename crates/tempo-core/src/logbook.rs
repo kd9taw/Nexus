@@ -846,6 +846,8 @@ mod id;
 pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
+#[cfg(test)]
+mod one_row_tests;
 mod op;
 pub mod query;
 pub mod reader;
@@ -854,7 +856,7 @@ pub mod sqlite;
 pub mod writer;
 pub use edit::{OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
-pub use op::{Effects, LogOp, UploadService};
+pub use op::{Effects, LogOp, RowAfter, UploadService};
 use records::Records;
 pub use records::{OpClass, Watermarks};
 
@@ -959,203 +961,81 @@ impl Logbook {
         std::mem::replace(&mut self.minter, own)
     }
 
-    /// Replace the human-entered fields of the record at `index` (a correction —
-    /// e.g. a busted call or wrong band). The sync-DERIVED state (confirmed /
-    /// award_confirmed / credit / upload) is preserved from the existing record so
-    /// an edit can never fabricate a confirmation; the next reconcile re-validates
-    /// it against the corrected key. Returns false if `index` is out of range.
+    /// ★ Follow a change the station made (SPEC-2 v3 C19, Part B): `pairs` — the rows it took
+    /// out and put in, in log order, as the hot index is told them ([`hot::RowPair`]) — laid over
+    /// the rows this log holds, and `marks`, the watermarks the station moved to, taken as this
+    /// log's own. Until the cut the log in memory is a FOLLOWER: the station plans each change
+    /// on the store's rows and tells it here, so the tests and the parity oracle still read a
+    /// whole log, at the station's revision.
     ///
-    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
-    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
-    pub(crate) fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
-        match self.records.get(index) {
-            Some(old) => {
-                // An edit is the same row, corrected: it keeps the row's identity.
-                rec.id = old.id;
-                // A field-edit must not wipe an operator-declared QSL-sent mark —
-                // only `mark_qsl_sent` mutates it. (Kept even on a call fix: the
-                // card WAS mailed; that's history, not credit.)
-                rec.qsl_sent = old.qsl_sent;
-                // TRIMMED comparison: an imported record can carry a padded
-                // CALL, while the edit form always sends a trimmed one — an
-                // untrimmed compare would read every ordinary edit of such a
-                // record as a callsign correction and strip its confirmations.
-                let call_changed = !rec.call.trim().eq_ignore_ascii_case(old.call.trim());
-                if !call_changed {
-                    // Ordinary edit (band/grid/name/…): derived state rides along.
-                    rec.confirmed = old.confirmed;
-                    rec.award_confirmed = old.award_confirmed;
-                    rec.qsl_rcvd = old.qsl_rcvd;
-                    rec.credit_granted = old.credit_granted.clone();
-                    rec.credit_submitted = old.credit_submitted.clone();
-                    rec.upload = old.upload.clone();
-                } else {
-                    // CALLSIGN correction — operator ruling (2026-07-30): the
-                    // services hold the OLD call, so clearing the upload stamps
-                    // re-queues the corrected QSO to every one of them; and a
-                    // confirmation (or granted credit) matched against the busted
-                    // call is credit this QSO never earned — stripped, never
-                    // silently carried over. (LoTW itself still holds the
-                    // old-call record; nothing we send can retract it.)
-                    rec.confirmed = false;
-                    rec.award_confirmed = false;
-                    rec.qsl_rcvd = QslRcvd::default();
-                    rec.credit_granted = Vec::new();
-                    rec.credit_submitted = Vec::new();
-                    rec.upload = UploadState::default();
-                    // The RESURRECTION guard: an imported LOTW_QSL_SENT=Y rides
-                    // in `extra`, and the parser's fallback would re-derive
-                    // upload.lotw = Accepted from it on the next load — quietly
-                    // undoing the clear above and excluding the corrected QSO
-                    // from the LoTW batch forever. It described the BUSTED
-                    // call's upload; it goes with the stamps.
-                    rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
-                    // Call-derived identity re-derives from the NEW call: the
-                    // busted call's entity/state must not ride along. (country
-                    // refills from the resolver on the save path; dxcc/state
-                    // stay empty until a lookup supplies them.)
-                    rec.dxcc = None;
-                    rec.country = None;
-                    rec.state = None;
-                }
-                // Never clobber a known country/state to None on an ORDINARY
-                // edit (the form doesn't carry them) — but on a call correction
-                // the old values describe the busted call and stay cleared.
-                if !call_changed {
-                    if rec.country.is_none() {
-                        rec.country = old.country.clone();
-                    }
-                    if rec.state.is_none() {
-                        rec.state = old.state.clone();
-                    }
-                }
-                // An incoming record with no end time means LEAVE ALONE, never "clear it" —
-                // preserve the stored TIME_OFF rather than wiping it on a name/grid edit.
-                // The Logbook form does carry the field since #329, so an operator can SET
-                // and CORRECT an end time here; a producer that knows nothing about it (a
-                // per-row connector push, the remote edit, a contest merge) still cannot
-                // drop one. Clearing an end time altogether is deliberately not offered.
-                if rec.time_off_unix.is_none() {
-                    rec.time_off_unix = old.time_off_unix;
-                }
-                // Nor does it carry the SPLIT receive leg (#163): the form edits one
-                // frequency, so a name/RST fix would silently turn a split contact into a
-                // simplex one and drop `FREQ_RX` from the record and every future export.
-                // Same rule as TIME_OFF and the park refs above.
-                if rec.freq_rx_mhz.is_none() {
-                    rec.freq_rx_mhz = old.freq_rx_mhz;
-                }
-                // Preserve the stored POTA/SOTA park refs when the edit leaves them empty (a
-                // busted-call/RST fix must not silently drop the park from the record + ADIF).
-                let incoming_ota_empty = rec.ota.my_program.is_none()
-                    && rec.ota.my_ref.is_none()
-                    && rec.ota.their_program.is_none()
-                    && rec.ota.their_ref.is_none();
-                if incoming_ota_empty {
-                    rec.ota = old.ota.clone();
-                }
-                // Nor the contest block: the edit form carries none of it (the desktop
-                // DTO hard-sets `contest: None`), so without this an ordinary edit drops
-                // CONTEST_ID, STX/SRX, both exchange vectors and APP_NEXUS_SESSION. The
-                // last one is why this is worse than a lost column — it is the key merge
-                // idempotence is keyed on. Preserved on a CALLSIGN correction too, unlike
-                // country/state/dxcc: the exchange is what went over the air, and a busted
-                // call does not change what was sent or received.
-                if rec.contest.is_none() {
-                    rec.contest = old.contest.clone();
-                }
-                // The edit form carries none of the import-carried identity —
-                // an edit must never bleach it off the record. (dxcc is
-                // call-derived: preserved on an ordinary edit only.)
-                if !call_changed && rec.dxcc.is_none() {
-                    rec.dxcc = old.dxcc;
-                }
-                if rec.prop_mode.is_none() {
-                    rec.prop_mode = old.prop_mode.clone();
-                }
-                if rec.sat_name.is_none() {
-                    rec.sat_name = old.sat_name.clone();
-                }
-                if rec.operator.is_none() {
-                    rec.operator = old.operator.clone();
-                }
-                if rec.station_callsign.is_none() {
-                    rec.station_callsign = old.station_callsign.clone();
-                }
-                // #239: same rule — an edit that leaves them empty keeps what the record had.
-                if rec.my_grid.is_none() {
-                    rec.my_grid = old.my_grid.clone();
-                }
-                if rec.my_rig.is_none() {
-                    rec.my_rig = old.my_rig.clone();
-                }
-                if rec.extra.is_empty() {
-                    rec.extra = old.extra.clone();
-                    if call_changed {
-                        // The preservation must not undo the resurrection guard
-                        // above: the busted call's LOTW_QSL_SENT goes, whether
-                        // the extra set came from the payload or from `old`.
-                        rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
-                    }
-                }
-                // The same resurrection, for a park. A side's OTHER programme's reference rides
-                // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
-                // `take_ota_side`), and it described the reference the side HAD. An edit that
-                // changes the side takes it along: left behind, it is written after the edited
-                // reference, a repeated tag's last copy is the one a reader keeps, and the next
-                // read would put the old park back over the correction, or bring back a park the
-                // operator removed.
-                if (&rec.ota.my_program, &rec.ota.my_ref) != (&old.ota.my_program, &old.ota.my_ref)
-                {
-                    rec.extra.retain(|(k, _)| {
-                        !matches!(
-                            k.as_str(),
-                            "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF"
-                        )
-                    });
-                }
-                if (&rec.ota.their_program, &rec.ota.their_ref)
-                    != (&old.ota.their_program, &old.ota.their_ref)
-                {
-                    rec.extra.retain(|(k, _)| {
-                        !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF")
-                    });
-                }
-                // An edit that did not touch the TIME OF DAY must not fabricate
-                // time-knowledge onto an imported, time-less record — keyed on
-                // the time-of-day, not the whole timestamp, so a DATE fix on a
-                // date-only import stays honestly time-unknown.
-                if rec.when_unix % 86_400 == old.when_unix % 86_400 {
-                    rec.time_known = old.time_known;
-                }
-                // The same row, corrected: it stays where it is, but its keys may have moved.
-                self.records.write_as(OpClass::Key)[index] = Arc::new(rec);
-                true
-            }
-            None => false,
+    /// A row changed in place is found by its id and replaced where it stands; a row taken out is
+    /// removed; a row put in goes on the end, in order. A purge (`clear`) empties the log first,
+    /// so its pairs need not be walked.
+    pub fn follow(&mut self, pairs: &[hot::RowPair], clear: bool, marks: Watermarks) {
+        let rows = self.records.write_following(marks);
+        if clear {
+            rows.clear();
         }
+        // Found by id: a change names its rows, never their places. One map for a change of
+        // many rows; a scan for the one-contact changes that are nearly all of them.
+        let changed: Vec<(&Arc<QsoRecord>, &Arc<QsoRecord>)> = pairs
+            .iter()
+            .filter_map(|(b, a)| Some((b.as_ref()?, a.as_ref()?)))
+            .collect();
+        let removed: std::collections::HashSet<RecordId> = pairs
+            .iter()
+            .filter(|(_, a)| a.is_none())
+            .filter_map(|(b, _)| b.as_ref()?.id)
+            .collect();
+        if !clear && !changed.is_empty() {
+            if changed.len() <= 8 {
+                for (b, a) in changed {
+                    if let Some(i) = rows.iter().position(|r| r.id == b.id) {
+                        rows[i] = Arc::clone(a);
+                    }
+                }
+            } else {
+                let at: std::collections::HashMap<RecordId, usize> = rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| Some((r.id?, i)))
+                    .collect();
+                for (b, a) in changed {
+                    if let Some(&i) = b.id.as_ref().and_then(|id| at.get(id)) {
+                        rows[i] = Arc::clone(a);
+                    }
+                }
+            }
+        }
+        if !clear && !removed.is_empty() {
+            rows.retain(|r| r.id.is_none_or(|id| !removed.contains(&id)));
+        }
+        rows.extend(
+            pairs
+                .iter()
+                .filter(|(b, _)| b.is_none())
+                .filter_map(|(_, a)| a.clone()),
+        );
     }
 
-    /// Record — or WITHDRAW — the operator's declaration that they sent a QSL for `index`.
-    ///
-    /// `Some(via)` marks it sent (bureau/direct/electronic) on `date_unix`. `None` CLEARS the
-    /// mark: there was previously no way to undo one at all, while the received side has taken
-    /// a bool since #152, so an operator who ticked the wrong row was stuck with it.
-    ///
-    /// Never touches `confirmed`/`qsl_rcvd` in either direction — a request is not a
-    /// confirmation, and withdrawing one is not un-confirming anything.
-    ///
-    /// ⚠️ A CLEAR IS RECORDED AS A DECISION, not as an absence: `date_unix` doubles as the
-    /// moment of the clear in [`QslSent::cleared_unix`], which is what stops a later import of
-    /// a pre-clear export from quietly restoring the mark (see [`QslSent::merge`]). And a
-    /// genuine re-send RETIRES that decision — the operator who clears a mistake and then
-    /// really posts a card gets an ordinary monotonic sent mark back, not one permanently
-    /// shadowed by their own correction.
-    ///
-    /// Returns false if `index` is out of range. Pure — call [`save`](Self::save) to persist.
-    ///
-    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
-    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    /// Replace the human-entered fields of the record at `index` with an edit's — [`edited`] on
+    /// the row there: a test's handle on the one implementation, which the log itself reaches by
+    /// id through [`Logbook::apply`]. Returns false if `index` is out of range.
+    #[cfg(test)]
+    pub(crate) fn update_record(&mut self, index: usize, rec: QsoRecord) -> bool {
+        let Some(old) = self.records.get(index) else {
+            return false;
+        };
+        let now = edited(old, rec);
+        self.records.write_as(OpClass::Key)[index] = Arc::new(now);
+        true
+    }
+
+    /// Record — or withdraw — the operator's QSL-sent declaration on the record at `index`
+    /// ([`qsl_sent_marked`] on the row there): a test's handle on the one implementation, which the
+    /// log itself reaches by id through [`Logbook::apply`]. Returns false if `index` is out of
+    /// range.
+    #[cfg(test)]
     pub(crate) fn mark_qsl_sent(
         &mut self,
         index: usize,
@@ -1164,125 +1044,51 @@ impl Logbook {
     ) -> bool {
         match self.records.write_as(OpClass::Stamp).get_mut(index) {
             Some(rec) => {
-                Arc::make_mut(rec).qsl_sent = match via {
-                    Some(via) => QslSent {
-                        sent: true,
-                        via: Some(via),
-                        date_unix: Some(date_unix),
-                        cleared_unix: None,
-                    },
-                    None => QslSent {
-                        sent: false,
-                        via: None,
-                        date_unix: None,
-                        cleared_unix: Some(date_unix),
-                    },
-                };
+                qsl_sent_marked(Arc::make_mut(rec), via, date_unix);
                 true
             }
             None => false,
         }
     }
 
-    /// Record that a PAPER card for `index` did or did not arrive (ADIF `QSL_RCVD`).
-    ///
-    /// The operator is the only possible authority here: LoTW, eQSL and QRZ report their own
-    /// confirmations and Nexus syncs those, but nothing on the internet knows a card landed in
-    /// somebody's letterbox. Until this existed a paper QSL could not be entered at all (#152),
-    /// which mattered more than it sounds: `QslRcvd::award` counts card OR LoTW, so a card that
-    /// makes a DXCC entity countable was unrecordable and the award view stayed wrong.
-    ///
-    /// Unlike [`QslRcvd::merge`], which is monotonic because a service only ever ADDS what it
-    /// has matched, this can also clear — an operator who ticks the wrong row must be able to
-    /// untick it. A later service sync cannot silently undo the correction either: merge ORs
-    /// per source, and no service reports the card field.
-    ///
-    /// `confirmed` and `award_confirmed` follow the channels, as the parser, the store and
-    /// `log.adi` all read them back: every fold counts a contact by `award_confirmed`, so a
-    /// card that set only its channel counted for nothing until a restart re-read the log.
-    ///
-    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
-    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    /// Record whether a paper card arrived for the record at `index` ([`qsl_card_marked`] on the
+    /// row there): a test's handle on the one implementation, which the log itself reaches by id
+    /// through [`Logbook::apply`]. Returns false if `index` is out of range.
+    #[cfg(test)]
     pub(crate) fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
-                let rec = Arc::make_mut(rec);
-                rec.qsl_rcvd.card = received;
-                rec.confirmed = rec.qsl_rcvd.any();
-                rec.award_confirmed = rec.qsl_rcvd.award();
+                qsl_card_marked(Arc::make_mut(rec), received);
                 true
             }
             None => false,
         }
     }
 
-    /// Set — or REMOVE — the satellite tag on `index`: ADIF `PROP_MODE=SAT` + `SAT_NAME`.
-    ///
-    /// `Some(name)` tags the contact as worked through that bird, `None` removes the tag, and
-    /// NOT CALLING THIS leaves it alone. That third state is the point. The edit form reads a
-    /// blank field as "leave alone" on purpose — so that a busted-call fix cannot silently
-    /// strip a satellite tag off a contact that earned it (see [`Self::update_record`]) — and
-    /// two more boxes on that form would give a blank box two meanings at once. A removal has
-    /// to be something the operator SAYS, not something a form submits by omission, which is
-    /// the same shape as [`Self::mark_qsl_sent`]'s withdrawal and [`Self::mark_qsl_card`]'s
-    /// untick: an operator-declared fact, reversible only by the operator.
-    ///
-    /// ⚠️ **BOTH FIELDS OR NEITHER, in both directions.** TQSL validates the two as a PAIR
-    /// and hard-errors on a lone member; through the `-a compliant` funnel a lone field would
-    /// wedge the whole signed batch as Rejected. So this writes the pair or removes the pair,
-    /// and refuses a blank name rather than leaving `PROP_MODE=SAT` standing on its own.
-    ///
-    /// ⚠️ It does NOT vet the name against LoTW's accepted list — that table lives with the
-    /// catalog that feeds it (`Engine::LOTW_SAT_NAMES`), and this crate has no business
-    /// holding a second copy of it. The caller gates the name; this stores what it is given.
-    ///
-    /// Returns false when `index` names no row, and when the name is blank.
-    ///
-    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
-    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    /// Set — or remove — the satellite tag on the record at `index` ([`sat_tagged`] on the row
+    /// there): a test's handle on the one implementation, which the log itself reaches by id
+    /// through [`Logbook::apply`]. Returns false when `index` names no row, and when the name is
+    /// blank.
+    #[cfg(test)]
     pub(crate) fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
-        let name = match sat_name {
-            // A tag with no name is the lone `PROP_MODE=SAT` TQSL rejects. Refused here
-            // rather than written, for the same reason an empty QSL-sent code is an error
-            // and not a withdrawal: an empty control is a non-choice, not a decision.
-            Some(n) if n.trim().is_empty() => return false,
-            Some(n) => Some(n.trim().to_string()),
-            None => None,
+        let Some(row) = self.records.get(index) else {
+            return false;
         };
-        match self.records.write_as(OpClass::Key).get_mut(index) {
-            Some(rec) => {
-                let rec = Arc::make_mut(rec);
-                match name {
-                    Some(n) => {
-                        rec.prop_mode = Some("SAT".into());
-                        rec.sat_name = Some(n);
-                    }
-                    None => {
-                        rec.sat_name = None;
-                        // Only OUR tag. A contact carrying `PROP_MODE=EME`/`MS`/`TEP` and a
-                        // stray `SAT_NAME` is making a different claim about how it got
-                        // there, and that claim is not this op's to withdraw.
-                        if rec
-                            .prop_mode
-                            .as_deref()
-                            .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
-                        {
-                            rec.prop_mode = None;
-                        }
-                    }
-                }
-                true
-            }
-            None => false,
+        let mut rec = QsoRecord::clone(row);
+        if !sat_tagged(&mut rec, sat_name) {
+            return false;
         }
+        self.records.write_as(OpClass::Key)[index] = Arc::new(rec);
+        true
     }
 
     /// Remove the record at `index` (a mis-logged contact). Returns false if out of
     /// range. NOTE: this shifts the indices of all later records — callers that hold
     /// indices must reload after a delete.
     ///
-    /// Crate-private since SPEC-2's C16: outside tempo-core a contact is changed by its id,
-    /// through [`Logbook::apply`] — a position names a row only for as long as nothing moves.
+    /// A test's handle: the log itself removes a contact by id, through [`Logbook::apply`] — a
+    /// position names a row only for as long as nothing moves.
+    #[cfg(test)]
     pub(crate) fn delete(&mut self, index: usize) -> bool {
         if index < self.records.len() {
             self.records.write_as(OpClass::Structural).remove(index);
@@ -2288,47 +2094,44 @@ impl Logbook {
         same_push_key(&self.records[i], pushed).then_some(i)
     }
 
-    /// Stamp a QRZ Logbook push outcome onto the QSO that was pushed ([`Self::stamp_target`]).
-    /// Returns whether a record was stamped. Pure — call `save` to persist.
-    pub fn stamp_qrz_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
+    /// Stamp `status` on `service`'s leg of the QSO that was pushed ([`Self::stamp_target`]) —
+    /// [`stamped`], the one implementation of a stamp. Returns whether a record was stamped.
+    fn stamp_pushed(
+        &mut self,
+        pushed: &QsoRecord,
+        service: UploadService,
+        status: UploadStatus,
+    ) -> bool {
         match self.stamp_target(pushed) {
             Some(i) => {
-                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
-                    .upload
-                    .qrz = Some(status);
+                stamped(
+                    Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i]),
+                    service,
+                    status,
+                );
                 true
             }
             None => false,
         }
+    }
+
+    /// Stamp a QRZ Logbook push outcome onto the QSO that was pushed ([`Self::stamp_target`]).
+    /// Returns whether a record was stamped. Pure — call `save` to persist.
+    pub fn stamp_qrz_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
+        self.stamp_pushed(pushed, UploadService::Qrz, status)
     }
 
     /// Stamp a ClubLog realtime push outcome onto the QSO that was pushed
     /// ([`Self::stamp_target`]). Returns whether a record was stamped. Pure — call `save` to
     /// persist.
     pub fn stamp_clublog_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
-        match self.stamp_target(pushed) {
-            Some(i) => {
-                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
-                    .upload
-                    .clublog = Some(status);
-                true
-            }
-            None => false,
-        }
+        self.stamp_pushed(pushed, UploadService::Clublog, status)
     }
 
     /// Stamp an eQSL ADIF-upload outcome onto the QSO that was pushed ([`Self::stamp_target`]).
     /// Returns whether a record was stamped. Pure — call `save` to persist.
     pub fn stamp_eqsl_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
-        match self.stamp_target(pushed) {
-            Some(i) => {
-                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
-                    .upload
-                    .eqsl = Some(status);
-                true
-            }
-            None => false,
-        }
+        self.stamp_pushed(pushed, UploadService::Eqsl, status)
     }
 
     /// What actually happened, per connector, the last time Nexus talked to it.
@@ -2736,10 +2539,305 @@ impl Activations {
     }
 }
 
+/// The contact `old` corrected by an operator edit whose fields are `rec` — a busted call, a
+/// wrong band, a name. The sync-DERIVED state (confirmed / award_confirmed / credit / upload) is
+/// preserved from `old` so an edit can never fabricate a confirmation; the next reconcile
+/// re-validates it against the corrected key.
+///
+/// ★ THE one implementation of an edit (SPEC-2 v3 §4.6): [`LogOp::Edit`] applied to one row, in
+/// the in-memory log and in a plan made off the Engine lock on the row read from the store alike.
+pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
+    // An edit is the same row, corrected: it keeps the row's identity.
+    rec.id = old.id;
+    // A field-edit must not wipe an operator-declared QSL-sent mark —
+    // only `mark_qsl_sent` mutates it. (Kept even on a call fix: the
+    // card WAS mailed; that's history, not credit.)
+    rec.qsl_sent = old.qsl_sent;
+    // TRIMMED comparison: an imported record can carry a padded
+    // CALL, while the edit form always sends a trimmed one — an
+    // untrimmed compare would read every ordinary edit of such a
+    // record as a callsign correction and strip its confirmations.
+    let call_changed = !rec.call.trim().eq_ignore_ascii_case(old.call.trim());
+    if !call_changed {
+        // Ordinary edit (band/grid/name/…): derived state rides along.
+        rec.confirmed = old.confirmed;
+        rec.award_confirmed = old.award_confirmed;
+        rec.qsl_rcvd = old.qsl_rcvd;
+        rec.credit_granted = old.credit_granted.clone();
+        rec.credit_submitted = old.credit_submitted.clone();
+        rec.upload = old.upload.clone();
+    } else {
+        // CALLSIGN correction — operator ruling (2026-07-30): the
+        // services hold the OLD call, so clearing the upload stamps
+        // re-queues the corrected QSO to every one of them; and a
+        // confirmation (or granted credit) matched against the busted
+        // call is credit this QSO never earned — stripped, never
+        // silently carried over. (LoTW itself still holds the
+        // old-call record; nothing we send can retract it.)
+        rec.confirmed = false;
+        rec.award_confirmed = false;
+        rec.qsl_rcvd = QslRcvd::default();
+        rec.credit_granted = Vec::new();
+        rec.credit_submitted = Vec::new();
+        rec.upload = UploadState::default();
+        // The RESURRECTION guard: an imported LOTW_QSL_SENT=Y rides
+        // in `extra`, and the parser's fallback would re-derive
+        // upload.lotw = Accepted from it on the next load — quietly
+        // undoing the clear above and excluding the corrected QSO
+        // from the LoTW batch forever. It described the BUSTED
+        // call's upload; it goes with the stamps.
+        rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+        // Call-derived identity re-derives from the NEW call: the
+        // busted call's entity/state must not ride along. (country
+        // refills from the resolver on the save path; dxcc/state
+        // stay empty until a lookup supplies them.)
+        rec.dxcc = None;
+        rec.country = None;
+        rec.state = None;
+    }
+    // Never clobber a known country/state to None on an ORDINARY
+    // edit (the form doesn't carry them) — but on a call correction
+    // the old values describe the busted call and stay cleared.
+    if !call_changed {
+        if rec.country.is_none() {
+            rec.country = old.country.clone();
+        }
+        if rec.state.is_none() {
+            rec.state = old.state.clone();
+        }
+    }
+    // An incoming record with no end time means LEAVE ALONE, never "clear it" —
+    // preserve the stored TIME_OFF rather than wiping it on a name/grid edit.
+    // The Logbook form does carry the field since #329, so an operator can SET
+    // and CORRECT an end time here; a producer that knows nothing about it (a
+    // per-row connector push, the remote edit, a contest merge) still cannot
+    // drop one. Clearing an end time altogether is deliberately not offered.
+    if rec.time_off_unix.is_none() {
+        rec.time_off_unix = old.time_off_unix;
+    }
+    // Nor does it carry the SPLIT receive leg (#163): the form edits one
+    // frequency, so a name/RST fix would silently turn a split contact into a
+    // simplex one and drop `FREQ_RX` from the record and every future export.
+    // Same rule as TIME_OFF and the park refs above.
+    if rec.freq_rx_mhz.is_none() {
+        rec.freq_rx_mhz = old.freq_rx_mhz;
+    }
+    // Preserve the stored POTA/SOTA park refs when the edit leaves them empty (a
+    // busted-call/RST fix must not silently drop the park from the record + ADIF).
+    let incoming_ota_empty = rec.ota.my_program.is_none()
+        && rec.ota.my_ref.is_none()
+        && rec.ota.their_program.is_none()
+        && rec.ota.their_ref.is_none();
+    if incoming_ota_empty {
+        rec.ota = old.ota.clone();
+    }
+    // Nor the contest block: the edit form carries none of it (the desktop
+    // DTO hard-sets `contest: None`), so without this an ordinary edit drops
+    // CONTEST_ID, STX/SRX, both exchange vectors and APP_NEXUS_SESSION. The
+    // last one is why this is worse than a lost column — it is the key merge
+    // idempotence is keyed on. Preserved on a CALLSIGN correction too, unlike
+    // country/state/dxcc: the exchange is what went over the air, and a busted
+    // call does not change what was sent or received.
+    if rec.contest.is_none() {
+        rec.contest = old.contest.clone();
+    }
+    // The edit form carries none of the import-carried identity —
+    // an edit must never bleach it off the record. (dxcc is
+    // call-derived: preserved on an ordinary edit only.)
+    if !call_changed && rec.dxcc.is_none() {
+        rec.dxcc = old.dxcc;
+    }
+    if rec.prop_mode.is_none() {
+        rec.prop_mode = old.prop_mode.clone();
+    }
+    if rec.sat_name.is_none() {
+        rec.sat_name = old.sat_name.clone();
+    }
+    if rec.operator.is_none() {
+        rec.operator = old.operator.clone();
+    }
+    if rec.station_callsign.is_none() {
+        rec.station_callsign = old.station_callsign.clone();
+    }
+    // #239: same rule — an edit that leaves them empty keeps what the record had.
+    if rec.my_grid.is_none() {
+        rec.my_grid = old.my_grid.clone();
+    }
+    if rec.my_rig.is_none() {
+        rec.my_rig = old.my_rig.clone();
+    }
+    if rec.extra.is_empty() {
+        rec.extra = old.extra.clone();
+        if call_changed {
+            // The preservation must not undo the resurrection guard
+            // above: the busted call's LOTW_QSL_SENT goes, whether
+            // the extra set came from the payload or from `old`.
+            rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+        }
+    }
+    // The same resurrection, for a park. A side's OTHER programme's reference rides
+    // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
+    // `take_ota_side`), and it described the reference the side HAD. An edit that
+    // changes the side takes it along: left behind, it is written after the edited
+    // reference, a repeated tag's last copy is the one a reader keeps, and the next
+    // read would put the old park back over the correction, or bring back a park the
+    // operator removed.
+    if (&rec.ota.my_program, &rec.ota.my_ref) != (&old.ota.my_program, &old.ota.my_ref) {
+        rec.extra.retain(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF"
+            )
+        });
+    }
+    if (&rec.ota.their_program, &rec.ota.their_ref) != (&old.ota.their_program, &old.ota.their_ref)
+    {
+        rec.extra
+            .retain(|(k, _)| !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF"));
+    }
+    // An edit that did not touch the TIME OF DAY must not fabricate
+    // time-knowledge onto an imported, time-less record — keyed on
+    // the time-of-day, not the whole timestamp, so a DATE fix on a
+    // date-only import stays honestly time-unknown.
+    if rec.when_unix % 86_400 == old.when_unix % 86_400 {
+        rec.time_known = old.time_known;
+    }
+    // The same row, corrected: it stays where it is, but its keys may have moved.
+    rec
+}
+
+/// Record — or WITHDRAW — the operator's declaration that they sent a QSL for `rec`.
+///
+/// `Some(via)` marks it sent (bureau/direct/electronic) on `date_unix`. `None` CLEARS the
+/// mark: there was previously no way to undo one at all, while the received side has taken
+/// a bool since #152, so an operator who ticked the wrong row was stuck with it.
+///
+/// Never touches `confirmed`/`qsl_rcvd` in either direction — a request is not a
+/// confirmation, and withdrawing one is not un-confirming anything.
+///
+/// ⚠️ A CLEAR IS RECORDED AS A DECISION, not as an absence: `date_unix` doubles as the
+/// moment of the clear in [`QslSent::cleared_unix`], which is what stops a later import of
+/// a pre-clear export from quietly restoring the mark (see [`QslSent::merge`]). And a
+/// genuine re-send RETIRES that decision — the operator who clears a mistake and then
+/// really posts a card gets an ordinary monotonic sent mark back, not one permanently
+/// shadowed by their own correction.
+///
+/// ★ THE one implementation of [`LogOp::MarkQslSent`] (SPEC-2 v3 §4.6), in the in-memory log and
+/// in a plan made on the row read from the store alike.
+pub(crate) fn qsl_sent_marked(rec: &mut QsoRecord, via: Option<QslVia>, date_unix: u64) {
+    rec.qsl_sent = match via {
+        Some(via) => QslSent {
+            sent: true,
+            via: Some(via),
+            date_unix: Some(date_unix),
+            cleared_unix: None,
+        },
+        None => QslSent {
+            sent: false,
+            via: None,
+            date_unix: None,
+            cleared_unix: Some(date_unix),
+        },
+    };
+}
+
+/// Record that a PAPER card for `rec` did or did not arrive (ADIF `QSL_RCVD`).
+///
+/// The operator is the only possible authority here: LoTW, eQSL and QRZ report their own
+/// confirmations and Nexus syncs those, but nothing on the internet knows a card landed in
+/// somebody's letterbox. Until this existed a paper QSL could not be entered at all (#152),
+/// which mattered more than it sounds: `QslRcvd::award` counts card OR LoTW, so a card that
+/// makes a DXCC entity countable was unrecordable and the award view stayed wrong.
+///
+/// Unlike [`QslRcvd::merge`], which is monotonic because a service only ever ADDS what it
+/// has matched, this can also clear — an operator who ticks the wrong row must be able to
+/// untick it. A later service sync cannot silently undo the correction either: merge ORs
+/// per source, and no service reports the card field.
+///
+/// `confirmed` and `award_confirmed` follow the channels, as the parser, the store and
+/// `log.adi` all read them back: every fold counts a contact by `award_confirmed`, so a
+/// card that set only its channel counted for nothing until a restart re-read the log.
+///
+/// ★ THE one implementation of [`LogOp::MarkQslCard`] (SPEC-2 v3 §4.6).
+pub(crate) fn qsl_card_marked(rec: &mut QsoRecord, received: bool) {
+    rec.qsl_rcvd.card = received;
+    rec.confirmed = rec.qsl_rcvd.any();
+    rec.award_confirmed = rec.qsl_rcvd.award();
+}
+
+/// Set — or REMOVE — the satellite tag on `rec`: ADIF `PROP_MODE=SAT` + `SAT_NAME`.
+///
+/// `Some(name)` tags the contact as worked through that bird, `None` removes the tag, and
+/// NOT CALLING THIS leaves it alone. That third state is the point. The edit form reads a
+/// blank field as "leave alone" on purpose — so that a busted-call fix cannot silently
+/// strip a satellite tag off a contact that earned it (see [`edited`]) — and two more boxes
+/// on that form would give a blank box two meanings at once. A removal has to be something
+/// the operator SAYS, not something a form submits by omission, which is the same shape as
+/// [`qsl_sent_marked`]'s withdrawal and [`qsl_card_marked`]'s untick: an operator-declared
+/// fact, reversible only by the operator.
+///
+/// ⚠️ **BOTH FIELDS OR NEITHER, in both directions.** TQSL validates the two as a PAIR
+/// and hard-errors on a lone member; through the `-a compliant` funnel a lone field would
+/// wedge the whole signed batch as Rejected. So this writes the pair or removes the pair,
+/// and refuses a blank name rather than leaving `PROP_MODE=SAT` standing on its own.
+///
+/// ⚠️ It does NOT vet the name against LoTW's accepted list — that table lives with the
+/// catalog that feeds it (`Engine::LOTW_SAT_NAMES`), and this crate has no business
+/// holding a second copy of it. The caller gates the name; this stores what it is given.
+///
+/// Returns false, leaving `rec` untouched, when the name is blank.
+///
+/// ★ THE one implementation of [`LogOp::SetSatTag`] (SPEC-2 v3 §4.6).
+pub(crate) fn sat_tagged(rec: &mut QsoRecord, sat_name: Option<&str>) -> bool {
+    let name = match sat_name {
+        // A tag with no name is the lone `PROP_MODE=SAT` TQSL rejects. Refused here
+        // rather than written, for the same reason an empty QSL-sent code is an error
+        // and not a withdrawal: an empty control is a non-choice, not a decision.
+        Some(n) if n.trim().is_empty() => return false,
+        Some(n) => Some(n.trim().to_string()),
+        None => None,
+    };
+    match name {
+        Some(n) => {
+            rec.prop_mode = Some("SAT".into());
+            rec.sat_name = Some(n);
+        }
+        None => {
+            rec.sat_name = None;
+            // Only OUR tag. A contact carrying `PROP_MODE=EME`/`MS`/`TEP` and a
+            // stray `SAT_NAME` is making a different claim about how it got
+            // there, and that claim is not this op's to withdraw.
+            if rec
+                .prop_mode
+                .as_deref()
+                .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
+            {
+                rec.prop_mode = None;
+            }
+        }
+    }
+    true
+}
+
+/// Stamp `status` on `rec`'s `service` leg: what that connector answered the last time this
+/// contact was pushed to it.
+///
+/// ★ THE one implementation of [`LogOp::Stamp`] and of the connector stamps (SPEC-2 v3 §4.6).
+pub(crate) fn stamped(rec: &mut QsoRecord, service: UploadService, status: UploadStatus) {
+    let slot = match service {
+        UploadService::Lotw => &mut rec.upload.lotw,
+        UploadService::Eqsl => &mut rec.upload.eqsl,
+        UploadService::Qrz => &mut rec.upload.qrz,
+        UploadService::Clublog => &mut rec.upload.clublog,
+    };
+    *slot = Some(status);
+}
+
 /// Whether `r` is, by the key a connector stamp matches on, the contact `pushed` describes:
 /// the same call and band (ASCII case aside), the same mode class, the same UTC day. One
-/// predicate for the named push and the unnamed one, so the two cannot drift apart.
-fn same_push_key(r: &QsoRecord, pushed: &QsoRecord) -> bool {
+/// predicate for the named push and the unnamed one, so the two cannot drift apart — and one
+/// for the log in memory and the station's plan on the store's rows (SPEC-2 v3 C19).
+pub fn same_push_key(r: &QsoRecord, pushed: &QsoRecord) -> bool {
     r.call.eq_ignore_ascii_case(&pushed.call)
         && r.band.eq_ignore_ascii_case(&pushed.band)
         && crate::reconcile::mode_class(&r.mode) == crate::reconcile::mode_class(&pushed.mode)

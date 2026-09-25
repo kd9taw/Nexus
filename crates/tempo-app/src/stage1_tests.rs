@@ -565,11 +565,9 @@ mod lockstep {
         let any = |rng: &mut Rng| log[rng.below(n)].clone();
         match rng.below(22) {
             0..=3 => {
-                // `Engine::log_qso`'s order: the add (the id minted), then the append.
-                let mut r = contact(rng);
-                r.id = Some(sc.add_record(r.clone()));
-                sc.append_to_log(std::slice::from_ref(&r));
-                s1.add_record(r);
+                // `Engine::log_qso`'s append: the station mints the contact's id.
+                let (mut rows, _) = sc.append(vec![contact(rng)], false);
+                s1.add_record(rows.pop().expect("one contact in, one out"));
                 "log a contact"
             }
             4 if n > 0 => {
@@ -867,9 +865,8 @@ mod lockstep {
     fn an_own_echo_that_restamps_a_contact_on_file_reaches_the_store() {
         let d = Dir::new("echo");
         let (mut sc, mut s1) = lockstep(&d);
-        let mut r = contact(&mut Rng(7));
-        r.id = Some(sc.add_record(r.clone()));
-        sc.append_to_log(std::slice::from_ref(&r));
+        let (mut rows, _) = sc.append(vec![contact(&mut Rng(7))], false);
+        let r = rows.pop().expect("one contact in, one out");
         s1.add_record(r.clone());
         let id = r.id.unwrap();
         sc.stamp_lotw_upload(&[id], UploadOutcome::Duplicate, 6, None);
