@@ -1,4 +1,4 @@
-// Descriptive analytics over the logbook — a pure roll-up of getLog()'s LoggedQso[] into the
+// Descriptive analytics over the logbook — a pure roll-up of a log's LoggedQso[] into the
 // counts a "my ham life" dashboard shows. No React, no IO, fully node-testable. Deliberately
 // distinct from the Journey layer (gamified goals) and Awards (official credit): this is just the
 // operator's log, sliced. Continent / CQ-zone / POTA breakdowns need the cty.dat resolver + the

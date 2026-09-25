@@ -240,6 +240,9 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
   if (cmd === 'radio_launch_info') return { showPicker: false }
   if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log)$/.test(cmd)) return []
   if (/^(get_propagation|get_settings|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update)$/.test(cmd)) return null
+  // The log's questions go unanswered, as the whole-log read (answered `{}`) did: no view here
+  // needs the log, and `{}` is no answer to any of them.
+  if (cmd === 'ask_log') throw new Error('no log in this test')
   return {}
 }
 

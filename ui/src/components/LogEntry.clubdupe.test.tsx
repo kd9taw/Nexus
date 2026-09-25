@@ -12,7 +12,6 @@ import type { AppSnapshot, FieldDayStatus } from '../types'
 vi.mock('../api', () => ({
   fdLogManual: vi.fn(() => Promise.resolve({})),
   logQso: vi.fn(() => Promise.resolve({})),
-  getLog: vi.fn(() => Promise.resolve([])),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
   qrzLookup: vi.fn(() => Promise.resolve(null)),

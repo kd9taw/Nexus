@@ -1692,8 +1692,8 @@ export function OperateCockpit({
  * here only ever armed the Spot button.
  *
  * This is therefore the assembly LogEntry does inline, with the log FORM left out: read the
- * logbook, resolve the award entity, ask the callbook, hand the result over. The logbook is
- * the window's shared copy (features/logStore), which follows `logTick` — every change to the
+ * logbook, resolve the award entity, ask the callbook, hand the result over. The logbook's
+ * answers (features/logSource) follow `logTick` — every change to the
  * log, by any writer. That matters more here than in a strip: Operate logs in the BACKGROUND
  * (the sequencer files a contact the moment the exchange completes, with no click), so a
  * once-per-mount read would show a stale "previous contacts" list for the rest of the session

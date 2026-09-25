@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -24,20 +25,20 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
-    editQso: vi.fn(() => Promise.resolve({})),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    editQsoById: vi.fn(() => Promise.resolve({})),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(() => Promise.resolve({})), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -47,7 +48,7 @@ vi.mock('../api', () => {
 const at = (h: number, m: number, s = 0) => Math.floor(Date.UTC(2026, 8, 14, h, m, s) / 1000)
 
 function seedLog(whenUnix: number, timeOffUnix: number | null) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+  engineLog.mockResolvedValue([
     {
       call: 'VE3ABC', grid: 'FN03', band: '40m', freqMhz: 7.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
@@ -82,7 +83,7 @@ function endBox(form: HTMLElement): HTMLInputElement {
   return within(form).getByTitle(/when the contact ended/i) as HTMLInputElement
 }
 const save = (form: HTMLElement) => fireEvent.click(within(form).getByRole('button', { name: /save/i }))
-const saved = () => (api.editQso as ReturnType<typeof vi.fn>).mock.calls[0][1] as { timeOffUnix?: number }
+const saved = () => (api.editQsoById as ReturnType<typeof vi.fn>).mock.calls[0][1] as { timeOffUnix: number | null }
 
 afterEach(() => {
   cleanup()
@@ -131,7 +132,7 @@ describe('the Logbook edit form takes the contact end time (#329)', () => {
     const form = await openEdit(at(14, 32), at(14, 35))
     fireEvent.change(endBox(form), { target: { value: '14:41:07' } })
     save(form)
-    await waitFor(() => expect((api.editQso as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1))
+    await waitFor(() => expect((api.editQsoById as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1))
     expect(saved().timeOffUnix).toBe(at(14, 41, 7))
   })
 
@@ -142,20 +143,20 @@ describe('the Logbook edit form takes the contact end time (#329)', () => {
     const form = await openEdit(start, null)
     fireEvent.change(endBox(form), { target: { value: '00:03' } })
     save(form)
-    await waitFor(() => expect((api.editQso as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1))
+    await waitFor(() => expect((api.editQsoById as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1))
     expect(saved().timeOffUnix).toBe(start + 5 * 60)
   })
 
   it('sends no end time at all when the box is left blank, so a stored one is not wiped', async () => {
-    // ⚠️ `undefined`, never `null`. The backend restores the stored TIME_OFF when the incoming
-    // record has none (`Logbook::update_record`), which is what keeps every producer that
-    // knows nothing about the field from dropping one — and it is also why clearing an end
-    // time is deliberately not offered here.
+    // ⚠️ `null`, never a time: in an edit (`QsoEdit.timeOffUnix`) null is LEAVE ALONE. The backend
+    // restores the stored TIME_OFF when the incoming record has none (`Logbook::update_record`),
+    // which is what keeps every producer that knows nothing about the field from dropping one —
+    // and it is also why clearing an end time is deliberately not offered here.
     const form = await openEdit(at(14, 32), at(14, 35))
     fireEvent.change(endBox(form), { target: { value: '' } })
     save(form)
-    await waitFor(() => expect((api.editQso as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1))
-    expect(saved().timeOffUnix).toBeUndefined()
+    await waitFor(() => expect((api.editQsoById as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1))
+    expect(saved().timeOffUnix).toBeNull()
   })
 
   it('refuses a time that is not a 24-hour UTC one rather than guessing at it', async () => {
@@ -163,6 +164,6 @@ describe('the Logbook edit form takes the contact end time (#329)', () => {
     fireEvent.change(endBox(form), { target: { value: '2:35 PM' } })
     expect(endBox(form).getAttribute('aria-invalid')).toBe('true')
     save(form)
-    expect((api.editQso as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
+    expect((api.editQsoById as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
   })
 })

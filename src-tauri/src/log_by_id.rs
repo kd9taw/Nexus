@@ -63,7 +63,8 @@ pub enum RowAnswer {
     Busy {},
 }
 
-/// `r` as `get_log` shows it (the entity resolved, as the parent's `log_row` does), with its key.
+/// `r` as a page of the log shows it (the entity resolved, as the parent's `log_row` does), with
+/// its key.
 fn keyed(r: &QsoRecord) -> KeyedRow {
     let mut row = LoggedQso::from(r.clone());
     row.entity = propagation::dxcc::resolve(&row.call).map(|i| i.entity.to_string());

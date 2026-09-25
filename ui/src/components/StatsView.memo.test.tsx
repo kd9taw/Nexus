@@ -10,6 +10,7 @@ import { StatsView } from './StatsView'
 import { computeLogStats } from '../features/logStats'
 import { t } from '../i18n'
 import type { LoggedQso } from '../types'
+import type { LogQuestion } from '../features/logAnswers'
 
 vi.mock('../features/logStats', async (importOriginal) => {
   const real = await importOriginal<typeof import('../features/logStats')>()
@@ -17,9 +18,8 @@ vi.mock('../features/logStats', async (importOriginal) => {
 })
 const engine = vi.hoisted(() => ({ log: [] as unknown[] }))
 vi.mock('../api', () => ({
-  // The whole log, however it is asked for.
-  getLog: vi.fn(async () => engine.log),
-  getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: engine.log })),
+  // The engine's answer over this log (features/logAnswers.testkit): the roll-up is its to compute.
+  askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[])),
   // No geographic cards: the frontend statistics are what is under test.
   getLogStats: vi.fn(async () => {
     throw new Error('not under test')

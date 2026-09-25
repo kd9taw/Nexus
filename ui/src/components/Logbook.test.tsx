@@ -4,6 +4,7 @@ import { render, waitFor, fireEvent } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
 import * as toast from '../toast'
+import type { LogQuestion } from '../features/logAnswers'
 
 // react-virtual (virtual-core) measures the scroll element and rows via offsetHeight + a
 // ResizeObserver, neither of which jsdom implements — stub them so a non-trivial visible window is
@@ -18,15 +19,13 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     // #25 per-operator export: the Logbook asks on mount, so the mock must answer.
     // A vi.fn WITH a default implementation: the Logbook calls this on its own during render,
     // so a bare vi.fn returning undefined blows up on .then — and mockResolvedValue can still
@@ -35,9 +34,9 @@ vi.mock('../api', () => {
     // Same contract for the per-activation export: asked for on mount, so it must answer.
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
-    logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
+    logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }
@@ -71,13 +70,13 @@ function fakeLog(n: number) {
 describe('Logbook virtualization', () => {
   it('mounts only a small window of rows for a large (5k) log', async () => {
     const N = 5000
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(N))
+    engineLog.mockResolvedValue(fakeLog(N))
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    // Wait for the async getLog → setLog → virtualized render (the spacer div appears only once the
+    // Wait for the log's first page → the virtualized render (the spacer div appears only once the
     // log has loaded; before that .log-scroll's child is the "no contacts" <p>).
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
     // The virtualizer is engaged over the FULL set — the spacer reserves the whole scroll height
     // (~5000 rows) even though only a small window is realized.
     const spacer = container.querySelector('.log-rows') as HTMLElement
@@ -102,11 +101,11 @@ describe('Logbook virtualization', () => {
 // source-grep test would pass on prose that never reaches the screen.
 describe('purge confirmation dialog', () => {
   it('warns that purging resets the LoTW/eQSL sync position', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    engineLog.mockResolvedValue(fakeLog(3))
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
 
     // The button is disabled on an empty log, so this also proves the log actually loaded.
     const btn = [...container.querySelectorAll('button')].find(
@@ -142,12 +141,12 @@ describe('purge confirmation dialog', () => {
 // log; before the operator was stamped on the record there was nothing to split on.
 describe('per-operator export', () => {
   it('is not offered to a single-op station', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    engineLog.mockResolvedValue(fakeLog(3))
     ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue([])
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
     // One operator, or none, means the split file would be identical to Export ADIF.
     expect(
       [...container.querySelectorAll('button')].some((b) =>
@@ -158,7 +157,7 @@ describe('per-operator export', () => {
   })
 
   it('appears once the log holds more than one operator', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    engineLog.mockResolvedValue(fakeLog(3))
     ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue(['G0PQR', 'W1ABC'])
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
@@ -187,13 +186,13 @@ describe('POTA park on logbook edit (#60)', () => {
   }
 
   it('shows the stored park in the edit form', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+    engineLog.mockResolvedValue(
       logWithOta({ theirProgram: 'POTA', theirRef: 'US-1234' }),
     )
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
     fireEvent.click(container.querySelector('button[aria-label="Edit K0ABC"]') as HTMLButtonElement)
     // RED before the fix: the form rendered no park control at all, so this input did not exist.
     await waitFor(() =>
@@ -204,31 +203,32 @@ describe('POTA park on logbook edit (#60)', () => {
   })
 
   it('does not drop an IOTA reference when editing a POTA QSO', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+    engineLog.mockResolvedValue(
       logWithOta({ theirProgram: 'POTA', theirRef: 'US-1234', iota: 'NA-001' }),
     )
     // The real withErrorToast runs its callback; the module mock is a bare stub that never does,
-    // so override it here or editQso is never reached and the assertion is vacuous.
+    // so override it here or editQsoById is never reached and the assertion is vacuous.
     ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
       fn(),
     )
-    const editQso = api.editQso as ReturnType<typeof vi.fn>
-    editQso.mockResolvedValue({})
+    const editQsoById = api.editQsoById as ReturnType<typeof vi.fn>
+    editQsoById.mockResolvedValue({ kind: 'applied' })
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
     fireEvent.click(container.querySelector('button[aria-label="Edit K0ABC"]') as HTMLButtonElement)
     await waitFor(() =>
       expect(container.querySelector('input[title*="you worked"]')).not.toBeNull(),
     )
     fireEvent.click(container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement)
-    await waitFor(() => expect(editQso).toHaveBeenCalled())
-    const record = editQso.mock.calls[0][1]
+    await waitFor(() => expect(editQsoById).toHaveBeenCalled())
+    const edit = editQsoById.mock.calls[0][1]
     // Editing a POTA QSO that also carries an island reference must keep the iota (the guard's
     // blind spot): a park-only ota built from the four editable fields would silently drop it.
-    expect(record.ota.iota).toBe('NA-001')
-    expect(record.ota.theirRef).toBe('US-1234')
+    // The IOTA has no box, so the edit carries none and the ENGINE keeps the stored one
+    // (tempo-core `QsoEdit::record`, pinned by its park test); the park goes with its programme.
+    expect(edit.ota).toEqual({ myProgram: null, myRef: null, theirProgram: 'POTA', theirRef: 'US-1234' })
   })
 })
 
@@ -247,7 +247,7 @@ describe('the log table shows the comment and flags a private note', () => {
   }
 
   it('shows the shared comment inline', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+    engineLog.mockResolvedValue(
       withNotes({ comment: 'Rag chew about his 6-el yagi' }),
     )
     const { container } = render(
@@ -260,7 +260,7 @@ describe('the log table shows the comment and flags a private note', () => {
   })
 
   it('flags a private note with 📝 and carries the text in the tooltip', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+    engineLog.mockResolvedValue(
       withNotes({ comment: null, notes: 'Runs a KX3 at 5W from a sailboat' }),
     )
     const { container } = render(
@@ -276,7 +276,7 @@ describe('the log table shows the comment and flags a private note', () => {
   })
 
   it('POSITIVE CONTROL — a row with neither shows no marker and no tooltip', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+    engineLog.mockResolvedValue(
       withNotes({ comment: null, notes: null }),
     )
     const { container } = render(
@@ -292,7 +292,7 @@ describe('the log table shows the comment and flags a private note', () => {
     // The row is a CSS grid with a fixed template; a header cell added without its data cell
     // (or the reverse) silently shears every column after it. Counting both is the cheap guard
     // that a rendered-structure test can actually make in jsdom.
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(2))
+    engineLog.mockResolvedValue(fakeLog(2))
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
@@ -320,7 +320,7 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
   const opts = (c: HTMLElement) => Array.from(qsl(c)?.options ?? []).map((o) => o.value)
 
   it('is reachable in the ORDINARY logbook, with no filter chip set', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(1))
+    engineLog.mockResolvedValue(fakeLog(1))
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
@@ -331,7 +331,7 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
 
   it('still offers the arriving card AFTER one has been marked sent — the round trip', async () => {
     const sent = [{ ...fakeLog(1)[0], qslSent: { sent: true, via: 'B' } }]
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(sent)
+    engineLog.mockResolvedValue(sent)
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
@@ -351,7 +351,7 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
 // operator can SEE what is filtering the log and clear it with the ✕ that is already there.
 describe('recall-card handoff (#192)', () => {
   it('opens filtered to the handed-over callsign, and reports the handoff consumed', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+    engineLog.mockResolvedValue([
       { ...fakeLog(1)[0], call: 'W1AW' },
       { ...fakeLog(1)[0], call: 'K9XYZ', whenUnix: fakeLog(1)[0].whenUnix - 100 },
     ])
@@ -381,7 +381,7 @@ describe('recall-card handoff (#192)', () => {
   })
 
   it('opens unfiltered when nothing was handed over', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    engineLog.mockResolvedValue(fakeLog(3))
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
@@ -401,14 +401,14 @@ describe('the edit form carries a whole callsign', () => {
   const oneCall = (call: string) => [{ ...fakeLog(1)[0], call }]
 
   const openEdit = async (call: string) => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(oneCall(call))
+    engineLog.mockResolvedValue(oneCall(call))
     ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
       fn(),
     )
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
     fireEvent.click(
       container.querySelector(`button[aria-label="Edit ${call}"]`) as HTMLButtonElement,
     )
@@ -426,16 +426,16 @@ describe('the edit form carries a whole callsign', () => {
 
   it('saves the whole call back, at and past the reported boundary', async () => {
     for (const call of ['WW9WTF', 'KD9TAW/P', 'SV9/KD9TAW/P']) {
-      const editQso = api.editQso as ReturnType<typeof vi.fn>
-      editQso.mockReset()
-      editQso.mockResolvedValue({})
+      const editQsoById = api.editQsoById as ReturnType<typeof vi.fn>
+      editQsoById.mockReset()
+      editQsoById.mockResolvedValue({ kind: 'applied' })
       const container = await openEdit(call)
       expect(callInput(container).value).toBe(call)
       fireEvent.click(
         container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement,
       )
-      await waitFor(() => expect(editQso).toHaveBeenCalled())
-      expect(editQso.mock.calls[0][1].call).toBe(call)
+      await waitFor(() => expect(editQsoById).toHaveBeenCalled())
+      expect(editQsoById.mock.calls[0][1].call).toBe(call)
     }
   })
 })
@@ -463,7 +463,7 @@ describe('per-activation export', () => {
   const AFTERNOON = { ...MORNING, reference: 'US-5678', qsos: 4 }
 
   function mountWith(activations: unknown[]) {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    engineLog.mockResolvedValue(fakeLog(3))
     ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue([])
     ;(api.logActivations as ReturnType<typeof vi.fn>).mockResolvedValue(activations)
     return render(
@@ -486,7 +486,7 @@ describe('per-activation export', () => {
 
   it('is not offered to a station that has never activated', async () => {
     const { container } = mountWith([])
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
     expect(picker(container), 'a hunter-only log has no activation to pick').toBeNull()
     expect(exportBtn(container)).toBeUndefined()
   })
