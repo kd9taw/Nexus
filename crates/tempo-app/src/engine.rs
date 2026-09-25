@@ -23621,8 +23621,8 @@ pub const SESSION_READ_WINDOW: u64 = 4 * 86_400 + 3_600;
 pub const SESSION_BUSY: &str = "The logbook was too busy to read the contest's contacts, so the \
                                 contest session was not opened. Try again in a moment.";
 
-/// What the launch says when it could not read a restored contest session's rows, however long
-/// it tried ([`with_session_rows_at_launch`]): it started without the session.
+/// What the launch says when it could not read a restored contest session's rows within its
+/// tries ([`with_session_rows_at_launch`]): it started without the session.
 pub const SESSION_NOT_RESUMED: &str = "The logbook was too busy at start-up to read the \
                                        contest's contacts, so Field Day was not resumed. Turn it \
                                        on again when you are ready.";
@@ -23651,16 +23651,18 @@ pub fn with_session_rows<T>(
 }
 
 /// [`with_session_rows`] for the launch's restore of the contest session the operator left
-/// running (Q1 of the C19 cut, the coordinator's (a)): the log is idle at launch, so it tries for
-/// longer — ten times, each read waiting up to five seconds. When even that cannot read the rows,
-/// `then` does not run and the answer is [`SESSION_NOT_RESUMED`], for the launch to start without
-/// the session and say so.
+/// running (Q1 of the C19 cut, the coordinator's (a), and its bound): the same tries as the
+/// switch command — three reads, each waiting up to [`crate::logstore::SESSION_READ_WAIT`] for
+/// the store and again for the writer's look at other windows, about three seconds at worst —
+/// so a busy log never holds the radio loop's start for longer than a moment. When they cannot
+/// read the rows, `then` does not run and the answer is [`SESSION_NOT_RESUMED`], for the launch
+/// to start without the session and say so.
 pub fn with_session_rows_at_launch<T>(
     engine: &std::sync::Mutex<Engine>,
     opens: impl Fn(&Engine) -> bool,
     then: impl FnOnce(&mut Engine, Option<crate::logstore::SessionRows>) -> T,
 ) -> Result<T, String> {
-    session_rows_within(engine, opens, then, 10, std::time::Duration::from_secs(5))
+    session_rows_within(engine, opens, then, 3, crate::logstore::SESSION_READ_WAIT)
         .map_err(|()| SESSION_NOT_RESUMED.to_string())
 }
 

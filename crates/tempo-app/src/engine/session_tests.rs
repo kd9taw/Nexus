@@ -416,3 +416,62 @@ fn another_windows_contact_during_a_session_reaches_the_session_on_the_poll() {
     let b4 = e.session_b4().expect("a session is open");
     assert!(b4.worked_this_session("W9DUR"), "and it is this session's");
 }
+
+/// ★ The launch's restore of a session left running is bounded like the switch (the
+/// coordinator's ruling): with the store's write lock held elsewhere and a contact stuck behind
+/// it, so no read of the session's rows can be current, the launch reads three times — about
+/// three seconds at worst — and answers `SESSION_NOT_RESUMED`: Field Day is not entered, and
+/// the radio loop's start is held no longer. The CONTROL: once the store answers, the same
+/// restore enters Field Day with its sweep.
+#[test]
+fn the_launch_gives_a_busy_log_three_tries_then_starts_without_the_session() {
+    let d = Dir::new("session-launch-busy");
+    let mut s = ready(&d).settings().clone();
+    // The master left on, as the launch finds it: the setting, and Field Day not entered yet.
+    s.fd_active = true;
+    let mut e = Engine::with_settings(s);
+    e.attach_log_store(crate::logstore::tests::open_fast(&d));
+    assert!(
+        e.restore_opens_session(),
+        "premise: the launch would restore it"
+    );
+    let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+    e.log_qso(qso("W1AW", now_unix_secs() + 60));
+    let m = Mutex::new(e);
+    let restore = |m: &Mutex<Engine>| {
+        with_session_rows_at_launch(
+            m,
+            |e| e.restore_opens_session(),
+            |e, rows| {
+                e.restore_field_day_if_enabled();
+                rows.is_some_and(|r| e.open_session_from(r))
+            },
+        )
+    };
+    SESSION_READS.with(|c| c.set(0));
+    let started = std::time::Instant::now();
+    assert_eq!(
+        restore(&m),
+        Err(SESSION_NOT_RESUMED.to_string()),
+        "the launch starts without the session, and says so"
+    );
+    // Counted, and bounded loosely: each read waits `SESSION_READ_WAIT` twice (1.0 s alone). The
+    // shape it replaced could hold the start for ten tries of five seconds.
+    assert_eq!(
+        SESSION_READS.with(|c| c.get()),
+        3,
+        "three reads, as the switch makes"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "a moment, not a wait: {:?}",
+        started.elapsed()
+    );
+    assert!(!engine_lock(&m).in_field_day(), "Field Day was not entered");
+    drop(hold);
+    assert_eq!(
+        restore(&m),
+        Ok(true),
+        "CONTROL: once the store answers, the restore enters Field Day with its sweep"
+    );
+}
