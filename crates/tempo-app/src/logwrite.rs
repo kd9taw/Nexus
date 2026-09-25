@@ -311,54 +311,122 @@ pub fn stamp_lotw_batch(
 
 /// Stamp `upload.lotw` on every contact still owed to LoTW — the operator's "already uploaded"
 /// declaration (the Awards view's "Mark all as uploaded") — the pick and the stamps both read off
-/// the store with the Engine lock released. How many were stamped, and their durability.
+/// the store with the Engine lock released, [`STAMP_CHUNK`] contacts to a change. How many were
+/// stamped, and their durability.
+///
+/// Made as one change, the declaration held the Engine lock for as long as the log is long: over
+/// half a second on the SPEC-2 v3 §4.11 bench's 500,000-contact log, a third of a million of them
+/// owed. A chunk's change is bounded by the chunk. So a declaration can stop partway — a chunk
+/// the log keeps changing under, a store that cannot be read, the app closed between chunks — and
+/// the chunks made before it stand. It says how far it got, and made again it picks only what is
+/// still owed, so it finishes the rest and stamps nothing twice.
 pub fn mark_lotw_uploaded_all(
     engine: &Mutex<Engine>,
     when_unix: i64,
+) -> (Result<usize, String>, Durability) {
+    mark_lotw_uploaded_in_chunks(engine, when_unix, STAMP_CHUNK)
+}
+
+/// How many contacts one change of the "already uploaded" declaration stamps: a bound on what one
+/// plan reads whole and one commit holds the lock for, whatever the log's size — the fill job's
+/// ([`FILL_CHUNK`]).
+pub const STAMP_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
+
+/// [`mark_lotw_uploaded_all`], `chunk` contacts to a change: each chunk planned with the Engine
+/// lock released and made under it, planned again while its contacts keep changing — [`PLANS`]
+/// plans, then the declaration stops there — and the next chunk planned once it is in the store.
+fn mark_lotw_uploaded_in_chunks(
+    engine: &Mutex<Engine>,
+    when_unix: i64,
+    chunk: usize,
 ) -> (Result<usize, String>, Durability) {
     let rows = engine_lock(engine).log_rows();
     let ids = match station::lotw_unsent_ids(&rows) {
         Ok(ids) => ids,
         Err(e) => return (Err(e), Durability::default()),
     };
-    if ids.is_empty() {
-        return (Ok(0), Durability::default());
-    }
     let status = UploadStatus {
         outcome: tempo_core::logbook::UploadOutcome::Accepted,
         when_unix,
         detail: Some(tempo_core::logbook::UploadDetail::OperatorDeclared),
     };
-    for _ in 0..PLANS {
-        let plan = engine_lock(engine).station_mut().log_plan();
-        let found = match plan.rows(&ids) {
-            Ok(found) => found,
-            Err(e) => return (Err(e), Durability::default()),
+    let (mut stamped, mut durability) = (0, Durability::default());
+    for part in ids.chunks(chunk) {
+        let mut made = None;
+        for _ in 0..PLANS {
+            let plan = engine_lock(engine).station_mut().log_plan();
+            let found = match plan.rows(part) {
+                Ok(found) => found,
+                Err(e) => return (Err(stopped(stamped, ids.len(), Some(e))), durability),
+            };
+            #[cfg(test)]
+            tests::race();
+            // Still owed as the plan reads them: a contact a change settled since the pick — an
+            // upload's stamp, a confirmation — is left as that change made it.
+            let rows: Vec<Arc<QsoRecord>> = part
+                .iter()
+                .filter_map(|id| found.get(id))
+                .filter(|r| station::owed_to_lotw(r))
+                .cloned()
+                .collect();
+            let Some(pairs) = station::stamped_rows(&rows, UploadService::Lotw, &status) else {
+                made = Some((0, Durability::default()));
+                break;
+            };
+            let n = pairs.len();
+            let bulk = n > tempo_core::logbook::writer::CHUNK_ROWS;
+            let (ok, d) = engine_lock(engine).with_log_tickets(|e| {
+                e.station_mut()
+                    .commit_planned(
+                        &plan,
+                        tempo_core::logbook::OpClass::Stamp,
+                        pairs,
+                        bulk,
+                        Vec::new(),
+                        "lotw upload stamp",
+                    )
+                    .is_ok()
+            });
+            if ok {
+                made = Some((n, d));
+                break;
+            }
+        }
+        let Some((n, d)) = made else {
+            return (Err(stopped(stamped, ids.len(), None)), durability);
         };
-        let rows: Vec<Arc<QsoRecord>> =
-            ids.iter().filter_map(|id| found.get(id).cloned()).collect();
-        let Some(pairs) = station::stamped_rows(&rows, UploadService::Lotw, &status) else {
-            return (Ok(0), Durability::default());
-        };
-        let n = pairs.len();
-        let bulk = n > tempo_core::logbook::writer::CHUNK_ROWS;
-        let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
-            e.station_mut()
-                .commit_planned(
-                    &plan,
-                    tempo_core::logbook::OpClass::Stamp,
-                    pairs,
-                    bulk,
-                    Vec::new(),
-                    "lotw upload stamp",
-                )
-                .is_ok()
-        });
-        if made {
-            return (Ok(n), durability);
+        stamped += n;
+        // The next chunk is planned once this one is in the store. Ahead of the store's writer —
+        // a few thousand rows a second — the chunks would pile up in flight, and each commit and
+        // each plan's read looks through what is in flight row by row. One chunk, not two: with
+        // the writer committing the one before while this one was made, the §4.11 bench read
+        // holds over 5 ms here at 500,000 contacts.
+        let stored = d.wait_stored(crate::logstore::DURABLE_WAIT);
+        durability = durability.and(d);
+        if let Err(why) = stored {
+            return (Err(stopped(stamped, ids.len(), Some(why))), durability);
         }
     }
-    (Err(station::LOG_BUSY.into()), Durability::default())
+    (Ok(stamped), durability)
+}
+
+/// What a declaration that stopped at a chunk answers: `why`, the store's words — `None` for a
+/// chunk the log kept changing under (LogBusy). Before any chunk is made nothing has changed, and
+/// it says what any change says; after, the chunks made stand, and it says how far it got.
+fn stopped(stamped: usize, total: usize, why: Option<String>) -> String {
+    match (stamped, why) {
+        (0, None) => station::LOG_BUSY.into(),
+        (0, Some(why)) => why,
+        (_, None) => format!(
+            "{stamped} of {total} QSOs were marked as already on LoTW, but the logbook kept \
+             changing while the rest were being marked, so they were not. Mark them again to \
+             finish."
+        ),
+        (_, Some(why)) => format!(
+            "{stamped} of {total} QSOs were marked as already on LoTW, but the rest could not be: \
+             {why}. Mark them again to finish."
+        ),
+    }
 }
 
 /// ★ A bulk change — an import, a report merge, the POTA stamps — planned on the candidate sub-log
@@ -581,26 +649,36 @@ pub const FILL_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
 
 /// Write the fill job's fills (SPEC-2 v3 D2-A) — each planned with the Engine lock released, a
 /// chunk of [`FILL_CHUNK`] at a time, and made under the lock only where the field is still empty
-/// in the row as it now stands ([`station::fill_pairs`]). `fill_ver` goes with the LAST chunk, and
-/// only once every earlier chunk is on disk: the store names the resolver data its fills come
-/// from only when it holds every one of them. How many contacts gained a field.
+/// in the row as it now stands ([`station::fill_pairs`]), and planned only once every chunk but
+/// the one made last is in the store. `fill_ver` goes with the LAST chunk, and only once every
+/// earlier chunk is on disk: the store names the resolver data its fills come from only when it
+/// holds every one of them. How many contacts gained a field.
 ///
 /// ⚠️ It reads the store and waits for it: call it on the job's own thread, with no lock held.
 pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<usize, String> {
+    fill_in_chunks(engine, fills, fill_ver, FILL_CHUNK)
+}
+
+/// [`fill`], `chunk` fills to a change.
+fn fill_in_chunks(
+    engine: &Mutex<Engine>,
+    fills: &[LogFill],
+    fill_ver: i64,
+    chunk: usize,
+) -> Result<usize, String> {
     let chunks: Vec<&[LogFill]> = if fills.is_empty() {
         vec![&[]]
     } else {
-        fills.chunks(FILL_CHUNK).collect()
+        fills.chunks(chunk).collect()
     };
     let last = chunks.len() - 1;
     let mut filled = 0;
-    let mut waiting: Vec<Durability> = Vec::new();
+    // The chunk made before the latest: in the store before the next is planned.
+    let mut previous = Durability::default();
     for (k, chunk) in chunks.into_iter().enumerate() {
         if k == last {
             // `fill_ver` only once every earlier fill is on disk.
-            for d in waiting.drain(..) {
-                d.wait(crate::logstore::DURABLE_WAIT)?;
-            }
+            previous.wait_stored(crate::logstore::DURABLE_WAIT)?;
         }
         let meta = if k == last {
             vec![(crate::logfill::FILL_VER, fill_ver)]
@@ -612,6 +690,8 @@ pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<
         for _ in 0..PLANS {
             let plan = engine_lock(engine).station_mut().log_plan();
             let rows = plan.rows(&ids)?;
+            #[cfg(test)]
+            tests::race();
             let pairs = station::fill_pairs(&rows, chunk);
             let n = pairs.len();
             let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
@@ -635,7 +715,12 @@ pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<
             return Err(station::LOG_BUSY.into());
         };
         filled += n;
-        waiting.push(durability);
+        // The store's writer takes this chunk while the next is planned, and the one before it
+        // is in the store first. Ahead of the writer — a few thousand rows a second — the chunks
+        // would pile up in flight, and each commit and each plan's read looks through what is in
+        // flight row by row: two chunks, never the whole job.
+        previous.wait_stored(crate::logstore::DURABLE_WAIT)?;
+        previous = durability;
     }
     Ok(filled)
 }
