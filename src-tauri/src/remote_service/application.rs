@@ -584,6 +584,7 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use serde_json::json;
     const REQUEST: &str = "8aa041cb-c642-459c-83f3-11a5b720647d";
     #[test]
@@ -674,7 +675,7 @@ mod tests {
             before_settings
         );
         assert!(!engine.snapshot().radio.tx_enabled);
-        assert!(engine.get_log().is_empty());
+        assert!(engine.stored_records().is_empty());
     }
     #[test]
     fn stream_is_credited_paced_and_restarts_without_old_delta_bases() {

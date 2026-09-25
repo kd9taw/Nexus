@@ -38,7 +38,7 @@ The same vocabulary appears on the decode feed in the cockpits, so the two read 
 
 | Chip | Need type | What it means |
 |---|---|---|
-| **WANTED** | watch list | On your watch list — the Call Roster, the Stations list and Spots mark the same station with their WATCH tile. |
+| **WATCH** | watch list | On your watch list — the same lime tile the Call Roster, the Stations list and Spots put on that station. |
 | **NEW ONE** | ATNO | New DXCC entity — an all-time new one. |
 | **ZONE** | new zone | New CQ zone on this band (5BWAZ). |
 | **STATE** | new state | New US state on this band (5BWAS) — inferred from the grid, so confirm from the log. |

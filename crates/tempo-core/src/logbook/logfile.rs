@@ -62,6 +62,13 @@
 //! thing to write. A rewrite reads the store once the store holds every change up to its own, so
 //! a rewrite can include a later append; the lane knows every row a rewrite wrote, and never
 //! appends one of them again.
+//!
+//! One thing goes ahead of that order: a contact logged behind a rewrite the store cannot give
+//! yet. The store in memory holds a commit off while a read is open on it, so an edit can wait
+//! for a long read; 1.13 appended a logged contact at once, whatever else was going on, and so
+//! does the lane — to the file as it stands, the edit still to come
+//! (`Lane::append_ahead`). The contact's change is still counted done in order, once the
+//! rewrite is in the file, and the rewrite never writes it twice.
 
 use super::mirror::{file_stamp, FileStamp, MirrorSource, Readiness, READY_WAIT};
 use super::{adif_record_own_log, Export, ExportKind, Logbook, QsoRecord, RecordId, Saved};
@@ -72,9 +79,14 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-/// How long the lane waits before it tries again a write it could not make — the store behind
-/// the change, a disk that refused, a file another machine changed.
+/// How long the lane waits before it tries again a write it could not make — a disk that
+/// refused, a file another machine changed.
 const RETRY: Duration = Duration::from_millis(1_000);
+
+/// While a rewrite waits for the store to take its change, how long the lane waits for the store
+/// at a time before it looks at what it has been handed meanwhile — so a contact logged behind
+/// that rewrite goes to the file at once ([`Lane::append_ahead`]), however long the store takes.
+const BEHIND_POLL: Duration = Duration::from_millis(20);
 
 /// What the lane has done, for the station, a waiting command and the quit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -376,6 +388,8 @@ struct Lane {
     shared: Arc<Shared>,
     /// The foreign stamp last reported, so a refusal is logged once per file.
     reported: Option<FileStamp>,
+    /// Whether the lane stopped last because a rewrite waits for the store ([`BEHIND_POLL`]).
+    behind: bool,
 }
 
 impl Lane {
@@ -432,10 +446,20 @@ impl Lane {
         self.shared.changed.notify_all();
     }
 
+    /// 1.13's append of the change next in order ([`Self::append_rows`]), counted done.
+    fn append(&mut self, rows: &[Arc<QsoRecord>]) -> bool {
+        if !self.append_rows(rows) {
+            return false;
+        }
+        self.advance(1);
+        true
+    }
+
     /// 1.13's append: every row not already in the file, each written and synced; the file then
     /// accounted only if it was accounted before — or was not there, and this append made it —
-    /// and grew by exactly what was written.
-    fn append(&mut self, rows: &[Arc<QsoRecord>]) -> bool {
+    /// and grew by exactly what was written. Counts nothing done: whether it can is the order's
+    /// question ([`Self::work`]).
+    fn append_rows(&mut self, rows: &[Arc<QsoRecord>]) -> bool {
         let fresh: Vec<&Arc<QsoRecord>> = {
             let held = self.file_ids();
             rows.iter()
@@ -443,7 +467,6 @@ impl Lane {
                 .collect()
         };
         if fresh.is_empty() {
-            self.advance(1);
             return true;
         }
         super::io_fence::on_log_lane("an append to log.adi");
@@ -479,7 +502,6 @@ impl Lane {
             (true, Some((now, t))) if now == was + written => Some((now, t)),
             _ => None,
         });
-        self.advance(1);
         true
     }
 
@@ -492,7 +514,8 @@ impl Lane {
     /// 1.13's save of the store's rows, once the store holds every change up to `upto` and only
     /// over the file the lane may replace.
     fn rewrite(&mut self, upto: u64, source: &dyn MirrorSource) -> bool {
-        if source.ready(upto, READY_WAIT) == Readiness::Behind {
+        if source.ready(upto, BEHIND_POLL) == Readiness::Behind {
+            self.behind = true;
             return false;
         }
         if !self.unchanged() {
@@ -558,8 +581,11 @@ impl Lane {
         }
     }
 
-    /// Work through what is owed, in order, until it is all done or a write cannot be made now.
+    /// Work through what is owed, in order, until it is all done or a write cannot be made now —
+    /// with one thing let ahead: a contact appended behind a rewrite the store cannot give yet is
+    /// in the file at once ([`Self::append_ahead`]).
     fn work(&mut self, jobs: &mut VecDeque<Job>, source: &dyn MirrorSource) {
+        self.behind = false;
         while let Some(job) = jobs.front() {
             match job {
                 Job::Noted { .. } => {
@@ -581,6 +607,11 @@ impl Lane {
                         .take_while(|j| matches!(j, Job::Rewrite { .. } | Job::Noted { .. }))
                         .count();
                     let upto = jobs.iter().take(run).map(Job::rev).max().unwrap_or(0);
+                    if source.ready(upto, Duration::ZERO) == Readiness::Behind
+                        && !self.append_ahead(jobs, run)
+                    {
+                        return;
+                    }
                     if !self.rewrite(upto, source) {
                         return;
                     }
@@ -589,6 +620,28 @@ impl Lane {
                 }
             }
         }
+    }
+
+    /// The contacts appended behind a rewrite the store cannot give yet, written to the file now,
+    /// in the order they were logged — skipping `from` jobs, the rewrite's own run. 1.13 appended
+    /// a logged contact the moment it was logged; on the store in memory an edit's commit waits
+    /// for every read open on it, and a contact logged meanwhile must not wait in the file for
+    /// that edit. Whether every one is in the file.
+    ///
+    /// Each stays in the queue, and nothing is counted done here: the file holds the changes IN
+    /// ORDER only once the rewrite is in it ([`Status::done`]). When its turn comes after the
+    /// rewrite, a contact the rewrite already wrote is not written twice — the rewrite's rows are
+    /// the file's ([`Shared::file_ids`]) — and one it did not, its store read having come first,
+    /// is appended again to the file the rewrite left.
+    fn append_ahead(&mut self, jobs: &VecDeque<Job>, from: usize) -> bool {
+        for job in jobs.iter().skip(from) {
+            if let Job::Append { rows, .. } = job {
+                if !self.append_rows(rows) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -616,6 +669,7 @@ fn run(
         path,
         shared,
         reported: None,
+        behind: false,
     };
     let mut jobs: VecDeque<Job> = VecDeque::new();
     let mut flushes: Vec<mpsc::SyncSender<Status>> = Vec::new();
@@ -626,12 +680,17 @@ fn run(
                 Err(_) => return, // the handle went away, and nothing is owed
             }
         } else {
-            match rx.recv_timeout(retry) {
+            match rx.recv_timeout(if lane.behind { BEHIND_POLL } else { retry }) {
                 Ok(m) => Some(m),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => {
-                    // The handle went away: one last try at what is owed, then stop.
+                    // The handle went away: one last try at what is owed, then stop — as patient
+                    // as a write always was with a store still taking the change.
+                    let until = Instant::now() + READY_WAIT;
                     lane.work(&mut jobs, &*source);
+                    while lane.behind && Instant::now() < until {
+                        lane.work(&mut jobs, &*source);
+                    }
                     return;
                 }
             }
@@ -643,6 +702,15 @@ fn run(
             take(m, &mut jobs, &mut flushes);
         }
         lane.work(&mut jobs, &*source);
+        // A flush is answered once the lane has done what it can — as patient as a write always
+        // was with a store still taking the change, and still writing a contact logged meanwhile.
+        let until = Instant::now() + READY_WAIT;
+        while !flushes.is_empty() && lane.behind && Instant::now() < until {
+            while let Ok(m) = rx.try_recv() {
+                take(m, &mut jobs, &mut flushes);
+            }
+            lane.work(&mut jobs, &*source);
+        }
         let now = lane.status().clone();
         for reply in flushes.drain(..) {
             let _ = reply.send(now.clone());
@@ -770,6 +838,27 @@ mod tests {
 
     fn file(d: &Dir) -> Vec<u8> {
         std::fs::read(d.log()).unwrap()
+    }
+
+    /// The calls `log.adi` holds, in file order — none when there is no file.
+    fn calls(d: &Dir) -> Vec<String> {
+        Logbook::load(&d.log())
+            .records()
+            .iter()
+            .map(|r| r.call.clone())
+            .collect()
+    }
+
+    /// Whether `f` comes true within a few seconds, polling.
+    fn soon(mut f: impl FnMut() -> bool) -> bool {
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        f()
     }
 
     /// What 1.13's own save and appends leave in a folder of their own, for the same log.
@@ -1025,9 +1114,10 @@ mod tests {
         assert_eq!(file(&d), saved_by_1_13(&held.log()));
     }
 
-    /// Order: a change is written only once every change before it is; a note is in the file once
-    /// what came before it is; and a store behind the change holds the rewrite (and everything
-    /// after it) until it has caught up.
+    /// Order: a change is counted written only once every change before it is; a note is in the
+    /// file once what came before it is; and a store behind the change holds the rewrite (and
+    /// everything after it) until it has caught up — all but a logged contact, which is in the
+    /// file at once, as 1.13 appended it, and counted done in its turn.
     #[test]
     fn changes_are_written_in_the_order_they_were_made() {
         let d = Dir::new("order");
@@ -1043,11 +1133,127 @@ mod tests {
         let st = w.status();
         assert_eq!((st.done, st.sent), (0, 3), "nothing yet: {st:?}");
         assert!(st.pending());
-        assert!(!d.log().exists(), "not even the append after it");
+        assert!(
+            soon(|| calls(&d) == ["K1ABC"]),
+            "but the logged contact is in the file: {:?}",
+            calls(&d)
+        );
         held.behind
             .store(false, std::sync::atomic::Ordering::SeqCst);
         written(&w, 3);
         assert!(!w.status().pending());
+        assert_eq!(calls(&d), ["K0ABC", "K1ABC"], "and the rewrite kept it");
+    }
+
+    /// ★ A LOGGED CONTACT DOES NOT WAIT FOR AN EDIT (SPEC-2 v3 C19, D1-A). The store in memory
+    /// holds an edit's commit off while a read is open on it, and the edit's rewrite waits with
+    /// it; a contact logged meanwhile goes into `log.adi` at once, as 1.13 appended it, so a crash
+    /// then keeps it. Nothing after the edit is counted done until the edit is in the file too,
+    /// and the rewrite that writes the edit writes the contact once — or, when the store took the
+    /// edit but not yet the contact, the contact is appended again to the file the rewrite left.
+    /// Each case ends as 1.13 left its file: 1.13's save of the log, then its appends.
+    #[test]
+    fn a_contact_logged_behind_an_edit_the_store_has_not_taken_is_in_the_file_at_once() {
+        for store_has_the_contact in [true, false] {
+            let d = Dir::new(&format!("ahead-edit-{store_has_the_contact}"));
+            let held = Arc::new(Held::default());
+            let all = rows(&d, 4);
+            held.set(&all[..3]);
+            let w = lane(&d, &held);
+            w.rewrite(1);
+            written(&w, 1);
+
+            // An edit of the first contact the store has not taken, then a contact logged.
+            held.behind.store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut edited = QsoRecord::clone(&all[0]);
+            edited.comment = Some("edited".into());
+            w.rewrite(2);
+            w.append(3, vec![Arc::clone(&all[3])]);
+            assert!(
+                soon(|| calls(&d).contains(&"K3ABC".to_string())),
+                "the logged contact is in log.adi while the edit waits"
+            );
+            let crash = Logbook::load(&d.log());
+            assert!(
+                crash
+                    .records()
+                    .iter()
+                    .all(|r| r.comment.as_deref() != Some("edited")),
+                "premise: the edit is not in it yet"
+            );
+            assert_eq!(
+                w.status().done,
+                1,
+                "and nothing after the edit is counted done"
+            );
+
+            // The store takes the edit, and the contact or not yet.
+            let mut log = vec![Arc::new(edited), Arc::clone(&all[1]), Arc::clone(&all[2])];
+            if store_has_the_contact {
+                log.push(Arc::clone(&all[3]));
+            }
+            held.set(&log);
+            held.behind
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            written(&w, 3);
+            assert_eq!(
+                calls(&d),
+                ["K0ABC", "K1ABC", "K2ABC", "K3ABC"],
+                "store has the contact: {store_has_the_contact}: the contact once"
+            );
+            if store_has_the_contact {
+                assert_eq!(
+                    file(&d),
+                    saved_by_1_13(&held.log()),
+                    "1.13's save of the log"
+                );
+            }
+        }
+    }
+
+    /// A held DELETE, and a held PURGE, before a logged contact. While the store has not taken the
+    /// removal, the file — what a crash leaves — still holds what it removes, and the contact
+    /// logged after it: nothing is lost, and nothing is removed early. The rewrite then writes
+    /// the log: the removed contacts gone for good, the logged one there once.
+    #[test]
+    fn a_held_delete_or_purge_before_a_logged_contact_leaves_the_file_whole_until_the_rewrite() {
+        for purge in [false, true] {
+            let d = Dir::new(&format!("ahead-removal-{purge}"));
+            let held = Arc::new(Held::default());
+            let all = rows(&d, 4);
+            held.set(&all[..3]);
+            let w = lane(&d, &held);
+            w.rewrite(1);
+            written(&w, 1);
+
+            held.behind.store(true, std::sync::atomic::Ordering::SeqCst);
+            w.rewrite(2);
+            w.append(3, vec![Arc::clone(&all[3])]);
+            assert!(
+                soon(|| calls(&d) == ["K0ABC", "K1ABC", "K2ABC", "K3ABC"]),
+                "purge {purge}: a crash now keeps every contact, the logged one too: {:?}",
+                calls(&d)
+            );
+
+            let log: Vec<Arc<QsoRecord>> = if purge {
+                vec![Arc::clone(&all[3])]
+            } else {
+                vec![
+                    Arc::clone(&all[0]),
+                    Arc::clone(&all[2]),
+                    Arc::clone(&all[3]),
+                ]
+            };
+            held.set(&log);
+            held.behind
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            written(&w, 3);
+            assert_eq!(
+                file(&d),
+                saved_by_1_13(&held.log()),
+                "purge {purge}: the log, nothing removed come back, the logged contact once"
+            );
+        }
     }
 
     /// A change the store refused and is sent again keeps its revision — it is the same change —

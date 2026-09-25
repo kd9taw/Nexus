@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { render, waitFor, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseRules, specificity, cmpSpec } from './cssCascade'
+// Imported here, not inside a test: loading the Logbook module (~0.6 s) then counts against no
+// test's time limit. (`vi.mock` below is hoisted above this import either way.)
+import { Logbook } from './components/Logbook'
 import type { LogQuestion } from './features/logAnswers'
+import { t } from './i18n'
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE LOGBOOK ROW'S ACTION CLUSTER MUST FIT ITS GRID TRACK.
@@ -171,6 +175,10 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
+// Each test's Logbook unmounted when the test ends. Left mounted, it stays subscribed to the log
+// answers still on their way, and one landing after this file's window is gone re-renders it
+// there: "window is not defined", counted as an uncaught error against the run.
+afterEach(cleanup)
 
 /** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
 const engineLog = vi.hoisted(() => vi.fn())
@@ -198,7 +206,6 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
   // `moreColumns` is read from localStorage on mount (#239's "More columns" toggle), so the
   // wide table is rendered by seeding it rather than by driving the chip.
   window.localStorage.setItem('nexus.logbook.moreColumns', moreColumns ? '1' : '0')
-  const { Logbook } = await import('./components/Logbook')
   engineLog.mockResolvedValue([
     {
       call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
@@ -213,6 +220,17 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
     <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
   )
   await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+  // The whole cluster, the satellite menu in it. That menu is the one control a SEPARATE answer
+  // draws — the backend's list of names (`lotwSatNames`) — which lands on its own schedule, so
+  // the row can be on screen a moment before it. Counted then, the cluster is nine controls, not
+  // the ten an operator sees.
+  const satMenu = t('logbook.row.sat.aria', { call: 'K0ABC' })
+  await waitFor(() =>
+    expect(
+      container.querySelector(`.logbook-row:not(.head) select[aria-label="${satMenu}"]`),
+      'the satellite names never reached the row',
+    ).not.toBeNull(),
+  )
   return container.querySelector('.logbook-row:not(.head)') as HTMLElement
 }
 

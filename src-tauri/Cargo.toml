@@ -150,6 +150,12 @@ tempo-audio = { path = "../crates/tempo-audio", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 gdk = "0.18"
 
+[dev-dependencies]
+# The same crate as above with one more feature, for this crate's tests only: `test_util`, the log
+# as a test reads it (SPEC-2 C19 Part D), which tempo-app's own tests read it through too. A
+# dev-dependency's feature is never on in a shipped build.
+tempo-app = { path = "../crates/tempo-app", features = ["test-util"] }
+
 [features]
 # FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge. OFF by default: it links
 # FTDI's closed-source LibFT4222/D2XX, which macOS does not ship and which a GPL-3.0-only

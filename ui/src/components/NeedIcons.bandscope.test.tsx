@@ -15,6 +15,7 @@ import { OperateRoster } from './OperateRoster'
 import { OperateDecodes } from './OperateDecodes'
 import { visibleNeeds } from '../features/needs'
 import type { DecodeRow, NeedAlert, NeedTag, Station } from '../types'
+import { t } from '../i18n'
 
 vi.mock('../api', () => ({
   getDeclination: vi.fn(() => Promise.resolve(0)),
@@ -139,8 +140,9 @@ describe('the grid band scope reaches the ROSTER (his "roster mode")', () => {
       grid: 'off',
       rareGrid: 'off',
     })
-    // The roster's dense column renders NEED_CHIP.short — 'WANT', not the board's 'WANTED'.
-    expect(screen.getByText('WANT')).toBeTruthy()
+    // The roster's dense column renders NEED_CHIP.short — the WATCH tile's own word (one look for
+    // one list), and nothing on the list here draws a tile of its own.
+    expect(screen.getByText(t('watchlist.tile.label'))).toBeTruthy()
   })
 })
 

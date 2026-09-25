@@ -268,6 +268,9 @@ describe('the FT cockpit card carries a contest-scoped dupe badge', () => {
     renderCockpit(workedInContest, true)
     const c = await card()
     await waitFor(() => expect(c.querySelector('.recall-badge.contest-dupe')).not.toBeNull())
+    // The contest badge reads the contest log in the snapshot, at once; the lifetime one reads the
+    // LOG's answer, which lands on its own schedule — wait for it too before reading both.
+    await waitFor(() => expect(c.querySelector('.recall-badge.dupe')).not.toBeNull())
     const b = badges(c)
     expect(b.contest).toBe('Contest dupe')
     expect(b.lifetime, 'the lifetime badge was explicitly kept, not replaced').toBe('Dupe 20m')

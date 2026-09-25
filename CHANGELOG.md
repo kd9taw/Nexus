@@ -138,9 +138,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Needed board now puts every station on your watch list at the top whenever it is heard.**
   By call, prefix, country or grid, worked or not, as the WATCH tile already does on the Call
-  Roster, the Stations list and Spots. The Watch list chip shows exactly those stations. Any calls
-  left in the old hidden "Wanted watch list" setting are added to your watch list (Settings ▸ Spots
-  & Alerts) once, with a note saying so.
+  Roster, the Stations list and Spots, and it carries that same lime WATCH tile on the board and in
+  Band Activity. The Watch list chip shows exactly those stations. Any calls left in the old hidden
+  "Wanted watch list" setting are added to your watch list (Settings ▸ Spots & Alerts) once, with a
+  note saying so.
 
 - **Big logbooks no longer weigh on every window.** Each window now asks Nexus for just the contacts
   it shows instead of holding its own copy of the whole log. With 150,000 contacts that is about

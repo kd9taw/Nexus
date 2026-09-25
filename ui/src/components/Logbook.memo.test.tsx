@@ -6,7 +6,7 @@
 // is taken once per log now (big-log fix, U3). The positive control is the new log at the end:
 // the count must still follow the log it describes.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 import { lotwBacklog } from '../features/lotwBacklog'
@@ -64,6 +64,11 @@ describe('the Logbook counts the LoTW backlog once per log, not once per render'
     rerender(view(14.075, 1))
     rerender(view(14.076, 1))
     rerender(view(14.077, 1))
+    // A recount happens where the log is, at the end of the engine's round trip — never during the
+    // render that asked. Let one land before counting, or a recount could not be seen.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
     expect(vi.mocked(lotwBacklog).mock.calls.length, 'recounted on a render with the same log').toBe(passes)
 
     engine.log = [...engine.log, qso('K9XYZ')]

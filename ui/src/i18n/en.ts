@@ -1882,7 +1882,6 @@ export const EN = {
     'This entity/zone/grid is worked on this band but not yet confirmed — a LoTW match or a paper card would close it (eQSL and QRZ do not count toward awards, so they do not clear this). Not a claim about this callsign: B4 is the worked-this-call chip.',
   'need.badge.pota.title': 'Live POTA activator',
   'need.badge.sota.title': 'Live SOTA activator',
-  'need.badge.wanted.label': 'WANTED',
   'need.badge.wanted.title': 'On your watch list',
 
   // The board/roster chip. `short` is the dense-column form — a translation needs both, and
@@ -1918,8 +1917,6 @@ export const EN = {
   'need.chip.dxped.title': 'Active announced DXpedition — a limited-time window',
   'need.chip.pota.title': "Live POTA activator — the row's call is on a park right now",
   'need.chip.sota.title': "Live SOTA activator — the row's call is on a summit right now",
-  'need.chip.wanted.label': 'WANTED',
-  'need.chip.wanted.short': 'WANT',
   'need.chip.wanted.title': 'On your watch list',
 
   // ── Status roles (the colour+glyph pairing table) ───────────────────────────────────

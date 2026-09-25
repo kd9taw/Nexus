@@ -709,6 +709,7 @@ pub(super) fn configuration_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     const ID: &str = "10000000-0000-4000-8000-000000000001";
     fn request(collection: Collection) -> Request {
         Request {
@@ -766,7 +767,7 @@ mod tests {
             .map(|i| adif(&format!("K1T{i:03}"), "010000"))
             .collect();
         engine.lock().unwrap().import_adif(&data);
-        let before = engine.lock().unwrap().get_log();
+        let before = engine.lock().unwrap().stored_records();
         let mut publisher = Publisher::default();
         let now = Instant::now();
         let mut req = request(Collection::Log);
@@ -775,7 +776,7 @@ mod tests {
         assert_eq!(first["rows"].as_array().unwrap().len(), 128);
         assert_eq!(first["total"], 270);
         assert_eq!(
-            engine.lock().unwrap().get_log(),
+            engine.lock().unwrap().stored_records(),
             before,
             "reading cannot change records, confirmations or connector state"
         );
@@ -968,12 +969,13 @@ mod tests {
         search: &str,
         unconfirmed: bool,
     ) -> Result<(Vec<Value>, usize, Value), &'static str> {
-        // A copy of the log's pointers under the lock; the scan (every row, and with a
-        // search five lowercased fields each) runs after it is released.
-        let records = tempo_app::engine::engine_try_lock(engine)
-            .map_err(|_| "applicationBusy")?
-            .log_snapshot()
-            .records;
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old window against the new over the same rows, and whether the store
+        // holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
+        let records = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
         tempo_core::logbook::io_fence::whole_log_off_engine_lock("Remote's log window");
         let (rows, total) = old_log_window(&records, search, unconfirmed);
         let rows = rows
@@ -1169,14 +1171,17 @@ mod tests {
     }
 
     /// ★ ONE PICTURE: the window's two newest contacts, picked by its pass, are edited out of
-    /// the window and deleted — by the operator, committed to the store (on the 1.13 path, made:
-    /// its store in memory commits them once the read ends) — before the pass's whole records
-    /// are read. They are still the contacts the pass picked: the window is the log as the read
-    /// found it, every row of it, on the store and on the 1.13 path. The next read has both
-    /// changes.
+    /// the window and deleted — by the operator, committed to the store (on the 1.13 path, begun:
+    /// its store in memory commits nothing until the read ends, so there the edit is made as a
+    /// command makes it and the delete after it, `changed_by_a_command`) — before the pass's
+    /// whole records are read. They are still the contacts the pass picked: the window is the log
+    /// as the read found it, every row of it, on the store and on the 1.13 path. The next read
+    /// has both changes.
     #[test]
     fn a_contact_edited_or_deleted_between_the_pass_and_the_whole_read_is_the_one_picked() {
+        use super::log_tests::changed_by_a_command;
         use super::picture::{at_seams, Seam};
+        use tempo_core::logbook::LogOp;
         let text = synthetic_log(400, 0x00C1_8AB7);
         let d = Dir::new("between");
         std::fs::write(d.log(), &text).unwrap();
@@ -1194,6 +1199,8 @@ mod tests {
             let (edit, delete) = (place(&rows[0]["id"]), place(&rows[1]["id"]));
             let (hook, changes) = (e.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
             let counted = changes.clone();
+            let command = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let commanded = command.clone();
             let during = bytes(at_seams(
                 move |seam| {
                     if seam != Seam::Whole {
@@ -1204,14 +1211,25 @@ mod tests {
                         tempo_core::logbook::QsoRecord::clone(&eng.logged_row(edit).expect("held"));
                     r.call = "ZZ9ZZZ".into();
                     r.when_unix = 1_000_000_000;
-                    assert!(eng.update_qso(edit, r));
-                    eng.delete_qso(delete);
                     // On the store they commit while the read runs, beside its snapshot. The 1.13
                     // path's store is in memory, where a read holds off every commit until it
-                    // ends: there they commit after it, and the next read waits for them.
+                    // ends: there the edit is made now, the delete once the edit has committed,
+                    // after the read, and the next read waits for them.
                     if arm == "store" {
+                        assert!(eng.update_qso(edit, r));
+                        assert!(eng.delete_qso(delete));
                         eng.flush_log_store(std::time::Duration::from_secs(60))
                             .expect("committed to the store");
+                    } else {
+                        drop(eng);
+                        let rec = Box::new(r);
+                        *commanded.borrow_mut() = Some(changed_by_a_command(
+                            &hook,
+                            vec![
+                                (edit, LogOp::Edit { id: edit, rec }),
+                                (delete, LogOp::Delete(delete)),
+                            ],
+                        ));
                     }
                     counted.set(counted.get() + 1);
                 },
@@ -1220,8 +1238,15 @@ mod tests {
             assert_eq!(
                 changes.get(),
                 1,
-                "{arm}: premise: the changes landed mid-read"
+                "{arm}: premise: the changes began mid-read"
             );
+            if let Some(command) = command.take() {
+                assert_eq!(
+                    command.join().unwrap(),
+                    [true, true],
+                    "{arm}: premise: both changes made"
+                );
+            }
             assert!(
                 during == before,
                 "{arm}: the window is the log as the read found it\n{during:.300}\n{before:.300}"

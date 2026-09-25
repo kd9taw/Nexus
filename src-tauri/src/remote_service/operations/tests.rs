@@ -30,6 +30,7 @@ mod spot;
 #[path = "transmit_tests.rs"]
 mod transmit;
 use super::*;
+use crate::remote_service::stored_log_tests::StoredLog;
 use std::sync::Arc;
 #[cfg(feature = "radio")]
 #[path = "ai_cw_tests.rs"]
@@ -285,6 +286,17 @@ struct Fixture {
     engine: crate::SharedEngine,
     connection: u64,
     dir: std::path::PathBuf,
+    /// Declared last, so dropped last: the folder goes once the engine has, and with it every
+    /// thread of the engine's that writes the log there (the 1.13 path's `log.adi` lane, the
+    /// store's mirror), each joined after its last try at what it still owed.
+    _folder: Folder,
+}
+/// A fixture's folder, removed when it is dropped.
+struct Folder(std::path::PathBuf);
+impl Drop for Folder {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
 }
 impl Fixture {
     fn new() -> Self {
@@ -304,6 +316,7 @@ impl Fixture {
             authority,
             engine: Arc::new(Mutex::new(engine)),
             connection,
+            _folder: Folder(dir.clone()),
             dir,
         }
     }
@@ -352,10 +365,63 @@ impl Fixture {
         serde_json::from_value(json!({"type":"logManual","requestId":id(),"stationBootId":state["stationBootId"],"leaseId":state["leaseId"],"expectedRevision":state["revision"],"commandWindowId":state["commandWindowId"],"clientSequence":state["nextSequence"],"record":{"call":"W1AW","grid":"FN31","country":null,"state":"CT","band":"20m","freqMhz":14.25,"mode":"SSB","rstSent":"59","rstRcvd":"57","name":"Joe","qth":"Newington","comment":"Remote test","notes":"Keep this note","whenUnix":super::super::now_ms()/1000,"confirmed":false,"awardConfirmed":false}})).unwrap()
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.dir).unwrap();
-    }
+/// ★ THE FOLDER GOES LAST. Since SPEC-2 v3 C19 (D1-A) a session on the 1.13 path writes its
+/// `log.adi` a moment after each change, on a thread of its own (the log's lane), and the lane
+/// makes what it still owes one last try as the engine goes: the engine's drop returns once it
+/// has. A fixture that removed its folder while its engine lived raced that lane: a write landing
+/// during the removal failed it (directory not empty), and one landing after it made the folder
+/// again. Here the lane still owes a write when the fixture goes (the folder refuses the new
+/// `contacts.adi`), and the folder is gone once the fixture is, and stays gone. The control:
+/// once the folder takes the file, the engine's own drop writes it before it returns.
+#[cfg(unix)]
+#[test]
+fn the_fixtures_folder_goes_after_its_engine_and_the_logs_lane() {
+    use std::os::unix::fs::PermissionsExt;
+    let refuse_new_files = |dir: &std::path::Path, refuse: bool| {
+        let mode = if refuse { 0o500 } else { 0o700 };
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let owing = || {
+        let f = Fixture::new();
+        refuse_new_files(&f.dir, true);
+        f.engine.lock().unwrap().import_adif(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>",
+        );
+        assert!(
+            f.engine
+                .lock()
+                .unwrap()
+                .flush_log_store(Duration::from_millis(200))
+                .is_err(),
+            "premise: log.adi is still owed the contact"
+        );
+        f
+    };
+
+    let f = owing();
+    refuse_new_files(&f.dir, false);
+    let Fixture {
+        engine,
+        dir,
+        _folder: folder,
+        ..
+    } = f;
+    assert_eq!(Arc::strong_count(&engine), 1, "premise: the only handle");
+    drop(engine);
+    assert_eq!(
+        tempo_core::logbook::Logbook::load(&dir.join("contacts.adi")).len(),
+        1,
+        "control: the engine's drop wrote what log.adi was owed"
+    );
+    drop(folder);
+
+    let f = owing();
+    let dir = f.dir.clone();
+    drop(f);
+    assert!(
+        !dir.exists(),
+        "the folder is gone, and nothing made it again"
+    );
 }
 
 fn control_state(f: &Fixture, now: Instant) -> Value {
@@ -989,7 +1055,7 @@ fn manual_logging_requires_local_permission_and_one_controller() {
         ),
         Err("controllerBusy")
     );
-    assert!(f.engine.lock().unwrap().log_records().is_empty());
+    assert!(f.engine.lock().unwrap().stored_log().is_empty());
 }
 #[test]
 fn manual_logging_syncs_the_actual_adif_and_returns_one_receipt_on_replay() {
@@ -1009,11 +1075,11 @@ fn manual_logging_syncs_the_actual_adif_and_returns_one_receipt_on_replay() {
         result
     );
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), bytes);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     let mut reloaded = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     reloaded.set_log_path(f.dir.join("contacts.adi"));
-    assert_eq!(reloaded.log_records().len(), 1);
-    assert_eq!(reloaded.log_records()[0].call, "W1AW");
+    assert_eq!(reloaded.stored_log().len(), 1);
+    assert_eq!(reloaded.stored_log()[0].call, "W1AW");
     assert_eq!(
         serde_json::to_value(f.engine.lock().unwrap().settings()).unwrap(),
         serde_json::to_value(before).unwrap()
@@ -1047,9 +1113,9 @@ fn manual_logging_preserves_memory_and_uncertainty_on_file_failure_without_retry
     let command = f.command(&f.acquire(now));
     let result = f.run(&command, now).unwrap();
     assert_eq!(result["outcome"], "unknown");
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert_eq!(f.run(&command, now).unwrap(), result);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert!(f.dir.join("contacts.adi").is_dir());
 }
 #[test]
@@ -1086,7 +1152,7 @@ fn manual_logging_refuses_expired_windows_context_changes_and_contest_recording(
             f.run(&command, if kind == "window" { now + WINDOW } else { now }),
             Err(expected)
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
         if kind == "fieldDay" || kind == "recording" {
             let command = f.command(&f.state(now));
             assert_eq!(
@@ -1118,7 +1184,7 @@ fn manual_logging_disconnect_takeover_and_reconnect_cannot_restore_a_lease() {
         let state = f.state(now);
         assert_ne!(state["phase"], "controlling");
         assert_eq!(state["allowed"], kind != "takeover");
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
     }
 }
 #[test]
@@ -1161,7 +1227,7 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
             Err("localPermissionRequired"),
             "{revoke}"
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
     }
 }
 /// #318: a logging or station-control revoke must not fail because Core is busy — it used to
@@ -1212,7 +1278,7 @@ fn a_logging_or_station_revoke_does_not_wait_for_a_busy_core() {
         );
         assert_eq!(result, Err("localPermissionRequired"), "{grant}");
         assert!(!f.engine.lock().unwrap().rtty_armed(), "{grant}");
-        assert!(f.engine.lock().unwrap().log_records().is_empty(), "{grant}");
+        assert!(f.engine.lock().unwrap().stored_log().is_empty(), "{grant}");
         let status = f.authority.local_status();
         assert_eq!(status["controller"], Value::Null, "{grant}: lease ended");
         assert_eq!(status["devices"], json!([]), "{grant}: OTHER not granted");
@@ -1288,7 +1354,7 @@ fn manual_logging_uses_station_time_unless_the_operator_explicitly_overrides_it(
     let before = super::super::now_ms() / 1000;
     assert_eq!(f.run(&command, now).unwrap()["outcome"], "applied");
     let engine = f.engine.lock().unwrap();
-    let qso = &engine.log_records()[0];
+    let qso = &engine.stored_log()[0];
     assert!(qso.when_unix >= before && qso.when_unix <= super::super::now_ms() / 1000);
 }
 
@@ -1326,7 +1392,7 @@ fn expired_receipt_never_reopens_an_old_sequence_under_a_live_lease() {
         Err("resultExpired")
     );
     assert_eq!(f.run(&request, later), Err("resultExpired"));
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
 }
 
@@ -1347,7 +1413,7 @@ fn a_desktop_log_collision_and_a_returned_profile_do_not_repeat_remote_work() {
     let result = f.run(&request, now).unwrap();
     assert_eq!(result["outcome"], "rejected");
     assert_eq!(result["reason"], "alreadyPresent");
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), adif);
     let next = f.command(&f.state(now));
     {

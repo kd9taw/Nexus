@@ -7,6 +7,7 @@ use super::*;
 use crate::remote_service::query::log_tests::{
     launch, random_change, settle, synthetic, test_country, test_state, Dir, Gen, MY_CALL,
 };
+use crate::remote_service::stored_log_tests::StoredLog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -18,12 +19,16 @@ use std::sync::{Arc, Mutex};
 /// A position is never the answer: one kept from an earlier read is stale the moment the
 /// OTHER writer deletes above it, and acting on it deleted or rewrote a different contact.
 /// Another instance's changes are folded in first, so the answer is about the log as it is.
+///
+/// A key target is found in the log as the store holds it ([`StoredLog`]), in place of the copy
+/// in memory: these tests hold the old search against the new over the same rows, and whether
+/// the store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
 fn old_locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
     engine.sync_shared_log_if_changed();
     match target {
         Target::Key(t) => engine
-            .log_records()
-            .iter()
+            .stored_log()
+            .into_iter()
             .find(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
             .and_then(|r| r.id),
         Target::Id(t) => {
@@ -93,7 +98,7 @@ fn targets(e: &crate::SharedEngine) -> Vec<Target> {
         })
     };
     let mut out = Vec::new();
-    for (i, r) in eng.log_records().iter().enumerate() {
+    for (i, r) in eng.stored_log().iter().enumerate() {
         out.push(key(&r.call, r.when_unix, row_key(r)));
         let id =
             r.id.expect("every row the log holds carries an id")
@@ -147,10 +152,10 @@ fn every_target_is_found_as_the_old_locate_found_it() {
     let store = launch(&d);
     {
         let eng = store.lock().unwrap();
-        let log = eng.log_records();
+        let log = eng.stored_log();
         assert_eq!(log.len(), 2_000, "premise: every contact, twins too");
         let (mut seconds, mut copies) = (HashMap::new(), HashMap::new());
-        for r in log {
+        for r in &log {
             *seconds.entry((r.call.clone(), r.when_unix)).or_insert(0) += 1;
             let mut unnamed = QsoRecord::clone(r);
             unnamed.id = None;
@@ -166,7 +171,7 @@ fn every_target_is_found_as_the_old_locate_found_it() {
         );
     }
     for (arm, e) in [("the store", &store), ("the 1.13 path", &loaded(&m))] {
-        let contacts = e.lock().unwrap().log_records().len();
+        let contacts = e.lock().unwrap().stored_log().len();
         let (found, refused) = assert_found_as_before(e, arm);
         assert_eq!(
             found,
@@ -207,7 +212,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
     let e = launch(&d);
     let first = |e: &crate::SharedEngine| {
         let eng = e.lock().unwrap();
-        let r = QsoRecord::clone(&eng.log_records()[0]);
+        let r = QsoRecord::clone(&eng.stored_log()[0]);
         let t = Target::Key(KeyTarget {
             call: r.call.clone(),
             when_unix: r.when_unix,
@@ -251,13 +256,13 @@ fn a_key_target_searched_under_the_engine_lock_is_refused() {
     let d = Dir::new("find-fence");
     std::fs::write(d.log(), twins_log(5, 0x0C18_A2F3)).unwrap();
     let e = launch(&d);
-    let eng = tempo_app::engine::engine_lock(&e);
-    let r = QsoRecord::clone(&eng.log_records()[0]);
+    let r = QsoRecord::clone(&e.lock().unwrap().stored_log()[0]);
     let t = Target::Key(KeyTarget {
         call: r.call.clone(),
         when_unix: r.when_unix,
         key: row_key(&r),
     });
+    let eng = tempo_app::engine::engine_lock(&e);
     let rows = eng.log_rows();
     let _ = find(&rows, &t);
 }

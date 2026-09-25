@@ -14,6 +14,7 @@ import { render, waitFor, fireEvent, cleanup, within } from '@testing-library/re
 import { Logbook } from './Logbook'
 import * as api from '../api'
 import type { LogQuestion } from '../features/logAnswers'
+import { __resetLogSourceForTests } from '../features/logSource'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -99,6 +100,9 @@ describe('the Logbook shows the contact end time (#329)', () => {
     const cells = [...withEnd.querySelectorAll('.logbook-row:not(.head) .log-cell')].map((c) => c.textContent)
     expect(cells, 'the end time is on the row, seconds and all').toContain('14:35:20')
     cleanup()
+    // A new window, as between tests: the window's log answers outlive a render, and the second
+    // table would otherwise be drawn from the first one's answer until its own landed.
+    __resetLogSourceForTests()
 
     // THE CONTROL that makes the assertion above mean something: the same row, same table,
     // with no end time. Without it, a cell that always printed the same thing would pass.

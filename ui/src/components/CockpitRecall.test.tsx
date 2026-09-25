@@ -208,7 +208,10 @@ function makeSnap(rigMode: 'USB' | 'CW'): AppSnapshot {
   } as unknown as AppSnapshot
 }
 
-/** Type + blur a call in the log pane and wait for the QRZ resolution to land. */
+/** Type + blur a call in the log pane and wait for the card: the QRZ resolution AND the prior-QSO
+ *  history, two answers that land on their own schedules. The history is the LOG's answer (a
+ *  `LogSource` round trip), and the card is drawn before it arrives — waiting for the card alone
+ *  read its history list while that answer could still be on its way. */
 async function resolveCall(): Promise<HTMLElement> {
   const logPane = document.querySelector('[data-pane="log"]') as HTMLElement
   expect(logPane, 'no log pane').not.toBeNull()
@@ -218,6 +221,9 @@ async function resolveCall(): Promise<HTMLElement> {
     fireEvent.blur(callInput) // the silent on-blur lookup path
   })
   await waitFor(() => expect(document.querySelector('.recall-card')).not.toBeNull())
+  await waitFor(() =>
+    expect(document.querySelector('.recall-card .recall-log-list'), 'the log history never reached the card').not.toBeNull(),
+  )
   return logPane
 }
 

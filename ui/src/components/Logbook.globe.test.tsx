@@ -52,6 +52,9 @@ async function mount() {
   engineLog.mockResolvedValue([qso])
   const view = render(<Logbook defaultBand="40m" defaultFreqMhz={7.074} defaultMode="FT8" />)
   await waitFor(() => expect(view.container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+  // The band is drawn for a log with contacts in it: the log's SIZE, an answer of its own that the
+  // rows say nothing about. Waited for here, so "no band" below means switched off, not not-yet.
+  await waitFor(() => expect(view.container.querySelector('.count-badge')?.textContent).toBe('1'))
   return view.container
 }
 

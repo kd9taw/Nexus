@@ -10,6 +10,8 @@ pub(crate) mod operations;
 pub(crate) mod query;
 pub(crate) mod sstv;
 #[cfg(test)]
+pub(crate) mod stored_log_tests;
+#[cfg(test)]
 mod tests;
 mod transport;
 mod vault;

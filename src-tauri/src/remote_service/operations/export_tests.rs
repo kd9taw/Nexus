@@ -41,7 +41,7 @@ fn seed(f: &Fixture) {
     ]
     .concat();
     f.engine.lock().unwrap().import_adif(&text);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 5);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 5);
 }
 
 fn run(f: &Fixture, version: u8, request: &Request) -> Result<Value, &'static str> {
@@ -168,7 +168,7 @@ fn the_file_is_the_desktops_and_nothing_else(f: &Fixture) {
     let e = f.engine.lock().unwrap();
     for call in ["K1CCC", "K1DDD", "K1EEE"] {
         assert!(
-            e.log_records().iter().any(|r| r.call == call),
+            e.stored_log().iter().any(|r| r.call == call),
             "{call} is in the log"
         );
         assert!(!text.contains(call), "{call} is not in this activation");
@@ -245,7 +245,7 @@ fn only_a_listed_activation_can_be_named_and_a_read_spends_no_command() {
     // A read spends no command: the next write still takes the same sequence.
     let after = control_state_version(&f, Instant::now(), 4);
     assert_eq!(after["nextSequence"], state["nextSequence"]);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 5);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 5);
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn a_long_activation_arrives_in_whole_chunks_and_a_file_over_the_bound_is_refuse
         })
         .collect();
     f.engine.lock().unwrap().import_adif(&long);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 400);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 400);
     let state = lease(&f);
     let (bytes, file) = download(&f, &state, &selection("US-1234", DAY));
     assert!(
@@ -455,14 +455,17 @@ fn an_export_waits_for_a_contact_just_logged_with_both_locks_free_and_is_busy_pa
 /// ★ ONE PICTURE, THE ENGINE FREE: the file is cut from the picture of the log its activation was
 /// found in. After the pass that finds it and before its contacts' whole records are read, the
 /// operator moves one of its two contacts to the next day and deletes the other — committed to the
-/// store (on the 1.13 path, made: its store in memory commits them once the read ends): the file
-/// is still both contacts, byte for byte the file before. At every step of the read the Engine
-/// lock is free, and the read is one pass and then the whole records, nothing more. The next read
-/// has the changes: the activation holds no contact, and is not found.
+/// store (on the 1.13 path, begun: its store in memory commits nothing until the read ends, so
+/// there the move is made as a command makes it and the delete after it, `changed_by_a_command`):
+/// the file is still both contacts, byte for byte the file before. At every step of the read the
+/// Engine lock is free, and the read is one pass and then the whole records, nothing more. The
+/// next read has the changes: the activation holds no contact, and is not found.
 #[test]
 fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
+    use crate::remote_service::query::log_tests::changed_by_a_command;
     use crate::remote_service::query::picture::{at_seams, Seam};
     use std::{cell::RefCell, rc::Rc};
+    use tempo_core::logbook::LogOp;
     for f in [Fixture::new(), Fixture::with_store()] {
         seed(&f);
         let state = lease(&f);
@@ -470,6 +473,8 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
         let before = desktop_file(&f, "US-1234", DAY, Some("W9XYZ"));
         let (hook, seams) = (f.engine.clone(), Rc::new(RefCell::new(Vec::new())));
         let seen = seams.clone();
+        let command = Rc::new(RefCell::new(None));
+        let commanded = command.clone();
         let during = at_seams(
             move |seam| {
                 assert!(
@@ -482,24 +487,41 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
                 }
                 let mut e = hook.lock().unwrap();
                 let id = |e: &tempo_app::engine::Engine, call: &str| {
-                    let r = e.log_records().iter().find(|r| r.call == call);
+                    let r = e.stored_log().into_iter().find(|r| r.call == call);
                     r.and_then(|r| r.id).unwrap()
                 };
                 let moved = id(&e, "K1AAA");
                 let mut r = tempo_core::logbook::QsoRecord::clone(&e.logged_row(moved).unwrap());
                 r.when_unix += 86_400;
-                assert!(e.update_qso(moved, r));
                 let deleted = id(&e, "K1BBB");
-                assert!(e.delete_qso(deleted));
-                // A store in memory holds off a commit until the read ends: there the changes
-                // are committed after it.
-                if !e.log_on_file() {
+                // A store in memory holds off a commit until the read ends: there the move is
+                // made now and the delete once the move has committed, after the read.
+                if e.log_on_file() {
+                    drop(e);
+                    let rec = Box::new(r);
+                    *commanded.borrow_mut() = Some(changed_by_a_command(
+                        &hook,
+                        vec![
+                            (moved, LogOp::Edit { id: moved, rec }),
+                            (deleted, LogOp::Delete(deleted)),
+                        ],
+                    ));
+                } else {
+                    assert!(e.update_qso(moved, r));
+                    assert!(e.delete_qso(deleted));
                     e.flush_log_store(std::time::Duration::from_secs(60))
                         .expect("committed to the store");
                 }
             },
             || download(&f, &state, &pick).0,
         );
+        if let Some(command) = command.take() {
+            assert_eq!(
+                command.join().unwrap(),
+                [true, true],
+                "premise: both changes made"
+            );
+        }
         assert_eq!(
             *seams.borrow(),
             [Seam::Each, Seam::Whole],

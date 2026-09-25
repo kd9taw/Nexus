@@ -807,6 +807,7 @@ pub(crate) fn test_fresh_catalog() -> crate::TleSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     fn fixture() -> (crate::SharedEngine, Sources) {
         let settings = tempo_app::settings::Settings {
             mycall: "W1AW".into(),
@@ -821,7 +822,7 @@ mod tests {
             format!("<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<GRIDSQUARE:4>{grid}{sat}<QSO_DATE:8>20260910<TIME_ON:6>000000<EOR>\n",call.len())
         }).collect();
         engine.import_adif(&adif);
-        assert_eq!(engine.log_records().len(), 2301);
+        assert_eq!(engine.stored_log().len(), 2301);
         let mut prop = propagation::offline(crate::now_unix() - 1, "W1AW", "FN31RX09");
         prop.source = "live".into();
         let context = crate::PropContext {
@@ -1285,10 +1286,15 @@ mod tests {
         engine: &crate::SharedEngine,
     ) -> Result<OldLogContext, &'static str> {
         let deadline = Instant::now() + Duration::from_secs(2);
-        let count = {
-            let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
-            e.log_records().len()
-        };
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old algorithm against the new reader over the same rows, and whether the
+        // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+        // picture, so the old read's log token has nothing left to check.
+        let log = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
+        let count = log.len();
         if count > 1_000_000 {
             return Err("applicationTooLarge");
         }
@@ -1306,14 +1312,11 @@ mod tests {
             let rows = {
                 let e =
                     tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
-                if !Arc::ptr_eq(&context.log, &e.log_read_token())
-                    || e.settings().mycall != context.call
-                    || e.settings().mygrid != context.grid
-                {
+                if e.settings().mycall != context.call || e.settings().mygrid != context.grid {
                     return Err("applicationBusy");
                 }
                 let mut rows = Vec::new();
-                for q in &e.log_records()[offset..(offset + 128).min(count)] {
+                for q in &log[offset..(offset + 128).min(count)] {
                     for s in [&q.call, &q.band, &q.mode].into_iter().chain(
                         [q.grid.as_ref(), q.state.as_ref(), q.prop_mode.as_ref()]
                             .into_iter()

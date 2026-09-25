@@ -8,6 +8,7 @@ use crate::logstore::tests::{
     engine_on_store, eventually, flush, id_at, legacy_log, qso, same_log, stored, Dir,
 };
 use crate::logstore::DURABLE_WAIT;
+use crate::test_util::StoredLog;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -82,7 +83,7 @@ fn shared(d: &Dir, n: usize) -> Arc<Mutex<Engine>> {
 fn a_row_another_writer_changes_under_the_plan_is_planned_again_and_both_changes_stand() {
     let d = Dir::new("race-once");
     let engine = shared(&d, 6);
-    let id = id_at(&engine_lock(&engine), 3);
+    let id = id_at(&*engine, 3);
     let plans = Rc::new(Cell::new(0usize));
     let hook = {
         let (engine, plans) = (Arc::clone(&engine), Rc::clone(&plans));
@@ -133,7 +134,7 @@ fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
     e.set_log_path(d.log());
     assert!(e.log_on_file(), "premise: the 1.13 path");
     let engine = Arc::new(Mutex::new(e));
-    let id = id_at(&engine_lock(&engine), 3);
+    let id = id_at(&*engine, 3);
     let plans = Rc::new(Cell::new(0usize));
     let hook = {
         let (engine, plans, path) = (Arc::clone(&engine), Rc::clone(&plans), d.log());
@@ -167,11 +168,10 @@ fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
         "planned again: the first plan read the contact before the take-in changed it"
     );
     durability.wait(DURABLE_WAIT).expect("in log.adi");
-    let held = engine_lock(&engine)
-        .log_records()
-        .iter()
+    let held = engine
+        .stored_records()
+        .into_iter()
         .find(|r| r.id == Some(id))
-        .map(|r| QsoRecord::clone(r))
         .expect("held");
     assert!(
         held.qsl_rcvd.card && held.qsl_rcvd.lotw,
@@ -197,7 +197,7 @@ fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
 fn a_row_that_keeps_changing_answers_log_busy_and_changes_nothing() {
     let d = Dir::new("race-always");
     let engine = shared(&d, 6);
-    let id = id_at(&engine_lock(&engine), 2);
+    let id = id_at(&*engine, 2);
     let plans = Rc::new(Cell::new(0i64));
     let hook = {
         let (engine, plans) = (Arc::clone(&engine), Rc::clone(&plans));
@@ -242,7 +242,7 @@ fn another_windows_change_under_the_plan_is_planned_again() {
     let d = Dir::new("race-window");
     let a = shared(&d, 6);
     let b = Arc::new(Mutex::new(engine_on_store(&d)));
-    let id = id_at(&engine_lock(&a), 4);
+    let id = id_at(&*a, 4);
     let plans = Rc::new(Cell::new(0usize));
     let hook = {
         let (a, b, plans) = (Arc::clone(&a), Arc::clone(&b), Rc::clone(&plans));
@@ -280,10 +280,7 @@ fn another_windows_change_to_another_row_is_no_reason_to_plan_again() {
     let d = Dir::new("race-window-other");
     let a = shared(&d, 6);
     let b = Arc::new(Mutex::new(engine_on_store(&d)));
-    let (id, other) = {
-        let e = engine_lock(&a);
-        (id_at(&e, 4), id_at(&e, 1))
-    };
+    let (id, other) = (id_at(&*a, 4), id_at(&*a, 1));
     let plans = Rc::new(Cell::new(0usize));
     let hook = {
         let (a, b, plans) = (Arc::clone(&a), Arc::clone(&b), Rc::clone(&plans));
@@ -332,7 +329,7 @@ fn another_windows_change_to_another_row_is_no_reason_to_plan_again() {
 fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
     let d = Dir::new("overlay");
     let engine = shared(&d, 6);
-    let id = id_at(&engine_lock(&engine), 3);
+    let id = id_at(&*engine, 3);
     let hold = WriteHold::take(&d.db()).expect("stall the writer");
     let (first, first_durable) = change_ops(&engine, id, None, &[card(id)], "first");
     assert!(matches!(first, Ok(Ok(_))), "{first:?}");
@@ -373,7 +370,7 @@ fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
 fn a_correction_by_an_edit_key_is_made_only_on_the_version_found() {
     let d = Dir::new("update-row-key");
     let engine = shared(&d, 6);
-    let id = id_at(&engine_lock(&engine), 3);
+    let id = id_at(&*engine, 3);
     let key = || {
         let view = engine_lock(&engine).log_view();
         QsoEdit::project(&view.row(id).expect("read").expect("held")).key()
@@ -652,8 +649,9 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
             } else {
                 Some(e.log_qso_for_sync(rec.clone()))
             };
-            let (held, row) = (e.log_records().len(), e.log_records().last().cloned());
             drop(e);
+            let log = engine.stored_log();
+            let (held, row) = (log.len(), log.last().cloned());
             last = Some(rec.clone());
             if duplicate {
                 refused += 1;
@@ -686,12 +684,12 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
             );
             model.add(expected);
         }
-        let e = engine_lock(&engine);
         assert_eq!(
-            e.log_records().len(),
+            engine.stored_log().len(),
             model.len(),
             "seed {seed}: nothing else was logged"
         );
+        let e = engine_lock(&engine);
         flush(&e);
         same_log(
             &stored(&d),
@@ -715,14 +713,14 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
 fn a_plan_read_under_the_engine_lock_trips_the_fence() {
     let d = Dir::new("ft-fence-control");
     let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
     let e = engine_lock(&engine);
-    let id = id_at(&e, 1);
     let _ = e.logged_row(id);
 }
 
-/// The contact at `at` in the log in memory, as a report restating it is written from.
+/// The contact at `at` in the log, as a report restating it is written from.
 fn row_at(engine: &Arc<Mutex<Engine>>, at: usize) -> QsoRecord {
-    QsoRecord::clone(&engine_lock(engine).log_records()[at])
+    QsoRecord::clone(&engine.stored_log()[at])
 }
 
 /// A generator whose failing case replays from its seed.
@@ -755,10 +753,9 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
         let engine = shared(&d, 10);
         let mut g = Gen(seed);
         for step in 0..45u64 {
-            let len = engine_lock(&engine).log_records().len();
+            let len = engine.stored_log().len();
             let at = g.below(len);
-            let pick = |e: &Engine| (len > 0).then(|| id_at(e, at));
-            let id = pick(&engine_lock(&engine));
+            let id = (len > 0).then(|| id_at(&*engine, at));
             let call = CALLS[g.below(CALLS.len())];
             let when = 1_788_000_000 + step * 97;
             let kind = match (g.below(18), id) {
@@ -824,14 +821,12 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                 }
                 (8, Some(_)) => {
                     let view = engine_lock(&engine).log_view();
-                    let ids: Vec<RecordId> = {
-                        let e = engine_lock(&engine);
-                        e.log_records()
-                            .iter()
-                            .filter_map(|r| r.id)
-                            .take(4)
-                            .collect()
-                    };
+                    let ids: Vec<RecordId> = engine
+                        .stored_log()
+                        .iter()
+                        .filter_map(|r| r.id)
+                        .take(4)
+                        .collect();
                     let rows = view.rows(&ids).expect("read");
                     let signed: Vec<LotwSigned> = ids
                         .iter()

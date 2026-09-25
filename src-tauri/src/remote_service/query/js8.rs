@@ -156,9 +156,22 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::sync::Arc;
     fn engine() -> crate::SharedEngine {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
+        seed(&mut e);
+        Arc::new(std::sync::Mutex::new(e))
+    }
+    /// [`engine`]'s heard calls and log, on the database: a file store in `d`, opened as the
+    /// launch opens one.
+    fn engine_on_file(d: &Dir) -> crate::SharedEngine {
+        let e = launch(d);
+        seed(&mut e.lock().unwrap());
+        settle(&e);
+        e
+    }
+    fn seed(e: &mut tempo_app::engine::Engine) {
         let journal = json!({"inbox":[],"heard":[
             {"call":"W1AW","grid":null,"snrDb":-8,"freqHz":1500.0,"speed":"normal","lastMs":1,"lastHb":true,"lastCq":false,"storedMsgs":0},
             {"call":"K2ABC","grid":null,"snrDb":-12,"freqHz":1000.0,"speed":"slow","lastMs":1,"lastHb":false,"lastCq":true,"storedMsgs":0}
@@ -166,7 +179,7 @@ mod tests {
         e.js8_load_journal(&journal.to_string());
         assert_eq!(e.js8_heard().len(), 2);
         e.import_adif("<CALL:4>W1AW<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20260908<TIME_ON:6>010000<GRIDSQUARE:4>FN31<NAME:3>OLD<COMMENT:3>OLD<EOR>");
-        let base = e.log_records()[0].as_ref().clone();
+        let base = e.stored_log()[0].as_ref().clone();
         let adif: String = (1..2302)
             .map(|i| {
                 let mut q = base.clone();
@@ -183,8 +196,7 @@ mod tests {
             })
             .collect();
         e.import_adif(&adif);
-        assert_eq!(e.log_records().len(), 2302);
-        Arc::new(std::sync::Mutex::new(e))
+        assert_eq!(e.stored_log().len(), 2302);
     }
     /// Every contact with a heard call joins its history — the latest one's fields even when
     /// they are empty — from ONE pass, made with the Engine lock free; an unchanged log and
@@ -225,13 +237,13 @@ mod tests {
         {
             let mut e = engine.lock().unwrap();
             let index = e
-                .log_records()
+                .stored_log()
                 .iter()
                 .enumerate()
                 .max_by_key(|(_, q)| q.when_unix)
                 .unwrap()
                 .0;
-            let mut q = e.log_records()[index].as_ref().clone();
+            let mut q = e.stored_log()[index].as_ref().clone();
             q.comment = Some("CURRENT".into());
             assert!(e.update_qso(q.id.unwrap(), q));
         }
@@ -242,69 +254,103 @@ mod tests {
     }
     /// An edit landing while the history is read is not half in it, and does not refuse it:
     /// the answer is the log the read found, and the next read — the log's revision has moved
-    /// — has the edit. An oversized field of a heard call's contact refuses the whole context
-    /// rather than showing a station unworked.
+    /// — has the edit. On the database the edits commit while the read runs, beside its
+    /// picture. A store in memory commits nothing until the read ends, so there the edits are
+    /// made as a command makes them, the first while the read runs and the second after it
+    /// ([`changed_by_a_command`](super::super::log_tests::changed_by_a_command)). An oversized
+    /// field of a heard call's contact refuses the whole context rather than showing a station
+    /// unworked.
     #[test]
     fn an_edit_during_the_read_belongs_to_the_next_read_and_oversized_context_is_refused() {
+        use super::super::log_tests::changed_by_a_command;
         use super::super::picture::{at_seams, Seam};
-        let engine = engine();
-        let mut cache = Cache::default();
-        let (hook, edits) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
-        let counted = edits.clone();
-        let during = at_seams(
-            move |seam| {
-                if seam != Seam::Each {
-                    return;
-                }
-                // Both halves of the history move: the first W1AW contact becomes another
-                // station's, and the latest one gains a comment.
-                let mut e = hook.lock().unwrap();
-                let last = e.log_records().len() - 1;
-                let mut latest = e.log_records()[last].as_ref().clone();
-                assert_eq!(latest.call, "w1aw", "premise: the latest W1AW contact");
-                latest.comment = Some("CHANGED".into());
-                assert!(e.update_qso(latest.id.unwrap(), latest));
-                let mut first = e.log_records()[0].as_ref().clone();
-                first.call = "K9ZZZ".into();
-                assert!(e.update_qso(first.id.unwrap(), first));
-                counted.set(counted.get() + 1);
-            },
-            || cache.read(&engine),
-        )
-        .unwrap();
-        assert_eq!(
-            edits.get(),
-            1,
-            "premise: the edits landed while the read ran"
-        );
-        assert_eq!(
-            (
-                &during["history"]["W1AW"]["count"],
-                &during["history"]["W1AW"]["comment"]
-            ),
-            (&json!(2), &json!("")),
-            "the history is the log as the read found it, in both halves"
-        );
-        let after = cache.read(&engine).unwrap();
-        assert_eq!(
-            (
-                &after["history"]["W1AW"]["count"],
-                &after["history"]["W1AW"]["comment"]
-            ),
-            (&json!(1), &json!("CHANGED")),
-            "and the next read has both edits"
-        );
-        {
-            let mut e = engine.lock().unwrap();
-            let last = e.log_records().len() - 1;
-            let mut q = e.log_records()[last].as_ref().clone();
-            q.comment = Some("x".repeat(1025));
-            assert!(e.update_qso(q.id.unwrap(), q));
+        let d = Dir::new("js8-edit-during-read");
+        for (arm, engine) in [
+            ("the database", engine_on_file(&d)),
+            ("a store in memory", engine()),
+        ] {
+            let mut cache = Cache::default();
+            let (hook, edits) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
+            let counted = edits.clone();
+            let command = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let commanded = command.clone();
+            let during = at_seams(
+                move |seam| {
+                    if seam != Seam::Each {
+                        return;
+                    }
+                    // Both halves of the history move: the first W1AW contact becomes another
+                    // station's, and the latest one gains a comment.
+                    let mut e = hook.lock().unwrap();
+                    let log = e.stored_log();
+                    let mut latest = log[log.len() - 1].as_ref().clone();
+                    assert_eq!(latest.call, "w1aw", "premise: the latest W1AW contact");
+                    latest.comment = Some("CHANGED".into());
+                    let mut first = log[0].as_ref().clone();
+                    first.call = "K9ZZZ".into();
+                    if arm == "the database" {
+                        assert!(e.update_qso(latest.id.unwrap(), latest));
+                        assert!(e.update_qso(first.id.unwrap(), first));
+                        e.flush_log_store(Duration::from_secs(60))
+                            .expect("committed to the store");
+                    } else {
+                        drop(e);
+                        let edit = |r: tempo_core::logbook::QsoRecord| {
+                            let id = r.id.unwrap();
+                            let rec = Box::new(r);
+                            (id, tempo_core::logbook::LogOp::Edit { id, rec })
+                        };
+                        *commanded.borrow_mut() =
+                            Some(changed_by_a_command(&hook, vec![edit(latest), edit(first)]));
+                    }
+                    counted.set(counted.get() + 1);
+                },
+                || cache.read(&engine),
+            )
+            .unwrap();
+            assert_eq!(
+                edits.get(),
+                1,
+                "{arm}: premise: the edits began while the read ran"
+            );
+            if let Some(command) = command.take() {
+                assert_eq!(
+                    command.join().unwrap(),
+                    [true, true],
+                    "{arm}: premise: both edits made"
+                );
+            }
+            assert_eq!(
+                (
+                    &during["history"]["W1AW"]["count"],
+                    &during["history"]["W1AW"]["comment"]
+                ),
+                (&json!(2), &json!("")),
+                "{arm}: the history is the log as the read found it, in both halves"
+            );
+            let after = cache.read(&engine).unwrap();
+            assert_eq!(
+                (
+                    &after["history"]["W1AW"]["count"],
+                    &after["history"]["W1AW"]["comment"]
+                ),
+                (&json!(1), &json!("CHANGED")),
+                "{arm}: and the next read has both edits"
+            );
+            {
+                let mut e = engine.lock().unwrap();
+                let log = e.stored_log();
+                let mut q = log[log.len() - 1].as_ref().clone();
+                q.comment = Some("x".repeat(1025));
+                assert!(e.update_qso(q.id.unwrap(), q));
+            }
+            assert_eq!(
+                Cache::default().read(&engine).unwrap_err(),
+                "applicationTooLarge",
+                "{arm}"
+            );
+            settle(&engine);
         }
-        assert_eq!(
-            Cache::default().read(&engine).unwrap_err(),
-            "applicationTooLarge"
-        );
     }
 
     // ── the roster's history from the store, held to the code before C18 ─────────────────
@@ -315,7 +361,9 @@ mod tests {
 
     #[derive(Default)]
     struct OldCache {
-        token: Option<Arc<()>>,
+        /// The log the history was read from — the store's rows, where the old cache kept the
+        /// copy's read token.
+        log: Option<Vec<Arc<tempo_core::logbook::QsoRecord>>>,
         calls: Vec<String>,
         history: BTreeMap<String, History>,
     }
@@ -339,22 +387,23 @@ mod tests {
                     Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
                 }
             };
-            let (token, count, heard, class) = {
+            // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+            // tests hold the old algorithm against the new reader over the same rows, and whether the
+            // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+            // picture, so the old read's log token has nothing left to check.
+            let log = engine
+                .lock()
+                .map_err(|_| "applicationUnavailable")?
+                .stored_log();
+            let (count, heard, class) = {
                 let e = lock()?;
-                if e.log_records().len() > 1_000_000 {
+                if log.len() > 1_000_000 {
                     return Err("applicationTooLarge");
                 }
-                (
-                    e.log_read_token(),
-                    e.log_records().len(),
-                    calls(&e)?,
-                    e.settings().license_class,
-                )
+                (log.len(), calls(&e)?, e.settings().license_class)
             };
-            let unchanged = |e: &tempo_app::engine::Engine| {
-                Arc::ptr_eq(&token, &e.log_read_token()) && e.settings().license_class == class
-            };
-            if self.token.as_ref().is_none_or(|t| !Arc::ptr_eq(t, &token)) || self.calls != heard {
+            let unchanged = |e: &tempo_app::engine::Engine| e.settings().license_class == class;
+            if self.log.as_ref() != Some(&log) || self.calls != heard {
                 let mut history: BTreeMap<_, _> = heard
                     .iter()
                     .map(|c| (c.clone(), History::default()))
@@ -369,7 +418,7 @@ mod tests {
                                 return Err("applicationBusy");
                             }
                             let mut rows = Vec::new();
-                            for q in &e.log_records()[offset..(offset + 128).min(count)] {
+                            for q in &log[offset..(offset + 128).min(count)] {
                                 if q.call.len() > 128 {
                                     return Err("applicationTooLarge");
                                 }
@@ -412,7 +461,7 @@ mod tests {
                         return Err("applicationBusy");
                     }
                 }
-                self.token = Some(token.clone());
+                self.log = Some(log.clone());
                 self.calls = heard.clone();
                 self.history = history;
             }

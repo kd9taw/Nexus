@@ -6,6 +6,7 @@
 //! before C18 made of the log in memory.
 use std::sync::{Arc, Mutex};
 
+use crate::remote_service::stored_log_tests::StoredLog;
 use tempo_app::engine::Engine;
 use tempo_core::logbook::sqlite::Resolved;
 use tempo_core::logbook::{QsoRecord, UploadDetail, UploadOutcome};
@@ -273,9 +274,42 @@ pub(in crate::remote_service) fn settle(e: &crate::SharedEngine) {
         .expect("written");
 }
 
-/// The contact at `at` in log order, as the log in memory holds it.
+/// Changes to the log made as a command makes them, each planned with the Engine lock released
+/// and made under it ([`tempo_app::logwrite::change_ops`]), in order, on a thread of their own,
+/// started from inside a read of the log (a test's seam hook, holding no Engine guard). It returns
+/// once the FIRST is made, with the thread, which answers whether each was.
+///
+/// ⚠️ On a store in memory, a test makes more than one change during a read only this way. SQLite's
+/// `memdb` has no WAL: an open read holds off every commit until it ends, and a commit waiting for
+/// its turn holds off every read that begins meanwhile, a change's plan among them. So a second
+/// change made on the reading thread plans behind a commit that waits for that thread's own read,
+/// a wait only the store's 5 s busy timeout ends. A command makes its changes on a thread of its
+/// own, and so do these: the first while the read runs, the next once the one before it has
+/// committed, after the read.
+pub(in crate::remote_service) fn changed_by_a_command(
+    engine: &crate::SharedEngine,
+    changes: Vec<(tempo_core::logbook::RecordId, tempo_core::logbook::LogOp)>,
+) -> std::thread::JoinHandle<Vec<bool>> {
+    let (first, first_made) = std::sync::mpsc::channel();
+    let engine = Arc::clone(engine);
+    let changing = std::thread::spawn(move || {
+        changes
+            .into_iter()
+            .map(|(id, op)| {
+                let (made, _) =
+                    tempo_app::logwrite::change_ops(&engine, id, None, &[op], "a test's change");
+                let _ = first.send(());
+                matches!(made, Ok(Ok(_)))
+            })
+            .collect()
+    });
+    let _ = first_made.recv();
+    changing
+}
+
+/// The contact at `at` in log order, as the log holds it ([`StoredLog`]).
 pub(in crate::remote_service) fn record_at(e: &Engine, at: usize) -> QsoRecord {
-    QsoRecord::clone(&e.log_records()[at])
+    QsoRecord::clone(&e.stored_log()[at])
 }
 
 /// One ADIF record, parsed as the log parses it, with no id.
@@ -289,7 +323,7 @@ pub(in crate::remote_service) fn parse_one(text: &str) -> QsoRecord {
 
 /// The id of the contact at `at`: how a change names its contact (SPEC-2 C16).
 pub(in crate::remote_service) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
-    e.log_records()[at]
+    e.stored_log()[at]
         .id
         .expect("every row the log holds carries an id")
 }
@@ -303,9 +337,11 @@ pub(in crate::remote_service) fn edit_at(e: &mut Engine, at: usize, edited: QsoR
 /// One random change of the kinds the app makes to the log: logged contacts (some in a second
 /// already in the log), imports, edits that move a contact in time or change what a search or
 /// a recall matches, deletes, QSL cards and sent marks, satellite tags, the connectors' stamps,
-/// a LoTW confirmation with credit, and the fill job.
+/// a LoTW confirmation with credit, and the fill job. It returns once the store holds the change
+/// ([`StoredLog::caught_up`]), so what a test asks next is the reader's answer, never the disk's
+/// speed.
 pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
-    let len = e.lock().unwrap().log_records().len();
+    let len = e.lock().unwrap().stored_log().len();
     let at = g.below(len);
     let when = 1_700_000_000 + 60 * g.below(64) as u64 + step;
     match g.below(12) {
@@ -379,4 +415,5 @@ pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut 
             );
         }
     }
+    e.caught_up();
 }

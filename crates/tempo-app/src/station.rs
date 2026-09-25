@@ -4174,6 +4174,7 @@ impl StationCore {
 #[cfg(test)]
 mod grid_tests {
     use super::*;
+    use crate::test_util::StoredLog;
     use tempo_core::logbook::QsoRecord;
 
     fn rec(call: &str, band: &str, grid: &str) -> QsoRecord {
@@ -4305,7 +4306,7 @@ mod grid_tests {
         // A delete, through the station: the deleted row's slots leave the index, and no row is
         // looked up again.
         let before = lookups.load(Ordering::Relaxed);
-        assert!(sc.delete_qso(sc.logbook.records()[1].id.unwrap()));
+        assert!(sc.delete_qso(sc.stored_log()[1].id.unwrap()));
         assert_eq!(
             lookups.load(Ordering::Relaxed) - before,
             0,
@@ -4324,7 +4325,7 @@ mod grid_tests {
         // so the index and the lookup never met and NEW GRID fired forever on every such
         // square. Both sides now normalize to the 4-char square grids are awarded at.
         let mut sc = StationCore::new();
-        sc.logbook.add(rec("W1AW", "20m", "FN31PR"));
+        sc.append(vec![rec("W1AW", "20m", "FN31PR")], false);
         sc.sync_hot();
 
         assert!(
@@ -4346,7 +4347,7 @@ mod grid_tests {
         let mut sc = StationCore::new();
         let mut r = rec("K1ABC", "20m", "FN31");
         r.ota.their_ref = Some("US-0001,US-0002".into());
-        sc.logbook.add(r);
+        sc.append(vec![r], false);
         sc.sync_hot();
         assert!(sc.park_worked("US-0001"), "the first park");
         assert!(sc.park_worked("us-0002"), "…and the second");
@@ -4370,8 +4371,7 @@ mod grid_tests {
         let mut early = rec("w6a", "20m", "DM04");
         early.when_unix = 1_000;
         // The later contact goes in FIRST, so "latest wins" cannot be "last row wins".
-        sc.logbook.add(late);
-        sc.logbook.add(early);
+        sc.append(vec![late, early], false);
         sc.sync_hot();
         assert_eq!(
             sc.last_worked_unix("W6A"),
@@ -4387,8 +4387,7 @@ mod grid_tests {
 
         // Deleting the later contact falls back to the earlier one — the answer follows the
         // rows, it does not accumulate.
-        sc.logbook
-            .apply(LogOp::Delete(sc.logbook.records()[0].id.unwrap()));
+        assert!(sc.delete_qso(sc.stored_log()[0].id.unwrap()));
         sc.sync_hot();
         assert_eq!(sc.last_worked_unix("W6A"), Some(1_000));
     }
@@ -4396,7 +4395,7 @@ mod grid_tests {
     #[test]
     fn a_malformed_grid_never_counts_as_worked() {
         let mut sc = StationCore::new();
-        sc.logbook.add(rec("W1AW", "20m", "FN"));
+        sc.append(vec![rec("W1AW", "20m", "FN")], false);
         sc.sync_hot();
         assert!(
             !sc.hot().grid_worked_on("FN", "20m"),
@@ -4452,7 +4451,7 @@ mod grid_tests {
             "our own append must not reopen the gate — every later call re-parses the whole log"
         );
         assert_eq!(
-            sc.logbook.len(),
+            sc.stored_log().len(),
             2,
             "and nothing was re-read or double-counted"
         );
@@ -4517,7 +4516,7 @@ mod grid_tests {
             "our own append must not reopen the gate — every later call would re-read the log"
         );
         assert_eq!(
-            sc.logbook.len(),
+            sc.stored_log().len(),
             2,
             "and nothing was re-read or double-counted"
         );
@@ -4620,7 +4619,7 @@ mod grid_tests {
         );
 
         // The next change to a contact the log holds: the look before it takes A's in.
-        let w1 = sc.logbook.records()[0].id.unwrap();
+        let w1 = sc.stored_log()[0].id.unwrap();
         assert!(sc.mark_qsl_sent(w1, Some(tempo_core::logbook::QslVia::Direct)));
         let st = lane.flush(wait);
         assert!(!st.pending(), "{st:?}");
@@ -4663,7 +4662,7 @@ mod grid_tests {
             sc.sync_shared_log_if_changed(),
             "first look reads the shared log"
         );
-        assert_eq!(sc.logbook.len(), 1);
+        assert_eq!(sc.stored_log().len(), 1);
         assert!(
             sc.hot().grid_worked_on("JO31", "20m"),
             "X is now worked-before"
@@ -4676,7 +4675,7 @@ mod grid_tests {
         sc.last_log_mtime = None;
         assert!(sc.sync_shared_log_if_changed(), "a changed log is re-read");
         assert_eq!(
-            sc.logbook.len(),
+            sc.stored_log().len(),
             2,
             "the other instance's new QSO is folded in"
         );
@@ -4702,6 +4701,7 @@ mod diagnostics_tests {
     //! runs on that ([`DiagnosticsInputs::diagnose`]). The report must be the one the old body
     //! made, reproduced below verbatim as the oracle.
     use super::*;
+    use crate::test_util::StoredLog;
     use tempo_core::diagnostics::DiagnosticsReport;
     use tempo_core::reconcile::{OrphanConfirmation, ReconcileSummary};
 
@@ -4751,7 +4751,7 @@ mod diagnostics_tests {
         now: i64,
         resolve: impl Fn(&str) -> Option<String>,
     ) -> DiagnosticsReport {
-        let records = sc.logbook.records();
+        let records = sc.stored_log();
         let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
         let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
         if let Some(s) = &sc.last_lotw_reconcile {
@@ -4764,7 +4764,7 @@ mod diagnostics_tests {
             recents.push(s);
         }
         tempo_core::diagnostics::diagnose(
-            records,
+            &records,
             &entities,
             &recents,
             now,
@@ -4781,7 +4781,7 @@ mod diagnostics_tests {
     fn the_diagnosis_off_the_lock_is_the_one_the_old_body_made() {
         let mut sc = StationCore::new();
         sc.import_adif(LOG);
-        assert_eq!(sc.logbook.len(), 6, "premise: every contact imported");
+        assert_eq!(sc.stored_log().len(), 6, "premise: every contact imported");
         sc.last_lotw_reconcile = Some(orphan("15m"));
         sc.last_eqsl_reconcile = Some(orphan("17m"));
         sc.last_qrz_reconcile = Some(orphan("12m"));
@@ -4842,6 +4842,7 @@ mod hot_parity_tests {
     //! change, and is never rebuilt to do it. The oracles are that code, verbatim, over the
     //! in-memory log the station still holds.
     use super::*;
+    use crate::test_util::StoredLog;
     use tempo_core::logbook::dedup::scan_for_duplicate;
     use tempo_core::logbook::hot::{HOT_CATCH_UPS, HOT_REBUILDS};
     use tempo_core::logbook::{adif_header, adif_record, QslVia, UploadOutcome};
@@ -4974,9 +4975,10 @@ mod hot_parity_tests {
 
     /// One row of the log, as a report or an export would restate it, with `extra` tags.
     fn restated(sc: &StationCore, rng: &mut Rng, extra: &str) -> Option<String> {
-        let n = sc.logbook.len();
+        let log = sc.stored_log();
+        let n = log.len();
         (n > 0).then(|| {
-            let row = adif_record(&sc.logbook.records()[rng.below(n)]);
+            let row = adif_record(&log[rng.below(n)]);
             let at = row.rfind("<EOR>").expect("a record ends");
             format!("{}{}{extra}{}", adif_header(), &row[..at], &row[at..])
         })
@@ -4984,14 +4986,14 @@ mod hot_parity_tests {
 
     /// The id of the contact at `at`: how the property names a row it picked by place.
     fn id_at(sc: &StationCore, at: usize) -> RecordId {
-        sc.logbook.records()[at]
+        sc.stored_log()[at]
             .id
             .expect("every row the log holds carries an id")
     }
 
     /// Every change the station makes to its log, through the method the app calls.
     fn change(sc: &mut StationCore, rng: &mut Rng) -> &'static str {
-        let n = sc.logbook.len();
+        let n = sc.stored_log().len();
         match rng.below(18) {
             0..=4 => {
                 // `Engine::log_qso`'s append: the station's, one change.
@@ -5044,14 +5046,14 @@ mod hot_parity_tests {
             },
             12 if n > 0 => {
                 // A POTA export naming a park for a contact that has none.
-                let mut r = QsoRecord::clone(&sc.logbook.records()[rng.below(n)]);
+                let mut r = QsoRecord::clone(&sc.stored_log()[rng.below(n)]);
                 r.ota.their_program = Some("POTA".into());
                 r.ota.their_ref = Some("US-0002".into());
                 sc.import_pota_log(&format!("{}{}", adif_header(), adif_record(&r)));
                 "POTA park stamp"
             }
             13 if n > 0 => {
-                let pushed = QsoRecord::clone(&sc.logbook.records()[rng.below(n)]);
+                let pushed = QsoRecord::clone(&sc.stored_log()[rng.below(n)]);
                 match rng.below(3) {
                     0 => sc.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 1, None),
                     1 => sc.stamp_clublog_upload(&pushed, UploadOutcome::Accepted, 1, None),
@@ -5331,7 +5333,7 @@ mod hot_parity_tests {
         let mut imported = contact(&mut rng);
         imported.call = "K1ABC".into();
         sc.import_adif(&format!("{}{}", adif_header(), adif_record(&imported)));
-        let imported = sc.logbook.records()[1]
+        let imported = sc.stored_log()[1]
             .id
             .expect("an import's row carries an id");
         match (logged, imported) {
@@ -5371,7 +5373,7 @@ mod hot_parity_tests {
         sc.append(vec![older, newer], false);
         sc.sync_hot();
         assert_eq!(sc.newest_logged_grid("w1aw").as_deref(), Some("EM12"));
-        assert!(sc.is_duplicate(&sc.logbook.records()[0].as_ref().clone()));
+        assert!(sc.is_duplicate(&sc.stored_log()[0].as_ref().clone()));
     }
 }
 

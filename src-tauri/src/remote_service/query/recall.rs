@@ -287,10 +287,11 @@ fn read(records: &[QsoRecord], call: &str) -> Result<Capture, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     fn record(call: &str, when: u64, band: &str, mode: &str) -> QsoRecord {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
         e.import_adif(&format!("<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>", call.len(), band.len(), mode.len()));
-        let mut q = e.log_records()[0].as_ref().clone();
+        let mut q = e.stored_log()[0].as_ref().clone();
         q.when_unix = when;
         q
     }
@@ -397,7 +398,7 @@ mod tests {
             })
             .collect();
         e.import_adif(&adif);
-        assert_eq!(e.log_records().len(), 270);
+        assert_eq!(e.stored_log().len(), 270);
         let engine = std::sync::Arc::new(std::sync::Mutex::new(e));
         let (hook, edits) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
         let counted = edits.clone();
@@ -409,16 +410,14 @@ mod tests {
                 let mut e = hook
                     .try_lock()
                     .expect("summary work has released station authority");
-                let count = e.log_records().len();
                 let index = e
-                    .log_records()
+                    .stored_log()
                     .iter()
                     .position(|q| q.call == "W1AW")
                     .unwrap();
-                let mut changed = e.log_records()[index].as_ref().clone();
+                let mut changed = e.stored_log()[index].as_ref().clone();
                 changed.notes = Some("edited during recall".into());
                 assert!(e.update_qso(changed.id.unwrap(), changed));
-                assert_eq!(e.log_records().len(), count);
                 counted.set(counted.get() + 1);
             },
             || read_engine(&engine, "W1AW"),
@@ -431,6 +430,9 @@ mod tests {
             1,
             "premise: the edit landed while the read ran"
         );
+        // Counted once the read has ended: the store in memory holds the edit's commit off until
+        // then.
+        assert_eq!(engine.lock().unwrap().stored_log().len(), 270);
         assert_eq!(result.1, 1);
         assert_eq!(
             result.2["latestNote"],
@@ -581,40 +583,23 @@ mod tests {
         call: &str,
         mut after_chunk: impl FnMut(usize),
     ) -> Result<Capture, &'static str> {
-        use std::sync::{Arc, TryLockError};
-        use std::time::{Duration, Instant};
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let lock = || loop {
-            if Instant::now() >= deadline {
-                return Err("applicationBusy");
-            }
-            match tempo_app::engine::engine_try_lock(engine) {
-                Ok(e) => return Ok(e),
-                Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
-            }
-        };
-        let (token, count) = {
-            let e = lock()?;
-            (e.log_read_token(), e.log_records().len())
-        };
+        // The log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+        // tests hold the old algorithm against the new reader over the same rows, and whether the
+        // store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job. One
+        // picture, so the old read's log token has nothing left to check.
+        let log = engine
+            .lock()
+            .map_err(|_| "applicationUnavailable")?
+            .stored_log();
+        let count = log.len();
         let mut result = OldAccumulator::new(call);
         for offset in (0..count).step_by(128) {
-            let rows = {
-                let e = lock()?;
-                if !Arc::ptr_eq(&token, &e.log_read_token()) {
-                    return Err("applicationBusy");
-                }
-                e.log_records()[offset..(offset + 128).min(count)].to_vec()
-            };
+            let rows = log[offset..(offset + 128).min(count)].to_vec();
             // DXCC resolution and summary work cannot hold the engine mutex. The
             // token check refuses even same-length edits between chunks; no mixed
             // log may be reported as complete or used to claim a new entity.
             result.append(&rows, offset)?;
             after_chunk(offset);
-        }
-        if !Arc::ptr_eq(&token, &lock()?.log_read_token()) {
-            return Err("applicationBusy");
         }
         Ok(result.finish())
     }
