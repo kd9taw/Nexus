@@ -10,6 +10,11 @@
 //! only once it is on disk ([`crate::durable_command`]), with the contact as it now stands and
 //! the key the next change to it must send.
 //!
+//! Each is planned with the Engine lock released and made under it (SPEC-2 v3 C19,
+//! [`tempo_app::logwrite`]): the contact is read from the store, and changed only while it is
+//! still the contact that was read. One that keeps changing under the change — another writer,
+//! every time it is planned — is refused as `busy`, changing nothing (`LogBusy`).
+//!
 //! The Logbook form's whole edit is ONE change here ([`edit_qso_by_id`]): the fields, and the
 //! QSL-sent and paper-card marks where the form changes them, in one commit — where the form
 //! used to send three commands, each its own write.
@@ -18,9 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 use tempo_app::dto::LoggedQso;
-use tempo_app::engine::{engine_lock, Engine};
-use tempo_app::station::RowRefusal;
-use tempo_core::logbook::{QsoEdit, QsoRecord, RecordId};
+use tempo_app::station::{MadeRow, RowRefusal};
+use tempo_core::logbook::{LogOp, QsoEdit, QsoRecord, RecordId};
 
 use crate::{durable_command, qsl_via_arg, sat_name_arg, SharedEngine};
 
@@ -53,6 +57,10 @@ pub enum RowAnswer {
     Changed { current: KeyedRow },
     /// Refused, nothing changed: no contact has that id — deleted, or never in this log.
     Gone {},
+    /// Refused, nothing changed: the contact kept changing while the change was being made —
+    /// another writer changed it every time it was planned (`LogBusy`, SPEC-2 v3 §4.6). The
+    /// caller may try again.
+    Busy {},
 }
 
 /// `r` as `get_log` shows it (the entity resolved, as the parent's `log_row` does), with its key.
@@ -71,17 +79,17 @@ fn refused(refusal: RowRefusal) -> RowAnswer {
         RowRefusal::Changed(now) => RowAnswer::Changed {
             current: keyed(&now),
         },
+        RowRefusal::Busy => RowAnswer::Busy {},
     }
 }
 
-/// The contact `id` after a change to it was made.
-fn applied(eng: &Engine, id: RecordId) -> RowAnswer {
-    match eng.logged_row(id) {
+/// The contact after a change to it was made, as the change left it.
+fn applied(made: MadeRow) -> RowAnswer {
+    match made.1 {
         Some(now) => RowAnswer::Applied {
             current: keyed(&now),
         },
-        // Made, then gone before the answer: not something one hold of the lock allows.
-        None => RowAnswer::Gone {},
+        None => RowAnswer::Deleted {},
     }
 }
 
@@ -93,27 +101,31 @@ fn id_of(target: &RowRef) -> Result<RecordId, String> {
         .map_err(|()| format!("'{}' is not a contact id.", target.id))
 }
 
-/// Make `change` to the contact `target` names — only while it is still the version the caller
-/// held, checked in the same hold of the engine lock — and wait for it to reach the disk.
+/// Make `op` on the contact `target` names — only while it is still the version the caller
+/// held — and wait for it to reach the disk. Planned with the Engine lock released, and checked
+/// again, and made, under it ([`tempo_app::logwrite::change_ops`]).
 async fn change_row(
     engine: SharedEngine,
     target: RowRef,
-    change: impl FnOnce(&mut Engine, RecordId) -> bool + Send + 'static,
-    answer: fn(&Engine, RecordId) -> RowAnswer,
+    op: impl FnOnce(RecordId) -> LogOp + Send + 'static,
 ) -> Result<RowAnswer, String> {
     let id = id_of(&target)?;
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            if let Err(refusal) = eng.fresh_log_row(id, &target.edit_key) {
-                return Ok(refused(refusal));
-            }
-            Ok(if change(eng, id) {
-                answer(eng, id)
-            } else {
-                RowAnswer::Gone {}
-            })
-        })
+        let op = op(id);
+        let (made, durability) = tempo_app::logwrite::change_ops(
+            &engine,
+            id,
+            Some(&target.edit_key),
+            std::slice::from_ref(&op),
+            "log change",
+        );
+        (
+            made.map(|made| match made {
+                Ok(made) => applied(made),
+                Err(refusal) => refused(refusal),
+            }),
+            durability,
+        )
     })
     .await
 }
@@ -138,13 +150,17 @@ pub(crate) async fn edit_row(
 ) -> Result<RowAnswer, String> {
     let id = id_of(&target)?;
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            Ok(match eng.edit_qso(id, &target.edit_key, &edit)? {
-                Ok(()) => applied(eng, id),
+        let (made, durability) =
+            tempo_app::logwrite::edit_row(&engine, id, &target.edit_key, &edit);
+        (
+            made.map(|made| match made {
+                Ok(now) => RowAnswer::Applied {
+                    current: keyed(&now),
+                },
                 Err(refusal) => refused(refusal),
-            })
-        })
+            }),
+            durability,
+        )
     })
     .await
 }
@@ -166,12 +182,9 @@ pub(crate) async fn qsl_sent(
     via: Option<String>,
 ) -> Result<RowAnswer, String> {
     let via = qsl_via_arg(via.as_deref())?;
-    change_row(
-        engine,
-        target,
-        move |eng, id| eng.mark_qsl_sent(id, via),
-        applied,
-    )
+    change_row(engine, target, move |id| {
+        tempo_app::logwrite::qsl_sent(id, via)
+    })
     .await
 }
 
@@ -190,13 +203,7 @@ pub(crate) async fn qsl_card(
     target: RowRef,
     received: bool,
 ) -> Result<RowAnswer, String> {
-    change_row(
-        engine,
-        target,
-        move |eng, id| eng.mark_qsl_card(id, received),
-        applied,
-    )
-    .await
+    change_row(engine, target, move |id| LogOp::MarkQslCard { id, received }).await
 }
 
 /// [`crate::set_sat_tag`], by id: `satName` tags the contact, `null` removes the tag.
@@ -216,13 +223,7 @@ pub(crate) async fn sat_tag(
 ) -> Result<RowAnswer, String> {
     // Gated BEFORE the lock, as the command by row is.
     let name = sat_name_arg(sat_name.as_deref())?;
-    change_row(
-        engine,
-        target,
-        move |eng, id| eng.set_sat_tag(id, name.as_deref()),
-        applied,
-    )
-    .await
+    change_row(engine, target, move |id| LogOp::SetSatTag { id, sat_name: name }).await
 }
 
 /// [`crate::delete_qso`], by id.
@@ -235,19 +236,14 @@ pub async fn delete_qso_by_id(
 }
 
 pub(crate) async fn delete_row(engine: SharedEngine, target: RowRef) -> Result<RowAnswer, String> {
-    change_row(
-        engine,
-        target,
-        |eng, id| eng.delete_qso(id),
-        |_, _| RowAnswer::Deleted {},
-    )
-    .await
+    change_row(engine, target, LogOp::Delete).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::durable_command_tests::engine_on_store;
+    use tempo_app::engine::engine_lock;
     use std::path::Path;
     use tempo_core::logbook::{QslVia, UploadOutcome};
 
@@ -415,7 +411,17 @@ mod tests {
         let (target, held) = row_ref(&engine, 3);
 
         // An upload stamp lands after the read: the card is still made.
-        assert!(engine_lock(&engine).stamp_qrz_upload(&held, UploadOutcome::Accepted, 1, None));
+        let (stamped, _) = tempo_app::logwrite::stamp_push(
+            &engine,
+            &held,
+            tempo_core::logbook::UploadService::Qrz,
+            tempo_core::logbook::UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix: 1,
+                detail: None,
+            },
+        );
+        assert!(stamped);
         let now = current(
             rt.block_on(qsl_card(engine.clone(), target.clone(), true))
                 .expect("made"),
@@ -427,11 +433,16 @@ mod tests {
             edit_key: now.edit_key.clone(),
         };
         {
-            let mut eng = engine_lock(&engine);
             let id = held.id.expect("an id");
-            let mut theirs = QsoRecord::clone(&eng.logged_row(id).expect("held"));
+            let view = engine_lock(&engine).log_view();
+            let mut theirs = QsoRecord::clone(&view.row(id).expect("read").expect("held"));
             theirs.grid = Some("FN42".into());
-            assert!(eng.update_qso(id, theirs));
+            let edit = LogOp::Edit {
+                id,
+                rec: Box::new(theirs),
+            };
+            let (made, _) = tempo_app::logwrite::change_ops(&engine, id, None, &[edit], "theirs");
+            assert!(matches!(made, Ok(Ok(_))), "their edit is made");
         }
         let before = engine_lock(&engine).log_records().to_vec();
         for answer in [
@@ -616,6 +627,16 @@ mod tests {
         found
     }
 
+    /// `LogBusy` reaches the UI as a kind of its own with nothing else in it — the contact kept
+    /// changing while the change was planned, so there is no one version of it to show.
+    #[test]
+    fn log_busy_answers_as_a_kind_of_its_own() {
+        assert_eq!(
+            serde_json::to_value(refused(RowRefusal::Busy)).expect("serialize"),
+            serde_json::json!({ "kind": "busy" })
+        );
+    }
+
     /// The scan is only worth having if it can fail, and if it can pass: a position-addressed
     /// change and a position handed back are each named; a change by id, and a helper inside a
     /// test module, are not.
@@ -695,32 +716,7 @@ mod tests {
             ),
         ];
         // (file, function, why a position is right there)
-        let allowed: [(&str, &str, &str); 16] = [
-            (
-                "tempo-core logbook.rs",
-                "update_record",
-                "the body behind LogOp::Edit",
-            ),
-            (
-                "tempo-core logbook.rs",
-                "mark_qsl_sent",
-                "the body behind LogOp::MarkQslSent",
-            ),
-            (
-                "tempo-core logbook.rs",
-                "mark_qsl_card",
-                "the body behind LogOp::MarkQslCard",
-            ),
-            (
-                "tempo-core logbook.rs",
-                "set_sat_tag",
-                "the body behind LogOp::SetSatTag",
-            ),
-            (
-                "tempo-core logbook.rs",
-                "delete",
-                "the body behind LogOp::Delete",
-            ),
+        let allowed: [(&str, &str, &str); 11] = [
             (
                 "tempo-core op.rs",
                 "position_of",

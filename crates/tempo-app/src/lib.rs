@@ -30,6 +30,7 @@ pub mod keyboard;
 pub mod logexport;
 pub mod logfill;
 pub mod logstore;
+pub mod logwrite;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;

@@ -151,8 +151,8 @@ pub struct Change {
     /// `log_meta` keys this change sets, in the same transaction as its last chunk — a fact
     /// about the rows the change writes that must never be on disk without them (the fill job's
     /// `fill_ver`, SPEC-2 v3 D2-A). A change carrying only these still writes, so it is not
-    /// [`Self::is_empty`]. ⚠️ A re-send from memory ([`Self::resend`]) does not carry them: the
-    /// job that set them runs again, and finds its rows already written.
+    /// [`Self::is_empty`]. ⚠️ A change sent again after the writer refused it carries its rows,
+    /// never these: the job that set them runs again, and finds its rows already written.
     pub meta: Vec<(&'static str, i64)>,
 }
 
@@ -305,19 +305,18 @@ impl Change {
         change
     }
 
-    /// The durable form of the last `count` rows of `log`, appended by the change just made.
-    /// What the FT auto-log costs: one row, no walk over the rest of the log.
+    /// The durable form of `rows`, appended by the change that left the log at `marks` — what
+    /// the FT auto-log costs: the rows themselves, as they were built, and no walk over the log
+    /// (SPEC-2 v3 C19: built from the records, not read back out of a copy of the log).
     pub fn appended(
-        log: &Logbook,
-        count: usize,
+        rows: &[Arc<QsoRecord>],
+        marks: Watermarks,
         resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
     ) -> Change {
-        let rows = log.records();
-        let from = rows.len().saturating_sub(count);
         Change {
-            rev: log.revision(),
-            marks: Watermarks::of(log),
-            upsert: rows[from..]
+            rev: marks.revision,
+            marks,
+            upsert: rows
                 .iter()
                 .map(|rec| {
                     let (entity, cq_zone) = resolve(rec);
@@ -332,103 +331,44 @@ impl Change {
         }
     }
 
-    /// A change the writer gave up on ([`Refusal`]), sent again FROM MEMORY: the rows `touched`
-    /// names as the log holds them NOW — written where the log still has them, removed where it
-    /// no longer does — or, for a purge, the whole log after a clear. `rev` is the revision the
-    /// change first went out with: it is the same change, and none other is in flight under it
-    /// (the first attempt resolved before this one could be built).
+    /// ★ The durable form of a change the station made row by row (SPEC-2 v3 C19): `pairs`, the
+    /// rows it took out and put in — the same `(before, after)` pairs the hot index follows
+    /// ([`super::hot::RowPair`]), in log order — under `marks`, the watermarks it left the log
+    /// at. Every operation hands over its own pairs, so the store and the index hear of ONE
+    /// change, and nothing walks the log to find out what changed.
     ///
-    /// It carries STATE, never the delta the change first made, and that is what makes sending
-    /// it again safe:
-    ///
-    /// - **Never twice.** Applied twice — or applied after the first attempt landed despite the
-    ///   error — it writes what is already there: an upsert of each row as it stands, a delete of
-    ///   an id that is gone. No row is ever duplicated; the id is the key.
-    /// - **Never out of order.** It is built and submitted under the same lock as every other
-    ///   change (the owner's), so it carries whatever an earlier change did to its rows, and a
-    ///   later change to them is submitted after it — and the writer applies changes that share
-    ///   a row in the order they were submitted. Re-sending the rows the change FIRST carried
-    ///   would be the out-of-order write: that copy can be older than a later edit already on
-    ///   disk.
-    ///
-    /// One pass over the log, as [`Change::of`] finds its rows. [`Change::resend_each`] sends
-    /// several at once, in one pass for all of them.
-    pub fn resend(
-        touched: &Touched,
-        rev: u64,
-        log: &Logbook,
+    /// A row put in, or changed, is written as it now stands; one whose content did not change
+    /// (an edit that set what was already there) writes nothing, as [`Self::between`] never
+    /// wrote one; one taken out is removed. A purge (`clear`) is ONE statement, never a delete per
+    /// row: its pairs name every row taken out, and none of them becomes a statement.
+    pub fn of_pairs(
+        marks: Watermarks,
+        clear: bool,
+        pairs: &[super::hot::RowPair],
         resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
     ) -> Change {
-        Change::resend_each(&[(touched, rev)], log, resolve)
-            .pop()
-            .expect("one change in, one out")
-    }
-
-    /// [`Change::resend`] for several changes at once, in order, finding all their rows in ONE
-    /// pass over the log — so a burst of dropped changes costs one walk of a lifetime log under
-    /// its owner's lock, not one walk each.
-    pub fn resend_each(
-        changes: &[(&Touched, u64)],
-        log: &Logbook,
-        resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
-    ) -> Vec<Change> {
-        let row = |rec: &Arc<QsoRecord>| {
-            let (entity, cq_zone) = resolve(rec);
-            RowWrite {
-                rec: Arc::clone(rec),
-                entity,
-                cq_zone,
-            }
+        let mut change = Change {
+            rev: marks.revision,
+            marks,
+            clear,
+            ..Change::default()
         };
-        let wanted: HashSet<RecordId> = changes
-            .iter()
-            .filter_map(|(touched, _)| match touched {
-                Touched::Rows(ids) => Some(ids),
-                Touched::All => None,
-            })
-            .flatten()
-            .copied()
-            .collect();
-        let mut held: HashMap<RecordId, &Arc<QsoRecord>> = HashMap::with_capacity(wanted.len());
-        if !wanted.is_empty() {
-            for r in log.records() {
-                if let Some(id) = r.id.filter(|id| wanted.contains(id)) {
-                    held.insert(id, r);
+        for (before, after) in pairs {
+            match (before, after) {
+                (Some(b), Some(a)) if Arc::ptr_eq(b, a) || **b == **a => {}
+                (_, Some(a)) => {
+                    let (entity, cq_zone) = resolve(a);
+                    change.upsert.push(RowWrite {
+                        rec: Arc::clone(a),
+                        entity,
+                        cq_zone,
+                    });
                 }
+                (Some(b), None) if !clear => change.remove.extend(b.id),
+                (_, None) => {}
             }
         }
-        changes
-            .iter()
-            .map(|&(touched, rev)| match touched {
-                Touched::All => Change {
-                    rev,
-                    priority: Priority::Bulk,
-                    clear: true,
-                    remove: Vec::new(),
-                    upsert: log.records().iter().map(row).collect(),
-                    marks: Watermarks::of(log),
-                    meta: Vec::new(),
-                },
-                Touched::Rows(ids) => {
-                    let mut change = Change {
-                        rev,
-                        marks: Watermarks::of(log),
-                        ..Change::default()
-                    };
-                    let mut seen: HashSet<RecordId> = HashSet::with_capacity(ids.len());
-                    for id in ids {
-                        if !seen.insert(*id) {
-                            continue;
-                        }
-                        match held.get(id) {
-                            Some(rec) => change.upsert.push(row(rec)),
-                            None => change.remove.push(*id),
-                        }
-                    }
-                    change
-                }
-            })
-            .collect()
+        change
     }
 
     /// Whether this change writes anything at all. An empty change still moves the
@@ -613,9 +553,10 @@ impl Ticket {
 ///
 /// The writer never retries a change it has given up on: it cannot, because the rows it holds
 /// are the rows as they were when the change was made, and a later change to the same rows may
-/// already be on disk (see the module header's ordering rule). Whoever owns the log in memory
-/// can — by sending the rows AS THEY STAND NOW ([`Change::resend`]) — and `retryable` is what
-/// says whether that is worth doing.
+/// already be on disk (see the module header's ordering rule). Whoever owns the log can — by
+/// sending the refused change's rows again under its revision, each as it now stands (a later
+/// change to one of them carries that row instead) — and `retryable` is what says whether that
+/// is worth doing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
     /// What went wrong, in the store's words.
@@ -710,8 +651,8 @@ pub enum WriteState {
     },
     /// A change was abandoned. **Sticky** — it does not clear because the next change landed,
     /// since the one that was lost is still lost to THIS writer. The log's owner may send its
-    /// rows again from memory ([`Change::resend`]); that is a new change to the writer, which
-    /// keeps reporting the first one's loss — the owner's own record says whether it landed.
+    /// rows again under its revision; that is a new change to the writer, which keeps
+    /// reporting the first one's loss — the owner's own record says whether it landed.
     Failed,
 }
 
@@ -723,8 +664,8 @@ pub struct Status {
     /// Not "the highest revision committed": an interactive write can be on disk while an
     /// earlier bulk one is still being chunked, and this watermark does not claim otherwise.
     /// A single change's own durability is its [`Ticket`]. Monotone, and capped by the first
-    /// change the store lost and has not taken since: sent again under its own revision
-    /// ([`Change::resend`]) and landed, a lost change no longer holds it back.
+    /// change the store lost and has not taken since: sent again under its own revision and
+    /// landed, a lost change no longer holds it back.
     pub durable_rev: u64,
     /// Changes submitted and not yet resolved.
     pub pending: usize,
@@ -942,7 +883,7 @@ impl LogWriter {
     /// It waits on the durability watermark ([`Status::durable_rev`]), not on one ticket: a
     /// change can commit ahead of an earlier bulk one it shares no row with, and a read wants
     /// ALL of them. A change the store lost caps the watermark until its rows are sent again
-    /// and land ([`Change::resend`]), so a wait past it ends as soon as nothing still in flight
+    /// and land, so a wait past it ends as soon as nothing still in flight
     /// could move it — [`WaitError::Failed`] with the reason, rather than a timeout nobody can
     /// do anything about.
     ///
@@ -1201,8 +1142,8 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     let mut highest_ok: u64 = 0;
     // The revisions the store lost and has not taken since. The watermark never passes the
     // first of them, because everything after it describes a store that is missing a change.
-    // A change sent again under a lost revision (`Change::resend`: the rows as memory holds them
-    // then) repairs that loss when it lands, and the watermark moves on past it.
+    // A change sent again under a lost revision (its rows, each as its owner holds it then)
+    // repairs that loss when it lands, and the watermark moves on past it.
     let mut lost: BTreeSet<u64> = BTreeSet::new();
     let mut closed = false;
 
@@ -1948,69 +1889,10 @@ mod tests {
         assert!(!r.retryable, "a row with no id is refused every time");
     }
 
-    /// A change sent again is built FROM MEMORY, as state: the rows it named as the log holds
-    /// them NOW — written where the log still has them, removed where it no longer does — and a
-    /// purge sends the whole log after a clear. Never the rows as they were when it was first
-    /// sent: that copy can be older than a later change to the same row.
-    #[test]
-    fn a_change_sent_again_carries_the_rows_as_memory_holds_them_now() {
-        let mut log = Logbook::new();
-        let [a, b, gone] = ["W1AW", "K2DEF", "DL1ABC"]
-            .map(|call| log.add((*rec(call, u64::from(call.len() as u32 * 7))).clone()));
-        // After the change that is sent again: b is corrected, and gone is deleted.
-        let mut corrected = (*log.records()[1]).clone();
-        corrected.comment = Some("corrected".into());
-        log.apply(LogOp::Edit {
-            id: b,
-            rec: Box::new(corrected),
-        });
-        log.apply(LogOp::Delete(gone));
-
-        let again = Change::resend(&Touched::Rows(vec![a, b, gone, b]), 41, &log, |_| {
-            (Some("Entity".into()), Some(5))
-        });
-        assert_eq!(again.rev, 41, "the change keeps its own revision");
-        assert!(!again.clear);
-        let written: Vec<_> = again.upsert.iter().map(|w| w.rec.id).collect();
-        assert_eq!(
-            written,
-            vec![Some(a), Some(b)],
-            "each row the log still has, once"
-        );
-        assert_eq!(
-            again.upsert[1].rec.comment.as_deref(),
-            Some("corrected"),
-            "as memory holds it NOW"
-        );
-        assert_eq!(
-            again.upsert[0].entity.as_deref(),
-            Some("Entity"),
-            "resolved"
-        );
-        assert_eq!(
-            again.remove,
-            vec![gone],
-            "a row the log no longer holds is removed"
-        );
-        assert_eq!(
-            again.marks,
-            Watermarks::of(&log),
-            "the log's watermarks as they stand"
-        );
-
-        let purge = Change::resend(&Touched::All, 42, &log, |_| (None, None));
-        assert!(purge.clear, "a purge sent again clears the store first");
-        assert_eq!(
-            purge.upsert.iter().map(|w| w.rec.id).collect::<Vec<_>>(),
-            log.records().iter().map(|r| r.id).collect::<Vec<_>>(),
-            "then writes the whole log as memory holds it"
-        );
-        assert_eq!(purge.priority, Priority::Bulk);
-    }
-
     /// Sent again, and again: the store ends where memory is, never with a row twice. A change
-    /// sent again carries state, so the second copy — or the first one landing after all — only
-    /// writes what is already there.
+    /// carries state — each row as it stands — so the second copy (a change the writer refused,
+    /// sent again by its owner, or the first one landing after all) only writes what is already
+    /// there.
     #[test]
     fn a_change_sent_twice_leaves_the_store_exactly_as_memory() {
         let scratch = Scratch::new();
@@ -2019,12 +1901,8 @@ mod tests {
         let ids: Vec<RecordId> = (1..=3)
             .map(|n| log.add((*rec("W1AW", n)).clone()))
             .collect();
-        let first = w.submit(Change::resend(&Touched::Rows(ids.clone()), 1, &log, |_| {
-            (None, None)
-        }));
-        let second = w.submit(Change::resend(&Touched::Rows(ids.clone()), 1, &log, |_| {
-            (None, None)
-        }));
+        let first = w.submit(change(1, log.records().to_vec()));
+        let second = w.submit(change(1, log.records().to_vec()));
         w.wait_durable(&first, Duration::from_secs(60))
             .expect("first");
         w.wait_durable(&second, Duration::from_secs(60))
@@ -2110,8 +1988,8 @@ mod tests {
     /// ★ A LOST CHANGE SENT AGAIN LIFTS THE WATERMARK ONCE IT LANDS. The store loses revisions
     /// 102 and 104 and takes 103 and 105: the watermark stops at 101, and a read that must see
     /// 105 hears the loss — those changes truly are not saved. Their rows are sent again under
-    /// the revisions they first went out with, which is what the log's owner does
-    /// (`Change::resend`), one at a time: the watermark rises to just below the loss still
+    /// the revisions they first went out with, which is what the log's owner does (the app's
+    /// `LogStore::resend`), one at a time: the watermark rises to just below the loss still
     /// standing, then past everything, and a read of the store is current again.
     #[test]
     fn a_lost_change_sent_again_lifts_the_watermark_once_it_lands() {

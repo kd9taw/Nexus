@@ -18,13 +18,14 @@
 //! 2. Off the lock, in ONE read transaction: `fill_ver`. The version it was asked to fill for →
 //!    done, and the launch has written nothing. Otherwise every contact lacking a country or a
 //!    state — a narrow read of four columns — resolved call by call, still off the lock.
-//! 3. Under the Engine lock: [`crate::station::StationCore::apply_log_fills`] writes what was
-//!    found into the log and, as one change in the writer's bulk lane (chunked; a contact
-//!    logged meanwhile overtakes it), into the store, with `fill_ver` on that change's last
-//!    chunk — so the version is on disk only once every fill is.
+//! 3. [`crate::logwrite::fill`] writes what was found, a chunk at a time: each chunk's rows read
+//!    whole from the store with the lock released, and made under it only where the field is
+//!    still empty in the row as it now stands — a change in the writer's bulk lane (a contact
+//!    logged meanwhile overtakes it). `fill_ver` goes with the last chunk, once every earlier
+//!    one is on disk — so the version is on disk only once every fill is.
 //!
 //! It runs on a thread of its own, never on the radio loop, and nothing it does under the lock
-//! touches the disk or calls a resolver. On the 1.13 path (no store) it does nothing: that path
+//! touches the disk, calls a resolver, or passes over the log. On the 1.13 path (no store) it does nothing: that path
 //! fills as it always has, into `log.adi`.
 //!
 //! The resolvers are the caller's, and must be the functions the engine's own are
@@ -112,7 +113,7 @@ pub fn fill_log_store(
             (country.is_some() || state.is_some()).then_some(LogFill { id, country, state })
         })
         .collect();
-    let filled = engine_lock(engine).apply_log_fills(&fills, version);
+    let filled = crate::logwrite::fill(engine, &fills, version)?;
     Ok(FillOutcome {
         current: false,
         lacking: found,

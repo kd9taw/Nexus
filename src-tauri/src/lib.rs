@@ -2650,11 +2650,26 @@ mod durable_command_tests {
             .expect("every row the log holds carries an id")
     }
 
+    /// `op` on the contact `id`, made the way a command makes it: planned with the Engine lock
+    /// released and made under it (SPEC-2 v3 C19). Whether it was made, and its durability.
+    pub(super) fn by_command(
+        engine: &SharedEngine,
+        id: tempo_core::logbook::RecordId,
+        op: tempo_core::logbook::LogOp,
+    ) -> (bool, tempo_app::logstore::Durability) {
+        let (made, durability) = tempo_app::logwrite::change_ops(engine, id, None, &[op], "test");
+        (matches!(made, Ok(Ok(_))), durability)
+    }
+
     /// Mark a paper card on the contact at `at` — a change for a test to hold on a stalled disk.
     pub(super) fn card_at(engine: &SharedEngine, at: usize) -> bool {
-        let mut e = engine_lock(engine);
-        let id = id_at(&e, at);
-        e.mark_qsl_card(id, true)
+        let id = id_at(&engine_lock(engine), at);
+        by_command(
+            engine,
+            id,
+            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+        )
+        .0
     }
 
     /// The naive shape this replaces: the change and its wait run INSIDE the async task, so the
@@ -2688,10 +2703,13 @@ mod durable_command_tests {
         for i in 0..WAITS {
             let engine = std::sync::Arc::clone(&engine);
             let body = move || {
-                let mut eng = engine_lock(&engine);
-                eng.with_log_tickets(|eng| {
-                    Ok::<bool, String>(eng.mark_qsl_card(id_at(eng, i), true))
-                })
+                let id = id_at(&engine_lock(&engine), i);
+                let (made, durability) = by_command(
+                    &engine,
+                    id,
+                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                );
+                (Ok::<bool, String>(made), durability)
             };
             waits.push(if naive {
                 rt.spawn(async move { waits_on_the_worker(body).await })
@@ -2759,8 +2777,13 @@ mod durable_command_tests {
         let eng = std::sync::Arc::clone(&engine);
         let marked = rt
             .block_on(durable_command(move || {
-                let mut e = engine_lock(&eng);
-                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(id_at(e, 4), true)))
+                let id = id_at(&engine_lock(&eng), 4);
+                let (made, durability) = by_command(
+                    &eng,
+                    id,
+                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                );
+                (Ok::<bool, String>(made), durability)
             }))
             .expect("durable");
         assert!(marked);
@@ -2862,7 +2885,12 @@ mod lotw_batch_tests {
                 "premise: TQSL is handed the batch"
             );
             assert!(
-                engine_lock(engine).delete_qso(ids[0]),
+                super::durable_command_tests::by_command(
+                    engine,
+                    ids[0],
+                    tempo_core::logbook::LogOp::Delete(ids[0])
+                )
+                .0,
                 "deleted while TQSL runs"
             );
             Ok((0, String::new()))
@@ -2894,10 +2922,16 @@ mod lotw_batch_tests {
     fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
         let (dir, engine, ids) = station("lotw-edit", 4);
         let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
-            let mut eng = engine_lock(&engine);
-            let mut fixed = QsoRecord::clone(&eng.log_records()[1]);
+            let mut fixed = QsoRecord::clone(&engine_lock(&engine).log_records()[1]);
             fixed.call = "K1DUX".into();
-            assert!(eng.update_qso(ids[1], fixed), "corrected while TQSL runs");
+            let edit = tempo_core::logbook::LogOp::Edit {
+                id: ids[1],
+                rec: Box::new(fixed),
+            };
+            assert!(
+                super::durable_command_tests::by_command(&engine, ids[1], edit).0,
+                "corrected while TQSL runs"
+            );
             Ok((0, String::new()))
         })
         .expect("the upload ran");
@@ -2919,8 +2953,9 @@ mod lotw_batch_tests {
                 "{what}: every contact but the corrected one is marked"
             );
         }
+        let rows = engine_lock(&engine).log_rows();
         assert!(
-            engine_lock(&engine).lotw_unsent_ids() == vec![ids[1]],
+            tempo_app::station::lotw_unsent_ids(&rows).expect("the store reads") == vec![ids[1]],
             "the corrected contact is offered again"
         );
         assert!(
@@ -2994,7 +3029,9 @@ mod lotw_batch_tests {
             !tempo_app::station::lotw_owed(&rows).expect("the store reads"),
             "only the timeless contact is unsent, and it is owed nothing"
         );
-        assert!(engine_lock(&engine).lotw_unsent_ids().is_empty());
+        assert!(tempo_app::station::lotw_unsent_ids(&rows)
+            .expect("the store reads")
+            .is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -3233,8 +3270,14 @@ mod logbook_startup_tests {
                 .is_some_and(|r| r.qsl_rcvd.card)
         };
         let hold = WriteHold::take(&db).expect("stall the store");
+        let id = id.expect("an id");
         assert!(
-            engine_lock(&engine).mark_qsl_card(id.unwrap(), true),
+            super::durable_command_tests::by_command(
+                &engine,
+                id,
+                tempo_core::logbook::LogOp::MarkQslCard { id, received: true }
+            )
+            .0,
             "not waited for"
         );
 
@@ -17002,10 +17045,11 @@ fn durability_failed(why: String) -> String {
 }
 
 /// The contact `id` as `get_log` would show it — what a log command hands back so a
-/// follow-up (a QSL mark from the same edit form) can key the row it just changed.
+/// follow-up (a QSL mark from the same edit form) can key the row it just changed. Read in the
+/// hold of the lock that changed it ([`Engine::logged_row_held`]).
 fn log_row(eng: &Engine, id: tempo_core::logbook::RecordId) -> Result<LoggedQso, String> {
     let r = eng
-        .logged_row(id)
+        .logged_row_held(id)
         .map(|r| r.as_ref().clone())
         .ok_or(LOG_ROW_GONE)?;
     let mut q = LoggedQso::from(r);
@@ -17027,7 +17071,7 @@ async fn edit_qso(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let id = locate_seen(eng, &target)?;
-            if !eng.update_qso(id, record.into()) {
+            if !eng.update_qso_held(id, record.into()) {
                 return Err(LOG_ROW_GONE.into());
             }
             log_row(eng, id)
@@ -17091,7 +17135,8 @@ async fn mark_qsl_sent(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let id = locate_seen(eng, &target)?;
-            if !eng.mark_qsl_sent(id, via) {
+            let op = tempo_app::logwrite::qsl_sent(id, via);
+            if !eng.change_row_held(id, &[op], "mark_qsl_sent") {
                 return Err(LOG_ROW_GONE.into());
             }
             log_row(eng, id)
@@ -17118,7 +17163,8 @@ async fn mark_qsl_card(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let id = locate_seen(eng, &target)?;
-            if !eng.mark_qsl_card(id, received) {
+            let op = tempo_core::logbook::LogOp::MarkQslCard { id, received };
+            if !eng.change_row_held(id, &[op], "mark_qsl_card") {
                 return Err(LOG_ROW_GONE.into());
             }
             log_row(eng, id)
@@ -17190,7 +17236,11 @@ async fn set_sat_tag(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let id = locate_seen(eng, &target)?;
-            if !eng.set_sat_tag(id, name.as_deref()) {
+            let op = tempo_core::logbook::LogOp::SetSatTag {
+                id,
+                sat_name: name.clone(),
+            };
+            if !eng.change_row_held(id, &[op], "set_sat_tag") {
                 return Err(LOG_ROW_GONE.into());
             }
             log_row(eng, id)
@@ -17221,7 +17271,7 @@ async fn delete_qso(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let id = locate_seen(eng, &target)?;
-            if !eng.delete_qso(id) {
+            if !eng.change_row_held(id, &[tempo_core::logbook::LogOp::Delete(id)], "delete_qso") {
                 return Err(LOG_ROW_GONE.into());
             }
             Ok(eng.snapshot())
@@ -20408,11 +20458,9 @@ fn run_tqsl(tqsl_path: &str, args: &[String]) -> Result<(i32, String), String> {
 #[tauri::command]
 async fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
     let engine = Arc::clone(&state);
-    durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| Ok(eng.mark_lotw_uploaded_all()))
-    })
-    .await
+    // The pick and the stamps are both read off the store with the Engine lock released, and the
+    // stamps made under it (SPEC-2 v3 C19).
+    durable_command(move || tempo_app::logwrite::mark_lotw_uploaded_all(&engine, now_unix())).await
 }
 
 #[tauri::command]
@@ -20608,9 +20656,29 @@ fn lotw_upload_batch_with(
             skipped_deleted: 0,
         }),
         Some(outcome) => {
-            let (done, durable) = engine_lock(state).with_log_tickets(|eng| {
-                eng.stamp_lotw_batch(&signed, outcome, now_unix(), stamped)
-            });
+            // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
+            // the store, and stamped under the lock only while it is still the one TQSL signed.
+            let (done, durable) = tempo_app::logwrite::stamp_lotw_batch(
+                state,
+                &signed,
+                &tempo_core::logbook::UploadStatus {
+                    outcome,
+                    when_unix: now_unix(),
+                    detail: stamped,
+                },
+            );
+            if done.unrecorded > 0 {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!(
+                        "TQSL finished, but its result could not be recorded on the {} contacts \
+                         of this upload. They stay unsent and are offered again with the next \
+                         upload; LoTW ignores a contact it already has.",
+                        done.unrecorded
+                    ),
+                );
+            }
             if done.changed + done.gone > 0 {
                 conn_log(
                     "LoTW",
@@ -21922,18 +21990,19 @@ fn qrz_push_qso_impl(
     // written into `log.adi`, which TQSL signs and uploads to ARRL. QRZ's own reason goes to
     // the connection log and the operator's toast, and dies with the session. See
     // `tempo_core::logbook::UploadDetail`.
-    let ((), stamped) = {
-        let outcome = push.result.to_upload_outcome();
-        let detail = push.result.to_upload_detail();
-        engine_lock(engine).with_log_tickets(|eng| {
-            eng.stamp_qrz_upload(
-                &stamp_subject(named.as_deref(), &rec),
-                outcome,
-                now_unix(),
-                detail,
-            );
-        })
-    };
+    //
+    // Planned with the Engine lock released (SPEC-2 v3 C19): the row the push names is read off
+    // the store, and stamped under the lock only while it is still that row.
+    let (_, stamped) = tempo_app::logwrite::stamp_push(
+        engine,
+        &stamp_subject(named.as_deref(), &rec),
+        tempo_core::logbook::UploadService::Qrz,
+        tempo_core::logbook::UploadStatus {
+            outcome: push.result.to_upload_outcome(),
+            when_unix: now_unix(),
+            detail: push.result.to_upload_detail(),
+        },
+    );
     // The operator's push button waits for the stamp to reach the disk; the upload worker
     // does not (a stamp it loses is re-derived: a re-push answers Duplicate).
     if wait {
@@ -22545,15 +22614,17 @@ fn clublog_push_qso_impl(
     // ARRL. ClubLog's own body goes to the connection log and the toast. See
     // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
-        let detail = push.result.to_upload_detail();
-        let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
-            eng.stamp_clublog_upload(
-                &stamp_subject(named.as_deref(), &rec),
+        // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
+        let (_, stamped) = tempo_app::logwrite::stamp_push(
+            engine,
+            &stamp_subject(named.as_deref(), &rec),
+            tempo_core::logbook::UploadService::Clublog,
+            tempo_core::logbook::UploadStatus {
                 outcome,
-                now_unix(),
-                detail,
-            );
-        });
+                when_unix: now_unix(),
+                detail: push.result.to_upload_detail(),
+            },
+        );
         // The push button waits for the stamp; the upload worker does not (see QRZ's).
         if wait {
             stamped
@@ -22669,14 +22740,17 @@ fn eqsl_push_qso_impl(
             skipped_deleted: 0,
         }),
         Some(outcome) => {
-            let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
-                eng.stamp_eqsl_upload(
-                    &stamp_subject(named.as_deref(), &rec),
+            // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
+            let (_, stamped) = tempo_app::logwrite::stamp_push(
+                engine,
+                &stamp_subject(named.as_deref(), &rec),
+                tempo_core::logbook::UploadService::Eqsl,
+                tempo_core::logbook::UploadStatus {
                     outcome,
-                    now_unix(),
-                    None,
-                );
-            });
+                    when_unix: now_unix(),
+                    detail: None,
+                },
+            );
             // The push button waits for the stamp; the upload worker does not (see QRZ's).
             if wait {
                 stamped
@@ -30266,7 +30340,7 @@ mod tests {
             .expect("the end of the command")
             .0;
         assert!(
-            body.contains("set_sat_tag(id, name.as_deref())"),
+            body.contains("sat_name: name.clone()"),
             "the command must pass the Option through — None is the removal"
         );
         assert!(
@@ -37619,7 +37693,18 @@ mod tests {
         // An edit rewrites a row the copy holds: the whole log, never a delta.
         let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
-        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
+        let id = edited.id.unwrap();
+        let (made, _) = tempo_app::logwrite::change_ops(
+            &engine,
+            id,
+            None,
+            &[tempo_core::logbook::LogOp::Edit {
+                id,
+                rec: Box::new(edited),
+            }],
+            "test",
+        );
+        assert!(matches!(made, Ok(Ok(_))));
         let after_edit = super::log_delta(&engine, grown.revision, copy.len());
         assert!(after_edit.full, "an edit is not an append");
         assert_eq!(after_edit.rows, get_log());
@@ -37627,7 +37712,14 @@ mod tests {
 
         // A delete likewise.
         let first = engine_lock(&engine).log_records()[0].id.unwrap();
-        assert!(engine_lock(&engine).delete_qso(first));
+        let (made, _) = tempo_app::logwrite::change_ops(
+            &engine,
+            first,
+            None,
+            &[tempo_core::logbook::LogOp::Delete(first)],
+            "test",
+        );
+        assert!(matches!(made, Ok(Ok(_))));
         let after_delete = super::log_delta(&engine, after_edit.revision, after_edit.rows.len());
         assert!(after_delete.full, "a delete is not an append");
         assert_eq!(after_delete.rows, get_log());
@@ -37695,7 +37787,18 @@ mod tests {
         // A rewrite moves them all, as an append does.
         let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.band = "40m".into();
-        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
+        let id = edited.id.unwrap();
+        let (made, _) = tempo_app::logwrite::change_ops(
+            &engine,
+            id,
+            None,
+            &[tempo_core::logbook::LogOp::Edit {
+                id,
+                rec: Box::new(edited),
+            }],
+            "test",
+        );
+        assert!(matches!(made, Ok(Ok(_))));
         assert_eq!(folds(), 3, "an edit folds each tally again");
     }
 }

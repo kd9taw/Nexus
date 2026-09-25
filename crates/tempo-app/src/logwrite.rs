@@ -1,0 +1,394 @@
+//! The log's changes as a command makes them, holding the Engine mutex — SPEC-2 v3 §4.6, C19
+//! Part B: **planned with the Engine lock released, made under it.**
+//!
+//! A change to rows the log already holds reads those rows first. Since C19 that read is the
+//! store's ([`LogPlan::rows`]), and a read of the store never runs under the Engine lock (the
+//! radio loop takes that lock every 20 ms, and `io_fence` stops a debug build that tries). So a
+//! command here holds the lock twice, briefly, and never across the read:
+//!
+//! 1. under the lock: the plan's handles ([`StationCore::log_plan`] — pointers, no I/O);
+//! 2. with it released: the rows, read from the store;
+//! 3. under the lock again: the change, made only while the rows it read are still the rows the
+//!    log holds ([`StationCore::unchanged_since`]) — otherwise planned again, and after
+//!    [`PLANS`] plans refused as `LogBusy` ([`RowRefusal::Busy`]).
+//!
+//! Each step 3 is O(the rows changed): the decision about each row, the index following its
+//! pairs, a channel send to the writer. The command then waits for its change to reach the disk
+//! with every lock released ([`Durability::wait`]), as every operator command has since C9.
+//!
+//! Each function here has a twin on [`StationCore`] that makes the same plan and the same commit
+//! in one breath, for an owner holding the log with no Engine guard (a test's own engine).
+
+use std::sync::{Arc, Mutex};
+
+use tempo_core::logbook::{
+    LogOp, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService, UploadStatus,
+};
+
+use crate::engine::{engine_lock, Engine};
+use crate::logstore::Durability;
+use crate::station::{
+    self, Decided, LogFill, LotwSigned, LotwStamped, MadeRow, RowRefusal, StationCore, PLANS,
+};
+
+/// What a change to one row came to: made (`Some` of what the caller answered), found nothing
+/// to change (`None`), or refused ([`RowRefusal`]) — or `Err`, the store could not be read.
+pub type RowOutcome<T> = Result<Result<Option<T>, RowRefusal>, String>;
+
+/// ★ Plan a change to the contact `id` with the Engine lock released and make it under the lock
+/// — the by-id change every command makes (an edit, a QSL mark, a satellite tag, a delete).
+///
+/// `decide` is handed, under the lock, the row as the plan read it, and answers what to make of
+/// it ([`Decided`]). When the change is made, `then` runs in the same hold of the lock with the
+/// row as it was and as it now is — what the command answers, and anything that must happen
+/// with the change (a corrected call queued to the connectors, the contest log's own row). The
+/// durability of the change made, for the command to wait on once the lock is released.
+pub fn change_row<T>(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    context: &str,
+    mut decide: impl FnMut(&Engine, &Arc<QsoRecord>) -> Decided,
+    mut then: impl FnMut(&mut Engine, MadeRow) -> T,
+) -> (RowOutcome<T>, Durability) {
+    for _ in 0..PLANS {
+        let plan = engine_lock(engine).station_mut().log_plan();
+        let before = match plan.row(id) {
+            Ok(Some(row)) => row,
+            Ok(None) => return (Ok(Err(RowRefusal::Gone)), Durability::default()),
+            Err(e) => return (Err(e), Durability::default()),
+        };
+        #[cfg(test)]
+        tests::race();
+        let mut e = engine_lock(engine);
+        let (made, durability) = e.with_log_tickets(|e| {
+            let (class, after) = match decide(e, &before) {
+                Ok(Some(made)) => made,
+                Ok(None) => return Some(Ok(Ok(None))),
+                Err(refusal) => return Some(Ok(Err(refusal))),
+            };
+            let after = after.map(Arc::new);
+            let rows = vec![(Arc::clone(&before), after.clone())];
+            e.station_mut()
+                .commit_planned(&plan, class, rows, false, Vec::new(), context)
+                .ok()?;
+            Some(Ok(Ok(Some(then(e, (Arc::clone(&before), after))))))
+        });
+        if let Some(made) = made {
+            return (made, durability);
+        }
+    }
+    (Ok(Err(RowRefusal::Busy)), Durability::default())
+}
+
+/// `ops` made on the contact `id` — a QSL mark, the satellite tag, a delete — only while it is
+/// still the version whose edit key is `edit_key` when one is given (a `RowRef`'s check,
+/// [`StationCore::fresh_row`]), planned with the Engine lock released ([`change_row`]). What it
+/// made, or why not: a row that took none of the ops (a blank satellite name) is answered as
+/// [`RowRefusal::Gone`], as the command by row always answered it.
+pub fn change_ops(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: Option<&str>,
+    ops: &[LogOp],
+    context: &str,
+) -> (Result<Result<MadeRow, RowRefusal>, String>, Durability) {
+    let (made, durability) = change_row(
+        engine,
+        id,
+        context,
+        |_, row| {
+            if let Some(key) = edit_key {
+                StationCore::fresh_row(row, key)?;
+            }
+            Ok(station::ops_on(row, ops))
+        },
+        |_, made| made,
+    );
+    let made = made.map(|made| made.and_then(|made| made.ok_or(RowRefusal::Gone)));
+    (made, durability)
+}
+
+/// The Logbook form's edit of the contact `id`, as ONE change ([`StationCore::edit_ops`]: the
+/// fields, and the QSL-sent and paper-card marks where the form changes them), only while it is
+/// still the version whose edit key is `edit_key` — planned with the Engine lock released. The
+/// command-side twin of [`Engine::edit_qso`], with what goes with an edit made in the same hold
+/// of the lock: a corrected call queued to the connectors as the edit left it, and the contest
+/// log's own row corrected. The contact as the change left it, or why not; `Err` for an edit the
+/// caller must not send again as it is, or a store that could not be read.
+pub fn edit_row(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: &str,
+    edit: &QsoEdit,
+) -> (Result<Result<Arc<QsoRecord>, RowRefusal>, String>, Durability) {
+    let mut bad = None;
+    // The row as the field edit alone leaves it: what a corrected call goes back out to the
+    // connectors as, as it did when the marks were commands of their own.
+    let edited: std::cell::RefCell<Option<QsoRecord>> = std::cell::RefCell::new(None);
+    let (made, durability) = change_row(
+        engine,
+        id,
+        "edit_qso",
+        |e, stored| match e.station().edit_ops(id, edit_key, edit, stored) {
+            Ok(Ok(ops)) => {
+                *edited.borrow_mut() = ops.first().and_then(|op| match op.apply_to(stored) {
+                    RowAfter::Now(row) => Some(row),
+                    RowAfter::Gone | RowAfter::Unchanged => None,
+                });
+                Ok(station::ops_on(stored, &ops))
+            }
+            Ok(Err(refusal)) => Err(refusal),
+            Err(e) => {
+                bad = Some(e);
+                Ok(None)
+            }
+        },
+        |e, (before, after)| {
+            if let Some(edited) = edited.borrow().as_ref() {
+                e.station_mut().requeue_if_corrected(&before, edited);
+            }
+            if let Some(after) = &after {
+                e.correct_contest_row(after);
+            }
+            after
+        },
+    );
+    if let Some(e) = bad {
+        return (Err(e), durability);
+    }
+    let made = made.map(|made| match made {
+        Ok(Some(Some(after))) => Ok(after),
+        Ok(Some(None)) | Ok(None) => Err(RowRefusal::Gone),
+        Err(refusal) => Err(refusal),
+    });
+    (made, durability)
+}
+
+/// The operator's QSL-sent declaration on `id` — `Some(via)` marks it sent, dated now; `None`
+/// withdraws it — as [`StationCore::mark_qsl_sent`] makes it.
+pub fn qsl_sent(id: RecordId, via: Option<tempo_core::logbook::QslVia>) -> LogOp {
+    LogOp::MarkQslSent {
+        id,
+        via,
+        date_unix: crate::engine::now_unix_secs(),
+    }
+}
+
+/// Stamp a connector's answer for the QSO it pushed (`pushed`) on the row that push names
+/// ([`station::push_target`]: by its id while it is still that contact, or — a push that names
+/// no row — the newest with its push key), planned with the Engine lock released. Whether a
+/// record was stamped, and the durability of the stamp.
+pub fn stamp_push(
+    engine: &Mutex<Engine>,
+    pushed: &QsoRecord,
+    service: UploadService,
+    status: UploadStatus,
+) -> (bool, Durability) {
+    for _ in 0..PLANS {
+        let plan = engine_lock(engine).station_mut().log_plan();
+        let target = match station::push_target(&plan, pushed) {
+            Ok(Some(row)) => row,
+            Ok(None) => return (false, Durability::default()),
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("an upload stamp could not read the logbook: {e}"),
+                );
+                return (false, Durability::default());
+            }
+        };
+        let Some(rows) = station::stamped_rows(&[target], service, &status) else {
+            return (false, Durability::default());
+        };
+        let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
+            e.station_mut()
+                .commit_planned(
+                    &plan,
+                    tempo_core::logbook::OpClass::Stamp,
+                    rows,
+                    false,
+                    Vec::new(),
+                    "upload stamp",
+                )
+                .is_ok()
+        });
+        if made {
+            return (true, durability);
+        }
+    }
+    tempo_core::applog::warn(
+        "logbook",
+        "an upload stamp's contact kept changing under it; not stamped",
+    );
+    (false, Durability::default())
+}
+
+/// Stamp `upload.lotw` on the contacts of a batch TQSL signed — by id, and only where each row
+/// is still the one that was signed ([`station::stamp_lotw_batch_plan`]) — planned with the Engine
+/// lock released. What it made of the batch, and the durability of the stamps.
+pub fn stamp_lotw_batch(
+    engine: &Mutex<Engine>,
+    batch: &[LotwSigned],
+    status: &UploadStatus,
+) -> (LotwStamped, Durability) {
+    let unrecorded = LotwStamped {
+        unrecorded: batch.len(),
+        ..LotwStamped::default()
+    };
+    for _ in 0..PLANS {
+        let plan = engine_lock(engine).station_mut().log_plan_moving();
+        let (report, pairs) = match station::stamp_lotw_batch_plan(&plan, batch, status) {
+            Ok(planned) => planned,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("a LoTW upload's stamps could not read the logbook: {e}"),
+                );
+                return (unrecorded, Durability::default());
+            }
+        };
+        let Some(pairs) = pairs else {
+            return (report, Durability::default());
+        };
+        let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
+        let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
+            e.station_mut()
+                .commit_planned(
+                    &plan,
+                    tempo_core::logbook::OpClass::Stamp,
+                    pairs,
+                    bulk,
+                    Vec::new(),
+                    "lotw upload stamp",
+                )
+                .is_ok()
+        });
+        if made {
+            return (report, durability);
+        }
+    }
+    tempo_core::applog::warn(
+        "logbook",
+        "a LoTW upload's contacts kept changing under its stamps; not stamped",
+    );
+    (unrecorded, Durability::default())
+}
+
+/// Stamp `upload.lotw` on every contact still owed to LoTW — the operator's "already uploaded"
+/// declaration (the Awards view's "Mark all as uploaded") — the pick and the stamps both read off
+/// the store with the Engine lock released. How many were stamped, and their durability.
+pub fn mark_lotw_uploaded_all(
+    engine: &Mutex<Engine>,
+    when_unix: i64,
+) -> (Result<usize, String>, Durability) {
+    let rows = engine_lock(engine).log_rows();
+    let ids = match station::lotw_unsent_ids(&rows) {
+        Ok(ids) => ids,
+        Err(e) => return (Err(e), Durability::default()),
+    };
+    if ids.is_empty() {
+        return (Ok(0), Durability::default());
+    }
+    let status = UploadStatus {
+        outcome: tempo_core::logbook::UploadOutcome::Accepted,
+        when_unix,
+        detail: Some(tempo_core::logbook::UploadDetail::OperatorDeclared),
+    };
+    for _ in 0..PLANS {
+        let plan = engine_lock(engine).station_mut().log_plan();
+        let found = match plan.rows(&ids) {
+            Ok(found) => found,
+            Err(e) => return (Err(e), Durability::default()),
+        };
+        let rows: Vec<Arc<QsoRecord>> = ids.iter().filter_map(|id| found.get(id).cloned()).collect();
+        let Some(pairs) = station::stamped_rows(&rows, UploadService::Lotw, &status) else {
+            return (Ok(0), Durability::default());
+        };
+        let n = pairs.len();
+        let bulk = n > tempo_core::logbook::writer::CHUNK_ROWS;
+        let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
+            e.station_mut()
+                .commit_planned(
+                    &plan,
+                    tempo_core::logbook::OpClass::Stamp,
+                    pairs,
+                    bulk,
+                    Vec::new(),
+                    "lotw upload stamp",
+                )
+                .is_ok()
+        });
+        if made {
+            return (Ok(n), durability);
+        }
+    }
+    (Err(station::LOG_BUSY.into()), Durability::default())
+}
+
+/// How many fills one change of the fill job carries: a bound on what one plan reads whole and
+/// one commit holds the lock for, whatever the log's size.
+pub const FILL_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
+
+/// Write the fill job's fills (SPEC-2 v3 D2-A) — each planned with the Engine lock released, a
+/// chunk of [`FILL_CHUNK`] at a time, and made under the lock only where the field is still empty
+/// in the row as it now stands ([`station::fill_pairs`]). `fill_ver` goes with the LAST chunk, and
+/// only once every earlier chunk is on disk: the store names the resolver data its fills come
+/// from only when it holds every one of them. How many contacts gained a field.
+///
+/// ⚠️ It reads the store and waits for it: call it on the job's own thread, with no lock held.
+pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<usize, String> {
+    let chunks: Vec<&[LogFill]> = if fills.is_empty() {
+        vec![&[]]
+    } else {
+        fills.chunks(FILL_CHUNK).collect()
+    };
+    let last = chunks.len() - 1;
+    let mut filled = 0;
+    let mut waiting: Vec<Durability> = Vec::new();
+    for (k, chunk) in chunks.into_iter().enumerate() {
+        if k == last {
+            // `fill_ver` only once every earlier fill is on disk.
+            for d in waiting.drain(..) {
+                d.wait(crate::logstore::DURABLE_WAIT)?;
+            }
+        }
+        let meta = if k == last {
+            vec![(crate::logfill::FILL_VER, fill_ver)]
+        } else {
+            Vec::new()
+        };
+        let ids: Vec<RecordId> = chunk.iter().map(|f| f.id).collect();
+        let mut made = None;
+        for _ in 0..PLANS {
+            let plan = engine_lock(engine).station_mut().log_plan();
+            let rows = plan.rows(&ids)?;
+            let pairs = station::fill_pairs(&rows, chunk);
+            let n = pairs.len();
+            let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
+                e.station_mut()
+                    .commit_planned(
+                        &plan,
+                        station::fill_class(n),
+                        pairs,
+                        true,
+                        meta.clone(),
+                        "fill",
+                    )
+                    .is_ok()
+            });
+            if ok {
+                made = Some((n, durability));
+                break;
+            }
+        }
+        let Some((n, durability)) = made else {
+            return Err(station::LOG_BUSY.into());
+        };
+        filled += n;
+        waiting.push(durability);
+    }
+    Ok(filled)
+}
+
+#[cfg(test)]
+mod tests;

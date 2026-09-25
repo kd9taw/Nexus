@@ -25,7 +25,7 @@ use tempo_app::engine::{
     Engine, LogWriteOutcome,
 };
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
-use tempo_core::logbook::{adif_record_own_log, QslVia, QsoRecord, RecordId};
+use tempo_core::logbook::{adif_record_own_log, LogOp, QslVia, QsoRecord, RecordId};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -686,7 +686,7 @@ fn rewrite(
     id: RecordId,
 ) -> Result<(String, usize), ChangeReason> {
     let stored = engine
-        .logged_row(id)
+        .logged_row_held(id)
         .ok_or(ChangeReason::ContextChanged)?
         .as_ref()
         .clone();
@@ -700,7 +700,7 @@ fn rewrite(
     };
     let (expected, count) = if let Change::Delete { .. } = change {
         let text = adif_record_own_log(&stored);
-        if !engine.delete_qso(id) {
+        if !engine.change_row_held(id, &[LogOp::Delete(id)], "delete_qso") {
             return Err(ChangeReason::ContextChanged);
         }
         let count = copies(engine.log_records(), &stored, &text);
@@ -708,12 +708,24 @@ fn rewrite(
     } else {
         // Prove the record the engine actually wrote under `id`.
         let applied = match change {
-            Change::Edit { record, .. } => engine.update_qso(id, edited(record, &stored)),
+            Change::Edit { record, .. } => engine.update_qso_held(id, edited(record, &stored)),
             // `valid` admitted only B/D/E or null, so a letter always parses here.
             Change::QslSent { via, .. } => {
-                engine.mark_qsl_sent(id, via.as_deref().and_then(QslVia::from_code))
+                let via = via.as_deref().and_then(QslVia::from_code);
+                engine.change_row_held(
+                    id,
+                    &[tempo_app::logwrite::qsl_sent(id, via)],
+                    "mark_qsl_sent",
+                )
             }
-            Change::QslCard { received, .. } => engine.mark_qsl_card(id, *received),
+            Change::QslCard { received, .. } => engine.change_row_held(
+                id,
+                &[LogOp::MarkQslCard {
+                    id,
+                    received: *received,
+                }],
+                "mark_qsl_card",
+            ),
             Change::Delete { .. }
             | Change::Hunt { .. }
             | Change::ClearHunt {}
@@ -727,7 +739,9 @@ fn rewrite(
         if !applied {
             return Err(ChangeReason::ContextChanged);
         }
-        let written = engine.logged_row(id).ok_or(ChangeReason::ContextChanged)?;
+        let written = engine
+            .logged_row_held(id)
+            .ok_or(ChangeReason::ContextChanged)?;
         let text = adif_record_own_log(&written);
         let count = copies(engine.log_records(), &written, &text);
         (text, count)
