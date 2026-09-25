@@ -361,6 +361,258 @@ fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
     );
 }
 
+/// A purge still on its way, and a purge the writer gave up: what a plan reads of the rows around
+/// it, and what sending it again takes out (SPEC-2 v3 C19).
+mod purge {
+    use super::*;
+
+    /// The one contact `call` names, as a plan finds it by its call: the store as it stands, with
+    /// this process's changes laid over it — never a wait for a stalled writer.
+    fn named(engine: &Mutex<Engine>, call: &str) -> RecordId {
+        let view = engine_lock(engine).log_view();
+        let rows = view
+            .candidates(&std::collections::BTreeSet::from([call.to_string()]))
+            .expect("read");
+        assert_eq!(rows.len(), 1, "one {call}: {rows:?}");
+        rows[0].id.expect("an id")
+    }
+
+    /// The row `id` as a plan reads it: `None` when the log does not hold it.
+    fn read(engine: &Mutex<Engine>, id: RecordId) -> Option<Arc<QsoRecord>> {
+        let view = engine_lock(engine).log_view();
+        view.row(id).expect("read")
+    }
+
+    /// Poll `f` until it says yes or `limit` passes: longer than [`eventually`] waits, for the
+    /// writer's retry ladder.
+    fn eventually_for(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        f()
+    }
+
+    /// A read of the log held open on a thread of its own until the sender sends or is dropped:
+    /// on the 1.13 path, where the store is in memory, what holds its writer off. The thread
+    /// answers the read.
+    fn read_held_open(
+        engine: &Mutex<Engine>,
+    ) -> (
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<
+            Result<crate::logstore::Freshness, tempo_core::logbook::sqlite::Error>,
+        >,
+    ) {
+        let rows = engine_lock(engine).log_rows();
+        let (open, opened) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            let mut first = true;
+            rows.each_record(Duration::ZERO, &mut |_| {
+                if std::mem::take(&mut first) {
+                    let _ = open.send(());
+                    let _ = released.recv();
+                }
+                std::ops::ControlFlow::Continue(())
+            })
+        });
+        opened.recv().expect("the read is open");
+        (release, reader)
+    }
+
+    /// The calls `log.adi` holds, in its order.
+    fn calls_in_file(d: &Dir) -> Vec<String> {
+        tempo_core::logbook::Logbook::load(&d.log())
+            .records()
+            .iter()
+            .map(|r| r.call.clone())
+            .collect()
+    }
+
+    /// ★ A CONTACT LOGGED AFTER A PURGE ON ITS WAY IS THERE TO A PLAN. With the writer stalled, a
+    /// purge is still on its way when the next contact is logged, and both say something of that
+    /// contact: the purge that every row is gone, the append that it is there. The newer is the
+    /// log. A plan that read the purge refused every change made by id to the new contact — a
+    /// card, an edit, a delete — as a change to a contact that is gone, until the purge landed
+    /// and the next change let it go. Each ordering, asserted: a contact the store holds, gone;
+    /// one logged before the purge, gone; one logged after it, there; edited after it, the edit;
+    /// deleted after it, gone. And once the writer clears, the store holds the same.
+    #[test]
+    fn a_plan_reads_a_contact_logged_after_a_purge_the_store_has_not_taken_yet() {
+        let d = Dir::new("overlay-purge");
+        let engine = shared(&d, 6);
+        let held = named(&engine, "K3ABC");
+        let hold = WriteHold::take(&d.db()).expect("stall the writer");
+
+        engine_lock(&engine).log_qso(qso("K1AAA", 1_788_000_000));
+        let before = named(&engine, "K1AAA");
+        engine_lock(&engine).clear_logbook();
+        assert!(
+            stored(&d).iter().any(|r| r.id == Some(held)),
+            "control: the store still holds it"
+        );
+        assert_eq!(read(&engine, held), None, "a contact the store holds: gone");
+        assert_eq!(read(&engine, before), None, "logged before the purge: gone");
+
+        engine_lock(&engine).log_qso(qso("K1BBB", 1_788_000_060));
+        let after = named(&engine, "K1BBB");
+        assert!(
+            !stored(&d).iter().any(|r| r.id == Some(after)),
+            "control: the store has not taken it"
+        );
+        let row = read(&engine, after).expect("logged after the purge: there");
+        assert_eq!(row.call, "K1BBB");
+
+        let mut edit = QsoEdit::project(&row);
+        edit.comment = Some("after the purge".into());
+        let (made, _) = edit_row(&engine, after, &QsoEdit::project(&row).key(), &edit);
+        assert!(
+            matches!(made, Ok(Ok(_))),
+            "an edit after the purge is made: {made:?}"
+        );
+        assert_eq!(
+            read(&engine, after)
+                .and_then(|r| r.comment.clone())
+                .as_deref(),
+            Some("after the purge"),
+            "edited after the purge: the edit"
+        );
+
+        engine_lock(&engine).log_qso(qso("K1CCC", 1_788_000_120));
+        let deleted = named(&engine, "K1CCC");
+        let (made, _) = change_ops(&engine, deleted, None, &[LogOp::Delete(deleted)], "delete");
+        assert!(
+            matches!(made, Ok(Ok(_))),
+            "a delete after the purge is made: {made:?}"
+        );
+        assert_eq!(
+            read(&engine, deleted),
+            None,
+            "deleted after the purge: gone"
+        );
+
+        drop(hold);
+        flush(&engine_lock(&engine));
+        let rows = stored(&d);
+        assert_eq!(
+            rows.len(),
+            1,
+            "the store holds the one contact left: {rows:?}"
+        );
+        assert_eq!(rows[0].id, Some(after));
+        assert_eq!(rows[0].comment.as_deref(), Some("after the purge"));
+        for id in [held, before, deleted] {
+            assert_eq!(
+                read(&engine, id),
+                None,
+                "and a plan reads the store the same"
+            );
+        }
+    }
+
+    /// ★ A PURGE SENT AGAIN TAKES OUT THE ROWS IT TOOK OUT, AND NO OTHER (never silently lose a
+    /// contact). Another program holds the database past the writer's retry ladder (about 21 s:
+    /// this test waits it out), and the writer gives the purge up. The program lets go, and a
+    /// contact is logged and lands before the purge is sent again. Sent again as "every row",
+    /// the purge took that contact out of the store while the log in memory still held it: gone
+    /// from `log.adi`, and from the next launch. Sent as the rows it took out, it leaves it. And
+    /// while the purge waits, a plan reads the contact as there, not as gone.
+    #[test]
+    fn a_purge_sent_again_takes_out_the_rows_it_took_out_and_no_other() {
+        let d = Dir::new("purge-resend");
+        let engine = shared(&d, 6);
+        let hold = WriteHold::take(&d.db()).expect("another program holds the database");
+        engine_lock(&engine).clear_logbook();
+        assert!(
+            eventually_for(Duration::from_secs(90), || {
+                engine_lock(&engine).log_unsaved().standing().retryable == 1
+            }),
+            "premise: the writer gives the purge up"
+        );
+        drop(hold);
+        engine_lock(&engine).log_qso(qso("K1BBB", 1_788_000_060));
+        let after = named(&engine, "K1BBB");
+        assert!(
+            eventually(|| stored(&d).iter().any(|r| r.id == Some(after))),
+            "the contact lands while the purge waits"
+        );
+        // What the writer finished taken in, the purge's wait not up yet: the contact's own
+        // change is done with, and the purge is what is left.
+        let due = engine_lock(&engine).log_resend_due();
+        assert_eq!(
+            read(&engine, after).map(|r| r.call.clone()).as_deref(),
+            Some("K1BBB"),
+            "a plan reads it as there while the purge waits"
+        );
+
+        let sent = due + engine_lock(&engine).log_resend_all();
+        assert_eq!(sent, 1, "the purge, sent again");
+        let unsaved = engine_lock(&engine).log_unsaved();
+        assert!(unsaved.wait(DURABLE_WAIT).saved(), "and it lands");
+        flush(&engine_lock(&engine));
+        let in_store: Vec<String> = stored(&d).into_iter().map(|r| r.call).collect();
+        assert_eq!(
+            in_store,
+            ["K1BBB"],
+            "the store holds the contact logged after the purge, and none of the rows it took out"
+        );
+        same_log(
+            &stored(&d),
+            engine_lock(&engine).log_records(),
+            "the store is the log in memory",
+        );
+        assert!(
+            eventually(|| engine_lock(&engine).log_unsaved().is_empty()),
+            "log.adi catches up"
+        );
+        assert_eq!(calls_in_file(&d), ["K1BBB"], "and so does log.adi");
+    }
+
+    /// ★ …AND ON THE 1.13 PATH, `log.adi` KEEPS IT. There the store is in memory and `log.adi` is
+    /// the log's home. A read held open on the store holds its writer off, as another program
+    /// holds the database, until the writer gives the purge up. A contact is logged (into
+    /// `log.adi` at once, as 1.13 appended it), and the purge is sent again: its rewrite of
+    /// `log.adi` reads the store, which holds the contact and none of the rows the purge took
+    /// out.
+    #[test]
+    fn on_the_1_13_path_a_purge_sent_again_leaves_log_adi_the_contact_logged_after_it() {
+        let d = Dir::new("purge-resend-1-13");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_log_path(d.log());
+        assert!(e.log_on_file(), "premise: the 1.13 path");
+        e.flush_log_store(DURABLE_WAIT).expect("settled");
+        let engine = Arc::new(Mutex::new(e));
+        let (release, reader) = read_held_open(&engine);
+        engine_lock(&engine).clear_logbook();
+        let gave_up = eventually_for(Duration::from_secs(90), || {
+            engine_lock(&engine).log_unsaved().standing().retryable == 1
+        });
+        drop(release);
+        reader.join().expect("the read ran").expect("and read");
+        assert!(gave_up, "premise: the writer gives the purge up");
+        engine_lock(&engine).log_qso(qso("K1BBB", 1_788_000_060));
+        assert!(
+            eventually(|| calls_in_file(&d).contains(&"K1BBB".to_string())),
+            "the contact is in log.adi at once"
+        );
+        let due = engine_lock(&engine).log_resend_due();
+        let sent = due + engine_lock(&engine).log_resend_all();
+        assert_eq!(sent, 1, "the purge, sent again");
+        let unsaved = engine_lock(&engine).log_unsaved();
+        assert!(unsaved.wait(DURABLE_WAIT).saved(), "and it is in log.adi");
+        assert_eq!(
+            calls_in_file(&d),
+            ["K1BBB"],
+            "log.adi holds the contact logged after the purge, and none of the rows it took out"
+        );
+    }
+}
+
 /// ★ A CORRECTION BY A `RowRef` IS MADE ONLY ON THE VERSION FOUND (SPEC-2 v3 C19). The desktop's
 /// edit of the row it found by what the view showed, and a Remote browser's edit, are made by
 /// [`update_row`], which checks the edit key where the change is made — the check C16's `locate`
