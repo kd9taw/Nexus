@@ -601,6 +601,7 @@ mod tests {
     //! contact is logged (P4) with the Engine lock free while it waits; and the kept answers
     //! reused across an upload stamp exactly where that is correct.
     use super::*;
+    use crate::remote_service::stored_log_tests::caught_up;
     use propagation::model::{Band, ModeClass};
     use propagation::OperatorNeeds;
     use tempo_core::logbook::sqlite::{Resolved, WriteHold};
@@ -1308,6 +1309,10 @@ mod tests {
                 );
             }
         }
+        // Back once the store holds the change, so the folds asked next are asked about it rather
+        // than about the disk's speed ([`caught_up`]); P4 itself is the test below that holds the
+        // writer.
+        caught_up(e);
     }
 
     /// ★ THE PROPERTY: over 16 seeded runs of 30 random changes each — logged contacts, imports,
@@ -1527,6 +1532,9 @@ mod tests {
             let pushed = QsoRecord::clone(&eng.log_records()[3]);
             assert!(eng.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 2_000_000_000, None));
         }
+        // Asked once the store holds the stamp: a fold that reads it answers from the store as it
+        // stands if the writer is past READ_WAIT, and then keeps nothing ([`caught_up`]).
+        caught_up(&e);
         assert_eq!(
             folds(),
             0,
@@ -1552,6 +1560,7 @@ mod tests {
             let id = id_at(&eng, 5);
             assert!(eng.update_qso(id, edited));
         }
+        caught_up(&e);
         assert_eq!(folds(), 4, "control: an edit folds each again");
         assert_every_fold_agrees(&e, &tallies, "after the edit");
         settle(&e);
