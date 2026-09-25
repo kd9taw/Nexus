@@ -1812,6 +1812,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // budget. No-op when native Flex audio was never on.
             state.dax_src = None;
             cfg.rx_tap.retire_receive_audio();
+            // The contacts WSJT-X logged a moment ago, imported before the app is told it may
+            // exit, so they are in the log the quit flushes: dropping the worker waits for every
+            // record already handed to it (milliseconds). After the unkey above, never before it.
+            state.companion_import = None;
             SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
@@ -3506,6 +3510,9 @@ struct RadioLoop {
     clock_jump: tempo_app::clocksync::ClockJumpDetector,
     /// The persistent decode worker (heavy decode off this thread + the engine mutex).
     decode: DecodeWorker,
+    /// Imports the contacts WSJT-X logs in companion mode, beside this loop — started on the
+    /// first one ([`Self::import_companion`]).
+    companion_import: Option<crate::import_worker::ImportWorker>,
     /// A decode job (early OR boundary) is out on the worker. Guards against a second
     /// dispatch while one is in flight — the boundary defers a tick if the early pass
     /// is still running, so the early result is always folded (setting `early_seen`)
@@ -3722,8 +3729,32 @@ impl RadioLoop {
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
             decode: DecodeWorker::spawn(),
+            companion_import: None,
             decode_in_flight: false,
             dropped_decodes: 0,
+        }
+    }
+
+    /// Hand the ADIF record WSJT-X logged in companion mode to the import worker — a channel
+    /// send. The import reads the log (what it adds is checked against the contacts the log
+    /// holds), so it runs beside the loop and never in its tick: the radio loop never waits on
+    /// SQL (SPEC-2 v3 C19; the operator's call, 2026-09-24). A worker that could not be started
+    /// is started again on the next contact, and says why in the diagnostic log.
+    fn import_companion(&mut self, engine: &Arc<Mutex<Engine>>, adif: String) {
+        if self.companion_import.is_none() {
+            match crate::import_worker::ImportWorker::spawn(Arc::clone(engine)) {
+                Ok(worker) => self.companion_import = Some(worker),
+                Err(e) => {
+                    tempo_core::applog::error(
+                        "logbook",
+                        &format!("the companion import could not start ({e}); a contact WSJT-X logged was not imported"),
+                    );
+                    return;
+                }
+            }
+        }
+        if let Some(worker) = &self.companion_import {
+            worker.import(adif);
         }
     }
 
@@ -10209,7 +10240,7 @@ impl RadioLoop {
                     // structured summary, so the contact reaches the logbook /
                     // awards / Needed board exactly once (never double-logged).
                     WsjtxInbound::LoggedAdif { adif, .. } => {
-                        eng.import_adif(&adif);
+                        self.import_companion(engine, adif);
                     }
                     WsjtxInbound::QsoLogged { .. } => {} // handled via LoggedAdif above
                     _ => {}
@@ -16075,6 +16106,127 @@ mod tests {
             }
         });
         (addr, log)
+    }
+
+    /// ★ THE COMPANION IMPORT LEAVES THE TICK (SPEC-2 v3 C19 Part B; the operator's call,
+    /// 2026-09-24). A contact WSJT-X logs arrives as a LoggedAdif datagram and the tick hands it to
+    /// the import worker, reading nothing from the log itself: an import in the tick, under the
+    /// Engine lock the tick holds, reads the store — which trips the fence, and in a debug build
+    /// panics this test. The worker puts the contact in the log a moment later, as the record the
+    /// import has always written (the same text through an import of its own, compared field by
+    /// field), and the same contact sent again is the one already there, not a second.
+    #[test]
+    fn the_companion_import_runs_beside_the_loop_never_in_its_tick() {
+        use tempo_core::logbook::{adif_header, adif_record_own_log, sqlite::Resolved, QsoRecord};
+        const ADIF: &str = "<call:5>W1ABC <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-10 \
+            <rst_rcvd:3>-12 <qso_date:8>20260923 <time_on:6>120015 <qso_date_off:8>20260923 \
+            <time_off:6>120115 <band:3>20m <freq:9>14.075512 <station_callsign:5>K2DEF <EOR>";
+        let on_store = |tag: &str| {
+            let dir =
+                std::env::temp_dir().join(format!("nexus-companion-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let log = dir.join("log.adi");
+            std::fs::write(&log, adif_header()).unwrap();
+            let opened = tempo_app::logstore::open(&log, Arc::new(|_| Resolved::default()), None)
+                .expect("the store opens");
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.attach_log_store(opened);
+            (dir, Arc::new(Mutex::new(e)))
+        };
+        // The contacts the store holds, read through a connection of the test's own.
+        let held = |dir: &std::path::Path| -> Vec<QsoRecord> {
+            let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+            tempo_core::logbook::sqlite::LogDb::open(&db)
+                .and_then(|d| d.load_all())
+                .expect("the store reads")
+        };
+        let (dir, engine) = on_store("loop");
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            "127.0.0.1:9".parse().unwrap(),
+        )
+        .unwrap();
+        let wsjtx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let logged = || {
+            wsjtx
+                .send_to(
+                    &tempo_net::wsjtx::encode_logged_adif("WSJT-X", ADIF),
+                    server.local_addr().unwrap(),
+                )
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let eventually = |what: &str, ok: &dyn Fn() -> bool| {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !ok() {
+                assert!(std::time::Instant::now() < until, "{what}");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = |now: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut reopen,
+                    &mut station,
+                )
+                .unwrap();
+        };
+
+        logged();
+        tick(100.0);
+        eventually("the worker imports the contact WSJT-X logged", &|| {
+            held(&dir).len() == 1
+        });
+        logged();
+        tick(120.0);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            held(&dir).len(),
+            1,
+            "the same contact sent again is the one already there"
+        );
+
+        // The record the import has always written: the same text through an import of its own.
+        let (other_dir, reference) = on_store("reference");
+        reference
+            .lock()
+            .unwrap()
+            .import_adif(&(adif_header() + ADIF));
+        reference
+            .lock()
+            .unwrap()
+            .flush_log_store(std::time::Duration::from_secs(10))
+            .expect("the reference is written");
+        let text = |r: &QsoRecord| {
+            let mut r = r.clone();
+            r.id = None;
+            adif_record_own_log(&r)
+        };
+        assert_eq!(
+            held(&dir).iter().map(text).collect::<Vec<_>>(),
+            held(&other_dir).iter().map(text).collect::<Vec<_>>(),
+            "the contact as an import writes it"
+        );
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other_dir);
     }
 
     /// A DEAD rigctld IS NOTICED AND REBUILT (2026-08-17 Flex audit, wave-1 #44).

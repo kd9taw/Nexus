@@ -10358,26 +10358,50 @@ impl Engine {
     /// default**, on only when the operator turned it on for this session, and only to
     /// the destinations that session names. Queued as `CatchUp`, because a weekend's
     /// contacts arriving at once are history, not news.
-    #[allow(deprecated)] // SPEC-2 C19 (B2): the contest merge's "already there" reads the merge identities from the log in memory
+    ///
+    /// In one breath, for an engine held with no Engine guard (a test's); the command reads the
+    /// log's merge identities with the lock released ([`crate::logwrite::fd_merge_to_general`]).
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
+        for _ in 0..crate::station::PLANS {
+            if !self.in_field_day() {
+                return Err("Field Day mode is not active".into());
+            }
+            let plan = self.station.log_plan();
+            let seen = plan.merge_identities()?;
+            if let Some(report) = self.fd_merge_planned(&plan, seen)? {
+                return Ok(report);
+            }
+        }
+        Err(crate::station::LOG_BUSY.into())
+    }
+
+    /// Whether a Field Day session is running.
+    pub(crate) fn in_field_day(&self) -> bool {
+        matches!(self.mode, Mode::FieldDay { .. })
+    }
+
+    /// [`Self::fd_merge_to_general`], planned: `seen` is every merge identity the general log held
+    /// when `plan` was taken ([`crate::station::LogPlan::merge_identities`], read with the lock
+    /// released). Made under the lock only if the log has not changed since — a row it did not
+    /// read could carry an identity it would merge again — and `Ok(None)` otherwise, changing
+    /// nothing: the caller plans again.
+    pub(crate) fn fd_merge_planned(
+        &mut self,
+        plan: &crate::station::LogPlan,
+        seen: std::collections::HashSet<String>,
+    ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Field Day mode is not active".into());
         };
+        if !self.station.unchanged_at_all_since(plan) {
+            return Ok(None);
+        }
         // Read the destinations through the session's own accessor, which answers
         // EMPTY whenever the switch is off — so "default OFF" is one function's
         // property and not a flag every caller has to remember to check.
         let legs = upload_legs::mask_for(station.log.session.upload_destinations());
-        // Every merge identity the general log holds: a row whose qid is already there is
-        // skipped, which is what makes the merge safe to run twice.
-        let seen: std::collections::HashSet<String> = self
-            .station
-            .logbook
-            .records()
-            .iter()
-            .filter_map(|r| r.contest.as_deref())
-            .map(|c| c.qid.clone())
-            .filter(|q| !q.is_empty())
-            .collect();
+        // A row whose merge identity the general log already holds is skipped, which is what
+        // makes the merge safe to run twice.
         let mut report =
             tempo_core::contest::plan_merge(&station.log, &self.settings.fd_position_id, seen);
         if !report.written.is_empty() {
@@ -10411,7 +10435,7 @@ impl Engine {
                 report.refused
             ),
         );
-        Ok(report)
+        Ok(Some(report))
     }
 
     /// Set this session's upload policy — the §18.1 control. `enabled: false` is the

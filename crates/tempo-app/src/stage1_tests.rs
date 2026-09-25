@@ -22,8 +22,8 @@
 //! The suite below drives the same random writes into a station on a store and into Stage 1, and
 //! after every one holds the store's rows to what Stage 1 holds — and every tenth, the `log.adi`
 //! its mirror writes. Until the cut that is P6 said twice; once Part B lands, it is the proof that
-//! the new write path makes the changes the old one made. It has found one divergence already, in
-//! the write path it was copied from — see
+//! the new write path makes the changes the old one made. It found one divergence in the write
+//! path it was copied from, which C19 B2 mended —
 //! `an_own_echo_that_restamps_a_contact_on_file_reaches_the_store`.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -755,20 +755,7 @@ mod lockstep {
                 "take in a log file"
             }
             20 if n > 0 => {
-                let row = any(rng);
-                // Not an echo that finds a contact of the call already on file: the station
-                // misses it in the store until C19 B2 (see the test below).
-                let on_file = |r: &QsoRecord| {
-                    r.call.eq_ignore_ascii_case(&row.call)
-                        && matches!(
-                            r.upload.lotw.as_ref().map(|s| s.outcome),
-                            Some(UploadOutcome::Accepted | UploadOutcome::Duplicate)
-                        )
-                };
-                if log.iter().any(on_file) {
-                    return "LoTW own echo, left out";
-                }
-                let text = restated(&row, "");
+                let text = restated(&any(rng), "");
                 assert_eq!(
                     sc.merge_lotw_own_echo(&text, 7),
                     s1.merge_lotw_own_echo(&text, 7)
@@ -856,12 +843,11 @@ mod lockstep {
     }
 
     /// A LoTW own echo that finds a contact already on file stamps it again — the echo's
-    /// time, and a Duplicate becomes Accepted — without counting it as promoted, and today's
-    /// station carries an echo to the store only when the count moved: the store keeps the
-    /// stamp the copy in memory has replaced. The one divergence this oracle has found. C19 B2
-    /// plans the echo by content, which carries it; this test's `should_panic` goes with it.
+    /// time, and a Duplicate becomes Accepted — without counting it as promoted. Until C19 B2
+    /// the station carried an echo to the store only when that count moved, so the store kept
+    /// the stamp the copy in memory had replaced: the divergence this oracle found. B2 plans the
+    /// echo by content, which carries it.
     #[test]
-    #[should_panic(expected = "the own echo: the store is not Stage 1's log")]
     fn an_own_echo_that_restamps_a_contact_on_file_reaches_the_store() {
         let d = Dir::new("echo");
         let (mut sc, mut s1) = lockstep(&d);

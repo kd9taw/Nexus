@@ -3685,7 +3685,10 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
     }
 }
 
-fn parse_adif(text: &str) -> Vec<QsoRecord> {
+/// The records an ADIF text holds, as every import reads them — a pure parse: nothing deduped,
+/// no id minted (a record carries the id it brought, if any). What a bulk change reads the calls
+/// and ids of before it is planned on the rows of those calls (SPEC-2 v3 C19 Part B).
+pub fn parse_adif(text: &str) -> Vec<QsoRecord> {
     parse_adif_spans(text)
         .into_iter()
         .map(|(rec, _)| rec)

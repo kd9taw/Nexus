@@ -361,6 +361,220 @@ pub fn mark_lotw_uploaded_all(
     (Err(station::LOG_BUSY.into()), Durability::default())
 }
 
+/// ★ A bulk change — an import, a report merge, the POTA stamps — planned on the candidate sub-log
+/// with the Engine lock released and made under it ([`station::plan_on_candidates`],
+/// [`StationCore::commit_bulk`]), planned again while what it read keeps changing: [`PLANS`] plans
+/// in all, then LogBusy. `plan_it` is handed each plan's handles and answers what the change makes
+/// of them; `then` runs in the hold of the lock that made it (or, when it changed nothing, one of
+/// its own) with that answer — what the command answers, and what goes with the change.
+fn bulk<R, T>(
+    engine: &Mutex<Engine>,
+    context: &str,
+    mut plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
+    then: impl FnOnce(&mut Engine, R) -> T,
+) -> (Result<T, String>, Durability) {
+    let mut then = Some(then);
+    for _ in 0..PLANS {
+        let plan = engine_lock(engine).station_mut().log_plan();
+        let (out, planned) = match plan_it(&plan) {
+            Ok(planned) => planned,
+            Err(e) => return (Err(e), Durability::default()),
+        };
+        #[cfg(test)]
+        tests::race();
+        let mut out = Some(out);
+        let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
+            if !planned.is_empty() {
+                e.station_mut().commit_bulk(&plan, planned, context).ok()?;
+            }
+            let then = then.take()?;
+            Some(then(e, out.take()?))
+        });
+        if let Some(made) = made {
+            return (Ok(made), durability);
+        }
+    }
+    (Err(station::LOG_BUSY.into()), Durability::default())
+}
+
+/// How many contacts the log holds, read with the Engine lock released — with every change this
+/// process made before it counted.
+fn log_len(engine: &Mutex<Engine>) -> Result<usize, String> {
+    let rows = engine_lock(engine).log_rows();
+    rows.count()
+        .map(|(n, _)| n as usize)
+        .map_err(|e| e.to_string())
+}
+
+/// An ADIF import ([`StationCore::import_adif`]), planned with the Engine lock released:
+/// `(added, skipped, merged)`.
+fn import(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> (Result<(usize, usize, usize), String>, Durability) {
+    bulk(
+        engine,
+        "import_adif",
+        |plan| station::plan_import(plan, text),
+        |e, counts| {
+            e.station_mut().backfill_after_bulk();
+            counts
+        },
+    )
+}
+
+/// What an import answers: `(added, skipped, merged, total)` — the contacts it added, the ones the
+/// log already held, those of them it upgraded, and the log's size after it.
+pub type ImportCounts = (usize, usize, usize, usize);
+
+/// The Logbook's Import ([`StationCore::import_adif`]), planned with the Engine lock released:
+/// its [`ImportCounts`], the total counted once the import is made.
+pub fn import_adif(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> (Result<ImportCounts, String>, Durability) {
+    let (made, durability) = import(engine, text);
+    let made =
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+    (made, durability)
+}
+
+/// The companion import of the contact WSJT-X logged (its `LoggedAdif` record) — made beside the
+/// radio loop, never in its tick, by the same import as the Logbook's ([`import_adif`]), with no
+/// count of the log after it: nobody is answered. How many contacts it added.
+pub fn import_logged_contact(
+    engine: &Mutex<Engine>,
+    adif: &str,
+) -> (Result<usize, String>, Durability) {
+    let (made, durability) = import(engine, adif);
+    (made.map(|(added, _, _)| added), durability)
+}
+
+/// A LoTW confirmation report merged ([`StationCore::merge_lotw_report`]), planned with the Engine
+/// lock released. Its summary.
+pub fn merge_lotw_report(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> (
+    Result<tempo_core::reconcile::ReconcileSummary, String>,
+    Durability,
+) {
+    bulk(
+        engine,
+        "merge_lotw_report",
+        |plan| station::plan_report(plan, text),
+        |e, summary| {
+            e.station_mut().last_lotw_reconcile = Some(summary.clone());
+            summary
+        },
+    )
+}
+
+/// An eQSL confirmation report merged ([`StationCore::merge_eqsl_report`]), planned with the Engine
+/// lock released. Its summary.
+pub fn merge_eqsl_report(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> (
+    Result<tempo_core::reconcile::ReconcileSummary, String>,
+    Durability,
+) {
+    bulk(
+        engine,
+        "merge_eqsl_report",
+        |plan| station::plan_report(plan, text),
+        |e, summary| {
+            e.station_mut().last_eqsl_reconcile = Some(summary.clone());
+            summary
+        },
+    )
+}
+
+/// QRZ's download merged ([`StationCore::merge_qrz_report`]), planned with the Engine lock
+/// released. How many contacts it added, and its summary.
+pub fn merge_qrz_report(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> (
+    Result<(usize, tempo_core::reconcile::ReconcileSummary), String>,
+    Durability,
+) {
+    bulk(
+        engine,
+        "merge_qrz_report",
+        |plan| station::plan_download(plan, text),
+        |e, (added, summary)| {
+            e.station_mut().last_qrz_reconcile = Some(summary.clone());
+            e.station_mut().backfill_after_bulk();
+            (added, summary)
+        },
+    )
+}
+
+/// A pota.app export's park references stamped ([`StationCore::import_pota_log`]), planned with
+/// the Engine lock released: `(stamped, already, unmatched)`.
+pub fn import_pota_log(
+    engine: &Mutex<Engine>,
+    text: &str,
+) -> (Result<(usize, usize, usize), String>, Durability) {
+    bulk(
+        engine,
+        "import_pota_log",
+        |plan| station::plan_ota_refs(plan, text),
+        |_, counts| counts,
+    )
+}
+
+/// LoTW's own-QSO report merged ([`StationCore::merge_lotw_own_echo`]), planned with the Engine
+/// lock released: how many uploads were newly promoted.
+pub fn merge_lotw_own_echo(
+    engine: &Mutex<Engine>,
+    text: &str,
+    when_unix: i64,
+) -> (Result<usize, String>, Durability) {
+    bulk(
+        engine,
+        "merge_lotw_own_echo",
+        |plan| station::plan_own_echo(plan, text, when_unix),
+        |_, promoted| promoted,
+    )
+}
+
+/// The Field Day merge ([`Engine::fd_merge_to_general`]), its "already there" — every merge
+/// identity the general log holds — read with the Engine lock released, and the merge made under
+/// it only while the log has not changed since ([`Engine::fd_merge_planned`]): planned again
+/// otherwise, [`PLANS`] plans in all. What it merged; `Err` outside Field Day.
+pub fn fd_merge_to_general(
+    engine: &Mutex<Engine>,
+) -> (Result<tempo_core::contest::MergeReport, String>, Durability) {
+    for _ in 0..PLANS {
+        let plan = {
+            let mut e = engine_lock(engine);
+            if !e.in_field_day() {
+                return (
+                    Err("Field Day mode is not active".into()),
+                    Durability::default(),
+                );
+            }
+            e.station_mut().log_plan()
+        };
+        let seen = match plan.merge_identities() {
+            Ok(seen) => seen,
+            Err(e) => return (Err(e), Durability::default()),
+        };
+        #[cfg(test)]
+        tests::race();
+        let (made, durability) =
+            engine_lock(engine).with_log_tickets(|e| e.fd_merge_planned(&plan, seen));
+        match made {
+            Ok(Some(report)) => return (Ok(report), durability),
+            Ok(None) => {}
+            Err(e) => return (Err(e), durability),
+        }
+    }
+    (Err(station::LOG_BUSY.into()), Durability::default())
+}
+
 /// How many fills one change of the fill job carries: a bound on what one plan reads whole and
 /// one commit holds the lock for, whatever the log's size.
 pub const FILL_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
