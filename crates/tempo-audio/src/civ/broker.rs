@@ -24,8 +24,8 @@
 //!   A7380-7EX-4, p. 9), for every command its table marks
 //!   ([`commands::band_directed_supported`]). Nothing is selected, so nothing on the front
 //!   panel flickers, and no lock is needed: the command is atomic on the wire. The dial and
-//!   mode READS, which `29` does not carry, name Main the same way through `25 00` / `26 00`
-//!   ([`commands::reads_band_by_name`]); their writes are still sent to the selected band.
+//!   the mode, which `29` does not carry, are read AND written on Main the same way, through
+//!   `25 00` / `26 00` ([`commands::dial_by_band_name`]). The split verbs keep their own bytes.
 //! - **By holding the selection (the IC-9700, and the IC-7610's unmarked commands).** The
 //!   IC-9700's reference (A7508-3EX-4) has no command `29`. The broker keeps the selection on
 //!   Main and holds it there under the band lock for the length of the command, repairing a
@@ -164,7 +164,7 @@ pub struct CivBackend {
     /// timed-out `f` may serve the cache — see [`cache_fresh`].
     last_freq_ok: Mutex<Option<std::time::Instant>>,
     /// Main's dial and mode as the last BY-NAME read returned them (`25 00` / `26 00`,
-    /// [`Self::reads_main_by_name`]): what a failed read on that path stands in with, in place
+    /// [`Self::main_dial_by_name`]): what a failed read on that path stands in with, in place
     /// of the engine's state cache. The cache also folds the radio's transceive pushes, and a
     /// push reports the SELECTED band — serving one would put the selection back into the
     /// reading at exactly the moment the bus is busy. Never written on any other radio.
@@ -253,16 +253,17 @@ impl CivBackend {
         self.model.is_none_or(commands::has_delta_tx)
     }
 
-    /// Does this radio read Main's dial and mode BY NAME ([`commands::reads_band_by_name`] —
-    /// the IC-7610)? Only a radio offered a Sub has a selection to escape: a
-    /// [`RxAddressing::Single`] radio reads with exactly the bytes it always did.
-    fn reads_main_by_name(&self) -> bool {
+    /// Does this radio read and write Main's dial and mode BY NAME
+    /// ([`commands::dial_by_band_name`] — the IC-7610)? Only a radio offered a Sub has a
+    /// selection to escape: a [`RxAddressing::Single`] radio reads and writes with exactly the
+    /// bytes it always did.
+    fn main_dial_by_name(&self) -> bool {
         self.rx_addressing != RxAddressing::Single
-            && self.model.is_some_and(commands::reads_band_by_name)
+            && self.model.is_some_and(commands::dial_by_band_name)
     }
 
     /// Main's dial by name (`25 00`), for [`RigBackend::freq_hz`] on a radio that
-    /// [`Self::reads_main_by_name`]. The `03` path's answers exactly, with one difference: what
+    /// [`Self::main_dial_by_name`]. The `03` path's answers exactly, with one difference: what
     /// stands in for a read that fails is Main's own last reading ([`Self::main_hz`]), never
     /// the engine's cache. Callers hold the band lock.
     fn main_freq_by_name(&self) -> u64 {
@@ -939,7 +940,7 @@ impl RigBackend for CivBackend {
             // may hold it too. 0 = no honest reading, same as a dead engine.
             return 0;
         }
-        if self.reads_main_by_name() {
+        if self.main_dial_by_name() {
             // IC-7610: MAIN's dial by name, whichever band the operator has selected.
             return self.main_freq_by_name();
         }
@@ -972,7 +973,7 @@ impl RigBackend for CivBackend {
 
     fn mode(&self) -> (String, u32) {
         let mut g = self.band(); // the `04` read hits the SELECTED band
-        let by_name = self.reads_main_by_name(); // …the IC-7610's `26 00` names Main
+        let by_name = self.main_dial_by_name(); // …the IC-7610's `26 00` names Main
         let reply = if !self.ensure_main(&mut g) {
             // Selection possibly stranded on Sub: the read would serve the
             // uplink's mode. Fall back like any failed read (below).
@@ -1049,6 +1050,12 @@ impl RigBackend for CivBackend {
         let mut g = self.band(); // the `05` write hits the SELECTED band
                                  // A write with the selection stranded on Sub would land the downlink
                                  // in the uplink's band — re-assert Main first, refuse otherwise.
+        if self.main_dial_by_name() {
+            // IC-7610: MAIN's dial by name (`25 00`), whichever band the operator has selected —
+            // the receiver `f` reads. Same refusal over a selection Nexus stranded.
+            return self.ensure_main(&mut g)
+                && self.ack(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
+        }
         self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
     }
 
@@ -1078,6 +1085,18 @@ impl RigBackend for CivBackend {
                 None => return false,
             },
         };
+        if self.main_dial_by_name() {
+            // IC-7610: MAIN's mode by name — ONE `26 00` frame that leaves the radio where the
+            // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
+            // off and its default filter, a DATA mode with the operator's D1–D3 and FIL1.
+            let n = data.then(|| self.data_mode.load(std::sync::atomic::Ordering::Relaxed));
+            return self.ack(commands::set_band_mode(
+                self.addr,
+                commands::BAND_MAIN,
+                base,
+                n,
+            ));
+        }
         let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
         // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
         // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
@@ -2766,11 +2785,7 @@ mod tests {
     /// the Sub band, "the radio's" frequency and mode were the SUB's — and a turn of the Sub's
     /// dial read as a QSY of Main. `25 00` / `26 00` name Main in their own first byte ("00:
     /// MAIN 01: SUB", p. 13): the reading no longer depends on the selection, and nothing is
-    /// selected to take it.
-    ///
-    /// ⚠️ WHAT THIS DOES NOT CHANGE: a frequency WRITE (`05`, and `06` for the mode) still
-    /// lands on the SELECTED band, exactly as before. Pinned at the end, so moving it is a
-    /// decision rather than a side effect.
+    /// selected to take it. The writes follow in the next test.
     #[test]
     fn an_ic7610_reads_mains_dial_and_mode_by_name_whichever_band_the_panel_selects() {
         let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
@@ -2803,25 +2818,164 @@ mod tests {
             );
             assert_eq!(r.sel_sub, sel_sub, "the operator's selection never moved");
         }
+    }
 
-        // ⚠️ THE WRITES ARE UNCHANGED. With the Sub selected, a QSY from Nexus moves the SUB —
-        // and the dial Nexus reads, Main's, does not follow it.
+    /// ⭐ IC-7610 — A QSY OR A MODE CHANGE FROM NEXUS MOVES MAIN, BY NAME, whatever the panel
+    /// selects (operator ruling 2026-09-24, "Write Main by name").
+    ///
+    /// The dial Nexus reads is Main's (above); the dial it MOVES was the selected band's, because
+    /// `05` and `06` act on the selection. With the Sub selected, a QSY moved the Sub while the
+    /// reading stayed on Main. `25 00 <freq>` and `26 00 <mode>…` name Main in their own first
+    /// byte (A7380-7EX-4 p. 13), so Nexus reads, moves and judges one receiver.
+    ///
+    /// The mode frame carries what the `06` + `1A 06` pair left on the radio. A plain mode skips
+    /// the DATA and filter bytes, which the radio takes as "DATA OFF and the default filter of
+    /// the operating mode" (p. 13) — what `06 <mode>` (default filter, p. 10) followed by
+    /// `1A 06 00 00` left. A DATA mode carries the operator's D1–D3 and FIL1, the two bytes the
+    /// `1A 06` sent.
+    #[test]
+    fn an_ic7610_writes_mains_dial_and_mode_by_name_whichever_band_the_panel_selects() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        {
+            let mut r = regs.lock().unwrap();
+            r.main_hz = 14_074_000;
+            r.sub_hz = 7_074_000;
+            r.main_mode = 0x01; // USB
+            r.sub_mode = 0x00; // LSB
+        }
+        // The Sub selected first: that is where the old writes went wrong.
+        for (sel_sub, hz, frame) in [
+            (true, 14_080_000u64, "FE FE 98 E0 25 00 00 00 08 14 00 FD"),
+            (false, 14_085_000, "FE FE 98 E0 25 00 00 50 08 14 00 FD"),
+        ] {
+            regs.lock().unwrap().sel_sub = sel_sub;
+            let n = regs.lock().unwrap().wire.len();
+            assert!(b.set_freq(hz), "F, Sub selected = {sel_sub}");
+            {
+                let r = regs.lock().unwrap();
+                assert_eq!(
+                    (r.main_hz, r.sub_hz),
+                    (hz, 7_074_000),
+                    "F, Sub selected = {sel_sub}: MAIN moved, the Sub did not"
+                );
+                assert_eq!(hex_frames(&r.wire[n..]), [frame], "F on the wire");
+                assert_eq!(r.sel_sub, sel_sub, "the operator's selection never moved");
+            }
+            assert_eq!(b.freq_hz(), hz, "the dial Nexus reads follows its own QSY");
+
+            // Mode: each one MAIN's, each one ONE frame, the Sub's LSB untouched.
+            for (mode, main_mode, data_on, frame) in [
+                ("CW", 0x03u8, false, "FE FE 98 E0 26 00 03 FD"),
+                ("PKTUSB", 0x01, true, "FE FE 98 E0 26 00 01 01 01 FD"),
+                ("FM", 0x05, false, "FE FE 98 E0 26 00 05 FD"),
+                ("PKTFM", 0x05, true, "FE FE 98 E0 26 00 05 01 01 FD"),
+                ("USB", 0x01, false, "FE FE 98 E0 26 00 01 FD"),
+            ] {
+                let n = regs.lock().unwrap().wire.len();
+                assert!(b.set_mode(mode, 0), "M {mode}, Sub selected = {sel_sub}");
+                let r = regs.lock().unwrap();
+                assert_eq!(hex_frames(&r.wire[n..]), [frame], "M {mode} on the wire");
+                assert_eq!(
+                    (r.main_mode, r.sub_mode, r.data_mode),
+                    (main_mode, 0x00, data_on),
+                    "M {mode}, Sub selected = {sel_sub}: MAIN's mode and DATA, the Sub's LSB kept"
+                );
+                assert_eq!(r.sel_sub, sel_sub, "the operator's selection never moved");
+            }
+        }
+        assert!(
+            !regs.lock().unwrap().log.iter().any(|(c, _)| *c == 0x07),
+            "a by-name write selects nothing"
+        );
+
+        // The operator's DATA mode rides the frame: D2 here, as `1A 06 02 01` carried it.
+        let (radio, _push) = FakeRadio::new(0x98);
+        let regs2 = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let b2 = CivBackend::new(
+            engine.handle(),
+            0x98,
+            Arc::new(AtomicBool::new(false)),
+            2,
+            Some(IcomModel::Ic7610),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while regs2.lock().unwrap().log.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "engine housekeeping never ran"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let n = regs2.lock().unwrap().wire.len();
+        assert!(b2.set_mode("PKTUSB", 0));
+        assert_eq!(
+            hex_frames(&regs2.lock().unwrap().wire[n..]),
+            ["FE FE 98 E0 26 00 01 02 01 FD"],
+            "D2 on the wire"
+        );
+    }
+
+    /// ⛔ THE IC-7610'S SPLIT IS LEFT EXACTLY AS IT WAS. The by-name writes stop at the dial and
+    /// the mode. Icom's guide names `25 01` / `26 01` the SUB band (A7380-7EX-4 p. 13) and gives
+    /// `0F` split on/off (p. 3), but nowhere says which band a split transmits on — so the split
+    /// verbs keep their bytes, including the `25 01` / `26 01` they already send, which on this
+    /// radio name the Sub. NEEDS-BENCH.
+    #[test]
+    fn an_ic7610_split_is_left_exactly_as_it_was() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
         regs.lock().unwrap().sel_sub = true;
         let n = regs.lock().unwrap().wire.len();
-        assert!(b.set_freq(14_080_000));
-        {
-            let r = regs.lock().unwrap();
+        assert_eq!(b.set_split(true, "VFOB"), Some(true));
+        assert_eq!(b.set_split_freq(14_090_000), Some(true));
+        assert_eq!(b.set_split_mode("USB", 0), Some(true));
+        assert_eq!(b.set_split(false, "VFOA"), Some(true));
+        assert_eq!(
+            hex_frames(&regs.lock().unwrap().wire[n..]),
+            [
+                "FE FE 98 E0 16 5A FD",
+                "FE FE 98 E0 0F 01 FD",
+                "FE FE 98 E0 25 01 00 00 09 14 00 FD",
+                "FE FE 98 E0 26 01 01 00 FD",
+                "FE FE 98 E0 0F 00 FD",
+            ],
+            "the IC-7610's split bytes moved"
+        );
+    }
+
+    /// ⛔ EVERY OTHER RADIO WRITES ITS DIAL AND MODE WITH `05`, `06` AND `1A 06`, BYTE FOR BYTE —
+    /// the one-receiver Icoms, a build that does not know its model, and the IC-9700, whose
+    /// `25 00` would name its SELECTED VFO (A7508-3EX-4 p. 24). The frames are the ones the tree
+    /// before the by-name write (`456fdfdf`) sent, at each radio's own address.
+    #[test]
+    fn every_other_radio_writes_its_dial_and_mode_exactly_as_before() {
+        for (addr, model) in [
+            (0x94u8, Some(IcomModel::Ic7300)),
+            (0xA4, Some(IcomModel::Ic705)),
+            (0xAC, Some(IcomModel::Ic905)),
+            (0x94, None),
+            (0xA2, Some(IcomModel::Ic9700)),
+        ] {
+            let (_e, b, regs) = backend_on(addr, model);
+            let n = regs.lock().unwrap().wire.len();
+            let _ = b.set_freq(14_080_000);
+            let _ = b.set_mode("USB", 0);
+            let _ = b.set_mode("PKTUSB", 0);
+            let _ = b.set_mode("FM", 0);
             assert_eq!(
-                hex_frames(&r.wire[n..]),
-                ["FE FE 98 E0 05 00 00 08 14 00 FD"]
-            );
-            assert_eq!(
-                (r.main_hz, r.sub_hz),
-                (14_074_000, 14_080_000),
-                "the write landed on the selected band"
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [
+                    format!("FE FE {addr:02X} E0 05 00 00 08 14 00 FD"),
+                    format!("FE FE {addr:02X} E0 06 01 FD"),
+                    format!("FE FE {addr:02X} E0 1A 06 00 00 FD"),
+                    format!("FE FE {addr:02X} E0 06 01 FD"),
+                    format!("FE FE {addr:02X} E0 1A 06 01 01 FD"),
+                    format!("FE FE {addr:02X} E0 06 05 FD"),
+                    format!("FE FE {addr:02X} E0 1A 06 00 00 FD"),
+                ],
+                "{model:?}: the dial and mode writes moved"
             );
         }
-        assert_eq!(b.freq_hz(), 14_074_000, "the dial Nexus reads is Main's");
     }
 
     /// ⭐ A DIAL READ THAT TIMES OUT SERVES MAIN'S LAST READING — never the engine's cache,

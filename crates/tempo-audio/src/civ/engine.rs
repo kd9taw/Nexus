@@ -503,11 +503,12 @@ pub(crate) mod tests_support {
         /// address: the IC-9700's reference (A7508-3EX-4) has no command `29` at all, so
         /// at `0xA2` the fixture refuses it the way that table says the rig would.
         pub cmd29: bool,
-        /// Does this radio read a band's dial and mode BY NAME — `25 <band>` / `26 <band>`
-        /// with `00` = MAIN and `01` = SUB, whichever band is selected (IC-7610 CI-V Reference
-        /// Guide A7380-7EX-4, p. 13)? True only at the IC-7610's address. The IC-9700's
-        /// `25`/`26` name the SELECTED or UNSELECTED VFO instead (A7508-3EX-4, p. 24); that
-        /// read is not modelled and is NAKed here, because nothing sends it to that radio.
+        /// Does this radio read and write a band's dial and mode BY NAME — `25 <band>` /
+        /// `26 <band>` with `00` = MAIN and `01` = SUB, whichever band is selected (IC-7610 CI-V
+        /// Reference Guide A7380-7EX-4, p. 13)? True only at the IC-7610's address. The
+        /// IC-9700's `25`/`26` name the SELECTED or UNSELECTED VFO instead (A7508-3EX-4,
+        /// p. 24): its reads are not modelled and are NAKed here, because nothing sends them to
+        /// that radio, and its `25 01` / `26 01` writes land in the unselected-VFO registers.
         pub dial_by_band: bool,
         /// Fault injection — swallow the next N by-name dial/mode READ replies (`25`/`26`
         /// above): a lost CI-V reply, so the read times out while the rig's state stands.
@@ -629,27 +630,52 @@ pub(crate) mod tests_support {
                 None
             }
             (0x0F, _) => None, // duplex shift
-            // A band's dial or mode READ BY NAME (`25 <band>` / `26 <band>`, no value): the
-            // IC-7610's form, `00` MAIN / `01` SUB whichever band is selected (A7380-7EX-4
-            // p. 13), the reply naming the band back. See [`Regs::dial_by_band`].
-            (0x25 | 0x26, Some(band @ (0x00 | 0x01))) if r.dial_by_band && data.len() == 1 => {
+            // A band's dial or mode BY NAME (`25 <band>` / `26 <band>`): the IC-7610's form, `00`
+            // MAIN / `01` SUB whichever band is selected (A7380-7EX-4 p. 13). No value reads, and
+            // the reply names the band back; a value writes that band. See [`Regs::dial_by_band`].
+            (0x25 | 0x26, Some(band @ (0x00 | 0x01))) if r.dial_by_band => {
                 let sub = band == 0x01;
                 // Recorded under the band it NAMED, like a `29`-wrapped command — the entry
                 // pushed above assumed the selection, which this command does not use.
                 if let Some(last) = r.acted.last_mut() {
                     last.0 = sub;
                 }
-                if r.drop_dial_reads > 0 {
-                    r.drop_dial_reads -= 1;
-                    return Some((SILENT, Vec::new()));
-                }
-                if cmd == 0x25 {
-                    let mut d = vec![band];
-                    d.extend_from_slice(&freq_to_bcd(if sub { r.sub_hz } else { r.main_hz }));
-                    Some((0x25, d))
-                } else {
-                    let m = if sub { r.sub_mode } else { r.main_mode };
-                    Some((0x26, vec![band, m, u8::from(r.data_mode), 0x01]))
+                match (cmd, data.len()) {
+                    (_, 1) if r.drop_dial_reads > 0 => {
+                        r.drop_dial_reads -= 1;
+                        Some((SILENT, Vec::new()))
+                    }
+                    (0x25, 1) => {
+                        let mut d = vec![band];
+                        d.extend_from_slice(&freq_to_bcd(if sub { r.sub_hz } else { r.main_hz }));
+                        Some((0x25, d))
+                    }
+                    (0x26, 1) => {
+                        let m = if sub { r.sub_mode } else { r.main_mode };
+                        Some((0x26, vec![band, m, u8::from(r.data_mode), 0x01]))
+                    }
+                    (0x25, n) if n >= 6 => {
+                        let hz = bcd_to_freq(&data[1..6]);
+                        if sub {
+                            r.sub_hz = hz;
+                        } else {
+                            r.main_hz = hz;
+                        }
+                        None // ack
+                    }
+                    // `26 <band> <mode> [<data> <filter>]`. A skipped DATA byte is "DATA OFF"
+                    // (p. 13); the fixture keeps one DATA register, like the `1A 06` arm below,
+                    // and does not model the filter.
+                    (0x26, _) => {
+                        if sub {
+                            r.sub_mode = data[1];
+                        } else {
+                            r.main_mode = data[1];
+                        }
+                        r.data_mode = data.get(2).is_some_and(|&d| d != 0);
+                        None // ack
+                    }
+                    _ => Some((0xFA, Vec::new())), // a `25` with a short frequency
                 }
             }
             // The unselected VFO of the CURRENT band — write-only here.

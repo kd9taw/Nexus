@@ -212,9 +212,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
   notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
   with the Sub band selected on the radio. The frequency and mode Nexus shows are now Main's too,
-  so selecting the Sub band on the radio, or tuning it, no longer moves them. A frequency or mode
-  change made from Nexus still goes to whichever band is selected on the radio. Needs checking on
-  a real IC-7610.
+  so selecting the Sub band on the radio, or tuning it, no longer moves them, and a frequency or
+  mode change made from Nexus goes to Main as well. Split works exactly as before. Needs checking
+  on a real IC-7610.
 - **IC-7610 on native CI-V: the attenuator offers all fifteen of the radio's steps, 3 to 45 dB in
   3 dB steps**, where Nexus offered 6, 12 and 18. The list is the one Icom documents for the
   radio. Where the Receiver pane is too narrow for every step in one row, the steps wrap onto a

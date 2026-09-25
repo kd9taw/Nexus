@@ -763,25 +763,25 @@ pub fn band_directed_reply(f: Frame) -> Frame {
     }
 }
 
-/// Does `model` read a band's DIAL and MODE by name — `25 <band>` / `26 <band>`, where the
-/// band byte is `00` = MAIN and `01` = SUB whichever band the operator has selected?
+/// Does `model` read and write a band's DIAL and MODE by name — `25 <band>` / `26 <band>`,
+/// where the band byte is `00` = MAIN and `01` = SUB whichever band the operator has selected?
 ///
 /// | Model | Answer | Source |
 /// |---|---|---|
-/// | IC-7610 | yes | A7380-7EX-4 p. 13: "Main or Sub band's frequency settings" (`25`) and "Main or Sub band's operating mode and filter settings" (`26`), each `00: MAIN`, `01: SUB` |
-/// | IC-9700 | **no** | A7508-3EX-4 p. 24: its `25`/`26` name the SELECTED or UNSELECTED VFO, so `25 00` follows the selection — the very thing this read exists to escape |
+/// | IC-7610 | yes | A7380-7EX-4 p. 13: "Main or Sub band's frequency settings" (`25`) and "Main or Sub band's operating mode and filter settings" (`26`), each `00: MAIN`, `01: SUB`; both "Send/read" (p. 9) |
+/// | IC-9700 | **no** | A7508-3EX-4 p. 24: its `25`/`26` name the SELECTED or UNSELECTED VFO, so `25 00` follows the selection — the very thing this form exists to escape |
 /// | IC-7300 / IC-705 / IC-905 | no | not offered a Sub receiver at all ([`crate::dualrx`]); nothing to name |
 ///
 /// Neither command carries the band-directed mark (A7380-7EX-4 p. 9): the band is their OWN
 /// first data byte. That is why this is a table of its own rather than a row of
 /// [`band_directed_supported`] — `29 00 03` is not a command the radio lists.
-pub fn reads_band_by_name(model: IcomModel) -> bool {
+pub fn dial_by_band_name(model: IcomModel) -> bool {
     matches!(model, IcomModel::Ic7610)
 }
 
 /// Read `band`'s dial by name (`25 <band>`, [`BAND_MAIN`] / [`BAND_SUB`]). The reply is
 /// `25 <band>` and the 5-byte BCD frequency — see [`parse_band_freq`]. Only where
-/// [`reads_band_by_name`]: on an IC-9700 the same bytes read the SELECTED VFO.
+/// [`dial_by_band_name`]: on an IC-9700 the same bytes read the SELECTED VFO.
 pub fn read_band_freq(radio: u8, band: u8) -> Frame {
     Frame::command(radio, 0x25, &[band])
 }
@@ -789,6 +789,27 @@ pub fn read_band_freq(radio: u8, band: u8) -> Frame {
 /// — see [`parse_band_mode`]. Same model rule as [`read_band_freq`].
 pub fn read_band_mode(radio: u8, band: u8) -> Frame {
     Frame::command(radio, 0x26, &[band])
+}
+/// Set `band`'s dial by name: `25 <band>` and the 5-byte BCD frequency ([`set_freq`]'s
+/// payload). Same model rule as [`read_band_freq`].
+pub fn set_band_freq(radio: u8, band: u8, hz: u64) -> Frame {
+    let mut data = vec![band];
+    data.extend_from_slice(&freq_to_bcd(hz));
+    Frame::command(radio, 0x25, &data)
+}
+/// Set `band`'s mode by name, in ONE frame that leaves the radio where [`set_mode`] followed by
+/// the `1A 06` DATA write left it (A7380-7EX-4 pp. 10, 12, 13):
+///
+/// - `data` `None` → `26 <band> <mode>`. The DATA and filter bytes are skipped, which the
+///   radio takes as "DATA OFF and the default filter setting of the operating mode" — what
+///   `06 <mode>` (the mode's default filter) and then `1A 06 00 00` (DATA off) left.
+/// - `data` `Some(n)` → `26 <band> <mode> <n> 01`: DATA mode `n` (clamped to D1–D3, as
+///   [`set_data_mode_n`] clamps it) with FIL1, the two bytes `1A 06 <n> 01` sent.
+pub fn set_band_mode(radio: u8, band: u8, mode: Mode, data: Option<u8>) -> Frame {
+    match data {
+        Some(n) => Frame::command(radio, 0x26, &[band, mode.to_byte(), n.clamp(1, 3), 0x01]),
+        None => Frame::command(radio, 0x26, &[band, mode.to_byte()]),
+    }
 }
 
 // ---- scope CONTROL (command 0x27 sub 14/15/19) — set the RIG's panadapter, not the stream ----
@@ -1721,14 +1742,14 @@ mod tests {
     fn the_by_name_dial_and_mode_read_their_own_band_and_nothing_else() {
         // Only the IC-7610 names MAIN/SUB this way; the IC-9700's same bytes name the SELECTED
         // VFO (A7508-3EX-4 p. 24), and the one-receiver rigs have nothing to name.
-        assert!(reads_band_by_name(IcomModel::Ic7610));
+        assert!(dial_by_band_name(IcomModel::Ic7610));
         for m in [
             IcomModel::Ic9700,
             IcomModel::Ic7300,
             IcomModel::Ic705,
             IcomModel::Ic905,
         ] {
-            assert!(!reads_band_by_name(m), "{m:?}");
+            assert!(!dial_by_band_name(m), "{m:?}");
         }
         assert_eq!(
             read_band_freq(0x98, BAND_MAIN).to_bytes(),
@@ -1804,6 +1825,38 @@ mod tests {
             parse_mode(&Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x04, 0x12, 0x01, 0xFD]).unwrap()),
             None
         );
+    }
+
+    /// ⭐ THE BY-NAME WRITES CARRY WHAT `05`, `06` AND `1A 06` CARRIED (A7380-7EX-4 pp. 10, 12,
+    /// 13) — the band byte is the only new thing on the wire.
+    #[test]
+    fn the_by_name_writes_carry_what_05_06_and_1a06_carried() {
+        // The dial: `25 00` and the same five BCD bytes `05` carries.
+        assert_eq!(
+            set_band_freq(0x98, BAND_MAIN, 14_074_000).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x25, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD]
+        );
+        assert_eq!(
+            set_band_freq(0x98, BAND_MAIN, 14_074_000).data[1..],
+            set_freq(0x98, 14_074_000).data[..]
+        );
+        assert_eq!(set_band_freq(0x98, BAND_SUB, 7_074_000).data[0], 0x01);
+        // A plain mode: the mode byte alone after the band, which the radio takes as DATA OFF
+        // and the mode's default filter — the state `06 <mode>` + `1A 06 00 00` left.
+        assert_eq!(
+            set_band_mode(0x98, BAND_MAIN, Mode::Lsb, None).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x26, 0x00, 0x00, 0xFD]
+        );
+        // A DATA mode: D<n> and FIL1, the two bytes `1A 06 <n> 01` carried, clamped the same way.
+        for (n, d) in [(1u8, 0x01u8), (2, 0x02), (3, 0x03), (0, 0x01), (9, 0x03)] {
+            let f = set_band_mode(0x98, BAND_MAIN, Mode::Usb, Some(n));
+            assert_eq!(f.data, vec![0x00, 0x01, d, 0x01], "D{n}");
+            assert_eq!(
+                f.data[2..],
+                set_data_mode_n(0x98, n, None).data[1..],
+                "D{n}: the bytes `1A 06` carried"
+            );
+        }
     }
 
     /// THE STEP LISTS, AND WHERE EVERY NUMBER CAME FROM. An attenuator is not a slider: it
