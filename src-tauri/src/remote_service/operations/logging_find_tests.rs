@@ -221,7 +221,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
     };
     let (r, t) = first(&e);
     let found = search(&e, &t);
-    assert_eq!(locate(&mut e.lock().unwrap(), &found), r.id, "control");
+    assert_eq!(locate(&e.lock().unwrap(), &found), r.id, "control");
 
     // A stamp lands between the two: the same version, so it stands.
     assert!(e.lock().unwrap().stamp_qrz_upload(
@@ -230,7 +230,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
         1_789_000_000,
         None
     ));
-    assert_eq!(locate(&mut e.lock().unwrap(), &found), r.id);
+    assert_eq!(locate(&e.lock().unwrap(), &found), r.id);
 
     // An edit lands between the two: another version, refused.
     let (r, t) = first(&e);
@@ -238,7 +238,7 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
     let mut edited = r.clone();
     edited.comment = Some("changed at the shack".into());
     assert!(e.lock().unwrap().update_qso(r.id.unwrap(), edited));
-    assert_eq!(locate(&mut e.lock().unwrap(), &found), None);
+    assert_eq!(locate(&e.lock().unwrap(), &found), None);
     settle(&e);
 }
 
