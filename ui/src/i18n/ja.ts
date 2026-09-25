@@ -913,6 +913,9 @@ export const JA: PartialCatalog = {
   "logbook.delete.gone": "{{call}}はすでに別のウィンドウで削除されています。",
   "logbook.change.changed": "{{call}}は別のウィンドウまたは同期で変更されたため、保存されませんでした。現在の内容を表示しています。確認してもう一度お試しください。",
   "logbook.change.gone": "{{call}}は別のウィンドウで削除されたため、保存されませんでした。",
+  // The logbook was too busy (LogBusy): MACHINE TRANSLATION, for a native speaker to check.
+  "logbook.change.busy": "ログブックが使用中だったため、{{call}}へのこの変更は保存されませんでした。もう一度お試しください。",
+  "logbook.delete.busy": "ログブックが使用中だったため、{{call}}は削除されませんでした。もう一度お試しください。",
   "logEntry.title": "この交信を記録",
   "logEntry.clear.label": "クリア",
   "logEntry.clear.title": "入力欄をクリアします",

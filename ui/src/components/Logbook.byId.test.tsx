@@ -6,7 +6,9 @@
 // drawn from. The engine makes the change only while the contact is still that version, and says
 // what it did: applied / deleted, or — nothing written — `changed` (the contact changed since this
 // window read it: another window, a sync) or `gone` (deleted meanwhile). The operator is told the
-// last two in plain words, and the list (or the form) then shows the contact as it is.
+// last two in plain words, and the list (or the form) then shows the contact as it is. Or `busy`
+// (C19 B1): the logbook kept changing through every attempt, so nothing was written — said
+// plainly too, and then nothing on screen moves, so a retry is one click.
 //
 // The form's edit is ONE change, its QSL-sent and paper-card marks included, where it was three
 // commands. The old key-based commands must not be reached (`old`, below).
@@ -250,5 +252,58 @@ describe('a change the engine refuses is said plainly, and the contact shown as 
     })
     await waitFor(() => expect(toasts()).toContain(t('logbook.delete.gone', { call: 'K0ABC' })))
     expect(toasts()).not.toContain(t('logbook.delete.done', { call: 'K0ABC' }))
+  })
+})
+
+describe('a change the logbook was too busy to make is said plainly, and nothing on screen moves', () => {
+  // C19 B1: the engine answers `busy` when the logbook kept changing through all its attempts
+  // (`LogBusy`), so nothing was written. Not `changed`: the contact on screen is still the version
+  // the logbook holds, so the list is not read again and the form keeps what the operator typed —
+  // the retry goes against the same version.
+  it('FIX: a row menu change is not reported as made, and the list is not read again', async () => {
+    await renderLogbook()
+    const asked = pagesAsked.length
+    vi.mocked(markQslSentById).mockResolvedValue({ kind: 'busy' })
+    vi.mocked(setSatTagById).mockResolvedValue({ kind: 'busy' })
+    fireEvent.change(qslMenu('K2ABC'), { target: { value: 'B' } })
+    await waitFor(() => expect(toasts()).toContain(t('logbook.change.busy', { call: 'K2ABC' })))
+    fireEvent.change(satMenu('K1ABC'), { target: { value: 'SO-50' } })
+    await waitFor(() => expect(toasts()).toContain(t('logbook.change.busy', { call: 'K1ABC' })))
+    expect(toasts(), 'a change that was not made was reported as made').not.toContain(
+      t('logbook.qsl.marked', { call: 'K2ABC', via: t('logbook.qsl.via.bureau') }),
+    )
+    expect(toasts()).not.toContain(t('logbook.sat.tagged', { call: 'K1ABC', sat: 'SO-50' }))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pagesAsked.length, 'nothing changed, so nothing is read again').toBe(asked)
+  })
+
+  it('FIX: the edit form stays open with what was typed, and the retry saves it against the same version', async () => {
+    await renderLogbook()
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: 'K2ABC' }) }))
+    fireEvent.change(await screen.findByPlaceholderText(t('logbook.field.comment.placeholder')), {
+      target: { value: 'Mine' },
+    })
+    vi.mocked(editQsoById).mockResolvedValueOnce({ kind: 'busy' })
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.form.save') }))
+    await waitFor(() => expect(toasts()).toContain(t('logbook.change.busy', { call: 'K2ABC' })))
+    expect(toasts()).not.toContain(t('logbook.form.updated', { call: 'K2ABC' }))
+    expect((screen.getByPlaceholderText(t('logbook.field.comment.placeholder')) as HTMLInputElement).value).toBe('Mine')
+    vi.mocked(editQsoById).mockResolvedValueOnce({ kind: 'applied', current: now(contact(2, { comment: 'Mine' }), 2) })
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.form.save') }))
+    await waitFor(() => expect(editQsoById).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(editQsoById).mock.calls[1][0], 'the same version as the first try').toEqual(K2)
+    await waitFor(() => expect(toasts()).toContain(t('logbook.form.updated', { call: 'K2ABC' })))
+  })
+
+  it('FIX: a delete is not a delete: the row stays, and the list is not read again', async () => {
+    await renderLogbook()
+    const asked = pagesAsked.length
+    vi.mocked(deleteQsoById).mockResolvedValueOnce({ kind: 'busy' })
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K1ABC' }) }))
+    await waitFor(() => expect(toasts()).toContain(t('logbook.delete.busy', { call: 'K1ABC' })))
+    expect(toasts()).not.toContain(t('logbook.delete.done', { call: 'K1ABC' }))
+    expect(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K1ABC' }) })).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pagesAsked.length).toBe(asked)
   })
 })

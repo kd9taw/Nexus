@@ -2070,6 +2070,9 @@ export const DE: PartialCatalog = {
   "logbook.delete.gone": "{{call}} wurde bereits in einem anderen Fenster gelöscht.",
   "logbook.change.changed": "{{call}} wurde in einem anderen Fenster oder durch eine Synchronisierung geändert, daher wurde dies nicht gespeichert. Hier ist der aktuelle Stand — bitte prüfen und erneut versuchen.",
   "logbook.change.gone": "{{call}} wurde in einem anderen Fenster gelöscht, daher wurde dies nicht gespeichert.",
+  // The logbook was too busy (LogBusy): MACHINE TRANSLATION, for a native speaker to check.
+  "logbook.change.busy": "Das Logbuch war beschäftigt, daher wurde diese Änderung an {{call}} nicht gespeichert. Bitte erneut versuchen.",
+  "logbook.delete.busy": "Das Logbuch war beschäftigt, daher wurde {{call}} nicht gelöscht. Bitte erneut versuchen.",
   "logEntry.title": "Dieses QSO loggen",
   "logEntry.clear.label": "Leeren",
   "logEntry.clear.title": "Log-Felder leeren",

@@ -1021,15 +1021,18 @@ export interface KeyedRow {
   editKey: string
 }
 
-/** What a change by `RowRef` did. `applied`/`deleted` are made and on disk. `changed` and `gone`
- *  changed nothing: the contact changed since the caller read it (`current` is it now — show it,
- *  and retry against its key), or no contact has that id. An upload stamp or a confirmation never
- *  makes a contact `changed`: the key covers only what an edit can write. */
+/** What a change by `RowRef` did. `applied`/`deleted` are made and on disk. `changed`, `gone` and
+ *  `busy` changed nothing: the contact changed since the caller read it (`current` is it now — show
+ *  it, and retry against its key), or no contact has that id, or the logbook kept changing through
+ *  every attempt (`LogBusy`) — the contact is still the version the caller holds, so a retry goes
+ *  against the same key. An upload stamp or a confirmation never makes a contact `changed`: the key
+ *  covers only what an edit can write. */
 export type RowAnswer =
   | { kind: 'applied'; current: KeyedRow }
   | { kind: 'deleted' }
   | { kind: 'changed'; current: KeyedRow }
   | { kind: 'gone' }
+  | { kind: 'busy' }
 
 /** The park half of a `QsoEdit`. The form's own rule holds: with both refs empty no park is written
  *  and the stored one is kept whole; a ref carries its programme (the stored one, or POTA). */

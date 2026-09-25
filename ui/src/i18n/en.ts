@@ -1363,6 +1363,11 @@ export const EN = {
   'logbook.change.changed':
     '{{call}} changed in another window or by a sync, so this was not saved. Here it is now — check it and try again.',
   'logbook.change.gone': '{{call}} was deleted in another window, so this was not saved.',
+  // The logbook kept changing through every attempt (the backend's LogBusy), so nothing was
+  // written — and nothing on screen changed: the row and the edit form are as the operator left
+  // them, and doing it again is the whole remedy.
+  'logbook.change.busy': 'The logbook was busy, so this change to {{call}} was not saved. Try again.',
+  'logbook.delete.busy': 'The logbook was busy, so {{call}} was not deleted. Try again.',
 
   // ── The log strip (the cockpits' LOG pane, "Log this QSO") ──────────────────────────
   // One component serves Phone, CW and Satellites, plus a Field Day variant, so these keys

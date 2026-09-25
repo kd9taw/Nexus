@@ -789,8 +789,14 @@ export function Logbook({
   /** What a change to one contact by `RowRef` did, said when it was NOT made: the contact changed
    *  since this view read it — in another window (a Remote browser), or by a sync filling a blank
    *  field — or it was deleted meanwhile. Either way nothing was written, and the list is read
-   *  again so the row shows as it now is, or goes. Whether the change was made. */
+   *  again so the row shows as it now is, or goes. Or the logbook was too busy to take it: nothing
+   *  was written and nothing changed, so nothing on screen moves and a retry is one click. Whether
+   *  the change was made. */
   const changeMade = (answer: RowAnswer, call: string): boolean => {
+    if (answer.kind === 'busy') {
+      pushToast(t('logbook.change.busy', { call }), 'error', 8000)
+      return false
+    }
     if (answer.kind === 'changed') pushToast(t('logbook.change.changed', { call }), 'error', 8000)
     else if (answer.kind === 'gone') pushToast(t('logbook.change.gone', { call }), 'error', 8000)
     else return true
@@ -909,6 +915,11 @@ export function Logbook({
     if (!ref) return false
     const answer = await withErrorToast(() => deleteQsoById(ref), t('logbook.delete.failed'))
     if (!answer) return false
+    if (answer.kind === 'busy') {
+      // The logbook was too busy to take it: not deleted, and the row stays as it is.
+      pushToast(t('logbook.delete.busy', { call: q.call }), 'error', 8000)
+      return false
+    }
     if (answer.kind === 'changed') {
       // Changed since it was shown: not deleted. The list shows it as it is now.
       pushToast(t('logbook.delete.changed', { call: q.call }), 'error', 8000)
@@ -1634,6 +1645,12 @@ export function Logbook({
       }
       const answer = await withErrorToast(() => editQsoById(ref, edit), t('logbook.form.saveFailed'))
       if (!answer) return
+      if (answer.kind === 'busy') {
+        // The logbook was too busy to take it: nothing saved, and the form keeps what was typed,
+        // so Save again tries the same change against the same version.
+        pushToast(t('logbook.change.busy', { call: existing.call }), 'error', 8000)
+        return
+      }
       if (answer.kind === 'changed') {
         // Changed since the form opened (another window, or a sync): nothing was saved. The form
         // now shows the contact as it is, and a save from it goes against that version.

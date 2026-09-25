@@ -1925,6 +1925,9 @@ export const ES: PartialCatalog = {
   "logbook.delete.gone": "{{call}} ya se había eliminado en otra ventana.",
   "logbook.change.changed": "{{call}} cambió en otra ventana o por una sincronización, así que esto no se guardó. Aquí está como está ahora: revísalo e inténtalo de nuevo.",
   "logbook.change.gone": "{{call}} se eliminó en otra ventana, así que esto no se guardó.",
+  // The logbook was too busy (LogBusy): MACHINE TRANSLATION, for a native speaker to check.
+  "logbook.change.busy": "El log estaba ocupado, así que este cambio en {{call}} no se guardó. Inténtalo de nuevo.",
+  "logbook.delete.busy": "El log estaba ocupado, así que {{call}} no se eliminó. Inténtalo de nuevo.",
   "logbook.delete.heading": "¿Eliminar el QSO con {{call}} en {{band}}?",
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",
