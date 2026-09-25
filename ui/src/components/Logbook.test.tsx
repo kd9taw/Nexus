@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll } from 'vitest'
-import { render, waitFor, fireEvent, act } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { render, waitFor, fireEvent, act, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
 import * as toast from '../toast'
@@ -18,6 +18,10 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
+// Each test's Logbook unmounted when the test ends. Left mounted, it stays subscribed to the log
+// answers still on their way, and one landing after this file's window is gone re-renders it
+// there: "window is not defined", counted as an uncaught error against the run.
+afterEach(cleanup)
 
 /** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
 const engineLog = vi.hoisted(() => vi.fn())
@@ -322,8 +326,8 @@ describe('the log table shows the comment and flags a private note', () => {
 // removing the menu the moment a card was marked sent deleted the control for the arrival, and
 // the very card the feature exists to record could never be recorded.
 describe('#152 — recording a QSL card does not depend on a filter, or on not having sent one', () => {
-  // ⚠️ SCOPED TO THIS RENDER'S OWN CONTAINER, not `document`. This file has no afterEach
-  // cleanup, so a document-wide query finds the FIRST Logbook still mounted from an earlier
+  // ⚠️ SCOPED TO THIS RENDER'S OWN CONTAINER, not `document`. Until this file cleaned up after each
+  // test (2026-09-25), a document-wide query found the FIRST Logbook still mounted from an earlier
   // test — which is exactly how the second case below passed alone and failed in the file,
   // reading another test's row and reporting the opposite answer.
   const qsl = (c: HTMLElement) => c.querySelector('select.log-rowbtn') as HTMLSelectElement | null

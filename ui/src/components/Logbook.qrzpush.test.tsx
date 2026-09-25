@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll } from 'vitest'
-import { render, waitFor, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { render, waitFor, screen, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 
@@ -15,6 +15,10 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
+// Each test's Logbook unmounted when the test ends. Left mounted, it stays subscribed to the log
+// answers still on their way, and one landing after this file's window is gone re-renders it
+// there: "window is not defined", counted as an uncaught error against the run.
+afterEach(cleanup)
 
 /** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
 const engineLog = vi.hoisted(() => vi.fn())
