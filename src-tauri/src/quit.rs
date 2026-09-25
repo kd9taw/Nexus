@@ -631,6 +631,17 @@ mod tests {
             .is_some_and(|r| r.qsl_rcvd.card)
     }
 
+    /// Everything written, and every change's ticket resolved. The flush waits on the writer's
+    /// count, which the writer publishes a moment before it resolves the tickets
+    /// ([`tempo_core::logbook::writer::Ticket::is_resolved`]); `logbook_waiting` reads the tickets.
+    fn written(engine: &SharedEngine) {
+        engine_lock(engine)
+            .flush_log_store(Duration::from_secs(60))
+            .expect("written");
+        let unsaved = engine_lock(engine).log_unsaved();
+        assert!(unsaved.wait(Duration::from_secs(60)).saved(), "saved");
+    }
+
     fn saving(pending: usize) -> Notice {
         Notice::Saving(Saving {
             pending,
@@ -991,9 +1002,7 @@ mod tests {
     #[test]
     fn the_close_asks_the_logbook_without_waiting_for_the_engine() {
         let (dir, engine) = engine_on_store("quit-waiting", 10);
-        engine_lock(&engine)
-            .flush_log_store(Duration::from_secs(60))
-            .expect("written");
+        written(&engine);
         assert_eq!(logbook_waiting(&engine), Some(false), "nothing on its way");
 
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
@@ -1015,9 +1024,7 @@ mod tests {
         drop(busy);
 
         drop(hold);
-        engine_lock(&engine)
-            .flush_log_store(Duration::from_secs(60))
-            .expect("written");
+        written(&engine);
         assert_eq!(logbook_waiting(&engine), Some(false));
         let _ = std::fs::remove_dir_all(&dir);
 
