@@ -390,3 +390,29 @@ fn a_store_that_does_not_answer_in_time_refuses_the_switch_after_its_tries() {
     let b4 = e.session_b4().expect("a session is open");
     assert!(b4.worked_this_session("W1AW"));
 }
+
+/// ★ D4-A with a session open: another window's contact, logged after the session started,
+/// reaches this window on its freshness poll — the hot index built again from the store, off the
+/// lock, and the contest session's sweep opened again from whole rows (a build from the store
+/// reads no contest exchange) — so the DUPE badge knows it.
+#[test]
+fn another_windows_contact_during_a_session_reaches_the_session_on_the_poll() {
+    let d = Dir::new("session-d4a");
+    let a = ready(&d);
+    let mut b = engine_on_store(&d);
+    let m = Mutex::new(a);
+    assert_eq!(switch(&m, "fieldday-sp"), Ok(true), "opened with its sweep");
+    master_on(&mut engine_lock(&m));
+    b.log_qso(qso("W9DUR", now_unix_secs() + 60));
+    flush(&b);
+    assert!(crate::logstore::tests::eventually(
+        || engine_lock(&m).log_store_foreign_pending()
+    ));
+    assert!(
+        sync_shared_log(&m),
+        "the other window's contact is taken in"
+    );
+    let e = engine_lock(&m);
+    let b4 = e.session_b4().expect("a session is open");
+    assert!(b4.worked_this_session("W9DUR"), "and it is this session's");
+}

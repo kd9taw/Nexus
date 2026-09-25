@@ -5032,7 +5032,10 @@ pub(crate) mod tests {
         // The early window marks a card on a contact it loaded unfilled — once its writer has
         // seen A's commits, as the debug build's oracle (the log in memory, which no longer
         // follows another window's commits) needs to know to stand aside.
-        assert!(eventually(|| early.lock().unwrap().log_store_foreign_pending()));
+        assert!(eventually(|| early
+            .lock()
+            .unwrap()
+            .log_store_foreign_pending()));
         let first = find(&early.lock().unwrap(), "K0ABC")
             .and_then(|r| r.id)
             .unwrap();
