@@ -12,7 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use tempo_core::logbook::sqlite::WriteHold;
-use tempo_core::logbook::{LogOp, QsoRecord, UploadOutcome};
+use tempo_core::logbook::{adif_header, adif_record, LogOp, QsoRecord, UploadOutcome};
 
 thread_local! {
     // A writer racing the planned changes made on this thread: run by `change_row` after its
@@ -426,6 +426,102 @@ fn the_ft_auto_log_reads_nothing_from_the_store_under_the_engine_lock() {
     same_log(&rows, e.log_records(), "the store is the log in memory");
 }
 
+/// ★ A BULK CHANGE'S PRECONDITION (SPEC-2 v3 §4.6, C19 Part B). An import is planned on the rows of
+/// its calls; a contact of one of those calls logged before the import is made is a row the plan
+/// never read, so the import plans again — and finds the contact there. Made on the first plan,
+/// it would have added the same contact a second time.
+#[test]
+fn an_import_planned_before_a_contact_of_its_call_is_logged_plans_again() {
+    let d = Dir::new("bulk-race");
+    let engine = shared(&d, 6);
+    let contact = qso("W9RACE", 1_788_000_500);
+    let text = adif_header() + &adif_record(&contact);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (engine, plans, contact) = (Arc::clone(&engine), Rc::clone(&plans), contact.clone());
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                // The FT auto-log, as the radio loop makes it: no plan, no read.
+                engine_lock(&engine).log_qso(contact.clone());
+            }
+        }
+    };
+    let (made, durability) = racing(hook, || import_adif(&engine, &text));
+    let (added, skipped, _, _) = made.expect("the import is made");
+    assert_eq!(
+        plans.get(),
+        2,
+        "planned again: a row of its call was logged under the plan"
+    );
+    assert_eq!(
+        (added, skipped),
+        (0, 1),
+        "the import finds the contact already logged, and adds it no second time"
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    flush(&engine_lock(&engine));
+    assert_eq!(
+        stored(&d).iter().filter(|r| r.call == "W9RACE").count(),
+        1,
+        "one contact"
+    );
+    same_log(
+        &stored(&d),
+        engine_lock(&engine).log_records(),
+        "the store is the log in memory",
+    );
+}
+
+/// ★ THE FIELD DAY MERGE'S PRECONDITION: its "already there" is every merge identity the log holds,
+/// read off the store with the lock released; a change to the log before the merge is made — here
+/// another merge of the same session, in another command — plans it again, and the second merge
+/// finds every contact already there. Made on its first plan, it would have merged the session
+/// twice.
+#[test]
+fn a_field_day_merge_planned_before_another_merge_plans_again() {
+    let d = Dir::new("fd-race");
+    let engine = shared(&d, 3);
+    {
+        let mut e = engine_lock(&engine);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_position_id = "a1b2c3d4".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+    }
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (engine, plans) = (Arc::clone(&engine), Rc::clone(&plans));
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                let (other, _) = fd_merge_to_general(&engine);
+                assert_eq!(other.expect("in Field Day").added(), 2, "the other merge");
+            }
+        }
+    };
+    let (made, _) = racing(hook, || fd_merge_to_general(&engine));
+    let report = made.expect("in Field Day");
+    assert_eq!(plans.get(), 2, "planned again after the other merge");
+    assert_eq!(
+        (report.added(), report.already),
+        (0, 2),
+        "every contact already there"
+    );
+    flush(&engine_lock(&engine));
+    let merged = |r: &QsoRecord| r.contest.as_deref().is_some_and(|c| !c.qid.is_empty());
+    assert_eq!(
+        stored(&d).iter().filter(|r| merged(r)).count(),
+        2,
+        "the session merged once"
+    );
+}
+
 /// ★ THE FT AUTO-LOG LOGS WHAT IT LOGGED BEFORE (the FT gate's parity). Seeded runs of the funnel
 /// every logged contact passes through — the sequencer's `log_qso` and the synced
 /// `log_qso_for_sync` — with repeats inside and outside the duplicate window, each held to a model
@@ -549,6 +645,11 @@ fn a_plan_read_under_the_engine_lock_trips_the_fence() {
     let _ = e.logged_row(id);
 }
 
+/// The contact at `at` in the log in memory, as a report restating it is written from.
+fn row_at(engine: &Arc<Mutex<Engine>>, at: usize) -> QsoRecord {
+    QsoRecord::clone(&engine_lock(engine).log_records()[at])
+}
+
 /// A generator whose failing case replays from its seed.
 struct Gen(u64);
 impl Gen {
@@ -566,10 +667,10 @@ impl Gen {
 
 /// ★ P6 THROUGH EVERY WRITE PATH (SPEC-2 v3 C19 Part B): seeded random runs of every kind of
 /// change the app makes — the commands' planned changes (the marks, the tag, a delete, the
-/// form's edit, the connector stamps by id and by push key, the LoTW batch and the "already
-/// uploaded" declaration, the fill job), the FT append, the purge, and the bulk merges — with
-/// the store compared to the log in memory after EACH. The log in memory follows every change
-/// the station commits; nothing plans on it.
+/// form's edit, a correction of a row found by what was shown, the connector stamps by id and by
+/// push key, the LoTW batch and the "already uploaded" declaration, the fill job), the FT
+/// append, the purge, and the bulk merges — with the store compared to the log in memory after
+/// EACH. The log in memory follows every change the station commits; nothing plans on it.
 #[test]
 fn the_store_is_the_log_in_memory_after_every_write_path() {
     const CALLS: [&str; 5] = ["K1ABC", "W9XYZ", "DL1AB", "K2DEF/P", "JA1AA"];
@@ -585,7 +686,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
             let id = pick(&engine_lock(&engine));
             let call = CALLS[g.below(CALLS.len())];
             let when = 1_788_000_000 + step * 97;
-            let kind = match (g.below(13), id) {
+            let kind = match (g.below(18), id) {
                 (0 | 1, _) | (_, None) => {
                     engine_lock(&engine).log_qso(qso(call, when));
                     "append"
@@ -684,14 +785,66 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                     "fill"
                 }
                 (11, Some(_)) => {
-                    let e = engine_lock(&engine);
-                    let r = QsoRecord::clone(&e.log_records()[at]);
-                    drop(e);
                     // A LoTW report's confirmation of a contact the log holds (the bulk lane).
-                    let text = tempo_core::logbook::adif_record(&r)
+                    let text = adif_record(&row_at(&engine, at))
                         .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
-                    let _ = engine_lock(&engine).merge_lotw_report(&text);
+                    let (made, _) = merge_lotw_report(&engine, &text);
+                    made.expect("the report merges");
                     "report merge"
+                }
+                (12, Some(_)) => {
+                    // An import: a contact the log lacks, and one it holds restated with a card.
+                    let new = qso(CALLS[g.below(CALLS.len())], when + 7);
+                    let text = adif_header()
+                        + &adif_record(&new)
+                        + &adif_record(&row_at(&engine, at)).replace("<EOR>", "<QSL_RCVD:1>Y<EOR>");
+                    let (made, _) = import_adif(&engine, &text);
+                    made.expect("the import is made");
+                    "import"
+                }
+                (13, Some(_)) => {
+                    // QRZ's download: a contact the log lacks, and one it holds confirmed there.
+                    let new = qso(CALLS[g.below(CALLS.len())], when + 11);
+                    let text = adif_record(&new)
+                        + &adif_record(&row_at(&engine, at))
+                            .replace("<EOR>", "<APP_QRZLOG_STATUS:1>C<EOR>");
+                    let (made, _) = merge_qrz_report(&engine, &text);
+                    made.expect("the download merges");
+                    "qrz download"
+                }
+                (14, Some(_)) => {
+                    // A pota.app export naming the park of a contact the log holds.
+                    let text = adif_record(&row_at(&engine, at))
+                        .replace("<EOR>", "<SIG:4>POTA<SIG_INFO:6>K-0001<EOR>");
+                    let (made, _) = import_pota_log(&engine, &text);
+                    made.expect("the stamps are made");
+                    "pota stamps"
+                }
+                (15, Some(_)) => {
+                    // LoTW's own-QSO report of a contact the log holds.
+                    let text = adif_record(&row_at(&engine, at));
+                    let (made, _) = merge_lotw_own_echo(&engine, &text, step as i64 + 1);
+                    made.expect("the report merges");
+                    "own echo"
+                }
+                (16, Some(id)) => {
+                    // A correction of the row found by what the view or a browser showed.
+                    let view = engine_lock(&engine).log_view();
+                    let row = view.row(id).expect("read").expect("held");
+                    let key = QsoEdit::project(&row).key();
+                    let (made, _) = update_row(
+                        &engine,
+                        id,
+                        &key,
+                        |row| QsoRecord {
+                            call: call.into(),
+                            comment: Some(format!("corrected {step}")),
+                            ..row.clone()
+                        },
+                        |_, _| (),
+                    );
+                    assert!(matches!(made, Ok(Ok(Some(())))), "{made:?}");
+                    "correction"
                 }
                 (_, Some(_)) if g.below(4) == 0 => {
                     engine_lock(&engine).clear_logbook();
@@ -721,11 +874,16 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
         "sat tag",
         "delete",
         "edit",
+        "correction",
         "connector stamp",
         "lotw batch",
         "already uploaded",
         "fill",
         "report merge",
+        "import",
+        "qrz download",
+        "pota stamps",
+        "own echo",
         "purge",
     ] {
         assert!(

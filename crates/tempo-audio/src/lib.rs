@@ -130,4 +130,6 @@ pub fn warm_cpu_cache_probe() {
 #[cfg(feature = "device")]
 pub mod device;
 #[cfg(feature = "device")]
+mod import_worker;
+#[cfg(feature = "device")]
 pub mod service;
