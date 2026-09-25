@@ -77,7 +77,7 @@ describe('the WATCH tile on the Classic station list', () => {
     expect(tileOf('3Y0J')!.getAttribute('title')).toBe('On your watch list: Bouvet')
   })
 
-  it('a station the STATION marks watched shows the tile once — not a WANTED chip beside it', () => {
+  it('a station the STATION marks watched shows the tile once — not a second WATCH beside it', () => {
     // The station's `Wanted` need is the watch list (operator 2026-09-24: "watched counts as
     // needed"); where this window draws the tile, a chip saying it again is noise.
     const wanted = (call: string): NeedAlert[] => [
@@ -87,10 +87,14 @@ describe('the WATCH tile on the Classic station list', () => {
       } as NeedAlert,
     ]
     mount(new Map([['VP8PJ', wanted('VP8PJ')], ['PLAIN1', wanted('PLAIN1')]]))
-    expect(cardOf('VP8PJ')!.querySelectorAll('.need-watch')).toHaveLength(1)
-    expect(cardOf('VP8PJ')!.querySelector('.need-chip.need-wanted')).toBeNull()
-    // No tile here (a Remote browser's own list does not name it): the station's mark stays.
-    expect(cardOf('PLAIN1')!.querySelector('.need-chip.need-wanted')).not.toBeNull()
+    const marks = cardOf('VP8PJ')!.querySelectorAll('.need-chip.need-watch')
+    expect(marks, 'the same fact twice').toHaveLength(1)
+    expect(marks[0].getAttribute('title'), 'the one mark is the tile, naming the entry').toBe('On your watch list: VP8*')
+    // No tile here (a Remote browser's own list does not name it): the station's mark stays, in
+    // the tile's own look.
+    const mark = cardOf('PLAIN1')!.querySelector('.need-chip.need-watch')
+    expect(mark, "the station's mark is gone").not.toBeNull()
+    expect(mark!.textContent).toBe('WATCH')
   })
 
   it('leaves a card the list does not name alone', () => {
