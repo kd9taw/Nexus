@@ -3232,16 +3232,8 @@ pub(crate) mod tests {
         );
     }
 
-    // ── parity with the ADIF path ───────────────────────────────────────────
+    // ── parity with the 1.13 path ───────────────────────────────────────────
 
-    /// ★ PROPERTY 3 — THE OLD PATH IS THE ORACLE. The same operations, in the same order,
-    /// through an engine whose log is `log.adi` (the 1.13 path) and one whose log is the store.
-    /// After every step the two logs are the same log; at the end the store on disk is too,
-    /// and so is the mirror against the 1.13 file.
-    ///
-    /// The operations are every one the app makes to the log through the engine: logging,
-    /// the edit, both QSL marks, the satellite tag, a delete, an import, the three report
-    /// merges, the park import, the LoTW echo, all four connector stamps, and the purge.
     /// A report restating the contacts `legacy_log` wrote at `rows` (K<i>ABC, 00:00:i), exactly
     /// as it wrote them, with `tag` added — and `new` calls it never logged.
     fn report(rows: &[usize], new: &[&str], tag: &str) -> String {
@@ -3262,16 +3254,63 @@ pub(crate) mod tests {
         t
     }
 
+    /// The contacts a reader of `e`'s log reads, in log order: its store's, once the store holds
+    /// every change made before the read — the database on the store path, the store in memory on
+    /// the 1.13 path. Never the log in memory, which the cut removes.
+    fn store_rows(e: &Engine) -> Vec<QsoRecord> {
+        let mut rows = Vec::new();
+        let fresh = e
+            .log_rows()
+            .each_record(DURABLE_WAIT, &mut |r| {
+                rows.push(r.clone());
+                std::ops::ControlFlow::Continue(())
+            })
+            .expect("the store reads");
+        assert_eq!(
+            fresh,
+            Freshness::Current,
+            "the store holds every change made before the read"
+        );
+        rows
+    }
+
+    /// ★ PROPERTY 3 — THE 1.13 PATH AND THE DATABASE ANSWER ALIKE. The same operations, in the same
+    /// order, through a session on the database (the ordinary launch) and one on the 1.13 path —
+    /// the database refused: `log.adi` the log's home, its rows in a store in memory. Since SPEC-2
+    /// v3 C19 Part C both run the same code, over two stores, and what this holds them to is:
+    ///
+    /// - after every step, the contacts a reader reads — each session's STORE, read through the
+    ///   log's rows — are the same contacts in the same order (each session mints its own ids,
+    ///   and a mark stamps its own wall clock, within the seconds the step spanned);
+    /// - at the end, each path's durable home holds that log: the database file on the store
+    ///   path, and on the 1.13 path `log.adi` — row for row its store, ids and all; and the store
+    ///   path's mirror of `log.adi` is the same contacts as the 1.13 path's `log.adi`;
+    /// - the purge empties every one of them.
+    ///
+    /// The operations are every one the app makes to the log through the engine: logging, the
+    /// edit, both QSL marks, the satellite tag, a delete, an import, the three report merges,
+    /// the park import, the LoTW echo, all four connector stamps, and the purge. Neither
+    /// session's log in memory is read: the cut removes it. The 1.13 path's `log.adi` against
+    /// 1.13's own code, byte for byte, is `the_1_13_path_writes_log_adi_as_1_13_wrote_it`.
     #[test]
-    fn the_store_path_answers_exactly_as_the_adif_path() {
+    fn the_database_and_the_1_13_path_answer_alike() {
         let (a, b) = (Dir::new("parity-adif"), Dir::new("parity-store"));
         let start = legacy_log(40);
         std::fs::write(a.log(), &start).unwrap();
         std::fs::write(b.log(), &start).unwrap();
         let mut old = Engine::new("K2DEF", "FN31", 0);
         old.set_log_path(a.log());
+        assert!(old.log_on_file(), "premise: the 1.13 path");
         let mut new = engine_on_store(&b);
-        same_log(new.log_records(), old.log_records(), "at the start");
+        assert!(!new.log_on_file(), "premise: the database");
+        same_log(&store_rows(&new), &store_rows(&old), "at the start");
+        // A contact by its place in the log, as the log's reader reads it.
+        fn row_at(e: &Engine, at: usize) -> QsoRecord {
+            store_rows(e).swap_remove(at)
+        }
+        fn id_of(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+            row_at(e, at).id.expect("an id")
+        }
 
         type Step = (&'static str, Box<dyn Fn(&mut Engine)>);
         let steps: Vec<Step> = vec![
@@ -3282,41 +3321,44 @@ pub(crate) mod tests {
             ),
             (
                 "edit",
-                Box::new(|e| {
-                    let mut r = QsoRecord::clone(&e.log_records()[3]);
+                Box::new(move |e| {
+                    let mut r = row_at(e, 3);
                     r.name = Some("Edited".into());
                     assert!(e.update_qso(r.id.unwrap(), r));
                 }),
             ),
             (
                 "call fix",
-                Box::new(|e| {
-                    let mut r = QsoRecord::clone(&e.log_records()[4]);
+                Box::new(move |e| {
+                    let mut r = row_at(e, 4);
                     r.call = "K4FIX".into();
                     assert!(e.update_qso(r.id.unwrap(), r));
                 }),
             ),
             (
                 "qsl sent",
-                Box::new(|e| assert!(e.mark_qsl_sent(id_at(e, 5), Some(QslVia::Bureau)))),
+                Box::new(move |e| assert!(e.mark_qsl_sent(id_of(e, 5), Some(QslVia::Bureau)))),
             ),
             (
                 "qsl withdrawn",
-                Box::new(|e| assert!(e.mark_qsl_sent(id_at(e, 5), None))),
+                Box::new(move |e| assert!(e.mark_qsl_sent(id_of(e, 5), None))),
             ),
             (
                 "card",
-                Box::new(|e| assert!(e.mark_qsl_card(id_at(e, 6), true))),
+                Box::new(move |e| assert!(e.mark_qsl_card(id_of(e, 6), true))),
             ),
             (
                 "sat",
-                Box::new(|e| assert!(e.set_sat_tag(id_at(e, 7), Some("AO-91")))),
+                Box::new(move |e| assert!(e.set_sat_tag(id_of(e, 7), Some("AO-91")))),
             ),
-            ("delete", Box::new(|e| assert!(e.delete_qso(id_at(e, 8))))),
+            (
+                "delete",
+                Box::new(move |e| assert!(e.delete_qso(id_of(e, 8)))),
+            ),
             (
                 "form edit",
-                Box::new(|e| {
-                    let id = id_at(e, 20);
+                Box::new(move |e| {
+                    let id = id_of(e, 20);
                     let stored = e.logged_row(id).expect("held");
                     let key = QsoEdit::project(&stored).key();
                     let mut edit = QsoEdit::project(&stored);
@@ -3328,8 +3370,8 @@ pub(crate) mod tests {
             ),
             (
                 "lotw batch",
-                Box::new(|e| {
-                    let signed = e.lotw_signed(&[id_at(e, 21), id_at(e, 22)]);
+                Box::new(move |e| {
+                    let signed = e.lotw_signed(&[id_of(e, 21), id_of(e, 22)]);
                     e.stamp_lotw_batch(
                         &signed,
                         tempo_core::logbook::UploadOutcome::Pending,
@@ -3376,8 +3418,8 @@ pub(crate) mod tests {
             ),
             (
                 "qrz stamp",
-                Box::new(|e| {
-                    let r = QsoRecord::clone(&e.log_records()[0]);
+                Box::new(move |e| {
+                    let r = row_at(e, 0);
                     e.stamp_qrz_upload(
                         &r,
                         tempo_core::logbook::UploadOutcome::Accepted,
@@ -3388,8 +3430,8 @@ pub(crate) mod tests {
             ),
             (
                 "clublog stamp",
-                Box::new(|e| {
-                    let r = QsoRecord::clone(&e.log_records()[1]);
+                Box::new(move |e| {
+                    let r = row_at(e, 1);
                     e.stamp_clublog_upload(
                         &r,
                         tempo_core::logbook::UploadOutcome::Duplicate,
@@ -3400,8 +3442,8 @@ pub(crate) mod tests {
             ),
             (
                 "eqsl stamp",
-                Box::new(|e| {
-                    let r = QsoRecord::clone(&e.log_records()[2]);
+                Box::new(move |e| {
+                    let r = row_at(e, 2);
                     e.stamp_eqsl_upload(
                         &r,
                         tempo_core::logbook::UploadOutcome::Rejected,
@@ -3412,9 +3454,9 @@ pub(crate) mod tests {
             ),
             (
                 "lotw stamp",
-                Box::new(|e| {
+                Box::new(move |e| {
                     e.stamp_lotw_upload(
-                        &[id_at(e, 9), id_at(e, 10)],
+                        &[id_of(e, 9), id_of(e, 10)],
                         tempo_core::logbook::UploadOutcome::Pending,
                         1_788_000_000,
                         None,
@@ -3430,8 +3472,8 @@ pub(crate) mod tests {
         ];
         // The QSL-sent mark stamps the wall clock inside the engine (`StationCore::mark_qsl_sent`),
         // once per engine, so a second boundary between the two calls moves that stamp and
-        // nothing else — and the stamp stays on the row for every step after. The store's row
-        // takes the ADIF path's stamp when the two lie within the most seconds any pair so far
+        // nothing else — and the stamp stays on the row for every step after. The database's row
+        // takes the 1.13 path's stamp when the two lie within the most seconds any pair so far
         // spanned; every other byte, and any stamp further apart or missing on one side, still
         // has to match exactly.
         let mut spanned = 0;
@@ -3440,12 +3482,13 @@ pub(crate) mod tests {
             step(&mut old);
             step(&mut new);
             spanned = spanned.max(crate::engine::now_unix_secs() - before);
-            let aligned = with_wall_clock_of(new.log_records(), old.log_records(), spanned);
-            same_log_across(&aligned, old.log_records(), what);
+            let on_file = store_rows(&old);
+            let aligned = with_wall_clock_of(&store_rows(&new), &on_file, spanned);
+            same_log_across(&aligned, &on_file, what);
         }
         // Every step DID something — the census that keeps the comparisons above from passing
         // over a log nothing happened to.
-        let held = new.log_records();
+        let held = store_rows(&new);
         let any = |f: &dyn Fn(&QsoRecord) -> bool| held.iter().any(|r| f(r));
         for (what, hit) in [
             ("logged", any(&|r| r.call == "W2NEW")),
@@ -3504,32 +3547,43 @@ pub(crate) mod tests {
             "the own echo promoted its row (and the later mark-all left it alone)"
         );
         flush(&new);
-        same_log(
-            &stored(&b),
-            new.log_records(),
-            "the store on disk is the store's memory",
-        );
+        flush(&old);
+        let on_file = store_rows(&old);
         same_log_across(
-            &with_wall_clock_of(&stored(&b), old.log_records(), spanned),
-            old.log_records(),
-            "the store on disk",
+            &with_wall_clock_of(&stored(&b), &on_file, spanned),
+            &on_file,
+            "the database file",
         );
         let (mirror, file) = (
             tempo_core::logbook::Logbook::load(&b.log()),
             tempo_core::logbook::Logbook::load(&a.log()),
         );
+        same_log(
+            file.records(),
+            &on_file,
+            "the 1.13 path's log.adi is its store, ids and all",
+        );
         same_log_across(
             &with_wall_clock_of(mirror.records(), file.records(), spanned),
             file.records(),
-            "the mirror against the 1.13 file",
+            "the mirror against the 1.13 path's log.adi",
         );
 
         // And the purge.
         old.clear_logbook();
         new.clear_logbook();
         flush(&new);
-        assert!(new.log_records().is_empty() && stored(&b).is_empty());
+        flush(&old);
+        assert!(store_rows(&new).is_empty() && stored(&b).is_empty());
         assert!(tempo_core::logbook::Logbook::load(&b.log()).is_empty());
+        assert!(
+            store_rows(&old).is_empty(),
+            "the 1.13 path's store is empty"
+        );
+        assert!(
+            tempo_core::logbook::Logbook::load(&a.log()).is_empty(),
+            "and so is its log.adi"
+        );
     }
 
     // ── durability ──────────────────────────────────────────────────────────
@@ -4893,40 +4947,33 @@ pub(crate) mod tests {
         );
     }
 
-    /// ★ THE DIAGNOSIS NAMES THE CONTACTS IT READ — in the gap where another window has deleted a
-    /// row this window still shows (C17a; what the Awards view uploads by, once it uploads by id).
-    /// Since C14 the confirmation diagnostics read the store, so their positions are the store's;
-    /// this window's log in memory keeps the deleted row until its next re-read, so a position
-    /// looked up there names the contact after it. The report's ids are those of the rows the
-    /// diagnosis read — the contacts it is about — never the deleted one; and its positions,
-    /// looked up here, name other contacts: the control that the gap is real.
+    /// ★ THE DIAGNOSIS NAMES THE CONTACTS IT READ — so what is done by its report acts on the contacts
+    /// it was about, even once another window has deleted a row before them (C17a; what the Awards
+    /// view uploads by). The confirmation diagnostics read the store, and a report's positions are
+    /// the store's AS IT READ: another window's delete of an earlier row, committed after, moves
+    /// every later contact up one place. The report's ids are those of the rows it read, and name
+    /// the same contacts after the delete — each still in the store with its call, unless it was
+    /// the one deleted; its positions, looked up in the store after the delete, name other
+    /// contacts: the control that the gap is real. (Before the cut the gap was a window's log in
+    /// memory showing the deleted row; the log in memory is not read here.)
     #[test]
-    fn the_diagnosis_names_its_contacts_while_this_window_still_shows_a_deleted_row() {
+    fn the_diagnosis_names_the_contacts_it_read_across_another_windows_delete() {
         let d = Dir::new("diag-gap");
         std::fs::write(d.log(), legacy_log(8)).unwrap();
         let a = engine_on_store(&d);
         let mut b = engine_on_store(&d);
-        let gone = id_at(&b, 2);
-        assert!(b.delete_qso(gone));
-        flush(&b);
-        // A has seen B's commit and has not re-read: it still shows the deleted contact.
-        assert!(eventually(|| a.log_store_foreign_pending()));
-        assert!(
-            a.log_records().iter().any(|r| r.id == Some(gone)),
-            "premise: this window still shows the deleted contact"
-        );
-
+        let read = stored(&d);
         let report = a
             .confirmation_diagnostics_inputs()
             .diagnose_named(1_800_000_000, |_| None)
             .expect("the store reads");
-        let rows = stored(&d);
-        let id_of = |i: usize| rows.get(i).and_then(|r| r.id).map(|id| id.to_string());
+        let id_of =
+            |rows: &[QsoRecord], i: usize| rows.get(i).and_then(|r| r.id).map(|id| id.to_string());
         let bucket = report
             .buckets
             .iter()
             .find(|b| b.qso_indices.len() > 2)
-            .expect("premise: a bucket of contacts past the deleted one's place");
+            .expect("premise: a bucket of three contacts or more");
         let ids = bucket
             .qso_ids
             .clone()
@@ -4936,29 +4983,55 @@ pub(crate) mod tests {
             bucket
                 .qso_indices
                 .iter()
-                .map(|&i| id_of(i))
+                .map(|&i| id_of(&read, i))
                 .collect::<Vec<_>>(),
             "each id is the contact the diagnosis read at that position"
         );
-        assert!(
-            !ids.contains(&Some(gone.to_string())),
-            "and never the deleted one"
-        );
         assert!(!report.diagnoses.is_empty(), "premise: contacts diagnosed");
         for diag in &report.diagnoses {
-            let r = &rows[diag.index];
+            let r = &read[diag.index];
             assert_eq!(diag.id, r.id.map(|id| id.to_string()), "row {}", diag.index);
             assert_eq!(diag.call.as_deref(), Some(r.call.as_str()));
         }
-        // The control: the same positions, looked up in this window's log in memory, name other
-        // contacts — the deleted one among them — which an upload by position would sign.
-        let by_position: Vec<Option<String>> = a
-            .ids_at_positions(&bucket.qso_indices)
-            .into_iter()
-            .map(|id| Some(id.to_string()))
+
+        // Another window deletes a contact before the last of them, and commits.
+        let first = *bucket.qso_indices.iter().min().expect("positions");
+        let last = *bucket.qso_indices.iter().max().expect("positions");
+        assert!(last > first, "premise: the bucket spans places");
+        let gone = read[first].id.expect("an id");
+        assert!(b.delete_qso(gone));
+        flush(&b);
+        let after = stored(&d);
+        assert_eq!(
+            after.len(),
+            read.len() - 1,
+            "premise: the delete is in the store"
+        );
+
+        // The report's ids still name the contacts it read.
+        for (id, &i) in ids.iter().zip(&bucket.qso_indices) {
+            let named = id.as_deref().expect("every contact named");
+            if named == gone.to_string() {
+                assert!(
+                    after.iter().all(|r| r.id != Some(gone)),
+                    "the one deleted is gone, and an upload by id finds nothing to sign"
+                );
+                continue;
+            }
+            let now = after
+                .iter()
+                .find(|r| r.id.map(|x| x.to_string()).as_deref() == Some(named))
+                .expect("a contact the report named is still in the store");
+            assert_eq!(now.call, read[i].call, "the contact it read at {i}");
+        }
+        // The control: the same positions, looked up in the store after the delete, name other
+        // contacts — which an upload by position would sign.
+        let by_position: Vec<Option<String>> = bucket
+            .qso_indices
+            .iter()
+            .map(|&i| id_of(&after, i))
             .collect();
         assert_ne!(by_position, ids, "the gap is real");
-        assert!(by_position.contains(&Some(gone.to_string())));
     }
 
     // ── a log.adi the store does not account for ────────────────────────────
@@ -5076,7 +5149,9 @@ pub(crate) mod tests {
     }
 
     /// A data folder on network storage: the store is refused for the session, nothing is
-    /// converted or created, and the 1.13 path opens the log unharmed.
+    /// converted or created, and the 1.13 path opens the log unharmed — every contact of
+    /// `log.adi` in its store in memory, the store every reader reads (compared row for row, ids
+    /// and all, with the file it loaded), and `log.adi` byte for byte as it was.
     #[test]
     fn a_network_folder_keeps_the_log_in_log_adi() {
         let d = Dir::new("network");
@@ -5100,7 +5175,15 @@ pub(crate) mod tests {
         untouched(&d, &before, "network");
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_log_path(d.log());
-        assert_eq!(e.log_records().len(), 6, "the fallback opens the whole log");
+        assert!(e.log_on_file(), "the 1.13 path: log.adi is the log");
+        let held = store_rows(&e);
+        assert_eq!(held.len(), 6, "the fallback opens the whole log");
+        same_log(
+            &held,
+            tempo_core::logbook::Logbook::load(&d.log()).records(),
+            "its store is log.adi's contacts",
+        );
+        untouched(&d, &before, "the 1.13 path's open");
     }
 
     /// A read-only data folder: the conversion is refused before a database exists (the safety
@@ -5358,14 +5441,15 @@ pub(crate) mod tests {
 
     // ── the FT duplicate guard (hard gate) ──────────────────────────────────
 
-    /// ⛔ THE GUARD ANSWERS FROM MEMORY AND NEVER FROM THE STORE. With the store's writer held
-    /// back (its write lock taken elsewhere), a contact is logged: memory has it, the store does
-    /// not — shown by reading the store through a connection of the test's own (the control).
-    /// Logged again, it is refused as a duplicate at once. A guard that consulted the store
-    /// would have found nothing there and logged it twice; one that waited for the store would
-    /// not have answered while the lock was held.
+    /// ⛔ THE GUARD ANSWERS FROM THE HOT INDEX AND NEVER FROM THE STORE. With the store's writer
+    /// held back (its write lock taken elsewhere), a contact is logged: the station's hot index
+    /// has it at once, the store does not — shown by reading the store through a connection of
+    /// the test's own (the control). Logged again, it is refused as a duplicate at once. A guard
+    /// that consulted the store would have found nothing there and logged it twice; one that
+    /// waited for the store would not have answered while the lock was held. Once the store
+    /// catches up it holds the contact once: the refusal wrote nothing.
     #[test]
-    fn the_duplicate_guard_answers_from_memory_while_the_store_lags() {
+    fn the_duplicate_guard_answers_from_the_hot_index_while_the_store_lags() {
         let d = Dir::new("dedup-guard");
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let mut e = engine_on_store(&d);
@@ -5376,6 +5460,10 @@ pub(crate) mod tests {
             crate::engine::LogWriteOutcome::Duplicate
         ));
         assert!(
+            e.station().hot().worked_call("W1DUP"),
+            "the hot index has the contact at once"
+        );
+        assert!(
             stored(&d).iter().all(|r| r.call != "W1DUP"),
             "control: the store does NOT hold the contact yet"
         );
@@ -5383,15 +5471,11 @@ pub(crate) mod tests {
         let again = e.log_qso_for_sync(rec);
         assert!(
             matches!(again, crate::engine::LogWriteOutcome::Duplicate),
-            "refused from memory, though the store has never seen the first"
+            "refused from the hot index, though the store has never seen the first"
         );
         assert!(
             started.elapsed() < Duration::from_millis(200),
             "and at once"
-        );
-        assert_eq!(
-            e.log_records().iter().filter(|r| r.call == "W1DUP").count(),
-            1
         );
         drop(hold);
         flush(&e);
