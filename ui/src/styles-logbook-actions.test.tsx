@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseRules, specificity, cmpSpec } from './cssCascade'
 import type { LogQuestion } from './features/logAnswers'
+import { t } from './i18n'
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE LOGBOOK ROW'S ACTION CLUSTER MUST FIT ITS GRID TRACK.
@@ -213,6 +214,17 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
     <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
   )
   await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+  // The whole cluster, the satellite menu in it. That menu is the one control a SEPARATE answer
+  // draws — the backend's list of names (`lotwSatNames`) — which lands on its own schedule, so
+  // the row can be on screen a moment before it. Counted then, the cluster is nine controls, not
+  // the ten an operator sees.
+  const satMenu = t('logbook.row.sat.aria', { call: 'K0ABC' })
+  await waitFor(() =>
+    expect(
+      container.querySelector(`.logbook-row:not(.head) select[aria-label="${satMenu}"]`),
+      'the satellite names never reached the row',
+    ).not.toBeNull(),
+  )
   return container.querySelector('.logbook-row:not(.head)') as HTMLElement
 }
 
