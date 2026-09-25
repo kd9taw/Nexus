@@ -5,7 +5,7 @@
 // contacts that is the whole dashboard recomputed three times a second for numbers that had not
 // changed. Computed once per log now (big-log fix, U3).
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { StatsView } from './StatsView'
 import { computeLogStats } from '../features/logStats'
 import { t } from '../i18n'
@@ -42,6 +42,11 @@ describe('Statistics computes once per log, not once per render', () => {
     rerender(<StatsView />)
     rerender(<StatsView />)
     rerender(<StatsView />)
+    // A recompute happens where the log is, at the end of the engine's round trip — never during
+    // the render that asked. Let one land before counting, or a recount could not be seen.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
     expect(vi.mocked(computeLogStats).mock.calls.length, 'recomputed on a render with the same log').toBe(passes)
   })
 })

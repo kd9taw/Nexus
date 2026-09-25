@@ -9,7 +9,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { createAskingLogSource, type LogTransport } from './askingLogSource'
-import { questionKey, type AnswerTo, type LogQuestion } from './logAnswers'
+import { answerFrom, questionKey, type AnswerTo, type LogQuestion } from './logAnswers'
+// Imported here, not inside a test: loading the Logbook module (~0.6 s) then counts against no
+// test's time limit.
+import { Logbook } from '../components/Logbook'
 import { setLogSource, useLogAnswer, type LogSource } from './logSource'
 
 /** A transport whose every call waits until the test answers it. */
@@ -121,8 +124,6 @@ describe('the asking source', () => {
 // renders through the whole-log source, given a transport that answers today's answers. ----
 describe('the Logbook through the asking source', () => {
   it('shows the same rows, the same count and the same order as through the whole-log source', async () => {
-    const { Logbook } = await import('../components/Logbook')
-    const { answerFrom } = await import('./logAnswers')
     const log = Array.from({ length: 40 }, (_, i) => ({
       id: `id-${i}`, call: ['W1AW', 'k1abc', 'DL1ABC', 'JA1ABC'][i % 4] + (i % 7), grid: 'FN31', band: ['20m', '40m'][i % 2],
       freqMhz: i % 2 ? 7.074 : 14.074, mode: ['FT8', 'USB', 'CW'][i % 3], rstSent: String(-i), rstRcvd: null,

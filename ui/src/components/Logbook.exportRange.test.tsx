@@ -58,6 +58,9 @@ async function openLogbook() {
   ])
   const { container } = render(<Logbook defaultBand="40m" defaultFreqMhz={7.074} defaultMode="FT8" />)
   await waitFor(() => expect(container.querySelectorAll('.log-export-date').length).toBe(2))
+  // The export is armed once the log's SIZE is in — its own answer, which the date boxes (drawn at
+  // once) say nothing about. A click before it lands is a click on a disabled button.
+  await waitFor(() => expect(adifButton().disabled, 'the log size never reached the export').toBe(false))
   const [from, to] = [...container.querySelectorAll('.log-export-date')] as HTMLInputElement[]
   return { from, to }
 }

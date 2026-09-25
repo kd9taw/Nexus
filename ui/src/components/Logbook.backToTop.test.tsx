@@ -115,7 +115,9 @@ async function openDeep() {
   const r = render(view(1))
   await waitFor(() => expect(drawn(0)).not.toBeNull())
   scrollTo(DEEP)
-  await waitFor(() => expect(drawn(150)).not.toBeNull())
+  // Row 150 DRAWN, not only placed: its page is its own answer, and a row whose page is still on
+  // its way is a placeholder at the same index.
+  await waitFor(() => expect(drawn(150)?.classList.contains('placeholder')).toBe(false))
   return r
 }
 

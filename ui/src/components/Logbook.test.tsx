@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll } from 'vitest'
-import { render, waitFor, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { render, waitFor, fireEvent, act, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
 import * as toast from '../toast'
@@ -18,6 +18,10 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
+// Each test's Logbook unmounted when the test ends. Left mounted, it stays subscribed to the log
+// answers still on their way, and one landing after this file's window is gone re-renders it
+// there: "window is not defined", counted as an uncaught error against the run.
+afterEach(cleanup)
 
 /** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
 const engineLog = vi.hoisted(() => vi.fn())
@@ -107,12 +111,16 @@ describe('purge confirmation dialog', () => {
     )
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
 
-    // The button is disabled on an empty log, so this also proves the log actually loaded.
-    const btn = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Purge log',
-    ) as HTMLButtonElement
-    expect(btn).toBeTruthy()
-    expect(btn.disabled).toBe(false)
+    // The button is disabled on an empty log, so this also proves the log actually loaded. It reads
+    // the log's SIZE — an answer of its own, which the rows say nothing about — so wait for it.
+    const btn = await waitFor(() => {
+      const b = [...container.querySelectorAll('button')].find(
+        (el) => el.textContent?.trim() === 'Purge log',
+      ) as HTMLButtonElement
+      expect(b).toBeTruthy()
+      expect(b.disabled).toBe(false)
+      return b
+    })
     btn.click()
 
     const dialog = await waitFor(() => {
@@ -143,10 +151,16 @@ describe('per-operator export', () => {
   it('is not offered to a single-op station', async () => {
     engineLog.mockResolvedValue(fakeLog(3))
     ;(api.logOperators as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    // This file keeps its mocks' calls between tests: count this render's asks only.
+    vi.mocked(api.logOperators).mockClear()
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
+    // The operator list is asked for once the log's SIZE is in (an answer of its own). Wait for
+    // that list to have been applied, so "not offered" below is its answer, not a not-yet.
+    await waitFor(() => expect(api.logOperators).toHaveBeenCalled())
+    await act(async () => {})
     // One operator, or none, means the split file would be identical to Export ADIF.
     expect(
       [...container.querySelectorAll('button')].some((b) =>
@@ -312,8 +326,8 @@ describe('the log table shows the comment and flags a private note', () => {
 // removing the menu the moment a card was marked sent deleted the control for the arrival, and
 // the very card the feature exists to record could never be recorded.
 describe('#152 — recording a QSL card does not depend on a filter, or on not having sent one', () => {
-  // ⚠️ SCOPED TO THIS RENDER'S OWN CONTAINER, not `document`. This file has no afterEach
-  // cleanup, so a document-wide query finds the FIRST Logbook still mounted from an earlier
+  // ⚠️ SCOPED TO THIS RENDER'S OWN CONTAINER, not `document`. Until this file cleaned up after each
+  // test (2026-09-25), a document-wide query found the FIRST Logbook still mounted from an earlier
   // test — which is exactly how the second case below passed alone and failed in the file,
   // reading another test's row and reporting the opposite answer.
   const qsl = (c: HTMLElement) => c.querySelector('select.log-rowbtn') as HTMLSelectElement | null
@@ -408,7 +422,9 @@ describe('the edit form carries a whole callsign', () => {
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
+    // THIS call's row: the window's log answers outlive a render, so a second open in one test is
+    // first drawn from the answer the one before it got, until this log's answer lands.
+    await waitFor(() => expect(container.querySelector(`button[aria-label="Edit ${call}"]`)).not.toBeNull())
     fireEvent.click(
       container.querySelector(`button[aria-label="Edit ${call}"]`) as HTMLButtonElement,
     )
@@ -485,8 +501,14 @@ describe('per-activation export', () => {
     ) as HTMLButtonElement | undefined
 
   it('is not offered to a station that has never activated', async () => {
+    // This file keeps its mocks' calls between tests: count this render's asks only.
+    vi.mocked(api.logActivations).mockClear()
     const { container } = mountWith([])
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
+    // The activations are asked for once the log's SIZE is in: wait for that answer to have been
+    // applied, so the absence below is the answer and not a not-yet.
+    await waitFor(() => expect(api.logActivations).toHaveBeenCalled())
+    await act(async () => {})
     expect(picker(container), 'a hunter-only log has no activation to pick').toBeNull()
     expect(exportBtn(container)).toBeUndefined()
   })

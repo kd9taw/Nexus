@@ -263,10 +263,24 @@ function cockpit(
   )
 }
 
-/** The card, once the debounced callbook answer has landed. */
+/** The card, once the LOG's answer is on it — the prior-contact history. The card itself is drawn
+ *  for the selected call at once, before any answer lands (the callbook's is debounced, the log's
+ *  a round trip of its own). */
 async function card(): Promise<HTMLElement> {
-  await waitFor(() => expect(document.querySelector('.recall-card')).not.toBeNull())
+  await waitFor(() =>
+    expect(document.querySelector('.recall-card .recall-log-list'), 'the log history never reached the card').not.toBeNull(),
+  )
   return document.querySelector('.recall-card') as HTMLElement
+}
+
+/** The new-one badge, once the log's ENTITY answer is in — a question of its own, apart from the
+ *  history, answered on its own schedule. */
+async function needBadge(): Promise<HTMLElement> {
+  return waitFor(() => {
+    const need = document.querySelector('.recall-card .recall-badge.need') as HTMLElement | null
+    expect(need, 'no new-one badge').not.toBeNull()
+    return need!
+  })
 }
 
 beforeEach(() => {
@@ -341,9 +355,7 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
 
     // The new-one flag, DERIVED from this log: the entity is worked on 40 m and 15 m, the
     // rig is on 20 m, so this band is a new slot for it.
-    const need = c.querySelector('.recall-badge.need')
-    expect(need, 'no new-one badge').not.toBeNull()
-    expect(need!.textContent).toContain('New band-slot')
+    expect((await needBadge()).textContent).toContain('New band-slot')
 
     // Distance + bearing from the operator's own square to the CALLBOOK's — the finer of
     // the two positions wins over the decoded one.
@@ -462,8 +474,8 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
     // on a CALL change — and after an auto-log the call does not change. `loggedTick` is the
     // snapshot's "a QSO was just logged, by any path" counter.
     const { rerender } = renderCockpit('W1ABC')
-    const c = await card()
-    expect(c.querySelector('.recall-badge.need')?.textContent).toContain('New band-slot')
+    await card()
+    expect((await needBadge()).textContent).toContain('New band-slot')
 
     const justLogged = {
       ...priorQsos[0],
@@ -481,10 +493,14 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
           'the card never picked up the contact that was just logged',
         ).toHaveLength(3),
       )
-      expect(
-        document.querySelector('.recall-badge.need'),
-        'still flagging the slot the operator just worked',
-      ).toBeNull()
+      // The entity's answer is re-read too, and lands on its own schedule: the badge must GO (it
+      // was there above, so this is a change being waited for, not an absence taken on trust).
+      await waitFor(() =>
+        expect(
+          document.querySelector('.recall-badge.need'),
+          'still flagging the slot the operator just worked',
+        ).toBeNull(),
+      )
     } finally {
       engineLog.mockImplementation(async () => priorQsos)
     }

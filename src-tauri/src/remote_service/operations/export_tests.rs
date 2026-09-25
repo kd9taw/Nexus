@@ -455,14 +455,17 @@ fn an_export_waits_for_a_contact_just_logged_with_both_locks_free_and_is_busy_pa
 /// ★ ONE PICTURE, THE ENGINE FREE: the file is cut from the picture of the log its activation was
 /// found in. After the pass that finds it and before its contacts' whole records are read, the
 /// operator moves one of its two contacts to the next day and deletes the other — committed to the
-/// store (on the 1.13 path, made: its store in memory commits them once the read ends): the file
-/// is still both contacts, byte for byte the file before. At every step of the read the Engine
-/// lock is free, and the read is one pass and then the whole records, nothing more. The next read
-/// has the changes: the activation holds no contact, and is not found.
+/// store (on the 1.13 path, begun: its store in memory commits nothing until the read ends, so
+/// there the move is made as a command makes it and the delete after it, `changed_by_a_command`):
+/// the file is still both contacts, byte for byte the file before. At every step of the read the
+/// Engine lock is free, and the read is one pass and then the whole records, nothing more. The
+/// next read has the changes: the activation holds no contact, and is not found.
 #[test]
 fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
+    use crate::remote_service::query::log_tests::changed_by_a_command;
     use crate::remote_service::query::picture::{at_seams, Seam};
     use std::{cell::RefCell, rc::Rc};
+    use tempo_core::logbook::LogOp;
     for f in [Fixture::new(), Fixture::with_store()] {
         seed(&f);
         let state = lease(&f);
@@ -470,6 +473,8 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
         let before = desktop_file(&f, "US-1234", DAY, Some("W9XYZ"));
         let (hook, seams) = (f.engine.clone(), Rc::new(RefCell::new(Vec::new())));
         let seen = seams.clone();
+        let command = Rc::new(RefCell::new(None));
+        let commanded = command.clone();
         let during = at_seams(
             move |seam| {
                 assert!(
@@ -485,22 +490,38 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
                     let r = e.stored_log().into_iter().find(|r| r.call == call);
                     r.and_then(|r| r.id).unwrap()
                 };
-                // Both found before either change: the store in memory holds a change's commit
-                // off until the read ends, so a read of the log after one would wait on it.
-                let (moved, deleted) = (id(&e, "K1AAA"), id(&e, "K1BBB"));
+                let moved = id(&e, "K1AAA");
                 let mut r = tempo_core::logbook::QsoRecord::clone(&e.logged_row(moved).unwrap());
                 r.when_unix += 86_400;
-                assert!(e.update_qso(moved, r));
-                assert!(e.delete_qso(deleted));
-                // A store in memory holds off a commit until the read ends: there the changes
-                // are committed after it.
-                if !e.log_on_file() {
+                let deleted = id(&e, "K1BBB");
+                // A store in memory holds off a commit until the read ends: there the move is
+                // made now and the delete once the move has committed, after the read.
+                if e.log_on_file() {
+                    drop(e);
+                    let rec = Box::new(r);
+                    *commanded.borrow_mut() = Some(changed_by_a_command(
+                        &hook,
+                        vec![
+                            (moved, LogOp::Edit { id: moved, rec }),
+                            (deleted, LogOp::Delete(deleted)),
+                        ],
+                    ));
+                } else {
+                    assert!(e.update_qso(moved, r));
+                    assert!(e.delete_qso(deleted));
                     e.flush_log_store(std::time::Duration::from_secs(60))
                         .expect("committed to the store");
                 }
             },
             || download(&f, &state, &pick).0,
         );
+        if let Some(command) = command.take() {
+            assert_eq!(
+                command.join().unwrap(),
+                [true, true],
+                "premise: both changes made"
+            );
+        }
         assert_eq!(
             *seams.borrow(),
             [Seam::Each, Seam::Whole],
