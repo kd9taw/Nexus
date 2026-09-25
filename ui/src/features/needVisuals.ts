@@ -113,7 +113,10 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
     },
     iconOnly: true,
   },
-  wanted: badge({ cls: 'need-wanted', Icon: Star, labelKey: 'need.badge.wanted.label', titleKey: 'need.badge.wanted.title' }),
+  // A station on the watch list: the WATCH tile's own lime and word (`WatchTile`), so the feed marks
+  // a watched station the way the Call Roster, the Stations list and Spots do (operator, 2026-09-25:
+  // "Lime WATCH everywhere").
+  wanted: badge({ cls: 'need-watch', Icon: Star, labelKey: 'watchlist.tile.label', titleKey: 'need.badge.wanted.title' }),
 }
 
 /** Canonical precedence (icon order left→right; also picks the row colour): the most
@@ -246,10 +249,14 @@ export const NEED_CHIP: Record<import('../types').NeedTag, NeedChip> = {
       return t('need.chip.sota.title')
     },
   },
+  // A station on the watch list: EXACTLY the WATCH tile the Call Roster, the Stations list and Spots
+  // draw (`WatchTile` — `need-chip need-watch`, its word), full and dense alike, so the Needed board
+  // and the lists read as one list (operator, 2026-09-25: "Lime WATCH everywhere"). Pinned together
+  // by components/watchLook.test.tsx.
   Wanted: chip({
-    cls: 'wanted',
-    labelKey: 'need.chip.wanted.label',
-    shortKey: 'need.chip.wanted.short',
+    cls: 'watch',
+    labelKey: 'watchlist.tile.label',
+    shortKey: 'watchlist.tile.label',
     titleKey: 'need.chip.wanted.title',
   }),
 }
