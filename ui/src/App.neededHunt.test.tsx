@@ -52,6 +52,10 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // The engine's log questions go unanswered here, as the whole-log read (answered `{}`) did.
+    askLog: vi.fn(async () => {
+      throw new Error('no log in this test')
+    }),
     getSnapshot: vi.fn(async () => snapshot),
     subscribeSnapshot: vi.fn(() => () => {}),
     getAwards: vi.fn(async () => ({ achievements: [] })),

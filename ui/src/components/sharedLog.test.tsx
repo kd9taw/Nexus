@@ -1,30 +1,28 @@
 // @vitest-environment jsdom
 //
-// ONE READ OF THE LOG PER WINDOW, NOT ONE PER VIEW (the big-log fix, 2026-09-19).
+// ONE QUESTION PER WINDOW, NOT ONE PER VIEW (the big-log fix, 2026-09-19; SPEC-2 v3 C17).
 //
 // A user's 150k-contact log stopped Nexus working. One full read of it is ~100 MB of JSON, and
 // the main window made one per reader: the three log strips the RTTY, PSK and JS8 cockpits keep
 // mounted (hidden) from startup each read it for themselves, and the Operate callsign card read
-// it again on every selection and every logged contact. This renders those REAL readers — three
-// LogEntry strips and the OperateCockpit's card — against an engine that counts what it hands
-// over, and pins the two numbers the fix is for: ONE whole-log transfer at startup, and ONE row
-// (no whole-log transfer) when a contact is logged. Run RED before the fix (4 transfers at
-// startup; a logged contact re-read the whole log and never reached the strips), GREEN after.
+// it again on every selection and every logged contact. The window then held one shared copy;
+// now it holds none, and asks the engine what each reader shows. This renders those REAL readers
+// — three LogEntry strips and the OperateCockpit's card — against an engine that records every
+// question, and pins what sharing is for: each question asked ONCE however many readers show it,
+// at startup and again when a contact is logged — which still reaches the card and a strip.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor, within, fireEvent, screen } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot, LoggedQso } from '../types'
+import { questionKey, type LogQuestion } from '../features/logAnswers'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
-/** The engine's side: its log, and a tally of what each read handed over. */
+/** The engine's side: its log, and every question it was asked. */
 const engine = vi.hoisted(() => ({
   log: [] as unknown[],
   revision: 1,
-  /** Reads that handed over the WHOLE log. */
-  wholeLog: 0,
-  /** Rows handed over by each read that did not. */
-  deltaRows: [] as number[],
+  asked: [] as unknown[],
 }))
 
 vi.mock('../api', async (importOriginal) => {
@@ -35,20 +33,10 @@ vi.mock('../api', async (importOriginal) => {
   for (const k of Object.keys(actual)) auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => null) : actual[k]
   return {
     ...auto,
-    // The whole log — what every reader called before the fix.
-    getLog: vi.fn(async () => {
-      engine.wholeLog++
-      return engine.log.slice()
-    }),
-    // An append-only engine: a copy it has seen gets the rows after it; a first read gets it all.
-    getLogDelta: vi.fn(async (sinceRevision: number, haveCount: number) => {
-      if (sinceRevision === 0) {
-        engine.wholeLog++
-        return { revision: engine.revision, full: true, rows: engine.log.slice() }
-      }
-      const rows = engine.log.slice(haveCount)
-      engine.deltaRows.push(rows.length)
-      return { revision: engine.revision, full: false, rows }
+    // The engine: each question answered over its log, and recorded.
+    askLog: vi.fn(async (q: LogQuestion) => {
+      engine.asked.push(q)
+      return (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[], engine.revision)
     }),
     qrzLookup: vi.fn(async () => null),
     resolveEntity: vi.fn(async () => 'United States'),
@@ -169,8 +157,14 @@ function listed(testId: string): number {
   const list = screen.getByTestId(testId).querySelector('.recall-log-list')
   return list ? within(list as HTMLElement).getAllByRole('listitem').length : 0
 }
-/** Let every read that is going to happen, happen. */
+/** Let every question that is going to be asked, be asked. */
 const settle = () => new Promise((r) => setTimeout(r, 100))
+/** How many times each question was asked, of the questions from `from` on. */
+function times(from = 0): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const q of engine.asked.slice(from) as LogQuestion[]) counts.set(questionKey(q), (counts.get(questionKey(q)) ?? 0) + 1)
+  return counts
+}
 
 beforeEach(() => {
   globalThis.ResizeObserver = class {
@@ -180,20 +174,22 @@ beforeEach(() => {
   } as unknown as typeof ResizeObserver
   engine.log = [...priorQsos]
   engine.revision = 1
-  engine.wholeLog = 0
-  engine.deltaRows = []
+  engine.asked = []
 })
 afterEach(cleanup)
 
-describe('the main window reads the log once, not once per reader', () => {
-  it('three log strips and the Operate card cost ONE whole-log read at startup', async () => {
+describe('the main window asks each question once, not once per reader', () => {
+  it('three log strips and the Operate card ask each question ONCE at startup', async () => {
     render(<Window tick={1} />)
     await waitFor(() => expect(listed('operate')).toBe(2))
     await settle()
-    expect(engine.wholeLog, 'whole-log reads at startup').toBe(1)
+    const asked = times()
+    // Positive control: the card asked about its call.
+    expect([...asked.keys()].some((k) => k.startsWith('callHistory|W1ABC|')), 'the card asked nothing').toBe(true)
+    expect([...asked].filter(([, n]) => n > 1), 'a question asked more than once at startup').toEqual([])
   })
 
-  it('a logged contact moves ONE row, and reaches the Operate card and a strip alike', async () => {
+  it('a logged contact asks each question shown ONCE again, and reaches the Operate card and a strip alike', async () => {
     const { rerender } = render(<Window tick={1} />)
     // The same station typed into a strip, so that strip's card lists its history too.
     fireEvent.change(within(screen.getByTestId('strip-RTTY')).getByPlaceholderText('Call'), {
@@ -202,7 +198,7 @@ describe('the main window reads the log once, not once per reader', () => {
     await waitFor(() => expect(listed('operate')).toBe(2))
     await waitFor(() => expect(listed('strip-RTTY')).toBe(2))
     await settle()
-    const before = { whole: engine.wholeLog, deltas: engine.deltaRows.length }
+    const before = engine.asked.length
 
     // The sequencer files W1ABC on 20 m in the background; the next snapshot carries the tick.
     engine.log = [...engine.log, justLogged]
@@ -211,7 +207,8 @@ describe('the main window reads the log once, not once per reader', () => {
     await waitFor(() => expect(listed('operate'), 'the Operate card never showed the logged contact').toBe(3))
     await waitFor(() => expect(listed('strip-RTTY'), 'the strip never showed the logged contact').toBe(3))
     await settle()
-    expect(engine.wholeLog - before.whole, 'whole-log reads for one logged contact').toBe(0)
-    expect(engine.deltaRows.slice(before.deltas), 'rows moved per read').toEqual([1])
+    const asked = times(before)
+    expect(asked.size, 'the logged contact asked nothing again').toBeGreaterThan(0)
+    expect([...asked].filter(([, n]) => n > 1), 'a question asked more than once for one logged contact').toEqual([])
   })
 })

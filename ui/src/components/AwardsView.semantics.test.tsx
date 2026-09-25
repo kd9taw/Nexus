@@ -66,7 +66,6 @@ const N9UM: Partial<AwardSummary> = {
 vi.mock('../api', () => ({
   getAwards: vi.fn(() => Promise.resolve(N9UM)),
   getConfirmationDiagnostics: vi.fn(() => Promise.resolve(null)),
-  getLog: vi.fn(() => Promise.resolve([])),
   uploadLotw: vi.fn(),
   uploadQrz: vi.fn(),
   uploadClublog: vi.fn(),

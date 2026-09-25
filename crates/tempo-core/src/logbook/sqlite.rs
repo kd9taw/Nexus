@@ -1068,7 +1068,7 @@ impl LogDb {
     /// and upload stamps were read before it existed. A reader that then wrote the contact back
     /// from memory took them out of the store for good. In WAL mode a read transaction takes
     /// its picture at its first read and keeps it until it ends, and it never blocks a writer.
-    pub(super) fn in_one_snapshot<T>(&self, f: impl FnOnce(&LogDb) -> Result<T>) -> Result<T> {
+    pub fn in_one_snapshot<T>(&self, f: impl FnOnce(&LogDb) -> Result<T>) -> Result<T> {
         if !self.conn.is_autocommit() {
             return f(self);
         }

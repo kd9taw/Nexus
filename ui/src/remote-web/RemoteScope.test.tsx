@@ -22,7 +22,7 @@ import frames from '../remote-monitor/fixtures.v2.json'
 const scope = vi.hoisted(() => ({ feed: null as string | null }))
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
-  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], getLog: [], getCatCwUnprovenRigModels: [],
+  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], getCatCwUnprovenRigModels: [],
     getSpectrumRow: { row: [], loHz: 200, hiHz: 4000 },
     // The CW cockpit reads its decode on mount; an empty decode, not an empty object.
     cwDecode: { text: '', wpm: 0, sent: [], keyerError: null, candidates: [], rst: null, name: null, state: 'listening', headline: '', prompt: '', recommended: null, workedCall: null } }

@@ -23,7 +23,6 @@ vi.mock('../api', () => ({
   getPca: vi.fn(async () => null),
   getSatellites: vi.fn(async () => null),
   getSatTrackStatus: vi.fn(async () => null),
-  getLog: vi.fn(async () => []),
 }))
 vi.mock('three/examples/jsm/postprocessing/UnrealBloomPass.js', () => ({
   UnrealBloomPass: class {

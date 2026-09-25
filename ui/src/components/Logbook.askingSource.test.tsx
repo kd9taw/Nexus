@@ -26,15 +26,12 @@ import type { LoggedQso } from '../types'
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
-    getLogDelta: vi.fn(async () => {
-      throw new Error('the asking source never reads the whole log')
-    }),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(), logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
+    markQslSentById: noop(), markQslCardById: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
     qrzPushQso: noop(), clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
 })

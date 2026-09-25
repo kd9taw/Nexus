@@ -10,12 +10,12 @@ use tempo_app::engine::Engine;
 use tempo_core::logbook::sqlite::Resolved;
 use tempo_core::logbook::{QsoRecord, UploadDetail, UploadOutcome};
 
-pub(super) const MY_CALL: &str = "KD9TAW";
+pub(in crate::remote_service) const MY_CALL: &str = "KD9TAW";
 
 /// A folder of the test's own, gone with the value.
-pub(super) struct Dir(std::path::PathBuf);
+pub(in crate::remote_service) struct Dir(std::path::PathBuf);
 impl Dir {
-    pub(super) fn new(tag: &str) -> Dir {
+    pub(in crate::remote_service) fn new(tag: &str) -> Dir {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
@@ -29,10 +29,10 @@ impl Dir {
         std::fs::create_dir_all(&p).unwrap();
         Dir(p)
     }
-    pub(super) fn log(&self) -> std::path::PathBuf {
+    pub(in crate::remote_service) fn log(&self) -> std::path::PathBuf {
         self.0.join("log.adi")
     }
-    pub(super) fn db(&self) -> std::path::PathBuf {
+    pub(in crate::remote_service) fn db(&self) -> std::path::PathBuf {
         self.0.join("log.sqlite3")
     }
     /// The `log.adi` of a session on the 1.13 path ([`memory`]), beside the store's own.
@@ -47,30 +47,30 @@ impl Drop for Dir {
 }
 
 /// A deterministic generator: a failing case is reproducible from its seed alone.
-pub(super) struct Gen(pub(super) u64);
+pub(in crate::remote_service) struct Gen(pub(in crate::remote_service) u64);
 impl Gen {
-    pub(super) fn next(&mut self) -> u64 {
+    pub(in crate::remote_service) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         self.0
     }
-    pub(super) fn below(&mut self, n: usize) -> usize {
+    pub(in crate::remote_service) fn below(&mut self, n: usize) -> usize {
         (self.next() % n.max(1) as u64) as usize
     }
-    pub(super) fn chance(&mut self, one_in: u64) -> bool {
+    pub(in crate::remote_service) fn chance(&mut self, one_in: u64) -> bool {
         self.next().is_multiple_of(one_in)
     }
-    pub(super) fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+    pub(in crate::remote_service) fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
         xs[self.below(xs.len())]
     }
 }
 
 /// The resolvers the engine fills an insert with — and the fill job, the same functions.
-pub(super) fn test_country(call: &str) -> Option<String> {
+pub(in crate::remote_service) fn test_country(call: &str) -> Option<String> {
     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
 }
-pub(super) fn test_state(call: &str, _grid: Option<&str>) -> Option<String> {
+pub(in crate::remote_service) fn test_state(call: &str, _grid: Option<&str>) -> Option<String> {
     call.starts_with('K').then(|| "WI".to_string())
 }
 
@@ -78,7 +78,7 @@ pub(super) fn test_state(call: &str, _grid: Option<&str>) -> Option<String> {
 /// count), portables and compounds, lower case and stray spaces, and calls outside ASCII —
 /// `ſ` and `ı` upper-case INTO ASCII in Rust as in JavaScript, which is the fold a store's
 /// ASCII-only `call_norm` cannot see.
-pub(super) const CALLS: &[&str] = &[
+pub(in crate::remote_service) const CALLS: &[&str] = &[
     "W1AW",
     "W1AW",
     "W1AW",
@@ -113,7 +113,7 @@ pub(super) const CALLS: &[&str] = &[
 
 /// One synthetic contact, as ADIF: every field a Remote reader reads (and a passthrough tag
 /// that only a whole record carries), `when` given by the caller so ties can be made.
-pub(super) fn synthetic(g: &mut Gen, when: u64) -> String {
+pub(in crate::remote_service) fn synthetic(g: &mut Gen, when: u64) -> String {
     let mut f = String::new();
     let mut tag = |name: &str, val: &str| {
         f.push_str(&format!("<{}:{}>{}", name, val.len(), val));
@@ -219,7 +219,7 @@ pub(super) fn synthetic(g: &mut Gen, when: u64) -> String {
 
 /// `n` synthetic contacts, many of them in the same second: times are drawn from a range a
 /// quarter the size of the log, so ties are common and the log is not in time order.
-pub(super) fn synthetic_log(n: usize, seed: u64) -> String {
+pub(in crate::remote_service) fn synthetic_log(n: usize, seed: u64) -> String {
     let mut g = Gen(seed | 1);
     let mut s = tempo_core::logbook::adif_header();
     let span = (n / 4).max(1);
@@ -232,7 +232,7 @@ pub(super) fn synthetic_log(n: usize, seed: u64) -> String {
 
 /// A launch on the store at `d` — the shipped open path, which converts the `log.adi` it finds
 /// there — with the resolvers set before the log is adopted, as the shell's are.
-pub(super) fn launch(d: &Dir) -> crate::SharedEngine {
+pub(in crate::remote_service) fn launch(d: &Dir) -> crate::SharedEngine {
     let opened = tempo_app::logstore::open_with(
         &d.log(),
         Arc::new(|_| Resolved::default()),
@@ -255,7 +255,7 @@ pub(super) fn launch(d: &Dir) -> crate::SharedEngine {
 /// The same log on the 1.13 path — a session whose store could not be opened, keeping its log in
 /// its own `log.adi` in `d` ([`Dir::memory_log`]), its rows in a store in memory since SPEC-2 v3
 /// C19 (D1-A).
-pub(super) fn memory(d: &Dir, adif: &str) -> crate::SharedEngine {
+pub(in crate::remote_service) fn memory(d: &Dir, adif: &str) -> crate::SharedEngine {
     let mut e = Engine::new(MY_CALL, "EN52", 0);
     e.set_dxcc_resolver(test_country);
     e.set_state_resolver(test_state);
@@ -266,7 +266,7 @@ pub(super) fn memory(d: &Dir, adif: &str) -> crate::SharedEngine {
 }
 
 /// Everything submitted, written — before a test's folder goes.
-pub(super) fn settle(e: &crate::SharedEngine) {
+pub(in crate::remote_service) fn settle(e: &crate::SharedEngine) {
     e.lock()
         .unwrap()
         .flush_log_store(std::time::Duration::from_secs(120))
@@ -274,12 +274,12 @@ pub(super) fn settle(e: &crate::SharedEngine) {
 }
 
 /// The contact at `at` in log order, as the log in memory holds it.
-pub(super) fn record_at(e: &Engine, at: usize) -> QsoRecord {
+pub(in crate::remote_service) fn record_at(e: &Engine, at: usize) -> QsoRecord {
     QsoRecord::clone(&e.log_records()[at])
 }
 
 /// One ADIF record, parsed as the log parses it, with no id.
-pub(super) fn parse_one(text: &str) -> QsoRecord {
+pub(in crate::remote_service) fn parse_one(text: &str) -> QsoRecord {
     let mut log = tempo_core::logbook::Logbook::new();
     log.import_adif(text);
     let mut r = QsoRecord::clone(&log.records()[0]);
@@ -288,14 +288,14 @@ pub(super) fn parse_one(text: &str) -> QsoRecord {
 }
 
 /// The id of the contact at `at`: how a change names its contact (SPEC-2 C16).
-pub(super) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+pub(in crate::remote_service) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
     e.log_records()[at]
         .id
         .expect("every row the log holds carries an id")
 }
 
 /// Replace the contact at `at` with `edited` — the edit an operator makes, by the contact's id.
-pub(super) fn edit_at(e: &mut Engine, at: usize, edited: QsoRecord) {
+pub(in crate::remote_service) fn edit_at(e: &mut Engine, at: usize, edited: QsoRecord) {
     let id = id_at(e, at);
     assert!(e.update_qso(id, edited), "the edit is taken");
 }
@@ -304,7 +304,7 @@ pub(super) fn edit_at(e: &mut Engine, at: usize, edited: QsoRecord) {
 /// already in the log), imports, edits that move a contact in time or change what a search or
 /// a recall matches, deletes, QSL cards and sent marks, satellite tags, the connectors' stamps,
 /// a LoTW confirmation with credit, and the fill job.
-pub(super) fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
+pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
     let len = e.lock().unwrap().log_records().len();
     let at = g.below(len);
     let when = 1_700_000_000 + 60 * g.below(64) as u64 + step;

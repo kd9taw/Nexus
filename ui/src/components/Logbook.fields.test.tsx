@@ -3,12 +3,13 @@
 // #239: "More log information should be shown and be able to edit in the logbook — DE and DX
 // geographic location, QSL information, rig information — all on the line with a scroll bar."
 // Three things this pins: your own grid and rig are shown and saved from the edit form; QSL sent
-// and a received card are editable there (through the same commands as the row menu); and a
+// and a received card are editable there (in the same one change as the fields); and a
 // "More columns" chip opens the wider table, off by default so nobody's log changes under them.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -20,31 +21,21 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
-// What each write hands back: the row as stored, distinguishable by `step`. Hoisted because
-// vi.mock factories run before the module body.
-const written = vi.hoisted(() => ({
-  edited: { call: 'K0ABC', whenUnix: 1_700_000_000, step: 'edited' },
-  sent: { call: 'K0ABC', whenUnix: 1_700_000_000, step: 'sent' },
-  card: { call: 'K0ABC', whenUnix: 1_700_000_000, step: 'card' },
-}))
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
-    // Each write returns the row it wrote — the key the next write in the same form uses.
-    editQso: vi.fn(() => Promise.resolve(written.edited)),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    editQsoById: vi.fn(() => Promise.resolve({ kind: 'applied' })),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: vi.fn(() => Promise.resolve(written.sent)),
-    markQslCard: vi.fn(() => Promise.resolve(written.card)),
+    markQslSentById: noop(),
+    markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -57,7 +48,7 @@ vi.mock('../toast', () => ({
 function oneContact(over: Record<string, unknown> = {}) {
   return [
     {
-      call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
+      id: 'id-K0ABC', call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
       country: 'United States', whenUnix: 1_700_000_000,
       confirmed: false, awardConfirmed: false,
@@ -69,9 +60,9 @@ function oneContact(over: Record<string, unknown> = {}) {
 }
 
 async function renderLog(over: Record<string, unknown> = {}) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(oneContact(over))
+  engineLog.mockResolvedValue(oneContact(over))
   const utils = render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />)
-  await waitFor(() => expect(utils.container.querySelector('.log-scroll > div')).not.toBeNull())
+  await waitFor(() => expect(utils.container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
   return utils
 }
 
@@ -98,37 +89,59 @@ describe('own location and rig on each contact (#239)', () => {
 
     fireEvent.change(rig, { target: { value: 'FT-991A' } })
     fireEvent.click(within(form).getByRole('button', { name: /save/i }))
-    const editQso = api.editQso as ReturnType<typeof vi.fn>
-    await waitFor(() => expect(editQso).toHaveBeenCalled())
-    const record = editQso.mock.calls[0][1]
-    expect(record.myGrid).toBe('EN52XA')
-    expect(record.myRig).toBe('FT-991A')
+    const editQsoById = api.editQsoById as ReturnType<typeof vi.fn>
+    await waitFor(() => expect(editQsoById).toHaveBeenCalled())
+    const edit = editQsoById.mock.calls[0][1]
+    expect(edit.myGrid).toBe('EN52XA')
+    expect(edit.myRig).toBe('FT-991A')
   })
 })
 
 describe('QSL status is editable in the edit form (#239)', () => {
-  it('marks a card sent by post and a card received, through the row menu commands', async () => {
+  it('marks a card sent by post and a card received, in the same one change as the fields', async () => {
     const { container } = await renderLog()
     const form = await openEdit(container)
     fireEvent.change(within(form).getByLabelText('QSL sent'), { target: { value: 'D' } })
     fireEvent.click(within(form).getByLabelText('Card received'))
     fireEvent.click(within(form).getByRole('button', { name: /save/i }))
 
-    // Each write targets the row the PREVIOUS write returned: the edit changed the row, so
-    // the row the form opened with no longer names it; likewise after the sent mark.
-    await waitFor(() => expect(api.markQslCard).toHaveBeenCalled())
-    expect(api.editQso).toHaveBeenCalledWith(oneContact()[0], expect.anything())
-    expect(api.markQslSent).toHaveBeenCalledWith(written.edited, 'D')
-    expect(api.markQslCard).toHaveBeenCalledWith(written.sent, true)
+    // ONE write, the fields and both marks in it: the three writes the form used to send each
+    // changed the row, so each had to target the row the one before it returned.
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
+    expect(api.editQsoById).toHaveBeenCalledTimes(1)
+    expect(api.editQsoById).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-K0ABC' }),
+      expect.objectContaining({ call: 'K0ABC', qslSentVia: 'D', qslCard: true }),
+    )
+    expect(api.markQslSentById).not.toHaveBeenCalled()
+    expect(api.markQslCardById).not.toHaveBeenCalled()
   })
 
-  it('touches neither when the QSL fields were left alone', async () => {
+  it('sends the marks as they stand when the QSL fields were left alone', async () => {
+    // The engine changes a mark only where the edit's differs from the stored contact, so a form
+    // left alone must send exactly what is stored — for a contact with neither mark…
     const { container } = await renderLog()
     const form = await openEdit(container)
     fireEvent.click(within(form).getByRole('button', { name: /save/i }))
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
-    expect(api.markQslSent).not.toHaveBeenCalled()
-    expect(api.markQslCard).not.toHaveBeenCalled()
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
+    expect(api.editQsoById).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ qslSentVia: null, qslCard: false }),
+    )
+    cleanup()
+    vi.clearAllMocks()
+
+    // …and for one with both — a DIFFERENT answer, so the first cannot pass on a constant.
+    const marked = await renderLog({ qslSent: { sent: true, via: 'B', dateUnix: 1_700_000_000 }, qslRcvd: { card: true } })
+    const form2 = await openEdit(marked.container)
+    fireEvent.click(within(form2).getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
+    expect(api.editQsoById).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ qslSentVia: 'B', qslCard: true }),
+    )
+    expect(api.markQslSentById).not.toHaveBeenCalled()
+    expect(api.markQslCardById).not.toHaveBeenCalled()
   })
 })
 

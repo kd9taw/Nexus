@@ -2065,6 +2065,11 @@ export const DE: PartialCatalog = {
   "logbook.delete.confirm": "QSO löschen",
   "logbook.delete.failed": "Das QSO konnte nicht gelöscht werden",
   "logbook.delete.done": "{{call}} gelöscht",
+  // Changes by id that were not made: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.delete.changed": "{{call}} wurde in einem anderen Fenster oder durch eine Synchronisierung geändert und daher nicht gelöscht. Hier ist der aktuelle Stand — bitte prüfen und bei Bedarf erneut löschen.",
+  "logbook.delete.gone": "{{call}} wurde bereits in einem anderen Fenster gelöscht.",
+  "logbook.change.changed": "{{call}} wurde in einem anderen Fenster oder durch eine Synchronisierung geändert, daher wurde dies nicht gespeichert. Hier ist der aktuelle Stand — bitte prüfen und erneut versuchen.",
+  "logbook.change.gone": "{{call}} wurde in einem anderen Fenster gelöscht, daher wurde dies nicht gespeichert.",
   "logEntry.title": "Dieses QSO loggen",
   "logEntry.clear.label": "Leeren",
   "logEntry.clear.title": "Log-Felder leeren",

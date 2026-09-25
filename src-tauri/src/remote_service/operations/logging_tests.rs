@@ -320,12 +320,11 @@ const SEED: &str = "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<QSO_DATE:8>
 <CALL:5>K1ABC<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>020000<EOR>\n";
 
 fn seed(f: &Fixture) {
-    let mut e = f.engine.lock().unwrap();
-    e.import_adif(SEED);
-    assert_eq!(e.log_records().len(), 2);
-    // In the log's file, as 1.13's import had written it before it returned.
-    e.flush_log_store(std::time::Duration::from_secs(60))
-        .expect("written");
+    f.engine.lock().unwrap().import_adif(SEED);
+    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    // In the file, as 1.13's import had written it before it returned: on the 1.13 path the
+    // file is written on its own lane since SPEC-2 v3 C19 (D1-A).
+    let _ = written(f);
 }
 
 /// The rows exactly as the browser's log page receives them.
@@ -552,7 +551,7 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
         local.comment = Some("changed at the shack".into());
         assert!(e.update_qso(local.id.unwrap(), local));
     }
-    let bytes = adif(&f);
+    let bytes = written(&f);
     for kind in [
         edit(&stale),
         json!({"kind":"delete","target":target(&stale)}),
@@ -597,7 +596,7 @@ fn a_delete_is_idempotent_across_a_dropped_response_and_never_reaches_a_later_co
     assert!(!String::from_utf8_lossy(&adif(&f)).contains("W1AW"));
     // The same contact logged again later is a new row; replaying the old delete cannot touch it.
     f.engine.lock().unwrap().import_adif(SEED);
-    let bytes = adif(&f);
+    let bytes = written(&f);
     assert_eq!(run(&f, &delete).unwrap(), result);
     assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
     assert_eq!(adif(&f), bytes);
@@ -1468,19 +1467,36 @@ fn a_self_spot_in_flight_holds_no_authority_lock_so_a_revoke_lands_at_once() {
     assert_eq!(posts.load(Ordering::SeqCst), 1);
 }
 
+/// The id of the contact `target` names, as the change path finds it: in one picture of the log
+/// with the Engine lock released (`find`), then checked under the lock (`locate`).
+fn found_id(
+    f: &Fixture,
+    target: &super::super::logging::Target,
+) -> Option<tempo_core::logbook::RecordId> {
+    let rows = f.engine.lock().unwrap().log_rows();
+    let found = super::super::logging::find(&rows, target).expect("the log reads")?;
+    super::super::logging::locate(&mut f.engine.lock().unwrap(), &found)
+}
+
 /// The shack's log view and a Remote browser are two writers of one log. The view used to
 /// address a row by its position at load time; a browser's delete above that row shifted
 /// every later one, and the shack's next Delete or Edit went to a DIFFERENT contact, with a
 /// toast naming the one the operator meant. The shack now carries the row's key exactly as the
-/// browser does, and `locate` turns it into the contact's id — or refuses.
+/// browser does, and `find` + `locate` turn it into the contact's id — or refuse. On the 1.13
+/// path and on the store.
 #[test]
 fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
-    let f = Fixture::new();
-    seed(&f);
+    for f in [Fixture::new(), Fixture::with_store()] {
+        the_shacks_row_is_found_after_a_shift(&f);
+    }
+}
+
+fn the_shacks_row_is_found_after_a_shift(f: &Fixture) {
+    seed(f);
     f.engine.lock().unwrap().import_adif(
         "<CALL:5>N2XYZ<BAND:3>15m<MODE:3>SSB<FREQ:6>21.300<QSO_DATE:8>20260909<TIME_ON:6>030000<EOR>\n",
     );
-    acquire(&f);
+    acquire(f);
     // The shack loaded its list: K1ABC sits at position 1, and the view keeps that ROW — it is
     // what the desktop commands hand back as their target, and the station keys it.
     let stale_position = 1;
@@ -1494,47 +1510,51 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
 
     // The browser deletes the row ABOVE it.
     let result = run(
-        &f,
-        &change(
-            &f,
-            json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
-        ),
+        f,
+        &change(f, json!({"kind":"delete","target":target(&row(f, "W1AW"))})),
     )
     .unwrap();
     assert_eq!(result["outcome"], "applied");
 
-    let mut e = f.engine.lock().unwrap();
     // The defect, made visible: the position the shack held now names another contact.
-    assert_eq!(e.log_records()[stale_position].call, "N2XYZ");
+    assert_eq!(
+        f.engine.lock().unwrap().log_records()[stale_position].call,
+        "N2XYZ"
+    );
     // The key finds the contact the operator can see, where it is TODAY.
-    let found = super::super::logging::locate(&mut e, &held_target)
-        .expect("the row the shack holds is still in the log");
-    assert_eq!(Some(found), e.log_records()[0].id);
-    assert_eq!(e.log_records()[0].call, "K1ABC");
-    assert!(e.delete_qso(found));
-    let left: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
-    assert_eq!(left, ["N2XYZ"], "K1ABC went and the bystander survived");
+    let found = found_id(f, &held_target).expect("the row the shack holds is still in the log");
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert_eq!(Some(found), e.log_records()[0].id);
+        assert_eq!(e.log_records()[0].call, "K1ABC");
+        assert!(e.delete_qso(found));
+        let left: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(left, ["N2XYZ"], "K1ABC went and the bystander survived");
+    }
 
     // A key the log no longer holds is refused, not approximated: the deleted row's own key,
     // and a row that was edited since the view loaded (its key changed with its content).
-    assert_eq!(super::super::logging::locate(&mut e, &held_target), None);
-    let survivor_key: super::super::logging::Target = serde_json::from_value(
-        json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
+    assert_eq!(found_id(f, &held_target), None);
+    let key_now = || -> super::super::logging::Target {
+        let e = f.engine.lock().unwrap();
+        serde_json::from_value(
+            json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
             "key":super::super::logging::row_key(&e.log_records()[0])}),
-    )
-    .unwrap();
-    let mut changed = e.log_records()[0].as_ref().clone();
-    changed.comment = Some("changed at the browser".into());
-    assert!(e.update_qso(changed.id.unwrap(), changed));
-    assert_eq!(super::super::logging::locate(&mut e, &survivor_key), None);
+        )
+        .unwrap()
+    };
+    let survivor_key = key_now();
+    {
+        let mut e = f.engine.lock().unwrap();
+        let mut changed = e.log_records()[0].as_ref().clone();
+        changed.comment = Some("changed at the browser".into());
+        assert!(e.update_qso(changed.id.unwrap(), changed));
+    }
+    assert_eq!(found_id(f, &survivor_key), None);
     // Positive control: the key of the row as it is now is found.
-    let fresh: super::super::logging::Target = serde_json::from_value(
-        json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
-            "key":super::super::logging::row_key(&e.log_records()[0])}),
-    )
-    .unwrap();
-    let survivor = e.log_records()[0].id;
-    assert_eq!(super::super::logging::locate(&mut e, &fresh), survivor);
+    let fresh = key_now();
+    let survivor = f.engine.lock().unwrap().log_records()[0].id;
+    assert_eq!(found_id(f, &fresh), survivor);
 }
 
 /// WWFF is a real stored program (an ADIF SIG kept verbatim, as the desktop edit path keeps
@@ -1603,45 +1623,213 @@ fn a_remote_edit_keeps_a_wwff_park_as_wwff() {
 
 /// The whole design rests on a row's key naming ONE contact. Call + time alone does not: a
 /// contest station works the same call on two bands in the same minute, and both rows share
-/// them. The key is a SHA-256 over the entire row, so it tells the pair apart, and `locate`
-/// acts on the one the operator saw. Two rows can share a key only by being identical in every
-/// field, and then either is the same contact to delete.
+/// them. The key is a SHA-256 over the entire row, so it tells the pair apart, and `find` acts
+/// on the one the operator saw. Two rows can share a key only by being identical in every
+/// field, and then either is the same contact to delete. On the 1.13 path and on the store.
 #[test]
 fn a_duplicate_call_and_time_pair_has_two_keys_and_each_finds_its_own_row() {
-    let f = Fixture::new();
+    for f in [Fixture::new(), Fixture::with_store()] {
+        each_of_a_pair_finds_its_own_row(&f);
+    }
+}
+
+fn each_of_a_pair_finds_its_own_row(f: &Fixture) {
     f.engine.lock().unwrap().import_adif(
         "<CALL:4>W1AW<BAND:3>20m<MODE:2>CW<FREQ:6>14.030<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>\n\
          <CALL:4>W1AW<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>\n",
     );
-    let mut e = f.engine.lock().unwrap();
-    let records = e.log_records();
-    assert_eq!(records.len(), 2, "the pair is two contacts, not one dupe");
-    assert_eq!(
-        (&records[0].call, records[0].when_unix),
-        (&records[1].call, records[1].when_unix),
-        "call + time alone cannot tell them apart"
-    );
-    let key = |r: &tempo_core::logbook::QsoRecord| -> super::super::logging::Target {
-        serde_json::from_value(json!({"call":r.call,"whenUnix":r.when_unix,
-            "key":super::super::logging::row_key(r)}))
-        .unwrap()
+    let (first, second, on_20, on_40) = {
+        let e = f.engine.lock().unwrap();
+        let records = e.log_records();
+        assert_eq!(records.len(), 2, "the pair is two contacts, not one dupe");
+        assert_eq!(
+            (&records[0].call, records[0].when_unix),
+            (&records[1].call, records[1].when_unix),
+            "call + time alone cannot tell them apart"
+        );
+        let key = |r: &tempo_core::logbook::QsoRecord| -> super::super::logging::Target {
+            serde_json::from_value(json!({"call":r.call,"whenUnix":r.when_unix,
+                "key":super::super::logging::row_key(r)}))
+            .unwrap()
+        };
+        assert_ne!(
+            super::super::logging::row_key(&records[0]),
+            super::super::logging::row_key(&records[1]),
+            "the row key does"
+        );
+        (
+            key(&records[0]),
+            key(&records[1]),
+            records[0].id,
+            records[1].id,
+        )
     };
-    let (first, second) = (key(&records[0]), key(&records[1]));
-    let (on_20, on_40) = (records[0].id, records[1].id);
-    assert_ne!(
-        super::super::logging::row_key(&records[0]),
-        super::super::logging::row_key(&records[1]),
-        "the row key does"
-    );
-    assert_eq!(super::super::logging::locate(&mut e, &first), on_20);
-    assert_eq!(super::super::logging::locate(&mut e, &second), on_40);
+    assert_eq!(found_id(f, &first), on_20);
+    assert_eq!(found_id(f, &second), on_40);
     // Delete the 40 m contact by its key: the 20 m one, same call and time, survives.
-    let id = super::super::logging::locate(&mut e, &second).unwrap();
-    assert!(e.delete_qso(id));
-    assert_eq!(e.log_records().len(), 1);
-    assert_eq!(e.log_records()[0].band, "20m");
-    assert_eq!(super::super::logging::locate(&mut e, &first), on_20);
-    assert_eq!(super::super::logging::locate(&mut e, &second), None);
+    let id = found_id(f, &second).unwrap();
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.delete_qso(id));
+        assert_eq!(e.log_records().len(), 1);
+        assert_eq!(e.log_records()[0].band, "20m");
+    }
+    assert_eq!(found_id(f, &first), on_20);
+    assert_eq!(found_id(f, &second), None);
+}
+
+/// ★ A KEY TARGET IS FOUND WITH BOTH LOCKS FREE, AND NOTHING ADVANCES BEFORE IT IS. Asked straight
+/// after a contact is logged — its write held up, as another process's write holds it — the
+/// change's search of the store waits for that write with the Engine and the authority free
+/// (checked from this thread while it waits), and the change then applies. Held past the wait,
+/// the change is `stationBusy` and nothing moved: no sequence was spent and the contact is as it
+/// was. The control: once the write lands, the change asked again applies.
+#[test]
+fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing() {
+    use crate::remote_service::query::log_tests::parse_one;
+    use tempo_core::logbook::sqlite::WriteHold;
+    let f = Fixture::with_store();
+    seed(&f);
+    acquire(&f);
+    let db = f.dir.join("contacts.sqlite3");
+    let logged = |call: &str| {
+        parse_one(&format!(
+            "<CALL:{}>{call}<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260911<TIME_ON:6>010000<EOR>",
+            call.len()
+        ))
+    };
+
+    let request = change(
+        &f,
+        json!({"kind":"qslCard","target":target(&row(&f, "K1ABC")),"received":true}),
+    );
+    let hold = WriteHold::take(&db).unwrap();
+    f.engine.lock().unwrap().log_qso(logged("N3AAA"));
+    let result = std::thread::scope(|s| {
+        let asked = s.spawn(|| run(&f, &request));
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(
+            !asked.is_finished(),
+            "the search waits for the contact's write"
+        );
+        for _ in 0..5 {
+            assert!(
+                f.engine.try_lock().is_ok(),
+                "the Engine lock is free while it waits"
+            );
+            assert!(
+                f.authority.core.try_lock().is_ok(),
+                "and so is the authority"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(hold);
+        asked.join().unwrap()
+    })
+    .unwrap();
+    assert_eq!(result["outcome"], "applied", "{result}");
+    assert!(records(&f)
+        .iter()
+        .any(|r| r.call == "K1ABC" && r.qsl_rcvd.card));
+
+    let before = control_state_version(&f, Instant::now(), 4);
+    let request = change(
+        &f,
+        json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
+    );
+    let hold = WriteHold::take(&db).unwrap();
+    f.engine.lock().unwrap().log_qso(logged("N3BBB"));
+    let busy = run(&f, &request);
+    drop(hold);
+    assert_eq!(busy, Err("stationBusy"));
+    assert_eq!(
+        control_state_version(&f, Instant::now(), 4)["nextSequence"],
+        before["nextSequence"],
+        "no sequence was spent"
+    );
+    assert!(
+        records(&f).iter().any(|r| r.call == "W1AW"),
+        "the contact is as it was"
+    );
+    let result = run(
+        &f,
+        &change(
+            &f,
+            json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "applied", "control: {result}");
+    assert!(!records(&f).iter().any(|r| r.call == "W1AW"));
+    written(&f);
+}
+
+/// ★ THE SHACK'S COMMANDS, SPLIT THE SAME WAY: the desktop's log commands find the row the view
+/// showed in the store with the engine lock released (`find_seen`), and check it under the lock
+/// (`locate_seen`). A row no contact holds any more is refused in the words the view always
+/// showed, whether it changed before the search or between the search and the lock; a store whose
+/// writer is still behind is refused as unread, nothing changed. The control: once the write
+/// lands, the row is found.
+#[test]
+fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
+    use crate::remote_service::query::log_tests::parse_one;
+    use tempo_core::logbook::sqlite::WriteHold;
+    let f = Fixture::with_store();
+    seed(&f);
+    let seen = |call: &str| {
+        let e = f.engine.lock().unwrap();
+        let id = e
+            .log_records()
+            .iter()
+            .find(|r| r.call == call)
+            .and_then(|r| r.id);
+        crate::log_row(&e, id.unwrap()).unwrap()
+    };
+    let comment = |text: &str| {
+        let mut e = f.engine.lock().unwrap();
+        let mut r = e
+            .log_records()
+            .iter()
+            .find(|r| r.call == "K1ABC")
+            .unwrap()
+            .as_ref()
+            .clone();
+        r.comment = Some(text.into());
+        assert!(e.update_qso(r.id.unwrap(), r));
+    };
+
+    let held = seen("K1ABC");
+    let found = crate::find_seen(&f.engine, &held).expect("the row the view shows");
+    let id = crate::locate_seen(&mut f.engine.lock().unwrap(), &found).expect("still that contact");
+    assert_eq!(Some(id.to_string()), held.id);
+
+    comment("changed before the search");
+    assert_eq!(
+        crate::find_seen(&f.engine, &held).unwrap_err(),
+        crate::LOG_ROW_GONE
+    );
+
+    let held = seen("K1ABC");
+    let found = crate::find_seen(&f.engine, &held).expect("the row as it is now");
+    comment("changed between the search and the lock");
+    assert_eq!(
+        crate::locate_seen(&mut f.engine.lock().unwrap(), &found).unwrap_err(),
+        crate::LOG_ROW_GONE
+    );
+
+    let held = seen("W1AW");
+    let hold = WriteHold::take(&f.dir.join("contacts.sqlite3")).unwrap();
+    f.engine.lock().unwrap().log_qso(parse_one(
+        "<CALL:5>N3CCC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260911<TIME_ON:6>010000<EOR>",
+    ));
+    let unread = crate::find_seen(&f.engine, &held);
+    drop(hold);
+    assert_eq!(unread.unwrap_err(), crate::LOG_UNREAD);
+    assert!(
+        crate::find_seen(&f.engine, &held).is_ok(),
+        "control: once written, found"
+    );
+    written(&f);
 }
 
 /// The desktop hands a row back exactly as `get_log` gave it, and the station keys that echo.
@@ -1698,16 +1886,50 @@ const PAGE_1_14: &str = include_str!("../../../tests/fixtures/remote-log-change-
 
 /// A station holding the fixture's log, from its file, so every row has the id it had then.
 fn station_1_14() -> Fixture {
+    station_1_14_on(false)
+}
+
+/// [`station_1_14`], on the 1.13 path or (`store`) with the file converted into the logbook
+/// store by the shipped open path, which keeps every row's id.
+fn station_1_14_on(store: bool) -> Fixture {
     let fixture: Value = serde_json::from_str(PAGE_1_14).unwrap();
     let f = Fixture::new();
     let log = tempo_core::logbook::adif_header() + fixture["records"].as_str().unwrap();
     std::fs::write(f.dir.join("contacts.adi"), log).unwrap();
+    {
+        let mut e = f.engine.lock().unwrap();
+        if store {
+            let opened = tempo_app::logstore::open(
+                &f.dir.join("contacts.adi"),
+                Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+                None,
+            )
+            .expect("the store opens");
+            e.attach_log_store(opened);
+            assert_eq!(
+                e.log_records().len(),
+                3,
+                "premise: the store holds the file's rows"
+            );
+        } else {
+            e.set_log_path(f.dir.join("contacts.adi"));
+        }
+    }
+    acquire(&f);
+    f
+}
+
+/// What the log's file holds once everything submitted is written — the store's writer and its
+/// `log.adi` mirror flushed, or on the 1.13 path the lane that writes `log.adi` (SPEC-2 v3 C19,
+/// D1-A) — so a comparison of the file is not a race with either, and the fixture's folder can
+/// go.
+fn written(f: &Fixture) -> Vec<u8> {
     f.engine
         .lock()
         .unwrap()
-        .set_log_path(f.dir.join("contacts.adi"));
-    acquire(&f);
-    f
+        .flush_log_store(std::time::Duration::from_secs(60))
+        .expect("written");
+    adif(f)
 }
 
 /// Each contact as the station holds it now.
@@ -1732,17 +1954,26 @@ fn id_target(f: &Fixture, call: &str) -> Value {
 /// the page, where `50.0` and `50` are one number, and the key is what has to agree.
 #[test]
 fn a_1_14_page_s_key_targets_still_apply() {
+    // On the 1.13 path, and on the store: the page's key targets found in the store.
+    for store in [false, true] {
+        a_1_14_page_s_key_targets_apply_on(store);
+    }
+}
+
+fn a_1_14_page_s_key_targets_apply_on(store: bool) {
     let fixture: Value = serde_json::from_str(PAGE_1_14).unwrap();
     let canonical = |rows: &[Value]| -> Vec<String> {
         rows.iter()
             .map(super::super::logging::row_canonical)
             .collect()
     };
+    let served = station_1_14_on(store);
     assert_eq!(
-        canonical(&page_rows(&station_1_14())),
+        canonical(&page_rows(&served)),
         canonical(fixture["rows"].as_array().unwrap()),
         "the rows the 1.14 page hashed its keys over"
     );
+    written(&served);
     let changes = fixture["changes"].as_array().unwrap();
     assert_eq!(
         changes.len(),
@@ -1750,9 +1981,10 @@ fn a_1_14_page_s_key_targets_still_apply() {
         "a card, a sent mark, an edit and a delete"
     );
     for sent in changes {
-        let f = station_1_14();
+        let f = station_1_14_on(store);
         let result = run(&f, &change(&f, sent.clone())).unwrap();
         assert_eq!(result["outcome"], "applied", "{sent}");
+        written(&f);
         let held = records(&f);
         let row = |call: &str| held.iter().find(|r| r.call == call);
         match sent["kind"].as_str().unwrap() {
@@ -1778,9 +2010,15 @@ fn a_1_14_page_s_key_targets_still_apply() {
 /// changes, sent again naming its row by `{id, editKey}`, leaves the log exactly as the key did.
 #[test]
 fn a_row_change_by_id_applies_exactly_as_by_its_key() {
+    for store in [false, true] {
+        a_row_change_by_id_applies_as_by_its_key_on(store);
+    }
+}
+
+fn a_row_change_by_id_applies_as_by_its_key_on(store: bool) {
     let fixture: Value = serde_json::from_str(PAGE_1_14).unwrap();
     for by_key in fixture["changes"].as_array().unwrap() {
-        let (keyed, named) = (station_1_14(), station_1_14());
+        let (keyed, named) = (station_1_14_on(store), station_1_14_on(store));
         let call = by_key["target"]["call"].as_str().unwrap();
         let mut by_id = by_key.clone();
         by_id["target"] = id_target(&named, call);
@@ -1804,6 +2042,8 @@ fn a_row_change_by_id_applies_exactly_as_by_its_key() {
             "{}: by id and by key differ",
             by_key["kind"]
         );
+        written(&keyed);
+        written(&named);
     }
 }
 
@@ -1812,7 +2052,13 @@ fn a_row_change_by_id_applies_exactly_as_by_its_key() {
 /// content key — so a 1.14 page's key target is refused — but not its edit key.
 #[test]
 fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
-    let f = station_1_14();
+    for store in [false, true] {
+        a_stale_id_target_is_refused_on(store);
+    }
+}
+
+fn a_stale_id_target_is_refused_on(store: bool) {
+    let f = station_1_14_on(store);
     let stale = id_target(&f, "W1AW");
     let keyed = target(&row(&f, "W1AW"));
     let pushed = records(&f).into_iter().find(|r| r.call == "W1AW").unwrap();
@@ -1822,7 +2068,7 @@ fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
         1_789_000_000,
         None
     ));
-    let bytes = adif(&f);
+    let bytes = written(&f);
     let refused = run(
         &f,
         &change(&f, json!({"kind":"qslCard","target":keyed,"received":true})),
@@ -1833,7 +2079,7 @@ fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
         (Some("rejected"), Some("contextChanged")),
         "control: the stamp moved the content key"
     );
-    assert_eq!(adif(&f), bytes);
+    assert_eq!(written(&f), bytes);
     let made = run(
         &f,
         &change(&f, json!({"kind":"qslCard","target":stale,"received":true})),
@@ -1855,7 +2101,7 @@ fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
         local.comment = Some("changed at the shack".into());
         assert!(e.update_qso(local.id.unwrap(), local));
     }
-    let (bytes, before) = (adif(&f), records(&f));
+    let (bytes, before) = (written(&f), records(&f));
     for sent in [
         json!({"kind":"delete","target":stale}),
         json!({"kind":"qslSent","target":stale,"via":"E"}),
@@ -1865,7 +2111,7 @@ fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
             (result["outcome"].as_str(), result["reason"].as_str()),
             (Some("rejected"), Some("contextChanged"))
         );
-        assert_eq!(adif(&f), bytes);
+        assert_eq!(written(&f), bytes);
         assert_eq!(records(&f), before);
     }
     // Positive control: the id target of the row as it is now applies.
@@ -1873,6 +2119,7 @@ fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
     let result = run(&f, &change(&f, json!({"kind":"delete","target":fresh}))).unwrap();
     assert_eq!(result["outcome"], "applied");
     assert_eq!(records(&f).len(), 2);
+    written(&f);
 }
 
 /// An id target is held to its wire grammar: the id in its one canonical text and a 16-hex edit

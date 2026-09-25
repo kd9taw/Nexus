@@ -972,22 +972,6 @@ export async function logQso(record: LoggedQso): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('log_qso', { record })
 }
 
-/** Read the general ADIF logbook. */
-export async function getLog(): Promise<LoggedQso[]> {
-  return invoke<LoggedQso[]>('get_log')
-}
-
-/** What changed in the log since the caller's copy (see `getLogDelta`). */
-export interface LogDelta { revision: number; full: boolean; rows: LoggedQso[] }
-
-/** The log since a copy the caller already holds: `sinceRevision` is the `revision` that copy's
- *  answer carried, `haveCount` its length. `full: false` → `rows` are exactly the records appended
- *  after it (`haveCount..end`, in log order); `full: true` → `rows` is the whole log. The window's
- *  one caller is features/logStore. */
-export async function getLogDelta(sinceRevision: number, haveCount: number): Promise<LogDelta> {
-  return invoke<LogDelta>('get_log_delta', { sinceRevision, haveCount })
-}
-
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
  * identity the "new one" badge keys on (never the QRZ country string). */
 export async function resolveEntity(call: string): Promise<string | null> {
@@ -1001,65 +985,11 @@ export async function contestZoneHint(call: string): Promise<number | null> {
   return invoke<number | null>('contest_zone_hint', { call })
 }
 
-/** Edit a logged contact (a correction). `target` is the row as `getLog()` showed it — never a
- *  position: a Remote browser is a second writer, and its delete shifts every later row, so a
- *  position kept from an earlier load names a different contact. The backend keys the row it
- *  was shown (the same SHA-256 a Remote browser keys its page rows with), finds the record whose
- *  own key matches, or refuses, telling the operator to reload. Nothing is hashed here.
- *  Confirmation/credit/upload state is preserved server-side. Returns the row as stored, which
- *  is the target any follow-up (a QSL mark from the same form) must use: the edit changed the
- *  row. */
-export async function editQso(target: LoggedQso, record: LoggedQso): Promise<LoggedQso> {
-  return invoke<LoggedQso>('edit_qso', { target, record })
-}
-
-/** Mark the contact `target` as QSL-sent (operator-declared): a card/request was
- *  sent `via` "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT
- *  a confirmation — this never flips `confirmed`/`awardConfirmed`.
- *
- *  `via: null` CLEARS the mark instead (#180): the operator mis-clicked and nothing was
- *  ever sent. Sending is once-only, so without a clear the three send entries vanish with
- *  nothing to put the row back. Mirrors `markQslCard(target, false)` on the inbound side.
- *  Returns the row as stored (see `editQso`). */
-export async function markQslSent(
-  target: LoggedQso,
-  via: 'B' | 'D' | 'E' | null,
-): Promise<LoggedQso> {
-  return invoke<LoggedQso>('mark_qsl_sent', { target, via })
-}
-
-/** Record whether a PAPER QSL card arrived for the contact `target` (#152). The operator is
- *  the only authority — LoTW/eQSL/QRZ report their own confirmations, but nothing knows a card
- *  landed. Award-eligible, so this moves the awards view. Clearable, for a mis-tick.
- *  Returns the row as stored (see `editQso`). */
-export async function markQslCard(target: LoggedQso, received: boolean): Promise<LoggedQso> {
-  return invoke<LoggedQso>('mark_qsl_card', { target, received })
-}
-
-/** Set — or REMOVE — the satellite tag on `target` (ADIF `PROP_MODE=SAT` + `SAT_NAME`).
- *
- *  ⭐ Its own command, and NOT two boxes on the edit form. That form reads a blank field as
- *  LEAVE ALONE, which is what stops a busted-call fix silently stripping a satellite tag off a
- *  contact that earned it; add the boxes and a blank one would mean "leave it" and "clear it"
- *  at once. Removal has to be an act the operator chooses, like `markQslSent(target, null)`.
- *
- *  `satName: null` REMOVES the tag — both fields together, because TQSL validates them as a
- *  pair and a lone member is rejected. Any other value must be a name LoTW accepts (see
- *  `lotwSatNames`); an empty string is an error, never a removal. Returns the row as stored. */
-export async function setSatTag(target: LoggedQso, satName: string | null): Promise<LoggedQso> {
-  return invoke<LoggedQso>('set_sat_tag', { target, satName })
-}
-
 /** The satellite names LoTW accepts, for the tag picker. The backend owns the table, so what
  *  the operator can choose is exactly what the writer will store — a typed name is a permanent
  *  record of a guess, and TQSL rejects one it does not list ("AO7" for "AO-7"). */
 export async function lotwSatNames(): Promise<string[]> {
   return invoke<string[]>('lotw_sat_names')
-}
-
-/** Delete the contact `target` (the row as `getLog()` showed it — see `editQso`). */
-export async function deleteQso(target: LoggedQso): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('delete_qso', { target })
 }
 
 /** One contact, named by its id and the edit key of the version the caller holds (SPEC-2 v2 §3):
@@ -1124,28 +1054,43 @@ export interface QsoEdit {
 }
 
 /** The Logbook form's edit of the contact `target`, as ONE change: the fields, and the QSL-sent
- *  and paper-card marks where the form changed them — one write, where `editQso` then
- *  `markQslSent` then `markQslCard` were three. Returns once it is on disk. */
+ *  and paper-card marks where the form changed them — one write, where the form used to send three
+ *  commands. Confirmation, credit and upload state are kept as they are; a callsign correction
+ *  re-queues the uploads (the backend's one edit policy). Returns once it is on disk. */
 export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAnswer> {
   return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
 }
 
-/** `markQslSent`, by `RowRef`: a method marks the contact sent, dated now; `null` withdraws. */
+/** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
+ *  "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a confirmation — this never
+ *  moves `confirmed`/`awardConfirmed`. `via: null` WITHDRAWS the mark (#180): sending is once-only,
+ *  so without it a mis-click on a send entry was permanent. */
 export async function markQslSentById(target: RowRef, via: 'B' | 'D' | 'E' | null): Promise<RowAnswer> {
   return invoke<RowAnswer>('mark_qsl_sent_by_id', { target, via })
 }
 
-/** `markQslCard`, by `RowRef`. */
+/** Record whether a PAPER QSL card arrived for the contact `target` (#152). The operator is the
+ *  only source — LoTW/eQSL/QRZ report their own confirmations, nothing knows a card landed — and it
+ *  is award-eligible, so it moves the awards view. Clearable, for a mis-tick. */
 export async function markQslCardById(target: RowRef, received: boolean): Promise<RowAnswer> {
   return invoke<RowAnswer>('mark_qsl_card_by_id', { target, received })
 }
 
-/** `setSatTag`, by `RowRef`: a name LoTW accepts tags the contact; `null` removes the tag. */
+/** Set — or REMOVE — the satellite tag on `target` (ADIF `PROP_MODE=SAT` + `SAT_NAME`).
+ *
+ *  ⭐ Its own command, and NOT two boxes on the edit form. That form reads a blank field as
+ *  LEAVE ALONE, which is what stops a busted-call fix silently stripping a satellite tag off a
+ *  contact that earned it; add the boxes and a blank one would mean "leave it" and "clear it"
+ *  at once. Removal has to be an act the operator chooses, like withdrawing a QSL-sent mark.
+ *
+ *  `satName: null` REMOVES the tag — both fields together, because TQSL validates them as a
+ *  pair and a lone member is rejected. Any other value must be a name LoTW accepts (see
+ *  `lotwSatNames`); an empty string is an error, never a removal. */
 export async function setSatTagById(target: RowRef, satName: string | null): Promise<RowAnswer> {
   return invoke<RowAnswer>('set_sat_tag_by_id', { target, satName })
 }
 
-/** `deleteQso`, by `RowRef`. */
+/** Delete the contact `target`. */
 export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
 }

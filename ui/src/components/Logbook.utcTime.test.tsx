@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -21,22 +22,20 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The shared log store (big-log fix) reads through get_log_delta; answered with the whole
-    // log from `getLog`, so this file holds with or without it.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
-    editQso: vi.fn(() => Promise.resolve({})),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    editQsoById: vi.fn(() => Promise.resolve({})),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(() => Promise.resolve({})), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -46,7 +45,7 @@ vi.mock('../api', () => {
 const at = (h: number, m: number, s = 0) => Math.floor(Date.UTC(2026, 8, 14, h, m, s) / 1000)
 
 async function openEdit(whenUnix: number) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+  engineLog.mockResolvedValue([
     {
       call: 'VE3ABC', grid: 'FN03', band: '40m', freqMhz: 7.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
@@ -68,7 +67,7 @@ function timeBox(form: HTMLElement): HTMLInputElement {
   return box as HTMLInputElement
 }
 const save = (form: HTMLElement) => fireEvent.click(within(form).getByRole('button', { name: /save/i }))
-const savedWhen = () => (api.editQso as ReturnType<typeof vi.fn>).mock.calls[0][1].whenUnix as number
+const savedWhen = () => (api.editQsoById as ReturnType<typeof vi.fn>).mock.calls[0][1].whenUnix as number
 
 afterEach(() => {
   cleanup()
@@ -94,7 +93,7 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     const form = await openEdit(at(0, 58, 37))
     expect(timeBox(form).value).toBe('00:58:37')
     save(form)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
     expect(savedWhen()).toBe(at(0, 58, 37))
   })
 
@@ -102,7 +101,7 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     const form = await openEdit(at(0, 58, 37))
     fireEvent.change(timeBox(form), { target: { value: '12:58:37' } })
     save(form)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
     expect(savedWhen()).toBe(at(12, 58, 37))
   })
 
@@ -110,7 +109,7 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     const form = await openEdit(at(0, 58, 37))
     fireEvent.change(timeBox(form), { target: { value: '18:05' } })
     save(form)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
     expect(savedWhen()).toBe(at(18, 5))
   })
 
@@ -119,6 +118,6 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     fireEvent.change(timeBox(form), { target: { value: '25:00' } })
     save(form)
     await waitFor(() => expect(within(form).getByRole('alert').textContent).toMatch(/HH:MM/))
-    expect(api.editQso).not.toHaveBeenCalled()
+    expect(api.editQsoById).not.toHaveBeenCalled()
   })
 })

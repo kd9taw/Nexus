@@ -34,7 +34,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use tempo_app::logstore::{Freshness, LogRows, READ_WAIT};
-use tempo_core::logbook::sqlite::{LogDb, Narrow, Order, Scope};
+use tempo_core::logbook::sqlite::{call_norm_of, LogDb, Narrow, Order, Scope};
 use tempo_core::logbook::{QsoRecord, RecordId};
 
 /// What a read says when the store could not be read. Never an empty answer, which would call
@@ -43,16 +43,16 @@ const UNREADABLE: &str = "applicationUnavailable";
 
 /// The log as one read sees it: the store inside one read transaction, or on the 1.13 path the
 /// log in memory as a copy of its pointers. [`read`] makes it, for the length of one read.
-pub(super) enum Picture<'a> {
+pub(in crate::remote_service) enum Picture<'a> {
     Store(&'a LogDb),
     Memory(&'a [Arc<QsoRecord>]),
 }
 
-/// A contact a pass handed over: its place in log order in this picture, and its id — what its
-/// whole record is fetched by ([`Picture::whole`]). Two picks are the same pick when they are the
-/// same place, which in one picture is the same contact.
+/// A contact a pass handed over: its place in log order in this picture (among the contacts its
+/// pass visited), and its id — what its whole record is fetched by ([`Picture::whole`]). Two
+/// picks of one pass are the same pick when they are the same place, which is the same contact.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Pick {
+pub(in crate::remote_service) struct Pick {
     pub(super) at: usize,
     id: Option<RecordId>,
 }
@@ -77,8 +77,20 @@ impl Ord for Pick {
 impl Picture<'_> {
     /// Hand `each` every contact, in log order, with (at least) `narrow`'s fields filled, and its
     /// [`Pick`]. The first refusal `each` answers ends the pass, and is the answer.
-    pub(super) fn each(
+    pub(in crate::remote_service) fn each(
         &self,
+        narrow: Narrow,
+        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        self.each_in(Scope::All, narrow, each)
+    }
+
+    /// [`Self::each`] over only the contacts `scope` holds: on the store through the index that
+    /// holds them, on the 1.13 path by the same test made here. A scope narrows, it never decides
+    /// (P2): a reader still tests every contact it is handed.
+    pub(in crate::remote_service) fn each_in(
+        &self,
+        scope: Scope<'_>,
         narrow: Narrow,
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
@@ -87,7 +99,7 @@ impl Picture<'_> {
         match self {
             Picture::Store(db) => {
                 let (mut at, mut answer) = (0, Ok(()));
-                db.each_narrow(narrow, Scope::All, Order::Log, &mut |q| {
+                db.each_narrow(narrow, scope, Order::Log, &mut |q| {
                     let pick = Pick { at, id: q.id };
                     at += 1;
                     match each(pick, q) {
@@ -104,13 +116,17 @@ impl Picture<'_> {
             Picture::Memory(rows) => rows
                 .iter()
                 .enumerate()
+                .filter(|(_, q)| holds(scope, q))
                 .try_for_each(|(at, q)| each(Pick { at, id: q.id }, q)),
         }
     }
 
     /// The whole records of `picks`, in the order given — from this same picture, so a contact
     /// edited or deleted since the pass that picked it is still the contact it picked.
-    pub(super) fn whole(&self, picks: &[Pick]) -> Result<Vec<QsoRecord>, &'static str> {
+    pub(in crate::remote_service) fn whole(
+        &self,
+        picks: &[Pick],
+    ) -> Result<Vec<QsoRecord>, &'static str> {
         #[cfg(test)]
         seam(Seam::Whole);
         match self {
@@ -155,6 +171,16 @@ impl Picture<'_> {
     }
 }
 
+/// Whether `scope` holds the contact `q`: the store's own test for each scope ([`Scope`]), made on
+/// the 1.13 path's rows.
+fn holds(scope: Scope<'_>, q: &QsoRecord) -> bool {
+    match scope {
+        Scope::All => true,
+        Scope::Since(t) => q.when_unix >= t,
+        Scope::CallNorm(norm) => call_norm_of(&q.call) == norm,
+    }
+}
+
 /// The two seconds a Remote read of the log has always had, from before it takes the Engine
 /// lock: checked every 128 contacts — once per chunk of the reads this replaced, which checked it
 /// as they took the lock for each — a pass past it is refused as busy, as theirs were.
@@ -172,7 +198,7 @@ pub(super) fn within(deadline: std::time::Instant, pick: Pick) -> Result<(), &'s
 /// behind; then everything `f` reads comes from one read transaction.
 ///
 /// ⚠️ Never call it holding the Engine lock; a debug build panics.
-pub(super) fn read<T>(
+pub(in crate::remote_service) fn read<T>(
     rows: &LogRows,
     f: impl FnOnce(&Picture<'_>) -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
@@ -195,7 +221,7 @@ pub(super) fn read<T>(
 /// fetches the whole records its pass picked — between two statements of one read transaction.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Seam {
+pub(in crate::remote_service) enum Seam {
     Count,
     Each,
     Whole,
@@ -222,7 +248,10 @@ fn seam(at: Seam) {
 
 /// Run `hook` at every [`Seam`] of every read this thread makes while `body` runs.
 #[cfg(test)]
-pub(super) fn at_seams<T>(hook: impl FnMut(Seam) + 'static, body: impl FnOnce() -> T) -> T {
+pub(in crate::remote_service) fn at_seams<T>(
+    hook: impl FnMut(Seam) + 'static,
+    body: impl FnOnce() -> T,
+) -> T {
     struct Clear;
     impl Drop for Clear {
         fn drop(&mut self) {

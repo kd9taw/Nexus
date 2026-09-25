@@ -7,11 +7,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
-import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, QsoDiagnosis, UploadReport, LoggedQso } from '../types'
+import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, QsoDiagnosis, UploadReport } from '../types'
 import {
   getAwards,
   getConfirmationDiagnostics,
-  uploadLotwReport,
+  uploadLotwReportByIds,
   qrzPushQso,
   clublogPushQso,
   eqslPushQso,
@@ -129,7 +129,7 @@ function NeedList({ items, empty }: { items: EntityNeed[]; empty: string }) {
  * grid; the award math + tables always render. */
 
 /** True iff this action maps to the one-click LoTW (re)upload via TQSL — the only
- * service with an in-app bulk/by-index upload path. A `reUpload` for QRZ/ClubLog
+ * service with an in-app bulk upload path. A `reUpload` for QRZ/ClubLog
  * carries a non-LoTW `source` and must NOT drive the LoTW upload button. */
 function isLotwUpload(a?: DiagAction): boolean {
   if (!a) return false
@@ -161,12 +161,21 @@ function uploadMessage(r: UploadReport): string {
   }
 }
 
-/** Diagnoses the list shows — and so the most rows a push can need. */
+/** Diagnoses the list shows. */
 const SHOWN_DIAGNOSES = 50
 
 /** The per-QSO push targets the diagnostics can drive (each has a single-QSO
- * push command; LoTW goes through the TQSL by-index upload path instead). */
+ * push command; LoTW goes through the TQSL upload of the contacts' ids instead). */
 type PushService = 'QRZ' | 'ClubLog' | 'eQSL'
+
+/** The contacts a bucket names, by id — or null when the report does not name every one of them.
+ *  A bucket also lists LOG POSITIONS, and those are never acted on: another window's delete moves
+ *  a position onto the neighbouring contact between the diagnosis and the press (see `upload`). */
+function bucketIds(b: DiagActionBucket): string[] | null {
+  const ids = b.qsoIds
+  if (!ids || ids.length === 0 || ids.length !== b.qsoIndices.length) return null
+  return ids.every((id): id is string => !!id) ? ids : null
+}
 
 /** The push service a row action maps to, or null when it isn't a push. */
 function pushService(a: DiagAction): PushService | null {
@@ -185,16 +194,13 @@ function RowAction({
   busyKey,
   onUpload,
   onPush,
-  canPush,
   onOpenSettings,
   observed = false,
 }: {
   d: QsoDiagnosis
   busyKey: string | null
-  onUpload: (indices: number[], key: string) => void
-  onPush: (index: number, service: PushService, key: string) => void
-  /** False while the log hasn't loaded — pushes need the QSO record. */
-  canPush: boolean
+  onUpload: (ids: string[], key: string) => void
+  onPush: (id: string, service: PushService, key: string) => void
   /** Open Settings at a section id. Absent ⇒ the re-login row stays a guidance chip. */
   onOpenSettings?: (target: string) => void
   /** A station report read from a browser: every action is guidance, never a button. */
@@ -203,9 +209,13 @@ function RowAction({
   const a = d.reasons[0]?.action
   if (!a) return null
   const key = `row-${d.index}`
+  // The contact this row is about, by its id — the only way a button here names one. Its log
+  // position (`d.index`) can name the neighbouring contact by the time the button is pressed.
+  // A contact the report does not name by id gets the guidance chip, never a button.
+  const id = d.id
   // Only LoTW has an in-app one-click (re)upload (via TQSL) — show the live button.
   if (isLotwUpload(a)) {
-    if (observed)
+    if (observed || !id)
       return (
         <span className="conf-act">
           {a.kind === 'reUpload' ? t('awards.conf.reupload') : t('awards.conf.uploadToLotw')}
@@ -215,7 +225,7 @@ function RowAction({
       <button
         className="conf-btn"
         disabled={busyKey !== null}
-        onClick={() => onUpload([d.index], key)}
+        onClick={() => onUpload([id], key)}
       >
         {busyKey === key
           ? t('awards.conf.uploading')
@@ -234,13 +244,13 @@ function RowAction({
       a.kind === 'reUpload'
         ? t('awards.conf.repush', { service: svc })
         : t('awards.conf.push', { service: svc })
-    if (!canPush) return <span className="conf-act">{label}</span>
+    if (observed || !id) return <span className="conf-act">{label}</span>
     return (
       <button
         className="conf-btn conf-btn-push"
         disabled={busyKey !== null}
         title={t('awards.conf.push.title', { service: svc })}
-        onClick={() => onPush(d.index, svc, key)}
+        onClick={() => onPush(id, svc, key)}
       >
         {busyKey === key ? t('awards.conf.pushing') : label}
       </button>
@@ -301,11 +311,6 @@ export function AwardsView({
   const aw = observation ?? nativeAwards
   const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
   const shownDiag = observation ? (diagnostics ?? null) : diag
-  // The rows the listed diagnoses name, so a diagnosis row can hand its QsoRecord to the per-QSO
-  // QRZ/ClubLog/eQSL push. A diagnosis names contacts by LOG POSITION (oldest-first, the order of
-  // the log), so they are resolved right after the diagnosis that names them arrives — against
-  // the log it was computed from — and only the rows the list shows (`SHOWN_DIAGNOSES`).
-  const [pushRows, setPushRows] = useState<Map<number, LoggedQso> | null>(null)
   const [err, setErr] = useState(false)
   // Grid list: VUCC bands only by default — see the grids panel for why. Declared up here
   // with the other hooks rather than beside its own derivations, because AwardsView early-
@@ -332,35 +337,21 @@ export function AwardsView({
       mounted.current = false
     }
   }, [observation])
-  useEffect(() => {
-    if (observation || !diag) return
-    const indices = diag.diagnoses.slice(0, SHOWN_DIAGNOSES).map((d) => d.index)
-    let live = true
-    logSource()
-      .ask({ kind: 'rowsAt', indices })
-      .then((rows) => {
-        if (!live) return
-        const found = new Map<number, LoggedQso>()
-        indices.forEach((index, k) => {
-          const row = rows[k]
-          if (row) found.set(index, row)
-        })
-        setPushRows(found)
-      })
-      .catch(() => {}) // without them the push buttons degrade to guidance chips
-    return () => {
-      live = false
-    }
-  }, [diag, observation])
 
   /** Sign + upload the given QSOs via TQSL, then re-diagnose so the panel reflects
-   * the new state (uploaded rows drop to Pending/waiting; bounced ones show R9). */
-  async function upload(indices: number[], key: string) {
+   * the new state (uploaded rows drop to Pending/waiting; bounced ones show R9).
+   *
+   * ⚠️ BY ID, NEVER BY POSITION. The diagnosis names each contact by its log position too, and
+   * a position is only right while nothing above it changes: another window's delete (a Remote
+   * browser, the Logbook) between the diagnosis and the press moves it onto the neighbouring
+   * contact — which TQSL would then sign under the operator's certificate. An id names the
+   * contact or, once it is gone, nothing (the upload skips it). */
+  async function upload(ids: string[], key: string) {
     if (observation) return
     setBusyKey(key)
     setUploadMsg(null)
     try {
-      const r = await uploadLotwReport(indices)
+      const r = await uploadLotwReportByIds(ids)
       // Contacts that changed while TQSL signed are not marked (features/lotwSkips). A toast, as
       // the Logbook's upload says it — raised before the mount check, so it still reaches an
       // operator who left this view while TQSL worked.
@@ -378,24 +369,23 @@ export function AwardsView({
   }
 
   /** Push one QSO to QRZ/ClubLog/eQSL (the never-uploaded and bounced-re-push
-   * cases), then re-diagnose so the row reflects the new upload state. */
-  async function push(index: number, service: PushService, key: string) {
+   * cases), then re-diagnose so the row reflects the new upload state.
+   *
+   * The contact is read by its id when the button is pressed — as it stands then, and never the
+   * one at its diagnosed position, which another window's delete can have moved (see `upload`).
+   * One that was deleted meanwhile is not pushed. */
+  async function push(id: string, service: PushService, key: string) {
     if (observation) return
-    // A diagnosis re-read after a push can name a row its rows have not been resolved for yet
-    // (they are on their way): ask for that one rather than refuse it.
-    const q =
-      pushRows?.get(index) ??
-      (await logSource()
-        .ask({ kind: 'rowsAt', indices: [index] })
-        .then(([row]) => row)
-        .catch(() => null))
-    if (!q) {
-      if (mounted.current) setUploadMsg(t('awards.push.noQso'))
-      return
-    }
     setBusyKey(key)
     setUploadMsg(null)
     try {
+      const q = await logSource()
+        .ask({ kind: 'row', id })
+        .catch(() => null)
+      if (!q) {
+        if (mounted.current) setUploadMsg(t('awards.push.noQso'))
+        return
+      }
       // One whole sentence per outcome — the shipped text spliced " (already there)" into
       // the middle of one, which no language with another word order can reproduce.
       let msg: string
@@ -983,15 +973,16 @@ export function AwardsView({
                 <div className="conf-buckets">
                   {shownDiag.buckets.map((b, i) => {
                     const key = `bucket-${i}`
+                    const ids = bucketIds(b)
                     return (
                       <div className="conf-bucket" key={i}>
                         <span className="conf-bucket-count">{b.count}</span>
                         <span className="conf-bucket-kind">{b.kind}</span>
-                        {bucketUploadable(b.qsoIndices) && (
+                        {ids && bucketUploadable(b.qsoIndices) && (
                           <button
                             className="conf-btn conf-btn-bulk"
                             disabled={busyKey !== null}
-                            onClick={() => upload(b.qsoIndices, key)}
+                            onClick={() => upload(ids, key)}
                           >
                             <UploadCloud size={12} aria-hidden="true" />
                             {busyKey === key
@@ -1022,7 +1013,6 @@ export function AwardsView({
                       busyKey={busyKey}
                       onUpload={upload}
                       onPush={push}
-                      canPush={!observation && pushRows !== null}
                       onOpenSettings={observation ? undefined : onOpenSettings}
                       observed={!!observation}
                     />

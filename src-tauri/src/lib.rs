@@ -4568,7 +4568,10 @@ fn open_logbook_store(
     if let Some(dir) = log.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    tempo_app::logstore::open_reporting(log, store_resolve(), network, progress)
+    // The hot index is built here too, from the rows as they load, keyed by the resolver the
+    // station is given at the attach — so the attach does not build it under the lock.
+    let hot = tempo_app::logstore::HotBuild::keyed_by(Some(country_resolver()));
+    tempo_app::logstore::open_reporting(log, store_resolve(), network, Some(hot), progress)
 }
 
 /// cty.dat's answer for the two columns the logbook store writes beside each contact — its
@@ -4658,7 +4661,7 @@ fn adopt_logbook(
     eng: &mut Engine,
     log: &Path,
     opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
-) {
+) -> Option<tempo_app::logstore::SessionRows> {
     match opened {
         Ok(opened) => {
             let what = match opened.outcome {
@@ -4676,7 +4679,7 @@ fn adopt_logbook(
                 ),
             };
             tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
-            eng.attach_log_store(opened);
+            eng.attach_log_store(opened)
         }
         Err(e) => {
             let why = e.to_string();
@@ -4689,6 +4692,7 @@ fn adopt_logbook(
             }
             eng.set_log_path_resolved(log.to_path_buf(), store_resolve());
             eng.note_log_store_problem(&e);
+            None
         }
     }
 }
@@ -7003,6 +7007,15 @@ fn subdivision_hint(call: &str, grid: Option<&str>) -> Option<String> {
 /// a filled row the row an insert would have written.
 fn country_of(call: &str) -> Option<String> {
     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+}
+
+/// [`country_of`], as the ONE shared resolver the launch hands both the station and the store's
+/// build of the hot index ([`open_logbook_store`]): the same `Arc` is how the station knows the
+/// index the store built off the lock is keyed as it keys its own (SPEC-2 v3 C19).
+fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
+    static SHARED: std::sync::LazyLock<Arc<tempo_app::station::DxccResolve>> =
+        std::sync::LazyLock::new(|| Arc::new(country_of));
+    Arc::clone(&SHARED)
 }
 
 /// The version of the resolvers' data the logbook's country and state fills are written for —
@@ -11957,20 +11970,32 @@ fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterRe
 /// | "fieldday-sp". Returns the refreshed snapshot.
 #[tauri::command(async)]
 fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    // Refuse to enter a keying structured mode without the identity its messages need,
-    // so the operator gets a clear reason instead of a silently-suppressed over. The
-    // mode plugin decides which tiers are gated (Capabilities::structured_identity —
-    // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
-    // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
-    // fieldday-sp are passive on entry (the backstop covers TX).
-    match mode.as_str() {
-        "qso-run" => eng.structured_tx_ready(true)?,
-        "fieldday-run" => eng.structured_tx_ready(false)?,
-        _ => {}
-    }
-    eng.set_mode(&mode)?;
-    Ok(eng.snapshot())
+    // A switch that opens a contest session — Field Day entered from another mode — has the
+    // session's rows read from the logbook first, off the lock, and opens the session with its
+    // dupe sweep in the same hold of the lock as the switch (SPEC-2 v3 C19). Every other switch
+    // reads nothing and runs as it always has.
+    tempo_app::engine::with_session_rows(
+        &state,
+        |eng| eng.mode_opens_session(&mode),
+        |eng, rows| {
+            // Refuse to enter a keying structured mode without the identity its messages need,
+            // so the operator gets a clear reason instead of a silently-suppressed over. The
+            // mode plugin decides which tiers are gated (Capabilities::structured_identity —
+            // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
+            // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
+            // fieldday-sp are passive on entry (the backstop covers TX).
+            match mode.as_str() {
+                "qso-run" => eng.structured_tx_ready(true)?,
+                "fieldday-run" => eng.structured_tx_ready(false)?,
+                _ => {}
+            }
+            eng.set_mode(&mode)?;
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            Ok(eng.snapshot())
+        },
+    )
 }
 
 /// Current operator/station settings.
@@ -12121,67 +12146,78 @@ fn apply_and_persist(
     // save, so it reads this mirror rather than a spawn-time capture.
     set_operator_qth(&mycall, &mygrid);
 
-    let snap = {
-        let mut eng = engine_lock(&state);
-        // The LoTW sync cursor is bound to the exact query (notably the username);
-        // if the username changed, reset it to a full pull so a config edit can't
-        // silently skip confirmations.
-        if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
-            settings.lotw_last_qsl.clear();
-        }
-        // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-        if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-            settings.eqsl_last_sync.clear();
-        }
-        // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
-        let cur = eng.settings();
-        if cur.clublog_email != settings.clublog_email
-            || cur.clublog_callsign != settings.clublog_callsign
-            || cur.clublog_api_key != settings.clublog_api_key
-        {
-            CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Same shape for the automatic LoTW batch: everything its suspension could have been
-        // ABOUT lives in these four fields, so touching any of them is the operator saying
-        // "I fixed it". Without this the operator corrects their Station Location, saves,
-        // and nothing ever restarts — the latch is session-wide and there is no other way
-        // out of it short of a relaunch.
-        if cur.lotw_station_location != settings.lotw_station_location
-            || cur.lotw_use_adif_location != settings.lotw_use_adif_location
-            || cur.tqsl_path != settings.tqsl_path
-            || cur.lotw_auto_upload != settings.lotw_auto_upload
-        {
-            LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-            LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Keep the live DXpedition layer's most-wanted key current (Settings
-        // override, else the build's baked application key).
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &settings.clublog_api_key,
-        ));
-        // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
-        // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
-        // copies), so saving the raw form here would write a roster that diverges from the engine and
-        // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
-        // light verb does.
-        if authoritative_roster {
-            // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
-            // live roster here would leave a factory reset with every radio it promised to erase.
-            eng.apply_restored_settings(settings);
-        } else {
-            eng.apply_settings(settings);
-        }
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: failed to persist settings: {e}");
-        }
-        // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
-        // turning it off here actually stops the launch picker (the base config drives that, and
-        // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
-        if active_profile().is_some() {
-            persist_simultaneous_to_base(eng.settings().simultaneous_radios);
-        }
-        eng.snapshot()
-    }; // release the engine lock before spawning feed threads
+    // A save that turns the Field Day master on while Field Day is not running re-enters it,
+    // opening a contest session: the session's rows are read from the logbook first, off the
+    // lock, and the session is opened with its dupe sweep in the same hold of the lock as the
+    // save (SPEC-2 v3 C19). Every other save reads nothing.
+    let opens_session = settings.fd_active;
+    let snap = tempo_app::engine::with_session_rows(
+        &state,
+        |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
+        |eng, rows| {
+            // The LoTW sync cursor is bound to the exact query (notably the username);
+            // if the username changed, reset it to a full pull so a config edit can't
+            // silently skip confirmations.
+            if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
+                settings.lotw_last_qsl.clear();
+            }
+            // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
+            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
+                settings.eqsl_last_sync.clear();
+            }
+            // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
+            let cur = eng.settings();
+            if cur.clublog_email != settings.clublog_email
+                || cur.clublog_callsign != settings.clublog_callsign
+                || cur.clublog_api_key != settings.clublog_api_key
+            {
+                CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Same shape for the automatic LoTW batch: everything its suspension could have been
+            // ABOUT lives in these four fields, so touching any of them is the operator saying
+            // "I fixed it". Without this the operator corrects their Station Location, saves,
+            // and nothing ever restarts — the latch is session-wide and there is no other way
+            // out of it short of a relaunch.
+            if cur.lotw_station_location != settings.lotw_station_location
+                || cur.lotw_use_adif_location != settings.lotw_use_adif_location
+                || cur.tqsl_path != settings.tqsl_path
+                || cur.lotw_auto_upload != settings.lotw_auto_upload
+            {
+                LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+                LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Keep the live DXpedition layer's most-wanted key current (Settings
+            // override, else the build's baked application key).
+            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
+                &settings.clublog_api_key,
+            ));
+            // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
+            // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
+            // copies), so saving the raw form here would write a roster that diverges from the engine and
+            // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
+            // light verb does.
+            if authoritative_roster {
+                // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
+                // live roster here would leave a factory reset with every radio it promised to erase.
+                eng.apply_restored_settings(settings);
+            } else {
+                eng.apply_settings(settings);
+            }
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            if let Err(e) = eng.settings().save(&settings_path()) {
+                eprintln!("tempo: failed to persist settings: {e}");
+            }
+            // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
+            // turning it off here actually stops the launch picker (the base config drives that, and
+            // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
+            if active_profile().is_some() {
+                persist_simultaneous_to_base(eng.settings().simultaneous_radios);
+            }
+            eng.snapshot()
+        },
+    ); // release the engine lock before spawning feed threads
        // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -16931,87 +16967,6 @@ async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<Ap
     Ok(snap)
 }
 
-/// The full logbook as serializable contacts (for the UI log view). Each row
-/// carries the cty.dat-RESOLVED entity for its callsign — the award identity
-/// the UI compares on; the stored free-text COUNTRY is display only (QRZ and
-/// cty.dat spell entities differently, which made the DXCC totals disagree and
-/// the NEW ONE badge fire on every German/Russian contact forever).
-#[tauri::command(async)]
-#[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC
-fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
-    // A snapshot under the lock — pointers, no record cloned — converted after it is
-    // released: the per-row copy and country lookup are the whole cost, and the radio loop
-    // needs this lock at every slot boundary.
-    let records = engine_lock(&state).log_snapshot().records;
-    Ok(logged_rows(records))
-}
-
-/// Records as the UI reads them, each with its cty.dat entity — `get_log`'s conversion, and
-/// `get_log_delta`'s, which must hand out rows identical to it.
-fn logged_rows(records: Vec<Arc<tempo_core::logbook::QsoRecord>>) -> Vec<LoggedQso> {
-    records
-        .into_iter()
-        .map(|r| {
-            let mut q = LoggedQso::from(Arc::unwrap_or_clone(r));
-            q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-            q
-        })
-        .collect()
-}
-
-/// [`get_log_delta`]'s answer.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LogDelta {
-    /// The log's revision these rows bring the UI's copy to.
-    revision: u64,
-    /// `rows` is the whole log (the copy is replaced), not just its new end.
-    full: bool,
-    rows: Vec<tempo_app::dto::LoggedQso>,
-}
-
-/// The log since the UI's copy, which stood at `since_revision` holding `have_count` rows.
-///
-/// One logged QSO used to cost the whole log over IPC — ~100 MB of JSON at 150k QSOs — once
-/// per window that holds a copy. When every change since `since_revision` was an append and
-/// the copy is no longer than the log, `rows` is just `records[have_count..]`. After anything
-/// else — an edit, a delete, an import that changed a held row, a sync, an upload stamp, a
-/// reload, or a revision this log never held — `full` is set and `rows` is the whole log,
-/// exactly as [`get_log`] returns it. Rows are converted exactly as `get_log`'s are.
-#[tauri::command]
-async fn get_log_delta(
-    state: State<'_, SharedEngine>,
-    since_revision: u64,
-    have_count: usize,
-) -> Result<LogDelta, String> {
-    // On the blocking pool, like `with_engine`'s commands (#335): every window asks for this
-    // on every log change, it waits for the engine lock, and a full answer's per-row country
-    // lookup is CPU-bound — none of which may occupy a tokio worker the lock-free waterfall
-    // and meter reads need. `log_delta` takes and releases the lock itself.
-    let engine = Arc::clone(&state);
-    tauri::async_runtime::spawn_blocking(move || log_delta(&engine, since_revision, have_count))
-        .await
-        .map_err(|e| format!("engine task failed: {e}"))
-}
-
-#[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC
-fn log_delta(engine: &Mutex<Engine>, since_revision: u64, have_count: usize) -> LogDelta {
-    // The row pointers are copied and the revision read under ONE lock, so they always agree;
-    // the conversion runs after it is released, as in `get_log`.
-    let (revision, full, records) = {
-        let eng = engine_lock(engine);
-        let log = eng.log_records();
-        let grew = eng.log_appended_only_since(since_revision) && have_count <= log.len();
-        let rows = if grew { &log[have_count..] } else { log };
-        (eng.log_revision(), !grew, rows.to_vec())
-    };
-    LogDelta {
-        revision,
-        full,
-        rows: logged_rows(records),
-    }
-}
-
 /// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
 /// form keys its "new one" badge on this, not on the QRZ country string.
 #[tauri::command]
@@ -17057,10 +17012,10 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The log commands below take the ROW the UI showed (`target`, as `get_log` handed it out),
+/// The log commands below take the ROW the UI showed (`target`, as the log view was handed it),
 /// and never a position. The station keys that row exactly as a Remote browser keys its page
 /// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
-/// `remote_service::operations::logging::{seen_target, locate}`. They used to take
+/// `remote_service::operations::logging::{seen_target, find, locate}`. They used to take
 /// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
 /// which held while the desktop was the log's only writer. Remote made it a second writer:
 /// a browser's delete removed a row and shifted every later one, and the shack's next Delete
@@ -17068,13 +17023,32 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// with another contact's fields and its confirmations stripped as a "callsign correction" —
 /// under a toast naming the row the operator meant. The key finds the row where it is today,
 /// or refuses when no row holds that content any more.
+///
+/// The row is found in the store with the engine lock RELEASED — a read of the log never runs
+/// under it — and what was found is checked under the lock by [`locate_seen`], so a change
+/// landing between the two is refused like any other.
+fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRef, String> {
+    use remote_service::operations::logging::{find, seen_target};
+    let rows = engine_lock(engine).log_rows();
+    match find(&rows, &seen_target(seen)) {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(LOG_ROW_GONE.into()),
+        Err(_) => Err(LOG_UNREAD.into()),
+    }
+}
+
+/// The contact [`find_seen`] found, if it is still the version found, under the engine lock.
 fn locate_seen(
     eng: &mut Engine,
-    seen: &LoggedQso,
+    found: &log_by_id::RowRef,
 ) -> Result<tempo_core::logbook::RecordId, String> {
-    use remote_service::operations::logging::{locate, seen_target};
-    locate(eng, &seen_target(seen)).ok_or_else(|| LOG_ROW_GONE.into())
+    remote_service::operations::logging::locate(eng, found).ok_or_else(|| LOG_ROW_GONE.into())
 }
+
+/// The refusal a log command gives when the log could not be read to find its row: the store
+/// unreadable, or its writer still behind the changes made before the command was asked.
+const LOG_UNREAD: &str =
+    "Nexus could not read the logbook to find that contact just now — nothing was changed. Try again in a moment.";
 
 /// The refusal every log command gives for a row it cannot find: the log changed under the
 /// view (a Remote delete, an edit, a connector stamp) and the operator must look again.
@@ -17115,7 +17089,7 @@ fn durability_failed(why: String) -> String {
     format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
 }
 
-/// The contact `id` as `get_log` would show it — what a log command hands back so a
+/// The contact `id` as a page of the log shows it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn log_row(eng: &Engine, id: tempo_core::logbook::RecordId) -> Result<LoggedQso, String> {
     let r = eng
@@ -17138,9 +17112,10 @@ async fn edit_qso(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.update_qso(id, record.into()) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17202,9 +17177,10 @@ async fn mark_qsl_sent(
     let via = qsl_via_arg(via.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.mark_qsl_sent(id, via) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17229,9 +17205,10 @@ async fn mark_qsl_card(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.mark_qsl_card(id, received) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17301,9 +17278,10 @@ async fn set_sat_tag(
     let name = sat_name_arg(sat_name.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.set_sat_tag(id, name.as_deref()) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17332,9 +17310,10 @@ async fn delete_qso(
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.delete_qso(id) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17408,7 +17387,7 @@ async fn get_awards(
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
 /// no continent/zone; both re-resolve per callsign here via cty.dat, anchored on the operator's
 /// own call for the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/
-/// confirmations) is computed frontend-side from `get_log`. Pure/offline.
+/// confirmations) is the `statistics` log question's ([`log_queries`]). Pure/offline.
 ///
 /// Folded again only when the log's content or the operator's call moves ([`log_stats`]), from
 /// the logbook store, on the blocking pool.
@@ -26926,8 +26905,10 @@ fn start_on_the_logbook(
         let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
-        // the initial worked-entity index is populated.
-        eng.set_dxcc_resolver(country_of);
+        // the initial worked-entity index is populated. The SAME shared resolver the store
+        // keyed the hot index with when it opened, so the attach below installs that index
+        // rather than building one under this lock.
+        eng.set_dxcc_resolver_shared(country_resolver());
         // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
         // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
         // function is the whole point of the fix: the worked side used to have no resolver at
@@ -27039,7 +27020,8 @@ fn start_on_the_logbook(
                 .and_then(|m| m.get(&call.to_uppercase()).copied())
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
-        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
+        // The rows a Field Day session restored below is swept from, set aside by the open.
+        let session_rows = adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -27076,6 +27058,11 @@ fn start_on_the_logbook(
         // merge finds the journal. This is the ONLY auto-entry, and only because
         // the operator left `fd_active` on — no date/default path ever sets it.
         eng.restore_field_day_if_enabled();
+        // A session restored just now is swept from the rows the open set aside — not from the
+        // log, under this lock (SPEC-2 v3 C19).
+        if let Some(rows) = session_rows {
+            eng.open_session_from(rows);
+        }
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation
@@ -28787,8 +28774,6 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             confirm_pending_log,
             discard_pending_log,
             log_qso,
-            get_log,
-            get_log_delta,
             resolve_entity,
             contest_zone_hint,
             edit_qso,
@@ -37680,79 +37665,6 @@ mod tests {
         r.mode = "FT8".into();
         r.when_unix = when;
         r
-    }
-
-    /// A logged QSO moves ONE row over IPC instead of the whole log (~100 MB of JSON at 150k
-    /// QSOs, once per window holding a copy). `get_log_delta` may send "just these rows" only
-    /// while the UI's copy is still a prefix of the log: after an edit or a delete it must
-    /// answer `full`, or the UI keeps showing a contact the log no longer holds. Its rows must
-    /// be `get_log`'s rows exactly, entity included.
-    #[test]
-    fn the_log_delta_sends_appended_rows_and_the_whole_log_after_anything_else() {
-        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
-            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
-        ));
-        // `get_log`'s answer: the same snapshot and the same conversion.
-        let get_log = || super::logged_rows(engine_lock(&engine).log_snapshot().records);
-        engine_lock(&engine).log_qso(ft8_qso("DL1ABC", 1_700_000_000));
-        engine_lock(&engine).log_qso(ft8_qso("JA1XYZ", 1_700_000_100));
-
-        // The UI's first ask holds nothing, at no revision: the whole log.
-        let first = super::log_delta(&engine, 0, 0);
-        assert!(
-            first.full,
-            "a revision the log never held gets the whole log"
-        );
-        assert_eq!(first.rows, get_log());
-        assert!(
-            first.rows[0].entity.is_some(),
-            "fixture: rows carry the cty.dat entity"
-        );
-
-        // Nothing changed: nothing to send.
-        let idle = super::log_delta(&engine, first.revision, first.rows.len());
-        assert!(
-            !idle.full && idle.rows.is_empty(),
-            "an unchanged log sends nothing"
-        );
-        assert_eq!(idle.revision, first.revision);
-
-        // A logged contact and an import that only adds rows: exactly the new rows.
-        engine_lock(&engine).log_qso(ft8_qso("VK2AAA", 1_700_000_200));
-        engine_lock(&engine).import_adif(
-            "<CALL:6>ZL1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20231114<TIME_ON:6>230000<EOR>",
-        );
-        let grown = super::log_delta(&engine, first.revision, first.rows.len());
-        assert!(!grown.full, "appends only: just the new rows");
-        assert_eq!(grown.rows.len(), 2);
-        assert_ne!(grown.revision, first.revision);
-        let mut copy = first.rows.clone();
-        copy.extend(grown.rows.iter().cloned());
-        assert_eq!(copy, get_log(), "the copy plus the delta IS get_log");
-
-        // An edit rewrites a row the copy holds: the whole log, never a delta.
-        let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
-        edited.comment = Some("fixed".into());
-        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
-        let after_edit = super::log_delta(&engine, grown.revision, copy.len());
-        assert!(after_edit.full, "an edit is not an append");
-        assert_eq!(after_edit.rows, get_log());
-        assert_eq!(after_edit.rows[0].comment.as_deref(), Some("fixed"));
-
-        // A delete likewise.
-        let first = engine_lock(&engine).log_records()[0].id.unwrap();
-        assert!(engine_lock(&engine).delete_qso(first));
-        let after_delete = super::log_delta(&engine, after_edit.revision, after_edit.rows.len());
-        assert!(after_delete.full, "a delete is not an append");
-        assert_eq!(after_delete.rows, get_log());
-
-        // A copy longer than the log, or a revision from the log's future, is never trusted…
-        let (now, held) = (after_delete.revision, after_delete.rows.len());
-        assert!(super::log_delta(&engine, now, held + 1).full);
-        assert!(super::log_delta(&engine, now + 1, held).full);
-        // …while the same copy at its true length and revision is simply current.
-        let current = super::log_delta(&engine, now, held);
-        assert!(!current.full && current.rows.is_empty());
     }
 
     /// The periodic whole-log tallies — a propagation refetch's needs, the award summary, the

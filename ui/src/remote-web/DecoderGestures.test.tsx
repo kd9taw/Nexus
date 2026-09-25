@@ -20,7 +20,7 @@ import { t } from '../i18n'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
-  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], getLog: [] }
+  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], }
   return Object.fromEntries(Object.entries(actual).map(([name, value]) => [name,
     typeof value === 'function' ? vi.fn(async () => structuredClone(reads[name] ?? {})) : value]))
 })

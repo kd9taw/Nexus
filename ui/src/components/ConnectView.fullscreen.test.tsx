@@ -30,7 +30,6 @@ vi.mock('../api', async (importOriginal) => ({
   getDeclination: vi.fn(async () => null),
   getPca: vi.fn(async () => null),
   getSatellites: vi.fn(async () => null),
-  getLog: vi.fn(async () => []),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
 }))

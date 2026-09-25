@@ -16,11 +16,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
-import { deleteQso } from '../api'
+import { deleteQsoById, type RowRef } from '../api'
 import { t } from '../i18n'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
-import { answerFrom } from '../features/logAnswers'
+import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import { StationControlContext } from '../stationAccess'
 import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
 import type { QueryPage } from '../remote-web/application-query-protocol'
@@ -30,13 +30,14 @@ const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
-    getLogDelta: vi.fn(async () => ({ revision: engine.revision, full: true, rows: engine.log })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    // The engine answers each question from its log (features/logAnswers.testkit).
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[], engine.revision)),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(), logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
+    markQslSentById: noop(), markQslCardById: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
     qrzPushQso: noop(), clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
 })
@@ -182,30 +183,30 @@ describe('the Logbook is a keyboard grid', () => {
     expect(dialog.textContent).toContain(t('logbook.delete.heading', { call: callAt(3), band: '20m' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(deleteQso).not.toHaveBeenCalled()
+    expect(deleteQsoById).not.toHaveBeenCalled()
     await waitFor(() => expect(focusedIndex(), 'the keyboard back on the contact').toBe(3))
   })
 
   it('Delete answered yes: the keyboard lands on the contact that takes its place', async () => {
-    vi.mocked(deleteQso).mockImplementation(async (q: LoggedQso) => {
-      engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== q.id)
+    vi.mocked(deleteQsoById).mockImplementation(async (target: RowRef) => {
+      engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== target.id)
       engine.revision += 1
-      return {} as never
+      return { kind: 'deleted' }
     })
     await openAt(3)
     press('Delete')
     await screen.findByRole('dialog')
     fireEvent.click(screen.getByRole('button', { name: t('logbook.delete.confirm') }))
-    await waitFor(() => expect(deleteQso).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(deleteQsoById).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(document.activeElement?.textContent).toContain(callAt(4)))
     expect(focusedIndex(), 'the same place in the list').toBe(3)
   })
 
   it('the row’s ✕ answered yes: the keyboard goes to the ✕ of the contact that takes its place', async () => {
-    vi.mocked(deleteQso).mockImplementation(async (q: LoggedQso) => {
-      engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== q.id)
+    vi.mocked(deleteQsoById).mockImplementation(async (target: RowRef) => {
+      engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== target.id)
       engine.revision += 1
-      return {} as never
+      return { kind: 'deleted' }
     })
     await openAt(3)
     const del = screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(3) }) })

@@ -24,7 +24,7 @@ import { OperateCockpit } from './OperateCockpit'
 import { t } from '../i18n'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
-import { answerFrom } from '../features/logAnswers'
+import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import { RecallPanel } from './RecallPanel'
 import { distanceLabel, bearingLabel } from '../grid'
 import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
@@ -84,16 +84,17 @@ const priorQsos = [
 ] as unknown as LoggedQso[]
 
 const qrzLookup = vi.fn(async () => resolved)
-const getLog = vi.fn(async () => priorQsos)
+/** The log the engine holds; `askLog` answers each question from it as the engine does. */
+const engineLog = vi.fn(async (): Promise<LoggedQso[]> => priorQsos)
+/** Every question the window asked the engine. */
+const askLog = vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog()))
 
 // The structure suite's api surface for this cockpit, plus the three commands the card
 // itself needs. vi.mock replaces the whole module, so anything omitted is `undefined` at
 // the call site — `resolveEntity` learned that the hard way in CockpitRecall.test.tsx.
 vi.mock('../api', () => ({
-  getLog: (...a: unknown[]) => getLog(...(a as [])),
-  // The card reads the shared log store, which asks get_log_delta. Every answer here is the
-  // whole log (a valid answer), from `getLog` — so its call count is the store's read count.
-  getLogDelta: async () => ({ revision: 1, full: true, rows: await getLog() }),
+  // The card asks the engine: one question per call it shows, answered over `engineLog`'s log.
+  askLog: (q: LogQuestion) => askLog(q),
   qrzLookup: (...a: unknown[]) => qrzLookup(...(a as [])),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),
@@ -276,7 +277,8 @@ beforeEach(() => {
   } as unknown as typeof ResizeObserver
   qrzLookup.mockClear()
   qrzLookup.mockResolvedValue(resolved)
-  getLog.mockClear()
+  engineLog.mockClear()
+  askLog.mockClear()
 })
 afterEach(cleanup)
 
@@ -417,23 +419,24 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
   it('a card opened after the sequencer logged behind the operator shows that contact', async () => {
     // Operate files a contact the moment the exchange completes, with no click. A read-once card
     // would tell an operator they had never worked a station they worked ten minutes ago. The
-    // card used to re-read the whole log on every selection for that; it now reads the window's
-    // shared copy, which follows the engine's tick — so a selection alone reads nothing, and the
-    // background contact still reaches the next card opened.
+    // card used to re-read the whole log on every selection for that; it now asks the engine
+    // about the call it shows, and its answers follow the engine's tick — so a selection asks
+    // about the selected call and nothing else, and the background contact still reaches the
+    // next card opened.
     const { rerender } = renderCockpit('W1ABC')
     await card()
-    const first = getLog.mock.calls.length
+    const first = askLog.mock.calls.length
     expect(first).toBeGreaterThan(0)
 
     // The sequencer works and logs K9XYZ with W1ABC still on the card; the tick moves.
     const k9xyz = { ...priorQsos[0], call: 'K9XYZ', notes: undefined } as unknown as LoggedQso
-    getLog.mockImplementation(async () => [...priorQsos, k9xyz])
+    engineLog.mockImplementation(async () => [...priorQsos, k9xyz])
     try {
       rerender(cockpit('W1ABC', 'classic', null, 1))
-      await waitFor(() => expect(getLog.mock.calls.length).toBeGreaterThan(first))
-      const afterLog = getLog.mock.calls.length
+      await waitFor(() => expect(askLog.mock.calls.length).toBeGreaterThan(first))
+      const afterLog = askLog.mock.calls.length
 
-      // The operator clicks K9XYZ: its card lists the contact, and the click itself read nothing.
+      // The operator clicks K9XYZ: its card lists the contact, and the click asked only about it.
       rerender(cockpit('K9XYZ', 'classic', null, 1))
       await waitFor(() =>
         expect(
@@ -441,9 +444,15 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
           'the card never showed the contact the sequencer logged',
         ).toHaveLength(1),
       )
-      expect(getLog.mock.calls.length, 'a selection re-read the log').toBe(afterLog)
+      const since = askLog.mock.calls.slice(afterLog).map(([q]) => q)
+      // Positive control: the selection did ask — about K9XYZ.
+      expect(since.some((q) => q.kind === 'callHistory' && q.call === 'K9XYZ')).toBe(true)
+      expect(
+        since.filter((q) => !(q.kind === 'callHistory' && q.call === 'K9XYZ') && q.kind !== 'entity'),
+        'a selection asked about more than the selected call',
+      ).toEqual([])
     } finally {
-      getLog.mockImplementation(async () => priorQsos)
+      engineLog.mockImplementation(async () => priorQsos)
     }
   })
 
@@ -463,7 +472,7 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
       notes: undefined,
       whenUnix: Date.UTC(2026, 8, 14) / 1000,
     } as unknown as LoggedQso
-    getLog.mockImplementation(async () => [justLogged, ...priorQsos])
+    engineLog.mockImplementation(async () => [justLogged, ...priorQsos])
     try {
       rerender(cockpit('W1ABC', 'classic', null, 1))
       await waitFor(() =>
@@ -477,7 +486,7 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
         'still flagging the slot the operator just worked',
       ).toBeNull()
     } finally {
-      getLog.mockImplementation(async () => priorQsos)
+      engineLog.mockImplementation(async () => priorQsos)
     }
   })
 })
@@ -533,14 +542,20 @@ describe('no need badge until the call’s answer arrives', () => {
   const need = () => document.querySelector('.recall-card .recall-badge.need')?.textContent ?? null
   const TODAYS = `★ ${t('recall.need.band')}` // what this log says for W1ABC on 20 m (above)
 
-  it('the whole-log list: nothing while the log loads, then exactly today’s badge', async () => {
-    let release = () => {}
-    getLog.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(priorQsos))))
-    renderCockpit('W1ABC')
-    await waitFor(() => expect(document.querySelector('.recall-card')?.textContent).toContain('Alice Example'))
-    expect(need(), 'a need badge before the log answered').toBeNull()
-
-    await act(async () => release())
+  it('the window’s own source: nothing while the engine’s answers are out, then exactly today’s badge', async () => {
+    const out: (() => void)[] = []
+    engineLog.mockImplementation(() => new Promise((resolve) => out.push(() => resolve(priorQsos))))
+    try {
+      renderCockpit('W1ABC')
+      await waitFor(() => expect(document.querySelector('.recall-card')?.textContent).toContain('Alice Example'))
+      await waitFor(() => expect(out.length, 'the card asked').toBeGreaterThan(0))
+      expect(need(), 'a need badge before the engine answered').toBeNull()
+    } finally {
+      engineLog.mockImplementation(async () => priorQsos)
+    }
+    await act(async () => {
+      for (const answer of out.splice(0)) answer()
+    })
     await waitFor(() => expect(need(), 'the answer, landed').toBe(TODAYS))
   })
 
