@@ -113,6 +113,9 @@ describe('rows past the first page', () => {
       scroller.dispatchEvent(new Event('scroll'))
     })
     await waitFor(() => expect(container.querySelector('.logbook-row[data-index="262"]')).not.toBeNull())
+    // Every row in the window DRAWN: a row whose page is still on its way is a placeholder at its
+    // index, and the pages are answers of their own.
+    await waitFor(() => expect(shownCalls(container), 'a page of the window never arrived').not.toContain('…'))
     const want = oracleNewestFirst(engine.log as LoggedQso[])
     const rendered = [...container.querySelectorAll('.log-rows .logbook-row')] as HTMLElement[]
     expect(rendered.some((r) => Number(r.dataset.index) >= 256), 'the window never reached page 3').toBe(true)
@@ -155,6 +158,11 @@ describe('a row is its id', () => {
 describe('the rows under the operator stay put (v2 §6 R5)', () => {
   /** The list's scroller, a row's index and its top edge in the viewport (index × row − scroll). */
   const scroller = (root: HTMLElement) => root.querySelector('.log-scroll') as HTMLElement
+  /** A drawn contact's place in the list, or null. */
+  const indexOf = (root: HTMLElement, call: string) => {
+    const row = [...root.querySelectorAll('.log-rows .logbook-row')].find((r) => r.querySelector('.qrz-link-call')?.textContent === call) as HTMLElement | undefined
+    return row ? Number(row.dataset.index) : null
+  }
   const topOf = (root: HTMLElement, call: string) => {
     const row = [...root.querySelectorAll('.log-rows .logbook-row')].find((r) => r.querySelector('.qrz-link-call')?.textContent === call) as HTMLElement | undefined
     return row ? Number(row.dataset.index) * ROW_PX - scroller(root).scrollTop : null
@@ -177,16 +185,19 @@ describe('the rows under the operator stay put (v2 §6 R5)', () => {
     const { container, rerender } = render(view(1))
     await waitFor(() => expect(shownCalls(container).length).toBeGreaterThan(0))
     scrollToRow(container, 150)
-    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="150"]')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="150"]:not(.placeholder)')).not.toBeNull())
     const looking = firstVisible(container)
     const before = topOf(container, looking)
+    const at = indexOf(container, looking)!
 
     // The sequencer logs a contact: newest first, it lands ABOVE everything on screen.
     engine.log = [...(engine.log as LoggedQso[]), contact(1000, { call: 'NEW1', whenUnix: 1_800_000_000 })]
     engine.revision = 2
     rerender(view(2))
     await waitFor(() => expect(container.querySelector('.count-badge')?.textContent).toBe('301'))
-    await waitFor(() => expect(topOf(container, looking)).not.toBeNull())
+    // The NEW order on screen — the row one place further down the list — before its top is
+    // compared: while the old page is still shown, nothing has moved and the check proves nothing.
+    await waitFor(() => expect(indexOf(container, looking)).toBe(at + 1))
     expect(topOf(container, looking), `${looking} moved under the operator`).toBe(before)
   })
 
@@ -204,12 +215,14 @@ describe('the rows under the operator stay put (v2 §6 R5)', () => {
       return (container.querySelector(`.logbook-row[data-index="${i + 1}"] .qrz-link-call`) as HTMLElement).textContent!
     })()
     const nextBefore = topOf(container, next)!
+    const nextAt = indexOf(container, next)!
     // Another writer deletes the anchor row itself AND one far above it.
     engine.log = rows.filter((q) => q.call !== looking && q.call !== 'K299ABC')
     engine.revision = 2
     rerender(view(2))
     await waitFor(() => expect(container.querySelector('.count-badge')?.textContent).toBe('298'))
-    await waitFor(() => expect(topOf(container, next)).not.toBeNull())
+    // The NEW order on screen (two rows gone above it) before its top is compared — see above.
+    await waitFor(() => expect(indexOf(container, next)).toBe(nextAt - 2))
     // The row the operator was looking at is gone; the next surviving one holds exactly where it
     // was (v2 §6 R5 (3)) — nothing still on screen moves, the gap closes from above the view.
     expect(topOf(container, next)).toBe(nextBefore)

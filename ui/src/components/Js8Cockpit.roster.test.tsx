@@ -16,7 +16,7 @@
 // sit inside the pane region. The layout half is a human sweep (tasks/js8-activity-parity.md).
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import { JS8_PINS_KEY } from '../features/js8Pins'
 import type { AppSnapshot, Js8State, LoggedQso } from '../types'
@@ -152,6 +152,8 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
+/** Mount the cockpit and let its mocked JS8 state land (the roster's rows and their own columns).
+ *  NOT the logbook join — see `joinedCell`. */
 async function renderCockpit(props: Partial<Parameters<typeof Js8Cockpit>[0]> = {}) {
   const r = render(<Js8Cockpit snap={snap} panels={fakePanels()} {...props} />)
   await act(async () => {
@@ -160,6 +162,22 @@ async function renderCockpit(props: Partial<Parameters<typeof Js8Cockpit>[0]> = 
     await Promise.resolve()
   })
   return r
+}
+
+/**
+ * A roster cell the LOGBOOK join fills (✓, Name, Comment, and a grid taken from the log), once it
+ * is there. That join is the answer to the roster's question (`LogSource`), which lands when the
+ * engine answers — a round trip, however long it takes, never a fixed number of ticks. Here the
+ * first answer in the file waits on a module load (the test engine's `import()`), and under load
+ * it landed after `renderCockpit`'s ticks: the ✓ assertion read W0IND's row without its mark. So
+ * a test that reads the join waits for the cell it reads, and a missing one is named.
+ */
+async function joinedCell(call: string, selector: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const cell = stationRow(call).querySelector<HTMLElement>(selector)
+    expect(cell, `the logbook join never reached ${call}: no ${selector}`).not.toBeNull()
+    return cell!
+  })
 }
 
 /** The roster row for a call, by its call button's text. */
@@ -183,6 +201,7 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
 
   it('renders distance, azimuth, ✓ worked-before, name and comment for a heard station', async () => {
     await renderCockpit()
+    const b4 = await joinedCell('W0IND', '.js8-b4')
     const row = stationRow('W0IND')
     // EN61 → EN52 is a real path; the exact face is units-dependent, so assert it EXISTS and
     // is a measurement rather than pinning a string the units setting can change.
@@ -193,14 +212,17 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
     expect(az, 'no azimuth cell').not.toBeNull()
     expect(az!.textContent).toMatch(/^\d+°$/)
     expect(az!.getAttribute('title')).toMatch(/short path/)
-    expect(row.querySelector('.js8-b4')!.textContent).toBe('✓')
-    expect(row.querySelector('.js8-b4')!.getAttribute('title')).toMatch(/2025-06-15|Worked before/)
+    expect(b4.textContent).toBe('✓')
+    expect(b4.getAttribute('title')).toMatch(/2025-06-15|Worked before/)
     expect(row.querySelector('.js8-opname')!.textContent).toBe('Dave')
     expect(row.querySelector('.js8-opcomment')!.textContent).toBe('JS8 ragchew')
   })
 
   it('leaves every joined column OFF a station with no grid and nothing in the log', async () => {
     await renderCockpit()
+    // The join has landed — W0IND carries its ✓ — so an absence below is the join's answer, not
+    // a question still on its way.
+    await joinedCell('W0IND', '.js8-b4')
     const row = stationRow('N0GRD')
     for (const sel of ['.js8-dist', '.js8-az', '.js8-b4', '.js8-opname', '.js8-opcomment']) {
       expect(row.querySelector(sel), `${sel} rendered with no source behind it`).toBeNull()
@@ -212,8 +234,8 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
   it('takes the grid from the LOG when the station has not sent one (JS8Call’s fallback)', async () => {
     log.current = [{ ...logFixture()[0], call: 'N0GRD', grid: 'FN31' }]
     await renderCockpit()
+    await joinedCell('N0GRD', '.js8-dist')
     const row = stationRow('N0GRD')
-    expect(row.querySelector('.js8-dist'), 'no distance from the logged grid').not.toBeNull()
     expect(row.querySelector('.js8-az'), 'no azimuth from the logged grid').not.toBeNull()
   })
 

@@ -159,7 +159,9 @@ describe('the Logbook is a keyboard grid', () => {
     await openAt(3)
     press('End')
     await waitFor(() => expect(focusedIndex()).toBe(N - 1))
-    expect(document.activeElement?.textContent).toContain(callAt(N - 1))
+    // DRAWN: the focus lands on the last row's place at once, and that place is a placeholder
+    // until its page's answer is in — so wait for the contact, not only the focus.
+    await waitFor(() => expect(document.activeElement?.textContent).toContain(callAt(N - 1)))
     press('Home')
     await waitFor(() => expect(focusedIndex()).toBe(0))
   })

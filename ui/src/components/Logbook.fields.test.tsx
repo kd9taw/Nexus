@@ -10,6 +10,7 @@ import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-li
 import { Logbook } from './Logbook'
 import * as api from '../api'
 import type { LogQuestion } from '../features/logAnswers'
+import { __resetLogSourceForTests } from '../features/logSource'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -130,6 +131,9 @@ describe('QSL status is editable in the edit form (#239)', () => {
     )
     cleanup()
     vi.clearAllMocks()
+    // A new window, as between tests: the window's log answers outlive a render, and the second
+    // form would otherwise open on the first contact's marks until its own answer landed.
+    __resetLogSourceForTests()
 
     // …and for one with both — a DIFFERENT answer, so the first cannot pass on a constant.
     const marked = await renderLog({ qslSent: { sent: true, via: 'B', dateUnix: 1_700_000_000 }, qslRcvd: { card: true } })
