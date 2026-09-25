@@ -660,26 +660,37 @@ pub const FILL_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
 
 /// Write the fill job's fills (SPEC-2 v3 D2-A) — each planned with the Engine lock released, a
 /// chunk of [`FILL_CHUNK`] at a time, and made under the lock only where the field is still empty
-/// in the row as it now stands ([`station::fill_pairs`]). `fill_ver` goes with the LAST chunk, and
-/// only once every earlier chunk is on disk: the store names the resolver data its fills come
-/// from only when it holds every one of them. How many contacts gained a field.
+/// in the row as it now stands ([`station::fill_pairs`]), and planned only once every chunk but
+/// the one made last is in the store, as the "already uploaded" declaration's are. `fill_ver` goes
+/// with the LAST chunk, and only once every earlier chunk is on disk: the store names the resolver
+/// data its fills come from only when it holds every one of them. How many contacts gained a
+/// field.
 ///
 /// ⚠️ It reads the store and waits for it: call it on the job's own thread, with no lock held.
 pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<usize, String> {
+    fill_in_chunks(engine, fills, fill_ver, FILL_CHUNK)
+}
+
+/// [`fill`], `chunk` fills to a change.
+fn fill_in_chunks(
+    engine: &Mutex<Engine>,
+    fills: &[LogFill],
+    fill_ver: i64,
+    chunk: usize,
+) -> Result<usize, String> {
     let chunks: Vec<&[LogFill]> = if fills.is_empty() {
         vec![&[]]
     } else {
-        fills.chunks(FILL_CHUNK).collect()
+        fills.chunks(chunk).collect()
     };
     let last = chunks.len() - 1;
     let mut filled = 0;
-    let mut waiting: Vec<Durability> = Vec::new();
+    // The chunk made before the latest: in the store before the next is planned.
+    let mut previous = Durability::default();
     for (k, chunk) in chunks.into_iter().enumerate() {
         if k == last {
             // `fill_ver` only once every earlier fill is on disk.
-            for d in waiting.drain(..) {
-                d.wait(crate::logstore::DURABLE_WAIT)?;
-            }
+            previous.wait_stored(crate::logstore::DURABLE_WAIT)?;
         }
         let meta = if k == last {
             vec![(crate::logfill::FILL_VER, fill_ver)]
@@ -691,6 +702,8 @@ pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<
         for _ in 0..PLANS {
             let plan = engine_lock(engine).station_mut().log_plan();
             let rows = plan.rows(&ids)?;
+            #[cfg(test)]
+            tests::race();
             let pairs = station::fill_pairs(&rows, chunk);
             let n = pairs.len();
             let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
@@ -714,7 +727,11 @@ pub fn fill(engine: &Mutex<Engine>, fills: &[LogFill], fill_ver: i64) -> Result<
             return Err(station::LOG_BUSY.into());
         };
         filled += n;
-        waiting.push(durability);
+        // The store's writer takes this chunk while the next is planned, and the one before it
+        // is in the store first: in flight, two chunks, never the whole job (see
+        // `mark_lotw_uploaded_in_chunks`).
+        previous.wait_stored(crate::logstore::DURABLE_WAIT)?;
+        previous = durability;
     }
     Ok(filled)
 }

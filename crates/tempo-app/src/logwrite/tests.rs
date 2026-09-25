@@ -1236,3 +1236,70 @@ fn a_chunk_is_planned_only_once_the_chunks_before_the_last_are_stored() {
     );
     durability.wait(DURABLE_WAIT).expect("on disk");
 }
+
+/// How many contacts the store at `db` holds with a country, as it stands.
+fn with_country_in_store(db: &std::path::Path) -> usize {
+    tempo_core::logbook::sqlite::LogDb::open(db)
+        .unwrap()
+        .load_all()
+        .unwrap()
+        .iter()
+        .filter(|r| r.country.is_some())
+        .count()
+}
+
+/// The fill job moves at the pace the store takes it, as the "already uploaded" declaration
+/// does: a chunk of fills is planned only once every chunk but the one made last is in the store,
+/// and the last, which carries `fill_ver`, only once every earlier fill is. On the first launch
+/// after an update it may fill every contact of a big log while every screen is loading. Here the
+/// writer is held while the first chunk is made, and let go a moment later.
+#[test]
+fn a_chunk_of_fills_is_planned_only_once_the_chunks_before_the_last_are_stored() {
+    let d = Dir::new("fill-chunks-paced");
+    let engine = shared(&d, 10);
+    let fills: Vec<LogFill> = stored(&d)
+        .iter()
+        .filter_map(|r| r.id)
+        .map(|id| LogFill {
+            id,
+            country: Some("Found".into()),
+            state: None,
+        })
+        .collect();
+    assert_eq!(
+        (fills.len(), with_country_in_store(&d.db())),
+        (10, 0),
+        "premise: ten contacts, none with a country yet"
+    );
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let hook = {
+        let (seen, db) = (Rc::clone(&seen), d.db());
+        move || {
+            // What the store holds as each chunk is planned, with no wait for the writer.
+            seen.borrow_mut().push(with_country_in_store(&db));
+            if seen.borrow().len() == 1 {
+                let hold = WriteHold::take(&db).expect("hold the writer");
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    drop(hold);
+                });
+            }
+        }
+    };
+    let filled = racing(hook, || fill_in_chunks(&engine, &fills, 7, 3)).expect("the job writes");
+    assert_eq!(filled, 10, "every contact gains its country");
+    let seen = seen.borrow().clone();
+    assert_eq!(seen.len(), 4, "four chunks planned once each: {seen:?}");
+    assert_eq!(
+        seen[1], 0,
+        "premise: the writer was held while the second chunk was planned"
+    );
+    assert!(
+        seen[2] >= 3,
+        "each chunk planned once the chunks before the last made are in the store: {seen:?}"
+    );
+    assert_eq!(
+        seen[3], 9,
+        "the last chunk, with fill_ver, planned once every earlier fill is in the store"
+    );
+}
