@@ -5262,7 +5262,7 @@ mod tests {
                 out.push_str(head);
                 let close = tail.find('>').map_or(tail.len(), |i| i + 1);
                 out.push_str(&tail[..close]);
-                let value = tail[close..].as_bytes();
+                let value = &tail.as_bytes()[close..];
                 if value.len() > 26 && value[8] == b':' && value[25] == b':' {
                     out.push_str(&tail[close..close + 9]);
                     out.push_str("NONCE-----------");
