@@ -913,6 +913,9 @@ export const JA: PartialCatalog = {
   "logbook.delete.gone": "{{call}}はすでに別のウィンドウで削除されています。",
   "logbook.change.changed": "{{call}}は別のウィンドウまたは同期で変更されたため、保存されませんでした。現在の内容を表示しています。確認してもう一度お試しください。",
   "logbook.change.gone": "{{call}}は別のウィンドウで削除されたため、保存されませんでした。",
+  // The logbook was too busy (LogBusy): MACHINE TRANSLATION, for a native speaker to check.
+  "logbook.change.busy": "ログブックが使用中だったため、{{call}}へのこの変更は保存されませんでした。もう一度お試しください。",
+  "logbook.delete.busy": "ログブックが使用中だったため、{{call}}は削除されませんでした。もう一度お試しください。",
   "logEntry.title": "この交信を記録",
   "logEntry.clear.label": "クリア",
   "logEntry.clear.title": "入力欄をクリアします",
@@ -1868,6 +1871,8 @@ export const JA: PartialCatalog = {
   "watchlist.add.submit": "追加",
   "watchlist.tile.label": "ウォッチ",
   "watchlist.tile.title": "ウォッチリストに登録済み：{{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": "廃止された旧設定「Wanted watch list」から{{count}}件（{{entries}}）をウォッチリストに追加しました。設定 ▸ スポットとアラートでいつでも変更できます。",
   "hideCalls.chip.label": "コール非表示",
   "hideCalls.chip.title": "このパネルからコールサイン（VP8* 形式のプレフィックスも可）を非表示にします — 表示上のフィルターのみで、デコード・記録・アラート・自動応答には影響しません",
   "hideCalls.head": "非表示にするコールサイン",

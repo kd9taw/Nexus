@@ -507,6 +507,9 @@ export function OperateRoster({
         ) : (
           rows.map(({ s, need, needAll, age, watch }, i) => {
             const chip = need ? NEED_CHIP[need] : null
+            // The station's `Wanted` need IS the watch list (it ranks a watched station first on
+            // the Needed board); where the WATCH tile says so, a chip saying it again is noise.
+            const chips = watch ? needAll.filter((t) => t !== 'Wanted') : needAll
             const ignoredRow = isIgnored(ignoredCalls ?? EMPTY_IGNORES, s.call)
             const rp = roving.rowProps(i)
             return (
@@ -612,12 +615,12 @@ export function OperateRoster({
                   className="or-need"
                   /* The cell clips chips (deliberate — stops the Zone chip overlapping the Call);
                      this title surfaces every need on hover so a clipped chip isn't silently lost. */
-                  title={needAll.map((t) => NEED_CHIP[t]?.label).filter(Boolean).join(' · ') || undefined}
+                  title={chips.map((t) => NEED_CHIP[t]?.label).filter(Boolean).join(' · ') || undefined}
                 >
                   {/* The WATCH tile leads: this cell clips what does not fit, and the tile is
                       the one the operator asked for by name. */}
                   {watch && <WatchTile entry={watch} />}
-                  {needAll.map((t) => {
+                  {chips.map((t) => {
                     const c = NEED_CHIP[t]
                     return (
                       c && (

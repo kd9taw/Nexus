@@ -35,6 +35,7 @@ pub mod remote_control;
 pub mod remote_monitor;
 pub mod station;
 pub mod update;
+pub mod watchlist;
 pub mod window_geometry;
 pub mod winlink;
 
