@@ -157,7 +157,7 @@ pub struct CivBackend {
     /// ⚠️ NOT derivable from [`Self::addr`], and that is the reason it is carried. The
     /// CI-V address is user-changeable on the radio's own menu, so two operators can run
     /// different rigs at the same address; a model inferred from the bus would eventually
-    /// hand an IC-7300 the 7610's 6/12/18 dB pads. `None` = an Icom this build has no step
+    /// hand an IC-7300 the 7610's fifteen 3 dB pads. `None` = an Icom this build has no step
     /// list for, and then neither control is offered at all rather than guessed at.
     model: Option<IcomModel>,
     /// When the dial was last READ from the radio (not merely cached). Bounds how long a
@@ -2384,10 +2384,29 @@ mod tests {
             assert_eq!(sent, Some(raw), "MONITOR_GAIN {frac}");
         }
 
-        // ATTENUATOR — the operator's dB in, BCD dB on the bus, the same dB back out.
-        // The IC-7610's three pads are what make this a real test: 6 dB encodes identically
-        // under BCD and raw hex, 12 and 18 do not.
-        for (db, wire) in [(6u8, 0x06u8), (12, 0x12), (18, 0x18), (0, 0x00)] {
+        // ATTENUATOR — the operator's dB in, BCD dB on the bus, the same dB back out, for
+        // every one of the IC-7610's fifteen pads (A7380-7EX-4 p. 3) and then OFF. 3, 6 and 9
+        // encode identically under BCD and raw hex; every pad from 12 up does not. Each goes
+        // out as ONE band-directed frame naming Main, as the three pads offered before did.
+        for (db, wire) in [
+            (3u8, 0x03u8),
+            (6, 0x06),
+            (9, 0x09),
+            (12, 0x12),
+            (15, 0x15),
+            (18, 0x18),
+            (21, 0x21),
+            (24, 0x24),
+            (27, 0x27),
+            (30, 0x30),
+            (33, 0x33),
+            (36, 0x36),
+            (39, 0x39),
+            (42, 0x42),
+            (45, 0x45),
+            (0, 0x00),
+        ] {
+            let n = regs.lock().unwrap().wire.len();
             assert_eq!(
                 backend.set_level("ATT", &db.to_string()),
                 Some(true),
@@ -2395,23 +2414,38 @@ mod tests {
             );
             assert_eq!(regs.lock().unwrap().att_raw, wire, "ATT {db} dB on the bus");
             assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [format!("FE FE 98 E0 29 00 11 {wire:02X} FD")],
+                "ATT {db}: the frame on the wire"
+            );
+            assert_eq!(
                 backend.level("ATT").as_deref(),
                 Some(db.to_string().as_str()),
                 "read ATT {db} back"
             );
         }
-        // A pad this rig does not have is REFUSED, not rounded to a neighbour. 10 dB is the
-        // IC-9700's pad, not the 7610's — quietly substituting 12 would attenuate by an
-        // amount the operator did not choose.
+        // A pad this rig does not have is REFUSED, not rounded to a neighbour: 10 dB is the
+        // IC-9700's pad, 4 falls between two of the 7610's, and 48 is one 3 dB step past its
+        // last. Substituting a neighbour would attenuate by an amount the operator did not
+        // choose.
+        for db in ["10", "4", "48"] {
+            let n = regs.lock().unwrap().wire.len();
+            assert_eq!(
+                backend.set_level("ATT", db),
+                Some(false),
+                "{db} dB is not a 7610 pad"
+            );
+            assert_eq!(
+                regs.lock().unwrap().wire.len(),
+                n,
+                "a refused pad ({db} dB) never reaches the bus"
+            );
+        }
+        assert_eq!(regs.lock().unwrap().att_raw, 0x00);
+        // …and the ladder `\dump_state` declares for this rig is that same one.
         assert_eq!(
-            backend.set_level("ATT", "10"),
-            Some(false),
-            "10 dB is not a 7610 pad"
-        );
-        assert_eq!(
-            regs.lock().unwrap().att_raw,
-            0x00,
-            "a refused pad never reaches the bus"
+            backend.attenuator_steps_db(),
+            vec![3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45]
         );
 
         // PREAMP — the LABEL goes in, the POSITION goes on the bus, the LABEL comes back.

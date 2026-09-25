@@ -8922,6 +8922,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-1);
 }
+/* …and a pad list may be LONG. The IC-7610 publishes fifteen 3 dB pads, and in the 3-column
+   layout the Receiver pane's column is narrower than sixteen chips: measured in Chrome at
+   1920×1080, the 33–45 dB chips sat past the column's clip edge (overflow-x: hidden), on
+   screen nowhere. The row wraps instead. A list that fits — every other radio's — never
+   wraps, and lays out exactly as it did. */
+.ph-steps {
+  flex-wrap: wrap;
+}
 
 /* THE TWO CHAIN PANES (Phone Receiver / Transmitter, 2026-09-20). One wrapping row of
    control groups in signal order; the pane is fit="content", so the wrap IS the height and

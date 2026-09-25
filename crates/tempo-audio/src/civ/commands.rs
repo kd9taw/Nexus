@@ -449,7 +449,7 @@ pub fn parse_dsp_level_raw(f: &Frame, sub: u8) -> Option<u16> {
 /// `0x12` reads as twelve. A raw-hex encoder would send `11 0c` and pad the receiver by
 /// some other amount; a 0..1 fraction (the shape every other level here has) would send
 /// nothing meaningful at all. Captured from Hamlib 4.5.5's own Icom backend against a pty
-/// at the IC-7610's address, whose three-step pad is what tells the two encodings apart:
+/// at the IC-7610's address, whose three pads there are what tell the two encodings apart:
 /// `L ATT 6` -> `11 06`, `L ATT 12` -> `11 12`, `L ATT 18` -> `11 18`, `L ATT 0` -> `11 00`.
 pub const ATT_CMD: u8 = 0x11;
 /// PREAMP — on the `0x16` family but **deliberately not a [`func_sub`] entry**: that table
@@ -466,6 +466,12 @@ pub const FUNC_PREAMP: u8 = 0x02;
 /// not transcribed from a manual. An attenuator is a LIST, not a slider: offering a rig a
 /// value it does not own gets the command NAKed or silently rounded to a neighbour.
 ///
+/// ⭐ THE IC-7610 IS THE EXCEPTION, and its list is Icom's own: the CI-V Reference Guide
+/// (A7380-7EX-4, Sep. 2025, p. 3) gives command `11` fifteen pads, 3 to 45 dB in 3 dB steps.
+/// Hamlib's backend declares only 6, 12 and 18 of them — which is what Nexus offered before
+/// — and leaves an operator who wants 3 dB, or more than 18, without it. NEEDS-BENCH
+/// (IC-7610): each new pad against the radio's own ATT readout.
+///
 /// ⛔ The IC-905 is empty because Hamlib 4.5.5 has no IC-905 backend to read it from
 /// (`-m 3095` returns no caps at all). An empty list renders no control, which degrades
 /// honestly; a guessed one would move the operator's front end by the wrong amount.
@@ -474,7 +480,7 @@ pub fn attenuator_steps_db(model: IcomModel) -> &'static [u8] {
     match model {
         IcomModel::Ic7300 | IcomModel::Ic705 => &[20],
         IcomModel::Ic9700 => &[10],
-        IcomModel::Ic7610 => &[6, 12, 18],
+        IcomModel::Ic7610 => &[3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
         IcomModel::Ic905 => &[],
     }
 }
@@ -1628,7 +1634,7 @@ mod tests {
     /// it cannot go through [`set_dsp_level`]'s percent path at all.
     #[test]
     fn the_attenuator_is_bcd_decibels_on_its_own_command() {
-        // The three steps the IC-7610 actually has, and the byte each one produces.
+        // The three IC-7610 pads Hamlib's backend declares, and the byte each one produces.
         for (db, wire) in [(0u8, 0x00u8), (6, 0x06), (12, 0x12), (18, 0x18)] {
             let f = set_attenuator_db(0x98, db);
             assert_eq!(f.cmd, 0x11, "the attenuator has its own CI-V command");
@@ -1815,6 +1821,9 @@ mod tests {
     /// IC-7610  m=3078   Attenuator: 6dB 12dB 18dB   Preamp: 12dB 20dB
     /// ```
     ///
+    /// ⭐ Except the IC-7610's ATTENUATOR, which is Icom's fifteen pads rather than Hamlib's
+    /// three — `the_ic7610_attenuator_is_icoms_fifteen_three_db_pads` below pins it.
+    ///
     /// ⚠️ The 7300-family "preamps" are `1` and `2` because they are Icom's P.AMP1/P.AMP2
     /// SELECTORS, which Hamlib carries in the same dB-labelled array; they are labels, not
     /// twelve-decibel-style gains, and [`preamp_index_for_db`] treats every entry as a label
@@ -1829,7 +1838,6 @@ mod tests {
         assert_eq!(attenuator_steps_db(IcomModel::Ic7300), &[20]);
         assert_eq!(attenuator_steps_db(IcomModel::Ic9700), &[10]);
         assert_eq!(attenuator_steps_db(IcomModel::Ic705), &[20]);
-        assert_eq!(attenuator_steps_db(IcomModel::Ic7610), &[6, 12, 18]);
         assert_eq!(preamp_steps_db(IcomModel::Ic7300), &[1, 2]);
         assert_eq!(preamp_steps_db(IcomModel::Ic9700), &[1, 2]);
         assert_eq!(preamp_steps_db(IcomModel::Ic705), &[1, 2]);
@@ -1861,5 +1869,68 @@ mod tests {
             assert!(!attenuator_steps_db(m).contains(&0), "{m:?} attenuator");
             assert!(!preamp_steps_db(m).contains(&0), "{m:?} preamp");
         }
+    }
+
+    /// ⭐ THE IC-7610'S ATTENUATOR IS ICOM'S LADDER: FIFTEEN 3 dB PADS, 3 TO 45 dB.
+    ///
+    /// Icom's CI-V Reference Guide for the IC-7610 (A7380-7EX-4, Sep. 2025, p. 3) gives command
+    /// `11` sixteen data values — `00` (OFF), then `03`, `06`, `09` … `42`, `45`, each "Send/read
+    /// the <n> dB attenuator setting" — and marks it band-directed. Hamlib's IC-7610 backend
+    /// declares only 6, 12 and 18 (4.5.5, and its current source still does), which is where
+    /// the old list came from: an operator who wanted 3 dB, or more than 18, could not get it
+    /// from Nexus although the radio has it.
+    ///
+    /// The bytes below are typed from Icom's table, not computed. The data byte is the
+    /// decibels in BCD, so 3, 6 and 9 read the same under BCD and raw hex, and every pad from
+    /// 12 up does not — 45 dB is `0x45`, where raw hex would send `0x2D`, a value the table
+    /// does not have.
+    #[test]
+    fn the_ic7610_attenuator_is_icoms_fifteen_three_db_pads() {
+        let icom: [(u8, u8); 15] = [
+            (3, 0x03),
+            (6, 0x06),
+            (9, 0x09),
+            (12, 0x12),
+            (15, 0x15),
+            (18, 0x18),
+            (21, 0x21),
+            (24, 0x24),
+            (27, 0x27),
+            (30, 0x30),
+            (33, 0x33),
+            (36, 0x36),
+            (39, 0x39),
+            (42, 0x42),
+            (45, 0x45),
+        ];
+        let pads: Vec<u8> = icom.iter().map(|&(db, _)| db).collect();
+        assert_eq!(attenuator_steps_db(IcomModel::Ic7610), pads.as_slice());
+        for (db, byte) in icom {
+            assert_eq!(
+                set_attenuator_db(0x98, db).to_bytes(),
+                vec![0xFE, 0xFE, 0x98, 0xE0, 0x11, byte, 0xFD],
+                "{db} dB on the wire"
+            );
+            let reply = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x11, byte, 0xFD]).unwrap();
+            assert_eq!(
+                parse_attenuator_db(&reply),
+                Some(db),
+                "{byte:02X} read back"
+            );
+        }
+        // OFF is Icom's `00`, and stays the implicit first position, never in the list.
+        assert_eq!(
+            set_attenuator_db(0x98, 0).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x11, 0x00, 0xFD]
+        );
+
+        // ⛔ EVERY OTHER RADIO'S LIST IS UNCHANGED — pinned beside the one that moved, so a
+        // table edit that reached a neighbour's row fails here by name.
+        assert_eq!(attenuator_steps_db(IcomModel::Ic7300), &[20]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic705), &[20]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic9700), &[10]);
+        assert!(attenuator_steps_db(IcomModel::Ic905).is_empty());
+        // The IC-7610's preamp is a different control and did not move either.
+        assert_eq!(preamp_steps_db(IcomModel::Ic7610), &[12, 20]);
     }
 }
