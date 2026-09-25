@@ -18,7 +18,6 @@ use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
 use tempo_app::engine::{
     remote_logging::{
         CurrentQsoLogOutcome, JournalSync, LogFailure, PendingJournalWrite, PendingLogConfirmation,
@@ -29,7 +28,7 @@ use tempo_app::engine::{
 use tempo_app::logstore::LogRows;
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
 use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
-use tempo_core::logbook::{adif_record_own_log, LogOp, QslVia, QsoEdit, QsoRecord, RecordId};
+use tempo_core::logbook::{LogOp, QslVia, QsoEdit, QsoRecord, RecordId};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -601,23 +600,14 @@ pub(crate) fn locate(engine: &Engine, row: &RowRef) -> Option<RecordId> {
 }
 
 pub(super) enum ChangeWork {
-    /// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
-    ///
-    /// `expected` is matched against `log.adi` ITSELF, so it must be built with
-    /// `adif_record_own_log` — the operator's own bytes, private note included. Build it
-    /// with the outbound serializer and every edit to a record carrying a private note
-    /// would look for text the file does not hold.
-    ///
-    /// `durable` is present when the logbook STORE owns the log: the change's own commit is
-    /// then the proof, and `log.adi` — only its mirror, which is allowed to lag — is not read.
-    Rewrite {
-        path: Option<PathBuf>,
-        expected: String,
-        count: usize,
-        durable: Option<tempo_app::logstore::Durability>,
+    /// A change to a contact, made. The logbook store owns the log (SPEC-2 v3 C19), so the
+    /// change's own commit is the proof, waited for once every lock is released; `log.adi`, its
+    /// mirror, is allowed to lag and is not read.
+    Made {
+        durable: tempo_app::logstore::Durability,
     },
     /// A change to a contact, as found — the version the writer saw — made once every lock is
-    /// released ([`change_found`]), which turns it into a [`Self::Rewrite`].
+    /// released ([`change_found`]), which turns it into a [`Self::Made`].
     Row(RowRef),
     /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
     State,
@@ -726,10 +716,8 @@ pub(super) fn prepare_change(
 
 /// A log change to the contact `row` names — the version the writer saw — planned with the Engine
 /// lock released and made under it only while the contact is still that version (SPEC-2 v3 C19;
-/// the check C16's `locate` made under the lock, made where the change is): what the file must
-/// then hold (`expected`, `count` copies of it) for the store-less last resort's proof, taken in
-/// the hold of the lock that made it. Wherever a store owns the log, the change's own Durability is
-/// the proof instead.
+/// the check C16's `locate` made under the lock, made where the change is). Its proof is the
+/// change's own Durability: the store owns the log.
 pub(super) fn change_found(
     engine: &crate::SharedEngine,
     change: &Change,
@@ -737,21 +725,6 @@ pub(super) fn change_found(
 ) -> Result<ChangeWork, ChangeReason> {
     let id: RecordId = row.id.parse().map_err(|_| ChangeReason::ContextChanged)?;
     let key = row.edit_key.as_str();
-    // What the file must hold now: the contact as the change left it (as it was, for a delete), and
-    // how many copies of it the log holds. Counted only on the store-less last resort, whose log is
-    // the log in memory: wherever a store owns the log — the database, or on the 1.13 path one in
-    // memory — the change's Durability is the proof, and nothing is counted.
-    let proof = |e: &mut Engine, (before, after): &tempo_app::station::MadeRow| {
-        let of = after.as_deref().unwrap_or(before);
-        let text = adif_record_own_log(of);
-        let store = e.log_store_open();
-        let count = if store {
-            0
-        } else {
-            copies_in_memory(e, of, &text)
-        };
-        (text, count, e.log_path().map(Path::to_path_buf), store)
-    };
     let ops = |ops: Vec<LogOp>, context: &str| {
         tempo_app::logwrite::change_row(
             engine,
@@ -761,7 +734,7 @@ pub(super) fn change_found(
                 tempo_app::station::StationCore::fresh_row(stored, key)?;
                 Ok(tempo_app::station::ops_on(stored, &ops))
             },
-            |e, made| proof(e, &made),
+            |_, _| (),
         )
     };
     let (made, durable) = match change {
@@ -770,7 +743,7 @@ pub(super) fn change_found(
             id,
             key,
             |stored| edited(record, stored),
-            &proof,
+            |_, _| (),
         ),
         // `valid` admitted only B/D/E or null, so a letter always parses here.
         Change::QslSent { via, .. } => {
@@ -799,26 +772,10 @@ pub(super) fn change_found(
     };
     // Refused — the contact changed, went, or kept changing (LogBusy) — or the log could not be
     // read: nothing was changed, and the browser reads the log again.
-    let Ok(Ok(Some((expected, count, path, store)))) = made else {
+    let Ok(Ok(Some(()))) = made else {
         return Err(ChangeReason::ContextChanged);
     };
-    Ok(ChangeWork::Rewrite {
-        path,
-        expected,
-        count,
-        durable: store.then_some(durable),
-    })
-}
-
-/// How many copies of `of` — written as `text` — the store-less last resort's log holds.
-#[allow(deprecated)] // SPEC-2 C19 (C19L): the store-less last resort's log is the log in memory
-fn copies_in_memory(e: &Engine, of: &QsoRecord, text: &str) -> usize {
-    e.log_records()
-        .iter()
-        .filter(|r| {
-            r.call == of.call && r.when_unix == of.when_unix && adif_record_own_log(r) == text
-        })
-        .count()
+    Ok(ChangeWork::Made { durable })
 }
 
 fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
@@ -855,85 +812,62 @@ impl ChangeWork {
         spot: impl FnOnce(&crate::self_spot::Context) -> crate::self_spot::Report,
         cluster: impl FnOnce(f64, &str, &str) -> Result<(), String>,
     ) -> ChangeOutcome {
-        let (path, expected, count) = match self {
+        match self {
             // The store owns the log: its commit of this change is the proof, waited for here,
             // with the Engine released (this runs on the blocking pool — see transport.rs).
-            Self::Rewrite {
-                durable: Some(durable),
-                ..
-            } => {
-                return match durable.wait(tempo_app::logstore::DURABLE_WAIT) {
-                    Ok(()) => ChangeOutcome::Applied {
-                        evidence: ChangeEvidence::FileSynced,
-                        spot: None,
-                    },
-                    Err(_) => ChangeOutcome::Unknown {
-                        reason: ChangeReason::PersistenceUnconfirmed,
-                    },
-                };
-            }
-            Self::Rewrite {
-                path,
-                expected,
-                count,
-                durable: None,
-            } => (path, expected, count),
-            Self::State => {
-                return ChangeOutcome::Applied {
-                    evidence: ChangeEvidence::StationState,
+            Self::Made { durable } => match durable.wait(tempo_app::logstore::DURABLE_WAIT) {
+                Ok(()) => ChangeOutcome::Applied {
+                    evidence: ChangeEvidence::FileSynced,
                     spot: None,
-                }
-            }
+                },
+                Err(_) => ChangeOutcome::Unknown {
+                    reason: ChangeReason::PersistenceUnconfirmed,
+                },
+            },
+            Self::State => ChangeOutcome::Applied {
+                evidence: ChangeEvidence::StationState,
+                spot: None,
+            },
             // A change to a contact is made before it is finished ([`change_found`]): one handed
             // here unmade changed nothing.
-            Self::Row(_) => {
-                return ChangeOutcome::Rejected {
-                    reason: ChangeReason::ContextChanged,
-                    spot: None,
-                }
-            }
-            Self::SettingsSaved => {
-                return ChangeOutcome::Applied {
-                    evidence: ChangeEvidence::SettingsSaved,
-                    spot: None,
-                }
-            }
-            Self::SettingsUnconfirmed | Self::ProgramUnconfirmed => {
-                return ChangeOutcome::Unknown {
-                    reason: ChangeReason::PersistenceUnconfirmed,
-                }
-            }
-            Self::ProgramSaved => {
-                return ChangeOutcome::Applied {
-                    evidence: ChangeEvidence::ProgramSaved,
-                    spot: None,
-                }
-            }
+            Self::Row(_) => ChangeOutcome::Rejected {
+                reason: ChangeReason::ContextChanged,
+                spot: None,
+            },
+            Self::SettingsSaved => ChangeOutcome::Applied {
+                evidence: ChangeEvidence::SettingsSaved,
+                spot: None,
+            },
+            Self::SettingsUnconfirmed | Self::ProgramUnconfirmed => ChangeOutcome::Unknown {
+                reason: ChangeReason::PersistenceUnconfirmed,
+            },
+            Self::ProgramSaved => ChangeOutcome::Applied {
+                evidence: ChangeEvidence::ProgramSaved,
+                spot: None,
+            },
             Self::ClusterSpot {
                 call,
                 freq_mhz,
                 comment,
-            } => {
-                return match cluster(freq_mhz, &call, &comment) {
-                    Ok(()) => ChangeOutcome::Applied {
-                        evidence: ChangeEvidence::ClusterQueued,
-                        spot: None,
-                    },
-                    // The station's own verb names the cluster only when no node is connected;
-                    // anything else is the callsign or the frequency being refused.
-                    Err(e) if e.contains("cluster") => ChangeOutcome::Rejected {
-                        reason: ChangeReason::ClusterUnavailable,
-                        spot: None,
-                    },
-                    Err(_) => ChangeOutcome::Rejected {
-                        reason: ChangeReason::InvalidChange,
-                        spot: None,
-                    },
-                };
-            }
+            } => match cluster(freq_mhz, &call, &comment) {
+                Ok(()) => ChangeOutcome::Applied {
+                    evidence: ChangeEvidence::ClusterQueued,
+                    spot: None,
+                },
+                // The station's own verb names the cluster only when no node is connected;
+                // anything else is the callsign or the frequency being refused.
+                Err(e) if e.contains("cluster") => ChangeOutcome::Rejected {
+                    reason: ChangeReason::ClusterUnavailable,
+                    spot: None,
+                },
+                Err(_) => ChangeOutcome::Rejected {
+                    reason: ChangeReason::InvalidChange,
+                    spot: None,
+                },
+            },
             Self::Spot(context) => {
                 let report = spot(&context);
-                return if report.any_posted() {
+                if report.any_posted() {
                     ChangeOutcome::Applied {
                         evidence: ChangeEvidence::SpotPosted,
                         spot: Some(report),
@@ -943,45 +877,10 @@ impl ChangeWork {
                         reason: ChangeReason::SpotNotPosted,
                         spot: Some(report),
                     }
-                };
-            }
-        };
-        let proved = path
-            .as_deref()
-            .is_some_and(|path| on_disk(path, &expected, count).unwrap_or(false));
-        if proved {
-            ChangeOutcome::Applied {
-                evidence: ChangeEvidence::FileSynced,
-                spot: None,
-            }
-        } else {
-            ChangeOutcome::Unknown {
-                reason: ChangeReason::PersistenceUnconfirmed,
+                }
             }
         }
     }
-}
-
-/// Read the file the log path names now, check it holds the change, then sync it and (on Unix) its
-/// directory, so the rename that published it survives a crash. A write handle: Windows flushes
-/// only through one. Anything short of that is unknown, never applied.
-fn on_disk(path: &Path, expected: &str, count: usize) -> std::io::Result<bool> {
-    use std::io::Read;
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    if text.matches(expected).count() != count {
-        return Ok(false);
-    }
-    file.sync_all()?;
-    #[cfg(unix)]
-    if let Some(dir) = path.parent() {
-        std::fs::File::open(dir)?.sync_all()?;
-    }
-    Ok(true)
 }
 
 #[cfg(test)]

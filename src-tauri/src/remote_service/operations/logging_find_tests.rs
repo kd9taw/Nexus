@@ -10,6 +10,7 @@ use crate::remote_service::query::log_tests::{
 use crate::remote_service::stored_log_tests::StoredLog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tempo_core::logbook::adif_record_own_log;
 
 // ── the code before C18, VERBATIM ────────────────────────────────────────────────────────────
 

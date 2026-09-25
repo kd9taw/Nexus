@@ -96,10 +96,8 @@ mod tests {
             "<CALL:5>ZD7AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260829<TIME_ON:6>030000<EOR>",
         ));
         let rows = e.lock().unwrap().log_rows();
-        let now = || match &rows {
-            LogRows::Store(reads) => reads.read(Duration::ZERO, |_| Ok(())).unwrap().1,
-            LogRows::Memory(_) => panic!("premise: the store's rows"),
-        };
+        let LogRows::Store(reads) = &rows;
+        let now = || reads.read(Duration::ZERO, |_| Ok(())).unwrap().1;
         assert!(
             matches!(now(), Freshness::Stale(_)),
             "control: the writer is held"
