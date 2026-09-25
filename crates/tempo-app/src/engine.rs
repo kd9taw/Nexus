@@ -24107,6 +24107,7 @@ mod tests {
     }
     use super::*;
     use crate::engine::js8::Js8Switch;
+    use crate::test_util::StoredLog;
     use modes::Decode;
 
     // The station owns every write to the shared log now (`StationCore::append_to_log`),
@@ -25603,7 +25604,7 @@ mod tests {
             true,
         );
         assert_eq!(e.rtty_state().seq_state, "confirmed");
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the QSO was auto-logged exactly once");
         assert_eq!(log[0].call, "W1AW");
         assert_eq!(log[0].mode, "RTTY", "logs as RTTY (award eligibility)");
@@ -25722,7 +25723,7 @@ mod tests {
         // both broadcast sinks stay clear, so the club emitter that reads the FD
         // log is the ONLY thing that sends this contact.
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "double-logged — the FD contact also landed in the general logbook"
         );
         assert!(
@@ -25773,7 +25774,7 @@ mod tests {
         e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW R 2A EMA K\n"), 0.0, true);
         assert_eq!(e.rtty_state().seq_state, "confirmed", "the QSO completed");
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the contact reached the general log");
         let rec = &log[0];
         // Each slot under its RECEIVED-side tag: his section is the CONTACTED
@@ -28926,14 +28927,12 @@ mod tests {
         // marking a batch of QSOs accepted must not cost a whole-log sweep per snapshot after
         // it. (The other direction — an edit or a delete DOES reach the next snapshot — is
         // `worked_before_marks_follow_every_kind_of_log_change` below.)
-        let pushed = e.station.logbook.records()[0].as_ref().clone();
-        assert!(e.station.logbook.stamp_qrz_upload(
+        let pushed = e.stored_log()[0].as_ref().clone();
+        assert!(e.stamp_qrz_upload(
             &pushed,
-            tempo_core::logbook::UploadStatus {
-                outcome: tempo_core::logbook::UploadOutcome::Accepted,
-                when_unix: 1_700_000_500,
-                detail: None,
-            }
+            tempo_core::logbook::UploadOutcome::Accepted,
+            1_700_000_500,
+            None
         ));
         tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
         let _after_stamp = e.snapshot();
@@ -29005,7 +29004,7 @@ mod tests {
             "an imported call is marked; its 40m contact is not this band"
         );
 
-        let mut to_40 = e.log_records()[0].as_ref().clone();
+        let mut to_40 = e.stored_log()[0].as_ref().clone();
         to_40.band = "40m".into();
         assert!(e.update_qso(to_40.id.unwrap(), to_40));
         assert_eq!(
@@ -29013,7 +29012,7 @@ mod tests {
             (true, false),
             "an edit that moves the band moves the band mark"
         );
-        let mut busted = e.log_records()[0].as_ref().clone();
+        let mut busted = e.stored_log()[0].as_ref().clone();
         busted.call = "W3CCC".into();
         assert!(e.update_qso(busted.id.unwrap(), busted));
         assert_eq!(
@@ -29028,7 +29027,7 @@ mod tests {
         );
 
         let id = e
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W2BBB")
             .and_then(|r| r.id)
@@ -29071,7 +29070,7 @@ mod tests {
             "fixture: W3CCC is an FT8 contact on 40m"
         );
         let mut to_cw = e
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W3CCC")
             .unwrap()
@@ -29108,7 +29107,7 @@ mod tests {
         e.log_qso(qrec("W1AAA", "20m"));
         e.log_qso(qrec("Q0QQQ", "20m"));
         assert_eq!(
-            e.log_records()[1].country,
+            e.stored_log()[1].country,
             None,
             "fixture: an unplaceable row"
         );
@@ -29131,9 +29130,9 @@ mod tests {
             e.log_appended_only_since(before),
             "one imported contact is an append"
         );
-        assert_eq!(e.log_records().len(), 3);
+        assert_eq!(e.stored_log().len(), 3);
         assert_eq!(
-            e.log_records()[2].country.as_deref(),
+            e.stored_log()[2].country.as_deref(),
             Some("DL"),
             "…and it arrives with its country"
         );
@@ -32685,8 +32684,8 @@ mod tests {
             e.log_current_qso(),
             "the Log button must still log the contact after a save (#100)"
         );
-        assert_eq!(e.get_log().len(), 1, "the contact reached the logbook");
-        assert_eq!(e.get_log()[0].call, "W9XYZ");
+        assert_eq!(e.stored_log().len(), 1, "the contact reached the logbook");
+        assert_eq!(e.stored_log()[0].call, "W9XYZ");
     }
 
     /// The other half of #100: the mode reset is a FIELD DAY reconcile, so it must still
@@ -33298,7 +33297,7 @@ mod tests {
         // The Fox confirms us (again multiplexed) — contact complete + logged.
         e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 5);
         assert!(
-            !e.get_log().is_empty(),
+            !e.stored_log().is_empty(),
             "the hound contact logged on the Fox's RR73"
         );
         // And the hound goes SILENT: no parting 73 may key up in the Fox's
@@ -33328,12 +33327,15 @@ mod tests {
         // A bystander signs a free-text 73 that happens to carry OUR call.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ 73", -3)], 5);
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "the QSO must NOT complete from a bystander's 73"
         );
         // The REAL multiplexed confirm still completes it.
         e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 7);
-        assert!(!e.get_log().is_empty(), "the Fox's multiplexed RR73 logs");
+        assert!(
+            !e.stored_log().is_empty(),
+            "the Fox's multiplexed RR73 logs"
+        );
     }
 
     /// #236 REGRESSION GUARD (on-air, WSJT-X cadence). On an ORDINARY (non-Hound) FT8 QSO, a
@@ -33360,7 +33362,7 @@ mod tests {
         // sender-less first half "W9XYZ RR73" must NOT become "W9XYZ PJ4DX RR73" and close the QSO.
         e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "the ordinary QSO must NOT complete or key a 73 from a bystander Fox's confirm (#236)"
         );
     }
@@ -33394,7 +33396,7 @@ mod tests {
         e.settings.special_op = crate::settings::SpecialOp::None;
         e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 5);
         assert!(
-            !e.get_log().is_empty(),
+            !e.stored_log().is_empty(),
             "leaving Hound mid-QSO stranded the contact — the Fox's multiplexed RR73 must still \
              close a QSO that STARTED as a Hound QSO"
         );
@@ -33421,7 +33423,7 @@ mod tests {
         e.settings.special_op = crate::settings::SpecialOp::Hound;
         e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "turning Hound on mid-QSO forged a roger from the partner — #236 through the header \
              button"
         );
@@ -33497,7 +33499,7 @@ mod tests {
         let mut other = e.qso_record("N0OTH".into(), None, Some(-5));
         other.when_unix = 1;
         e.log_qso(other);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert!(log
             .iter()
             .any(|r| r.call == "N0OTH" && r.ota.their_ref.is_none()));
@@ -33509,7 +33511,7 @@ mod tests {
         let mut rec = e.qso_record("K1ABC/P".into(), None, Some(-7));
         rec.when_unix = 2;
         e.log_qso(rec);
-        let log = e.get_log();
+        let log = e.stored_log();
         let hit = log.iter().find(|r| r.call == "K1ABC/P").unwrap();
         assert_eq!(hit.ota.their_program.as_deref(), Some("POTA"));
         assert_eq!(hit.ota.their_ref.as_deref(), Some("K-1234"));
@@ -33741,7 +33743,7 @@ mod tests {
         // They roger our report (→ we send RR73), then sign 73 and the QSO reaches Done.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ R-10", -7)], 3);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ 73", -7)], 5);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the QSO auto-logged");
         assert_eq!(
             log[0].rst_sent.as_deref(),
@@ -33783,7 +33785,7 @@ mod tests {
                                  // They roger with the only acknowledgement the frame carries.
         e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the completed contact auto-logged");
         assert_eq!(log[0].call, "F4CYH/R", "logged under the rover's real call");
         assert_eq!(log[0].rst_rcvd, None, "no number was ever sent to us");
@@ -33813,9 +33815,9 @@ mod tests {
         // Their roger, addressed to us. Nothing else happens: no TX slot is ever polled.
         e.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "a contact we never transmitted into must not reach the log: {:?}",
-            e.get_log()
+            e.stored_log()
         );
         // …and the manual button refuses it on the same evidence (`log_current_qso`
         // shares the predicate — one root, one fix).
@@ -33828,7 +33830,7 @@ mod tests {
         ok.call_station("F4CYH/R");
         key_one_over(&mut ok, 0);
         ok.ingest_decodes_for_test(&[dec_snr("<KD9TAW/P> F4CYH/R RR73", -7)], 3);
-        assert_eq!(ok.get_log().len(), 1, "…once we have actually keyed");
+        assert_eq!(ok.stored_log().len(), 1, "…once we have actually keyed");
     }
 
     /// D2, the same root at the other call site: **Log QSO must not claim a contact
@@ -33846,7 +33848,7 @@ mod tests {
             !e.log_current_qso(),
             "one partner over into a QSO we have not transmitted into is not a contact"
         );
-        assert!(e.get_log().is_empty(), "{:?}", e.get_log());
+        assert!(e.stored_log().is_empty(), "{:?}", e.stored_log());
     }
 
     /// D4: a closing `73` lost to QSB must not cost the operator the contact — nor stop
@@ -33879,7 +33881,7 @@ mod tests {
                                                  // …and their 73 never decodes. Nothing more arrives, ever.
         e.ingest_decodes_for_test(&[], rgr + 1);
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the contact is logged off our own roger");
         assert_eq!(log[0].call, "F4CYH/R");
         // The run is free again: back to calling CQ, not stuck re-sending the roger.
@@ -33910,9 +33912,9 @@ mod tests {
         );
         e.ingest_decodes_for_test(&[], 3);
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "a synthesized Done is not a contact: {:?}",
-            e.get_log()
+            e.stored_log()
         );
         assert!(!e.log_current_qso(), "…and Log QSO refuses it too");
     }
@@ -33992,7 +33994,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "completed QSO auto-logs exactly one record");
         assert_eq!(
             log[0].state.as_deref(),
@@ -34011,7 +34013,7 @@ mod tests {
         e.settings.rig_model_name = "Icom IC-705".into();
         let rec = e.qso_record("W9XYZ".into(), None, None);
         e.log_qso(rec);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].my_rig.as_deref(), Some("Icom IC-705"));
         assert_eq!(
@@ -34028,7 +34030,7 @@ mod tests {
         e.settings.rig_model_name = "None / VOX".into();
         let bare = e.qso_record("N0CALL".into(), None, None);
         e.log_qso(bare);
-        let log = e.get_log();
+        let log = e.stored_log();
         let rig = |call: &str| {
             log.iter()
                 .find(|r| r.call == call)
@@ -34061,7 +34063,7 @@ mod tests {
         let rec = e.qso_record("W9XYZ".into(), None, None);
         e.log_qso(rec);
         assert_eq!(
-            e.get_log()[0].my_rig.as_deref(),
+            e.stored_log()[0].my_rig.as_deref(),
             Some("CP2105 Dual USB to UART Bridge Controller"),
             "the reported symptom, reproduced"
         );
@@ -34074,7 +34076,7 @@ mod tests {
 
         let next = e.qso_record("K9AAA".into(), None, None);
         e.log_qso(next);
-        let log = e.get_log();
+        let log = e.stored_log();
         let rig = |call: &str| {
             log.iter()
                 .find(|r| r.call == call)
@@ -34126,7 +34128,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "completed QSO auto-logs exactly one record");
         assert_eq!(log[0].name.as_deref(), Some("Dave"));
         // No lookup for this call: no name — never a borrowed one.
@@ -34301,7 +34303,7 @@ mod tests {
         e.take_pending_uploads(); // the first-attempt queue; this is about the CORRECTION
         assert!(e.take_pending_uploads().is_empty(), "queue drained");
         // That first upload landed at QRZ — under the BUSTED call.
-        let sent = e.get_log()[0].clone();
+        let sent = QsoRecord::clone(&e.stored_log()[0]);
         e.stamp_qrz_upload(
             &sent,
             tempo_core::logbook::UploadOutcome::Accepted,
@@ -34310,12 +34312,12 @@ mod tests {
         );
 
         // The operator corrects the call in the edit form.
-        let mut fixed = e.get_log()[0].clone();
+        let mut fixed = QsoRecord::clone(&e.stored_log()[0]);
         fixed.call = "WW9WTF".into();
         assert!(e.update_qso(fixed.id.unwrap(), fixed), "the edit applies");
-        assert_eq!(e.get_log()[0].call, "WW9WTF", "the log holds the fix");
+        assert_eq!(e.stored_log()[0].call, "WW9WTF", "the log holds the fix");
         assert!(
-            e.get_log()[0].upload.qrz.is_none(),
+            e.stored_log()[0].upload.qrz.is_none(),
             "the busted call's QRZ stamp is cleared — that is what makes it owed again"
         );
 
@@ -34345,7 +34347,7 @@ mod tests {
         e.log_qso(rec);
         e.take_pending_uploads();
 
-        let mut edited = e.get_log()[0].clone();
+        let mut edited = QsoRecord::clone(&e.stored_log()[0]);
         edited.name = Some("Dave".into());
         assert!(e.update_qso(edited.id.unwrap(), edited));
         assert!(
@@ -34356,7 +34358,7 @@ mod tests {
         // Nor does re-typing the SAME call in a different case or with padding — that is
         // the rule `update_record` uses to decide whether confirmations survive, and the
         // re-queue has to read the edit the same way or the two disagree on every save.
-        let mut same = e.get_log()[0].clone();
+        let mut same = QsoRecord::clone(&e.stored_log()[0]);
         same.call = " ww9wtf ".into();
         assert!(e.update_qso(same.id.unwrap(), same));
         assert!(
@@ -34381,7 +34383,7 @@ mod tests {
         assert!(e.take_pending_uploads().is_empty(), "queue drained");
 
         // One QSO already succeeded on ClubLog (duplicate = sent); the other two never did.
-        let sent = e.get_log()[0].clone();
+        let sent = QsoRecord::clone(&e.stored_log()[0]);
         e.stamp_clublog_upload(
             &sent,
             tempo_core::logbook::UploadOutcome::Duplicate,
@@ -34428,7 +34430,10 @@ mod tests {
 
         // The first reached QRZ, the second reached eQSL; the third reached neither.
         let now = now_unix_secs() as i64;
-        let (first, second) = (e.get_log()[0].clone(), e.get_log()[1].clone());
+        let (first, second) = (
+            QsoRecord::clone(&e.stored_log()[0]),
+            QsoRecord::clone(&e.stored_log()[1]),
+        );
         e.stamp_qrz_upload(
             &first,
             tempo_core::logbook::UploadOutcome::Accepted,
@@ -34796,7 +34801,7 @@ mod tests {
         e.log_qso(e.qso_record("K7ABC".into(), None, None));
         moved(&e, "a second logged contact");
 
-        let mut edited = e.log_records()[0].as_ref().clone();
+        let mut edited = e.stored_log()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
         let id = edited.id.unwrap();
         assert!(e.update_qso(id, edited));
@@ -34811,10 +34816,10 @@ mod tests {
         use tempo_core::logbook::{adif_header, adif_record, UploadOutcome};
         e.import_adif(&(adif_header() + &adif_record(&qrec("N0IMP", "40m"))));
         moved(&e, "an import");
-        let pushed = e.log_records()[0].as_ref().clone();
+        let pushed = e.stored_log()[0].as_ref().clone();
         assert!(e.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 1, None));
         moved(&e, "an upload stamp");
-        let echo = adif_record(&e.log_records()[0]);
+        let echo = adif_record(&e.stored_log()[0]);
         assert_eq!(
             e.merge_lotw_own_echo(&echo, 2),
             1,
@@ -34837,7 +34842,7 @@ mod tests {
         std::fs::write(&path, adif_header() + &adif_record(&qrec("N0LOAD", "20m"))).unwrap();
         e.set_log_path(path.clone());
         assert_eq!(
-            e.log_records().len(),
+            e.stored_log().len(),
             1,
             "fixture: the file's log replaced the old one"
         );
@@ -34868,15 +34873,15 @@ mod tests {
         e.log_qso(rec);
 
         assert_eq!(
-            e.get_log()[0].operator.as_deref(),
+            e.stored_log()[0].operator.as_deref(),
             Some("W1ABC"),
             "the operator at the key must reach the log, not only the N3FJP push"
         );
         // The station's call is a different field and a different question; the operator being
         // named must never overwrite whose station it is.
         assert_ne!(
-            e.get_log()[0].operator.as_deref(),
-            e.get_log()[0].station_callsign.as_deref(),
+            e.stored_log()[0].operator.as_deref(),
+            e.stored_log()[0].station_callsign.as_deref(),
             "OPERATOR is the person, STATION_CALLSIGN is the station"
         );
     }
@@ -34893,7 +34898,7 @@ mod tests {
         let rec = e.qso_record("W9XYZ".into(), None, None);
         e.log_qso(rec);
 
-        assert_eq!(e.get_log()[0].operator, None);
+        assert_eq!(e.stored_log()[0].operator, None);
     }
 
     /// An imported multi-op log, or a row repaired by hand, already knows who worked it. The
@@ -34908,7 +34913,7 @@ mod tests {
         rec.operator = Some("G0PQR".into());
         e.log_qso(rec);
 
-        assert_eq!(e.get_log()[0].operator.as_deref(), Some("G0PQR"));
+        assert_eq!(e.stored_log()[0].operator.as_deref(), Some("G0PQR"));
     }
 
     // ---- STATION_CALLSIGN provenance (special event / club call) --------------------------
@@ -34928,7 +34933,7 @@ mod tests {
         e.log_qso(rec);
 
         assert_eq!(
-            e.get_log()[0].station_callsign.as_deref(),
+            e.stored_log()[0].station_callsign.as_deref(),
             Some("W6R"),
             "the call the contact was made under must reach the record"
         );
@@ -34954,7 +34959,7 @@ mod tests {
         e.log_qso(rec);
 
         assert_eq!(
-            e.get_log()[0].station_callsign.as_deref(),
+            e.stored_log()[0].station_callsign.as_deref(),
             Some("GB100RSGB")
         );
     }
@@ -34973,7 +34978,7 @@ mod tests {
 
         // The event is over and the operator is back on their own call.
         e.settings.mycall = "K2DEF".into();
-        let adif = e.lotw_upload_adif(&[e.log_records()[0].id.unwrap()]);
+        let adif = e.lotw_upload_adif(&[e.stored_log()[0].id.unwrap()]);
 
         assert!(
             adif.contains("<STATION_CALLSIGN:3>W6R"),
@@ -35002,11 +35007,11 @@ mod tests {
             r.when_unix = 1_788_000_000 + i as u64 * 60;
             e.log_qso(r);
         }
-        let ids: Vec<_> = e.log_records().iter().map(|r| r.id.unwrap()).collect();
+        let ids: Vec<_> = e.stored_log().iter().map(|r| r.id.unwrap()).collect();
         let signed = e.lotw_signed(&ids);
 
         // While TQSL runs:
-        let row = |e: &Engine, i: usize| QsoRecord::clone(&e.log_records()[i]);
+        let row = |e: &Engine, i: usize| QsoRecord::clone(&e.stored_log()[i]);
         let w1 = row(&e, 0);
         assert!(e.stamp_qrz_upload(&w1, UploadOutcome::Accepted, 1_788_000_500, None));
         let mut w2 = row(&e, 1);
@@ -35020,7 +35025,7 @@ mod tests {
 
         let done = e.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_900, None);
         let stamped: Vec<(String, bool)> = e
-            .log_records()
+            .stored_log()
             .iter()
             .map(|r| (r.call.clone(), r.upload.lotw.is_some()))
             .collect();
@@ -35052,6 +35057,11 @@ mod tests {
         rec.station_callsign = None;
         let (appended, _) = e.station.append(vec![rec], false);
         let id = appended[0].id.expect("an id");
+        assert_eq!(
+            e.stored_log()[0].station_callsign,
+            None,
+            "premise: the record carries no station call of its own"
+        );
 
         let adif = e.lotw_upload_adif(&[id]);
         assert!(
@@ -35069,7 +35079,7 @@ mod tests {
 
         let rec = e.qso_record("W9XYZ".into(), None, None);
         e.log_qso(rec);
-        let logged = e.get_log()[0].clone();
+        let logged = QsoRecord::clone(&e.stored_log()[0]);
 
         e.settings.mycall = "K2DEF".into();
         let dg = e.hrd_datagram(&logged);
@@ -35097,7 +35107,7 @@ mod tests {
         e.log_qso(rec);
 
         assert_eq!(
-            e.get_log()[0].state.as_deref(),
+            e.stored_log()[0].state.as_deref(),
             Some("MA"),
             "log_qso must fill a missing state, like it already fills a missing country"
         );
@@ -35112,7 +35122,7 @@ mod tests {
         let rec = e.qso_record("W1ABC".into(), None, None);
         e.log_qso(rec);
         assert_eq!(
-            e.get_log()[0].state,
+            e.stored_log()[0].state,
             None,
             "no resolver wired ⇒ no state, never a guess"
         );
@@ -35123,7 +35133,7 @@ mod tests {
         rec2.state = Some("MA".into());
         e2.log_qso(rec2);
         assert_eq!(
-            e2.get_log()[0].state.as_deref(),
+            e2.stored_log()[0].state.as_deref(),
             Some("MA"),
             "an operator-supplied state must win over the resolver"
         );
@@ -35134,7 +35144,7 @@ mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_tier(Tier::TempoFast); // this test asserts the FT1 path (default is now FT8)
         assert!(e.settings().auto_log, "auto_log on by default");
-        assert!(e.get_log().is_empty(), "log starts empty");
+        assert!(e.stored_log().is_empty(), "log starts empty");
 
         // Operator works W9XYZ: send grid, get a report, get RR73 → QSO done.
         e.call_station("W9XYZ");
@@ -35145,7 +35155,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
 
         // Exactly one record was auto-logged.
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "completed QSO auto-logs exactly one record");
         let r = &log[0];
         assert_eq!(r.call, "W9XYZ");
@@ -35167,7 +35177,11 @@ mod tests {
 
         // Idempotent: re-observing in the Done state does not double-log.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 5);
-        assert_eq!(e.get_log().len(), 1, "auto-log fires exactly once per QSO");
+        assert_eq!(
+            e.stored_log().len(),
+            1,
+            "auto-log fires exactly once per QSO"
+        );
     }
 
     /// Operator report (2026-07-23): a caller who answers our CQ with a bare report — the common
@@ -35189,7 +35203,7 @@ mod tests {
         // They roger → we send 73 → the QSO completes and auto-logs.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 5);
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the QSO auto-logged");
         assert_eq!(
             log[0].grid.as_deref(),
@@ -35288,7 +35302,7 @@ mod tests {
         let q = e.snapshot().qso.expect("still running");
         assert_eq!(q.state, "CallingCq", "the run moved on, as it should");
         assert!(q.dxcall.is_none());
-        let logged = e.get_log().len();
+        let logged = e.stored_log().len();
         assert_eq!(logged, 1, "the contact is logged");
 
         // THE REPORT: the DX never copied our RR73 and asks again.
@@ -35316,7 +35330,7 @@ mod tests {
             "the sequencer did not re-enter the QSO"
         );
         assert!(q.dxcall.is_none(), "no partner was restored");
-        assert_eq!(e.get_log().len(), logged, "and nothing was logged twice");
+        assert_eq!(e.stored_log().len(), logged, "and nothing was logged twice");
 
         // ONE over, once. The next slot is a CQ again — the answer cannot become a loop.
         e.ingest_decodes_for_test(&[], 9);
@@ -35460,27 +35474,27 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         let rec = e.qso_record("K1ABC".into(), None, None);
         e.log_qso(rec);
-        let id = e.get_log()[0].id.unwrap();
+        let id = e.stored_log()[0].id.unwrap();
         assert!(e.mark_qsl_sent(id, Some(QslVia::Direct)), "fixture: marked");
-        assert!(e.get_log()[0].qsl_sent.sent);
+        assert!(e.stored_log()[0].qsl_sent.sent);
 
         // The operator ticked the wrong row and clears it.
         assert!(
             e.mark_qsl_sent(id, None),
             "the clear verb exists and applies"
         );
-        let cleared = e.get_log()[0].qsl_sent.cleared_unix;
+        let cleared = e.stored_log()[0].qsl_sent.cleared_unix;
         assert!(cleared.is_some(), "the clear is recorded as a decision");
-        assert!(!e.get_log()[0].qsl_sent.sent);
+        assert!(!e.stored_log()[0].qsl_sent.sent);
 
         // …then edits something entirely unrelated. The edit form does not carry QSL state at
         // all, so this is the shape that would drop it: a record rebuilt without it.
-        let mut edited = e.get_log()[0].clone();
+        let mut edited = QsoRecord::clone(&e.stored_log()[0]);
         edited.comment = Some("fixed a typo".into());
         edited.qsl_sent = Default::default();
         assert!(e.update_qso(id, edited));
 
-        let r = &e.get_log()[0];
+        let r = &e.stored_log()[0];
         assert_eq!(
             r.comment.as_deref(),
             Some("fixed a typo"),
@@ -35495,14 +35509,14 @@ mod tests {
         // …and the decision still outranks an import AFTER that edit, which is the whole
         // point of keeping it rather than just keeping `sent == false`.
         let mut lb = tempo_core::logbook::Logbook::new();
-        let mut sent_copy = e.get_log()[0].clone();
+        let mut sent_copy = QsoRecord::clone(&e.stored_log()[0]);
         sent_copy.qsl_sent = tempo_core::logbook::QslSent {
             sent: true,
             via: Some(QslVia::Direct),
             date_unix: Some(1),
             cleared_unix: None,
         };
-        lb.add(e.get_log()[0].clone());
+        lb.add(QsoRecord::clone(&e.stored_log()[0]));
         let mut export = tempo_core::logbook::Logbook::new();
         export.add(sent_copy);
         lb.import_adif(&export.adif());
@@ -35702,7 +35716,7 @@ mod tests {
         // No prior CQ from W9XYZ → the roster has no grid for them.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 3);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 5);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1);
         assert_eq!(
             log[0].grid.as_deref(),
@@ -35874,7 +35888,7 @@ mod tests {
         key_one_over(&mut e, 4);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW RR73", -7)], 5);
 
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the QSO auto-logged: {log:?}");
         assert_eq!(
             log[0].rst_sent.as_deref(),
@@ -35906,7 +35920,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW +03", 3)], 3);
         key_one_over(&mut e, 4);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W1AW RR73", 3)], 5);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "the QSO auto-logged: {log:?}");
         assert_eq!(log[0].rst_sent.as_deref(), Some("+03"));
         assert_eq!(log[0].rst_rcvd.as_deref(), Some("+03"));
@@ -36075,7 +36089,7 @@ mod tests {
         let report = e.fd_merge_to_general().expect("in Field Day");
         assert_eq!((report.added(), report.already, report.refused), (2, 0, 0));
         assert_eq!(
-            e.station.logbook.len(),
+            e.stored_log().len(),
             2,
             "the contacts DID reach the logbook"
         );
@@ -36296,7 +36310,7 @@ mod tests {
         assert_eq!(e.fd_merge_to_general().unwrap().added(), 2);
         let again = e.fd_merge_to_general().unwrap();
         assert_eq!((again.added(), again.already), (0, 2));
-        assert_eq!(e.station.logbook.len(), 2, "the logbook did not grow");
+        assert_eq!(e.stored_log().len(), 2, "the logbook did not grow");
     }
 
     /// ⭐ **A CORRECTION REACHES THE CABRILLO, NOT JUST THE LOG ON SCREEN.**
@@ -36317,14 +36331,12 @@ mod tests {
         // Precondition, so a later change that stops the merge writing a qid fails HERE
         // rather than turning the assertions below green for the wrong reason.
         let at = e
-            .station
-            .logbook
-            .records()
+            .stored_log()
             .iter()
             .position(|r| r.call == "K1ABC")
             .expect("the merged contact is in the general log");
         assert!(
-            e.station.logbook.records()[at]
+            e.stored_log()[at]
                 .contest
                 .as_deref()
                 .is_some_and(|c| c.qid.ends_with(":1")),
@@ -36332,12 +36344,12 @@ mod tests {
         );
 
         // The operator fixes a busted call in the Logbook's own edit form.
-        let mut fixed = QsoRecord::clone(&e.station.logbook.records()[at]);
+        let mut fixed = QsoRecord::clone(&e.stored_log()[at]);
         fixed.call = "K1ABD".into();
         assert!(e.update_qso(fixed.id.unwrap(), fixed), "the edit applies");
 
         // The general log shows it — this half always worked.
-        assert_eq!(e.station.logbook.records()[at].call, "K1ABD");
+        assert_eq!(e.stored_log()[at].call, "K1ABD");
 
         // …and so does the file that gets scored.
         let cbr = e.export_log("cabrillo").expect("a Field Day log exports");
@@ -36379,25 +36391,21 @@ mod tests {
         plain.mode = "CW".into();
         e.log_qso(plain);
         let plain_at = e
-            .station
-            .logbook
-            .records()
+            .stored_log()
             .iter()
             .position(|r| r.call == "N0CAL")
             .expect("logged");
-        let mut edited = QsoRecord::clone(&e.station.logbook.records()[plain_at]);
+        let mut edited = QsoRecord::clone(&e.stored_log()[plain_at]);
         edited.call = "N0CAM".into();
         assert!(e.update_qso(edited.id.unwrap(), edited));
 
         // A contest row whose qid names ANOTHER session, on the same seq as a real row here.
         let at = e
-            .station
-            .logbook
-            .records()
+            .stored_log()
             .iter()
             .position(|r| r.call == "K1ABC")
             .expect("merged");
-        let mut foreign = QsoRecord::clone(&e.station.logbook.records()[at]);
+        let mut foreign = QsoRecord::clone(&e.stored_log()[at]);
         foreign.call = "K9ZZZ".into();
         foreign.contest.as_deref_mut().expect("provenance").qid = "CQ-WW-CW:IL:a1b2c3d4:1".into();
         assert!(e.update_qso(foreign.id.unwrap(), foreign));
@@ -36430,7 +36438,7 @@ mod tests {
         assert!(b4.worked_this_session("K1ABC"));
         // POSITIVE CONTROL: the LIFETIME index still knows N0OLD, so the negative
         // above is the session bound and not an empty index.
-        assert!(e.station.logbook.worked_call_set().contains("N0OLD"));
+        assert!(e.station.hot().worked_call("N0OLD"));
     }
 
     /// A contest snapshot's sweep count is bounded — the §3.1 sweep is ONE more beside
@@ -36523,7 +36531,7 @@ mod tests {
 
         assert_eq!(next_contact_and_snapshot(&mut e, 100), (0, 0), "a contact");
 
-        let pushed = QsoRecord::clone(&e.station.logbook.records()[3]);
+        let pushed = QsoRecord::clone(&e.stored_log()[3]);
         assert!(e.station.stamp_qrz_upload(
             &pushed,
             tempo_core::logbook::UploadOutcome::Accepted,
@@ -36536,7 +36544,7 @@ mod tests {
             "an upload stamp, then a contact (C11's finding)"
         );
 
-        let row_id = |e: &Engine, at: usize| e.station.logbook.records()[at].id.unwrap();
+        let row_id = |e: &Engine, at: usize| e.stored_log()[at].id.unwrap();
         let fifth = row_id(&e, 4);
         assert!(e
             .station
@@ -36547,7 +36555,7 @@ mod tests {
             "a QSL-sent mark"
         );
 
-        let mut fixed = QsoRecord::clone(&e.station.logbook.records()[5]);
+        let mut fixed = QsoRecord::clone(&e.stored_log()[5]);
         fixed.call = "W5XYZ".into();
         assert!(e.update_qso(fixed.id.unwrap(), fixed));
         assert_eq!(
@@ -36572,7 +36580,7 @@ mod tests {
         assert!(e.station.mark_qsl_card(seventh, true));
         assert_eq!(next_contact_and_snapshot(&mut e, 105), (0, 0), "a QSL card");
 
-        let confirmed = tempo_core::logbook::adif_record(&e.station.logbook.records()[7])
+        let confirmed = tempo_core::logbook::adif_record(&e.stored_log()[7])
             .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
         e.station.merge_lotw_report(&confirmed);
         assert_eq!(
@@ -37183,7 +37191,7 @@ mod tests {
 
         e.log_qso(qrec("T22TT", "30m"));
 
-        assert_eq!(e.get_log().len(), 1, "in memory");
+        assert_eq!(e.stored_log().len(), 1, "in memory");
         written(&e);
         let on_disk = tempo_core::logbook::Logbook::load(&path);
         assert_eq!(on_disk.len(), 1, "and on disk");
@@ -37200,7 +37208,7 @@ mod tests {
         e.log_qso(qrec("T22TT", "30m"));
         e.log_qso(qrec("T22TT", "30m"));
         e.log_qso(qrec("T22TT", "30m"));
-        assert_eq!(e.get_log().len(), 1, "3 identical seeds → 1 logged QSO");
+        assert_eq!(e.stored_log().len(), 1, "3 identical seeds → 1 logged QSO");
 
         // A different band, a different call, and the same call well outside the
         // dedup window are all legitimately distinct and MUST still log.
@@ -37210,7 +37218,7 @@ mod tests {
         later.when_unix = 3600; // an hour on — a genuine re-work, not a dupe
         e.log_qso(later);
         assert_eq!(
-            e.get_log().len(),
+            e.stored_log().len(),
             4,
             "distinct band / call / time still log"
         );
@@ -37575,7 +37583,7 @@ mod tests {
         // The next ingest runs the auto-log check.
         e.ingest_decodes_for_test(&[], 3);
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "a Done synthesized from a lone RR73 (no TX, no report) must not auto-log"
         );
     }
@@ -38290,7 +38298,7 @@ mod tests {
         // be lost. Asserted on the record, never on the export it came through.
         e.fd_merge_to_general().expect("the merge runs in FD mode");
         let rec = e
-            .get_log()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W1AW")
             .cloned()
@@ -38986,7 +38994,7 @@ mod tests {
         b.set_log_path(path.clone());
         b.log_qso(qrec("W1AAA", "20m"));
         b.log_qso(qrec("W2BBB", "20m"));
-        assert_eq!(b.get_log().len(), 2);
+        assert_eq!(b.stored_log().len(), 2);
         written(&b); // in the file, as 1.13 wrote them before it returned
 
         // Instance A (a second process on the same file) appends two more QSOs
@@ -38996,7 +39004,7 @@ mod tests {
         assert_eq!(Logbook::load(&path).len(), 4, "the file holds A's appends");
 
         // B does a full-log-rewrite action (mark QSL-sent) on its stale 2-record copy.
-        let w1 = b.get_log()[0].id.unwrap();
+        let w1 = b.stored_log()[0].id.unwrap();
         assert!(b.mark_qsl_sent(w1, Some(tempo_core::logbook::QslVia::Direct)));
         written(&b);
 
@@ -39044,7 +39052,7 @@ mod tests {
         Logbook::append(&path, &qrec("W3CCC", "40m")).unwrap();
 
         // B deletes its index 0 (W1AAA) on the stale copy.
-        let w1 = b.get_log()[0].id.unwrap();
+        let w1 = b.stored_log()[0].id.unwrap();
         assert!(b.delete_qso(w1));
         written(&b);
 
@@ -39088,7 +39096,7 @@ mod tests {
         b.set_log_path(path.clone());
         b.log_qso(qrec("W1AW", "20m"));
         b.log_qso(qrec("K5XYZ", "20m"));
-        assert_eq!(b.get_log().len(), 2);
+        assert_eq!(b.stored_log().len(), 2);
         written(&b);
 
         // Instance A (a second process on the same file) appends two QSOs that B
@@ -39172,13 +39180,17 @@ mod tests {
             "…and its identity, so the open popup's confirm is still the right one"
         );
         assert_eq!(snap.pending_logs_waiting, 1, "the second waits its turn");
-        assert!(e.get_log().is_empty(), "neither is logged yet");
+        assert!(e.stored_log().is_empty(), "neither is logged yet");
 
         // Confirming the shown contact logs THAT one and promotes the one behind it.
         assert!(confirm_held(&mut e, shown.into()));
         let snap = e.snapshot();
-        assert_eq!(e.get_log().len(), 1);
-        assert_eq!(e.get_log()[0].call, "W9XYZ", "the contact the operator saw");
+        assert_eq!(e.stored_log().len(), 1);
+        assert_eq!(
+            e.stored_log()[0].call,
+            "W9XYZ",
+            "the contact the operator saw"
+        );
         assert_eq!(
             snap.pending_log.as_ref().map(|q| q.call.as_str()),
             Some("K1ABC"),
@@ -39194,7 +39206,7 @@ mod tests {
         // …and discarding the promoted one empties the queue without logging it.
         assert!(discard_held(&mut e));
         assert!(e.snapshot().pending_log.is_none());
-        assert_eq!(e.get_log().len(), 1, "a discard logs nothing");
+        assert_eq!(e.stored_log().len(), 1, "a discard logs nothing");
     }
 
     /// The other half of R2: the confirm must name the contact it is confirming. A popup whose
@@ -39226,8 +39238,12 @@ mod tests {
             !e.confirm_pending_log("", shown.into()),
             "…nor may a caller with no key at all log the held contact"
         );
-        assert_eq!(e.get_log().len(), 1, "only the contact actually confirmed");
-        assert_eq!(e.get_log()[0].call, "W9XYZ");
+        assert_eq!(
+            e.stored_log().len(),
+            1,
+            "only the contact actually confirmed"
+        );
+        assert_eq!(e.stored_log()[0].call, "W9XYZ");
         assert_eq!(
             e.snapshot().pending_log.map(|q| q.call),
             Some("K1ABC".to_string()),
@@ -39330,7 +39346,7 @@ mod tests {
         let mut sent = e.snapshot().pending_log.expect("the hold comes back");
         sent.call = "EA8ABC".into();
         assert!(confirm_held(e, sent.into()));
-        e.get_log()[0].clone()
+        QsoRecord::clone(&e.stored_log()[0])
     }
 
     #[test]
@@ -39345,7 +39361,10 @@ mod tests {
             e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
         }
         assert_eq!(e.pending_logs_waiting(), PENDING_LOG_QUEUE_CAP - 1);
-        assert!(e.get_log().is_empty(), "the queue is holding, not logging");
+        assert!(
+            e.stored_log().is_empty(),
+            "the queue is holding, not logging"
+        );
 
         let newest = e.qso_record("K1NEW".into(), None, None);
         e.hold_pending_log(HeldQso::new(newest, GridSource::LookedUp));
@@ -39355,7 +39374,7 @@ mod tests {
             "the contact the popup is showing is never the one taken"
         );
         assert_eq!(
-            e.get_log()
+            e.stored_log()
                 .iter()
                 .map(|q| q.call.as_str())
                 .collect::<Vec<_>>(),
@@ -39483,7 +39502,7 @@ mod tests {
             }
             assert!(confirm_held(&mut e, sent.into()));
 
-            let logged = &e.get_log()[0];
+            let logged = &e.stored_log()[0];
             if correct {
                 assert_eq!(logged.call, "EA8ABC");
                 assert_eq!(
@@ -39544,7 +39563,7 @@ mod tests {
                 }
                 assert!(confirm_held(&mut e, sent.into()));
 
-                let logged = &e.get_log()[0];
+                let logged = &e.stored_log()[0];
                 match (transmitted, correct) {
                     (true, true) => assert_eq!(
                         logged.grid.as_deref(),
@@ -39580,7 +39599,7 @@ mod tests {
         assert!(confirm_held(&mut e, sent.into()));
 
         assert_eq!(
-            e.get_log()[0].grid.as_deref(),
+            e.stored_log()[0].grid.as_deref(),
             Some("IL18"),
             "the operator's own grid is not a stale lookup"
         );
@@ -39606,7 +39625,7 @@ mod tests {
         sent.rst_rcvd = Some("-15".into());
         assert!(confirm_held(&mut e, sent.into()));
 
-        let logged = &e.get_log()[0];
+        let logged = &e.stored_log()[0];
         assert_eq!(logged.rst_rcvd.as_deref(), Some("-15"));
         assert_eq!(
             logged.comment.as_deref(),
@@ -39637,7 +39656,10 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
 
         // Held, not logged.
-        assert!(e.get_log().is_empty(), "prompt-to-log withholds the write");
+        assert!(
+            e.stored_log().is_empty(),
+            "prompt-to-log withholds the write"
+        );
         let snap = e.snapshot();
         let pending = snap.pending_log.expect("a QSO awaits confirm");
         assert_eq!(pending.call, "W9XYZ");
@@ -39649,7 +39671,7 @@ mod tests {
 
         // Confirm logs it and clears the hold.
         assert!(confirm_held(&mut e, pending.into()));
-        assert_eq!(e.get_log().len(), 1, "confirm writes exactly one record");
+        assert_eq!(e.stored_log().len(), 1, "confirm writes exactly one record");
         assert!(
             e.snapshot().pending_log.is_none(),
             "hold cleared after confirm"
@@ -39682,7 +39704,7 @@ mod tests {
         sent.rst_rcvd = Some("-09".into());
         assert!(confirm_held(&mut e, sent.into()));
 
-        let saved = &e.station.logbook.records()[0];
+        let saved = &e.stored_log()[0];
         assert_eq!(saved.time_off_unix, held.time_off_unix, "TIME_OFF survives");
         assert_eq!(saved.freq_rx_mhz, held.freq_rx_mhz, "FREQ_RX survives");
         assert_eq!(saved.grid.as_deref(), Some("EN38"), "grid edit lands");
@@ -39772,7 +39794,7 @@ mod tests {
 
         // Confirming logs it and clears the journal, so it cannot resurrect next launch.
         assert!(confirm_held(&mut relaunched, pending.into()));
-        assert_eq!(relaunched.get_log().len(), 1, "logged exactly once");
+        assert_eq!(relaunched.stored_log().len(), 1, "logged exactly once");
         assert!(
             !path.exists(),
             "journal removed on confirm — a logged QSO must not come back"
@@ -39810,7 +39832,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
         assert!(e.snapshot().pending_log.is_some());
         assert!(discard_held(&mut e));
-        assert!(e.get_log().is_empty(), "discard logs nothing");
+        assert!(e.stored_log().is_empty(), "discard logs nothing");
         assert!(e.snapshot().pending_log.is_none());
     }
 
@@ -40124,7 +40146,7 @@ mod tests {
              <QSO_DATE:8>20240101<TIME_ON:6>120000<QSL_RCVD:1>Y<EOR>\n",
         );
         assert_eq!(e.clear_logbook(), 1);
-        assert!(e.get_log().is_empty());
+        assert!(e.stored_log().is_empty());
         assert!(
             e.settings().lotw_last_qsl.is_empty(),
             "the next LoTW sync must be a FULL pull, not an incremental one"
@@ -40150,7 +40172,7 @@ mod tests {
             <CALL:5>F5RXL<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20240101<TIME_ON:6>120100<EOR>\n";
         let (added, ..) = e.import_adif(adif);
         assert_eq!(added, 2);
-        let log = e.get_log();
+        let log = e.stored_log();
         let country = |call: &str| {
             log.iter()
                 .find(|r| r.call == call)
@@ -40171,7 +40193,7 @@ mod tests {
         e.call_station("W9XYZ");
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1);
         assert_eq!(
             log[0].mode, "FT8",
@@ -40356,7 +40378,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF R-12", -8)], 3);
         // The RR73 is only QUEUED here — the contact must NOT log until it's on the air.
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "not logged before the RR73 is transmitted"
         );
 
@@ -40364,7 +40386,7 @@ mod tests {
         assert!(!e.poll_tx(4).is_empty(), "RR73 goes out on a TX slot");
         // ...and the contact auto-logs once that closing roger has actually gone out.
         e.ingest_decodes_for_test(&[], 5); // an RX slot re-runs the auto-log check
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1, "CQ-side QSO auto-logs after RR73 is sent");
         assert_eq!(log[0].call, "K2DEF");
         assert_eq!(
@@ -40374,7 +40396,7 @@ mod tests {
         );
         // Idempotent: a later 73 (or re-observe) doesn't double-log.
         e.ingest_decodes_for_test(&[dec_snr("W9XYZ K2DEF 73", -8)], 7);
-        assert_eq!(e.get_log().len(), 1, "no double-log on a late 73");
+        assert_eq!(e.stored_log().len(), 1, "no double-log on a late 73");
     }
 
     #[test]
@@ -40422,13 +40444,13 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         // Operator clicks "Log" mid-sequence.
         assert!(e.log_current_qso(), "manual log writes the contact");
-        assert_eq!(e.get_log().len(), 1);
+        assert_eq!(e.stored_log().len(), 1);
         // A second click is a no-op (write-once).
         assert!(!e.log_current_qso(), "second manual log is a no-op");
-        assert_eq!(e.get_log().len(), 1);
+        assert_eq!(e.stored_log().len(), 1);
         // The QSO then completes naturally — must NOT auto-log a duplicate.
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
-        assert_eq!(e.get_log().len(), 1, "completion does not double-log");
+        assert_eq!(e.stored_log().len(), 1, "completion does not double-log");
     }
 
     #[test]
@@ -40440,12 +40462,12 @@ mod tests {
         assert!(e.log_current_qso());
         // Held for confirm, not written, like auto-log.
         assert!(
-            e.get_log().is_empty(),
+            e.stored_log().is_empty(),
             "prompt-to-log holds the manual log too"
         );
         let pending = e.snapshot().pending_log.expect("a QSO awaits confirm");
         assert!(confirm_held(&mut e, pending.into()));
-        assert_eq!(e.get_log().len(), 1);
+        assert_eq!(e.stored_log().len(), 1);
     }
 
     #[test]
@@ -40462,7 +40484,7 @@ mod tests {
         e.call_station("DL1XYZ");
         e.ingest_decodes_for_test(&[dec_snr("K2DEF DL1XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF DL1XYZ RR73", -7)], 3);
-        let log = e.get_log();
+        let log = e.stored_log();
         assert_eq!(log.len(), 1);
         assert_eq!(
             log[0].country.as_deref(),
@@ -40565,7 +40587,10 @@ mod tests {
         e.call_station("W9XYZ");
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
-        assert!(e.get_log().is_empty(), "no auto-log when auto_log is off");
+        assert!(
+            e.stored_log().is_empty(),
+            "no auto-log when auto_log is off"
+        );
     }
 
     /// Build a clean (noise-free) full frame for `kind` carrying `msg` at `f0`,
@@ -43366,7 +43391,7 @@ mod tests {
         local.mode = "FT8".into();
         local.when_unix = 1_700_000_000;
         e.log_qso(local);
-        assert_eq!(e.get_log().len(), 1);
+        assert_eq!(e.stored_log().len(), 1);
 
         // A QRZ FETCH body: the same QSO now QRZ-confirmed, PLUS a brand-new QSO the
         // operator logged elsewhere (e.g. a phone app) that Nexus has never seen.
@@ -43382,10 +43407,14 @@ mod tests {
 
         // The new QSO was pulled down; the existing one was reconciled (not re-added).
         assert_eq!(added, 1, "only K5NEW is new");
-        assert_eq!(e.get_log().len(), 2, "log grew by exactly one");
+        assert_eq!(e.stored_log().len(), 2, "log grew by exactly one");
 
         // The existing QSO is now confirmed by QRZ — but NOT award-eligible.
-        let w1aw = e.get_log().into_iter().find(|r| r.call == "W1AW").unwrap();
+        let w1aw = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "W1AW")
+            .unwrap();
         assert!(w1aw.confirmed, "QRZ match confirms the contact");
         assert!(!w1aw.award_confirmed, "QRZ confirmation is NOT award-grade");
         assert!(w1aw.qsl_rcvd.qrz && !w1aw.qsl_rcvd.card);
@@ -43396,13 +43425,17 @@ mod tests {
         );
 
         // The imported new QSO also carries the QRZ confirmation, non-award.
-        let k5new = e.get_log().into_iter().find(|r| r.call == "K5NEW").unwrap();
+        let k5new = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "K5NEW")
+            .unwrap();
         assert!(k5new.confirmed && !k5new.award_confirmed && k5new.qsl_rcvd.qrz);
 
         // Idempotent: a second identical sync adds nothing and re-confirms nothing new.
         let (added2, summary2) = e.merge_qrz_report(&adif);
         assert_eq!(added2, 0, "second sync adds no duplicates");
-        assert_eq!(e.get_log().len(), 2);
+        assert_eq!(e.stored_log().len(), 2);
         assert_eq!(summary2.newly_confirmed_any, 0, "already confirmed");
     }
 
@@ -46014,7 +46047,7 @@ mod tests {
         let mut on_bird = qrec("W1AW", "70cm");
         on_bird.freq_mhz = 436.795;
         e.log_qso(on_bird);
-        let r = &e.get_log()[0];
+        let r = &e.stored_log()[0];
         assert_eq!(
             r.sat_name, None,
             "a name LoTW refuses must not reach the record"
@@ -46030,7 +46063,7 @@ mod tests {
         let mut ok = qrec("K1ABC", "70cm");
         ok.freq_mhz = 436.795;
         e.log_qso(ok);
-        let r = &e.get_log()[1];
+        let r = &e.stored_log()[1];
         assert_eq!(r.sat_name.as_deref(), Some("SO-50"));
         assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
     }
@@ -46059,20 +46092,20 @@ mod tests {
         after.freq_mhz = 436.795;
         e.log_qso(after);
         assert_eq!(
-            e.get_log()[0].prop_mode.as_deref(),
+            e.stored_log()[0].prop_mode.as_deref(),
             Some("SAT"),
             "logged after LOS: no satellite tag"
         );
-        assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("SO-50"));
+        assert_eq!(e.stored_log()[0].sat_name.as_deref(), Some("SO-50"));
 
         // 2. GUARD — the passband still decides: an HF contact after LOS stays ordinary.
         e.log_qso(qrec("K1ABC", "20m"));
         assert_eq!(
-            e.get_log()[1].prop_mode,
+            e.stored_log()[1].prop_mode,
             None,
             "a remembered bird tagged a 20 m contact"
         );
-        assert_eq!(e.get_log()[1].sat_name, None);
+        assert_eq!(e.stored_log()[1].sat_name, None);
 
         // 3. GUARD — the next pick REPLACES the memory: after AO-91, SO-50's downlink is untagged.
         let mut e2 = Engine::new("KD9TAW", "EN52", 0);
@@ -46087,7 +46120,7 @@ mod tests {
         on_so50.freq_mhz = 436.795;
         e2.log_qso(on_so50);
         assert_eq!(
-            e2.get_log()[0].prop_mode,
+            e2.stored_log()[0].prop_mode,
             None,
             "a REPLACED bird still tagged a contact"
         );
@@ -46098,7 +46131,7 @@ mod tests {
         cold.freq_mhz = 436.795;
         e3.log_qso(cold);
         assert_eq!(
-            e3.get_log()[0].prop_mode,
+            e3.stored_log()[0].prop_mode,
             None,
             "a fresh engine tagged a contact"
         );
@@ -46114,8 +46147,8 @@ mod tests {
         let mut cuby = qrec("N0CALL", "70cm");
         cuby.freq_mhz = 437.800;
         e4.log_qso(cuby);
-        assert_eq!(e4.get_log()[0].prop_mode, None);
-        assert_eq!(e4.get_log()[0].sat_name, None);
+        assert_eq!(e4.stored_log()[0].prop_mode, None);
+        assert_eq!(e4.stored_log()[0].sat_name, None);
     }
 
     #[test]
@@ -46135,7 +46168,7 @@ mod tests {
         let mut on_bird = qrec("W1AW", "70cm");
         on_bird.freq_mhz = 436.795;
         e.log_qso(on_bird);
-        let r = &e.get_log()[0];
+        let r = &e.stored_log()[0];
         assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
         assert_eq!(
             r.sat_name.as_deref(),
@@ -46145,7 +46178,7 @@ mod tests {
         // 2. The hold outlives the pass: an ordinary HF contact logged with the bird
         //    still held is UNTOUCHED — the passband gate, the old stamp's worst defect.
         e.log_qso(qrec("K1ABC", "20m")); // 14.074 MHz
-        let hf = &e.get_log()[1];
+        let hf = &e.stored_log()[1];
         assert_eq!(
             hf.prop_mode, None,
             "a 20 m contact tagged as a satellite QSO"
@@ -46170,11 +46203,15 @@ mod tests {
         unknown.freq_mhz = 437.800;
         e3.log_qso(unknown);
         assert_eq!(
-            e3.get_log()[0].prop_mode,
+            e3.stored_log()[0].prop_mode,
             None,
             "CUBY-1 matches the designator shape; LoTW does not list it"
         );
-        assert_eq!(e3.get_log()[0].sat_name, None, "both-or-neither: neither");
+        assert_eq!(
+            e3.stored_log()[0].sat_name,
+            None,
+            "both-or-neither: neither"
+        );
 
         // 3b. …and the ISS, which LoTW lists as ARISS, now stamps that (#296).
         let mut e4 = Engine::new("KD9TAW", "EN52", 0);
@@ -46186,8 +46223,8 @@ mod tests {
         let mut iss = qrec("NA1SS", "70cm");
         iss.freq_mhz = 437.800;
         e4.log_qso(iss);
-        assert_eq!(e4.get_log()[0].prop_mode.as_deref(), Some("SAT"));
-        assert_eq!(e4.get_log()[0].sat_name.as_deref(), Some("ARISS"));
+        assert_eq!(e4.stored_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e4.stored_log()[0].sat_name.as_deref(), Some("ARISS"));
 
         // 4. Records ARRIVING with satellite fields are carried verbatim — the stamp is
         //    a writer for blank fields only, never an editor.
@@ -46196,8 +46233,8 @@ mod tests {
         given.prop_mode = Some("SAT".into());
         given.sat_name = Some("AO-91".into());
         e2.log_qso(given);
-        assert_eq!(e2.get_log()[0].prop_mode.as_deref(), Some("SAT"));
-        assert_eq!(e2.get_log()[0].sat_name.as_deref(), Some("AO-91"));
+        assert_eq!(e2.stored_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e2.stored_log()[0].sat_name.as_deref(), Some("AO-91"));
     }
 
     /// The designator resolver, against the real catalog shapes.
@@ -46274,19 +46311,19 @@ mod tests {
         wrong.prop_mode = Some("SAT".into());
         wrong.sat_name = Some("RS-44".into());
         e.log_qso(wrong);
-        assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("RS-44"));
+        assert_eq!(e.stored_log()[0].sat_name.as_deref(), Some("RS-44"));
 
         // CORRECT it. The stored name and the new one disagree, so a no-op fails here.
-        let id = e.get_log()[0].id.unwrap();
+        let id = e.stored_log()[0].id.unwrap();
         assert!(e.set_sat_tag(id, Some("AO-91")));
-        assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("AO-91"));
-        assert_eq!(e.get_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e.stored_log()[0].sat_name.as_deref(), Some("AO-91"));
+        assert_eq!(e.stored_log()[0].prop_mode.as_deref(), Some("SAT"));
 
         // REMOVE it — the contact was never on a bird. Both fields go together: a lone
         // PROP_MODE=SAT is the half-pair TQSL hard-errors on.
         assert!(e.set_sat_tag(id, None));
-        assert_eq!(e.get_log()[0].sat_name, None);
-        assert_eq!(e.get_log()[0].prop_mode, None);
+        assert_eq!(e.stored_log()[0].sat_name, None);
+        assert_eq!(e.stored_log()[0].prop_mode, None);
 
         // A row that is not there changes nothing and says so.
         let nowhere = tempo_core::logbook::RecordId::Provisional {
@@ -54995,6 +55032,7 @@ mod logged_frequency_tests {
 mod stalled_qso_log_tests {
     use super::tests::dec_snr;
     use super::*;
+    use crate::test_util::StoredLog;
 
     /// Answer our CQ with a report, we roger it, then they go quiet — the state bitslave was in
     /// (#153): `AwaitRr73`, both reports already across, waiting on their RR73.
@@ -55037,7 +55075,7 @@ mod stalled_qso_log_tests {
             "a contact whose reports crossed must stay loggable after the run gives up on it"
         );
         assert_eq!(
-            e.station.logbook.records().last().map(|r| r.call.as_str()),
+            e.stored_log().last().map(|r| r.call.as_str()),
             Some("VK3ABC"),
             "and it is the right station"
         );
@@ -55091,12 +55129,7 @@ mod stalled_qso_log_tests {
             "and is spent — a second press must not write a duplicate"
         );
         assert_eq!(
-            e.station
-                .logbook
-                .records()
-                .iter()
-                .filter(|r| r.call == "VK3ABC")
-                .count(),
+            e.stored_log().iter().filter(|r| r.call == "VK3ABC").count(),
             1,
             "exactly one record"
         );
@@ -55304,6 +55337,7 @@ mod amp_tests {
 #[cfg(test)]
 mod private_note_boundary_tests {
     use super::*;
+    use crate::test_util::StoredLog;
 
     const PRIVATE: &str = "ZZPRIVATEZZ";
     const SHARED: &str = "ZZSHAREDZZ";
@@ -55383,7 +55417,7 @@ mod private_note_boundary_tests {
             e.log_qso(noted());
             assert_withheld(
                 &format!("the LoTW batch (adif_location={adif_location})"),
-                &e.lotw_upload_adif(&[e.log_records()[0].id.unwrap()]),
+                &e.lotw_upload_adif(&[e.stored_log()[0].id.unwrap()]),
             );
         }
     }
@@ -55424,12 +55458,13 @@ mod private_note_boundary_tests {
 #[cfg(test)]
 mod dedup_gate_tests {
     use super::*;
+    use crate::test_util::StoredLog;
 
     /// THE OLD GUARD, VERBATIM — the expression `log_qso_inner` ran before the index, kept here
     /// as the oracle so the comparison is against the code that shipped, not a restatement.
     fn old_scan(e: &Engine, rec: &QsoRecord) -> bool {
         const DEDUP_WINDOW_SECS: u64 = 300;
-        e.station.logbook.records().iter().any(|r| {
+        e.stored_log().iter().any(|r| {
             tempo_core::message::same_call(&r.call, &rec.call)
                 && r.band.eq_ignore_ascii_case(&rec.band)
                 && r.mode.eq_ignore_ascii_case(&rec.mode)
@@ -55527,17 +55562,17 @@ mod dedup_gate_tests {
             let mut dups = 0;
             let mut accepted = 0;
             for step in 0..400 {
-                let n = e.station.logbook.len();
+                let n = e.stored_log().len();
                 match g.below(10) {
                     0 if n > 0 => {
                         let i = g.below(n);
-                        let mut r = QsoRecord::clone(&e.station.logbook.records()[i]);
+                        let mut r = QsoRecord::clone(&e.stored_log()[i]);
                         r.call = g.pick(&["W1AW", "K1ABC", "N0NEW"]).into();
                         r.band = g.pick(&["20m", "40m"]).into();
                         e.update_qso(r.id.unwrap(), r);
                     }
                     1 if n > 0 => {
-                        let id = e.station.logbook.records()[g.below(n)].id.unwrap();
+                        let id = e.stored_log()[g.below(n)].id.unwrap();
                         e.delete_qso(id);
                     }
                     2 => {
@@ -55547,11 +55582,11 @@ mod dedup_gate_tests {
                         e.import_adif(&t);
                     }
                     3 if n > 0 => {
-                        let id = e.station.logbook.records()[g.below(n)].id.unwrap();
+                        let id = e.stored_log()[g.below(n)].id.unwrap();
                         e.mark_qsl_card(id, true);
                     }
                     4 if n > 0 => {
-                        let r = QsoRecord::clone(&e.station.logbook.records()[g.below(n)]);
+                        let r = QsoRecord::clone(&e.stored_log()[g.below(n)]);
                         e.stamp_qrz_upload(
                             &r,
                             tempo_core::logbook::UploadOutcome::Accepted,
@@ -55567,7 +55602,7 @@ mod dedup_gate_tests {
                         let expected = old_scan(&e, &rec);
                         let hunt = e.station.pending_hunt.clone();
                         let (len, uploads, tick) = (
-                            e.station.logbook.len(),
+                            e.stored_log().len(),
                             e.station.pending_uploads.len(),
                             e.logged_tick,
                         );
@@ -55590,12 +55625,12 @@ mod dedup_gate_tests {
                         assert!(e.stalled_qso.is_none(), "the stash clears first, as before");
                         if got {
                             dups += 1;
-                            assert_eq!(e.station.logbook.len(), len, "a duplicate adds nothing");
+                            assert_eq!(e.stored_log().len(), len, "a duplicate adds nothing");
                             assert_eq!(e.station.pending_uploads.len(), uploads, "nor queues");
                             assert_eq!(e.station.pending_hunt, hunt, "nor spends the hunt");
                         } else {
                             accepted += 1;
-                            assert_eq!(e.station.logbook.len(), len + 1);
+                            assert_eq!(e.stored_log().len(), len + 1);
                         }
                     }
                 }
@@ -55634,14 +55669,7 @@ mod dedup_gate_tests {
             "and the real contact spends it"
         );
         assert_eq!(
-            e.station
-                .logbook
-                .records()
-                .last()
-                .unwrap()
-                .ota
-                .their_ref
-                .as_deref(),
+            e.stored_log().last().unwrap().ota.their_ref.as_deref(),
             Some("US-0001")
         );
     }

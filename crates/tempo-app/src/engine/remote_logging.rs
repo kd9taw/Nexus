@@ -516,6 +516,7 @@ mod tests {
     use super::*;
     use crate::dto::Tier;
     use crate::engine::tests::dec_snr;
+    use crate::test_util::StoredLog;
 
     struct Fixture {
         dir: PathBuf,
@@ -584,8 +585,9 @@ mod tests {
             for receipt in receipts {
                 receipt.sync().unwrap();
             }
-            let mut expected = native.engine.station.logbook.records()[0].as_ref().clone();
-            let actual = &remote.engine.station.logbook.records()[0];
+            let mut expected = native.engine.stored_log()[0].as_ref().clone();
+            let logged = remote.engine.stored_log();
+            let actual = &logged[0];
             assert!(
                 expected
                     .time_off_unix
@@ -613,7 +615,7 @@ mod tests {
             remote
                 .engine
                 .ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
-            assert_eq!(remote.engine.station.logbook.records().len(), 1);
+            assert_eq!(remote.engine.stored_log().len(), 1);
             assert_eq!(remote.engine.station.pending_uploads.len(), 1);
             assert_eq!(
                 serde_json::to_value(remote.engine.settings()).unwrap(),
@@ -631,7 +633,7 @@ mod tests {
             CurrentQsoLogOutcome::NoEligibleContact
         ));
         assert!(!engine.qso_logged);
-        assert!(engine.station.logbook.records().is_empty());
+        assert!(engine.stored_log().is_empty());
         assert!(engine.station.pending_uploads.is_empty());
     }
 
@@ -745,7 +747,8 @@ mod tests {
             .unwrap();
         assert!(fixture.engine.pending_log().is_none());
         assert!(!fixture.dir.join("pending.json").exists());
-        let saved = &fixture.engine.station.logbook.records()[0];
+        let logged = fixture.engine.stored_log();
+        let saved = &logged[0];
         assert_eq!(saved.freq_rx_mhz, original.freq_rx_mhz);
         assert_eq!(saved.time_off_unix, original.time_off_unix);
         assert_eq!(saved.when_unix, original.when_unix);
@@ -783,7 +786,7 @@ mod tests {
             std::fs::read(fixture.dir.join("pending.json")).unwrap(),
             before
         );
-        assert_eq!(fixture.engine.station.logbook.records().len(), 1);
+        assert_eq!(fixture.engine.stored_log().len(), 1);
         let duplicate = fixture
             .engine
             .confirm_pending_log_for_sync(identity.clone(), edits(&identity))
@@ -823,7 +826,8 @@ mod tests {
             .sync()
             .unwrap();
 
-        let logged = &fixture.engine.station.logbook.records()[0];
+        let log = fixture.engine.stored_log();
+        let logged = &log[0];
         assert_eq!(logged.call, "VE9XYZ");
         assert_eq!(
             logged.country.as_deref(),
@@ -1006,7 +1010,7 @@ mod tests {
             LogFailure::PersistenceUnconfirmed
         );
         assert!(fixture.engine.matches_pending_log(&pending));
-        assert!(fixture.engine.station.logbook.records().is_empty());
+        assert!(fixture.engine.stored_log().is_empty());
         assert!(fixture.engine.station.pending_uploads.is_empty());
     }
 
@@ -1023,7 +1027,7 @@ mod tests {
                 .unwrap_err(),
             LogFailure::InvalidEdits
         );
-        assert!(fixture.engine.station.logbook.records().is_empty());
+        assert!(fixture.engine.stored_log().is_empty());
         fixture
             .engine
             .set_pending_qso_path(fixture.dir.join("other.json"));

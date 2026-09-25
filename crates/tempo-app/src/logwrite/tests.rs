@@ -8,6 +8,7 @@ use crate::logstore::tests::{
     engine_on_store, eventually, flush, id_at, legacy_log, qso, same_log, stored, Dir,
 };
 use crate::logstore::DURABLE_WAIT;
+use crate::test_util::StoredLog;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -167,11 +168,10 @@ fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
         "planned again: the first plan read the contact before the take-in changed it"
     );
     durability.wait(DURABLE_WAIT).expect("in log.adi");
-    let held = engine_lock(&engine)
-        .log_records()
-        .iter()
+    let held = engine
+        .stored_records()
+        .into_iter()
         .find(|r| r.id == Some(id))
-        .map(|r| QsoRecord::clone(r))
         .expect("held");
     assert!(
         held.qsl_rcvd.card && held.qsl_rcvd.lotw,
@@ -652,8 +652,9 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
             } else {
                 Some(e.log_qso_for_sync(rec.clone()))
             };
-            let (held, row) = (e.log_records().len(), e.log_records().last().cloned());
             drop(e);
+            let log = engine.stored_log();
+            let (held, row) = (log.len(), log.last().cloned());
             last = Some(rec.clone());
             if duplicate {
                 refused += 1;
@@ -686,12 +687,12 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
             );
             model.add(expected);
         }
-        let e = engine_lock(&engine);
         assert_eq!(
-            e.log_records().len(),
+            engine.stored_log().len(),
             model.len(),
             "seed {seed}: nothing else was logged"
         );
+        let e = engine_lock(&engine);
         flush(&e);
         same_log(
             &stored(&d),
@@ -720,9 +721,9 @@ fn a_plan_read_under_the_engine_lock_trips_the_fence() {
     let _ = e.logged_row(id);
 }
 
-/// The contact at `at` in the log in memory, as a report restating it is written from.
+/// The contact at `at` in the log, as a report restating it is written from.
 fn row_at(engine: &Arc<Mutex<Engine>>, at: usize) -> QsoRecord {
-    QsoRecord::clone(&engine_lock(engine).log_records()[at])
+    QsoRecord::clone(&engine.stored_log()[at])
 }
 
 /// A generator whose failing case replays from its seed.
@@ -755,7 +756,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
         let engine = shared(&d, 10);
         let mut g = Gen(seed);
         for step in 0..45u64 {
-            let len = engine_lock(&engine).log_records().len();
+            let len = engine.stored_log().len();
             let at = g.below(len);
             let pick = |e: &Engine| (len > 0).then(|| id_at(e, at));
             let id = pick(&engine_lock(&engine));
@@ -824,14 +825,12 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                 }
                 (8, Some(_)) => {
                     let view = engine_lock(&engine).log_view();
-                    let ids: Vec<RecordId> = {
-                        let e = engine_lock(&engine);
-                        e.log_records()
-                            .iter()
-                            .filter_map(|r| r.id)
-                            .take(4)
-                            .collect()
-                    };
+                    let ids: Vec<RecordId> = engine
+                        .stored_log()
+                        .iter()
+                        .filter_map(|r| r.id)
+                        .take(4)
+                        .collect();
                     let rows = view.rows(&ids).expect("read");
                     let signed: Vec<LotwSigned> = ids
                         .iter()
