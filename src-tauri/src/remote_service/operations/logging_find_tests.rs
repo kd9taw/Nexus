@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 /// in memory: these tests hold the old search against the new over the same rows, and whether
 /// the store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
 fn old_locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
-    engine.sync_shared_log_if_changed();
+    engine.take_in_shared_log();
     match target {
         Target::Key(t) => engine
             .stored_log()
