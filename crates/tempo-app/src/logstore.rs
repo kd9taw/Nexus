@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tempo_core::logbook::hot::HotIndex;
+use tempo_core::logbook::logfile::LogFileWriter;
 use tempo_core::logbook::mirror::{
     self, FileStamp, MirrorOptions, MirrorState, MirrorWriter, StoreSource,
 };
@@ -48,14 +49,34 @@ pub type StoreResolve = Arc<dyn Fn(&QsoRecord) -> Resolved<'static> + Send + Syn
 /// How long an operator command waits for its change to reach the disk before it says so.
 pub const DURABLE_WAIT: Duration = Duration::from_secs(60);
 
+/// Rows per transaction when a session on the 1.13 path loads `log.adi` into its store in memory
+/// — the conversion's size ([`LogStore::fallback`]).
+const FALLBACK_LOAD_CHUNK: usize = 65_536;
+
+/// What a change asks of `log.adi` on the 1.13 path ([`LogStore::fallback`]'s lane).
+enum ToFile {
+    /// Anything but an append: the file is rewritten from the store.
+    Rewrite,
+    /// These rows were appended at the end of the log, and nothing else changed: they are
+    /// appended to the file.
+    Append(Vec<Arc<QsoRecord>>),
+    /// The rows came from the file: nothing to write.
+    Nothing,
+}
+
 /// The store, open and owning the log.
 pub struct LogStore {
     writer: Arc<LogWriter>,
     /// Read connections to the store, opened on first use — see [`StoreReads`].
     reader: Arc<LogReader>,
     /// Shared with a quit, which writes it with the engine lock released (see [`Unsaved`]).
-    mirror: Arc<MirrorWriter>,
-    log_path: PathBuf,
+    /// `None` for a store with no `log.adi` beside it — see [`LogStore::in_memory`] — and for a
+    /// session on the 1.13 path, whose `log.adi` is kept by [`Self::lane`] instead.
+    mirror: Option<Arc<MirrorWriter>>,
+    /// A session on the 1.13 path ([`LogStore::fallback`]): the lane that keeps `log.adi` with
+    /// 1.13's rules, where every change is saved once it is in the file. `None` otherwise.
+    lane: Option<Arc<LogFileWriter>>,
+    log_path: Option<PathBuf>,
     db_path: PathBuf,
     resolve: StoreResolve,
     /// This process's changes the writer has not finished with, and the rows each touched.
@@ -71,6 +92,10 @@ pub struct LogStore {
     /// Tickets being collected for a command that will wait on them (see
     /// [`crate::engine::Engine::with_log_tickets`]).
     collector: Option<Vec<Ticket>>,
+    /// The launch's placeholder: the empty store in memory its engine holds until the attach
+    /// replaces it with the operator's log ([`Self::placeholder_until_attached`]). No change may
+    /// reach it.
+    placeholder: bool,
 }
 
 impl std::fmt::Debug for LogStore {
@@ -80,6 +105,7 @@ impl std::fmt::Debug for LogStore {
             .field("log_path", &self.log_path)
             .field("inflight", &self.inflight.len())
             .field("dropped", &self.dropped.len())
+            .field("on_log_adi", &self.lane.is_some())
             .finish()
     }
 }
@@ -390,8 +416,9 @@ fn open_reporting_with(
         store: LogStore {
             writer,
             reader,
-            mirror,
-            log_path: log_path.to_path_buf(),
+            mirror: Some(mirror),
+            lane: None,
+            log_path: Some(log_path.to_path_buf()),
             db_path,
             resolve,
             inflight: Vec::new(),
@@ -399,6 +426,7 @@ fn open_reporting_with(
             last_refusal: None,
             synced_foreign,
             collector: None,
+            placeholder: false,
         },
         records,
         foreign,
@@ -408,6 +436,101 @@ fn open_reporting_with(
 }
 
 impl LogStore {
+    /// An empty store in this process's memory ([`LogDb::memory_name`]), with its writer and
+    /// its reads and no `log.adi` beside it — the log of an engine no launch has given one.
+    pub(crate) fn in_memory(resolve: StoreResolve) -> Result<LogStore, sqlite::Error> {
+        let db_path = LogDb::memory_name();
+        let writer = Arc::new(LogWriter::start(LogDb::open(&db_path)?));
+        let synced_foreign = writer.foreign_commits();
+        Ok(LogStore {
+            writer,
+            reader: Arc::new(LogReader::new(&db_path)),
+            mirror: None,
+            lane: None,
+            log_path: None,
+            db_path,
+            resolve,
+            inflight: Vec::new(),
+            dropped: Vec::new(),
+            last_refusal: None,
+            synced_foreign,
+            collector: None,
+            placeholder: false,
+        })
+    }
+
+    /// The store of a session on the 1.13 path — SPEC-2 v3 C19, D1-A, the operator's "Same code,
+    /// in-memory database": `log.adi` is the log's durable home, as it was in 1.13, and `records`
+    /// (the log as [`Logbook::load`] read it from `log_path`) are loaded into a store in this
+    /// process's memory, so every reader of the log reads a store whichever path the session is
+    /// on. `log.adi` is kept by a lane of its own, with 1.13's rules
+    /// ([`tempo_core::logbook::logfile`]); the store's C15 mirror is not started.
+    ///
+    /// The load is the conversion's: the rows in big transactions with the indexes built after
+    /// them, on a connection of its own, before the writer's connection takes over. Measured in
+    /// a release build: 1.0 s and 174 MiB for 150,000 contacts, 3.9 s and 404 MiB for 500,000, on
+    /// top of the 0.7 s / 2.5 s the 1.13 load of `log.adi` itself takes.
+    ///
+    /// `read` is `log.adi`'s stamp as it stood before the load read it: while the file still
+    /// has it, it holds the rows loaded, and the lane may replace it without the station reading
+    /// it again. Under the engine lock at launch, as 1.13's load was (see
+    /// [`tempo_core::logbook::io_fence`]): the launch holds it across the attach.
+    pub(crate) fn fallback(
+        log_path: &Path,
+        read: Option<FileStamp>,
+        records: &[Arc<QsoRecord>],
+        resolve: StoreResolve,
+    ) -> Result<LogStore, sqlite::Error> {
+        let db_path = LogDb::memory_name();
+        let mut loader = LogDb::open_for_conversion(&db_path)?;
+        loader.lift_memory_cap()?;
+        for chunk in records.chunks(FALLBACK_LOAD_CHUNK) {
+            loader.insert_all(chunk.iter().map(|r| (&**r, resolve(r))))?;
+        }
+        loader.build_indexes(&mut |_, _| {})?;
+        // The writer's own connection, opened while the loader's still holds the database: an
+        // in-memory database lasts as long as some connection to it does.
+        let writer = Arc::new(LogWriter::start(LogDb::open(&db_path)?));
+        drop(loader);
+        let synced_foreign = writer.foreign_commits();
+        let reader = Arc::new(LogReader::new(&db_path));
+        let lane = Arc::new(LogFileWriter::start(
+            log_path.to_path_buf(),
+            Arc::new(StoreSource::new(Arc::clone(&reader), Arc::clone(&writer))),
+        ));
+        if let Some(stamp) = read {
+            lane.accept(stamp, records.iter().filter_map(|r| r.id).collect());
+        }
+        Ok(LogStore {
+            writer,
+            reader,
+            mirror: None,
+            lane: Some(lane),
+            log_path: Some(log_path.to_path_buf()),
+            db_path,
+            resolve,
+            inflight: Vec::new(),
+            dropped: Vec::new(),
+            last_refusal: None,
+            synced_foreign,
+            collector: None,
+            placeholder: false,
+        })
+    }
+
+    /// Make this the launch's placeholder: the store the launch's engine holds until the attach
+    /// replaces it with the operator's log (the database, or on the 1.13 path `log.adi` loaded
+    /// into memory). A change sent to it would be lost with it, so in a debug build none may be:
+    /// one is a panic that names it. A release build checks nothing.
+    pub(crate) fn placeholder_until_attached(&mut self) {
+        self.placeholder = true;
+    }
+
+    /// The lane that keeps `log.adi` on the 1.13 path, if this store is that session's.
+    pub(crate) fn lane(&self) -> Option<&Arc<LogFileWriter>> {
+        self.lane.as_ref()
+    }
+
     /// The writer, for a command that waits on tickets after releasing every lock.
     pub fn writer(&self) -> Arc<LogWriter> {
         Arc::clone(&self.writer)
@@ -446,14 +569,14 @@ impl LogStore {
         &self.db_path
     }
 
-    /// The `log.adi` this store mirrors to.
-    pub fn log_path(&self) -> &Path {
-        &self.log_path
+    /// The `log.adi` this store mirrors to, if it has one.
+    pub fn log_path(&self) -> Option<&Path> {
+        self.log_path.as_deref()
     }
 
-    /// The mirror's state, for a caller that surfaces a refusal.
-    pub fn mirror_status(&self) -> mirror::Status {
-        self.mirror.status()
+    /// The mirror's state, for a caller that surfaces a refusal — `None` with no mirror.
+    pub fn mirror_status(&self) -> Option<mirror::Status> {
+        self.mirror.as_ref().map(|m| m.status())
     }
 
     /// cty.dat's answer as the store writes it.
@@ -464,15 +587,35 @@ impl LogStore {
         }
     }
 
-    /// Hand one change to the writer, and its revision to the mirror. Never touches the disk. A
-    /// change that writes nothing is not sent, and has no ticket.
+    /// Hand one change to the writer, and its revision to the mirror — or, on the 1.13 path, a
+    /// rewrite of `log.adi` to its lane. Never touches the disk. A change that writes nothing is
+    /// not sent, and has no ticket.
     pub(crate) fn submit(&mut self, change: Change) -> Option<Ticket> {
+        self.submit_as(change, ToFile::Rewrite)
+    }
+
+    /// [`Self::submit`] for a change that appended rows at the end of the log and changed
+    /// nothing else: on the 1.13 path, the lane appends them to `log.adi`, as 1.13's append did,
+    /// instead of rewriting the file.
+    pub(crate) fn submit_appended(&mut self, change: Change) -> Option<Ticket> {
+        let rows = change.upsert.iter().map(|w| Arc::clone(&w.rec)).collect();
+        self.submit_as(change, ToFile::Append(rows))
+    }
+
+    /// [`Self::submit`] for a change whose rows came FROM `log.adi` — the 1.13 path taking in
+    /// what another program wrote to it: the lane writes nothing for it, and counts it saved once
+    /// every change before it is.
+    pub(crate) fn submit_quietly(&mut self, change: Change) -> Option<Ticket> {
+        self.submit_as(change, ToFile::Nothing)
+    }
+
+    fn submit_as(&mut self, change: Change, to_file: ToFile) -> Option<Ticket> {
         if change.is_empty() {
             return None;
         }
         self.collect(Instant::now());
         self.supersede(&change);
-        let ticket = self.send(change, 0);
+        let ticket = self.send_as(change, 0, to_file);
         if let Some(c) = &mut self.collector {
             c.push(ticket.clone());
         }
@@ -483,6 +626,16 @@ impl LogStore {
     /// with its rows — `resends` times sent again already. No I/O, and no copy of the log: the
     /// mirror reads the store once it holds the change.
     fn send(&mut self, change: Change, resends: u32) -> Ticket {
+        self.send_as(change, resends, ToFile::Rewrite)
+    }
+
+    /// [`Self::send`], telling the 1.13 path's lane what the change asks of `log.adi`.
+    fn send_as(&mut self, change: Change, resends: u32, to_file: ToFile) -> Ticket {
+        debug_assert!(
+            !self.placeholder,
+            "a change reached the launch's placeholder log before the launch attached the \
+             operator's: the attach replaces it, and the change would be lost with it"
+        );
         let held = Arc::new(Held::of(&change));
         let ticket = self.writer.submit(change);
         self.inflight.push(InFlight {
@@ -490,7 +643,18 @@ impl LogStore {
             held,
             resends,
         });
-        self.mirror.dirty(ticket.revision());
+        if let Some(m) = &self.mirror {
+            m.dirty(ticket.revision());
+        }
+        if let Some(lane) = &self.lane {
+            // Its number, which a wait reads back as the lane's count once every change the
+            // command made has been handed over ([`Self::durability`]).
+            let _ = match to_file {
+                ToFile::Rewrite => lane.rewrite(ticket.revision()),
+                ToFile::Append(rows) => lane.append(ticket.revision(), rows),
+                ToFile::Nothing => lane.noted(ticket.revision()),
+            };
+        }
         ticket
     }
 
@@ -728,14 +892,18 @@ impl LogStore {
 
     /// The store has taken in the `log.adi` with `stamp`: the mirror may replace it now.
     pub(crate) fn accept_log_file(&self, stamp: FileStamp) {
-        self.mirror.accept(stamp);
+        if let Some(m) = &self.mirror {
+            m.accept(stamp);
+        }
     }
 
     /// Have the mirror picture the store as it stands, changing nothing in it — for a `log.adi`
     /// that is not the store's own picture yet (the file a conversion read, one just taken in),
     /// so the next launch finds a mirror and has nothing to read or take in.
     pub(crate) fn refresh_mirror(&self) {
-        self.mirror.dirty(self.writer.submitted_rev());
+        if let Some(m) = &self.mirror {
+            m.dirty(self.writer.submitted_rev());
+        }
     }
 
     /// What a quit still has to wait for (see [`Unsaved`]): this process's changes the writer
@@ -748,9 +916,43 @@ impl LogStore {
             .map(|f| f.ticket.clone())
             .collect();
         Unsaved {
-            changes: Durability::new(Some(self.writer()), tickets),
+            changes: self.durability(tickets),
             held: self.held(),
-            mirror: Some(Arc::clone(&self.mirror)),
+            mirror: self.mirror.clone(),
+            lane: self.lane_so_far(),
+        }
+    }
+
+    /// What a command that made the changes `tickets` name waits on: the writer, and on the
+    /// 1.13 path the lane that puts them in `log.adi` — every change it has been handed so far,
+    /// which is every one the command made.
+    pub(crate) fn durability(&self, tickets: Vec<Ticket>) -> Durability {
+        Durability {
+            writer: Some(self.writer()),
+            tickets,
+            lane: self.lane_so_far(),
+        }
+    }
+
+    /// The 1.13 path's lane, with how many changes it has been handed so far.
+    fn lane_so_far(&self) -> Option<(Arc<LogFileWriter>, u64)> {
+        self.lane.as_ref().map(|l| (Arc::clone(l), l.sent()))
+    }
+
+    /// The receipt for the change `ticket` names, just submitted — an append a Remote log
+    /// redeems once it is safe: committed, and on the 1.13 path in `log.adi` too.
+    pub(crate) fn receipt(&self, ticket: Ticket) -> tempo_core::logbook::LogAppendReceipt {
+        match self.lane_so_far() {
+            Some((lane, n)) => tempo_core::logbook::LogAppendReceipt::durable_in_file(
+                self.writer(),
+                ticket,
+                lane,
+                n,
+                DURABLE_WAIT,
+            ),
+            None => {
+                tempo_core::logbook::LogAppendReceipt::durable(self.writer(), ticket, DURABLE_WAIT)
+            }
         }
     }
 
@@ -762,10 +964,24 @@ impl LogStore {
             .flush(deadline)
             .map(|_| ())
             .map_err(|e| e.to_string());
-        let mirrored = self.mirror.flush(deadline);
+        let mirrored = self.mirror.as_ref().map(|m| m.flush(deadline));
+        let filed = self.lane.as_ref().map(|l| l.flush(deadline));
         logged?;
-        match mirrored.last_error {
-            Some(e) if mirrored.pending => Err(format!("log.adi was not brought up to date: {e}")),
+        if let Some(st) = filed.filter(|st| st.pending()) {
+            return Err(format!(
+                "log.adi does not hold every change yet{}",
+                if st.foreign_write {
+                    ": another program or computer changed it".to_string()
+                } else {
+                    st.last_error.map(|e| format!(": {e}")).unwrap_or_default()
+                }
+            ));
+        }
+        match mirrored {
+            Some(m) if m.pending => match m.last_error {
+                Some(e) => Err(format!("log.adi was not brought up to date: {e}")),
+                None => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -778,13 +994,12 @@ impl LogStore {
 pub struct Durability {
     writer: Option<Arc<LogWriter>>,
     tickets: Vec<Ticket>,
+    /// On the 1.13 path, the lane that puts the changes in `log.adi` — where they are saved —
+    /// and how many it had been handed when the command was done.
+    lane: Option<(Arc<LogFileWriter>, u64)>,
 }
 
 impl Durability {
-    pub(crate) fn new(writer: Option<Arc<LogWriter>>, tickets: Vec<Ticket>) -> Durability {
-        Durability { writer, tickets }
-    }
-
     /// Whether there is anything to wait for.
     pub fn is_empty(&self) -> bool {
         self.tickets.is_empty()
@@ -807,6 +1022,11 @@ impl Durability {
             let left = deadline.saturating_sub(start.elapsed());
             writer.wait_durable(t, left).map_err(|e| e.to_string())?;
         }
+        // On the 1.13 path a change is saved once it is in `log.adi`, as 1.13's command returned
+        // once its write had happened.
+        if let Some((lane, n)) = self.lane.as_ref().filter(|_| !self.tickets.is_empty()) {
+            lane.wait_saved(*n, deadline.saturating_sub(start.elapsed()))?;
+        }
         Ok(())
     }
 
@@ -816,10 +1036,22 @@ impl Durability {
         let Some(writer) = self.writer else {
             return Vec::new();
         };
+        let lane = self.lane;
         self.tickets
             .into_iter()
-            .map(|t| {
-                tempo_core::logbook::LogAppendReceipt::durable(Arc::clone(&writer), t, DURABLE_WAIT)
+            .map(|t| match &lane {
+                Some((lane, n)) => tempo_core::logbook::LogAppendReceipt::durable_in_file(
+                    Arc::clone(&writer),
+                    t,
+                    Arc::clone(lane),
+                    *n,
+                    DURABLE_WAIT,
+                ),
+                None => tempo_core::logbook::LogAppendReceipt::durable(
+                    Arc::clone(&writer),
+                    t,
+                    DURABLE_WAIT,
+                ),
             })
             .collect()
     }
@@ -1033,6 +1265,9 @@ pub struct Unsaved {
     /// the store ([`LogStore::resend`] sends the ones it can again).
     held: Standing,
     mirror: Option<Arc<MirrorWriter>>,
+    /// On the 1.13 path, the lane that puts every change in `log.adi`, where it is saved, and
+    /// how many changes it had been handed when this was taken.
+    lane: Option<(Arc<LogFileWriter>, u64)>,
 }
 
 /// How long a change the database refused for a reason that can pass waits before it is sent
@@ -1227,9 +1462,36 @@ impl Unsaved {
         s.saved() && !self.mirror.as_ref().is_some_and(|m| m.status().pending)
     }
 
-    /// Where the changes stand now. Never waits — it reads each ticket, and does not ask the
-    /// writer to wait on one, so it is safe to ask under any lock.
+    /// Where the changes stand now, as a quit counts them. Never waits — it reads each ticket,
+    /// and does not ask the writer to wait on one, so it is safe to ask under any lock.
+    ///
+    /// On the 1.13 path a change is saved once it is in `log.adi` — the store is in memory — so
+    /// a change the lane has not written yet is still on its way, whatever the store has taken.
+    /// Counted from both ends (the writer's tickets, the lane's count), a change owed to either
+    /// counts once.
     pub fn standing(&self) -> Standing {
+        let mut s = self.stored();
+        if let Some((lane, n)) = &self.lane {
+            let st = lane.status();
+            let owed = n.saturating_sub(st.done) as usize;
+            s.pending = s.pending.max(owed);
+            if owed > 0 && s.retry_reason.is_none() {
+                // What holds the lane now: a file another program wrote, before an older error
+                // the lane has not had the chance to try again since.
+                s.retry_reason = if st.foreign_write {
+                    Some("log.adi was changed by another program or computer".into())
+                } else {
+                    st.last_error.clone()
+                };
+            }
+        }
+        s
+    }
+
+    /// Where the changes stand in the STORE — what a read of it can hold, which is what an
+    /// export counts ([`crate::logexport`]). On the 1.13 path the store is in memory, so a change
+    /// the lane has still to write to `log.adi` is in it already.
+    pub fn stored(&self) -> Standing {
         let mut s = self.held.clone();
         for t in &self.changes.tickets {
             match t.refusal() {
@@ -1241,9 +1503,25 @@ impl Unsaved {
         s
     }
 
-    /// Wait up to `for_up_to` for the writer to finish with every change, then say where they
-    /// stand. ⚠️ The quit's wait: never call it holding a lock.
+    /// Wait up to `for_up_to` for the writer to finish with every change — and on the 1.13 path
+    /// for its lane to write them to `log.adi` — then say where they stand. ⚠️ The quit's wait:
+    /// never call it holding a lock.
     pub fn wait(&self, for_up_to: Duration) -> Standing {
+        let start = Instant::now();
+        self.wait_for_the_writer(for_up_to);
+        if let Some((lane, n)) = &self.lane {
+            let _ = lane.wait_written(*n, for_up_to.saturating_sub(start.elapsed()));
+        }
+        self.standing()
+    }
+
+    /// [`Self::wait`] for the store alone, and where the changes stand in it ([`Self::stored`]).
+    pub fn wait_stored(&self, for_up_to: Duration) -> Standing {
+        self.wait_for_the_writer(for_up_to);
+        self.stored()
+    }
+
+    fn wait_for_the_writer(&self, for_up_to: Duration) {
         if let Some(writer) = &self.changes.writer {
             let start = Instant::now();
             for t in &self.changes.tickets {
@@ -1256,13 +1534,24 @@ impl Unsaved {
                 }
             }
         }
-        self.standing()
     }
 
     /// Bring `log.adi` up to date now, waiting up to `for_up_to`: `None` when it is written, or
     /// had nothing to write; otherwise what is wrong, for the diagnostic log. The copy is a
     /// convenience beside the logbook, so this is never a question for the operator.
     pub fn write_mirror(&self, for_up_to: Duration) -> Option<String> {
+        if let Some((lane, _)) = &self.lane {
+            // The 1.13 path: `log.adi` is the log itself, and every change the quit waited for
+            // is in it already ([`Self::wait`]) — this is whatever came after.
+            let st = lane.flush(for_up_to);
+            return st.pending().then(|| {
+                format!(
+                    "log.adi does not hold {} change(s) yet{}",
+                    st.owed(),
+                    st.last_error.map(|e| format!(": {e}")).unwrap_or_default()
+                )
+            });
+        }
         let status = self.mirror.as_ref()?.flush(for_up_to);
         if status.pending {
             return Some(format!(
@@ -1585,6 +1874,33 @@ pub(crate) mod tests {
         Mutex::new(e)
     }
 
+    /// [`launch_with_resolvers`] onto the 1.13 path: `log.adi` in `d` is the log, its rows in a
+    /// store in memory (SPEC-2 v3 C19, D1-A).
+    fn launch_on_log_file_with_resolvers(d: &Dir) -> Mutex<Engine> {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(test_country);
+        e.set_state_resolver(test_state);
+        e.set_log_path(d.log());
+        assert!(e.log_on_file(), "premise: the 1.13 path");
+        Mutex::new(e)
+    }
+
+    /// Each seed of a run on both of the store's homes: the database, and the 1.13 path's store
+    /// in memory — `(on the 1.13 path, seed)`.
+    fn on_both_homes(seeds: u64) -> impl Iterator<Item = (bool, u64)> {
+        [false, true]
+            .into_iter()
+            .flat_map(move |on_file| (1..=seeds).map(move |seed| (on_file, seed)))
+    }
+
+    fn home(on_file: bool) -> &'static str {
+        if on_file {
+            "the 1.13 path"
+        } else {
+            "the store"
+        }
+    }
+
     /// One run of the fill job, with the same resolvers.
     fn fill(e: &Mutex<Engine>, version: i64) -> crate::logfill::FillOutcome {
         crate::logfill::fill_log_store(e, version, &test_country, &test_state)
@@ -1690,6 +2006,13 @@ pub(crate) mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
         e.set_log_path(legacy.log());
+        let e = Mutex::new(e);
+        assert_eq!(
+            fill(&e, 7),
+            crate::logfill::FillOutcome::default(),
+            "the fill job does nothing there: its fills are the launch's"
+        );
+        flush(&e.lock().unwrap());
         assert_ne!(
             std::fs::read(legacy.log()).unwrap(),
             before,
@@ -2019,8 +2342,9 @@ pub(crate) mod tests {
     /// ★ A PASS OVER THE STORE IS A PASS OVER THE LOG IN MEMORY — every row, every field a fold
     /// can ask for (all of them, the stamps included), in log order and newest first, and the
     /// same rows under each scope — after 12 seeded runs of 40 random changes of every kind the
-    /// app makes, fills included. The memory side is the 1.13 path's arm, which is the log as
-    /// every reader saw it before C14.
+    /// app makes, fills included, on the database and on the 1.13 path's store in memory. The
+    /// memory side is the in-memory log's arm, which is the log as every reader saw it before
+    /// C14.
     #[test]
     fn a_pass_over_the_store_is_a_pass_over_the_log_in_memory() {
         let every: Vec<&'static str> = [
@@ -2078,12 +2402,17 @@ pub(crate) mod tests {
             r
         };
         let mut changes = 0;
-        for seed in 1..=12u64 {
-            let d = Dir::new(&format!("rows-{seed}"));
+        for (on_file, seed) in on_both_homes(12) {
+            let d = Dir::new(&format!("rows-{on_file}-{seed}"));
             std::fs::write(d.log(), log_to_fill(12)).unwrap();
-            flush(&engine_on_store(&d));
-            let e = launch_with_resolvers(&d);
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                flush(&engine_on_store(&d));
+                launch_with_resolvers(&d)
+            };
             let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let seed = format!("{seed}, {}", home(on_file));
             for step in 0..40 {
                 random_change(&e, &mut g, step);
                 changes += 1;
@@ -2132,7 +2461,7 @@ pub(crate) mod tests {
             }
             assert_eq!(store.count().unwrap().0, held.len() as u64, "seed {seed}");
         }
-        assert_eq!(changes, 12 * 40);
+        assert_eq!(changes, 2 * 12 * 40);
     }
 
     /// ★ The catch-up sweep picks from the store what it picked from memory: the same contacts,
@@ -2366,22 +2695,28 @@ pub(crate) mod tests {
     /// the replacement characters a lossy read leaves, and then 8 seeded runs of 24 random
     /// changes of every kind the app makes (logged contacts, imports, edits, deletes, QSL cards
     /// and marks, satellite tags, connector stamps, LoTW confirmations, the fill job), compared
-    /// after every fourth. The memory side is the Logbook's own export of the log the engine
-    /// holds — what the Export button wrote before C15.
+    /// after every fourth — on the database and on the 1.13 path's store in memory. The memory
+    /// side is the Logbook's own export of the log the engine holds — what the Export button
+    /// wrote before C15.
     #[test]
     fn every_export_from_the_store_is_the_export_of_the_log_in_memory() {
         let mut compared = 0usize;
         let mut nonempty = 0usize;
-        for seed in 1..=8u64 {
-            let d = Dir::new(&format!("export-{seed}"));
+        for (on_file, seed) in on_both_homes(8) {
+            let d = Dir::new(&format!("export-{on_file}-{seed}"));
             std::fs::write(d.log(), export_fixture()).unwrap();
-            let e = launch_with_resolvers(&d);
+            let e = if on_file {
+                launch_on_log_file_with_resolvers(&d)
+            } else {
+                launch_with_resolvers(&d)
+            };
             let _ = e.lock().unwrap().import_adif(
                 &export_records(12, 20)
                     .replace("Jean-Luc", "Jos\u{FFFD}")
                     .replace("plain", "a \u{FFFD}\u{FFFD} b"),
             );
             let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let seed = format!("{seed}, {}", home(on_file));
             for step in 0..24 {
                 random_change(&e, &mut g, step);
                 if step % 4 != 3 {
@@ -3315,6 +3650,129 @@ pub(crate) mod tests {
         let (rows, fresh) = reads.rows(DURABLE_WAIT).expect("read");
         assert_eq!(fresh, Freshness::Current);
         same_log(&rows, e.log_records(), "a read of the store is the log");
+    }
+
+    /// ★ A NEW STATION KEEPS ITS LOG IN A STORE (SPEC-2 v3 C19, D1-A): an empty one in this
+    /// process's memory, with no file behind it and no `log.adi` beside it, until the launch
+    /// gives it the operator's. A contact it logs is in that store, where every pass over the
+    /// log reads it. The control: the 1.13 path, which leaves the store for `log.adi`.
+    #[test]
+    fn a_new_station_keeps_its_log_in_an_empty_store_in_memory() {
+        let sc = crate::station::StationCore::new();
+        let store = sc.store.as_ref().expect("a new station holds a store");
+        let name = store.db_path().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("file:/nexus-log-") && name.ends_with("?vfs=memdb"),
+            "in memory: {name}"
+        );
+        assert!(!store.db_path().exists(), "no file behind it");
+        assert!(store.log_path().is_none(), "and no log.adi beside it");
+        assert!(store.mirror_status().is_none(), "so nothing to mirror");
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(e.log_store_open(), "an engine's station too");
+        e.log_qso(qso("W1NEW", 1_788_200_000));
+        let mut calls = Vec::new();
+        let fresh = e
+            .log_rows()
+            .each_record(DURABLE_WAIT, &mut |r| {
+                calls.push(r.call.clone());
+                std::ops::ControlFlow::Continue(())
+            })
+            .expect("the store reads");
+        assert_eq!(fresh, Freshness::Current);
+        assert_eq!(calls, ["W1NEW"], "the contact is in the store");
+
+        assert!(!e.log_on_file(), "and no log.adi to keep");
+        let d = Dir::new("new-station");
+        e.set_log_path(d.log());
+        assert!(
+            e.log_on_file() && e.log_store_open(),
+            "control: the 1.13 path keeps log.adi, its rows in a store in memory"
+        );
+    }
+
+    /// ⛔ A CONTACT WRITTEN BEFORE THE LAUNCH ATTACHES THE OPERATOR'S LOG IS NOT CARRIED INTO IT
+    /// — exactly as before a new station held a store. The attach, and the fallback to
+    /// `log.adi`, REPLACE the log a station was built with: before SPEC-2 v3 C19 an empty log in
+    /// memory with nowhere to write, now an empty store in memory, and either is replaced the
+    /// same way, whatever was written into it. So the launch must write nothing before the
+    /// attach, and nothing can: src-tauri's
+    /// `nothing_can_write_the_log_before_the_launch_attaches_it` pins why. The two stations
+    /// here differ in that alone: one built as a station is now, one with its store taken away,
+    /// as a station was built before.
+    #[test]
+    fn a_contact_written_before_the_attach_is_not_carried_into_the_operator_s_log_as_before() {
+        for built_before_c19 in [false, true] {
+            for fallback in [false, true] {
+                let d = Dir::new(&format!("pre-attach-{built_before_c19}-{fallback}"));
+                std::fs::write(d.log(), legacy_log(3)).unwrap();
+                let mut sc = crate::station::StationCore::new();
+                if built_before_c19 {
+                    sc.store = None;
+                }
+                // The write the FT auto-log makes: the station's append.
+                let _ = sc.append(vec![qso("W9EARLY", 1_788_300_000)], false);
+                if fallback {
+                    sc.set_log_path(d.log());
+                } else {
+                    sc.attach_store(open_fast(&d));
+                }
+                let what = format!("built before C19: {built_before_c19}, fallback: {fallback}");
+                let calls: Vec<&str> = sc.logbook.records().iter().map(|r| &*r.call).collect();
+                assert_eq!(
+                    calls.len(),
+                    3,
+                    "the operator's log, whole ({what}): {calls:?}"
+                );
+                assert!(!calls.contains(&"W9EARLY"), "and nothing else ({what})");
+                if !fallback {
+                    let store = sc.store.as_ref().expect("the operator's store");
+                    store.flush(DURABLE_WAIT).expect("written");
+                    let rows = stored(&d);
+                    assert_eq!(rows.len(), 3, "the store holds its own rows ({what})");
+                    assert!(rows.iter().all(|r| r.call != "W9EARLY"), "only ({what})");
+                }
+                let file = String::from_utf8_lossy(&std::fs::read(d.log()).unwrap()).into_owned();
+                assert!(!file.contains("W9EARLY"), "nor is it in log.adi ({what})");
+            }
+        }
+    }
+
+    /// ★ POSITIVE CONTROL for the launch's guard: a change sent to the launch's engine before the
+    /// attach — which would be lost with the placeholder the attach replaces — is a panic in a
+    /// debug build, naming it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "a change reached the launch's placeholder log before the launch attached"
+    )]
+    fn a_change_before_the_launch_attaches_the_log_is_refused_in_a_debug_build() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.refuse_log_changes_until_attached();
+        e.log_qso(qso("W9EARLY", 1_788_300_000));
+    }
+
+    /// The attach, and the 1.13 path, replace the launch's placeholder: its engine then logs as
+    /// any does, into the operator's log. Reading the placeholder before (the launch seeds the
+    /// decoder's hash table from it) is no change, and is allowed.
+    #[test]
+    fn the_attach_and_the_1_13_path_replace_the_launchs_placeholder() {
+        for on_file in [false, true] {
+            let d = Dir::new(&format!("placeholder-{on_file}"));
+            std::fs::write(d.log(), legacy_log(3)).unwrap();
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.refuse_log_changes_until_attached();
+            assert_eq!(e.log_rows().count().expect("reads").0, 0, "a read");
+            if on_file {
+                e.set_log_path(d.log());
+            } else {
+                e.attach_log_store(open_fast(&d));
+            }
+            e.log_qso(qso("W9LATE", 1_788_300_000));
+            flush(&e);
+            assert_eq!(e.log_records().len(), 4, "on_file {on_file}");
+        }
     }
 
     /// ★ POSITIVE CONTROL: a read of the store under the Engine lock is a panic in a debug
@@ -4942,6 +5400,561 @@ pub(crate) mod tests {
             1,
             "once the store catches up it holds the contact once"
         );
+    }
+
+    // ── D1-A: the 1.13 path, its log in a store in memory ───────────────────
+
+    /// A station on the 1.13 path over a `log.adi` of `n` contacts.
+    fn on_log_file(d: &Dir, n: usize) -> crate::station::StationCore {
+        std::fs::write(d.log(), legacy_log(n)).unwrap();
+        let mut sc = crate::station::StationCore::new();
+        sc.set_log_path(d.log());
+        sc
+    }
+
+    fn lane_of(sc: &crate::station::StationCore) -> Arc<LogFileWriter> {
+        Arc::clone(
+            sc.store
+                .as_ref()
+                .and_then(LogStore::lane)
+                .expect("the 1.13 path's lane"),
+        )
+    }
+
+    /// Hold the lane's rewrites for a moment, as a slow network drive does: the folder refuses
+    /// the temporary file a rewrite writes first, and nothing else — `log.adi` itself can still
+    /// be appended to, as another computer appends to it. `false` lets them through again.
+    #[cfg(unix)]
+    fn folder_refuses_new_files(d: &Dir, refuses: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if refuses { 0o500 } else { 0o700 };
+        std::fs::set_permissions(&d.0, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// The calls `log.adi` holds, in file order.
+    fn calls_in_file(d: &Dir) -> Vec<String> {
+        Logbook::load(&d.log())
+            .records()
+            .iter()
+            .map(|r| r.call.clone())
+            .collect()
+    }
+
+    /// The calls the station's log holds, in log order.
+    fn calls_held(sc: &crate::station::StationCore) -> Vec<String> {
+        sc.logbook
+            .records()
+            .iter()
+            .map(|r| r.call.clone())
+            .collect()
+    }
+
+    /// ★ A CONTACT DELETED HERE STAYS DELETED WHILE THE FILE CATCHES UP. The lane writes
+    /// `log.adi` after the change, so for a moment the file still holds a contact the log has
+    /// deleted. If another machine appends in that moment, the lane holds its rewrite and the
+    /// station takes the file in: the other machine's contact comes in, and the deleted one —
+    /// in the file only because the file lags — must not. The contact here is one the launch
+    /// loaded, which the lane has never written itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_delete_the_file_has_not_caught_up_with_is_not_taken_back_in() {
+        let d = Dir::new("lagging-delete");
+        let mut sc = on_log_file(&d, 3);
+        let gone = QsoRecord::clone(&sc.logbook.records()[0]);
+        let lane = lane_of(&sc);
+        // The lane cannot write the delete yet, as on a slow drive.
+        folder_refuses_new_files(&d, true);
+        assert!(sc.delete_qso(gone.id.unwrap()));
+        // Another machine appends meanwhile.
+        Logbook::append(&d.log(), &qso("W7OTHER", 1_788_400_000)).unwrap();
+        folder_refuses_new_files(&d, false);
+        assert!(
+            eventually(|| lane.status().foreign_write),
+            "premise: the lane holds its rewrite for the other machine's file: {:?}",
+            lane.status()
+        );
+        assert!(sc.take_in_log_file_if_changed(), "the file is taken in");
+        let st = lane.flush(DURABLE_WAIT);
+        assert!(!st.pending(), "and then written: {st:?}");
+        let held = calls_held(&sc);
+        assert!(
+            !held.contains(&gone.call),
+            "the contact deleted here stays deleted: {held:?}"
+        );
+        assert!(
+            held.contains(&"W7OTHER".to_string()),
+            "and the other machine's contact is taken in: {held:?}"
+        );
+        let file = calls_in_file(&d);
+        assert!(
+            !file.contains(&gone.call) && file.contains(&"W7OTHER".to_string()),
+            "the file agrees: {file:?}"
+        );
+    }
+
+    /// ★ THE LANE NEVER REWRITES A FILE ANOTHER MACHINE HAS CHANGED — the data-loss fix D1-A adds
+    /// to 1.13's rules. 1.13 read the shared file, changed the log and rewrote the file in one
+    /// hold of the engine lock; the lane rewrites it a moment after the change. A contact another
+    /// machine appends in that moment is in no picture this station has: a rewrite then would
+    /// delete it. The lane finds the file changed, holds the rewrite, and writes once the station
+    /// has taken the file in — the other machine's contact kept, in the log and in the file.
+    #[cfg(unix)]
+    #[test]
+    fn a_contact_another_machine_appends_while_a_change_is_on_its_way_is_kept() {
+        let d = Dir::new("foreign-mid-change");
+        let mut sc = on_log_file(&d, 3);
+        let lane = lane_of(&sc);
+        folder_refuses_new_files(&d, true);
+        let mut edited = QsoRecord::clone(&sc.logbook.records()[1]);
+        edited.name = Some("Edited here".into());
+        assert!(sc.update_qso(edited.id.unwrap(), edited));
+        Logbook::append(&d.log(), &qso("W7OTHER", 1_788_400_000)).unwrap();
+        folder_refuses_new_files(&d, false);
+        assert!(
+            eventually(|| lane.status().foreign_write),
+            "the lane holds its rewrite: {:?}",
+            lane.status()
+        );
+        assert!(
+            calls_in_file(&d).contains(&"W7OTHER".to_string()),
+            "and the other machine's contact is still in the file"
+        );
+        assert!(
+            sc.sync_shared_log_if_changed(),
+            "the freshness poll takes it in"
+        );
+        let st = lane.flush(DURABLE_WAIT);
+        assert!(
+            !st.pending() && !st.foreign_write,
+            "then the lane writes: {st:?}"
+        );
+        let held = calls_held(&sc);
+        assert!(held.contains(&"W7OTHER".to_string()), "{held:?}");
+        let on_disk = Logbook::load(&d.log());
+        let calls: Vec<&str> = on_disk.records().iter().map(|r| &*r.call).collect();
+        assert!(calls.contains(&"W7OTHER"), "kept in the file: {calls:?}");
+        assert_eq!(calls.len(), 4, "once: {calls:?}");
+        assert_eq!(
+            on_disk.records()[1].name.as_deref(),
+            Some("Edited here"),
+            "and the change made here is in it"
+        );
+    }
+
+    /// ★ A QUIT ON THE 1.13 PATH WAITS FOR `log.adi` ITSELF — the log's home there; the store is
+    /// memory. A change the lane has not written is still on its way, whatever the store holds,
+    /// and the quit says why while the lane is held; once the file holds it, the quit is done. An
+    /// export, which reads the store, counts it as there already.
+    #[cfg(unix)]
+    #[test]
+    fn a_quit_on_the_1_13_path_waits_for_log_adi() {
+        let d = Dir::new("quit-1-13");
+        let mut sc = on_log_file(&d, 3);
+        let lane = lane_of(&sc);
+        folder_refuses_new_files(&d, true);
+        let first = sc.logbook.records()[0].id.unwrap();
+        assert!(sc.mark_qsl_card(first, true));
+        Logbook::append(&d.log(), &qso("W7OTHER", 1_788_400_000)).unwrap();
+        folder_refuses_new_files(&d, false);
+        assert!(eventually(|| lane.status().foreign_write), "premise: held");
+        let unsaved = sc.store.as_ref().unwrap().unsaved();
+        assert!(!unsaved.is_empty(), "the quit has something to save");
+        let s = unsaved.wait(Duration::from_millis(300));
+        assert_eq!(s.pending, 1, "the change is still on its way: {s:?}");
+        assert!(
+            s.retry_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("another program or computer")),
+            "and the quit says why: {s:?}"
+        );
+        assert!(
+            unsaved.wait_stored(Duration::from_secs(10)).saved(),
+            "an export counts it: the store has it"
+        );
+        // What the quit runs before it waits: the file taken in, so the lane can write.
+        assert!(sc.take_in_log_file_if_changed());
+        let s = unsaved.wait(DURABLE_WAIT);
+        assert!(s.saved(), "{s:?}");
+        let on_disk = Logbook::load(&d.log());
+        assert!(
+            on_disk.records()[0].qsl_rcvd.card,
+            "the change is in log.adi"
+        );
+        assert_eq!(on_disk.len(), 4, "with the other machine's contact");
+    }
+
+    /// ★ THE NAS TRADES ARE 1.13'S (the operator's D1 choice, pinned). Two machines on one
+    /// `log.adi`: an edit made on the other machine arrives here as a second contact beside the
+    /// one it edited, and a contact deleted there comes back with this machine's next rewrite —
+    /// on the 1.13 path exactly as with no store at all, 1.13's own code. A file with no
+    /// tombstones, which other loggers also read, cannot say "deleted" or "was this row".
+    #[test]
+    fn the_nas_trades_are_1_13_s_on_the_1_13_path() {
+        use tempo_core::logbook::LogOp;
+        for last_resort in [false, true] {
+            let how = if last_resort {
+                "no store"
+            } else {
+                "the 1.13 path"
+            };
+            let d = Dir::new(&format!("nas-trades-{last_resort}"));
+            let mut sc = on_log_file(&d, 4);
+            if last_resort {
+                sc.store = None;
+            }
+            let written = |sc: &crate::station::StationCore| {
+                if let Some(store) = &sc.store {
+                    store.flush(DURABLE_WAIT).expect("written");
+                }
+            };
+            let theirs = sc.logbook.records().to_vec();
+
+            // The other machine corrects a call, and saves.
+            let mut other = Logbook::load(&d.log());
+            let mut fixed = QsoRecord::clone(&other.records()[1]);
+            fixed.call = "K1FIX".into();
+            let _ = other.apply(LogOp::Edit {
+                id: fixed.id.unwrap(),
+                rec: Box::new(fixed),
+            });
+            other.save(&d.log()).unwrap();
+            assert!(
+                sc.sync_shared_log_if_changed(),
+                "{how}: the file is taken in"
+            );
+            let held = calls_held(&sc);
+            assert!(
+                held.contains(&theirs[1].call) && held.contains(&"K1FIX".to_string()),
+                "{how}: the edit arrives beside the contact it edited: {held:?}"
+            );
+            assert_eq!(held.len(), 5, "{how}: {held:?}");
+
+            // The other machine deletes a contact, and saves.
+            let mut other = Logbook::load(&d.log());
+            let gone = QsoRecord::clone(&other.records()[2]);
+            let _ = other.apply(LogOp::Delete(gone.id.unwrap()));
+            other.save(&d.log()).unwrap();
+            assert!(
+                !calls_in_file(&d).contains(&gone.call),
+                "premise: gone from the file"
+            );
+            assert!(
+                sc.sync_shared_log_if_changed(),
+                "{how}: the file is taken in"
+            );
+            assert!(
+                calls_held(&sc).contains(&gone.call),
+                "{how}: this machine still holds it"
+            );
+            let first = sc.logbook.records()[0].id.unwrap();
+            assert!(sc.mark_qsl_card(first, true));
+            written(&sc);
+            assert!(
+                calls_in_file(&d).contains(&gone.call),
+                "{how}: and this machine's next rewrite puts it back"
+            );
+        }
+    }
+
+    /// A `log.adi` with each minted id's nonce blanked (`RecordId::Minted`, `posid:nonce:seq`):
+    /// two sessions mint under nonces of their own, the one place two files of the same log may
+    /// differ, and not a difference in what they hold. Same length; the bytes are compared.
+    fn nonces_aside(file: &[u8]) -> String {
+        let text = String::from_utf8_lossy(file);
+        let tag = "<APP_NEXUS_ID:";
+        let mut out = String::with_capacity(text.len());
+        let mut rest = &*text;
+        while let Some(at) = rest.find(tag) {
+            let (head, tail) = rest.split_at(at);
+            out.push_str(head);
+            let close = tail.find('>').map_or(tail.len(), |i| i + 1);
+            out.push_str(&tail[..close]);
+            let value = &tail.as_bytes()[close..];
+            if value.len() > 26 && value[8] == b':' && value[25] == b':' {
+                out.push_str(&tail[close..close + 9]);
+                out.push_str("NONCE-----------");
+                rest = &tail[close + 25..];
+            } else {
+                rest = &tail[close..];
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// ★ THE 1.13 PATH WRITES `log.adi` AS 1.13 WROTE IT (SPEC-2 v3 C19, D1-A). Two sessions on
+    /// one starting `log.adi`: one on the 1.13 path, its log in a store in memory and the file
+    /// kept by the lane; one with its store taken away, the file written by 1.13's own code, the
+    /// last resort that still has it. Each makes the same 40 random changes of every kind the app
+    /// makes, 8 seeds. After every change the two files are the same bytes, and each change was
+    /// written the same way — appended to the file, or the file replaced (a hard link to the
+    /// file before the change tells: an append grows the linked file, a rewrite leaves it
+    /// behind). And after every run the store every reader of the log reads holds exactly the log.
+    ///
+    /// No resolvers: what a change FILLS is the store's rule on both of its homes (SPEC-2 v3
+    /// D2-A — an import fills its own rows, and 1.13's code also fills older ones after it),
+    /// held to the store path by `the_store_path_answers_exactly_as_the_adif_path`. This test
+    /// holds the WRITING to 1.13's.
+    #[test]
+    fn the_1_13_path_writes_log_adi_as_1_13_wrote_it() {
+        fn start(d: &Dir) -> Mutex<Engine> {
+            std::fs::write(d.log(), log_to_fill(12)).unwrap();
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_log_path(d.log());
+            flush(&e);
+            Mutex::new(e)
+        }
+        // A hard link to the file as it stands: it follows an append, and not a rewrite.
+        fn pin(d: &Dir) -> PathBuf {
+            let at = d.0.join("before-the-change");
+            let _ = std::fs::remove_file(&at);
+            std::fs::hard_link(d.log(), &at).unwrap();
+            at
+        }
+        let same_file = |d: &Dir, pinned: &Path| {
+            std::fs::read(pinned).unwrap() == std::fs::read(d.log()).unwrap()
+        };
+        let (mut steps, mut rewrites, mut in_place) = (0, 0, 0);
+        for seed in 1..=8u64 {
+            let (a, b) = (
+                Dir::new(&format!("d1a-lane-{seed}")),
+                Dir::new(&format!("d1a-113-{seed}")),
+            );
+            let lane = start(&a);
+            let old = start(&b);
+            old.lock().unwrap().without_log_store();
+            assert!(lane.lock().unwrap().log_on_file(), "premise: the 1.13 path");
+            assert!(!old.lock().unwrap().log_store_open(), "premise: no store");
+            let key = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let (mut ga, mut gb) = (Gen(key), Gen(key));
+            for step in 0..40 {
+                let (pa, pb) = (pin(&a), pin(&b));
+                random_change(&lane, &mut ga, step);
+                random_change(&old, &mut gb, step);
+                flush(&lane.lock().unwrap());
+                let (fa, fb) = (
+                    nonces_aside(&std::fs::read(a.log()).unwrap()),
+                    nonces_aside(&std::fs::read(b.log()).unwrap()),
+                );
+                assert!(
+                    fa == fb,
+                    "seed {seed}, step {step}: log.adi differs from 1.13's\n--- 1.13 path\n{fa}\n--- 1.13\n{fb}"
+                );
+                let (kept_a, kept_b) = (same_file(&a, &pa), same_file(&b, &pb));
+                assert_eq!(
+                    kept_a, kept_b,
+                    "seed {seed}, step {step}: written the same way (true: appended or untouched)"
+                );
+                if kept_b {
+                    in_place += 1;
+                } else {
+                    rewrites += 1;
+                }
+                steps += 1;
+            }
+            let eng = lane.lock().unwrap();
+            let mut stored = Vec::new();
+            let fresh = eng
+                .log_rows()
+                .each_record(DURABLE_WAIT, &mut |r| {
+                    stored.push(r.clone());
+                    std::ops::ControlFlow::Continue(())
+                })
+                .expect("the store reads");
+            assert_eq!(fresh, Freshness::Current, "seed {seed}");
+            same_log(
+                &stored,
+                eng.log_records(),
+                &format!("seed {seed}: the store is the log"),
+            );
+        }
+        assert_eq!(steps, 8 * 40);
+        assert!(
+            rewrites > 0 && in_place > 0,
+            "control: the runs both rewrote and appended ({rewrites} rewrites, {in_place} in place)"
+        );
+    }
+
+    /// ★ THE FT AUTO-LOG ON THE 1.13 PATH LOGS WHAT 1.13 LOGGED (the FT gate's parity, SPEC-2 v3
+    /// C19 D1-A). The funnel every logged contact passes through — the sequencer's `log_qso` and
+    /// the synced `log_qso_for_sync` — driven with repeats inside and outside the duplicate
+    /// window, in lockstep on two sessions over the same `log.adi`: one on the 1.13 path (its log
+    /// in a store in memory, the file kept by the lane) and one with no store at all, the file
+    /// written by 1.13's own code. At every step: the same answer to the caller (refused as a
+    /// duplicate, or logged with one receipt); the contact in the log the moment the call
+    /// returns, as the same record under the next id the station mints; once the receipt is
+    /// redeemed, the contact in `log.adi`; and the two files the same bytes, written the same way.
+    #[test]
+    fn the_ft_auto_log_on_the_1_13_path_logs_what_1_13_logged() {
+        use crate::engine::LogWriteOutcome;
+        const CALLS: [&str; 3] = ["W1AW", "JA1AA", "DL1AB"];
+        const BANDS: [(&str, f64); 2] = [("20m", 14.074), ("40m", 7.074)];
+        const MODES: [&str; 2] = ["FT8", "FT4"];
+        let (mut logged, mut refused) = (0, 0);
+        for seed in 0..6u64 {
+            let (a, b) = (
+                Dir::new(&format!("ft113-lane-{seed}")),
+                Dir::new(&format!("ft113-old-{seed}")),
+            );
+            let mut lane = Engine::new("K2DEF", "FN31", 0);
+            lane.set_log_path(a.log());
+            let mut old = Engine::new("K2DEF", "FN31", 0);
+            old.set_log_path(b.log());
+            old.without_log_store();
+            assert!(lane.log_on_file() && !old.log_store_open(), "premise");
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut when = 1_788_000_000u64;
+            let mut last: Option<QsoRecord> = None;
+            for step in 0..40 {
+                let rec = match &last {
+                    // The same contact handed in again moments later: the sequencer's repeat.
+                    Some(prev) if g.below(4) == 0 => {
+                        let mut again = prev.clone();
+                        again.id = None;
+                        again.when_unix += 15;
+                        again
+                    }
+                    _ => {
+                        when += [30, 90, 200, 400][g.below(4)];
+                        let mut r = qso(CALLS[g.below(CALLS.len())], when);
+                        let (band, freq) = BANDS[g.below(BANDS.len())];
+                        r.band = band.into();
+                        r.freq_mhz = freq;
+                        r.mode = MODES[g.below(MODES.len())].into();
+                        r.station_callsign = Some("K2DEF".into());
+                        r
+                    }
+                };
+                last = Some(rec.clone());
+                let at = format!(
+                    "seed {seed} step {step}: {} {} {}",
+                    rec.call, rec.band, rec.mode
+                );
+                let synced = step % 2 == 1;
+                let (held_a, held_b) = (lane.log_records().len(), old.log_records().len());
+                let outcomes = [&mut lane, &mut old].map(|e| {
+                    if synced {
+                        Some(e.log_qso_for_sync(rec.clone()))
+                    } else {
+                        e.log_qso(rec.clone());
+                        None
+                    }
+                });
+                let [oa, ob] = outcomes;
+                let refused_here = lane.log_records().len() == held_a;
+                assert_eq!(
+                    refused_here,
+                    old.log_records().len() == held_b,
+                    "{at}: refused by both, or logged by both"
+                );
+                match (oa, ob) {
+                    (Some(LogWriteOutcome::Duplicate), Some(LogWriteOutcome::Duplicate)) => {}
+                    (
+                        Some(LogWriteOutcome::PendingSync(ra)),
+                        Some(LogWriteOutcome::PendingSync(rb)),
+                    ) => {
+                        assert_eq!((ra.len(), rb.len()), (1, 1), "{at}: one receipt each");
+                        for r in ra.into_iter().chain(rb) {
+                            r.sync().unwrap_or_else(|e| panic!("{at}: redeemed: {e}"));
+                        }
+                        // Redeemed: the contact is in log.adi, before any flush.
+                        for (d, what) in [(&a, "the 1.13 path"), (&b, "1.13")] {
+                            let last = Logbook::load(&d.log()).records().last().cloned();
+                            assert_eq!(
+                                last.map(|r| (r.call.clone(), r.when_unix)),
+                                Some((rec.call.clone(), rec.when_unix)),
+                                "{at}: {what}: the redeemed contact is in log.adi"
+                            );
+                        }
+                    }
+                    (None, None) => {}
+                    (oa, ob) => panic!(
+                        "{at}: the caller heard different answers: {:?} / {:?}",
+                        oa.map(|o| matches!(o, LogWriteOutcome::Duplicate)),
+                        ob.map(|o| matches!(o, LogWriteOutcome::Duplicate))
+                    ),
+                }
+                if refused_here {
+                    refused += 1;
+                    continue;
+                }
+                logged += 1;
+                same_log_across(lane.log_records(), old.log_records(), &at);
+                let row = lane.log_records().last().cloned().expect("logged");
+                let mut expected = rec;
+                expected.id = row.id;
+                assert_eq!(
+                    *row, expected,
+                    "{at}: the contact as handed in, with its id"
+                );
+                flush(&lane);
+                assert_eq!(
+                    nonces_aside(&std::fs::read(a.log()).unwrap_or_default()),
+                    nonces_aside(&std::fs::read(b.log()).unwrap_or_default()),
+                    "{at}: log.adi is the file 1.13 wrote"
+                );
+            }
+        }
+        assert!(
+            logged >= 60 && refused >= 20,
+            "logged {logged}, refused {refused}"
+        );
+    }
+
+    /// ★ ON THE 1.13 PATH A LOGGED CONTACT'S RECEIPT IS REDEEMED ONLY ONCE `log.adi` HOLDS IT —
+    /// what a Remote log answers `fileSynced` on. While the file refuses the contact, the
+    /// receipt says so, at once, as 1.13's failed append did; once the file takes it, the lane
+    /// appends it, and it is there once.
+    #[cfg(unix)]
+    #[test]
+    fn a_receipt_on_the_1_13_path_is_redeemed_only_once_log_adi_holds_the_contact() {
+        use crate::engine::LogWriteOutcome;
+        use std::os::unix::fs::PermissionsExt;
+        let d = Dir::new("receipt-1-13");
+        std::fs::write(d.log(), legacy_log(2)).unwrap();
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_log_path(d.log());
+        let mode = |m| std::fs::set_permissions(d.log(), std::fs::Permissions::from_mode(m));
+        mode(0o444).unwrap();
+        let LogWriteOutcome::PendingSync(receipts) =
+            e.log_qso_for_sync(qso("W1RCPT", 1_788_500_000))
+        else {
+            panic!("logged, with a receipt");
+        };
+        assert_eq!(receipts.len(), 1);
+        let asked = Instant::now();
+        let redeemed: Result<Vec<()>, _> = receipts.into_iter().map(|r| r.sync()).collect();
+        mode(0o644).unwrap();
+        assert!(
+            redeemed.is_err(),
+            "not redeemed while log.adi refuses the contact"
+        );
+        assert!(
+            asked.elapsed() < Duration::from_secs(10),
+            "and said at once: {:?}",
+            asked.elapsed()
+        );
+        flush(&e);
+        let file = calls_in_file(&d);
+        assert_eq!(
+            file.iter().filter(|c| *c == "W1RCPT").count(),
+            1,
+            "then the lane appends it, once: {file:?}"
+        );
+    }
+
+    /// The launch adopts the 1.13 path holding the engine lock, and loads `log.adi` into its
+    /// store in memory under it, as 1.13 loaded the file: nothing on that path asserts the lock
+    /// is free.
+    #[test]
+    fn the_1_13_path_loads_under_the_engine_lock_as_the_launch_holds_it() {
+        let d = Dir::new("fallback-under-lock");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let shared = Mutex::new(Engine::new("K2DEF", "FN31", 0));
+        let mut eng = engine_lock(&shared);
+        eng.set_log_path(d.log());
+        assert!(eng.log_on_file());
+        assert_eq!(eng.log_records().len(), 5);
     }
 
     // ── the launch's hot index (SPEC-2 v3 C19) ──────────────────────────────

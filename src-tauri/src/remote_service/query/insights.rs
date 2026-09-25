@@ -642,7 +642,7 @@ mod tests {
             "premise: cards"
         );
         assert_summaries_are_the_old_summaries(&store, "the store");
-        assert_summaries_are_the_old_summaries(&memory(&text), "the 1.13 path");
+        assert_summaries_are_the_old_summaries(&memory(&d, &text), "the 1.13 path");
         settle(&store);
     }
 

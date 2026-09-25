@@ -3194,7 +3194,7 @@ mod logbook_startup_tests {
         let dir = folder("network", Some(5));
         let log = dir.join("log.adi");
         let e = launch(&log, Some("an NFS share".into()), true);
-        assert!(!e.log_store_open());
+        assert!(e.log_on_file(), "the 1.13 path: log.adi is the log");
         assert_eq!(e.log_records().len(), 5, "the log is read from log.adi");
         assert!(
             e.log_store_problem().is_some_and(|p| p.contains("NFS")),
@@ -3228,7 +3228,7 @@ mod logbook_startup_tests {
         )
         .expect("log");
         let e = launch(&log, None, true);
-        assert!(!e.log_store_open());
+        assert!(e.log_on_file(), "the 1.13 path: log.adi is the log");
         let shown = e.snapshot().log_store_problem;
         assert!(
             shown
@@ -3514,6 +3514,184 @@ mod logbook_startup_tests {
         );
     }
 
+    /// ⛔ NOTHING CAN WRITE THE LOG BEFORE THE LAUNCH ATTACHES IT. A new engine holds an empty
+    /// store in memory until then (SPEC-2 v3 C19), and the attach replaces it, as it replaced
+    /// the empty log in memory before; a contact written into it first would be gone, as it
+    /// always would have been (tempo-app's
+    /// `a_contact_written_before_the_attach_is_not_carried_into_the_operator_s_log_as_before`).
+    /// None can be, because of the order this pins:
+    /// - the attach is made in the same hold of the engine lock that sets the resolvers, so
+    ///   from there to the attach nothing else reaches the engine;
+    /// - every writer of the log starts after it: the radio loop (the FT auto-log and the
+    ///   companion's imports), the Field Day restore and its merge, the companion source, the
+    ///   QRZ and LoTW timers, the Remote service, the RX decoders, the pounce detector, the AI CW
+    ///   decoder, the main window and the fill job;
+    /// - before the second half, `run()` and the app's builder start none of them — only the
+    ///   spot, PSK Reporter, WSPR and APRS-IS feeds, the rotator and caches, none of which writes
+    ///   the log;
+    /// - no command reaches the engine before the attach: the main window waits on a page that
+    ///   runs nothing (pinned in `the_main_window_is_shown_only_once_the_log_is_attached`), the
+    ///   pop-outs open only by its command, and the splash is granted no command and invokes
+    ///   none;
+    /// - and at run time, the launch's engine refuses a change from the moment it is made until
+    ///   the attach (`Engine::refuse_log_changes_until_attached`): a debug build — every test run
+    ///   and CI's end-to-end launch — panics on one, naming it, so a writer added out of order
+    ///   anywhere, however indirectly, is found rather than lost.
+    ///
+    /// Source-scanned, like the launch tests beside it: what is under test is the order the
+    /// launch calls things in.
+    #[test]
+    fn nothing_can_write_the_log_before_the_launch_attaches_it() {
+        let src = include_str!("lib.rs");
+        let start = body_of(src, "fn start_on_the_logbook(");
+        let attach = at(
+            start,
+            "adopt_logbook(&mut eng, &logbook_path(), logbook_store);",
+        );
+        let lock = at(start, "let mut eng = engine_lock(&engine);");
+        assert!(lock < attach, "the lock is taken before the attach");
+        let held = &start[lock..attach];
+        assert!(
+            !held.contains("drop(eng)") && !held.contains("\n    }\n"),
+            "and held until it: the attach is in the same block, with nothing releasing it"
+        );
+        let writers = [
+            "run_radio(",
+            "restore_field_day_if_enabled(",
+            "set_source(SourceKind::Companion)",
+            "sync_qrz_since(",
+            "lotw_upload_batch(",
+            "remote_service_for(",
+            "spawn_log_fill(",
+            "import_adif(",
+            "log_qso(",
+            "fd_merge_to_general(",
+        ];
+        for w in writers {
+            assert!(
+                !start[..attach].contains(w),
+                "`{w}` comes before the attach in start_on_the_logbook"
+            );
+        }
+        for w in &writers[..5] {
+            assert!(attach < at(start, w), "`{w}` starts after the attach");
+        }
+        let finish = body_of(src, "fn finish_launch(");
+        let second_half = at(finish, "start_on_the_logbook(&d, logbook_store, rest);");
+        for w in [
+            "remote_service_for(",
+            "pouncer::run(",
+            "spawn_ai_cw(",
+            "spawn_rtty_rx(",
+            "spawn_psk_rx(",
+            "spawn_aprs_rx(",
+            "spawn_sstv_rx(",
+            "send_main_window_to_the_app(&handle)",
+            "spawn_log_fill(",
+        ] {
+            assert!(second_half < at(finish, w), "`{w}` starts after the attach");
+        }
+        let run = body_of(src, "pub fn run() {");
+        let made = at(run, "let mut launched = Engine::with_settings(settings);");
+        let refused = at(run, "launched.refuse_log_changes_until_attached();");
+        assert!(
+            made < refused
+                && run[made..refused]
+                    .lines()
+                    .skip(1)
+                    .all(|l| l.trim().is_empty() || l.trim_start().starts_with("//")),
+            "the launch's engine refuses a change from the moment it is made"
+        );
+        assert!(
+            refused < at(run, "Arc::new(Mutex::new(launched))"),
+            "before anything else can reach it"
+        );
+        for (name, body) in [("run", run), ("build_app", body_of(src, "fn build_app("))] {
+            for w in writers {
+                assert!(
+                    !body.contains(w),
+                    "{name} starts no writer of the log: `{w}`"
+                );
+            }
+        }
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        assert_eq!(
+            caps["windows"],
+            serde_json::json!(["main", "panel-*"]),
+            "only the main window and its pop-outs are granted commands"
+        );
+        let splash = include_str!("../../ui/public/splashscreen.html");
+        assert!(
+            !splash.contains("invoke") && !splash.contains("__TAURI"),
+            "and the splash invokes none"
+        );
+    }
+
+    /// ★ THE LAUNCH WINDOW, WHAT IF (SPEC-2 v3 C19). A contact written between the engine's creation
+    /// and the attach — which the order above rules out, and a debug build refuses — would be in
+    /// no log afterwards: not in the log the attach hands the session (in memory and in its
+    /// store), not in `log.adi`, and not at the next launch. On the database and on the 1.13 path
+    /// alike, through the launch's own calls, and as before C19, when the engine's log before the
+    /// attach was an empty log in memory with nowhere to write.
+    #[test]
+    fn a_contact_written_before_the_attach_would_be_in_no_log_after_it() {
+        for network in [None, Some("an NFS share".to_string())] {
+            let path = if network.is_some() {
+                "the 1.13 path"
+            } else {
+                "the database"
+            };
+            let dir = folder(&format!("window-{}", network.is_some()), Some(3));
+            let log = dir.join("log.adi");
+            let opened = open_logbook_store(&log, network.clone(), &mut |_| {});
+            // Not refused: this is the case the order and the refusal keep from happening.
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let early = {
+                let mut l = tempo_core::logbook::Logbook::new();
+                l.import_adif(
+                    "<CALL:7>W9EARLY<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901\
+                     <TIME_ON:6>140000<EOR>\n",
+                );
+                let mut r = tempo_core::logbook::QsoRecord::clone(&l.records()[0]);
+                r.id = None;
+                r
+            };
+            e.log_qso(early);
+            assert_eq!(
+                e.log_records().len(),
+                1,
+                "premise: written before the attach"
+            );
+            adopt_logbook(&mut e, &log, opened);
+            assert_eq!(e.log_on_file(), network.is_some(), "premise: {path}");
+            let held: Vec<String> = e.log_records().iter().map(|r| r.call.clone()).collect();
+            assert_eq!(held.len(), 3, "{path}: the operator's log, whole: {held:?}");
+            assert!(!held.contains(&"W9EARLY".to_string()), "{path}: {held:?}");
+            let mut stored = Vec::new();
+            e.log_rows()
+                .each_record(Duration::from_secs(60), &mut |r| {
+                    stored.push(r.call.clone());
+                    std::ops::ControlFlow::Continue(())
+                })
+                .expect("the store reads");
+            assert_eq!(stored, held, "{path}: nor in its store");
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+            let file = std::fs::read_to_string(&log).expect("log.adi");
+            assert!(!file.contains("W9EARLY"), "{path}: nor in log.adi");
+            drop(e);
+            let next = launch(&log, network.clone(), false);
+            assert_eq!(next.log_on_file(), network.is_some(), "premise: {path}");
+            let calls: Vec<&str> = next.log_records().iter().map(|r| &*r.call).collect();
+            assert_eq!(calls.len(), 3, "{path}: the next launch: {calls:?}");
+            assert!(
+                !calls.contains(&"W9EARLY"),
+                "{path}: nor at the next launch"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// ★ SPEC-2 v3 D2-A: the fill job starts once the main window is shown, and on a thread of
     /// its own — the launch does not wait for it, and the radio loop never runs it. What it does
     /// there (reads with the Engine lock free, writes once per version) is `tempo_app::logfill`'s
@@ -3677,7 +3855,14 @@ mod logbook_startup_tests {
 
         let mut e = Engine::new("K2DEF", "FN31", 0);
         adopt_logbook(&mut e, &log, opened);
-        assert!(!e.log_store_open(), "the session is not on the database");
+        assert!(
+            e.log_on_file(),
+            "the session is not on the database: log.adi is its log"
+        );
+        assert!(
+            !database_path(&log).is_file(),
+            "and no database file was made"
+        );
         assert_eq!(
             e.log_records().len(),
             6,
@@ -3687,6 +3872,7 @@ mod logbook_startup_tests {
         rec.id = None;
         rec.call = "W1NEW".into();
         e.log_qso(rec);
+        e.flush_log_store(Duration::from_secs(60)).expect("written");
         assert!(
             std::fs::read_to_string(&log)
                 .expect("log.adi")
@@ -4512,18 +4698,23 @@ fn open_logbook_store(
     if let Some(dir) = log.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let resolve: tempo_app::logstore::StoreResolve = Arc::new(|r| {
+    // The hot index is built here too, from the rows as they load, keyed by the resolver the
+    // station is given at the attach — so the attach does not build it under the lock.
+    let hot = tempo_app::logstore::HotBuild::keyed_by(Some(country_resolver()));
+    tempo_app::logstore::open_reporting(log, store_resolve(), network, Some(hot), progress)
+}
+
+/// cty.dat's answer for the two columns the logbook store writes beside each contact — its
+/// entity and CQ zone — for the operator's store and for the 1.13 path's store in memory alike.
+fn store_resolve() -> tempo_app::logstore::StoreResolve {
+    Arc::new(|r| {
         propagation::dxcc::resolve(&r.call).map_or_else(Default::default, |i| {
             tempo_core::logbook::sqlite::Resolved {
                 entity: Some(i.entity),
                 cq_zone: Some(i.cq_zone),
             }
         })
-    });
-    // The hot index is built here too, from the rows as they load, keyed by the resolver the
-    // station is given at the attach — so the attach does not build it under the lock.
-    let hot = tempo_app::logstore::HotBuild::keyed_by(Some(country_resolver()));
-    tempo_app::logstore::open_reporting(log, resolve, network, Some(hot), progress)
+    })
 }
 
 /// Whether opening the logbook is about to convert `log.adi`: there is a log, and no database
@@ -4629,7 +4820,7 @@ fn adopt_logbook(
                 }
                 _ => tempo_core::applog::error("logbook", &line),
             }
-            eng.set_log_path(log.to_path_buf());
+            eng.set_log_path_resolved(log.to_path_buf(), store_resolve());
             eng.note_log_store_problem(&e);
             None
         }
@@ -4659,6 +4850,9 @@ fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
         if !quit::the_quit_settled_the_logbook() {
             eng.log_resend_all();
         }
+        // On the 1.13 path, a `log.adi` another computer wrote since is taken in first: its lane
+        // does not replace a file it cannot account for, and this is the last chance to.
+        eng.log_take_in_log_file();
         eng.flush_log_store(cap)
     };
     if let Err(e) = flushed {
@@ -26727,7 +26921,11 @@ pub fn run() {
     // profile. That is harmless only because nothing reads the registry and the cap forbids a
     // second chain — and re-registering chains when the radio set changes is the first thing the
     // cap-lift has to solve. It is not papered over here, where it would be untestable.
-    let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    let mut launched = Engine::with_settings(settings);
+    // Until `start_on_the_logbook` attaches the operator's log, the engine's log is a placeholder
+    // the attach replaces: a change reaching it would be lost, so a debug build refuses one.
+    launched.refuse_log_changes_until_attached();
+    let engine: SharedEngine = Arc::new(Mutex::new(launched));
     #[cfg(feature = "radio")]
     {
         let host_engine = engine.clone();

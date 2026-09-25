@@ -1,8 +1,8 @@
 //! The engine's answers held to the UI's: C17b's goldens on both of the log's homes (the store,
-//! and the 1.13 path's copy in memory), and a randomized parity against the reference over the
-//! engine's own log after every kind of change. Then the revisions, the kept orders, read-your-
-//! writes, the Engine lock left free while an answer waits, and the calls the store and the UI fold
-//! differently.
+//! and the 1.13 path's store in memory beside `log.adi`), and a randomized parity against the
+//! reference over the engine's own log after every kind of change. Then the revisions, the kept
+//! orders, read-your-writes, the Engine lock left free while an answer waits, and the calls the
+//! store and the UI fold differently.
 
 use super::*;
 use serde_json::json;
@@ -141,8 +141,8 @@ fn on_store(d: &Dir, records: &[QsoRecord]) -> SharedEngine {
     Arc::new(Mutex::new(e))
 }
 
-/// An engine on the 1.13 path: no store, the log read from `log.adi` into memory.
-fn in_memory(d: &Dir, records: &[QsoRecord]) -> SharedEngine {
+/// An engine on the 1.13 path: the log read from `log.adi` into a store in memory.
+fn on_log_file(d: &Dir, records: &[QsoRecord]) -> SharedEngine {
     write_log(d, records);
     let mut e = Engine::new("K2DEF", "FN31", 0);
     e.set_log_path(d.log());
@@ -201,20 +201,26 @@ fn normalise(q: &Value, a: Value) -> Value {
 /// ★ THE ENGINE ANSWERS WHAT THE UI ANSWERED. Every golden question, sent as the UI sends it (the
 /// question JSON, parsed as the command parses it), is answered exactly as the golden file froze
 /// it — the statistics as the counts the window finishes into it — with the log in the store, and
-/// with it in memory on the 1.13 path.
+/// on the 1.13 path, where since SPEC-2 v3 C19 (D1-A) it is in a store in memory beside
+/// `log.adi`.
 #[test]
 fn every_golden_answer_on_both_homes_of_the_log() {
     let (records, entities) = golden_log();
     let resolve = |call: &str| entities.get(call).cloned().flatten();
     for (home, d) in [
         ("store", Dir::new("golden-store")),
-        ("memory", Dir::new("golden-mem")),
+        ("1.13 path", Dir::new("golden-mem")),
     ] {
         let engine = if home == "store" {
             on_store(&d, &records)
         } else {
-            in_memory(&d, &records)
+            on_log_file(&d, &records)
         };
+        assert_eq!(
+            engine_lock(&engine).log_on_file(),
+            home != "store",
+            "{home}: premise"
+        );
         let queries = LogQueries::default();
         let mut answered = 0;
         for (q, a) in golden_answers() {
@@ -293,12 +299,12 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
     let resolve = |call: &str| entities.get(call).cloned().flatten();
     for (home, d) in [
         ("store", Dir::new("edit-keys-store")),
-        ("memory", Dir::new("edit-keys-mem")),
+        ("1.13 path", Dir::new("edit-keys-mem")),
     ] {
         let engine = if home == "store" {
             on_store(&d, &records)
         } else {
-            in_memory(&d, &records)
+            on_log_file(&d, &records)
         };
         let queries = LogQueries::default();
         let page = || {
@@ -844,12 +850,12 @@ fn calls_the_folds_disagree_on_are_answered_as_the_ui_answers() {
     .collect();
     for (home, d) in [
         ("store", Dir::new("odd-store")),
-        ("memory", Dir::new("odd-mem")),
+        ("1.13 path", Dir::new("odd-mem")),
     ] {
         let engine = if home == "store" {
             on_store(&d, &log)
         } else {
-            in_memory(&d, &log)
+            on_log_file(&d, &log)
         };
         let held: Vec<QsoRecord> = engine_lock(&engine)
             .log_records()
@@ -1162,7 +1168,7 @@ fn assert_parity(seed: u64, step: &str, engine: &SharedEngine, queries: &LogQuer
 #[test]
 fn every_answer_is_the_references_after_every_kind_of_change() {
     for seed in 1..=12u64 {
-        for home in ["store", "memory"] {
+        for home in ["store", "1.13 path"] {
             let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let n = 6 + g.below(14);
             let mut log: Vec<QsoRecord> = (0..n).map(|i| random_record(&mut g, i as u64)).collect();
@@ -1176,7 +1182,7 @@ fn every_answer_is_the_references_after_every_kind_of_change() {
             let engine = if home == "store" {
                 on_store(&d, &log)
             } else {
-                in_memory(&d, &log)
+                on_log_file(&d, &log)
             };
             let queries = LogQueries::default();
             assert_parity(seed, &format!("{home} load"), &engine, &queries, &mut g);

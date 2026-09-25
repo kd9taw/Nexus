@@ -75,7 +75,7 @@ fn loaded(d: &Dir) -> crate::SharedEngine {
     e.set_dxcc_resolver(test_country);
     e.set_state_resolver(test_state);
     e.set_log_path(d.log());
-    assert!(!e.log_store_open(), "premise: the 1.13 path");
+    assert!(e.log_on_file(), "premise: the 1.13 path");
     Arc::new(Mutex::new(e))
 }
 

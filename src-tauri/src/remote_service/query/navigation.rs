@@ -1442,7 +1442,7 @@ mod tests {
         );
         assert!(c.zones.len() > 5 && c.grids.len() > 100, "premise");
         assert_coverage_is_the_old_coverage(&store, "the store");
-        assert_coverage_is_the_old_coverage(&memory(&text), "the 1.13 path");
+        assert_coverage_is_the_old_coverage(&memory(&d, &text), "the 1.13 path");
         settle(&store);
     }
 

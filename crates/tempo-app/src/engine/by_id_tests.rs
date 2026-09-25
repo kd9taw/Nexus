@@ -44,9 +44,9 @@ fn contact(n: u64, call: &str) -> QsoRecord {
 
 fn engine_holding(rows: &[QsoRecord]) -> Engine {
     let mut e = Engine::new("K2DEF", "FN31", 0);
-    for r in rows {
-        e.station.logbook.add(r.clone());
-    }
+    // Appended as the station appends a contact — into the log in memory, its index and the
+    // engine's store — so a read of the log finds them there.
+    let _ = e.station.append(rows.to_vec(), false);
     e.station.sync_hot();
     e
 }

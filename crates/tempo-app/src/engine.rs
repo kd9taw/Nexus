@@ -22649,6 +22649,13 @@ contact yourself."
         self.sync_log_posid();
     }
 
+    /// See [`StationCore::set_log_path_resolved`] — the launch's 1.13 path, with cty.dat's
+    /// answer for the columns the store writes beside each contact.
+    pub fn set_log_path_resolved(&mut self, path: PathBuf, resolve: crate::logstore::StoreResolve) {
+        self.station.set_log_path_resolved(path, resolve);
+        self.sync_log_posid();
+    }
+
     /// Hand the log the position id its minted ids carry (see [`log_posid`]).
     fn sync_log_posid(&mut self) {
         self.station.set_posid(log_posid(&self.settings));
@@ -22732,9 +22739,34 @@ contact yourself."
             .map(|p| p.reason.as_str())
     }
 
-    /// Whether the store owns the log this session.
+    /// Whether the log is in a store this session: the database, or on the 1.13 path one in
+    /// memory ([`Self::log_on_file`]).
     pub fn log_store_open(&self) -> bool {
         self.station.store.is_some()
+    }
+
+    /// Whether this session is on the 1.13 path: `log.adi` is the log's durable home, kept as
+    /// 1.13 kept it, and the log's rows are in a store in memory (SPEC-2 v3 C19, D1-A).
+    pub fn log_on_file(&self) -> bool {
+        self.station.on_log_file()
+    }
+
+    /// The launch's engine, from its creation until the launch attaches the operator's log: its
+    /// store is an empty placeholder the attach replaces (SPEC-2 v3 C19), and a change sent to it
+    /// would be lost with it. In a debug build none may be — one is a panic that names it; a
+    /// release build checks nothing. The attach, and the 1.13 path, replace the placeholder.
+    pub fn refuse_log_changes_until_attached(&mut self) {
+        if let Some(store) = self.station.store.as_mut() {
+            store.placeholder_until_attached();
+        }
+    }
+
+    /// Take the store away (its lane makes what it still owes `log.adi` one last try as it
+    /// goes): from here on the session is the last resort, with no store at all and `log.adi`
+    /// written by 1.13's own code — the oracle a test holds the 1.13 path to.
+    #[cfg(test)]
+    pub(crate) fn without_log_store(&mut self) {
+        self.station.store = None;
     }
 
     /// Whether ANOTHER process has committed to the store since this engine's log last matched
@@ -22793,7 +22825,7 @@ contact yourself."
 
     /// The store's mirror of `log.adi`, as it stands.
     pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
-        self.station.store.as_ref().map(|s| s.mirror_status())
+        self.station.store.as_ref().and_then(|s| s.mirror_status())
     }
 
     /// Write everything submitted to the store, and the mirror, waiting up to `deadline` —
@@ -22807,6 +22839,14 @@ contact yourself."
             Some(store) => store.flush(deadline),
             None => Ok(()),
         }
+    }
+
+    /// On the 1.13 path, take in a `log.adi` another program or computer changed since the lane
+    /// last wrote it, so the lane can write the changes it is holding — the quit's and the exit's
+    /// last chance, as the freshness poll is the session's. Reads the file under the lock, as
+    /// 1.13's recovery did, and only when the file has changed. Nothing on the store path.
+    pub fn log_take_in_log_file(&mut self) -> bool {
+        self.station.take_in_log_file_if_changed()
     }
 
     /// Send again the logbook changes the database refused for a reason that can pass, each
@@ -22856,7 +22896,7 @@ contact yourself."
         let durability = match self.station.store.as_mut() {
             Some(store) => {
                 let tickets = store.take_collected();
-                crate::logstore::Durability::new(Some(store.writer()), tickets)
+                store.durability(tickets)
             }
             None => crate::logstore::Durability::default(),
         };
@@ -29000,7 +29040,9 @@ mod tests {
             "a deleted call is unmarked"
         );
 
-        // Another instance's append to the shared file, reconciled in.
+        // Another instance's append to the shared file, reconciled in — once the file holds
+        // this one's changes, as 1.13's did before each command returned.
+        written(&e);
         Logbook::append(&path, &qrec("W4DDD", "20m")).unwrap();
         assert!(
             e.sync_shared_log_if_changed(),
@@ -29071,7 +29113,9 @@ mod tests {
             "fixture: an unplaceable row"
         );
         // Steady state first: the first check of the shared file after a load can re-read it
-        // once (a load records no fingerprint, so an unaccountable file is never trusted).
+        // once (a load records no fingerprint, so an unaccountable file is never trusted) —
+        // once the file holds the two contacts, as 1.13's appends did before they returned.
+        written(&e);
         e.sync_shared_log_if_changed();
 
         let mut wsjtx = qrec("DL1ABC", "20m");
@@ -29093,6 +29137,7 @@ mod tests {
             Some("DL"),
             "…and it arrives with its country"
         );
+        written(&e);
         assert_eq!(
             Logbook::load(&path).records()[2].country.as_deref(),
             Some("DL"),
@@ -35001,10 +35046,12 @@ mod tests {
         e.settings.lotw_use_adif_location = true;
 
         // Straight into the logbook, bypassing the funnel — this is what an ADIF written by an
-        // older build looks like after it is read back in.
+        // older build looks like after it is read back in. Appended as the station appends,
+        // into its store as well: the upload's rows are read from the store.
         let mut rec = e.qso_record("W9XYZ".into(), None, None);
         rec.station_callsign = None;
-        let id = e.station.logbook.add(rec);
+        let (appended, _) = e.station.append(vec![rec], false);
+        let id = appended[0].id.expect("an id");
 
         let adif = e.lotw_upload_adif(&[id]);
         assert!(
@@ -37049,6 +37096,14 @@ mod tests {
         );
     }
 
+    /// Wait until `log.adi` holds every change `e` has made. On the 1.13 path the file is written
+    /// on its own lane since SPEC-2 v3 C19 (D1-A), where 1.13 wrote it before the command
+    /// returned: a test that reads the file waits for it first.
+    fn written(e: &Engine) {
+        e.flush_log_store(Duration::from_secs(60))
+            .expect("log.adi written");
+    }
+
     /// A concise `QsoRecord` builder for the logbook tests (the struct has no
     /// `Default`; only call+band vary here).
     fn qrec(call: &str, band: &str) -> QsoRecord {
@@ -37129,6 +37184,7 @@ mod tests {
         e.log_qso(qrec("T22TT", "30m"));
 
         assert_eq!(e.get_log().len(), 1, "in memory");
+        written(&e);
         let on_disk = tempo_core::logbook::Logbook::load(&path);
         assert_eq!(on_disk.len(), 1, "and on disk");
         assert_eq!(on_disk.records()[0].call, "T22TT");
@@ -38931,6 +38987,7 @@ mod tests {
         b.log_qso(qrec("W1AAA", "20m"));
         b.log_qso(qrec("W2BBB", "20m"));
         assert_eq!(b.get_log().len(), 2);
+        written(&b); // in the file, as 1.13 wrote them before it returned
 
         // Instance A (a second process on the same file) appends two more QSOs
         // that B never sees in memory.
@@ -38941,6 +38998,7 @@ mod tests {
         // B does a full-log-rewrite action (mark QSL-sent) on its stale 2-record copy.
         let w1 = b.get_log()[0].id.unwrap();
         assert!(b.mark_qsl_sent(w1, Some(tempo_core::logbook::QslVia::Direct)));
+        written(&b);
 
         let on_disk = Logbook::load(&path);
         assert_eq!(
@@ -38980,6 +39038,7 @@ mod tests {
         b.set_log_path(path.clone());
         b.log_qso(qrec("W1AAA", "20m"));
         b.log_qso(qrec("W2BBB", "20m"));
+        written(&b);
 
         // Another instance appends a QSO B does not know about.
         Logbook::append(&path, &qrec("W3CCC", "40m")).unwrap();
@@ -38987,6 +39046,7 @@ mod tests {
         // B deletes its index 0 (W1AAA) on the stale copy.
         let w1 = b.get_log()[0].id.unwrap();
         assert!(b.delete_qso(w1));
+        written(&b);
 
         let on_disk = Logbook::load(&path);
         let calls: Vec<&str> = on_disk.records().iter().map(|r| r.call.as_str()).collect();
@@ -39029,6 +39089,7 @@ mod tests {
         b.log_qso(qrec("W1AW", "20m"));
         b.log_qso(qrec("K5XYZ", "20m"));
         assert_eq!(b.get_log().len(), 2);
+        written(&b);
 
         // Instance A (a second process on the same file) appends two QSOs that B
         // never sees in memory.
@@ -39044,6 +39105,7 @@ mod tests {
             <CALL:5>K5XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>19700101<TIME_ON:6>000000<QSL_RCVD:1>Y<EOR>\n\
             <CALL:5>W4DDD<BAND:3>15m<MODE:3>FT8<QSO_DATE:8>19700101<TIME_ON:6>000000<QSL_RCVD:1>Y<EOR>\n";
         let (added, _skipped, updated, _total) = b.import_adif(adif);
+        written(&b);
 
         let on_disk = Logbook::load(&path);
         let calls: Vec<&str> = on_disk.records().iter().map(|r| r.call.as_str()).collect();
