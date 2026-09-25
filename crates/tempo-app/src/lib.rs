@@ -33,6 +33,8 @@ pub mod logstore;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
+#[cfg(test)]
+mod stage1_tests;
 pub mod station;
 pub mod update;
 pub mod watchlist;
