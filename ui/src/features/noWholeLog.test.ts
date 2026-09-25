@@ -1,17 +1,15 @@
-// NO VIEW READS THE WHOLE LOG (SPEC-2 v2 R6 §8; v3 C17b). A census the compiler takes, and a ratchet.
+// NO MODULE READS THE WHOLE LOG (SPEC-2 v2 R6 §8; v3 C17). A census the compiler takes, at zero.
 //
 // At 150k contacts every window held the whole log as parsed rows (195 MiB) and re-pulled it after
-// every upload stamp (141 MB of JSON). C17b moves each view onto `LogSource` (features/logSource.ts),
-// which answers the questions a view asks instead of handing it the log. This guard is what keeps a
-// moved view moved, and stops a new one reading the log:
+// every upload stamp (141 MB of JSON). C17b moved each view onto `LogSource` (features/logSource.ts),
+// which answers the questions a view asks instead of handing it the log, and C17 deleted the whole-log
+// path: the store, its adapter, the api calls and the engine's commands. This guard keeps it deleted:
 //
 //   - it PARSES every non-test module under `ui/src` with the TypeScript compiler (never a grep) and
 //     finds each way to reach the whole log: an import of `features/logStore`; an import or a use of
 //     `getLog` / `getLogDelta` / `LogDelta` from `api`; and `invoke('get_log' | 'get_log_delta')`;
-//   - the modules that may do so are named below, and the census must EQUAL that list. A new
-//     reader fails; so does a module on the list that no longer reads it — remove it, and the list
-//     can only shrink. It is the progress meter: C17b empties STILL_READING, C17a deletes the store,
-//     the adapter and the api calls, and WHOLE_LOG_ADAPTER goes with them.
+//   - NO module may: the census must be empty. It was the progress meter — C17b emptied the views'
+//     list, C17 deleted the rest — and a module that reads the whole log again fails here, with where.
 //
 // Its own positive controls run on every pass: a detector that has only ever been green is untested.
 
@@ -22,15 +20,6 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-
-/** Where the whole log is allowed to be read: the api calls, the window's copy of it, and the one
- *  `LogSource` adapter answering from that copy until the engine answers (C17a deletes all three). */
-const WHOLE_LOG_ADAPTER = ['api.ts', 'features/logStore.ts', 'features/wholeLogSource.ts']
-
-/** Views not yet moved onto `LogSource`. Each C17b step removed the views it moved; none is left.
- *  (Kept, and empty, so a view that starts reading the log again has to be ADDED here to pass —
- *  a visible act in a diff, not a silent one.) */
-const STILL_READING: string[] = []
 
 const WHOLE_LOG_API = new Set(['getLog', 'getLogDelta', 'LogDelta'])
 const WHOLE_LOG_COMMANDS = new Set(['get_log', 'get_log_delta'])
@@ -115,19 +104,14 @@ describe('no view reads the whole log (the census, as a ratchet)', () => {
     expect(hits('components/Fake.tsx', `import * as api from '../api'\nvoid api.getLogStats()`)).toBe(0)
   })
 
-  it('the modules reading the whole log are exactly the adapter and the views not yet moved', () => {
-    const readers = new Map<string, string[]>()
-    for (const file of modules(SRC)) {
-      const found = wholeLogReads(file, readFileSync(join(SRC, file), 'utf8'))
-      if (found.length) readers.set(file, found)
-    }
-    // Positive control on the REAL tree: the store itself must be found, or the walk is blind.
-    expect(readers.has('features/logStore.ts'), 'the census did not see the store it exists to police').toBe(true)
-    const allowed = [...WHOLE_LOG_ADAPTER, ...STILL_READING].sort()
-    const actual = [...readers.keys()].sort()
-    const unexpected = actual.filter((f) => !allowed.includes(f)).map((f) => readers.get(f)!.join('\n'))
-    expect(unexpected, 'a NEW whole-log reader — ask LogSource (features/logSource.ts) instead').toEqual([])
-    const moved = allowed.filter((f) => !actual.includes(f))
-    expect(moved, 'no longer reads the whole log — remove it from STILL_READING (the list only shrinks)').toEqual([])
+  it('no module reads the whole log', () => {
+    const files = modules(SRC)
+    // The walk is not blind: it reaches the api, and the source every view reads the log through.
+    expect(files).toEqual(expect.arrayContaining(['api.ts', 'features/logSource.ts']))
+    // Positive control on a REAL module: the api as it stands, with a whole-log read planted in it.
+    const api = readFileSync(join(SRC, 'api.ts'), 'utf8')
+    expect(wholeLogReads('api.ts', `${api}\nexport async function planted() { return invoke('get_log_delta', {}) }`)).toHaveLength(1)
+    const readers = files.flatMap((file) => wholeLogReads(file, readFileSync(join(SRC, file), 'utf8')))
+    expect(readers, 'a whole-log reader — ask LogSource (features/logSource.ts) instead').toEqual([])
   })
 })

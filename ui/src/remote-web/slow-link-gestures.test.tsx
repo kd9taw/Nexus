@@ -29,7 +29,7 @@ import frames from '../remote-monitor/fixtures.v2.json'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
-  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], getLog: [], getCatCwUnprovenRigModels: [],
+  const reads: Record<string, unknown> = { getLicensedBandPlan: [], getBandPlan: [], getCatCwUnprovenRigModels: [],
     getSpectrumRow: { row: [], loHz: 200, hiHz: 4000 } }
   return Object.fromEntries(Object.entries(actual).map(([name, value]) => [name,
     typeof value === 'function' ? vi.fn(async () => structuredClone(reads[name] ?? {})) : value]))

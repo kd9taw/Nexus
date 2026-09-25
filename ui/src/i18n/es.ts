@@ -1920,6 +1920,11 @@ export const ES: PartialCatalog = {
   "logbook.delete.confirm": "Eliminar QSO",
   "logbook.delete.done": "Eliminado {{call}}",
   "logbook.delete.failed": "No se pudo eliminar el QSO",
+  // Changes by id that were not made: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.delete.changed": "{{call}} cambió en otra ventana o por una sincronización, así que no se eliminó. Aquí está como está ahora: revísalo y vuelve a eliminarlo si todavía quieres.",
+  "logbook.delete.gone": "{{call}} ya se había eliminado en otra ventana.",
+  "logbook.change.changed": "{{call}} cambió en otra ventana o por una sincronización, así que esto no se guardó. Aquí está como está ahora: revísalo e inténtalo de nuevo.",
+  "logbook.change.gone": "{{call}} se eliminó en otra ventana, así que esto no se guardó.",
   "logbook.delete.heading": "¿Eliminar el QSO con {{call}} en {{band}}?",
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",

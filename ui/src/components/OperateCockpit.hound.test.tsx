@@ -61,7 +61,6 @@ vi.mock('../api', () => {
     getSpectrumRow: vi.fn(nothing),
     setDecodeDepth: vi.fn(nothing),
     atuTune: vi.fn(nothing),
-    getLog: vi.fn(() => Promise.resolve([])),
     qrzLookup: vi.fn(nothing),
     resolveEntity: vi.fn(nothing),
     setMsk144Period: vi.fn(nothing),

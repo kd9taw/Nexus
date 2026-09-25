@@ -24,6 +24,7 @@ import { render, cleanup, waitFor } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot, FieldDayStatus, LoggedQso, QrzLookup } from '../types'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
+import type { LogQuestion } from '../features/logAnswers'
 
 const resolved: QrzLookup = {
   call: 'W1ABC',
@@ -58,11 +59,11 @@ const priorQsos = [
 ] as unknown as LoggedQso[]
 
 const qrzLookup = vi.fn(async () => resolved)
-const getLog = vi.fn(async () => priorQsos)
+/** The log the engine holds; `askLog` answers each question from it as the engine does. */
+const engineLog = vi.fn(async (): Promise<LoggedQso[]> => priorQsos)
 
 vi.mock('../api', () => ({
-  getLog: (...a: unknown[]) => getLog(...(a as [])),
-  getLogDelta: async () => ({ revision: 1, full: true, rows: await getLog() }),
+  askLog: async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog()),
   qrzLookup: (...a: unknown[]) => qrzLookup(...(a as [])),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),
@@ -238,7 +239,7 @@ beforeEach(() => {
   } as unknown as typeof ResizeObserver
   qrzLookup.mockClear()
   qrzLookup.mockResolvedValue(resolved)
-  getLog.mockClear()
+  engineLog.mockClear()
 })
 afterEach(cleanup)
 

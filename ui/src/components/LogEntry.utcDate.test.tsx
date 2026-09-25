@@ -15,15 +15,12 @@ import { logQso } from '../api'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => {
-  const getLog = vi.fn(() => Promise.resolve([]))
   return {
     fdLogManual: vi.fn(() => Promise.resolve({})),
     contestLogManual: vi.fn(() => Promise.resolve({})),
     contestWorking: vi.fn(() => Promise.resolve({})),
     contestEntryReset: vi.fn(() => Promise.resolve({})),
     logQso: vi.fn(() => Promise.resolve({})),
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
     lookupPark: vi.fn(() => Promise.resolve(null)),
     lookupParkLive: vi.fn(() => Promise.resolve(null)),
     qrzLookup: vi.fn(() => Promise.resolve(null)),

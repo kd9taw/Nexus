@@ -12,11 +12,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
-import { getLogDelta } from '../api'
+import { askLog } from '../api'
 import { t } from '../i18n'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
-import { answerFrom } from '../features/logAnswers'
+import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import type { AppSnapshot, LoggedQso } from '../types'
 
 // W1ABC's country is in the log, on 40 m; the rig is on 20 m — so the card's badge, once the log
@@ -46,8 +46,7 @@ vi.mock('../api', async (importOriginal) => {
   for (const k of Object.keys(actual)) auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
   return {
     ...auto,
-    getLogDelta: vi.fn(),
-    getLog: vi.fn(async () => []),
+    askLog: vi.fn(),
     qrzLookup: vi.fn(async () => null),
     resolveEntity: vi.fn(async () => 'United States'),
     lookupPark: vi.fn(async () => null),
@@ -74,21 +73,24 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
-  vi.mocked(getLogDelta).mockReset()
+  vi.mocked(askLog).mockReset()
 })
 
 describe('the log strip’s card: no need badge until the call’s answer arrives', () => {
-  it('the whole-log list: nothing while the log loads, then exactly today’s badge', async () => {
-    let release = () => {}
-    vi.mocked(getLogDelta).mockImplementation(
-      () => new Promise((resolve) => (release = () => resolve({ revision: 1, full: true, rows: priorQsos }))) as never,
+  it('the window’s own source: nothing while the engine’s answers are out, then exactly today’s badge', async () => {
+    const out: (() => void)[] = []
+    vi.mocked(askLog).mockImplementation(
+      ((q: LogQuestion) => new Promise((resolve) => out.push(() => resolve(answerFrom(priorQsos, q, 1))))) as never,
     )
     typeCall('W1ABC')
     await waitFor(() => expect(document.querySelector('.recall-card')).not.toBeNull())
+    await waitFor(() => expect(out.length, 'the card asked').toBeGreaterThan(0))
     await act(async () => {}) // the entity resolves (cty.dat, local)
-    expect(need(), 'a need badge before the log answered').toBeNull()
+    expect(need(), 'a need badge before the engine answered').toBeNull()
 
-    await act(async () => release())
+    await act(async () => {
+      for (const answer of out.splice(0)) answer()
+    })
     await waitFor(() => expect(need(), 'the answer, landed').toBe(TODAYS))
   })
 

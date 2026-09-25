@@ -57,7 +57,7 @@ use tempo_core::logbook::query::{
     LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
 };
 use tempo_core::logbook::sqlite::{self, Narrow, Order, Scope, ENTITY_COLUMNS, ORDER_COLUMNS};
-use tempo_core::logbook::{QsoRecord, RecordId};
+use tempo_core::logbook::{QsoEdit, QsoRecord, RecordId};
 
 use crate::{SharedEngine, Tally};
 
@@ -186,6 +186,9 @@ struct PageAnswer {
     offset: usize,
     rows: Vec<LoggedQso>,
     keys: Vec<String>,
+    /// Each row's edit key ([`QsoEdit::key`]): what a change to the row sends back with its id
+    /// (`RowRef`, [`crate::log_by_id`]). Computed here and never in the UI.
+    edit_keys: Vec<String>,
 }
 
 /// Where a row sits in an order (`LogLocate`).
@@ -259,8 +262,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A row as the UI reads it: [`LoggedQso`] with its live cty.dat entity — exactly
-/// `logged_rows`'s conversion, the one `get_log` hands out.
+/// A row as the UI reads it: [`LoggedQso`] with its live cty.dat entity — the conversion every
+/// row the UI is handed gets ([`crate::log_by_id`]'s answers too).
 fn logged(r: QsoRecord, resolve: &dyn Fn(&str) -> Option<String>) -> LoggedQso {
     let mut q = LoggedQso::from(r);
     q.entity = resolve(&q.call);
@@ -567,6 +570,10 @@ impl LogQueries {
             }
         };
         let keys = rows.iter().map(|(h, r)| key_of(r, *h)).collect();
+        let edit_keys = rows
+            .iter()
+            .map(|(_, r)| QsoEdit::project(r).key())
+            .collect();
         json(PageAnswer {
             query: query.clone(),
             revision: c.revision,
@@ -577,6 +584,7 @@ impl LogQueries {
             offset,
             rows: rows.into_iter().map(|(_, r)| logged(r, resolve)).collect(),
             keys,
+            edit_keys,
         })
     }
 
@@ -888,7 +896,7 @@ impl LogQueries {
     }
 }
 
-/// A call's live DXCC entity — the conversion `get_log` applies.
+/// A call's live DXCC entity (cty.dat) — what each row the UI is handed carries.
 fn cty(call: &str) -> Option<String> {
     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
 }

@@ -4,7 +4,7 @@ import { render, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseRules, specificity, cmpSpec } from './cssCascade'
-import * as api from './api'
+import type { LogQuestion } from './features/logAnswers'
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE LOGBOOK ROW'S ACTION CLUSTER MUST FIT ITS GRID TRACK.
@@ -172,24 +172,22 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('./api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('./features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // ⚠️ NON-EMPTY, unlike the sibling Logbook suites: the satellite menu renders only
     // when the backend hands it names, and a cluster measured without it is a cluster
     // no operator sees. The names are LoTW's own (Engine::LOTW_SAT_NAMES).
     lotwSatNames: vi.fn(async () => ['AO-91', 'ARISS', 'SO-50']),
-    setSatTag: vi.fn(async () => ({})),
+    setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
-    logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
+    logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }
@@ -201,7 +199,7 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
   // wide table is rendered by seeding it rather than by driving the chip.
   window.localStorage.setItem('nexus.logbook.moreColumns', moreColumns ? '1' : '0')
   const { Logbook } = await import('./components/Logbook')
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+  engineLog.mockResolvedValue([
     {
       call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,

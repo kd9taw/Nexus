@@ -14,8 +14,7 @@
 //   - An answer never goes backwards: one to a request made before the request whose answer is
 //     already kept is dropped (v2 R4, "stale answers by identity"). The question is the key, so an
 //     answer to another sort or search cannot land in a view either.
-//   - A failed request is not retried in a loop: it waits for the next change, as the whole-log
-//     store's did.
+//   - A failed request is not retried in a loop: it waits for the next change.
 //   - Answers no view shows any more are kept a little while (LRU), so scrolling back, or leaving a
 //     view and coming back, is not a round trip.
 //
@@ -138,7 +137,7 @@ export function createAskingLogSource(transport: LogTransport): LogSource {
     },
     follow(logTick) {
       // A tick the answers already reflect is not a change; `undefined` is a reader that cannot
-      // tell (no snapshot yet), answered with a refresh — the whole-log store's own rule.
+      // tell (no snapshot yet), answered with a refresh.
       if (logTick !== undefined && logTick === lastTick) return
       if (logTick !== undefined) lastTick = logTick
       generation++

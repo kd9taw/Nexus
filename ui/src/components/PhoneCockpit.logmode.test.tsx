@@ -56,7 +56,6 @@ vi.mock('../api', () => ({
   contestIMoved: vi.fn(async () => ({})),
   contestLogManual: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),
-  getLog: vi.fn(async () => []),
   lookupPark: vi.fn(async () => null),
   lookupParkLive: vi.fn(async () => null),
   qrzLookup: vi.fn(async () => null),

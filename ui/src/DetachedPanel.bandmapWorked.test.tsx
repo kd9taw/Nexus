@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { DetachedPanel } from './DetachedPanel'
 import type { AppSnapshot, LoggedQso, SpotRow } from './types'
+import type { LogQuestion } from './features/logAnswers'
 
 const station = vi.hoisted(() => ({
   log: [] as unknown[],
@@ -36,11 +37,11 @@ vi.mock('./api', async () => {
   out.getSettings = vi.fn().mockResolvedValue({})
   out.getPropagation = vi.fn().mockResolvedValue(null)
   out.getAllSpots = vi.fn(() => Promise.resolve(SPOTS))
-  out.getLogDelta = vi.fn(async (since: number, have: number) => {
+  // The engine answers each question the pop-out asks, over its log.
+  const { answerAs } = await import('./features/logAnswers.testkit')
+  out.askLog = vi.fn(async (q: LogQuestion) => {
     station.logReads++
-    return since === 0
-      ? { revision: station.revision, full: true, rows: station.log.slice() }
-      : { revision: station.revision, full: false, rows: station.log.slice(have) }
+    return answerAs(q, station.log as LoggedQso[], station.revision)
   })
   return out
 })
@@ -98,13 +99,20 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('the band-map pop-out’s worked calls', () => {
-  it('strikes through exactly the spots the log holds (upper-cased, untrimmed), with one log read', async () => {
+  it('strikes through exactly the spots the log holds (upper-cased, untrimmed), asking only about the map’s calls', async () => {
     const { container } = render(<DetachedPanel panel="bandmapCw" />)
     await waitFor(() => expect(shown(container)).toBe(SPOTS.length))
     await waitFor(() => expect(struckThrough(container)).toEqual(expectedWorked(station.log as LoggedQso[])))
     // The fixture must reach the rule's corners, or the equality above proves little.
     expect(struckThrough(container)).toEqual(['DL1ABC ', 'W1AW', 'w1abc'])
-    expect(station.logReads).toBe(1)
+    // What it asked the engine: which of the calls on the map are worked — nothing else, and never
+    // the log itself.
+    const { askLog } = await import('./api')
+    const asked = vi.mocked(askLog).mock.calls.map(([q]) => q)
+    expect(station.logReads).toBe(asked.length)
+    expect(asked.map((q) => q.kind).filter((k) => k !== 'workedCalls')).toEqual([])
+    const onMap = new Set(SPOTS.map((s) => s.call.toUpperCase()))
+    expect(asked.flatMap((q) => (q.kind === 'workedCalls' ? q.calls : [])).filter((c) => !onMap.has(c.toUpperCase()))).toEqual([])
   })
 
   it('a contact logged while the map is up is struck through on the next tick', async () => {

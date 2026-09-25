@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, waitFor, screen } from '@testing-library/react'
 import { Logbook } from './Logbook'
-import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 // Same jsdom shims the sibling Logbook suites need: react-virtual measures the scroll
 // element and rows via offsetHeight + a ResizeObserver, neither of which jsdom implements.
@@ -16,22 +16,20 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: vi.fn(() => Promise.resolve({})),
-    markQslCard: vi.fn(() => Promise.resolve({})),
+    markQslSentById: vi.fn(() => Promise.resolve({})),
+    markQslCardById: vi.fn(() => Promise.resolve({})),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -57,11 +55,11 @@ function oneContact() {
 // bare ↥ arrow, so an operator hunting for "Upload to QRZ" reported the control as gone.
 describe('Logbook row — the QRZ push is recognisable as QRZ (#270)', () => {
   it('shows QRZ on the button and keeps its accessible name', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(oneContact())
+    engineLog.mockResolvedValue(oneContact())
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
-    await waitFor(() => expect(container.querySelector('.log-scroll > div')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
 
     // Found by its accessible name — that name is what screen readers and the existing
     // guidance ("Push <call> to QRZ") rely on, so it must not change.

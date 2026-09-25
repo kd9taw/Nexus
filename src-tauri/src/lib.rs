@@ -16853,87 +16853,6 @@ async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<Ap
     Ok(snap)
 }
 
-/// The full logbook as serializable contacts (for the UI log view). Each row
-/// carries the cty.dat-RESOLVED entity for its callsign — the award identity
-/// the UI compares on; the stored free-text COUNTRY is display only (QRZ and
-/// cty.dat spell entities differently, which made the DXCC totals disagree and
-/// the NEW ONE badge fire on every German/Russian contact forever).
-#[tauri::command(async)]
-#[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC
-fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
-    // A snapshot under the lock — pointers, no record cloned — converted after it is
-    // released: the per-row copy and country lookup are the whole cost, and the radio loop
-    // needs this lock at every slot boundary.
-    let records = engine_lock(&state).log_snapshot().records;
-    Ok(logged_rows(records))
-}
-
-/// Records as the UI reads them, each with its cty.dat entity — `get_log`'s conversion, and
-/// `get_log_delta`'s, which must hand out rows identical to it.
-fn logged_rows(records: Vec<Arc<tempo_core::logbook::QsoRecord>>) -> Vec<LoggedQso> {
-    records
-        .into_iter()
-        .map(|r| {
-            let mut q = LoggedQso::from(Arc::unwrap_or_clone(r));
-            q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-            q
-        })
-        .collect()
-}
-
-/// [`get_log_delta`]'s answer.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LogDelta {
-    /// The log's revision these rows bring the UI's copy to.
-    revision: u64,
-    /// `rows` is the whole log (the copy is replaced), not just its new end.
-    full: bool,
-    rows: Vec<tempo_app::dto::LoggedQso>,
-}
-
-/// The log since the UI's copy, which stood at `since_revision` holding `have_count` rows.
-///
-/// One logged QSO used to cost the whole log over IPC — ~100 MB of JSON at 150k QSOs — once
-/// per window that holds a copy. When every change since `since_revision` was an append and
-/// the copy is no longer than the log, `rows` is just `records[have_count..]`. After anything
-/// else — an edit, a delete, an import that changed a held row, a sync, an upload stamp, a
-/// reload, or a revision this log never held — `full` is set and `rows` is the whole log,
-/// exactly as [`get_log`] returns it. Rows are converted exactly as `get_log`'s are.
-#[tauri::command]
-async fn get_log_delta(
-    state: State<'_, SharedEngine>,
-    since_revision: u64,
-    have_count: usize,
-) -> Result<LogDelta, String> {
-    // On the blocking pool, like `with_engine`'s commands (#335): every window asks for this
-    // on every log change, it waits for the engine lock, and a full answer's per-row country
-    // lookup is CPU-bound — none of which may occupy a tokio worker the lock-free waterfall
-    // and meter reads need. `log_delta` takes and releases the lock itself.
-    let engine = Arc::clone(&state);
-    tauri::async_runtime::spawn_blocking(move || log_delta(&engine, since_revision, have_count))
-        .await
-        .map_err(|e| format!("engine task failed: {e}"))
-}
-
-#[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC
-fn log_delta(engine: &Mutex<Engine>, since_revision: u64, have_count: usize) -> LogDelta {
-    // The row pointers are copied and the revision read under ONE lock, so they always agree;
-    // the conversion runs after it is released, as in `get_log`.
-    let (revision, full, records) = {
-        let eng = engine_lock(engine);
-        let log = eng.log_records();
-        let grew = eng.log_appended_only_since(since_revision) && have_count <= log.len();
-        let rows = if grew { &log[have_count..] } else { log };
-        (eng.log_revision(), !grew, rows.to_vec())
-    };
-    LogDelta {
-        revision,
-        full,
-        rows: logged_rows(records),
-    }
-}
-
 /// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
 /// form keys its "new one" badge on this, not on the QRZ country string.
 #[tauri::command]
@@ -16979,7 +16898,7 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The log commands below take the ROW the UI showed (`target`, as `get_log` handed it out),
+/// The log commands below take the ROW the UI showed (`target`, as the log view was handed it),
 /// and never a position. The station keys that row exactly as a Remote browser keys its page
 /// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
 /// `remote_service::operations::logging::{seen_target, locate}`. They used to take
@@ -17037,7 +16956,7 @@ fn durability_failed(why: String) -> String {
     format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
 }
 
-/// The contact `id` as `get_log` would show it — what a log command hands back so a
+/// The contact `id` as a page of the log shows it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn log_row(eng: &Engine, id: tempo_core::logbook::RecordId) -> Result<LoggedQso, String> {
     let r = eng
@@ -17330,7 +17249,7 @@ async fn get_awards(
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
 /// no continent/zone; both re-resolve per callsign here via cty.dat, anchored on the operator's
 /// own call for the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/
-/// confirmations) is computed frontend-side from `get_log`. Pure/offline.
+/// confirmations) is the `statistics` log question's ([`log_queries`]). Pure/offline.
 ///
 /// Folded again only when the log's content or the operator's call moves ([`log_stats`]), from
 /// the logbook store, on the blocking pool.
@@ -28717,8 +28636,6 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             confirm_pending_log,
             discard_pending_log,
             log_qso,
-            get_log,
-            get_log_delta,
             resolve_entity,
             contest_zone_hint,
             edit_qso,
@@ -37610,79 +37527,6 @@ mod tests {
         r.mode = "FT8".into();
         r.when_unix = when;
         r
-    }
-
-    /// A logged QSO moves ONE row over IPC instead of the whole log (~100 MB of JSON at 150k
-    /// QSOs, once per window holding a copy). `get_log_delta` may send "just these rows" only
-    /// while the UI's copy is still a prefix of the log: after an edit or a delete it must
-    /// answer `full`, or the UI keeps showing a contact the log no longer holds. Its rows must
-    /// be `get_log`'s rows exactly, entity included.
-    #[test]
-    fn the_log_delta_sends_appended_rows_and_the_whole_log_after_anything_else() {
-        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
-            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
-        ));
-        // `get_log`'s answer: the same snapshot and the same conversion.
-        let get_log = || super::logged_rows(engine_lock(&engine).log_snapshot().records);
-        engine_lock(&engine).log_qso(ft8_qso("DL1ABC", 1_700_000_000));
-        engine_lock(&engine).log_qso(ft8_qso("JA1XYZ", 1_700_000_100));
-
-        // The UI's first ask holds nothing, at no revision: the whole log.
-        let first = super::log_delta(&engine, 0, 0);
-        assert!(
-            first.full,
-            "a revision the log never held gets the whole log"
-        );
-        assert_eq!(first.rows, get_log());
-        assert!(
-            first.rows[0].entity.is_some(),
-            "fixture: rows carry the cty.dat entity"
-        );
-
-        // Nothing changed: nothing to send.
-        let idle = super::log_delta(&engine, first.revision, first.rows.len());
-        assert!(
-            !idle.full && idle.rows.is_empty(),
-            "an unchanged log sends nothing"
-        );
-        assert_eq!(idle.revision, first.revision);
-
-        // A logged contact and an import that only adds rows: exactly the new rows.
-        engine_lock(&engine).log_qso(ft8_qso("VK2AAA", 1_700_000_200));
-        engine_lock(&engine).import_adif(
-            "<CALL:6>ZL1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20231114<TIME_ON:6>230000<EOR>",
-        );
-        let grown = super::log_delta(&engine, first.revision, first.rows.len());
-        assert!(!grown.full, "appends only: just the new rows");
-        assert_eq!(grown.rows.len(), 2);
-        assert_ne!(grown.revision, first.revision);
-        let mut copy = first.rows.clone();
-        copy.extend(grown.rows.iter().cloned());
-        assert_eq!(copy, get_log(), "the copy plus the delta IS get_log");
-
-        // An edit rewrites a row the copy holds: the whole log, never a delta.
-        let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
-        edited.comment = Some("fixed".into());
-        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
-        let after_edit = super::log_delta(&engine, grown.revision, copy.len());
-        assert!(after_edit.full, "an edit is not an append");
-        assert_eq!(after_edit.rows, get_log());
-        assert_eq!(after_edit.rows[0].comment.as_deref(), Some("fixed"));
-
-        // A delete likewise.
-        let first = engine_lock(&engine).log_records()[0].id.unwrap();
-        assert!(engine_lock(&engine).delete_qso(first));
-        let after_delete = super::log_delta(&engine, after_edit.revision, after_edit.rows.len());
-        assert!(after_delete.full, "a delete is not an append");
-        assert_eq!(after_delete.rows, get_log());
-
-        // A copy longer than the log, or a revision from the log's future, is never trusted…
-        let (now, held) = (after_delete.revision, after_delete.rows.len());
-        assert!(super::log_delta(&engine, now, held + 1).full);
-        assert!(super::log_delta(&engine, now + 1, held).full);
-        // …while the same copy at its true length and revision is simply current.
-        let current = super::log_delta(&engine, now, held);
-        assert!(!current.full && current.rows.is_empty());
     }
 
     /// The periodic whole-log tallies — a propagation refetch's needs, the award summary, the
