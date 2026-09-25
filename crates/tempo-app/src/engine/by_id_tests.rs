@@ -43,11 +43,13 @@ fn contact(n: u64, call: &str) -> QsoRecord {
     r
 }
 
-/// An engine whose log holds exactly `rows`, each under its own id — added by the append every
-/// logged contact makes, which keeps the id a row brings and follows it into the hot index.
+/// An engine whose log holds exactly `rows`, each under its own id — appended as the station
+/// appends a contact (into the log in memory, its index and the engine's store, keeping the id a
+/// row brings), so a read of the log finds them there.
 fn engine_holding(rows: &[QsoRecord]) -> Engine {
     let mut e = Engine::new("K2DEF", "FN31", 0);
-    e.station.append(rows.to_vec(), false);
+    let _ = e.station.append(rows.to_vec(), false);
+    e.station.sync_hot();
     let held: Vec<QsoRecord> = e.stored_log().iter().map(|r| QsoRecord::clone(r)).collect();
     assert_eq!(
         held, rows,

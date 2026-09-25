@@ -319,7 +319,7 @@ fn every_answer_read_from_the_store_is_the_old_answer() {
             "premise: an activation worked under {callsign:?}"
         );
     }
-    for (arm, e) in [("the store", &store), ("the 1.13 path", &memory(&text))] {
+    for (arm, e) in [("the store", &store), ("the 1.13 path", &memory(&d, &text))] {
         let (files, refusals) = assert_answers_are_the_old_answers(e, true, arm);
         assert!(
             files > 100 && refusals > 100,

@@ -117,6 +117,81 @@ fn a_row_another_writer_changes_under_the_plan_is_planned_again_and_both_changes
     );
 }
 
+/// ★ ON THE 1.13 PATH, A `log.adi` TAKEN IN UNDER A PLAN IS PLANNED AGAIN, NOT WRITTEN OVER
+/// (SPEC-2 v3 C19 Part C with Part B). Another computer on the shared `log.adi` confirms a contact
+/// through LoTW — 1.13's own report merge and save, as a second Nexus on the folder runs them —
+/// and the freshness poll takes that file in, between our plan's read of the contact and the
+/// commit of our change to it. The commit plans again on the contact as it now stands, so the
+/// confirmation and our paper card both stand: in the log, and in `log.adi`, this path's home. A
+/// commit of the first plan would write the contact back without the confirmation. The store is
+/// the 1.13 path's, in memory: no other process ever commits to it, so a check on another
+/// window's commits cannot see this.
+#[test]
+fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
+    let d = Dir::new("take-in-under-plan");
+    std::fs::write(d.log(), legacy_log(6)).unwrap();
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.set_log_path(d.log());
+    assert!(e.log_on_file(), "premise: the 1.13 path");
+    let engine = Arc::new(Mutex::new(e));
+    let id = id_at(&engine_lock(&engine), 3);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (engine, plans, path) = (Arc::clone(&engine), Rc::clone(&plans), d.log());
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() != 1 {
+                return;
+            }
+            let mut other = tempo_core::logbook::Logbook::load(&path);
+            let row = other
+                .records()
+                .iter()
+                .find(|r| r.id == Some(id))
+                .map(|r| QsoRecord::clone(r))
+                .expect("the other computer holds the contact");
+            let report =
+                tempo_core::logbook::adif_record(&row).replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
+            let _ = other.merge_report(&report);
+            other.save(&path).unwrap();
+            assert!(
+                engine_lock(&engine).sync_shared_log_if_changed(),
+                "premise: the freshness poll takes the file in"
+            );
+        }
+    };
+    let (made, durability) = racing(hook, || change_ops(&engine, id, None, &[card(id)], "ours"));
+    assert!(matches!(made, Ok(Ok(_))), "ours is made: {made:?}");
+    assert_eq!(
+        plans.get(),
+        2,
+        "planned again: the first plan read the contact before the take-in changed it"
+    );
+    durability.wait(DURABLE_WAIT).expect("in log.adi");
+    let held = engine_lock(&engine)
+        .log_records()
+        .iter()
+        .find(|r| r.id == Some(id))
+        .map(|r| QsoRecord::clone(r))
+        .expect("held");
+    assert!(
+        held.qsl_rcvd.card && held.qsl_rcvd.lotw,
+        "both stand in the log: {:?}",
+        held.qsl_rcvd
+    );
+    let on_disk = tempo_core::logbook::Logbook::load(&d.log());
+    let row = on_disk
+        .records()
+        .iter()
+        .find(|r| r.id == Some(id))
+        .expect("in log.adi");
+    assert!(
+        row.qsl_rcvd.card && row.qsl_rcvd.lotw,
+        "and in log.adi: {:?}",
+        row.qsl_rcvd
+    );
+}
+
 /// ★ `LogBusy` (SPEC-1 v2 R5): a row that changes under EVERY plan is refused after
 /// [`PLANS`] of them, and nothing of ours is written — the racing writer's changes all stand.
 #[test]

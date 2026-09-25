@@ -455,9 +455,10 @@ fn an_export_waits_for_a_contact_just_logged_with_both_locks_free_and_is_busy_pa
 /// ★ ONE PICTURE, THE ENGINE FREE: the file is cut from the picture of the log its activation was
 /// found in. After the pass that finds it and before its contacts' whole records are read, the
 /// operator moves one of its two contacts to the next day and deletes the other — committed to the
-/// store: the file is still both contacts, byte for byte the file before. At every step of the read
-/// the Engine lock is free, and the read is one pass and then the whole records, nothing more. The
-/// next read has the changes: the activation holds no contact, and is not found.
+/// store (on the 1.13 path, made: its store in memory commits them once the read ends): the file
+/// is still both contacts, byte for byte the file before. At every step of the read the Engine
+/// lock is free, and the read is one pass and then the whole records, nothing more. The next read
+/// has the changes: the activation holds no contact, and is not found.
 #[test]
 fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
     use crate::remote_service::query::picture::{at_seams, Seam};
@@ -490,8 +491,12 @@ fn an_activation_file_is_one_picture_of_the_log_read_with_the_engine_free() {
                 assert!(e.update_qso(moved, r));
                 let deleted = id(&e, "K1BBB");
                 assert!(e.delete_qso(deleted));
-                e.flush_log_store(std::time::Duration::from_secs(60))
-                    .expect("committed to the store");
+                // A store in memory holds off a commit until the read ends: there the changes
+                // are committed after it.
+                if !e.log_on_file() {
+                    e.flush_log_store(std::time::Duration::from_secs(60))
+                        .expect("committed to the store");
+                }
             },
             || download(&f, &state, &pick).0,
         );

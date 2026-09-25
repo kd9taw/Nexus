@@ -349,7 +349,8 @@ mod tests {
     #[cfg(debug_assertions)]
     #[should_panic(expected = "io_fence: a Remote read of the log is a pass over the whole log")]
     fn a_read_under_the_engine_lock_is_refused() {
-        let e = memory(&synthetic_log(5, 0x000C_18A6));
+        let d = Dir::new("fence");
+        let e = memory(&d, &synthetic_log(5, 0x000C_18A6));
         let eng = tempo_app::engine::engine_lock(&e);
         let rows = eng.log_rows();
         let _ = read(&rows, |log| log.count());

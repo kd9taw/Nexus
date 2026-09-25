@@ -196,6 +196,9 @@ pub(crate) fn save_the_logbook(
 fn take_what_to_save(engine: &SharedEngine) -> tempo_app::logstore::Unsaved {
     let mut eng = engine_lock(engine);
     eng.log_resend_all();
+    // On the 1.13 path, a `log.adi` another computer wrote since is taken in, so its lane can
+    // write what it holds instead of waiting for a freshness poll the quit will not see.
+    eng.log_take_in_log_file();
     eng.log_unsaved()
 }
 
@@ -495,7 +498,11 @@ fn quit_then(
 /// the radio has stopped. Nothing is sent again here: the visible save already did that, and
 /// asked. Bounded by `cap`; what is still not on disk then is written to the diagnostic log.
 pub(crate) fn flush_logbook_unlocked(engine: &SharedEngine, cap: Duration) {
-    let unsaved = engine_lock(engine).log_unsaved();
+    let unsaved = {
+        let mut eng = engine_lock(engine);
+        eng.log_take_in_log_file();
+        eng.log_unsaved()
+    };
     let s = unsaved.wait(cap);
     if !s.saved() {
         tempo_core::applog::error(
