@@ -131,8 +131,9 @@ export function StationCard({
                 comes last is what a narrow rail loses. */}
             {watch && <WatchTile entry={watch} />}
             {/* One chip per need form (new-DXCC, band, zone, …) — matches the decode
-                feed so the roster no longer looks emptier than Band Activity. */}
-            {needAll.map((t) => {
+                feed so the roster no longer looks emptier than Band Activity. The station's
+                `Wanted` need IS the watch list, and the tile already says so. */}
+            {(watch ? needAll.filter((t) => t !== 'Wanted') : needAll).map((t) => {
               const c = NEED_CHIP[t]
               return c ? (
                 <span key={t} className={`need-chip need-${c.cls}`} title={c.title}>

@@ -38,7 +38,6 @@ import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
-import { useWatchMatch } from '../watchlist'
 
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
 function chipFor(tag: NeedTag): { label: string; cls: string; title: string } {
@@ -320,9 +319,6 @@ export function NeededPanel({
   })
   const [filters, setFilters] = useState<NeededFilters>(loadFilters)
   const [filtersOpen, setFiltersOpen] = useState(false)
-  // The operator's watch list, live — the matcher behind the WATCH tile on the roster, the
-  // Stations list and Spots — for the Watch list chip.
-  const watchOf = useWatchMatch()
   // Persisted launch behavior for the detached window (read by App's auto-pop).
   const [autopop, setAutopop] = useState<boolean>(() => {
     try {
@@ -401,11 +397,7 @@ export function NeededPanel({
     MODE_CLASSES.some((c) => !filters.modes[c])
 
   const rows = useMemo(() => {
-    const filtered = filterAlerts(
-      alerts,
-      filters,
-      (a) => watchOf({ call: a.call, entity: a.entity, grid: a.grid }) !== null,
-    )
+    const filtered = filterAlerts(alerts, filters)
     const dir = sort.dir === 'asc' ? 1 : -1
     filtered.sort((a, b) => {
       let c = 0
@@ -440,7 +432,7 @@ export function NeededPanel({
       return c * dir
     })
     return filtered
-  }, [alerts, sort, filters, watchOf])
+  }, [alerts, sort, filters])
 
   // Keyboard: arrow through rows, Enter selects + works/QSYs (same as a click).
   const roving = useRovingList(rows.length, (i) => {

@@ -60,6 +60,7 @@ import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } fro
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
+import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
@@ -989,6 +990,14 @@ export async function contestZoneHint(call: string): Promise<number | null> {
  *  (`features/watchlistFold`). A whole-struct settings save cannot change the list. */
 export async function retireWantedCalls(): Promise<void> {
   await invoke<void>('retire_wanted_calls')
+}
+
+/** Send the station the watch list — whole, identity only — so the Needed board puts its stations
+ *  first, for this window and every Remote browser (operator, 2026-09-24: "watched counts as
+ *  needed"). The main window sends it on launch and after every edit; `false` when refused (any
+ *  other window). */
+export async function setWatchList(entries: { kind: WatchKind; value: string }[]): Promise<boolean> {
+  return invoke<boolean>('set_watch_list', { entries })
 }
 
 /** The satellite names LoTW accepts, for the tag picker. The backend owns the table, so what

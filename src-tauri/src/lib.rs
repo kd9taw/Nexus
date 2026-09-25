@@ -16290,6 +16290,25 @@ fn retire_wanted_calls(state: State<'_, SharedEngine>) -> Result<(), String> {
         .map_err(|e| format!("could not save the settings: {e}"))
 }
 
+/// The desktop's watch list, for the Needed board (operator 2026-09-24: "watched counts as
+/// needed"; `tempo_app::watchlist`). The main window sends the whole list on launch and after
+/// every edit (`ui/src/App.tsx`), then reads the board again. Only the main window: a torn-off
+/// panel holds no editor, and a Remote browser's own list is its own — the rows it is served
+/// follow the station's. `false` when refused. Held by the engine, which the native board and
+/// every Remote one read, so they cannot be served two different lists.
+#[tauri::command(async)]
+fn set_watch_list(
+    window: tauri::WebviewWindow,
+    state: State<'_, SharedEngine>,
+    entries: Vec<tempo_app::watchlist::WatchEntry>,
+) -> bool {
+    if window.label() != "main" {
+        return false;
+    }
+    engine_lock(&state).set_watch_list(entries);
+    true
+}
+
 /// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
 /// write path for it. A NARROW write, and here the narrowness is the point rather than the
 /// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
@@ -17891,6 +17910,8 @@ fn read_need_alerts(
     // the same station: they read the same alerts, and those alerts read this.
     let hunted_rows = eng.log_rows();
     let snap = eng.snapshot();
+    // The watch list the desktop last sent — its stations lead the board (see the end).
+    let watch = eng.watch_list().to_vec();
     let confirm_tier = eng.settings().alert_confirm_tier;
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
@@ -18171,10 +18192,49 @@ fn read_need_alerts(
         // Re-sort: an activation that is ALSO a new one must land among the new ones.
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
-    // The board carries no watch-list rows of its own: the old wanted list that fed them is
-    // retired (operator 2026-09-24, "One list"). Its Watch list chip filters these rows by the
-    // watch list the operator edits (Settings ▸ Spots & Alerts), matched in the window exactly as
-    // the WATCH tile matches the roster, the Stations list and Spots.
+    // THE WATCH LIST (Settings ▸ Spots & Alerts): a heard station it names tops the board even
+    // when it advances no award — operator 2026-09-24, "watched counts as needed", which is what
+    // the retired wanted list did, fed now by the list the operator edits. Matched as the WATCH
+    // tile matches the roster, the Stations list and Spots (`tempo_app::watchlist::watched`:
+    // call or `*` pattern, entity, grid; identity only, worked or not), last of every pass so the
+    // rows it marks are the board's final rows. The Watch list chip keeps exactly these.
+    if !watch.is_empty() {
+        let names = |call: &str, entity: Option<&str>, grid: Option<&str>| {
+            tempo_app::watchlist::watched(&watch, call, entity, grid).is_some()
+        };
+        // (a) A row already on the board: marked, and first.
+        for a in &mut alerts {
+            if names(&a.call, Some(&a.entity), a.grid.as_deref()) {
+                propagation::mark_watched(a);
+            }
+        }
+        // (b) A heard station no need put there: a row of its own. One per call and band, as
+        //     the board already keeps them.
+        for h in &heard {
+            let call = h.call.to_ascii_uppercase();
+            if call == me_up || alerts.iter().any(|a| a.call == call && a.band == h.band) {
+                continue;
+            }
+            let entity = propagation::dxcc::resolve(&call).map(|i| i.entity);
+            if !names(&call, entity, h.grid.as_deref()) {
+                continue;
+            }
+            let mut a = propagation::watched_alert(
+                &call,
+                &h.band,
+                &h.mode,
+                h.grid.as_deref(),
+                &*needs,
+                &needs.slots(),
+                confirm_tier,
+            );
+            a.freq_mhz = h.freq_mhz;
+            a.admitted_at = h.admitted_at;
+            a.evidence = h.evidence.clone();
+            alerts.push(a);
+        }
+        alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
+    }
     Ok(alerts)
 }
 
@@ -28548,6 +28608,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_psk_macros,
             set_beta_updates,
             retire_wanted_calls,
+            set_watch_list,
             set_launch_at_login,
             answer_remote_autostart_offer,
             set_fd_operator,
@@ -36439,42 +36500,88 @@ mod tests {
         cluster: &[&str],
         feed: &[(&str, &[propagation::OtaSpot])],
     ) -> Vec<propagation::NeedAlert> {
-        use std::sync::{Arc, Mutex};
-        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
-        let now = crate::now_unix();
-        let mut buf = SpotBuffer::new(100);
-        for call in cluster {
-            buf.push(ClusterSpot {
-                spotter: "W3LPL".into(), // the operator's own continent — the locality gate
-                dx_call: (*call).into(),
-                freq_khz: 14_025.0, // 20 m CW
-                comment: "CW 18 dB".into(),
-                time_utc: None,
-                received_unix: now as u64,
-                corroborators: Vec::new(),
-                rbn: false,
-            });
+        BoardStation::on_the_air(engine, cluster, feed).board()
+    }
+
+    /// A station with these stations on the air, whose Needed board can be read again after the
+    /// desktop sends it something — the engine stays reachable between reads.
+    struct BoardStation {
+        engine: SharedEngine,
+        spots: crate::SharedSpots,
+        ota: crate::SharedOtaSpots,
+        live: crate::SharedLivePaths,
+        region: crate::SharedRegionPaths,
+    }
+
+    impl BoardStation {
+        fn on_the_air(
+            engine: tempo_app::engine::Engine,
+            cluster: &[&str],
+            feed: &[(&str, &[propagation::OtaSpot])],
+        ) -> BoardStation {
+            use std::sync::{Arc, Mutex};
+            use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+            let now = crate::now_unix();
+            let mut buf = SpotBuffer::new(100);
+            for call in cluster {
+                buf.push(ClusterSpot {
+                    spotter: "W3LPL".into(), // the operator's own continent — the locality gate
+                    dx_call: (*call).into(),
+                    freq_khz: 14_025.0, // 20 m CW
+                    comment: "CW 18 dB".into(),
+                    time_utc: None,
+                    received_unix: now as u64,
+                    corroborators: Vec::new(),
+                    rbn: false,
+                });
+            }
+            let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
+            let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+            for (program, rows) in feed {
+                ota.lock()
+                    .unwrap()
+                    .insert((*program).into(), (now, rows.to_vec()));
+            }
+            let live: crate::SharedLivePaths =
+                Arc::new(Mutex::new(propagation::LiveSpots::default()));
+            let region =
+                crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+            let engine: SharedEngine = Arc::new(Mutex::new(engine));
+            BoardStation {
+                engine,
+                spots,
+                ota,
+                live,
+                region,
+            }
         }
-        let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
-        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        for (program, rows) in feed {
-            ota.lock()
-                .unwrap()
-                .insert((*program).into(), (now, rows.to_vec()));
+
+        /// The board, as the native window and every Remote browser read it.
+        fn board(&self) -> Vec<propagation::NeedAlert> {
+            crate::read_need_alerts(
+                engine_lock(&self.engine),
+                &Default::default(),
+                &self.live,
+                &self.region,
+                &self.spots,
+                &self.ota,
+            )
+            .unwrap()
         }
-        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
-        let region =
-            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
-        let engine: SharedEngine = Arc::new(Mutex::new(engine));
-        crate::read_need_alerts(
-            engine_lock(&engine),
-            &Default::default(),
-            &live,
-            &region,
-            &spots,
-            &ota,
-        )
-        .unwrap()
+
+        /// The desktop sends the station its watch list.
+        fn watching(&self, entries: &[(tempo_app::watchlist::WatchKind, &str)]) -> &Self {
+            engine_lock(&self.engine).set_watch_list(
+                entries
+                    .iter()
+                    .map(|(kind, value)| tempo_app::watchlist::WatchEntry {
+                        kind: *kind,
+                        value: (*value).into(),
+                    })
+                    .collect(),
+            );
+            self
+        }
     }
 
     /// Today's 0000Z on the real clock the board reads — a log timestamp that is always "today"
@@ -36607,8 +36714,8 @@ mod tests {
     /// THE BOARD NO LONGER READS THE OLD WANTED LIST (operator 2026-09-24, "One list"). It had no
     /// editor since the watch list replaced it, and went on tagging `Wanted` from settings.json:
     /// a list the operator could neither see nor change. Its entries now join the watch list on the
-    /// first launch (the desktop's `features/watchlistFold`), and the board's Watch list chip
-    /// filters by the watch list, the one the operator edits.
+    /// first launch (the desktop's `features/watchlistFold`), and the board ranks by the watch
+    /// list, the one the operator edits (below).
     #[test]
     fn the_needed_board_does_not_tag_from_the_retired_wanted_list() {
         let engine = with_old_wanted_list(
@@ -36636,9 +36743,8 @@ mod tests {
         );
     }
 
-    /// …nor ADDS a row for a listed station that is no need at all. The old list surfaced every
-    /// heard station on it, worked or not; with the list retired, the board shows needs, and the
-    /// watch list marks a watched station on the roster, the Stations list and Spots.
+    /// …nor ADDS a row for a station on it that is no need at all. The old list surfaced every
+    /// heard station on it, worked or not; the watch list does that now, and only the watch list.
     #[test]
     fn the_needed_board_adds_no_row_for_a_worked_station_on_the_retired_list() {
         let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
@@ -36656,6 +36762,163 @@ mod tests {
         assert!(
             !alerts.iter().any(|a| a.call == "W1AW"),
             "a row for a worked station, from the retired list: {alerts:?}"
+        );
+    }
+
+    /// An operator who worked W1AW on 20 m CW an hour ago, with the confirmation tier off — so
+    /// W1AW, heard again, is no need of any kind.
+    fn w1aw_worked() -> tempo_app::engine::Engine {
+        let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
+        worked.mode = "CW".into();
+        worked.when_unix = (crate::now_unix() - 3_600) as u64;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(worked);
+        let mut s = e.settings().clone();
+        s.alert_confirm_tier = false;
+        e.apply_restored_settings(s);
+        e
+    }
+
+    /// ⭐ A WATCHED STATION THAT IS HEARD IS ON THE BOARD, FIRST — even when nothing else needs it
+    /// (operator 2026-09-24: "Yes, watched counts as needed", offered as "a watched station is on
+    /// the Needed board when heard, and the Watch list chip shows exactly your watched stations").
+    /// It counts as the Call Roster, the Stations list and Spots count it — worked or not — and
+    /// ranks above everything, a new one included, as the retired wanted list's stations did.
+    #[test]
+    fn a_watched_station_heard_is_on_the_board_first_even_when_nothing_else_needs_it() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX"], &[]);
+        station.watching(&[(WatchKind::Call, "W1AW")]);
+        let alerts = station.board();
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.call == "VK9XX" && a.tags.contains(&propagation::NeedTag::NewEntity)),
+            "control: the board is there, a new one on it: {alerts:?}"
+        );
+        let first = &alerts[0];
+        assert_eq!(
+            first.call, "W1AW",
+            "the watched station leads the board, above a new one: {alerts:?}"
+        );
+        assert_eq!(first.tags, vec![propagation::NeedTag::Wanted]);
+        assert_eq!(first.priority, propagation::NeedTag::Wanted.tier());
+        assert_eq!(first.headline, "Watch list — United States");
+        // The row is the spot's, so a click works it where it was heard.
+        assert_eq!((first.mode.as_str(), first.freq_mhz), ("CW", Some(14.025)));
+        assert!(first.evidence.is_some(), "and it says who heard it");
+    }
+
+    /// The control: a station nothing needs, that the watch list does not name, stays off — while
+    /// the list names others, a GRID entry among them that is W1AW's grid in the log: a cluster
+    /// spot carries no grid, and a grid-less station is unknown to a grid entry, never a hit.
+    #[test]
+    fn an_unwatched_station_nothing_needs_stays_off_the_board() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX"], &[]);
+        station.watching(&[
+            (WatchKind::Call, "VP8*"),
+            (WatchKind::Dxcc, "Bouvet"),
+            (WatchKind::Grid, "FN31"),
+        ]);
+        let alerts = station.board();
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "control: the board is there: {alerts:?}"
+        );
+        assert!(
+            !alerts.iter().any(|a| a.call == "W1AW"),
+            "a station nothing needs and nothing names: {alerts:?}"
+        );
+        assert!(
+            !alerts
+                .iter()
+                .any(|a| a.tags.contains(&propagation::NeedTag::Wanted)),
+            "nothing on the board is on the list: {alerts:?}"
+        );
+    }
+
+    /// TAKING A STATION OFF THE WATCH LIST TAKES ITS ROW OFF once nothing else needs it — and a
+    /// station that is still needed stays, as its need, no longer first. The desktop sends the
+    /// edited list and reads the board again; this is that second read.
+    #[test]
+    fn taking_a_station_off_the_watch_list_takes_its_row_off_once_it_is_no_longer_needed() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX", "3Y0J"], &[]);
+        let row = |alerts: &[propagation::NeedAlert], call: &str| {
+            alerts.iter().find(|a| a.call == call).cloned()
+        };
+        station.watching(&[(WatchKind::Call, "W1AW"), (WatchKind::Call, "VK9*")]);
+        let before = station.board();
+        assert!(row(&before, "W1AW").is_some(), "{before:?}");
+        let vk9 = row(&before, "VK9XX").unwrap();
+        assert_eq!(vk9.tags[0], propagation::NeedTag::Wanted);
+        assert!(vk9.tags.contains(&propagation::NeedTag::NewEntity));
+
+        station.watching(&[]);
+        let after = station.board();
+        assert_eq!(
+            row(&after, "W1AW"),
+            None,
+            "off the list and needed for nothing: off the board"
+        );
+        let vk9 = row(&after, "VK9XX").expect("still a new one");
+        assert!(!vk9.tags.contains(&propagation::NeedTag::Wanted), "{vk9:?}");
+        assert!(
+            vk9.priority < propagation::NeedTag::Wanted.tier(),
+            "{vk9:?}"
+        );
+        // The control: a station the list never named is the same row on both reads.
+        assert_eq!(row(&before, "3Y0J"), row(&after, "3Y0J"));
+        assert!(row(&after, "3Y0J").is_some());
+    }
+
+    /// Never the operator's own call: a pattern broad enough to name it (`KD9*`) must not put the
+    /// operator on their own board when their call reaches the evidence (a spot of their own).
+    #[test]
+    fn the_operators_own_call_is_never_a_watched_row() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["KD9TAW", "VK9XX"], &[]);
+        station.watching(&[(WatchKind::Call, "KD9*"), (WatchKind::Call, "VK9*")]);
+        let alerts = station.board();
+        assert_eq!(
+            alerts[0].tags[0],
+            propagation::NeedTag::Wanted,
+            "control: the list marks what it names: {alerts:?}"
+        );
+        assert!(!alerts.iter().any(|a| a.call == "KD9TAW"), "{alerts:?}");
+    }
+
+    /// A WATCH ENTRY NAMES A ROW BY ENTITY AND BY GRID, as the WATCH tile does on the roster: a DXCC
+    /// entry by the station's cty.dat entity, a grid entry by the grid its evidence carried (here an
+    /// activator's spot). What neither names is left alone.
+    #[test]
+    fn a_watch_entry_names_a_row_by_entity_and_by_grid() {
+        use tempo_app::watchlist::WatchKind;
+        let mut park = live_spot("POTA", "K1ABC", "US-0001", 60);
+        park.grid = Some("FN31".into());
+        let station = BoardStation::on_the_air(
+            w1aw_worked(),
+            &["VK9XX", "3Y0J"],
+            &[("POTA", std::slice::from_ref(&park))],
+        );
+        station.watching(&[
+            (WatchKind::Dxcc, "Christmas Island"),
+            (WatchKind::Grid, "FN3*"),
+        ]);
+        let alerts = station.board();
+        let tags = |call: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call == call)
+                .map(|a| a.tags.clone())
+                .unwrap_or_else(|| panic!("no {call} row: {alerts:?}"))
+        };
+        assert_eq!(tags("VK9XX")[0], propagation::NeedTag::Wanted, "by entity");
+        assert_eq!(tags("K1ABC")[0], propagation::NeedTag::Wanted, "by grid");
+        assert!(
+            !tags("3Y0J").contains(&propagation::NeedTag::Wanted),
+            "Bouvet is not on the list"
         );
     }
 

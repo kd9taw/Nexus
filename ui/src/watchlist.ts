@@ -37,7 +37,8 @@ export interface WatchFilter {
 const STORAGE_KEY = 'nexus.watchlist'
 /** Dispatched by every writer of the list after it saves — the Settings manager
  *  (`WatchlistPanel`) and the one-time fold of the retired wanted list (`features/watchlistFold`);
- *  App's alert path, `useWatchMatch` and the manager itself re-read the list on it. */
+ *  App (its alert path, and the copy it sends the station for the Needed board), `useWatchMatch`
+ *  and the manager itself re-read the list on it. */
 export const WATCHLIST_CHANGED = 'nexus:watchlist-changed'
 
 /** Escape a string for literal use inside a RegExp. */

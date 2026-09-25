@@ -111,6 +111,7 @@ import {
   getPropagation,
   getFeedHealth,
   getNeedAlerts,
+  setWatchList,
   getAllSpots,
   getXrayNow,
   getDxpedWindows,
@@ -1182,6 +1183,17 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (remote) return
     void foldRetiredWantedList()
   }, [remote])
+  // The station puts the watch list's stations first on the Needed board — this window's and every
+  // Remote browser's (operator, 2026-09-24: "watched counts as needed") — so it is sent the list on
+  // launch and after every edit, and the board is read again. One send at a time, in order: the
+  // station keeps whichever list reaches it last, so an earlier send finishing late would restore
+  // an entry the operator has just removed.
+  const watchSent = useRef<Promise<unknown>>(Promise.resolve())
+  useEffect(() => {
+    if (remote) return
+    const entries = watchlist.map(({ kind, value }) => ({ kind, value }))
+    watchSent.current = watchSent.current.then(() => setWatchList(entries)).then(refreshNeeds, () => {})
+  }, [watchlist, remote, refreshNeeds])
   const [onboardDismissed, setOnboardDismissed] = useState<boolean>(
     () => localStorage.getItem(ONBOARD_KEY) === '1',
   )

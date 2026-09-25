@@ -1878,7 +1878,7 @@ export const EN = {
   'need.badge.pota.title': 'Live POTA activator',
   'need.badge.sota.title': 'Live SOTA activator',
   'need.badge.wanted.label': 'WANTED',
-  'need.badge.wanted.title': 'On your wanted watch list',
+  'need.badge.wanted.title': 'On your watch list',
 
   // The board/roster chip. `short` is the dense-column form — a translation needs both, and
   // the short one has to stay short.
@@ -1915,7 +1915,7 @@ export const EN = {
   'need.chip.sota.title': "Live SOTA activator — the row's call is on a summit right now",
   'need.chip.wanted.label': 'WANTED',
   'need.chip.wanted.short': 'WANT',
-  'need.chip.wanted.title': 'On your wanted watch list',
+  'need.chip.wanted.title': 'On your watch list',
 
   // ── Status roles (the colour+glyph pairing table) ───────────────────────────────────
   // `statusMeta.ts` pairs each role with a CSS token, a CVD-immune glyph and this label.

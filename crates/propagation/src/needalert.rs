@@ -49,9 +49,11 @@ pub enum NeedTag {
     /// The call belongs to an ACTIVE announced DXpedition — a limited-time window
     /// (appended alongside the award tags; never the primary row color).
     Dxped,
-    /// The call was on the operator's old "wanted" list. NO LONGER PRODUCED: that list is retired
-    /// (2026-09-24) and the Needed board's Watch list chip filters by the watch list, in the UI.
-    /// Kept so a row an older station tagged still reads, and its tier still ranks it.
+    /// The station is on the operator's watch list (Settings ▸ Spots & Alerts) — an explicit ask
+    /// to be told when it is heard, so it earns the TOP tier and leads the row even when it
+    /// advances no award (operator 2026-09-24: "watched counts as needed"; see [`mark_watched`]
+    /// and [`watched_alert`]). The name is the old "wanted" list's, which fed it until that list
+    /// was retired into the watch list the same day; a station older than that still tags it so.
     Wanted,
 }
 
@@ -188,9 +190,10 @@ pub struct NeedAlert {
     #[serde(default)]
     pub grid_rarity: Option<crate::gridrarity::GridRarity>,
     /// The station's grid as the evidence carried it (own decodes, an activator's spot), `None`
-    /// otherwise. The window's watch list matches a GRID entry against it, as it does the same
-    /// station's roster row; the board keeps no watch list of its own. Not sent when `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// otherwise. The station matches a GRID watch-list entry against it, as the WATCH tile does
+    /// the same station's roster row. Internal: the row's watch-list verdict travels as
+    /// [`NeedTag::Wanted`], so the grid itself is never sent.
+    #[serde(skip)]
     pub grid: Option<String>,
     /// The activation this row IS, when it is one — see [`ParkRef`]. `None` for every other
     /// need, so a row that names no activation can never tag one onto a contact.
@@ -472,8 +475,8 @@ pub fn score_slots(
         NeedTag::Dxped => format!("Active DXpedition — {}", info.entity),
         NeedTag::Pota => format!("POTA activator — {}", info.entity),
         NeedTag::Sota => format!("SOTA activator — {}", info.entity),
-        // Wanted is never produced (see the variant); this arm exists only for match
-        // exhaustiveness.
+        // Wanted is applied by [`mark_watched`] (which owns its headline), never by
+        // score(); this arm exists only for match exhaustiveness.
         NeedTag::Wanted => format!("Wanted — {}", info.entity),
     };
     Some(NeedAlert {
@@ -785,6 +788,74 @@ pub fn activation_alert(
         spot.activator.to_ascii_uppercase()
     ));
     Some(alert)
+}
+
+/// Mark a row as a station on the watch list: [`NeedTag::Wanted`] leads its tags (it drives the
+/// row's colour and chip) and its priority rises to that tier, so it tops the board; whatever
+/// award it also advances keeps riding along as the chips after it.
+pub fn mark_watched(alert: &mut NeedAlert) {
+    if alert.tags.contains(&NeedTag::Wanted) {
+        return;
+    }
+    alert.tags.insert(0, NeedTag::Wanted);
+    alert.priority = alert.priority.max(NeedTag::Wanted.tier());
+    alert.headline = if alert.headline.is_empty() {
+        let who = if alert.entity.is_empty() {
+            &alert.call
+        } else {
+            &alert.entity
+        };
+        format!("Watch list — {who}")
+    } else {
+        format!("Watch list · {}", alert.headline)
+    };
+}
+
+/// The Needed-board row for a heard station on the watch list that no need put there. Like
+/// [`activation_alert`] (and unlike [`score`], which has nothing to say about a station the log
+/// has already worked), the watch-list hit is ITSELF the opportunity: the row is built even when
+/// no award is advanced, and merges any the station does advance — through the same
+/// [`strip_confirm_tier`] seam as every other row when the operator has turned confirmation
+/// opportunities off (`confirm_tier` false), so a watched station never carries a chip the board
+/// withholds from the rest. The caller has matched the station against the list and attaches the
+/// spot's frequency, time and evidence.
+pub fn watched_alert(
+    call: &str,
+    band: &str,
+    mode: &str,
+    grid: Option<&str>,
+    needs: &dyn OperatorNeeds,
+    slots: &AwardSlots,
+    confirm_tier: bool,
+) -> NeedAlert {
+    let info = dxcc::resolve(call);
+    let mut award: Vec<NeedAlert> = score_slots(call, band, mode, grid, None, needs, slots)
+        .into_iter()
+        .collect();
+    if !confirm_tier {
+        strip_confirm_tier(&mut award);
+    }
+    let mut alert = award.pop().unwrap_or_else(|| NeedAlert {
+        call: call.to_ascii_uppercase(),
+        entity: info
+            .as_ref()
+            .map(|i| i.entity.to_string())
+            .unwrap_or_default(),
+        band: band.to_string(),
+        zone: info.as_ref().map(|i| i.cq_zone).unwrap_or(0),
+        tags: Vec::new(),
+        priority: 0,
+        headline: String::new(),
+        mode: ModeClass::from_adif(mode).label().to_string(),
+        freq_mhz: None,
+        admitted_at: None,
+        evidence: None,
+        grid_rarity: grid.and_then(crate::gridrarity::grid_rarity),
+        grid: grid.map(str::to_string),
+        park: None,
+    });
+    mark_watched(&mut alert);
+    alert
 }
 
 /// Band-aware "local to me" radius (km) — how close a receiver must be before its
@@ -1797,11 +1868,11 @@ mod tests {
         }
     }
 
-    /// A ROW CARRIES THE GRID ITS EVIDENCE CARRIED (operator 2026-09-24, "One list"). The Needed
-    /// board's Watch list chip matches the watch list in the window, by call or prefix, entity or
-    /// GRID, as the WATCH tile does on the roster — and a row with no grid could never answer a
-    /// grid entry, while the same station's roster row did. Serialized, since the window reads
-    /// JSON; absent when the evidence carried none (a cluster spot), as the key was before.
+    /// A ROW CARRIES THE GRID ITS EVIDENCE CARRIED, for the station's watch-list match (operator
+    /// 2026-09-24: "watched counts as needed"). A GRID entry names a station by the grid it sent,
+    /// as the WATCH tile does on the roster — and a row with no grid could never answer one while
+    /// the same station's roster row did. Kept on the row, never sent: the verdict travels as
+    /// the `Wanted` tag. `None` when the evidence carried none (a cluster spot).
     #[test]
     fn a_row_carries_the_grid_its_evidence_carried() {
         let n = LogNeeds::new();
@@ -1812,14 +1883,15 @@ mod tests {
         };
         let spotted = heard_from_freq("DL1XYZ", 14.074, "FT8").unwrap();
         let ranked = rank(&[decoded, spotted], &n, &slots(&z, &g, &s));
-        let row = |call: &str| {
-            serde_json::to_value(ranked.iter().find(|a| a.call == call).unwrap()).unwrap()
-        };
-        assert_eq!(row("K1ABC")["grid"], "FN42", "{:?}", row("K1ABC"));
+        let row = |call: &str| ranked.iter().find(|a| a.call == call).unwrap();
+        assert_eq!(row("K1ABC").grid.as_deref(), Some("FN42"));
+        assert_eq!(row("DL1XYZ").grid, None, "a cluster spot carries no grid");
         assert!(
-            row("DL1XYZ").get("grid").is_none(),
-            "a row whose evidence carried no grid sends none: {:?}",
-            row("DL1XYZ")
+            serde_json::to_value(row("K1ABC"))
+                .unwrap()
+                .get("grid")
+                .is_none(),
+            "the grid is the station's to match with, not the window's to read"
         );
         // An activation that advances no award builds its own row, not score_slots': the
         // activator spot's grid rides on that one too.
@@ -1845,6 +1917,59 @@ mod tests {
             "the bare activation row"
         );
         assert_eq!(park.grid.as_deref(), Some("FN31"));
+    }
+
+    /// A watched station the log has already worked still gets its row — the watch-list hit is
+    /// the opportunity — and one that is also a need keeps its award, behind the watch tag.
+    #[test]
+    fn a_watched_station_gets_a_row_worked_or_not_and_keeps_any_award() {
+        let mut worked = LogNeeds::new();
+        worked.add("VP8PJ", "20m", "CW", None, None, true);
+        let states = HashSet::new();
+        let slots = slots(worked.worked_zones(), worked.worked_grids(), &states);
+        let done = watched_alert("VP8PJ", "20m", "CW", None, &worked, &slots, true);
+        assert_eq!(done.tags, vec![NeedTag::Wanted]);
+        assert_eq!(done.priority, NeedTag::Wanted.tier());
+        assert!(!done.entity.is_empty());
+        assert_eq!(done.headline, format!("Watch list — {}", done.entity));
+        assert_eq!(done.mode, "CW");
+        let new_one = watched_alert("3Y0J", "20m", "CW", None, &worked, &slots, true);
+        assert_eq!(new_one.tags[0], NeedTag::Wanted);
+        assert!(
+            new_one.tags.contains(&NeedTag::NewEntity),
+            "{:?}",
+            new_one.tags
+        );
+        assert!(new_one.priority >= NeedTag::Wanted.tier());
+        assert!(
+            new_one.headline.starts_with("Watch list · New one"),
+            "{}",
+            new_one.headline
+        );
+        // Marking twice is marking once.
+        let mut again = new_one.clone();
+        mark_watched(&mut again);
+        assert_eq!(again, new_one);
+    }
+
+    /// With confirmation opportunities turned OFF, a watched station the log holds unconfirmed
+    /// gets its row WITHOUT the Confirm chip the board withholds from every other row — through
+    /// the same seam ([`strip_confirm_tier`]). On, the chip rides behind the watch tag.
+    #[test]
+    fn a_watched_row_keeps_no_confirm_chip_the_operator_turned_off() {
+        let mut worked = LogNeeds::new();
+        worked.add("VP8PJ", "20m", "CW", None, None, false); // worked, NOT confirmed
+        let states = HashSet::new();
+        let slots = slots(worked.worked_zones(), worked.worked_grids(), &states);
+        let on = watched_alert("VP8PJ", "20m", "CW", None, &worked, &slots, true);
+        assert_eq!(
+            on.tags,
+            vec![NeedTag::Wanted, NeedTag::Confirm],
+            "the premise"
+        );
+        let off = watched_alert("VP8PJ", "20m", "CW", None, &worked, &slots, false);
+        assert_eq!(off.tags, vec![NeedTag::Wanted]);
+        assert_eq!(off.headline, format!("Watch list — {}", off.entity));
     }
 
     /// The other half of the beacon rule, and the one that keeps it honest: 4U1UN is the

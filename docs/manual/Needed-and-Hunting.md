@@ -11,7 +11,7 @@ sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 
 | Need tag | Priority |
 |-----------|----------|
-| `Wanted` — only from a station on an older Nexus, for a call on its old hidden wanted list (this version adds that list to your watch list) | 120 |
+| `Wanted` — on your watch list (Settings ▸ Spots & Alerts), heard, worked or not | 120 |
 | `NewEntity` — ATNO, an all-time new DXCC entity | 100 |
 | `NewZone` — new CQ zone (WAZ) | 70 |
 | `NewState` — new state (WAS) | 60 |

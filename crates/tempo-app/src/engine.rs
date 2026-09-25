@@ -2465,6 +2465,10 @@ pub struct Engine {
     /// with no Remote service revokes a counter nobody reads rather than needing an `Option`.
     /// `halt_tx` moves it — see there for why.
     remote_transmit_stand_down: crate::remote_control::Revocation,
+    /// The operator's watch list, as the desktop's main window last sent it — what the Needed
+    /// board puts first ([`crate::watchlist`]). Not a setting: the list is the desktop's, kept in
+    /// its ui-state.json, and sent again on every launch and after every edit. Empty until then.
+    watch_list: Vec<crate::watchlist::WatchEntry>,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     remote_radio_command: Option<remote_radio::Request>,
     remote_radio_selection: Option<remote_selection::Request>,
@@ -4701,6 +4705,7 @@ impl Engine {
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
             remote_transmit_stand_down: Default::default(),
+            watch_list: Vec::new(),
             remote_amp_command: None,
             remote_radio_command: None,
             remote_radio_selection: None,
@@ -11073,6 +11078,18 @@ impl Engine {
         revocation: crate::remote_control::Revocation,
     ) {
         self.remote_transmit_stand_down = revocation;
+    }
+
+    /// Take the desktop's watch list — whole, replacing the last one ([`crate::watchlist`]). The
+    /// command layer admits it from the main window only.
+    pub fn set_watch_list(&mut self, list: Vec<crate::watchlist::WatchEntry>) {
+        self.watch_list = list;
+    }
+
+    /// The watch list the desktop last sent, for the Needed board — the native one and every
+    /// Remote browser's, which read this same engine.
+    pub fn watch_list(&self) -> &[crate::watchlist::WatchEntry] {
+        &self.watch_list
     }
 
     /// The generation a browser is shown as its `transmitEpoch`. Test-visible so a stand-down
@@ -29274,6 +29291,29 @@ mod tests {
         bundle.wanted_calls = vec!["VP8*".into()];
         e.apply_restored_settings(bundle);
         assert_eq!(e.settings().wanted_calls, vec!["VP8*".to_string()]);
+    }
+
+    /// The watch list is the DESKTOP's, sent whole (operator 2026-09-24: "watched counts as
+    /// needed"): the engine holds what it was last sent, and no settings payload — a form save,
+    /// a restore — reaches it, because it is not a setting at all.
+    #[test]
+    fn the_watch_list_is_what_the_desktop_last_sent_and_no_settings_payload_moves_it() {
+        use crate::watchlist::{WatchEntry, WatchKind};
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.watch_list().is_empty(),
+            "nothing until the desktop sends it"
+        );
+        let list = vec![WatchEntry {
+            kind: WatchKind::Call,
+            value: "VP8*".into(),
+        }];
+        e.set_watch_list(list.clone());
+        e.apply_settings(e.settings().clone());
+        e.apply_restored_settings(e.settings().clone());
+        assert_eq!(e.watch_list(), list.as_slice());
+        e.set_watch_list(Vec::new());
+        assert!(e.watch_list().is_empty(), "a later list replaces it whole");
     }
 
     /// The retired list's one writer does empty it — the positive control for the form test
