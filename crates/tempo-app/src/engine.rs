@@ -23123,84 +23123,19 @@ contact yourself."
         self.station.log_view()
     }
 
-    /// The contact the log holds under `id`, if any, read from the log in memory under the lock
-    /// the caller holds — what a command that names the row the operator saw by its content
-    /// answers with, in the hold of the lock that changed it ([`StationCore::change_held`]).
-    #[allow(deprecated)] // SPEC-2 C19 (B, after C18a's locate): a seen-row command's answer, read in the log in memory
-    pub fn logged_row_held(
-        &self,
-        id: tempo_core::logbook::RecordId,
-    ) -> Option<std::sync::Arc<QsoRecord>> {
-        self.station
-            .logbook
-            .records()
-            .iter()
-            .find(|r| r.id == Some(id))
-            .cloned()
-    }
-
-    /// `ops` made on the contact `id` in the hold of the Engine lock the caller already has — a
-    /// command that found the row by the content the operator saw ([`StationCore::change_held`]).
-    /// Whether a row carries `id` and took them.
-    pub fn change_row_held(
-        &mut self,
-        id: tempo_core::logbook::RecordId,
-        ops: &[tempo_core::logbook::LogOp],
-        context: &str,
-    ) -> bool {
-        match self
-            .station
-            .change_held(id, context, |_, row| Ok(crate::station::ops_on(row, ops)))
-        {
-            Ok(made) => made.is_some(),
-            Err(crate::station::RowRefusal::Busy) => {
-                tempo_core::applog::warn(
-                    "logbook",
-                    &format!("{context}: the contact kept changing under the change; not made"),
-                );
-                false
-            }
-            Err(_) => false,
-        }
-    }
-
-    /// [`Self::update_qso`] in the hold of the Engine lock the caller already has
-    /// ([`Self::change_row_held`]): the edit, a corrected call queued to the connectors, and the
-    /// contest log's own row corrected. Whether a row carries `id`.
-    pub fn update_qso_held(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
-        let op = self.station.edit_op(id, rec);
-        let made = self.station.change_held(id, "update_qso", |_, row| {
-            Ok(crate::station::ops_on(row, std::slice::from_ref(&op)))
-        });
-        let Ok(Some((before, Some(after)))) = made else {
-            return false;
-        };
-        self.station.requeue_if_corrected(&before, &after);
-        self.correct_contest_row(&after);
-        true
-    }
-
-    /// The contact `id`, if it is still the version whose edit key is `edit_key` — checked under
-    /// the Engine lock the caller holds, against the log as it is (another window's commits taken
-    /// in first), by [`StationCore::fresh_row`]'s rule.
+    /// The contact `id`, if it is still the version whose edit key is `edit_key`, by
+    /// [`StationCore::fresh_row`]'s rule — read from the store as [`Self::logged_row`] reads it.
+    /// A change made by a `RowRef` makes this check itself, on the row it planned on
+    /// ([`crate::logwrite`]); this answers the same question outside a change.
     ///
-    /// Remote's check of the row a change names, made under the lock its operation holds. The
-    /// desktop's changes by id check the row they planned on instead ([`crate::logwrite`]); when
-    /// Remote's change is planned the same way this goes.
-    #[allow(deprecated)] // SPEC-2 C19 (B, after C18a's locate): Remote's check under the lock reads the log in memory
+    /// ⚠️ It reads the store: never under the Engine lock (a debug build panics).
     pub fn fresh_log_row(
-        &mut self,
+        &self,
         id: tempo_core::logbook::RecordId,
         edit_key: &str,
     ) -> Result<std::sync::Arc<QsoRecord>, crate::station::RowRefusal> {
-        self.station.recover_external_appends();
         let row = self
-            .station
-            .logbook
-            .records()
-            .iter()
-            .find(|r| r.id == Some(id))
-            .cloned()
+            .logged_row(id)
             .ok_or(crate::station::RowRefusal::Gone)?;
         StationCore::fresh_row(&row, edit_key)?;
         Ok(row)

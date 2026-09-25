@@ -2731,46 +2731,6 @@ impl StationCore {
         Ok(Err(RowRefusal::Busy))
     }
 
-    /// [`Self::change_by_id`] for a command that finds its row and changes it in ONE hold of the
-    /// Engine lock — the commands that name the row the operator saw by its content (the
-    /// desktop's by-row commands and Remote's rewrite), whose locate reads the log in memory
-    /// under that lock. The row is read from the log in memory as well, which holds what the
-    /// store and this process's changes on their way to it hold (the P6 oracle), so nothing reads
-    /// the disk under the lock; the change is made as every change is ([`Self::commit_planned`]).
-    ///
-    /// Goes with the log in memory: these commands plan with the lock released, as the by-id
-    /// commands do ([`crate::logwrite`]), once their locate does.
-    #[allow(deprecated)] // SPEC-2 C19 (B, after C18a's locate): a seen-row command's change, planned on the log in memory under the lock
-    pub(crate) fn change_held(
-        &mut self,
-        id: RecordId,
-        context: &str,
-        mut decide: impl FnMut(&Self, &Arc<QsoRecord>) -> Decided,
-    ) -> Result<Option<MadeRow>, RowRefusal> {
-        for _ in 0..PLANS {
-            let plan = self.log_plan();
-            let before = self
-                .logbook
-                .records()
-                .iter()
-                .find(|r| r.id == Some(id))
-                .cloned()
-                .ok_or(RowRefusal::Gone)?;
-            let Some((class, after)) = decide(self, &before)? else {
-                return Ok(None);
-            };
-            let after = after.map(Arc::new);
-            let rows = vec![(Arc::clone(&before), after.clone())];
-            if self
-                .commit_planned(&plan, class, rows, false, Vec::new(), context)
-                .is_ok()
-            {
-                return Ok(Some((before, after)));
-            }
-        }
-        Err(RowRefusal::Busy)
-    }
-
     /// Make `ops` on the contact `id`, in one breath ([`Self::change_by_id`]): whether a row
     /// carries `id` and took them. A row that kept changing under them is not changed, and says
     /// so in the diagnostic log.

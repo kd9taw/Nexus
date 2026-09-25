@@ -273,6 +273,16 @@ fn a_page_names_its_query_its_revisions_and_its_rows() {
     }
 }
 
+/// Whether a change by id with the edit key `key` would be taken now: the contact `id` is still
+/// the version whose key it is — asked of the store with the Engine lock released, as a change
+/// asks it.
+fn key_taken(engine: &SharedEngine, id: RecordId, key: &str) -> bool {
+    let view = engine_lock(engine).log_view();
+    view.row(id)
+        .expect("the log reads")
+        .is_some_and(|row| tempo_app::station::StationCore::fresh_row(&row, key).is_ok())
+}
+
 /// ★ A PAGE HANDS OUT EACH ROW'S EDIT KEY (SPEC-2 v2 §1): the key a change by id is checked
 /// against (`QsoEdit::key`, never computed by the UI). The Logbook sends it back with the row's
 /// id, so the key a page gives must be the one the change accepts — on both homes of the log —
@@ -310,7 +320,7 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
             let id: RecordId = id.as_str().unwrap().parse().unwrap();
             let key = key.as_str().expect("an edit key is text");
             assert!(
-                engine_lock(&engine).fresh_log_row(id, key).is_ok(),
+                key_taken(&engine, id, key),
                 "{home}: {id}'s key from the page is refused"
             );
         }
@@ -323,7 +333,7 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
             "premise: marked"
         );
         assert!(
-            engine_lock(&engine).fresh_log_row(id, &before).is_err(),
+            !key_taken(&engine, id, &before),
             "{home}: the key of a row that changed since is accepted"
         );
         let after = page();
@@ -333,7 +343,7 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
         );
         let now = after["editKeys"][2].as_str().unwrap();
         assert_ne!(now, before, "{home}: the page still hands out the old key");
-        assert!(engine_lock(&engine).fresh_log_row(id, now).is_ok());
+        assert!(key_taken(&engine, id, now));
     }
 }
 

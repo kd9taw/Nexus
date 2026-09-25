@@ -167,6 +167,38 @@ pub fn edit_row(
     (made, durability)
 }
 
+/// A correction of the contact `id` as a whole record — the desktop's edit of a row it found by
+/// the content on screen, and a Remote browser's — as [`Engine::update_qso`] makes it: `edit`
+/// builds the record from the row as it stands, its country is filled from the resolver when it
+/// carries none, a corrected call goes back out to the connectors, and the contest log's own row
+/// is corrected. Only while the row is still the version whose edit key is `edit_key`, planned
+/// with the Engine lock released ([`change_row`]); `then` runs in the hold of the lock that made
+/// it, with the row as it was and as it now is.
+pub fn update_row<T>(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: &str,
+    mut edit: impl FnMut(&QsoRecord) -> QsoRecord,
+    mut then: impl FnMut(&mut Engine, &MadeRow) -> T,
+) -> (RowOutcome<T>, Durability) {
+    change_row(
+        engine,
+        id,
+        "update_qso",
+        |e, row| {
+            StationCore::fresh_row(row, edit_key)?;
+            Ok(station::ops_on(row, &[e.station().edit_op(id, edit(row))]))
+        },
+        |e, made| {
+            if let (before, Some(after)) = &made {
+                e.station_mut().requeue_if_corrected(before, after);
+                e.correct_contest_row(after);
+            }
+            then(e, &made)
+        },
+    )
+}
+
 /// The operator's QSL-sent declaration on `id` — `Some(via)` marks it sent, dated now; `None`
 /// withdraws it — as [`StationCore::mark_qsl_sent`] makes it.
 pub fn qsl_sent(id: RecordId, via: Option<tempo_core::logbook::QslVia>) -> LogOp {
