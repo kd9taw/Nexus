@@ -70,7 +70,6 @@ vi.mock('../api', () => ({
   contestWorking: async (..._args: unknown[]) => ({}),
   contestEntryReset: async () => ({}),
   fdLogManual: vi.fn(async () => ({})),
-  getLog: vi.fn(async () => [] as LoggedQso[]),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
   lookupPark: vi.fn(async () => null),

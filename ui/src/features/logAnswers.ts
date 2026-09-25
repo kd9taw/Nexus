@@ -6,9 +6,8 @@
 //
 // `answerFrom` is the reference answer to every question: it runs the SAME functions the views
 // ran over the whole log — `callHistory`, `entitySlots`, `computeLogStats`, `lotwBacklog`,
-// `workedGridSet`, the Logbook's filter and sort — so the whole-log adapter built on it
-// (features/wholeLogSource.ts) answers exactly what the views computed, by construction. The
-// engine's queries (C17a) must answer the same; the goldens in `__fixtures__/log-query/` are
+// `workedGridSet`, the Logbook's filter and sort — so it answers exactly what the views computed
+// when each held the whole log, by construction. The engine's queries (C17a) must answer the same; the goldens in `__fixtures__/log-query/` are
 // generated from this module and are what its Rust port is held to.
 //
 // ⚠️ Answers are JSON-shaped on purpose (arrays and records, never Sets or Maps): they cross IPC
@@ -87,8 +86,13 @@ export interface LogPage {
   offset: number
   rows: LoggedQso[]
   /** Each row's identity: its id. Only a row without one (a test fixture, a pre-1.14 station's
-   *  row) gets `#<log position>` from the whole-log adapter — the engine's rows always carry ids. */
+   *  row) gets `#<log position>` from the reference answer — the engine's rows always carry ids. */
   keys: string[]
+  /** Each row's edit key (tempo-core's `QsoEdit::key`): with its id, the `RowRef` a change to the
+   *  row sends (`editQsoById` and the rest), refused as `changed` once the row is no longer this
+   *  version. The engine computes it and the UI never does, so the reference answer (`answerFrom`)
+   *  gives '' — a key no row has: a change sent with it is refused, never applied. */
+  editKeys: string[]
 }
 
 export interface LogLocate {
@@ -225,6 +229,7 @@ function compute(
         offset: q.offset,
         rows: slice.map((i) => log[i]),
         keys: slice.map((i) => rowKeyAt(log, i)),
+        editKeys: slice.map(() => ''),
       }
     }
     case 'locate': {
@@ -241,7 +246,7 @@ const empties = new Map<string, unknown>()
 const EMPTIES_KEPT = 64
 
 /** The answer an EMPTY log gives — what every view showed before its first answer arrived, when
- *  it computed over `useSharedLog(...) ?? NO_LOG`. A view that has no answer yet shows this, so
+ *  it computed over a copy of the log that had not loaded yet. A view that has no answer yet shows this, so
  *  the loading moment looks exactly as it did. (C17a decides per view whether a loading state
  *  should replace it: an empty log's answer is "never worked", which is a claim, not a blank.) */
 export function emptyAnswer<Q extends LogQuestion>(q: Q): AnswerTo<Q> {

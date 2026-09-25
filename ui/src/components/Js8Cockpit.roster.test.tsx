@@ -21,6 +21,7 @@ import { Js8Cockpit } from './Js8Cockpit'
 import { JS8_PINS_KEY } from '../features/js8Pins'
 import type { AppSnapshot, Js8State, LoggedQso } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
+import type { LogQuestion } from '../features/logAnswers'
 
 const js8Fixture = (): Js8State => ({
   speed: 'normal',
@@ -90,9 +91,8 @@ vi.mock('../api', async (importOriginal) => {
     getJs8State: vi.fn(async () => state.current),
     js8Enter: vi.fn(async () => state.current),
     js8Arm: vi.fn(async () => state.current),
-    getLog: vi.fn(async () => log.current),
-    // The roster reads the shared log store, which asks get_log_delta: the whole log, every time.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: log.current })),
+    // The roster asks the engine; each answer is the engine's over this log.
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, log.current as LoggedQso[])),
     getLicensedBandPlan: vi.fn(async () => []),
     setRxOffset: vi.fn(async () => ({})),
     haltTx: vi.fn(async () => ({})),
@@ -172,13 +172,13 @@ function stationRow(call: string): HTMLElement {
 
 describe('the call-activity roster carries JS8Call’s DX columns', () => {
   it('a hidden roster asks the log nothing (the join is paid only while the view is visible)', async () => {
-    const { getLogDelta } = await import('../api')
-    vi.mocked(getLogDelta).mockClear()
+    const { askLog } = await import('../api')
+    vi.mocked(askLog).mockClear()
     await renderCockpit({ active: false })
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20))
     })
-    expect(getLogDelta, 'a hidden JS8 roster read the log').not.toHaveBeenCalled()
+    expect(askLog, 'a hidden JS8 roster asked the log').not.toHaveBeenCalled()
   })
 
   it('renders distance, azimuth, ✓ worked-before, name and comment for a heard station', async () => {

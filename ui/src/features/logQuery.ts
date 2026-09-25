@@ -3,8 +3,8 @@
 //
 // Lifted VERBATIM out of Logbook.tsx, where it was the body of a `useMemo` over the window's copy of
 // the whole log. It lives on its own so that one copy serves three readers: the Logbook (its header
-// click needs `defaultAsc`, its rows `fmtUtc`), the whole-log adapter behind `LogSource`
-// (features/wholeLogSource.ts), and the goldens in `__fixtures__/log-query/` that the engine's port
+// click needs `defaultAsc`, its rows `fmtUtc`), the reference answers (`logAnswers.ts`
+// `answerFrom`), and the goldens in `__fixtures__/log-query/` that the engine's port
 // of this code is held to. The goldens are generated FROM this module, so a change here that alters
 // an order fails them — that is the point of them.
 //

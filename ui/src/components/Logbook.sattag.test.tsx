@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -32,22 +33,22 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
-    editQso: vi.fn(async () => ({})),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: noop(),
     logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
     // The real table LoTW accepts is the backend's (Engine::LOTW_SAT_NAMES); three of its
     // names are enough to prove the picker offers what the backend hands it.
     lotwSatNames: vi.fn(async () => ['AO-91', 'ARISS', 'SO-50']),
-    setSatTag: vi.fn(async () => ({})),
+    setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -60,7 +61,7 @@ vi.mock('../toast', () => ({
 /** One contact. `tagged` gives it the PROP_MODE/SAT_NAME pair a mis-tag leaves behind. */
 function logRow(tagged: boolean) {
   return {
-    call: 'K0ABC', grid: 'EN37', band: '70cm', freqMhz: 435.5, mode: 'SSB',
+    id: 'id-K0ABC', call: 'K0ABC', grid: 'EN37', band: '70cm', freqMhz: 435.5, mode: 'SSB',
     rstSent: '59', rstRcvd: '57', name: null, qth: null, comment: null, notes: null,
     country: 'United States', whenUnix: 1_700_000_000,
     confirmed: false, awardConfirmed: false,
@@ -70,7 +71,7 @@ function logRow(tagged: boolean) {
 }
 
 async function renderLog(tagged: boolean) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([logRow(tagged)])
+  engineLog.mockResolvedValue([logRow(tagged)])
   const { container } = render(
     <Logbook defaultBand="70cm" defaultFreqMhz={435.5} defaultMode="SSB" />,
   )
@@ -88,7 +89,9 @@ async function renderLog(tagged: boolean) {
 }
 
 const values = (s: HTMLSelectElement) => [...s.options].map((o) => o.value)
-const setSatTag = () => api.setSatTag as ReturnType<typeof vi.fn>
+const setSatTag = () => api.setSatTagById as ReturnType<typeof vi.fn>
+/** The contact on screen, by its id — never its position (a Remote delete shifts positions). */
+const K0ABC = expect.objectContaining({ id: 'id-K0ABC' })
 
 afterEach(() => {
   cleanup()
@@ -110,8 +113,7 @@ describe('correcting a satellite tag from inside Nexus', () => {
   it('corrects a wrong designator to the one the operator picked', async () => {
     const { sat } = await renderLog(true)
     fireEvent.change(sat, { target: { value: 'AO-91' } })
-    // The row on screen, never its position (a Remote delete shifts positions).
-    await waitFor(() => expect(setSatTag()).toHaveBeenCalledWith(logRow(true), 'AO-91'))
+    await waitFor(() => expect(setSatTag()).toHaveBeenCalledWith(K0ABC, 'AO-91'))
   })
 
   it('REMOVES the tag when the operator says the contact was not via satellite', async () => {
@@ -119,7 +121,7 @@ describe('correcting a satellite tag from inside Nexus', () => {
     expect(values(sat), 'the way out has to be reachable').toContain('clear')
     fireEvent.change(sat, { target: { value: 'clear' } })
     // `null`, and only `null`, is the removal — the same shape as markQslSent's withdrawal.
-    await waitFor(() => expect(setSatTag()).toHaveBeenCalledWith(logRow(true), null))
+    await waitFor(() => expect(setSatTag()).toHaveBeenCalledWith(K0ABC, null))
   })
 
   it('does not offer the removal on a contact that carries no tag', async () => {
@@ -147,7 +149,7 @@ describe('correcting a satellite tag from inside Nexus', () => {
 // resolve the wrong way for every operator who fixed a busted call on a satellite contact.
 describe('the edit form still carries neither satellite field', () => {
   it('sends no propMode or satName when a busted call is corrected', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([logRow(true)])
+    engineLog.mockResolvedValue([logRow(true)])
     const { container } = render(
       <Logbook defaultBand="70cm" defaultFreqMhz={435.5} defaultMode="SSB" />,
     )
@@ -164,9 +166,9 @@ describe('the edit form still carries neither satellite field', () => {
       container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement,
     )
 
-    const editQso = api.editQso as ReturnType<typeof vi.fn>
-    await waitFor(() => expect(editQso).toHaveBeenCalled())
-    const sent = editQso.mock.calls[0][1] as Record<string, unknown>
+    const editQsoById = api.editQsoById as ReturnType<typeof vi.fn>
+    await waitFor(() => expect(editQsoById).toHaveBeenCalled())
+    const sent = editQsoById.mock.calls[0][1] as Record<string, unknown>
     // Positive control, with DISAGREEING values: the payload really is a busted-call fix and
     // really did change something, so the two absences below cannot pass on an empty payload.
     expect(sent.call).toBe('K0ABD')
@@ -177,8 +179,9 @@ describe('the edit form still carries neither satellite field', () => {
     expect(sent.satName, 'the form must not carry SAT_NAME — blank would mean clear').toBe(
       undefined,
     )
-    // …and the stored tag is what the backend restores from, untouched by this save: the row
-    // the form was opened on still carries it.
-    expect((editQso.mock.calls[0][0] as Record<string, unknown>).satName).toBe('RS-44')
+    // …and the stored tag is what the backend restores from, untouched by this save: the edit
+    // names the contact by its id, and an edit has no satellite field to write (tempo-core's
+    // `QsoEdit`; `update_record` keeps the stored pair).
+    expect(editQsoById.mock.calls[0][0]).toEqual(K0ABC)
   })
 })

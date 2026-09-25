@@ -20,7 +20,7 @@ vi.mock('../api', async importOriginal => {
     getJs8State: vi.fn(async () => { if (!reading.current) throw Error('readingUnavailable'); return reading.current }),
     getSpectrumRow: vi.fn(async () => ({ row: [], loHz: 200, hiHz: 4000 })),
     js8SetSpeed: vi.fn(async () => reading.current),
-    getLog: vi.fn(async () => []), getLicensedBandPlan: vi.fn(async () => []), getSettings: vi.fn(async () => ({})) }
+    getLicensedBandPlan: vi.fn(async () => []), getSettings: vi.fn(async () => ({})) }
 })
 vi.mock('./useJs8Context', () => ({ useJs8Context: () => ({ remote: true, value: null, loading: false, refresh: () => {} }) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()) }))

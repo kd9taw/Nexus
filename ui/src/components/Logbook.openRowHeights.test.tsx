@@ -28,6 +28,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
+import type { LogQuestion } from '../features/logAnswers'
 import { ConfirmHost } from '../confirm'
 import { t } from '../i18n'
 import type { LoggedQso } from '../types'
@@ -36,13 +37,14 @@ const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
-    getLogDelta: vi.fn(async () => ({ revision: engine.revision, full: true, rows: engine.log })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    // The engine answers each question from its log (features/logAnswers.testkit).
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[], engine.revision)),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(), logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
+    markQslSentById: noop(), markQslCardById: noop(), syncLotwReport: noop(), uploadLotwReport: noop(),
     qrzPushQso: noop(), clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
 })

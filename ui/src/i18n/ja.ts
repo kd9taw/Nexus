@@ -908,6 +908,11 @@ export const JA: PartialCatalog = {
   "logbook.delete.confirm": "QSOを削除",
   "logbook.delete.failed": "交信を削除できませんでした",
   "logbook.delete.done": "{{call}}を削除しました",
+  // Changes by id that were not made: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.delete.changed": "{{call}}は別のウィンドウまたは同期で変更されたため、削除されませんでした。現在の内容を表示しています。確認して、必要ならもう一度削除してください。",
+  "logbook.delete.gone": "{{call}}はすでに別のウィンドウで削除されています。",
+  "logbook.change.changed": "{{call}}は別のウィンドウまたは同期で変更されたため、保存されませんでした。現在の内容を表示しています。確認してもう一度お試しください。",
+  "logbook.change.gone": "{{call}}は別のウィンドウで削除されたため、保存されませんでした。",
   "logEntry.title": "この交信を記録",
   "logEntry.clear.label": "クリア",
   "logEntry.clear.title": "入力欄をクリアします",

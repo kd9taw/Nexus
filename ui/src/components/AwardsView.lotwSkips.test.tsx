@@ -10,23 +10,22 @@ import { AwardsJourney } from './AwardsJourney'
 import { Toasts } from './Toasts'
 import { dismissToast, subscribeToasts, type Toast } from '../toast'
 import { t } from '../i18n'
-import { getConfirmationDiagnostics, uploadLotwReport } from '../api'
+import { getConfirmationDiagnostics, uploadLotwReportByIds } from '../api'
 import type { DiagnosticsReport } from '../types'
 import fixture from '../remote-web/__fixtures__/insights.json'
 
 vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
-  getLog: vi.fn(async () => []), getLogStats: vi.fn(async () => fixture.geography),
-  getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: [] })),
+  getLogStats: vi.fn(async () => fixture.geography),
   getJourney: vi.fn(async () => { throw new Error('unsupported') }),
-  uploadLotwReport: vi.fn(), qrzPushQso: vi.fn(), clublogPushQso: vi.fn(), eqslPushQso: vi.fn(),
+  uploadLotwReportByIds: vi.fn(), qrzPushQso: vi.fn(), clublogPushQso: vi.fn(), eqslPushQso: vi.fn(),
 }))
 
 /** One contact the diagnostics say LoTW needs — so the panel offers its bulk upload. */
 const report = {
-  diagnoses: [{ index: 0, award: 'DXCC', status: 'actionable', reasons: [{ code: 'R1', confidence: 'high', explanation: 'Upload needed', action: { kind: 'uploadToLotw' } }] }],
-  buckets: [{ kind: 'uploadToLotw', count: 1, qsoIndices: [0] }], oneAway: [], waitingOnPartner: 0, pendingLag: 0,
+  diagnoses: [{ index: 0, id: 'id-0', award: 'DXCC', status: 'actionable', reasons: [{ code: 'R1', confidence: 'high', explanation: 'Upload needed', action: { kind: 'uploadToLotw' } }] }],
+  buckets: [{ kind: 'uploadToLotw', count: 1, qsoIndices: [0], qsoIds: ['id-0'] }], oneAway: [], waitingOnPartner: 0, pendingLag: 0,
 } as unknown as DiagnosticsReport
 
 let toasts: Toast[] = []
@@ -46,7 +45,7 @@ afterEach(() => {
 })
 
 it('an Awards upload that skipped contacts shows the same counts', async () => {
-  vi.mocked(uploadLotwReport).mockResolvedValue({ dispatched: 1, outcome: 'pending', skippedEdited: 0, skippedDeleted: 1 })
+  vi.mocked(uploadLotwReportByIds).mockResolvedValue({ dispatched: 1, outcome: 'pending', skippedEdited: 0, skippedDeleted: 1 })
   const view = render(
     <>
       <AwardsJourney showGamification={false} />
@@ -63,7 +62,7 @@ it('an Awards upload that skipped contacts shows the same counts', async () => {
 })
 
 it('an Awards upload that recorded every contact adds nothing', async () => {
-  vi.mocked(uploadLotwReport).mockResolvedValue({ dispatched: 1, outcome: 'pending' })
+  vi.mocked(uploadLotwReportByIds).mockResolvedValue({ dispatched: 1, outcome: 'pending' })
   const view = render(
     <>
       <AwardsJourney showGamification={false} />

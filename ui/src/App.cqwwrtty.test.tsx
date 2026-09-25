@@ -134,7 +134,6 @@ vi.mock('./api', async (importOriginal) => {
     getRttyState: vi.fn(async () => rttyState),
     rttyAutoArm: vi.fn(async () => rttyState),
     rttySend,
-    getLog: vi.fn(async () => []),
     qrzLookup: vi.fn(async () => null),
     resolveEntity: vi.fn(async () => null),
     contestZoneHint: vi.fn(async () => null),

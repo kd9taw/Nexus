@@ -77,7 +77,6 @@ vi.mock('../api', () => ({
   contestEntryReset: async () => ({}),
   contestZoneHint: vi.fn(async () => null),
   contestIMoved: vi.fn(async () => ({})),
-  getLog: vi.fn(async () => [] as LoggedQso[]),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
   lookupPark: vi.fn(async () => null),
