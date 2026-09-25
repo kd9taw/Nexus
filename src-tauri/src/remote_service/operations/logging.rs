@@ -11,7 +11,9 @@
 //! engine's rewrite does not sync and reports a failed save only to stderr, by re-reading the log
 //! file itself, showing it holds the change, and syncing it. Either way the evidence the browser
 //! is told is `fileSynced` — the token every supported page already reads.
+use super::super::query::picture;
 use super::station::Action;
+use crate::log_by_id::RowRef;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,8 +26,10 @@ use tempo_app::engine::{
     remote_transmit::FtExchangeContext,
     Engine, LogWriteOutcome,
 };
+use tempo_app::logstore::LogRows;
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
-use tempo_core::logbook::{adif_record_own_log, LogOp, QslVia, QsoRecord, RecordId};
+use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
+use tempo_core::logbook::{adif_record_own_log, LogOp, QslVia, QsoEdit, QsoRecord, RecordId};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -301,7 +305,7 @@ pub enum Change {
 }
 
 impl Change {
-    fn target(&self) -> Option<&Target> {
+    pub(super) fn target(&self) -> Option<&Target> {
         match self {
             Self::Edit { target, .. }
             | Self::Delete { target }
@@ -524,11 +528,12 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
 
 /// The identity of a row the SHACK's log view showed: the row itself, exactly as the view was
 /// handed it. The station keys it the way a browser keys its page row — the same canonical
-/// bytes, the same SHA-256 — and [`locate`] then finds the record whose OWN key matches, so
-/// the row is a claim to be matched, never an address to trust. The view computes no hash (the
-/// desktop webview has no proven `crypto.subtle`), and the view is handed no such keys: keying a
-/// whole log on every reload would cost a serialise and a digest per record under the engine
-/// lock, where keying one row on one click costs nothing anyone can notice.
+/// bytes, the same SHA-256 — and [`find`] then finds the record whose OWN key matches
+/// ([`locate`] checks it under the lock), so the row is a claim to be matched, never an address
+/// to trust. The view computes no hash (the desktop webview has no proven `crypto.subtle`), and
+/// the view is handed no such keys: keying a whole log on every reload would cost a serialise and a
+/// digest per record under the engine lock, where keying one row on one click costs nothing anyone
+/// can notice.
 pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> Target {
     Target::Key(KeyTarget {
         call: seen.call.clone(),
@@ -539,26 +544,58 @@ pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> Target {
     })
 }
 
-/// The id of the contact a writer saw — the browser's log page or the shack's log view — or
-/// `None` when no contact is that row any more: none holds exactly that content (a key
-/// target), or the contact is gone or no longer the version the writer held (an id target).
-/// A position is never the answer: one kept from an earlier read is stale the moment the
-/// OTHER writer deletes above it, and acting on it deleted or rewrote a different contact.
-/// Another instance's changes are folded in first, so the answer is about the log as it is.
-#[allow(deprecated)] // SPEC-2 C18: a key target's candidates, from the in-memory log
-pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
+/// What finding a key target's contact reads of the contacts with its call: the call and the
+/// time, the two things the target names outright.
+const CANDIDATES: Narrow = Narrow {
+    columns: &["call", "when_unix"],
+    uploads: false,
+};
+
+/// The contact a writer saw — the browser's log page or the shack's log view — as a [`RowRef`]:
+/// its id and the edit key of the version found, or `None` when no contact is that row any more.
+/// A position is never the answer: one kept from an earlier read is stale the moment the OTHER
+/// writer deletes above it, and acting on it deleted or rewrote a different contact.
+///
+/// An id target already is one. A key target is the FIRST contact in log order whose own row is
+/// the row the writer saw ([`row_key`]), as the search of the log in memory took it, found in ONE
+/// picture of the log with the Engine lock released (SPEC-2 v3 C18). SQL narrows to the contacts
+/// whose `call_norm` is the call's, which holds every contact with exactly that call; the call,
+/// the time and the key are tested here, on whole records from that same picture.
+///
+/// ⚠️ A key target reads the store: never under the Engine lock (a debug build panics). Take
+/// `rows` (`Engine::log_rows`) under it; [`locate`] then checks what was found, under it again.
+pub(crate) fn find(rows: &LogRows, target: &Target) -> Result<Option<RowRef>, &'static str> {
+    let t = match target {
+        Target::Key(t) => t,
+        Target::Id(row) => return Ok(Some(row.clone())),
+    };
+    let call = call_norm_of(&t.call);
+    picture::read(rows, |log| {
+        let mut picks = Vec::new();
+        log.each_in(Scope::CallNorm(&call), CANDIDATES, &mut |pick, q| {
+            if q.call == t.call && q.when_unix == t.when_unix {
+                picks.push(pick);
+            }
+            Ok(())
+        })?;
+        let first = log.whole(&picks)?.into_iter().find(|r| row_key(r) == t.key);
+        Ok(first.and_then(|r| {
+            Some(RowRef {
+                id: r.id?.to_string(),
+                edit_key: QsoEdit::project(&r).key(),
+            })
+        }))
+    })
+}
+
+/// The id of the contact `row` names, if it is still the version whose edit key it holds —
+/// checked under the Engine lock, against the log as it is: another instance's changes are
+/// folded in first. For a key target `row` is what [`find`] found with the lock released, so a
+/// change landing since is refused here exactly as for an id target.
+pub(crate) fn locate(engine: &mut Engine, row: &RowRef) -> Option<RecordId> {
     engine.sync_shared_log_if_changed();
-    match target {
-        Target::Key(t) => engine
-            .log_records()
-            .iter()
-            .find(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
-            .and_then(|r| r.id),
-        Target::Id(t) => {
-            let id = t.id.parse().ok()?;
-            engine.fresh_log_row(id, &t.edit_key).ok().map(|_| id)
-        }
-    }
+    let id = row.id.parse().ok()?;
+    engine.fresh_log_row(id, &row.edit_key).ok().map(|_| id)
 }
 
 pub(super) enum ChangeWork {
@@ -603,9 +640,13 @@ pub(super) enum ChangeWork {
 /// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
 /// (confirmations, uploads, park refs, the split leg) is carried from the stored record, and the
 /// engine's own edit policy still applies on top (a callsign fix clears upload stamps).
+///
+/// `found` is a key target's contact as [`find`] found it with the lock released (`None`: no
+/// contact held that row); an id target names its own.
 pub(super) fn prepare_change(
     engine: &mut Engine,
     change: &Change,
+    found: Option<&RowRef>,
 ) -> Result<ChangeWork, ChangeReason> {
     match change {
         // The engine validates and normalizes the reference for its program; a refusal changes nothing.
@@ -664,8 +705,13 @@ pub(super) fn prepare_change(
         }
         _ => {}
     }
-    let t = change.target().ok_or(ChangeReason::ContextChanged)?;
-    let id = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
+    let row = match change.target().ok_or(ChangeReason::ContextChanged)? {
+        Target::Id(row) => Some(row),
+        Target::Key(_) => found,
+    };
+    let id = row
+        .and_then(|row| locate(engine, row))
+        .ok_or(ChangeReason::ContextChanged)?;
     let store = engine.log_store_open();
     let (proof, durable) = engine.with_log_tickets(|engine| rewrite(engine, change, id));
     let (expected, count) = proof?;
@@ -903,3 +949,7 @@ fn on_disk(path: &Path, expected: &str, count: usize) -> std::io::Result<bool> {
     }
     Ok(true)
 }
+
+#[cfg(test)]
+#[path = "logging_find_tests.rs"]
+mod find_tests;

@@ -1,18 +1,25 @@
 //! One POTA/SOTA activation file for a Remote browser. The file is exactly what the desktop's
-//! per-activation export writes (`Engine::export_logbook_for_activation`), and a browser can name
-//! one activation the log lists and nothing else: no date range, no search, never the whole log.
-//! It is a READ under the logging grant and that browser's own current lease. It spends no command
-//! sequence, writes nothing and never touches the radio.
+//! per-activation export writes (`tempo_app::logexport::export_for_activation`, tempo-core's
+//! `Export` rule), and a browser can name one activation the log lists and nothing else: no date
+//! range, no search, never the whole log. It is a READ under the logging grant and that browser's
+//! own current lease. It spends no command sequence, writes nothing and never touches the radio.
+//!
+//! The list and the file come from ONE picture of the logbook store, read with the Engine lock
+//! released (`query::picture`, SPEC-2 v3 C18): the activation the list names is the one its file
+//! is cut from, whatever commits meanwhile.
 //!
 //! An operation reply is small, so the file travels in bounded chunks, each carrying the file's
 //! length and SHA-256. The station keeps nothing between chunks and rebuilds the file for each one,
 //! so a log that changed mid-download arrives as a different file description, and the browser
 //! refuses it rather than stitching two logs together.
+use super::super::query::picture;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tempo_app::dto::LoggedActivationDto;
-use tempo_app::engine::Engine;
+use tempo_app::logstore::LogRows;
+use tempo_core::logbook::sqlite::Narrow;
+use tempo_core::logbook::{Activations, Export, ExportKind};
 
 /// Mirrors ACTIVATION_EXPORT_* in ui/src/remote-web/operation-protocol.ts. They bound every export
 /// that travels this way, not only an activation's: one ceiling and one chunk size means a browser
@@ -82,43 +89,111 @@ impl Selection {
     }
 }
 
+/// What the activation list reads of every contact — the callsign it was worked under
+/// (`STATION_CALLSIGN`, else `OPERATOR`), its time, your reference and your program — which is also
+/// all a file needs to find its contacts: their UTC day.
+const ACTIVATIONS: Narrow = Narrow {
+    columns: &[
+        "station_callsign",
+        "operator",
+        "when_unix",
+        "ota_my_ref",
+        "ota_my_program",
+    ],
+    uploads: false,
+};
+
+/// What one read of the log answers.
+enum Answer {
+    /// Every activation a browser can name back.
+    Listed(Vec<LoggedActivationDto>),
+    /// The selection names no listed activation.
+    NotFound,
+    /// The selected activation's file.
+    File(String),
+}
+
+/// A refused read of the log in an operation's words — the only ones a page accepts in an
+/// operation reply (`OPERATION_ERRORS`, ui/src/remote-web/operation-protocol.ts): a writer still
+/// behind is `stationBusy`, which a page retries; a store that cannot be read is
+/// `stationUnavailable`. The export's reads, and a log change's search for its key target.
+pub(super) fn in_operation_words(refused: &'static str) -> &'static str {
+    match refused {
+        "applicationBusy" => "stationBusy",
+        _ => "stationUnavailable",
+    }
+}
+
+/// The list, or one listed activation's file, from ONE picture of the log: one pass takes every
+/// activation and, for a file, keeps its UTC day's contacts — the only ones the export's rule can
+/// take (SQL narrows, the rule decides) — and only those are read whole.
+fn read(rows: &LogRows, selection: Option<&Selection>) -> Result<Answer, &'static str> {
+    picture::read(rows, |log| {
+        let mut found = Activations::default();
+        let day = selection.map(|s| s.day_start_unix - s.day_start_unix % 86_400);
+        let mut picks = Vec::new();
+        log.each(ACTIVATIONS, &mut |pick, q| {
+            found.add(q);
+            if day.is_some_and(|d| q.when_unix >= d && q.when_unix < d + 86_400) {
+                picks.push(pick);
+            }
+            Ok(())
+        })?;
+        // Only activations a browser can name back. A reference imported with other bytes is left
+        // out rather than offered and then refused.
+        let listed: Vec<LoggedActivationDto> = found
+            .finish()
+            .into_iter()
+            .map(LoggedActivationDto::from)
+            .filter(|a| {
+                Selection {
+                    reference: a.reference.clone(),
+                    day_start_unix: a.day_start_unix,
+                    callsign: a.callsign.clone(),
+                }
+                .valid()
+            })
+            .collect();
+        let Some(selection) = selection else {
+            return Ok(Answer::Listed(listed));
+        };
+        if !listed.iter().any(|a| selection.names(a)) {
+            return Ok(Answer::NotFound);
+        }
+        let mut file = Export::new(ExportKind::Activation {
+            reference: selection.reference.clone(),
+            day_start_unix: selection.day_start_unix,
+            callsign: selection.callsign.clone(),
+        });
+        for r in log.whole(&picks)? {
+            file.add(&r);
+        }
+        Ok(Answer::File(file.finish()))
+    })
+    .map_err(in_operation_words)
+}
+
 /// The reply to one read: the list (no selection, chunk 0 only), one chunk of one listed
 /// activation's file, or a refusal that names why nothing was sent.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` (`Engine::log_rows`) under it.
 pub(super) fn respond(
-    engine: &Engine,
+    rows: &LogRows,
     selection: Option<&Selection>,
     index: u32,
 ) -> Result<Value, &'static str> {
     if selection.is_some_and(|s| !s.valid()) || (selection.is_none() && index != 0) {
         return Err("invalidRequest");
     }
-    // Only activations a browser can name back. A reference imported with other bytes is left out
-    // rather than offered and then refused.
-    let listed: Vec<LoggedActivationDto> = engine
-        .log_activations()
-        .into_iter()
-        .map(LoggedActivationDto::from)
-        .filter(|a| {
-            Selection {
-                reference: a.reference.clone(),
-                day_start_unix: a.day_start_unix,
-                callsign: a.callsign.clone(),
-            }
-            .valid()
-        })
-        .collect();
-    let Some(selection) = selection else {
-        return Ok(
+    match read(rows, selection)? {
+        Answer::Listed(listed) => Ok(
             json!({"operation":"activationExport","activations":&listed[..listed.len().min(LISTED)]}),
-        );
-    };
-    if !listed.iter().any(|a| selection.names(a)) {
-        return Ok(json!({"operation":"activationExport","refused":"notFound"}));
+        ),
+        Answer::NotFound => Ok(json!({"operation":"activationExport","refused":"notFound"})),
+        Answer::File(text) => chunked("activationExport", &text, index),
     }
-    let text = engine.export_logbook_for_activation(
-        &selection.reference,
-        selection.day_start_unix,
-        selection.callsign.as_deref(),
-    );
-    chunked("activationExport", &text, index)
 }
+
+#[cfg(test)]
+#[path = "export_parity_tests.rs"]
+mod tests;

@@ -13,12 +13,12 @@ mod field_day;
 mod insights;
 mod js8;
 #[cfg(test)]
-mod log_tests;
+pub(super) mod log_tests;
 pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
 mod parks;
-mod picture;
+pub(super) mod picture;
 mod pounce;
 mod recall;
 mod rotator;
@@ -835,6 +835,77 @@ mod tests {
         );
     }
 
+    /// A REMOTE BROWSER IS SERVED THE STATION'S WATCHED ROWS (operator 2026-09-24: "watched
+    /// counts as needed"). The desktop's watch list lives in the engine both boards read, so the
+    /// browser's Needed list leads with the station's watched station — and stops the moment the
+    /// desktop sends a list without it, whatever the browser's own watch list holds.
+    #[test]
+    fn a_remote_browser_is_served_the_stations_watched_rows() {
+        use tempo_app::watchlist::{WatchEntry, WatchKind};
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let engine: crate::SharedEngine = Arc::new(Mutex::new(tempo_app::engine::Engine::new(
+            "KD9TAW", "EN52", 0,
+        )));
+        let mut spots = SpotBuffer::new(8);
+        for call in ["VK9XX", "W1AW"] {
+            spots.push(ClusterSpot {
+                spotter: "W3LPL".into(), // the operator's own continent — the locality gate
+                dx_call: call.into(),
+                freq_khz: 14_025.0,
+                comment: "CW 18 dB".into(),
+                time_utc: None,
+                received_unix: crate::now_unix() as u64,
+                corroborators: Vec::new(),
+                rbn: false,
+            });
+        }
+        let sources = Sources {
+            needs: Default::default(),
+            spots: Arc::new(Mutex::new(spots)),
+            live_paths: Default::default(),
+            region_paths: crate::SharedRegionPaths(Default::default()),
+            ota: Default::default(),
+            health: Default::default(),
+            propagation: Default::default(),
+            memories: Default::default(),
+            parks: Default::default(),
+            pounces: Default::default(),
+            sstv: Default::default(),
+            navigation: Default::default(),
+        };
+        let rows = |publisher: &mut Publisher| {
+            let page: Value = serde_json::from_str(
+                &publisher
+                    .read(
+                        &request(Collection::Needs),
+                        &engine,
+                        Some(&sources),
+                        Instant::now(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            page["rows"].as_array().unwrap().clone()
+        };
+        engine.lock().unwrap().set_watch_list(vec![WatchEntry {
+            kind: WatchKind::Call,
+            value: "W1AW".into(),
+        }]);
+        let watched = rows(&mut Publisher::default());
+        assert_eq!(watched[0]["call"], "W1AW", "{watched:?}");
+        assert_eq!(watched[0]["tags"][0], "Wanted");
+        assert!(watched.iter().any(|r| r["call"] == "VK9XX"), "{watched:?}");
+
+        engine.lock().unwrap().set_watch_list(Vec::new());
+        let unwatched = rows(&mut Publisher::default());
+        assert!(
+            unwatched
+                .iter()
+                .all(|r| !r["tags"].as_array().unwrap().contains(&json!("Wanted"))),
+            "{unwatched:?}"
+        );
+    }
+
     // ── the Log collection from the store, held to the code before C18 ───────────────────
     //
     // SPEC-2 v3 C18: the window is read from one picture of the logbook store now, and must be
@@ -1164,19 +1235,19 @@ mod tests {
     }
 
     /// ★ THE KEYS STILL MATCH. A browser names the row it changes by the bytes of the row it was
-    /// served, and the change path finds the contact whose own row — built from the log in
-    /// memory — has those bytes (`operations::logging::{seen_target, locate}`). Every row of a
-    /// window read from the store is found, at its own place: a change made from a page served
-    /// out of the store reaches the contact the page showed.
+    /// served, and the change path finds the contact whose own row has those bytes — in the
+    /// store, then checked under the Engine lock (`operations::logging::{seen_target, find,
+    /// locate}`). Every row of a window read from the store is found, as the contact it was: a
+    /// change made from a page served out of the store reaches the contact the page showed.
     #[test]
     fn every_row_served_from_the_store_is_found_by_the_change_path_at_its_own_place() {
-        use crate::remote_service::operations::logging::{locate, seen_target};
+        use crate::remote_service::operations::logging::{find, locate, seen_target};
         let d = Dir::new("keys");
         std::fs::write(d.log(), synthetic_log(2_500, 0x0C18_A4E7)).unwrap();
         let store = launch(&d);
         let (rows, _, _) = log_capture(&store, "", false).unwrap();
         assert_eq!(rows.len(), 2_000, "premise: a full window");
-        let mut eng = store.lock().unwrap();
+        let log = store.lock().unwrap().log_rows();
         for row in &rows {
             let seen: tempo_app::dto::LoggedQso = serde_json::from_value(row.clone()).unwrap();
             assert_eq!(
@@ -1184,11 +1255,13 @@ mod tests {
                 *row,
                 "premise: the row a browser holds is the row it was sent"
             );
-            let at = locate(&mut eng, &seen_target(&seen))
+            let found = find(&log, &seen_target(&seen))
+                .expect("the log reads")
                 .unwrap_or_else(|| panic!("the change path finds the row it served: {row}"));
+            let at = locate(&mut store.lock().unwrap(), &found)
+                .unwrap_or_else(|| panic!("and it is still that contact: {row}"));
             assert_eq!(Some(at.to_string()), seen.id, "the contact it served");
         }
-        drop(eng);
         settle(&store);
     }
 

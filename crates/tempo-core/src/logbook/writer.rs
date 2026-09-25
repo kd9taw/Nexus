@@ -711,6 +711,9 @@ type CopyRequest = (
 enum Msg {
     Write(Box<Change>, Arc<Slot>),
     Copy(CopyRequest),
+    /// Look for another process's commits now, and answer with the count
+    /// ([`LogWriter::foreign_commits_now`]).
+    Foreign(std::sync::mpsc::SyncSender<u64>),
 }
 
 /// How often an idle writer looks for another process's commits. A `PRAGMA data_version` is a
@@ -937,6 +940,28 @@ impl LogWriter {
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// [`Self::foreign_commits`], counted NOW: the writer looks once it has written what it holds,
+    /// and answers. `None` when it cannot answer within `wait`.
+    ///
+    /// The count [`Self::foreign_commits`] reads is only as fresh as the writer's last look — up
+    /// to its idle poll ago. This one covers every commit another process made before it was
+    /// asked, so a read of the store made just before it can be checked against it: a commit
+    /// that read saw is counted here (SPEC-2 v3 C19, a contest session's rows).
+    ///
+    /// ⚠️ It waits: never call it holding a lock (a debug build panics under the Engine's).
+    pub fn foreign_commits_now(&self, wait: Duration) -> Option<u64> {
+        io_fence::off_engine_lock("a wait for the logbook writer to look for other windows");
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        let sent = self
+            .tx
+            .as_ref()
+            .is_some_and(|tx| tx.send(Msg::Foreign(reply)).is_ok());
+        if !sent {
+            return None;
+        }
+        answer.recv_timeout(wait).ok()
+    }
+
     /// Copy the database to `dst` ([`sqlite::copy_database`]) FROM THE WRITER THREAD, after
     /// every change submitted before this call is written, and with none written while it
     /// runs. The data-folder move uses this while the store is open: a copy taken beside a
@@ -1134,6 +1159,8 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     // Copies wait for the queue ahead of them to empty: a copy must hold every change
     // submitted before it was asked for.
     let mut copies: VecDeque<CopyRequest> = VecDeque::new();
+    // Callers waiting for a look at other processes' commits ([`LogWriter::foreign_commits_now`]).
+    let mut looks: Vec<std::sync::mpsc::SyncSender<u64>> = Vec::new();
     let mut seen_version: Option<i64> = None;
     watch_foreign(&db, &mut seen_version, shared);
     // Revisions submitted and not yet resolved — the low end of this set is the durability
@@ -1155,6 +1182,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     queue.push_back(Job::new(*c, slot));
                 }
                 Ok(Msg::Copy(request)) => copies.push_back(request),
+                Ok(Msg::Foreign(reply)) => looks.push(reply),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     closed = true;
@@ -1164,6 +1192,11 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
         }
         if queue.is_empty() {
             watch_foreign(&db, &mut seen_version, shared);
+            // Asked after this writer's own changes ahead of them, answered with the look just
+            // made.
+            for reply in looks.drain(..) {
+                let _ = reply.send(shared.foreign.load(std::sync::atomic::Ordering::Acquire));
+            }
             if let Some((dst, reply)) = copies.pop_front() {
                 io_fence::on_log_lane("a logbook database copy");
                 let outcome = match db.path() {
@@ -1182,6 +1215,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     queue.push_back(Job::new(*c, slot));
                 }
                 Ok(Msg::Copy(request)) => copies.push_back(request),
+                Ok(Msg::Foreign(reply)) => looks.push(reply),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
@@ -2597,6 +2631,35 @@ mod tests {
         assert!(
             wait_until(&|| a.foreign_commits() > before),
             "and A sees B's"
+        );
+    }
+
+    /// The count taken NOW ([`LogWriter::foreign_commits_now`]) covers every commit another
+    /// process made before it was asked — the idle poll's count can trail it by up to
+    /// `FOREIGN_POLL`. A writer's own change, submitted just ahead of the question, is written
+    /// first and still not counted.
+    #[test]
+    fn the_count_taken_now_covers_every_commit_made_before_it_was_asked() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        a.submit(change(1, vec![rec("W1AW", 1)]));
+        assert_eq!(
+            a.foreign_commits_now(Duration::from_secs(10)),
+            Some(0),
+            "A's own change is not another window's"
+        );
+        let t = b.submit(change(2, vec![rec("K5XYZ", 2)]));
+        b.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert_eq!(
+            a.foreign_commits_now(Duration::from_secs(10)),
+            Some(1),
+            "B's commit, counted the moment A is asked"
+        );
+        assert_eq!(
+            a.foreign_commits(),
+            1,
+            "and the count every reader sees moved with it"
         );
     }
 

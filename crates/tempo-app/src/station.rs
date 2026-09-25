@@ -28,7 +28,7 @@ use tempo_core::logbook::{
     Watermarks, WorkedSince,
 };
 
-use crate::logstore::{LogStore, Opened};
+use crate::logstore::{LogStore, Opened, SessionRows};
 
 use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
@@ -471,11 +471,12 @@ pub(crate) fn unsent_legs(rec: &QsoRecord, want: u8) -> u8 {
 const DUAL_EXECUTION_ROWS: usize = 1_000;
 
 /// What the hot index needs from the station: the band a badge is keyed on, and the live DXCC
-/// resolver.
-struct StationKeys<'a>(Option<&'a DxccResolve>);
+/// resolver. The store's launch build keys the index the same way
+/// ([`crate::logstore::HotBuild`]).
+pub(crate) struct StationKeys<'a>(pub(crate) Option<&'a DxccResolve>);
 
-/// The station's callsign → DXCC entity resolver, as [`StationCore::dxcc_resolve`] holds it.
-type DxccResolve = dyn Fn(&str) -> Option<String> + Send + Sync;
+/// A callsign → DXCC entity resolver, as [`StationCore::dxcc_resolve`] holds it.
+pub type DxccResolve = dyn Fn(&str) -> Option<String> + Send + Sync;
 
 impl HotKeys for StationKeys<'_> {
     fn band_key(&self, band: &str) -> String {
@@ -516,6 +517,16 @@ impl Hot<'_> {
     /// hide-confirmed filter (F4MQS).
     pub(crate) fn entity_confirmed_on(&self, entity: &str, band: &str) -> bool {
         self.0.entity_confirmed_on(entity, &band_key(band))
+    }
+}
+
+/// Whether two DXCC resolvers are the same one — both absent, or one shared `Arc`. A hot index
+/// keyed by one is the index of the other only then: two closures cannot be compared.
+fn same_resolver(a: &Option<Arc<DxccResolve>>, b: &Option<Arc<DxccResolve>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
     }
 }
 
@@ -1066,9 +1077,10 @@ pub struct StationCore {
     pub(crate) journals: tempo_core::journal::JournalWriter,
     /// Callsign → DXCC entity resolver, injected by the command layer (which owns
     /// the cty.dat table) so tempo-app stays DXCC-free. `None` in headless tests
-    /// (new-DXCC highlighting simply stays off). See [`Self::set_dxcc_resolver`].
-    #[allow(clippy::type_complexity)]
-    pub(crate) dxcc_resolve: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+    /// (new-DXCC highlighting simply stays off). See [`Self::set_dxcc_resolver`]. Shared, so the
+    /// launch can key the hot index it builds off the lock with this very resolver
+    /// ([`crate::logstore::HotBuild`]).
+    pub(crate) dxcc_resolve: Option<Arc<DxccResolve>>,
     /// (Callsign, heard grid) → US state resolver, injected by the command layer (which owns
     /// the FCC callsign index) — same pattern as [`Self::set_dxcc_resolver`], and injected for
     /// the same reason: tempo-app has no `propagation` dependency, so it cannot reach the index
@@ -1212,16 +1224,35 @@ impl StationCore {
     /// every screen reading either hold the same rows. The one write an open itself can make is
     /// taking in a `log.adi` the store cannot account for ([`Self::take_in_log_file`]) —
     /// contacts that are in no store at all.
+    ///
+    /// Hands back the rows a contest session restored at launch is swept from, when the open set
+    /// them aside ([`crate::logstore::HotBuild`]): they are this log's rows until it next
+    /// changes.
     #[allow(deprecated)] // SPEC-2 C19: the launch attach loads the in-memory log
-    pub fn attach_store(&mut self, opened: Opened) {
+    pub fn attach_store(&mut self, opened: Opened) -> Option<SessionRows> {
         let Opened {
             store,
             records,
             foreign,
+            hot,
             outcome,
         } = opened;
         self.logbook = Logbook::from_store(records);
         self.minter = self.logbook.hand_over_minter();
+        // The hot index the open built of these very rows off the lock (SPEC-2 v3 C19), when it
+        // was keyed by the resolver this station holds. Otherwise the catch-up below builds one
+        // from the log, as it always has.
+        let mut session_rows = None;
+        if let Some(built) = hot.filter(|h| same_resolver(&h.entity, &self.dxcc_resolve)) {
+            self.install_hot(built.index);
+            session_rows = Some(SessionRows {
+                rows: built.recent,
+                bound: built.bound,
+                marks: self.marks,
+                exact: true,
+                ready: true,
+            });
+        }
         self.log_path = Some(store.log_path().to_path_buf());
         self.last_log_mtime = None;
         self.store = Some(store);
@@ -1242,6 +1273,7 @@ impl StationCore {
             }
         }
         self.sync_hot();
+        session_rows
     }
 
     /// Take the contacts of a `log.adi` the store does not account for into the log — a file a
@@ -1589,7 +1621,13 @@ impl StationCore {
         &mut self,
         resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) {
-        self.dxcc_resolve = Some(Box::new(resolve));
+        self.set_dxcc_resolver_shared(Arc::new(resolve));
+    }
+
+    /// [`Self::set_dxcc_resolver`], with a resolver the caller shares — the launch, which keys
+    /// the hot index it has the store build with the same one ([`crate::logstore::HotBuild`]).
+    pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<DxccResolve>) {
+        self.dxcc_resolve = Some(resolve);
         // Every row's entity comes from the resolver, so a new one re-keys the hot index: it is
         // rebuilt at its next catch-up — the backfill's, below.
         match self.hot.get_mut() {
@@ -1964,6 +2002,63 @@ impl StationCore {
         #[cfg(debug_assertions)]
         if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
             hot.verify(&self.logbook, &keys);
+        }
+    }
+
+    /// Make `index` — the index of the log as it stands, built somewhere else (the store, off
+    /// the lock) — the one the station follows the log with from here.
+    #[allow(deprecated)] // SPEC-2 C19: the index is installed as the in-memory log's
+    fn install_hot(&mut self, index: HotIndex) {
+        let rev = self.logbook.revision();
+        let hot = hot_mut(&mut self.hot);
+        *hot = index.holding(rev);
+        self.marks = self.logbook.marks();
+        // ⛔ The debug build's oracle: on a log small enough to afford it, the index built
+        // elsewhere must answer as the one this station would have built from its own rows. The
+        // oracle's pass is not the station's work, so the counters tests read are left as they
+        // were.
+        #[cfg(debug_assertions)]
+        if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
+            use tempo_core::logbook::{hot::HOT_REBUILDS, LOG_SWEEPS};
+            let keys = StationKeys(self.dxcc_resolve.as_deref());
+            hot.verify(&self.logbook, &keys);
+            let counts = (HOT_REBUILDS.with(|c| c.get()), LOG_SWEEPS.with(|c| c.get()));
+            let own = HotIndex::build(&self.logbook, &keys);
+            HOT_REBUILDS.with(|c| c.set(counts.0));
+            LOG_SWEEPS.with(|c| c.set(counts.1));
+            assert!(
+                hot.answers_as(&own),
+                "hot index: the index built elsewhere is not the log's"
+            );
+        }
+    }
+
+    /// Open the contest session's sweep — from `cutoff`, keyed by `rule` — from `rows`, the log's
+    /// rows from a bound at or before `cutoff` read off the lock (SPEC-2 v3 C19). The caller has
+    /// checked they are still this log's rows ([`crate::engine::Engine::open_session_from`]).
+    #[allow(deprecated)] // SPEC-2 C19: a debug build holds the session to the in-memory log's sweep
+    pub(crate) fn install_session(
+        &mut self,
+        cutoff: u64,
+        rule: tempo_core::contest::DupeRule,
+        rows: &[QsoRecord],
+    ) {
+        let hot = hot_mut(&mut self.hot);
+        hot.install_session(cutoff, rule, rows);
+        // ⛔ The debug build's oracle, on a log small enough to afford it: the session opened
+        // from rows read elsewhere is the sweep of the log this station holds. The oracle's
+        // sweep is not the station's work, so the counters tests read are left as they were.
+        #[cfg(debug_assertions)]
+        if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
+            use tempo_core::logbook::LOG_SWEEPS;
+            let opened = hot.worked_since(&self.logbook, cutoff, &rule);
+            let sweeps = LOG_SWEEPS.with(|c| c.get());
+            let swept = self.logbook.worked_keys_since(cutoff, &rule);
+            LOG_SWEEPS.with(|c| c.set(sweeps));
+            assert_eq!(
+                opened, swept,
+                "hot index: the session opened from rows read elsewhere is not the log's sweep"
+            );
         }
     }
 
@@ -3518,31 +3613,6 @@ impl StationCore {
     /// appends them to the on-disk log). Empty when ALL.TXT logging is off.
     pub fn take_all_txt_pending(&mut self) -> Vec<String> {
         std::mem::take(&mut self.all_txt_pending)
-    }
-
-    /// Distinct activations in the log — YOUR park × UTC day × the callsign it was worked
-    /// under, newest first. What the per-activation export offers to split by.
-    ///
-    /// The log in memory, for Remote's activation export, which answers under the Engine lock
-    /// its operations hold. The desktop's reads the store off the lock
-    /// ([`crate::logexport::activations`]) through the same rule.
-    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
-    pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
-        self.logbook.activations()
-    }
-
-    /// ADIF containing only ONE activation's contacts — the three bounds an
-    /// `Activation` carries, handed straight back. For Remote, as [`Self::log_activations`];
-    /// the desktop's is [`crate::logexport::export_for_activation`].
-    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
-    pub fn export_logbook_for_activation(
-        &self,
-        reference: &str,
-        day_start_unix: u64,
-        callsign: Option<&str>,
-    ) -> String {
-        self.logbook
-            .adif_for_activation(reference, day_start_unix, callsign)
     }
 }
 

@@ -4513,7 +4513,10 @@ fn open_logbook_store(
             }
         })
     });
-    tempo_app::logstore::open_reporting(log, resolve, network, progress)
+    // The hot index is built here too, from the rows as they load, keyed by the resolver the
+    // station is given at the attach — so the attach does not build it under the lock.
+    let hot = tempo_app::logstore::HotBuild::keyed_by(Some(country_resolver()));
+    tempo_app::logstore::open_reporting(log, resolve, network, Some(hot), progress)
 }
 
 /// Whether opening the logbook is about to convert `log.adi`: there is a log, and no database
@@ -4590,7 +4593,7 @@ fn adopt_logbook(
     eng: &mut Engine,
     log: &Path,
     opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
-) {
+) -> Option<tempo_app::logstore::SessionRows> {
     match opened {
         Ok(opened) => {
             let what = match opened.outcome {
@@ -4608,7 +4611,7 @@ fn adopt_logbook(
                 ),
             };
             tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
-            eng.attach_log_store(opened);
+            eng.attach_log_store(opened)
         }
         Err(e) => {
             let why = e.to_string();
@@ -4621,6 +4624,7 @@ fn adopt_logbook(
             }
             eng.set_log_path(log.to_path_buf());
             eng.note_log_store_problem(&e);
+            None
         }
     }
 }
@@ -6932,6 +6936,15 @@ fn subdivision_hint(call: &str, grid: Option<&str>) -> Option<String> {
 /// a filled row the row an insert would have written.
 fn country_of(call: &str) -> Option<String> {
     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+}
+
+/// [`country_of`], as the ONE shared resolver the launch hands both the station and the store's
+/// build of the hot index ([`open_logbook_store`]): the same `Arc` is how the station knows the
+/// index the store built off the lock is keyed as it keys its own (SPEC-2 v3 C19).
+fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
+    static SHARED: std::sync::LazyLock<Arc<tempo_app::station::DxccResolve>> =
+        std::sync::LazyLock::new(|| Arc::new(country_of));
+    Arc::clone(&SHARED)
 }
 
 /// The version of the resolvers' data the logbook's country and state fills are written for —
@@ -11886,20 +11899,32 @@ fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterRe
 /// | "fieldday-sp". Returns the refreshed snapshot.
 #[tauri::command(async)]
 fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    // Refuse to enter a keying structured mode without the identity its messages need,
-    // so the operator gets a clear reason instead of a silently-suppressed over. The
-    // mode plugin decides which tiers are gated (Capabilities::structured_identity —
-    // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
-    // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
-    // fieldday-sp are passive on entry (the backstop covers TX).
-    match mode.as_str() {
-        "qso-run" => eng.structured_tx_ready(true)?,
-        "fieldday-run" => eng.structured_tx_ready(false)?,
-        _ => {}
-    }
-    eng.set_mode(&mode)?;
-    Ok(eng.snapshot())
+    // A switch that opens a contest session — Field Day entered from another mode — has the
+    // session's rows read from the logbook first, off the lock, and opens the session with its
+    // dupe sweep in the same hold of the lock as the switch (SPEC-2 v3 C19). Every other switch
+    // reads nothing and runs as it always has.
+    tempo_app::engine::with_session_rows(
+        &state,
+        |eng| eng.mode_opens_session(&mode),
+        |eng, rows| {
+            // Refuse to enter a keying structured mode without the identity its messages need,
+            // so the operator gets a clear reason instead of a silently-suppressed over. The
+            // mode plugin decides which tiers are gated (Capabilities::structured_identity —
+            // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
+            // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
+            // fieldday-sp are passive on entry (the backstop covers TX).
+            match mode.as_str() {
+                "qso-run" => eng.structured_tx_ready(true)?,
+                "fieldday-run" => eng.structured_tx_ready(false)?,
+                _ => {}
+            }
+            eng.set_mode(&mode)?;
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            Ok(eng.snapshot())
+        },
+    )
 }
 
 /// Current operator/station settings.
@@ -12050,67 +12075,78 @@ fn apply_and_persist(
     // save, so it reads this mirror rather than a spawn-time capture.
     set_operator_qth(&mycall, &mygrid);
 
-    let snap = {
-        let mut eng = engine_lock(&state);
-        // The LoTW sync cursor is bound to the exact query (notably the username);
-        // if the username changed, reset it to a full pull so a config edit can't
-        // silently skip confirmations.
-        if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
-            settings.lotw_last_qsl.clear();
-        }
-        // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-        if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-            settings.eqsl_last_sync.clear();
-        }
-        // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
-        let cur = eng.settings();
-        if cur.clublog_email != settings.clublog_email
-            || cur.clublog_callsign != settings.clublog_callsign
-            || cur.clublog_api_key != settings.clublog_api_key
-        {
-            CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Same shape for the automatic LoTW batch: everything its suspension could have been
-        // ABOUT lives in these four fields, so touching any of them is the operator saying
-        // "I fixed it". Without this the operator corrects their Station Location, saves,
-        // and nothing ever restarts — the latch is session-wide and there is no other way
-        // out of it short of a relaunch.
-        if cur.lotw_station_location != settings.lotw_station_location
-            || cur.lotw_use_adif_location != settings.lotw_use_adif_location
-            || cur.tqsl_path != settings.tqsl_path
-            || cur.lotw_auto_upload != settings.lotw_auto_upload
-        {
-            LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
-            LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Keep the live DXpedition layer's most-wanted key current (Settings
-        // override, else the build's baked application key).
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &settings.clublog_api_key,
-        ));
-        // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
-        // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
-        // copies), so saving the raw form here would write a roster that diverges from the engine and
-        // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
-        // light verb does.
-        if authoritative_roster {
-            // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
-            // live roster here would leave a factory reset with every radio it promised to erase.
-            eng.apply_restored_settings(settings);
-        } else {
-            eng.apply_settings(settings);
-        }
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: failed to persist settings: {e}");
-        }
-        // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
-        // turning it off here actually stops the launch picker (the base config drives that, and
-        // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
-        if active_profile().is_some() {
-            persist_simultaneous_to_base(eng.settings().simultaneous_radios);
-        }
-        eng.snapshot()
-    }; // release the engine lock before spawning feed threads
+    // A save that turns the Field Day master on while Field Day is not running re-enters it,
+    // opening a contest session: the session's rows are read from the logbook first, off the
+    // lock, and the session is opened with its dupe sweep in the same hold of the lock as the
+    // save (SPEC-2 v3 C19). Every other save reads nothing.
+    let opens_session = settings.fd_active;
+    let snap = tempo_app::engine::with_session_rows(
+        &state,
+        |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
+        |eng, rows| {
+            // The LoTW sync cursor is bound to the exact query (notably the username);
+            // if the username changed, reset it to a full pull so a config edit can't
+            // silently skip confirmations.
+            if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
+                settings.lotw_last_qsl.clear();
+            }
+            // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
+            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
+                settings.eqsl_last_sync.clear();
+            }
+            // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
+            let cur = eng.settings();
+            if cur.clublog_email != settings.clublog_email
+                || cur.clublog_callsign != settings.clublog_callsign
+                || cur.clublog_api_key != settings.clublog_api_key
+            {
+                CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Same shape for the automatic LoTW batch: everything its suspension could have been
+            // ABOUT lives in these four fields, so touching any of them is the operator saying
+            // "I fixed it". Without this the operator corrects their Station Location, saves,
+            // and nothing ever restarts — the latch is session-wide and there is no other way
+            // out of it short of a relaunch.
+            if cur.lotw_station_location != settings.lotw_station_location
+                || cur.lotw_use_adif_location != settings.lotw_use_adif_location
+                || cur.tqsl_path != settings.tqsl_path
+                || cur.lotw_auto_upload != settings.lotw_auto_upload
+            {
+                LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+                LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            // Keep the live DXpedition layer's most-wanted key current (Settings
+            // override, else the build's baked application key).
+            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
+                &settings.clublog_api_key,
+            ));
+            // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
+            // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
+            // copies), so saving the raw form here would write a roster that diverges from the engine and
+            // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
+            // light verb does.
+            if authoritative_roster {
+                // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
+                // live roster here would leave a factory reset with every radio it promised to erase.
+                eng.apply_restored_settings(settings);
+            } else {
+                eng.apply_settings(settings);
+            }
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            if let Err(e) = eng.settings().save(&settings_path()) {
+                eprintln!("tempo: failed to persist settings: {e}");
+            }
+            // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
+            // turning it off here actually stops the launch picker (the base config drives that, and
+            // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
+            if active_profile().is_some() {
+                persist_simultaneous_to_base(eng.settings().simultaneous_radios);
+            }
+            eng.snapshot()
+        },
+    ); // release the engine lock before spawning feed threads
        // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -16317,6 +16353,41 @@ fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// Empty the RETIRED wanted list — its ONE writer (operator 2026-09-24, "One list"). The desktop
+/// calls this once the list's entries are on the watch list and that is on disk
+/// (`ui/src/features/watchlistFold.ts`); `Engine::apply_settings` keeps the live value against
+/// every form payload, so a surface holding a settings snapshot from before the fold cannot write
+/// the old entries back for the next launch to fold again.
+///
+/// A failed save is an error, not a log line: the caller then leaves the old list to the next
+/// launch, which folds nothing twice.
+#[tauri::command(async)]
+fn retire_wanted_calls(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let mut eng = engine_lock(&state);
+    eng.retire_wanted_calls()
+        .save(&settings_path())
+        .map_err(|e| format!("could not save the settings: {e}"))
+}
+
+/// The desktop's watch list, for the Needed board (operator 2026-09-24: "watched counts as
+/// needed"; `tempo_app::watchlist`). The main window sends the whole list on launch and after
+/// every edit (`ui/src/App.tsx`), then reads the board again. Only the main window: a torn-off
+/// panel holds no editor, and a Remote browser's own list is its own — the rows it is served
+/// follow the station's. `false` when refused. Held by the engine, which the native board and
+/// every Remote one read, so they cannot be served two different lists.
+#[tauri::command(async)]
+fn set_watch_list(
+    window: tauri::WebviewWindow,
+    state: State<'_, SharedEngine>,
+    entries: Vec<tempo_app::watchlist::WatchEntry>,
+) -> bool {
+    if window.label() != "main" {
+        return false;
+    }
+    engine_lock(&state).set_watch_list(entries);
+    true
+}
+
 /// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
 /// write path for it. A NARROW write, and here the narrowness is the point rather than the
 /// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
@@ -16908,7 +16979,7 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// The log commands below take the ROW the UI showed (`target`, as the log view was handed it),
 /// and never a position. The station keys that row exactly as a Remote browser keys its page
 /// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
-/// `remote_service::operations::logging::{seen_target, locate}`. They used to take
+/// `remote_service::operations::logging::{seen_target, find, locate}`. They used to take
 /// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
 /// which held while the desktop was the log's only writer. Remote made it a second writer:
 /// a browser's delete removed a row and shifted every later one, and the shack's next Delete
@@ -16916,13 +16987,32 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// with another contact's fields and its confirmations stripped as a "callsign correction" —
 /// under a toast naming the row the operator meant. The key finds the row where it is today,
 /// or refuses when no row holds that content any more.
+///
+/// The row is found in the store with the engine lock RELEASED — a read of the log never runs
+/// under it — and what was found is checked under the lock by [`locate_seen`], so a change
+/// landing between the two is refused like any other.
+fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRef, String> {
+    use remote_service::operations::logging::{find, seen_target};
+    let rows = engine_lock(engine).log_rows();
+    match find(&rows, &seen_target(seen)) {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(LOG_ROW_GONE.into()),
+        Err(_) => Err(LOG_UNREAD.into()),
+    }
+}
+
+/// The contact [`find_seen`] found, if it is still the version found, under the engine lock.
 fn locate_seen(
     eng: &mut Engine,
-    seen: &LoggedQso,
+    found: &log_by_id::RowRef,
 ) -> Result<tempo_core::logbook::RecordId, String> {
-    use remote_service::operations::logging::{locate, seen_target};
-    locate(eng, &seen_target(seen)).ok_or_else(|| LOG_ROW_GONE.into())
+    remote_service::operations::logging::locate(eng, found).ok_or_else(|| LOG_ROW_GONE.into())
 }
+
+/// The refusal a log command gives when the log could not be read to find its row: the store
+/// unreadable, or its writer still behind the changes made before the command was asked.
+const LOG_UNREAD: &str =
+    "Nexus could not read the logbook to find that contact just now — nothing was changed. Try again in a moment.";
 
 /// The refusal every log command gives for a row it cannot find: the log changed under the
 /// view (a Remote delete, an edit, a connector stamp) and the operator must look again.
@@ -16987,9 +17077,10 @@ async fn edit_qso(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.update_qso_held(id, record.into()) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17051,9 +17142,10 @@ async fn mark_qsl_sent(
     let via = qsl_via_arg(via.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             let op = tempo_app::logwrite::qsl_sent(id, via);
             if !eng.change_row_held(id, &[op], "mark_qsl_sent") {
                 return Err(LOG_ROW_GONE.into());
@@ -17079,9 +17171,10 @@ async fn mark_qsl_card(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             let op = tempo_core::logbook::LogOp::MarkQslCard { id, received };
             if !eng.change_row_held(id, &[op], "mark_qsl_card") {
                 return Err(LOG_ROW_GONE.into());
@@ -17152,9 +17245,10 @@ async fn set_sat_tag(
     let name = sat_name_arg(sat_name.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             let op = tempo_core::logbook::LogOp::SetSatTag {
                 id,
                 sat_name: name.clone(),
@@ -17187,9 +17281,10 @@ async fn delete_qso(
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.change_row_held(id, &[tempo_core::logbook::LogOp::Delete(id)], "delete_qso") {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17925,8 +18020,8 @@ fn read_need_alerts(
     // the same station: they read the same alerts, and those alerts read this.
     let hunted_rows = eng.log_rows();
     let snap = eng.snapshot();
-    // Operator "wanted" watch list (W1.5) — captured before the lock drops.
-    let wanted_calls = eng.settings().wanted_calls.clone();
+    // The watch list the desktop last sent — its stations lead the board (see the end).
+    let watch = eng.watch_list().to_vec();
     let confirm_tier = eng.settings().alert_confirm_tier;
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
@@ -18207,52 +18302,46 @@ fn read_need_alerts(
         // Re-sort: an activation that is ALSO a new one must land among the new ones.
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
-    // Wanted watch list (W1.5): a station on the operator's list must top the
-    // board even if it advances no award. This aggregated needs path carries no
-    // per-spot CQ status or SNR, so the cq_only/min_snr gates can't be honored
-    // here — the operator-facing controls for them are intentionally not shipped
-    // (only wanted_calls). We pass is_cq=true / snr=None so every watch-list hit
-    // surfaces; `wanted_match`/`wanted_alert` treat unknown SNR as passing.
-    if !wanted_calls.is_empty() {
-        let wcfg = propagation::WantedConfig {
-            calls: &wanted_calls,
-            cq_only: false,
-            min_snr: None,
+    // THE WATCH LIST (Settings ▸ Spots & Alerts): a heard station it names tops the board even
+    // when it advances no award — operator 2026-09-24, "watched counts as needed", which is what
+    // the retired wanted list did, fed now by the list the operator edits. Matched as the WATCH
+    // tile matches the roster, the Stations list and Spots (`tempo_app::watchlist::watched`:
+    // call or `*` pattern, entity, grid; identity only, worked or not), last of every pass so the
+    // rows it marks are the board's final rows. The Watch list chip keeps exactly these.
+    if !watch.is_empty() {
+        let names = |call: &str, entity: Option<&str>, grid: Option<&str>| {
+            tempo_app::watchlist::watched(&watch, call, entity, grid).is_some()
         };
-        // (a) Decorate existing rows that are on the watch list — loud, on top.
+        // (a) A row already on the board: marked, and first.
         for a in &mut alerts {
-            if !a.tags.contains(&propagation::NeedTag::Wanted)
-                && propagation::wanted_match(&a.call, true, None, &wcfg)
-            {
-                a.tags.insert(0, propagation::NeedTag::Wanted);
-                a.priority = a.priority.max(120);
-                a.headline = format!("Wanted · {}", a.headline);
+            if names(&a.call, Some(&a.entity), a.grid.as_deref()) {
+                propagation::mark_watched(a);
             }
         }
-        // (b) Surface a loud row for a wanted heard station that produced no
-        //     alert (an already-worked entity you still want to catch).
+        // (b) A heard station no need put there: a row of its own. One per call and band, as
+        //     the board already keeps them.
         for h in &heard {
-            let up = h.call.to_ascii_uppercase();
-            if up == me_up || alerts.iter().any(|a| a.call == up && a.band == h.band) {
+            let call = h.call.to_ascii_uppercase();
+            if call == me_up || alerts.iter().any(|a| a.call == call && a.band == h.band) {
                 continue;
             }
-            if let Some(mut a) = propagation::wanted_alert(
-                &h.call,
+            let entity = propagation::dxcc::resolve(&call).map(|i| i.entity);
+            if !names(&call, entity, h.grid.as_deref()) {
+                continue;
+            }
+            let mut a = propagation::watched_alert(
+                &call,
                 &h.band,
                 &h.mode,
                 h.grid.as_deref(),
-                true,
-                None,
-                &wcfg,
                 &*needs,
                 &needs.slots(),
-            ) {
-                // wanted_alert doesn't know the spot metadata — carry it over.
-                a.freq_mhz = h.freq_mhz;
-                a.admitted_at = h.admitted_at;
-                a.evidence = h.evidence.clone();
-                alerts.push(a);
-            }
+                confirm_tier,
+            );
+            a.freq_mhz = h.freq_mhz;
+            a.admitted_at = h.admitted_at;
+            a.evidence = h.evidence.clone();
+            alerts.push(a);
         }
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
@@ -26805,8 +26894,10 @@ fn start_on_the_logbook(
         let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
-        // the initial worked-entity index is populated.
-        eng.set_dxcc_resolver(country_of);
+        // the initial worked-entity index is populated. The SAME shared resolver the store
+        // keyed the hot index with when it opened, so the attach below installs that index
+        // rather than building one under this lock.
+        eng.set_dxcc_resolver_shared(country_resolver());
         // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
         // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
         // function is the whole point of the fix: the worked side used to have no resolver at
@@ -26918,7 +27009,8 @@ fn start_on_the_logbook(
                 .and_then(|m| m.get(&call.to_uppercase()).copied())
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
-        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
+        // The rows a Field Day session restored below is swept from, set aside by the open.
+        let session_rows = adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -26955,6 +27047,11 @@ fn start_on_the_logbook(
         // merge finds the journal. This is the ONLY auto-entry, and only because
         // the operator left `fd_active` on — no date/default path ever sets it.
         eng.restore_field_day_if_enabled();
+        // A session restored just now is swept from the rows the open set aside — not from the
+        // log, under this lock (SPEC-2 v3 C19).
+        if let Some(rows) = session_rows {
+            eng.open_session_from(rows);
+        }
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation
@@ -28652,6 +28749,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_rtty_macros,
             set_psk_macros,
             set_beta_updates,
+            retire_wanted_calls,
+            set_watch_list,
             set_launch_at_login,
             answer_remote_autostart_offer,
             set_fd_operator,
@@ -36543,42 +36642,88 @@ mod tests {
         cluster: &[&str],
         feed: &[(&str, &[propagation::OtaSpot])],
     ) -> Vec<propagation::NeedAlert> {
-        use std::sync::{Arc, Mutex};
-        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
-        let now = crate::now_unix();
-        let mut buf = SpotBuffer::new(100);
-        for call in cluster {
-            buf.push(ClusterSpot {
-                spotter: "W3LPL".into(), // the operator's own continent — the locality gate
-                dx_call: (*call).into(),
-                freq_khz: 14_025.0, // 20 m CW
-                comment: "CW 18 dB".into(),
-                time_utc: None,
-                received_unix: now as u64,
-                corroborators: Vec::new(),
-                rbn: false,
-            });
+        BoardStation::on_the_air(engine, cluster, feed).board()
+    }
+
+    /// A station with these stations on the air, whose Needed board can be read again after the
+    /// desktop sends it something — the engine stays reachable between reads.
+    struct BoardStation {
+        engine: SharedEngine,
+        spots: crate::SharedSpots,
+        ota: crate::SharedOtaSpots,
+        live: crate::SharedLivePaths,
+        region: crate::SharedRegionPaths,
+    }
+
+    impl BoardStation {
+        fn on_the_air(
+            engine: tempo_app::engine::Engine,
+            cluster: &[&str],
+            feed: &[(&str, &[propagation::OtaSpot])],
+        ) -> BoardStation {
+            use std::sync::{Arc, Mutex};
+            use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+            let now = crate::now_unix();
+            let mut buf = SpotBuffer::new(100);
+            for call in cluster {
+                buf.push(ClusterSpot {
+                    spotter: "W3LPL".into(), // the operator's own continent — the locality gate
+                    dx_call: (*call).into(),
+                    freq_khz: 14_025.0, // 20 m CW
+                    comment: "CW 18 dB".into(),
+                    time_utc: None,
+                    received_unix: now as u64,
+                    corroborators: Vec::new(),
+                    rbn: false,
+                });
+            }
+            let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
+            let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+            for (program, rows) in feed {
+                ota.lock()
+                    .unwrap()
+                    .insert((*program).into(), (now, rows.to_vec()));
+            }
+            let live: crate::SharedLivePaths =
+                Arc::new(Mutex::new(propagation::LiveSpots::default()));
+            let region =
+                crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+            let engine: SharedEngine = Arc::new(Mutex::new(engine));
+            BoardStation {
+                engine,
+                spots,
+                ota,
+                live,
+                region,
+            }
         }
-        let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
-        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        for (program, rows) in feed {
-            ota.lock()
-                .unwrap()
-                .insert((*program).into(), (now, rows.to_vec()));
+
+        /// The board, as the native window and every Remote browser read it.
+        fn board(&self) -> Vec<propagation::NeedAlert> {
+            crate::read_need_alerts(
+                engine_lock(&self.engine),
+                &Default::default(),
+                &self.live,
+                &self.region,
+                &self.spots,
+                &self.ota,
+            )
+            .unwrap()
         }
-        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
-        let region =
-            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
-        let engine: SharedEngine = Arc::new(Mutex::new(engine));
-        crate::read_need_alerts(
-            engine_lock(&engine),
-            &Default::default(),
-            &live,
-            &region,
-            &spots,
-            &ota,
-        )
-        .unwrap()
+
+        /// The desktop sends the station its watch list.
+        fn watching(&self, entries: &[(tempo_app::watchlist::WatchKind, &str)]) -> &Self {
+            engine_lock(&self.engine).set_watch_list(
+                entries
+                    .iter()
+                    .map(|(kind, value)| tempo_app::watchlist::WatchEntry {
+                        kind: *kind,
+                        value: (*value).into(),
+                    })
+                    .collect(),
+            );
+            self
+        }
     }
 
     /// Today's 0000Z on the real clock the board reads — a log timestamp that is always "today"
@@ -36691,6 +36836,231 @@ mod tests {
             board_park(&alerts, "K1ABC", "CW"),
             None,
             "…and then it is ambiguous, so the freshness filter is what decided the case above"
+        );
+    }
+
+    /// An engine whose settings carry the RETIRED wanted list — as an old settings.json, or a
+    /// restored backup, still does — so the board can be asked whether it reads it.
+    fn with_old_wanted_list(
+        mut e: tempo_app::engine::Engine,
+        list: &[&str],
+        confirm_tier: bool,
+    ) -> tempo_app::engine::Engine {
+        let mut s = e.settings().clone();
+        s.wanted_calls = list.iter().map(|c| c.to_string()).collect();
+        s.alert_confirm_tier = confirm_tier;
+        e.apply_restored_settings(s);
+        e
+    }
+
+    /// THE BOARD NO LONGER READS THE OLD WANTED LIST (operator 2026-09-24, "One list"). It had no
+    /// editor since the watch list replaced it, and went on tagging `Wanted` from settings.json:
+    /// a list the operator could neither see nor change. Its entries now join the watch list on the
+    /// first launch (the desktop's `features/watchlistFold`), and the board ranks by the watch
+    /// list, the one the operator edits (below).
+    #[test]
+    fn the_needed_board_does_not_tag_from_the_retired_wanted_list() {
+        let engine = with_old_wanted_list(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+            &["VK9*", "W1AW"],
+            true,
+        );
+        let alerts = needed_board_for(engine, &["VK9XX", "W1AW", "K1ABC"], &[]);
+        // Positive control: the board is there, and the listed stations are on it as the needs
+        // they are (an empty log: every station is a new one).
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "no VK9XX row: {alerts:?}"
+        );
+        let wanted: Vec<&str> = alerts
+            .iter()
+            .filter(|a| {
+                a.tags.contains(&propagation::NeedTag::Wanted) || a.headline.starts_with("Wanted")
+            })
+            .map(|a| a.call.as_str())
+            .collect();
+        assert!(
+            wanted.is_empty(),
+            "rows tagged from the retired wanted list: {wanted:?}"
+        );
+    }
+
+    /// …nor ADDS a row for a station on it that is no need at all. The old list surfaced every
+    /// heard station on it, worked or not; the watch list does that now, and only the watch list.
+    #[test]
+    fn the_needed_board_adds_no_row_for_a_worked_station_on_the_retired_list() {
+        let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
+        worked.mode = "CW".into();
+        worked.when_unix = (crate::now_unix() - 3_600) as u64;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(worked);
+        // The confirmation tier off, so a worked, unconfirmed W1AW is no need of any kind.
+        let engine = with_old_wanted_list(e, &["W1AW"], false);
+        let alerts = needed_board_for(engine, &["W1AW", "VK9XX"], &[]);
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "control: the board is there: {alerts:?}"
+        );
+        assert!(
+            !alerts.iter().any(|a| a.call == "W1AW"),
+            "a row for a worked station, from the retired list: {alerts:?}"
+        );
+    }
+
+    /// An operator who worked W1AW on 20 m CW an hour ago, with the confirmation tier off — so
+    /// W1AW, heard again, is no need of any kind.
+    fn w1aw_worked() -> tempo_app::engine::Engine {
+        let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
+        worked.mode = "CW".into();
+        worked.when_unix = (crate::now_unix() - 3_600) as u64;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(worked);
+        let mut s = e.settings().clone();
+        s.alert_confirm_tier = false;
+        e.apply_restored_settings(s);
+        e
+    }
+
+    /// ⭐ A WATCHED STATION THAT IS HEARD IS ON THE BOARD, FIRST — even when nothing else needs it
+    /// (operator 2026-09-24: "Yes, watched counts as needed", offered as "a watched station is on
+    /// the Needed board when heard, and the Watch list chip shows exactly your watched stations").
+    /// It counts as the Call Roster, the Stations list and Spots count it — worked or not — and
+    /// ranks above everything, a new one included, as the retired wanted list's stations did.
+    #[test]
+    fn a_watched_station_heard_is_on_the_board_first_even_when_nothing_else_needs_it() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX"], &[]);
+        station.watching(&[(WatchKind::Call, "W1AW")]);
+        let alerts = station.board();
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.call == "VK9XX" && a.tags.contains(&propagation::NeedTag::NewEntity)),
+            "control: the board is there, a new one on it: {alerts:?}"
+        );
+        let first = &alerts[0];
+        assert_eq!(
+            first.call, "W1AW",
+            "the watched station leads the board, above a new one: {alerts:?}"
+        );
+        assert_eq!(first.tags, vec![propagation::NeedTag::Wanted]);
+        assert_eq!(first.priority, propagation::NeedTag::Wanted.tier());
+        assert_eq!(first.headline, "Watch list — United States");
+        // The row is the spot's, so a click works it where it was heard.
+        assert_eq!((first.mode.as_str(), first.freq_mhz), ("CW", Some(14.025)));
+        assert!(first.evidence.is_some(), "and it says who heard it");
+    }
+
+    /// The control: a station nothing needs, that the watch list does not name, stays off — while
+    /// the list names others, a GRID entry among them that is W1AW's grid in the log: a cluster
+    /// spot carries no grid, and a grid-less station is unknown to a grid entry, never a hit.
+    #[test]
+    fn an_unwatched_station_nothing_needs_stays_off_the_board() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX"], &[]);
+        station.watching(&[
+            (WatchKind::Call, "VP8*"),
+            (WatchKind::Dxcc, "Bouvet"),
+            (WatchKind::Grid, "FN31"),
+        ]);
+        let alerts = station.board();
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "control: the board is there: {alerts:?}"
+        );
+        assert!(
+            !alerts.iter().any(|a| a.call == "W1AW"),
+            "a station nothing needs and nothing names: {alerts:?}"
+        );
+        assert!(
+            !alerts
+                .iter()
+                .any(|a| a.tags.contains(&propagation::NeedTag::Wanted)),
+            "nothing on the board is on the list: {alerts:?}"
+        );
+    }
+
+    /// TAKING A STATION OFF THE WATCH LIST TAKES ITS ROW OFF once nothing else needs it — and a
+    /// station that is still needed stays, as its need, no longer first. The desktop sends the
+    /// edited list and reads the board again; this is that second read.
+    #[test]
+    fn taking_a_station_off_the_watch_list_takes_its_row_off_once_it_is_no_longer_needed() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX", "3Y0J"], &[]);
+        let row = |alerts: &[propagation::NeedAlert], call: &str| {
+            alerts.iter().find(|a| a.call == call).cloned()
+        };
+        station.watching(&[(WatchKind::Call, "W1AW"), (WatchKind::Call, "VK9*")]);
+        let before = station.board();
+        assert!(row(&before, "W1AW").is_some(), "{before:?}");
+        let vk9 = row(&before, "VK9XX").unwrap();
+        assert_eq!(vk9.tags[0], propagation::NeedTag::Wanted);
+        assert!(vk9.tags.contains(&propagation::NeedTag::NewEntity));
+
+        station.watching(&[]);
+        let after = station.board();
+        assert_eq!(
+            row(&after, "W1AW"),
+            None,
+            "off the list and needed for nothing: off the board"
+        );
+        let vk9 = row(&after, "VK9XX").expect("still a new one");
+        assert!(!vk9.tags.contains(&propagation::NeedTag::Wanted), "{vk9:?}");
+        assert!(
+            vk9.priority < propagation::NeedTag::Wanted.tier(),
+            "{vk9:?}"
+        );
+        // The control: a station the list never named is the same row on both reads.
+        assert_eq!(row(&before, "3Y0J"), row(&after, "3Y0J"));
+        assert!(row(&after, "3Y0J").is_some());
+    }
+
+    /// Never the operator's own call: a pattern broad enough to name it (`KD9*`) must not put the
+    /// operator on their own board when their call reaches the evidence (a spot of their own).
+    #[test]
+    fn the_operators_own_call_is_never_a_watched_row() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["KD9TAW", "VK9XX"], &[]);
+        station.watching(&[(WatchKind::Call, "KD9*"), (WatchKind::Call, "VK9*")]);
+        let alerts = station.board();
+        assert_eq!(
+            alerts[0].tags[0],
+            propagation::NeedTag::Wanted,
+            "control: the list marks what it names: {alerts:?}"
+        );
+        assert!(!alerts.iter().any(|a| a.call == "KD9TAW"), "{alerts:?}");
+    }
+
+    /// A WATCH ENTRY NAMES A ROW BY ENTITY AND BY GRID, as the WATCH tile does on the roster: a DXCC
+    /// entry by the station's cty.dat entity, a grid entry by the grid its evidence carried (here an
+    /// activator's spot). What neither names is left alone.
+    #[test]
+    fn a_watch_entry_names_a_row_by_entity_and_by_grid() {
+        use tempo_app::watchlist::WatchKind;
+        let mut park = live_spot("POTA", "K1ABC", "US-0001", 60);
+        park.grid = Some("FN31".into());
+        let station = BoardStation::on_the_air(
+            w1aw_worked(),
+            &["VK9XX", "3Y0J"],
+            &[("POTA", std::slice::from_ref(&park))],
+        );
+        station.watching(&[
+            (WatchKind::Dxcc, "Christmas Island"),
+            (WatchKind::Grid, "FN3*"),
+        ]);
+        let alerts = station.board();
+        let tags = |call: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call == call)
+                .map(|a| a.tags.clone())
+                .unwrap_or_else(|| panic!("no {call} row: {alerts:?}"))
+        };
+        assert_eq!(tags("VK9XX")[0], propagation::NeedTag::Wanted, "by entity");
+        assert_eq!(tags("K1ABC")[0], propagation::NeedTag::Wanted, "by grid");
+        assert!(
+            !tags("3Y0J").contains(&propagation::NeedTag::Wanted),
+            "Bouvet is not on the list"
         );
     }
 

@@ -69,6 +69,7 @@
 //! Like the duplicate guard it absorbed, this has no store in scope and cannot wait on one: the
 //! FT sequencer logs from the radio loop under the engine lock, and everything here runs there.
 
+use super::sqlite::{self, LogDb};
 use super::{Logbook, QsoRecord, RecordId, WorkedSince};
 use crate::contest::DupeRule;
 use crate::message::base_call;
@@ -258,6 +259,23 @@ impl Session {
             calls: Counted::default(),
         }
     }
+
+    /// The session's sweep of `rows`: each from `cutoff` on, keyed by `rule`.
+    fn swept<'a>(
+        cutoff: u64,
+        rule: DupeRule,
+        rows: impl IntoIterator<Item = &'a QsoRecord>,
+    ) -> Self {
+        let mut s = Self::new(cutoff, rule);
+        for r in rows.into_iter().filter(|r| r.when_unix >= cutoff) {
+            let (call, exact) = session_keys(&project(r), &rule);
+            s.calls.add(call);
+            if let Some(k) = exact {
+                s.exact.add(k);
+            }
+        }
+        s
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -274,6 +292,23 @@ impl Delta {
         }
     }
 }
+
+/// The store columns [`HotIndex::from_store`] reads: every field [`Project`] reads, where the
+/// award-grade confirmation is the card and LoTW channels the decoder reads it from. The id is
+/// always read. The contest exchange is not: only a contest session's sweep reads it, and a
+/// build starts with no session.
+pub const STORE_COLUMNS: &[&str] = &[
+    "call",
+    "band",
+    "mode",
+    "when_unix",
+    "grid",
+    "prop_mode",
+    "ota_their_ref",
+    "ota_my_ref",
+    "qsl_card_rcvd_raw",
+    "lotw_rcvd_raw",
+];
 
 /// One row's part in a change: the row as it stood before (`None` for a row put in) and as it
 /// stands after (`None` for a row taken out). A change to the log is a list of these, in log
@@ -366,6 +401,109 @@ impl HotIndex {
     /// The revision of the log the index holds; `None` while it holds none.
     pub fn at(&self) -> Option<u64> {
         self.at
+    }
+
+    /// The index of the log the store holds, built from its rows in one pass — the launch's
+    /// build, made before the engine is locked (SPEC-2 v3 C19). Each row is keyed by its rowid,
+    /// which is the store's log order, and a row put in later gets a key past the last of them.
+    ///
+    /// It reads [`STORE_COLUMNS`] of each row and nothing else, through the store's one decoder,
+    /// so a row reads here exactly as a whole-record load reads it. Run it inside one read
+    /// transaction ([`LogDb::in_one_snapshot`]) to build it from one picture of the store. The
+    /// index names no log until it is installed as one ([`Self::holding`]).
+    pub fn from_store(db: &LogDb, keys: &dyn HotKeys) -> sqlite::Result<HotIndex> {
+        let mut index = Self::default();
+        let mut last = 0;
+        db.each_narrow_after(STORE_COLUMNS, 0, &mut |rowid, r| {
+            index.put(r, u64::from(rowid), keys);
+            last = rowid;
+        })?;
+        index.next_order = u64::from(last) + 1;
+        Ok(index)
+    }
+
+    /// The index of `rows` — a log's rows in log order, each keyed by its place — built where
+    /// they already are, before any lock that guards the log they will become is taken (the
+    /// launch's rows, loaded by the store's open). The index names no log until it is installed
+    /// as one ([`Self::holding`]).
+    pub fn from_rows<'a>(
+        rows: impl IntoIterator<Item = &'a QsoRecord>,
+        keys: &dyn HotKeys,
+    ) -> Self {
+        let mut index = Self::default();
+        index.put_all(rows, keys);
+        index
+    }
+
+    /// Open the contest session's sweep from `rows` — every row the log holds from `cutoff` on,
+    /// and any from before it, which are passed over — read somewhere else (the store, off the
+    /// lock: SPEC-2 v3 C19). From here it is followed row by row, as a sweep built by
+    /// [`Self::worked_since`] is, and asking for this session sweeps nothing.
+    ///
+    /// ⚠️ `rows` must be the rows of the log the index holds: a row it lacks, or one it holds
+    /// that `rows` lacks, is a session counted wrong until the next sweep.
+    pub fn install_session<'a>(
+        &mut self,
+        cutoff: u64,
+        rule: DupeRule,
+        rows: impl IntoIterator<Item = &'a QsoRecord>,
+    ) {
+        self.session = Some(Session::swept(cutoff, rule, rows));
+    }
+
+    /// This index, as the index of the log at `revision` — how an index built somewhere else (the
+    /// store, off the lock) is installed as the one a log follows from here.
+    pub fn holding(mut self, revision: u64) -> Self {
+        self.at = Some(revision);
+        self
+    }
+
+    /// Whether `other` gives every answer this index gives: the same rows under each station, in
+    /// the same order, and the same keys counted the same number of times — whatever order keys
+    /// and name numbers each happened to hand out. What shows an index built one way is the one
+    /// built another (SPEC-2 v3 C19: from the store, and from the log in memory).
+    pub fn answers_as(&self, other: &HotIndex) -> bool {
+        type Station<'a> = Vec<(
+            Option<RecordId>,
+            &'a str,
+            &'a str,
+            u64,
+            Option<&'a str>,
+            Option<&'a str>,
+        )>;
+        fn stations(ix: &HotIndex) -> HashMap<&str, Station<'_>> {
+            ix.by_base
+                .iter()
+                .map(|(base, rows)| {
+                    let rows = rows
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.id,
+                                ix.bands.name(r.band),
+                                ix.modes.name(r.mode),
+                                r.when,
+                                r.grid.as_deref(),
+                                r.entity.map(|e| ix.entities.name(e)),
+                            )
+                        })
+                        .collect();
+                    (base.as_str(), rows)
+                })
+                .collect()
+        }
+        self.rows == other.rows
+            && stations(self) == stations(other)
+            && self.calls == other.calls
+            && self.call_band == other.call_band
+            && self.call_band_mode == other.call_band_mode
+            && self.grids == other.grids
+            && self.worked == other.worked
+            && self.worked_any == other.worked_any
+            && self.confirmed == other.confirmed
+            && self.parks == other.parks
+            && self.activations == other.activations
+            && self.session == other.session
     }
 
     /// ★ Follow one change to the log — the one way a change reaches the index. `pairs` are the
@@ -490,11 +628,16 @@ impl HotIndex {
             session,
             ..Self::default()
         };
-        for r in log.records() {
+        self.put_all(log.records().iter().map(|r| &**r), keys);
+        self.at = Some(log.revision());
+    }
+
+    /// Put in `rows`, in log order, each keyed past every key so far.
+    fn put_all<'a>(&mut self, rows: impl IntoIterator<Item = &'a QsoRecord>, keys: &dyn HotKeys) {
+        for r in rows {
             let k = self.next_key();
             self.put(r, k, keys);
         }
-        self.at = Some(log.revision());
     }
 
     /// The log was emptied: every count to nothing, the session's rule and the key counter kept.
@@ -720,15 +863,11 @@ impl HotIndex {
             .is_some_and(|s| s.cutoff == cutoff && s.rule == *rule)
         {
             super::note_log_sweep();
-            let mut s = Session::new(cutoff, *rule);
-            for r in log.records().iter().filter(|r| r.when_unix >= cutoff) {
-                let (call, exact) = session_keys(&project(r), rule);
-                s.calls.add(call);
-                if let Some(k) = exact {
-                    s.exact.add(k);
-                }
-            }
-            self.session = Some(s);
+            self.session = Some(Session::swept(
+                cutoff,
+                *rule,
+                log.records().iter().map(|r| &**r),
+            ));
         }
         let s = self.session.as_ref().expect("set above");
         WorkedSince {
@@ -1310,6 +1449,144 @@ mod tests {
                 caught_up.verify(&log, &Keys);
             }
         }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+
+        /// ★ THE LAUNCH'S BUILD (SPEC-2 v3 C19). The index built from the store — each row keyed
+        /// by its rowid, gaps and all — answers exactly as the index built from the same rows
+        /// loaded whole: the log the launch holds is those rows, so the two must agree. The
+        /// store is made the way a real one is: rows written, some taken out, more put in after
+        /// the gaps.
+        #[test]
+        fn the_index_built_from_the_store_answers_as_the_one_built_from_its_rows(
+            steps in prop::collection::vec(arb_step(), 1..40),
+            gone in prop::collection::vec(any::<usize>(), 0..6),
+            later in prop::collection::vec(arb_contact(), 0..4),
+        ) {
+            let mut log = Logbook::new();
+            for step in steps {
+                run(&mut log, step);
+            }
+            let mut db = LogDb::open_in_memory().expect("a store");
+            db.insert_all(log.records().iter().map(|r| (&**r, sqlite::Resolved::default())))
+                .expect("written");
+            let n = log.len();
+            let remove: Vec<RecordId> = gone
+                .iter()
+                .filter(|_| n > 0)
+                .map(|i| log.records()[i % n].id.expect("an id"))
+                .collect();
+            for r in later {
+                log.add(r);
+            }
+            let upsert: Vec<sqlite::RowWrite> = log.records()[n..]
+                .iter()
+                .map(|r| sqlite::RowWrite::new(Arc::clone(r)))
+                .collect();
+            db.apply(sqlite::Batch {
+                remove: &remove,
+                upsert: &upsert,
+                ..sqlite::Batch::default()
+            })
+            .expect("changed");
+
+            let copy = Logbook::from_store(db.load_all().expect("loaded"));
+            let from_rows = HotIndex::build(&copy, &Keys);
+            let from_store = db
+                .in_one_snapshot(|db| HotIndex::from_store(db, &Keys))
+                .expect("built");
+            prop_assert!(
+                from_store.answers_as(&from_rows),
+                "built from the store: {from_store:?}\nbuilt from its rows: {from_rows:?}"
+            );
+            // And installed as the index of that log, it follows the next change as the other does.
+            let (mut installed, mut built) = (from_store.holding(copy.revision()), from_rows);
+            let mut after = copy.clone();
+            let before = (after.revision(), after.records().to_vec());
+            after.add(row("K1ABC", "40m", Some("EM12"), 7_000));
+            let pairs = pairs_between(&before.1, after.records());
+            installed.follow(&pairs, before.0, after.revision(), &Keys);
+            built.follow(&pairs, before.0, after.revision(), &Keys);
+            prop_assert!(installed.answers_as(&built), "after a contact logged on top");
+            installed.verify(&after, &Keys);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+
+        /// ★ THE SESSION OPENED FROM ROWS READ ELSEWHERE (SPEC-2 v3 C19). A contest session
+        /// opened from rows read somewhere else — every row from a bound at or before its start —
+        /// answers exactly as the sweep of the log does, sweeps nothing when it is asked, and is
+        /// followed as that sweep is through every kind of change that comes after.
+        #[test]
+        fn a_session_opened_from_rows_read_elsewhere_is_the_sweep_of_the_log(
+            before in prop::collection::vec(arb_step(), 0..30),
+            after in prop::collection::vec(arb_step(), 0..20),
+            party in any::<bool>(),
+            cutoff in prop_oneof![Just(0u64), Just(T0 - 1_000), Just(T0), Just(T0 + 1_000)],
+            slack in 0u64..3_000,
+        ) {
+            let rule = if party { QSO_PARTY } else { FD };
+            let mut log = Logbook::new();
+            for step in before {
+                run(&mut log, step);
+            }
+            let mut index = HotIndex::build(&log, &Keys);
+            let bound = cutoff.saturating_sub(slack);
+            let read: Vec<QsoRecord> = log
+                .records()
+                .iter()
+                .filter(|r| r.when_unix >= bound)
+                .map(|r| QsoRecord::clone(r))
+                .collect();
+            index.install_session(cutoff, rule, &read);
+            crate::logbook::LOG_SWEEPS.with(|c| c.set(0));
+            let opened = index.worked_since(&log, cutoff, &rule);
+            prop_assert_eq!(
+                crate::logbook::LOG_SWEEPS.with(|c| c.get()),
+                0,
+                "asked for, the session sweeps nothing"
+            );
+            prop_assert_eq!(opened, log.worked_keys_since(cutoff, &rule), "the sweep of the log");
+            for step in after {
+                let before = (log.revision(), log.records().to_vec());
+                run(&mut log, step);
+                let pairs = pairs_between(&before.1, log.records());
+                index.follow(&pairs, before.0, log.revision(), &Keys);
+                prop_assert_eq!(
+                    index.worked_since(&log, cutoff, &rule),
+                    log.worked_keys_since(cutoff, &rule),
+                    "followed through every change"
+                );
+                index.verify(&log, &Keys);
+            }
+        }
+    }
+
+    /// The POSITIVE CONTROLS for `answers_as`: it tells apart two indexes whose counts differ,
+    /// and two whose station lists hold the same rows in a different order — which is what
+    /// decides the partner's grid.
+    #[test]
+    fn answers_as_tells_a_different_count_and_a_different_order_apart() {
+        let mut log = Logbook::new();
+        log.add(row("W1AW", "20m", Some("FN31"), 0));
+        log.add(row("W1AW/P", "40m", Some("EM12"), 60));
+        let index = HotIndex::build(&log, &Keys);
+        assert!(index.answers_as(&HotIndex::build(&log, &Keys)), "itself");
+        let mut counted = HotIndex::build(&log, &Keys);
+        counted.calls.add("K1ABC".into());
+        assert!(!index.answers_as(&counted), "a count");
+        let mut reversed = Logbook::new();
+        for r in log.records().iter().rev() {
+            reversed.add(QsoRecord::clone(r));
+        }
+        assert!(
+            !index.answers_as(&HotIndex::build(&reversed, &Keys)),
+            "the same rows in the other order"
+        );
     }
 
     fn row(call: &str, band: &str, grid: Option<&str>, dt: i64) -> QsoRecord {

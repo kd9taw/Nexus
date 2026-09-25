@@ -1925,6 +1925,9 @@ export const FR: PartialCatalog = {
   "logbook.delete.gone": "{{call}} avait déjà été supprimé dans une autre fenêtre.",
   "logbook.change.changed": "{{call}} a été modifié dans une autre fenêtre ou par une synchronisation, ceci n'a donc pas été enregistré. Le voici tel qu'il est maintenant — vérifiez-le et réessayez.",
   "logbook.change.gone": "{{call}} a été supprimé dans une autre fenêtre, ceci n'a donc pas été enregistré.",
+  // The logbook was too busy (LogBusy): MACHINE TRANSLATION, for a native speaker to check.
+  "logbook.change.busy": "Le journal était occupé, cette modification de {{call}} n'a donc pas été enregistrée. Réessayez.",
+  "logbook.delete.busy": "Le journal était occupé, {{call}} n'a donc pas été supprimé. Réessayez.",
   "logbook.delete.heading": "Supprimer le QSO avec {{call}} sur {{band}} ?",
   "logbook.empty": "Aucun contact enregistré pour l'instant.",
   "logbook.emptySearch": "Aucun contact ne correspond à “{{query}}”.",
@@ -6104,6 +6107,8 @@ export const FR: PartialCatalog = {
   "watchlist.item.remove.title": "Retirer de la liste de veille",
   "watchlist.tile.label": "VEILLE",
   "watchlist.tile.title": "Dans votre liste de veille : {{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": { "one": "{{entries}} a été ajouté à votre liste de veille depuis l'ancien réglage « Wanted watch list », désormais retiré. Vous pouvez le modifier à tout moment dans Réglages ▸ Spots et alertes.", "other": "{{count}} entrées ont été ajoutées à votre liste de veille depuis l'ancien réglage « Wanted watch list », désormais retiré : {{entries}}. Vous pouvez les modifier à tout moment dans Réglages ▸ Spots et alertes." },
   "waterfall.canvas.title": "Clic = RX (WSJT-X) · Maj+clic = TX · {{mod}}+clic = les deux",
   "waterfall.dss.off.title": "Passer à la vue 3D en spectres empilés (une perspective glissante des ~96 dernières lignes)",
   "waterfall.dss.on.title": "Revenir à la cascade 2D plate",

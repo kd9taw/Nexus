@@ -24,6 +24,9 @@ pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
 pub mod remote_transmit;
+// Debug builds only, like the station's parity tests: they read the debug build's counters.
+#[cfg(all(test, debug_assertions))]
+mod session_tests;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -2465,6 +2468,10 @@ pub struct Engine {
     /// with no Remote service revokes a counter nobody reads rather than needing an `Option`.
     /// `halt_tx` moves it — see there for why.
     remote_transmit_stand_down: crate::remote_control::Revocation,
+    /// The operator's watch list, as the desktop's main window last sent it — what the Needed
+    /// board puts first ([`crate::watchlist`]). Not a setting: the list is the desktop's, kept in
+    /// its ui-state.json, and sent again on every launch and after every edit. Empty until then.
+    watch_list: Vec<crate::watchlist::WatchEntry>,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     remote_radio_command: Option<remote_radio::Request>,
     remote_radio_selection: Option<remote_selection::Request>,
@@ -4701,6 +4708,7 @@ impl Engine {
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
             remote_transmit_stand_down: Default::default(),
+            watch_list: Vec::new(),
             remote_amp_command: None,
             remote_radio_command: None,
             remote_radio_selection: None,
@@ -5181,6 +5189,12 @@ impl Engine {
         // with what the computer does at the next sign-in.
         let live_launch_at_login = self.settings.launch_at_login;
         let live_remote_autostart_offer_answered = self.settings.remote_autostart_offer_answered;
+        // The RETIRED wanted list (operator 2026-09-24, "One list"): read once by the desktop's
+        // fold into the watch list and then emptied by its one writer, `retire_wanted_calls`. A
+        // form payload is a snapshot that may predate the fold, and writing its copy back would
+        // have the next launch fold the old entries in AGAIN — returning one the operator had
+        // removed from the watch list since. No form owns it; a restore/reset does (below).
+        let live_wanted_calls = std::mem::take(&mut self.settings.wanted_calls);
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -5264,6 +5278,7 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            self.settings.wanted_calls = live_wanted_calls;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
@@ -5623,6 +5638,14 @@ impl Engine {
             .map(|c| c.trim().to_ascii_uppercase())
             .filter(|c| !c.is_empty() && seen.insert(c.clone()))
             .collect();
+    }
+
+    /// Empty the RETIRED wanted list — its one writer. The desktop calls this once the list's
+    /// entries are safely on the watch list (`ui/src/features/watchlistFold.ts`); nothing reads
+    /// the list otherwise, and no form payload can write it (see `apply_settings_inner`).
+    pub fn retire_wanted_calls(&mut self) -> &Settings {
+        self.settings.wanted_calls.clear();
+        &self.settings
     }
 
     /// ⛔ **THE ONE WRITER of the beta-channel opt-in** (Settings ▸ App updates). A NARROW
@@ -11058,6 +11081,18 @@ impl Engine {
         revocation: crate::remote_control::Revocation,
     ) {
         self.remote_transmit_stand_down = revocation;
+    }
+
+    /// Take the desktop's watch list — whole, replacing the last one ([`crate::watchlist`]). The
+    /// command layer admits it from the main window only.
+    pub fn set_watch_list(&mut self, list: Vec<crate::watchlist::WatchEntry>) {
+        self.watch_list = list;
+    }
+
+    /// The watch list the desktop last sent, for the Needed board — the native one and every
+    /// Remote browser's, which read this same engine.
+    pub fn watch_list(&self) -> &[crate::watchlist::WatchEntry] {
+        &self.watch_list
     }
 
     /// The generation a browser is shown as its `transmitEpoch`. Test-visible so a stand-down
@@ -22596,11 +22631,64 @@ contact yourself."
     }
 
     /// Make the store the owner of the log — the ordinary launch. See
-    /// [`StationCore::attach_store`] and [`crate::logstore`].
-    pub fn attach_log_store(&mut self, opened: crate::logstore::Opened) {
-        self.station.attach_store(opened);
+    /// [`StationCore::attach_store`] and [`crate::logstore`]. Hands back the rows a contest
+    /// session restored at launch is swept from, when the open set them aside
+    /// ([`Self::open_session_from`]).
+    pub fn attach_log_store(
+        &mut self,
+        opened: crate::logstore::Opened,
+    ) -> Option<crate::logstore::SessionRows> {
+        let rows = self.station.attach_store(opened);
         // A fresh log, whose ids start without the position id — as after `set_log_path`.
         self.sync_log_posid();
+        rows
+    }
+
+    /// Whether switching to `spec` opens a contest session: a Field Day mode entered from any
+    /// other mode, where [`Self::set_mode`] builds the session anew. A switch between Field Day
+    /// modes keeps the session that is open, and every other switch opens none.
+    pub fn mode_opens_session(&self, spec: &str) -> bool {
+        spec.starts_with("fieldday") && !matches!(self.mode, Mode::FieldDay { .. })
+    }
+
+    /// The read a command that opens a contest session makes BEFORE it takes the Engine lock to
+    /// open it (SPEC-2 v3 C19; see [`with_session_rows`]): the log's rows from the earliest time
+    /// the session can start, read from the store off the lock. Taken here, under the lock; no
+    /// I/O. `None` without a store (the 1.13 path), or while the store is missing a change this
+    /// window holds.
+    pub fn session_read(&self) -> Option<crate::logstore::SessionRead> {
+        let bound = now_unix_secs().saturating_sub(SESSION_READ_WINDOW);
+        self.station
+            .store
+            .as_ref()?
+            .session_read(bound, self.station.marks())
+    }
+
+    /// Whether `rows` are still this window's log from their bound on: read exactly, and the log
+    /// unchanged since.
+    pub fn session_rows_current(&self, rows: &crate::logstore::SessionRows) -> bool {
+        rows.exact && rows.marks == self.station.marks()
+    }
+
+    /// Build the open contest session's dupe sweep from `rows`, right after the command that
+    /// opened it — under the same hold of the lock — when they are still the log's rows and cover
+    /// the session from its start. Whether it did: when not, the session's first snapshot sweeps
+    /// the log itself, as it always has.
+    pub fn open_session_from(&mut self, rows: crate::logstore::SessionRows) -> bool {
+        if !self.session_rows_current(&rows) {
+            return false;
+        }
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return false;
+        };
+        let (cutoff, rule) = (station.log.session.start_unix, station.log.dupe_rule());
+        // A session that starts before the rows do (a clock stepped back more than the read's
+        // margin) is swept from the log by its first snapshot instead.
+        if cutoff < rows.bound {
+            return false;
+        }
+        self.station.install_session(cutoff, rule, &rows.rows);
+        true
     }
 
     /// Record why the store could not be opened this session: the log runs on `log.adi` as
@@ -22667,7 +22755,8 @@ contact yourself."
         &mut self.station
     }
 
-    /// The station, for the log's write path's decisions ([`crate::logwrite`]).
+    /// The station, for the log's write path's decisions ([`crate::logwrite`]) and for a test in
+    /// another module that asks it directly.
     pub(crate) fn station(&self) -> &StationCore {
         &self.station
     }
@@ -22777,6 +22866,11 @@ contact yourself."
         resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_dxcc_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_dxcc_resolver_shared`].
+    pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<crate::station::DxccResolve>) {
+        self.station.set_dxcc_resolver_shared(resolve)
     }
 
     /// See [`StationCore::set_state_resolver`].
@@ -23487,22 +23581,6 @@ contact yourself."
         self.station.take_all_txt_pending()
     }
 
-    /// See [`StationCore::log_activations`].
-    pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
-        self.station.log_activations()
-    }
-
-    /// See [`StationCore::export_logbook_for_activation`].
-    pub fn export_logbook_for_activation(
-        &self,
-        reference: &str,
-        day_start_unix: u64,
-        callsign: Option<&str>,
-    ) -> String {
-        self.station
-            .export_logbook_for_activation(reference, day_start_unix, callsign)
-    }
-
     /// Two-instance freshness: re-read + reconcile the shared log iff another instance touched
     /// it (mtime-gated, so a no-op stat when unchanged). Call on the Needed-board poll so a
     /// monitoring radio's needs never go stale relative to the other radio. Returns true if it
@@ -23519,6 +23597,63 @@ fn report_in(msg: Option<Msg>) -> Option<i32> {
         Some(Msg::Report { snr, .. }) | Some(Msg::RReport { snr, .. }) => Some(snr),
         _ => None,
     }
+}
+
+/// How far back a contest session's rows are read before the command that opens it
+/// ([`Engine::session_read`]). A new session starts now, or at its oldest contact restored from
+/// the Field Day journal if that is earlier — and the journal gives back only the last four
+/// days ([`Engine::set_mode`] merges it from `now - 4 days`). So four days reach every row a
+/// session can hold, and the hour on top absorbs a clock step between the read and the switch.
+/// A test pins the journal's window to this one.
+pub const SESSION_READ_WINDOW: u64 = 4 * 86_400 + 3_600;
+
+/// Run `then` under the Engine lock with the rows a contest session's dupe sweep is built from,
+/// read BEFORE the lock is taken when `opens` says `then` opens a session (SPEC-2 v3 C19). The
+/// operator's pick: the command waits until the sweep is ready, so no snapshot ever sees the
+/// session without it, and the sweep is never made under the lock.
+///
+/// The rows are read off the lock ([`crate::logstore::SessionRead::read`]), the lock is taken,
+/// the rows are checked to be still the log's, and `then` runs in that same hold — `then` opens
+/// the session and hands the rows to [`Engine::open_session_from`]. A log that changed in
+/// between is read again, another window's commits taken in first, up to three times. After
+/// that, or at once when the store does not answer in time, `then` runs without rows, and the
+/// session's first snapshot sweeps the log itself, as it always has.
+///
+/// A command that opens no session reads nothing: `then` runs at once, in the first hold.
+pub fn with_session_rows<T>(
+    engine: &std::sync::Mutex<Engine>,
+    opens: impl Fn(&Engine) -> bool,
+    then: impl FnOnce(&mut Engine, Option<crate::logstore::SessionRows>) -> T,
+) -> T {
+    const TRIES: usize = 3;
+    for _ in 0..TRIES {
+        let read = {
+            let mut eng = engine_lock(engine);
+            if !opens(&eng) {
+                return then(&mut eng, None);
+            }
+            match eng.session_read() {
+                Some(read) => read,
+                None => return then(&mut eng, None),
+            }
+        };
+        let rows = read.read();
+        let mut eng = engine_lock(engine);
+        if !opens(&eng) {
+            return then(&mut eng, None);
+        }
+        if eng.session_rows_current(&rows) {
+            return then(&mut eng, Some(rows));
+        }
+        // A store too busy to answer in time is not asked again.
+        if !rows.ready {
+            return then(&mut eng, None);
+        }
+        // What changed may be another window's commits the read saw: taken in before the next.
+        eng.sync_shared_log_if_changed();
+    }
+    let mut eng = engine_lock(engine);
+    then(&mut eng, None)
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
@@ -29346,6 +29481,84 @@ mod tests {
             e.settings().beta_updates,
             "a payload that never mentioned the beta channel silently opted the operator out"
         );
+    }
+
+    /// ⛔ **No form payload may write the RETIRED wanted list** (operator 2026-09-24, "One
+    /// list"). The desktop folds the old hidden list into the watch list on its first launch and
+    /// then empties it through its one writer. A surface that read the settings before that — the
+    /// APRS cockpit keeps its copy for the whole session — posts the old entries back with any
+    /// control it saves; the next launch would fold them into the watch list AGAIN, bringing back
+    /// an entry the operator removed from the watch list in between.
+    #[test]
+    fn a_form_save_cannot_bring_back_the_retired_wanted_list() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.settings().wanted_calls.is_empty(),
+            "baseline: nothing to fold"
+        );
+        // A snapshot from a surface that read the settings before the fold emptied the list.
+        let mut stale = e.settings().clone();
+        stale.wanted_calls = vec!["VP8*".into(), "3Y0J".into()];
+        e.apply_settings(stale);
+        assert!(
+            e.settings().wanted_calls.is_empty(),
+            "a stale form payload wrote the retired wanted list back: {:?}",
+            e.settings().wanted_calls
+        );
+    }
+
+    /// The other half of the contract, and the positive control for the test above: a RESTORE is
+    /// the whole truth, as for every other one-writer field. An old backup's list comes back, and
+    /// the next launch folds it into the (restored) watch list — the same decision loading that
+    /// backup's settings.json makes, so the restore needs no migration of its own.
+    #[test]
+    fn a_restore_brings_the_old_list_back_for_the_next_launch_to_fold() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut bundle = e.settings().clone();
+        bundle.wanted_calls = vec!["VP8*".into()];
+        e.apply_restored_settings(bundle);
+        assert_eq!(e.settings().wanted_calls, vec!["VP8*".to_string()]);
+    }
+
+    /// The watch list is the DESKTOP's, sent whole (operator 2026-09-24: "watched counts as
+    /// needed"): the engine holds what it was last sent, and no settings payload — a form save,
+    /// a restore — reaches it, because it is not a setting at all.
+    #[test]
+    fn the_watch_list_is_what_the_desktop_last_sent_and_no_settings_payload_moves_it() {
+        use crate::watchlist::{WatchEntry, WatchKind};
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.watch_list().is_empty(),
+            "nothing until the desktop sends it"
+        );
+        let list = vec![WatchEntry {
+            kind: WatchKind::Call,
+            value: "VP8*".into(),
+        }];
+        e.set_watch_list(list.clone());
+        e.apply_settings(e.settings().clone());
+        e.apply_restored_settings(e.settings().clone());
+        assert_eq!(e.watch_list(), list.as_slice());
+        e.set_watch_list(Vec::new());
+        assert!(e.watch_list().is_empty(), "a later list replaces it whole");
+    }
+
+    /// The retired list's one writer does empty it — the positive control for the form test
+    /// above, which would otherwise pass on a list nothing can change.
+    #[test]
+    fn retire_wanted_calls_is_the_writer_that_empties_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut bundle = e.settings().clone();
+        bundle.wanted_calls = vec!["VP8*".into(), "3Y0J".into()];
+        e.apply_restored_settings(bundle);
+        let before_the_fold = e.settings().clone();
+        assert!(
+            e.retire_wanted_calls().wanted_calls.is_empty(),
+            "the verb empties it"
+        );
+        // …and a snapshot from before it cannot put the entries back.
+        e.apply_settings(before_the_fold);
+        assert!(e.settings().wanted_calls.is_empty());
     }
 
     /// The positive control for both tests above: the switch must still work. Without this,
