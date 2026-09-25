@@ -537,6 +537,11 @@ impl Ticket {
 
     /// Whether the writer has finished with this change — committed or given up on it. Never
     /// waits.
+    ///
+    /// ⚠️ A wait on the writer's status ([`LogWriter::wait_committed`], [`LogWriter::flush`]) can
+    /// return a moment BEFORE the tickets it covers are resolved: the writer publishes the status
+    /// first, so that [`LogWriter::wait_durable`] never answers "on disk" ahead of it. To know
+    /// this change's outcome, wait on the ticket ([`LogWriter::wait_durable`]).
     pub fn is_resolved(&self) -> bool {
         lock(&self.slot.done).is_some()
     }
@@ -1252,6 +1257,11 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
             // still names the revision before it. Caught intermittently by
             // `a_change_that_cannot_be_stored_fails_loudly_and_the_waiter_hears_it`, which
             // now asks the question in a loop so it is not a one-in-four question.
+            //
+            // The converse is not promised, and cannot be with the promise above: a wait on the
+            // status (`wait_committed`, `flush`) can return in the moment between the two, with
+            // the ticket still unresolved. A caller that needs one change's outcome waits on its
+            // ticket ([`Ticket::is_resolved`]).
             Ok(()) => {
                 let job = queue
                     .remove(i)
@@ -2015,7 +2025,14 @@ mod tests {
             .wait_committed(100, Duration::from_secs(60))
             .expect("committed once the lock is free");
         assert!(st.durable_rev >= 100, "{st:?}");
-        assert!(t.is_resolved(), "the change's own ticket agrees");
+        // The ticket resolves a moment AFTER the watermark moves, since the writer publishes its
+        // status first (`Ticket::is_resolved`): it is asked with its own wait, which answers at
+        // once or within that moment.
+        assert_eq!(
+            w.wait_durable(&t, Duration::from_secs(60)),
+            Ok(()),
+            "the change's own ticket agrees"
+        );
         assert_eq!(
             rows(&stored(&scratch.db())),
             1,

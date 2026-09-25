@@ -600,7 +600,7 @@ pub fn logbook_save_choice(keep_trying: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable_command_tests::{card_at, engine_on_store};
+    use crate::durable_command_tests::{card_at, engine_on_store, id_at};
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::{mpsc, Arc};
@@ -619,15 +619,27 @@ mod tests {
     }
 
     /// Whether row `row`'s QSL-card mark is in the database, read through a connection of the
-    /// test's own.
+    /// test's own — the row named without waiting for the writer ([`id_at`]), which would wait
+    /// the change onto the disk before this looks for it there.
     fn marked_on_disk(dir: &Path, engine: &SharedEngine, row: usize) -> bool {
-        let id = engine_lock(engine).log_records()[row].id;
+        let id = Some(id_at(engine, row));
         LogDb::open(&database_path(&dir.join("log.adi")))
             .and_then(|d| d.load_all())
             .expect("read")
             .into_iter()
             .find(|r| r.id == id)
             .is_some_and(|r| r.qsl_rcvd.card)
+    }
+
+    /// Everything written, and every change's ticket resolved. The flush waits on the writer's
+    /// count, which the writer publishes a moment before it resolves the tickets
+    /// ([`tempo_core::logbook::writer::Ticket::is_resolved`]); `logbook_waiting` reads the tickets.
+    fn written(engine: &SharedEngine) {
+        engine_lock(engine)
+            .flush_log_store(Duration::from_secs(60))
+            .expect("written");
+        let unsaved = engine_lock(engine).log_unsaved();
+        assert!(unsaved.wait(Duration::from_secs(60)).saved(), "saved");
     }
 
     fn saving(pending: usize) -> Notice {
@@ -990,9 +1002,7 @@ mod tests {
     #[test]
     fn the_close_asks_the_logbook_without_waiting_for_the_engine() {
         let (dir, engine) = engine_on_store("quit-waiting", 10);
-        engine_lock(&engine)
-            .flush_log_store(Duration::from_secs(60))
-            .expect("written");
+        written(&engine);
         assert_eq!(logbook_waiting(&engine), Some(false), "nothing on its way");
 
         let hold = WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
@@ -1014,9 +1024,7 @@ mod tests {
         drop(busy);
 
         drop(hold);
-        engine_lock(&engine)
-            .flush_log_store(Duration::from_secs(60))
-            .expect("written");
+        written(&engine);
         assert_eq!(logbook_waiting(&engine), Some(false));
         let _ = std::fs::remove_dir_all(&dir);
 

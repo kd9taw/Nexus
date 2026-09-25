@@ -6,6 +6,7 @@
 //! before C18 made of the log in memory.
 use std::sync::{Arc, Mutex};
 
+use crate::remote_service::stored_log_tests::StoredLog;
 use tempo_app::engine::Engine;
 use tempo_core::logbook::sqlite::Resolved;
 use tempo_core::logbook::{QsoRecord, UploadDetail, UploadOutcome};
@@ -306,9 +307,9 @@ pub(in crate::remote_service) fn changed_by_a_command(
     changing
 }
 
-/// The contact at `at` in log order, as the log in memory holds it.
+/// The contact at `at` in log order, as the log holds it ([`StoredLog`]).
 pub(in crate::remote_service) fn record_at(e: &Engine, at: usize) -> QsoRecord {
-    QsoRecord::clone(&e.log_records()[at])
+    QsoRecord::clone(&e.stored_log()[at])
 }
 
 /// One ADIF record, parsed as the log parses it, with no id.
@@ -322,7 +323,7 @@ pub(in crate::remote_service) fn parse_one(text: &str) -> QsoRecord {
 
 /// The id of the contact at `at`: how a change names its contact (SPEC-2 C16).
 pub(in crate::remote_service) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
-    e.log_records()[at]
+    e.stored_log()[at]
         .id
         .expect("every row the log holds carries an id")
 }
@@ -336,9 +337,11 @@ pub(in crate::remote_service) fn edit_at(e: &mut Engine, at: usize, edited: QsoR
 /// One random change of the kinds the app makes to the log: logged contacts (some in a second
 /// already in the log), imports, edits that move a contact in time or change what a search or
 /// a recall matches, deletes, QSL cards and sent marks, satellite tags, the connectors' stamps,
-/// a LoTW confirmation with credit, and the fill job.
+/// a LoTW confirmation with credit, and the fill job. It returns once the store holds the change
+/// ([`StoredLog::caught_up`]), so what a test asks next is the reader's answer, never the disk's
+/// speed.
 pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
-    let len = e.lock().unwrap().log_records().len();
+    let len = e.lock().unwrap().stored_log().len();
     let at = g.below(len);
     let when = 1_700_000_000 + 60 * g.below(64) as u64 + step;
     match g.below(12) {
@@ -412,4 +415,5 @@ pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut 
             );
         }
     }
+    e.caught_up();
 }

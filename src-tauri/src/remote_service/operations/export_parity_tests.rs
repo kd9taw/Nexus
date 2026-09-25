@@ -6,6 +6,7 @@ use super::*;
 use crate::remote_service::query::log_tests::{
     edit_at, launch, memory, random_change, record_at, settle, Dir, Gen, CALLS,
 };
+use crate::remote_service::stored_log_tests::StoredLog;
 use tempo_app::engine::Engine;
 use tempo_core::logbook::{Logbook, LoggedActivation};
 
@@ -25,9 +26,12 @@ trait Before {
     ) -> String;
 }
 
+/// Over the log as the store holds it ([`StoredLog`]), in place of the copy in memory: these
+/// tests hold the old answers against the new over the same rows, and whether the store holds
+/// what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
 impl Before for Engine {
     fn log_activations(&self) -> Vec<LoggedActivation> {
-        Logbook::from_store(self.get_log()).activations()
+        Logbook::from_store(self.stored_records()).activations()
     }
     fn export_logbook_for_activation(
         &self,
@@ -35,7 +39,11 @@ impl Before for Engine {
         day_start_unix: u64,
         callsign: Option<&str>,
     ) -> String {
-        Logbook::from_store(self.get_log()).adif_for_activation(reference, day_start_unix, callsign)
+        Logbook::from_store(self.stored_records()).adif_for_activation(
+            reference,
+            day_start_unix,
+            callsign,
+        )
     }
 }
 
@@ -168,10 +176,10 @@ fn activation_log(n: usize, seed: u64) -> String {
 /// One change to what an activation is made of, written as an edit may leave it rather than as
 /// an import cleans it: the reference in lower case, padded, or a two-fer with an empty part; the
 /// callsign in lower case and padded; the program; the time, onto a midnight or the second
-/// before one.
+/// before one. Back once the store holds it ([`StoredLog::caught_up`]), as `random_change` is.
 fn activation_change(e: &crate::SharedEngine, g: &mut Gen) {
     let mut eng = e.lock().unwrap();
-    let len = eng.log_records().len();
+    let len = eng.stored_log().len();
     if len == 0 {
         return;
     }
@@ -194,6 +202,8 @@ fn activation_change(e: &crate::SharedEngine, g: &mut Gen) {
         _ => r.when_unix = DAY + 86_400 * (1 + g.below(2) as u64) - g.below(2) as u64,
     }
     edit_at(&mut eng, at, r);
+    drop(eng);
+    e.caught_up();
 }
 
 // ── every answer, the old code's and the new code's ──────────────────────────────────────────
@@ -409,7 +419,7 @@ fn after_every_change_every_answer_is_the_old_answer() {
             assert_answers_are_the_old_answers(&e, false, &format!("seed {seed}, step {step}"));
             let (log, held) = {
                 let eng = e.lock().unwrap();
-                (eng.get_log(), eng.log_activations())
+                (eng.stored_records(), eng.log_activations())
             };
             raw_refs += usize::from(log.iter().any(|r| raw(r.ota.my_ref.as_deref())));
             raw_calls += usize::from(log.iter().any(|r| raw(r.station_callsign.as_deref())));

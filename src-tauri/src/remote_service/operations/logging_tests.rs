@@ -119,8 +119,8 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
     assert_eq!(std::fs::read(f.dir.join("contacts.adi")).unwrap(), bytes);
     let mut e = f.engine.lock().unwrap();
     assert!(e.pending_qso_log_key().is_none());
-    assert_eq!(e.log_records().len(), 1);
-    let record = &e.log_records()[0];
+    assert_eq!(e.stored_log().len(), 1);
+    let record = &e.stored_log()[0];
     assert_eq!(record.grid.as_deref(), Some("FN32"));
     assert_eq!(record.rst_rcvd.as_deref(), Some("58"));
     assert_eq!(record.name.as_deref(), Some("Joe"));
@@ -157,7 +157,7 @@ fn radio_permission_cannot_confirm_or_discard_a_contact() {
             f.engine.lock().unwrap().pending_qso_log_key().as_deref(),
             Some(key.as_str())
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
         assert!(f.dir.join("pending.json").exists());
     }
 }
@@ -190,7 +190,7 @@ fn replacing_a_hold_with_identical_fields_refuses_both_old_gestures() {
             f.engine.lock().unwrap().pending_qso_log_key(),
             Some(new_key)
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
         assert!(f.dir.join("pending.json").exists());
     }
 }
@@ -233,7 +233,7 @@ fn confirmation_sync_releases_engine_and_never_clears_a_newer_hold() {
     assert_eq!(result["evidence"], "fileSynced");
     assert_ne!(f.engine.lock().unwrap().pending_qso_log_key().unwrap(), key);
     assert!(f.dir.join("pending.json").exists());
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
 }
 
 /// The confirm-before-log popup, answered from a browser, against the STORE-owned log: the
@@ -279,7 +279,7 @@ fn discard_is_durable_and_duplicate_receipts_do_not_discard_a_later_contact() {
     assert_eq!(run(&f, &request).unwrap(), result);
     assert_eq!(f.engine.lock().unwrap().pending_qso_log_key(), Some(newer));
     assert!(f.dir.join("pending.json").exists());
-    assert!(f.engine.lock().unwrap().log_records().is_empty());
+    assert!(f.engine.lock().unwrap().stored_log().is_empty());
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn current_log_checks_native_eligibility_and_contact_incarnation() {
                 "noEligibleContact"
             }
         );
-        assert!(f.engine.lock().unwrap().log_records().is_empty());
+        assert!(f.engine.lock().unwrap().stored_log().is_empty());
         assert!(!f.engine.lock().unwrap().tx_enabled());
     }
 }
@@ -321,7 +321,7 @@ const SEED: &str = "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<QSO_DATE:8>
 
 fn seed(f: &Fixture) {
     f.engine.lock().unwrap().import_adif(SEED);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 2);
     // In the file, as 1.13's import had written it before it returned: on the 1.13 path the
     // file is written on its own lane since SPEC-2 v3 C19 (D1-A).
     let _ = written(f);
@@ -391,7 +391,7 @@ fn the_row_key_matches_the_browser_vector_and_the_log_page_row() {
         .engine
         .lock()
         .unwrap()
-        .log_records()
+        .stored_log()
         .iter()
         .map(|r| (r.call.clone(), super::super::logging::row_key(r)))
         .collect();
@@ -410,7 +410,7 @@ fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
     {
         let mut e = f.engine.lock().unwrap();
         let id = e
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W1AW")
             .and_then(|r| r.id)
@@ -430,7 +430,11 @@ fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
     let bytes = adif(&f);
     {
         let e = f.engine.lock().unwrap();
-        let edited = e.log_records().iter().find(|r| r.call == "W1AW").unwrap();
+        let edited = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "W1AW")
+            .unwrap();
         assert_eq!(
             (edited.band.as_str(), edited.grid.as_deref()),
             ("40m", Some("FN42"))
@@ -440,7 +444,7 @@ fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
             edited.qsl_rcvd.card,
             "an ordinary edit keeps the paper card"
         );
-        assert_eq!(e.log_records().len(), 2);
+        assert_eq!(e.stored_log().len(), 2);
         assert!(!e.tx_enabled());
     }
     assert!(String::from_utf8_lossy(&bytes).contains("FN42"));
@@ -542,7 +546,7 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
     {
         let mut e = f.engine.lock().unwrap();
         let mut local = e
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W1AW")
             .unwrap()
@@ -560,7 +564,7 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
         assert_eq!(result["outcome"], "rejected");
         assert_eq!(result["reason"], "contextChanged");
         assert_eq!(adif(&f), bytes);
-        assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+        assert_eq!(f.engine.lock().unwrap().stored_log().len(), 2);
     }
     // Positive control: the same delete from a current page applies.
     let fresh = row(&f, "W1AW");
@@ -570,7 +574,7 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
     )
     .unwrap();
     assert_eq!(result["outcome"], "applied");
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 1);
 }
 
 #[test]
@@ -588,7 +592,7 @@ fn a_delete_is_idempotent_across_a_dropped_response_and_never_reaches_a_later_co
         .engine
         .lock()
         .unwrap()
-        .log_records()
+        .stored_log()
         .iter()
         .map(|r| r.call.clone())
         .collect();
@@ -598,7 +602,7 @@ fn a_delete_is_idempotent_across_a_dropped_response_and_never_reaches_a_later_co
     f.engine.lock().unwrap().import_adif(SEED);
     let bytes = written(&f);
     assert_eq!(run(&f, &delete).unwrap(), result);
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 2);
     assert_eq!(adif(&f), bytes);
 }
 
@@ -635,7 +639,7 @@ fn log_changes_need_logging_permission_and_operation_v4() {
             Err("stationUnsupported")
         );
     }
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), 2);
 }
 
 #[cfg(unix)]
@@ -722,7 +726,7 @@ fn qsl_marks_are_found_by_key_synced_and_a_card_sent_is_never_a_confirmation() {
         f.engine
             .lock()
             .unwrap()
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W1AW")
             .unwrap()
@@ -739,7 +743,11 @@ fn qsl_marks_are_found_by_key_synced_and_a_card_sent_is_never_a_confirmation() {
     assert_eq!(run(&f, &sent).unwrap()["outcome"], "applied");
     {
         let e = f.engine.lock().unwrap();
-        let k1abc = e.log_records().iter().find(|r| r.call == "K1ABC").unwrap();
+        let k1abc = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "K1ABC")
+            .unwrap();
         assert!(k1abc.qsl_sent.sent);
         assert!(!k1abc.confirmed && !k1abc.award_confirmed);
         assert!(!e.tx_enabled());
@@ -752,7 +760,7 @@ fn qsl_marks_are_found_by_key_synced_and_a_card_sent_is_never_a_confirmation() {
         !f.engine
             .lock()
             .unwrap()
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "K1ABC")
             .unwrap()
@@ -798,7 +806,7 @@ fn a_qsl_sent_mark_accepts_only_the_menu_codes() {
         .engine
         .lock()
         .unwrap()
-        .log_records()
+        .stored_log()
         .iter()
         .any(|r| r.qsl_sent.sent));
 }
@@ -832,7 +840,11 @@ fn a_remote_hunt_tags_the_next_logged_contact_and_never_keys_or_tunes() {
     assert_eq!(logged["outcome"], "applied");
     {
         let e = f.engine.lock().unwrap();
-        let contact = e.log_records().iter().find(|r| r.call == "W1AW").unwrap();
+        let contact = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "W1AW")
+            .unwrap();
         assert_eq!(contact.ota.their_ref.as_deref(), Some("US-0002"));
         assert!(e.hunt_target().is_none(), "the pend is consumed by the tag");
         assert!(!e.tx_enabled());
@@ -903,7 +915,11 @@ fn a_remote_activation_stamps_your_reference_on_logged_contacts_and_never_keys_o
     assert_eq!(logged["outcome"], "applied");
     {
         let e = f.engine.lock().unwrap();
-        let contact = e.log_records().iter().find(|r| r.call == "W1AW").unwrap();
+        let contact = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "W1AW")
+            .unwrap();
         assert_eq!(contact.ota.my_ref.as_deref(), Some("US-0001"));
         assert_eq!(contact.ota.my_program.as_deref(), Some("POTA"));
         assert!(!e.tx_enabled());
@@ -1337,12 +1353,12 @@ fn a_station_with_no_cluster_node_says_so_and_queues_nothing() {
         Err("no DX cluster connected — set a cluster host in Settings".into()),
     );
     controlling(&f);
-    let before = f.engine.lock().unwrap().log_records().len();
+    let before = f.engine.lock().unwrap().stored_log().len();
     let result = run(&f, &dx_spot(&f, "JA2DEF")).unwrap();
     assert_eq!(result["outcome"], "rejected");
     assert_eq!(result["reason"], "clusterUnavailable");
     assert!(result.get("spot").is_none(), "no per-target report here");
-    assert_eq!(f.engine.lock().unwrap().log_records().len(), before);
+    assert_eq!(f.engine.lock().unwrap().stored_log().len(), before);
     // The door was reached exactly once and answered; nothing was retried.
     assert_eq!(posted.lock().unwrap().1.len(), 1);
 }
@@ -1508,7 +1524,7 @@ fn the_shacks_row_is_found_after_a_shift(f: &Fixture) {
     let stale_position = 1;
     let held_row = {
         let e = f.engine.lock().unwrap();
-        crate::logged_qso(&e.log_records()[stale_position])
+        crate::logged_qso(&e.stored_log()[stale_position])
     };
     assert_eq!(held_row.call, "K1ABC");
     let held_target = super::super::logging::seen_target(&held_row);
@@ -1523,17 +1539,18 @@ fn the_shacks_row_is_found_after_a_shift(f: &Fixture) {
 
     // The defect, made visible: the position the shack held now names another contact.
     assert_eq!(
-        f.engine.lock().unwrap().log_records()[stale_position].call,
+        f.engine.lock().unwrap().stored_log()[stale_position].call,
         "N2XYZ"
     );
     // The key finds the contact the operator can see, where it is TODAY.
     let found = found_id(f, &held_target).expect("the row the shack holds is still in the log");
     {
         let mut e = f.engine.lock().unwrap();
-        assert_eq!(Some(found), e.log_records()[0].id);
-        assert_eq!(e.log_records()[0].call, "K1ABC");
+        assert_eq!(Some(found), e.stored_log()[0].id);
+        assert_eq!(e.stored_log()[0].call, "K1ABC");
         assert!(e.delete_qso(found));
-        let left: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
+        let log = e.stored_log();
+        let left: Vec<&str> = log.iter().map(|r| r.call.as_str()).collect();
         assert_eq!(left, ["N2XYZ"], "K1ABC went and the bystander survived");
     }
 
@@ -1543,22 +1560,22 @@ fn the_shacks_row_is_found_after_a_shift(f: &Fixture) {
     let key_now = || -> super::super::logging::Target {
         let e = f.engine.lock().unwrap();
         serde_json::from_value(
-            json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
-            "key":super::super::logging::row_key(&e.log_records()[0])}),
+            json!({"call":"N2XYZ","whenUnix":e.stored_log()[0].when_unix,
+            "key":super::super::logging::row_key(&e.stored_log()[0])}),
         )
         .unwrap()
     };
     let survivor_key = key_now();
     {
         let mut e = f.engine.lock().unwrap();
-        let mut changed = e.log_records()[0].as_ref().clone();
+        let mut changed = e.stored_log()[0].as_ref().clone();
         changed.comment = Some("changed at the browser".into());
         assert!(e.update_qso(changed.id.unwrap(), changed));
     }
     assert_eq!(found_id(f, &survivor_key), None);
     // Positive control: the key of the row as it is now is found.
     let fresh = key_now();
-    let survivor = f.engine.lock().unwrap().log_records()[0].id;
+    let survivor = f.engine.lock().unwrap().stored_log()[0].id;
     assert_eq!(found_id(f, &fresh), survivor);
 }
 
@@ -1576,7 +1593,11 @@ fn a_remote_edit_keeps_a_wwff_park_as_wwff() {
     acquire(&f);
     let stored = |f: &Fixture| {
         let e = f.engine.lock().unwrap();
-        let r = e.log_records().iter().find(|r| r.call == "DL1ABC").unwrap();
+        let r = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "DL1ABC")
+            .unwrap();
         (
             r.ota.their_program.clone(),
             r.ota.their_ref.clone(),
@@ -1645,7 +1666,7 @@ fn each_of_a_pair_finds_its_own_row(f: &Fixture) {
     );
     let (first, second, on_20, on_40) = {
         let e = f.engine.lock().unwrap();
-        let records = e.log_records();
+        let records = e.stored_log();
         assert_eq!(records.len(), 2, "the pair is two contacts, not one dupe");
         assert_eq!(
             (&records[0].call, records[0].when_unix),
@@ -1676,8 +1697,8 @@ fn each_of_a_pair_finds_its_own_row(f: &Fixture) {
     {
         let mut e = f.engine.lock().unwrap();
         assert!(e.delete_qso(id));
-        assert_eq!(e.log_records().len(), 1);
-        assert_eq!(e.log_records()[0].band, "20m");
+        assert_eq!(e.stored_log().len(), 1);
+        assert_eq!(e.stored_log()[0].band, "20m");
     }
     assert_eq!(found_id(f, &first), on_20);
     assert_eq!(found_id(f, &second), None);
@@ -1784,14 +1805,14 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
     seed(&f);
     let seen = |call: &str| {
         let e = f.engine.lock().unwrap();
-        let row = e.log_records().iter().find(|r| r.call == call).cloned();
+        let row = e.stored_log().into_iter().find(|r| r.call == call);
         crate::logged_qso(&row.unwrap())
     };
     let card = |id| vec![tempo_core::logbook::LogOp::MarkQslCard { id, received: true }];
     let comment = |text: &str| {
         let mut e = f.engine.lock().unwrap();
         let mut r = e
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "K1ABC")
             .unwrap()
@@ -1860,12 +1881,12 @@ fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
     // takes the lock again.
     let handed_out: Vec<(tempo_core::logbook::QsoRecord, tempo_app::dto::LoggedQso)> = {
         let e = f.engine.lock().unwrap();
-        assert_eq!(e.log_records().len(), 3);
+        assert_eq!(e.stored_log().len(), 3);
         (0..3)
             .map(|index| {
                 (
-                    e.log_records()[index].as_ref().clone(),
-                    crate::logged_qso(&e.log_records()[index]),
+                    e.stored_log()[index].as_ref().clone(),
+                    crate::logged_qso(&e.stored_log()[index]),
                 )
             })
             .collect()
@@ -1918,7 +1939,7 @@ fn station_1_14_on(store: bool) -> Fixture {
             .expect("the store opens");
             e.attach_log_store(opened);
             assert_eq!(
-                e.log_records().len(),
+                e.stored_log().len(),
                 3,
                 "premise: the store holds the file's rows"
             );
@@ -1946,15 +1967,15 @@ fn written(f: &Fixture) -> Vec<u8> {
 /// Each contact as the station holds it now.
 fn records(f: &Fixture) -> Vec<tempo_core::logbook::QsoRecord> {
     let e = f.engine.lock().unwrap();
-    e.log_records().iter().map(|r| r.as_ref().clone()).collect()
+    e.stored_log().iter().map(|r| r.as_ref().clone()).collect()
 }
 
 /// The `{id, editKey}` a page reading the log by id sends for the contact `call`, as it is now.
 fn id_target(f: &Fixture, call: &str) -> Value {
     let e = f.engine.lock().unwrap();
-    let r = e.log_records().iter().find(|r| r.call == call).unwrap();
+    let r = e.stored_log().into_iter().find(|r| r.call == call).unwrap();
     json!({"id": r.id.unwrap().to_string(),
-        "editKey": tempo_core::logbook::QsoEdit::project(r).key()})
+        "editKey": tempo_core::logbook::QsoEdit::project(&r).key()})
 }
 
 /// ⛔ A 1.14 PAGE'S ROW CHANGES STILL APPLY. This station serves the fixture's rows as the page
@@ -2103,7 +2124,7 @@ fn a_stale_id_target_is_refused_on(store: bool) {
     {
         let mut e = f.engine.lock().unwrap();
         let mut local = e
-            .log_records()
+            .stored_log()
             .iter()
             .find(|r| r.call == "W1AW")
             .unwrap()

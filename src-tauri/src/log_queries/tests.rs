@@ -5,6 +5,7 @@
 //! store and the UI fold differently.
 
 use super::*;
+use crate::remote_service::stored_log_tests::StoredLog;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -857,11 +858,8 @@ fn calls_the_folds_disagree_on_are_answered_as_the_ui_answers() {
         } else {
             on_log_file(&d, &log)
         };
-        let held: Vec<QsoRecord> = engine_lock(&engine)
-            .log_records()
-            .iter()
-            .map(|r| QsoRecord::clone(r))
-            .collect();
+        // The reference's log: the store's rows, as `log_of` reads them.
+        let held = engine.lock().unwrap().stored_records();
         let queries = LogQueries::default();
         let worked = ask(
             &queries,
@@ -969,15 +967,12 @@ fn random_record(g: &mut Gen, n: u64) -> QsoRecord {
     r
 }
 
-/// The log the UI's answers were computed from: the copy in memory, in log order — what
-/// every window was handed before C17. The engine answers from the store when the store owns the log,
-/// so the parity holds the store's rows to the copy as well as the answers to the UI's.
+/// The log the reference answers are computed from: the store's rows, in log order
+/// ([`StoredLog`]), in place of the copy in memory every window was handed before C17. These tests
+/// hold the reference's answers against the engine's over the same rows; whether the store holds
+/// what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
 fn log_of(engine: &SharedEngine) -> Vec<QsoRecord> {
-    engine_lock(engine)
-        .log_records()
-        .iter()
-        .map(|r| QsoRecord::clone(r))
-        .collect()
+    engine.lock().unwrap().stored_records()
 }
 
 /// Every question this part answers, asked of the engine and of the reference over the log the
