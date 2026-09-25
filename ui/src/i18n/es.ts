@@ -1925,6 +1925,9 @@ export const ES: PartialCatalog = {
   "logbook.delete.gone": "{{call}} ya se había eliminado en otra ventana.",
   "logbook.change.changed": "{{call}} cambió en otra ventana o por una sincronización, así que esto no se guardó. Aquí está como está ahora: revísalo e inténtalo de nuevo.",
   "logbook.change.gone": "{{call}} se eliminó en otra ventana, así que esto no se guardó.",
+  // The logbook was too busy (LogBusy): MACHINE TRANSLATION, for a native speaker to check.
+  "logbook.change.busy": "El log estaba ocupado, así que este cambio en {{call}} no se guardó. Inténtalo de nuevo.",
+  "logbook.delete.busy": "El log estaba ocupado, así que {{call}} no se eliminó. Inténtalo de nuevo.",
   "logbook.delete.heading": "¿Eliminar el QSO con {{call}} en {{band}}?",
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",
@@ -6104,6 +6107,8 @@ export const ES: PartialCatalog = {
   "watchlist.item.remove.title": "Quitar de la lista de vigilancia",
   "watchlist.tile.label": "VIGIL.",
   "watchlist.tile.title": "En tu lista de vigilancia: {{what}}",
+  // The retired wanted list, folded in: MACHINE TRANSLATION, for a native speaker to check.
+  "watchlist.folded": { "one": "Se añadió {{entries}} a tu lista de vigilancia desde el antiguo ajuste «Wanted watch list», que ya no se usa. Puedes cambiarla cuando quieras en Ajustes ▸ Spots y alertas.", "other": "Se añadieron {{count}} entradas a tu lista de vigilancia desde el antiguo ajuste «Wanted watch list», que ya no se usa: {{entries}}. Puedes cambiarlas cuando quieras en Ajustes ▸ Spots y alertas." },
   "waterfall.canvas.title": "El clic fija la RX (WSJT-X) · Shift+clic fija la TX · {{mod}}+clic fija las dos",
   "waterfall.dss.off.title": "Cambiar a la vista 3D de espectro apilado (una perspectiva rodante de las últimas ~96 filas)",
   "waterfall.dss.on.title": "Cambiar a la cascada plana en 2D",

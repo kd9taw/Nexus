@@ -29,7 +29,7 @@ use tempo_app::engine::{
 use tempo_app::logstore::LogRows;
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
 use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
-use tempo_core::logbook::{adif_record_own_log, QslVia, QsoEdit, QsoRecord, RecordId};
+use tempo_core::logbook::{adif_record_own_log, LogOp, QslVia, QsoEdit, QsoRecord, RecordId};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -528,9 +528,9 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
 
 /// The identity of a row the SHACK's log view showed: the row itself, exactly as the view was
 /// handed it. The station keys it the way a browser keys its page row — the same canonical
-/// bytes, the same SHA-256 — and [`find`] then finds the record whose OWN key matches
-/// ([`locate`] checks it under the lock), so the row is a claim to be matched, never an address
-/// to trust. The view computes no hash (the desktop webview has no proven `crypto.subtle`), and
+/// bytes, the same SHA-256 — and [`find`] then finds the record whose OWN key matches (the
+/// change checks it is still that version where it is made), so the row is a claim to be matched,
+/// never an address to trust. The view computes no hash (the desktop webview has no proven `crypto.subtle`), and
 /// the view is handed no such keys: keying a whole log on every reload would cost a serialise and a
 /// digest per record under the engine lock, where keying one row on one click costs nothing anyone
 /// can notice.
@@ -563,7 +563,8 @@ const CANDIDATES: Narrow = Narrow {
 /// the time and the key are tested here, on whole records from that same picture.
 ///
 /// ⚠️ A key target reads the store: never under the Engine lock (a debug build panics). Take
-/// `rows` (`Engine::log_rows`) under it; [`locate`] then checks what was found, under it again.
+/// `rows` (`Engine::log_rows`) under it; the change checks what was found where it is made
+/// ([`change_found`]).
 pub(crate) fn find(rows: &LogRows, target: &Target) -> Result<Option<RowRef>, &'static str> {
     let t = match target {
         Target::Key(t) => t,
@@ -588,12 +589,13 @@ pub(crate) fn find(rows: &LogRows, target: &Target) -> Result<Option<RowRef>, &'
     })
 }
 
-/// The id of the contact `row` names, if it is still the version whose edit key it holds —
-/// checked under the Engine lock, against the log as it is: another instance's changes are
-/// folded in first. For a key target `row` is what [`find`] found with the lock released, so a
-/// change landing since is refused here exactly as for an id target.
-pub(crate) fn locate(engine: &mut Engine, row: &RowRef) -> Option<RecordId> {
-    engine.sync_shared_log_if_changed();
+/// The check a change makes where it is made ([`change_found`]: the version found is still the
+/// contact's), asked of the store alone — for a test that holds what [`find`] found. The id, or
+/// `None` when the contact is gone or another version.
+///
+/// ⚠️ It reads the store: a test holding the Engine lock holds it raw.
+#[cfg(test)]
+pub(crate) fn locate(engine: &Engine, row: &RowRef) -> Option<RecordId> {
     let id = row.id.parse().ok()?;
     engine.fresh_log_row(id, &row.edit_key).ok().map(|_| id)
 }
@@ -614,6 +616,9 @@ pub(super) enum ChangeWork {
         count: usize,
         durable: Option<tempo_app::logstore::Durability>,
     },
+    /// A change to a contact, as found — the version the writer saw — made once every lock is
+    /// released ([`change_found`]), which turns it into a [`Self::Rewrite`].
+    Row(RowRef),
     /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
     State,
     /// A self-spot read from the station under the Engine lock, posted only after it is released.
@@ -637,9 +642,12 @@ pub(super) enum ChangeWork {
     ProgramUnconfirmed,
 }
 
-/// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
-/// (confirmations, uploads, park refs, the split leg) is carried from the stored record, and the
-/// engine's own edit policy still applies on top (a callsign fix clears upload stamps).
+/// Apply under the Engine lock what changes the station itself (a hunt, an activation, a spot,
+/// a setting) — and for a change to a contact, name it ([`ChangeWork::Row`]): [`change_found`]
+/// changes it once every lock is released. Only the fields a remote edit carries change;
+/// everything else (confirmations, uploads, park refs, the split leg) is carried from the stored
+/// record, and the engine's own edit policy still applies on top (a callsign fix clears upload
+/// stamps).
 ///
 /// `found` is a key target's contact as [`find`] found it with the lock released (`None`: no
 /// contact held that row); an id target names its own.
@@ -709,76 +717,101 @@ pub(super) fn prepare_change(
         Target::Id(row) => Some(row),
         Target::Key(_) => found,
     };
-    let id = row
-        .and_then(|row| locate(engine, row))
-        .ok_or(ChangeReason::ContextChanged)?;
-    let store = engine.log_store_open();
-    let (proof, durable) = engine.with_log_tickets(|engine| rewrite(engine, change, id));
-    let (expected, count) = proof?;
-    Ok(ChangeWork::Rewrite {
-        path: engine.log_path().map(Path::to_path_buf),
-        expected,
-        count,
-        durable: store.then_some(durable),
-    })
+    // The change itself is made with every lock released ([`change_found`]): a change to a row the
+    // log holds reads that row, and the store is never read under the Engine lock.
+    Ok(ChangeWork::Row(
+        row.ok_or(ChangeReason::ContextChanged)?.clone(),
+    ))
 }
 
-/// The row change itself, under the Engine lock: what the file must then hold (`expected`,
-/// `count` copies of it) for the 1.13 path's proof.
+/// A log change to the contact `row` names — the version the writer saw — planned with the Engine
+/// lock released and made under it only while the contact is still that version (SPEC-2 v3 C19;
+/// the check C16's `locate` made under the lock, made where the change is): what the file must
+/// then hold (`expected`, `count` copies of it) for the 1.13 path's proof, taken in the hold of the
+/// lock that made it.
 #[allow(deprecated)] // SPEC-2 C19: the 1.13 path's proof counts copies in the whole log
-fn rewrite(
-    engine: &mut Engine,
+pub(super) fn change_found(
+    engine: &crate::SharedEngine,
     change: &Change,
-    id: RecordId,
-) -> Result<(String, usize), ChangeReason> {
-    let stored = engine
-        .logged_row(id)
-        .ok_or(ChangeReason::ContextChanged)?
-        .as_ref()
-        .clone();
-    let copies = |records: &[std::sync::Arc<QsoRecord>], of: &QsoRecord, text: &str| {
-        records
+    row: &RowRef,
+) -> Result<ChangeWork, ChangeReason> {
+    let id: RecordId = row.id.parse().map_err(|_| ChangeReason::ContextChanged)?;
+    let key = row.edit_key.as_str();
+    // What the file must hold now: the contact as the change left it (as it was, for a delete), and
+    // how many copies of it the log holds.
+    let proof = |e: &mut Engine, (before, after): &tempo_app::station::MadeRow| {
+        let of = after.as_deref().unwrap_or(before);
+        let text = adif_record_own_log(of);
+        let count = e
+            .log_records()
             .iter()
             .filter(|r| {
                 r.call == of.call && r.when_unix == of.when_unix && adif_record_own_log(r) == text
             })
-            .count()
+            .count();
+        (
+            text,
+            count,
+            e.log_path().map(Path::to_path_buf),
+            e.log_store_open(),
+        )
     };
-    let (expected, count) = if let Change::Delete { .. } = change {
-        let text = adif_record_own_log(&stored);
-        if !engine.delete_qso(id) {
-            return Err(ChangeReason::ContextChanged);
-        }
-        let count = copies(engine.log_records(), &stored, &text);
-        (text, count)
-    } else {
-        // Prove the record the engine actually wrote under `id`.
-        let applied = match change {
-            Change::Edit { record, .. } => engine.update_qso(id, edited(record, &stored)),
-            // `valid` admitted only B/D/E or null, so a letter always parses here.
-            Change::QslSent { via, .. } => {
-                engine.mark_qsl_sent(id, via.as_deref().and_then(QslVia::from_code))
-            }
-            Change::QslCard { received, .. } => engine.mark_qsl_card(id, *received),
-            Change::Delete { .. }
-            | Change::Hunt { .. }
-            | Change::ClearHunt {}
-            | Change::Activation { .. }
-            | Change::ClearActivation {}
-            | Change::SelfSpot { .. }
-            | Change::Spot { .. }
-            | Change::Settings { .. }
-            | Change::ProgramEdit { .. } => false,
-        };
-        if !applied {
-            return Err(ChangeReason::ContextChanged);
-        }
-        let written = engine.logged_row(id).ok_or(ChangeReason::ContextChanged)?;
-        let text = adif_record_own_log(&written);
-        let count = copies(engine.log_records(), &written, &text);
-        (text, count)
+    let ops = |ops: Vec<LogOp>, context: &str| {
+        tempo_app::logwrite::change_row(
+            engine,
+            id,
+            context,
+            |_, stored| {
+                tempo_app::station::StationCore::fresh_row(stored, key)?;
+                Ok(tempo_app::station::ops_on(stored, &ops))
+            },
+            |e, made| proof(e, &made),
+        )
     };
-    Ok((expected, count))
+    let (made, durable) = match change {
+        Change::Edit { record, .. } => tempo_app::logwrite::update_row(
+            engine,
+            id,
+            key,
+            |stored| edited(record, stored),
+            &proof,
+        ),
+        // `valid` admitted only B/D/E or null, so a letter always parses here.
+        Change::QslSent { via, .. } => {
+            let via = via.as_deref().and_then(QslVia::from_code);
+            ops(
+                vec![tempo_app::logwrite::qsl_sent(id, via)],
+                "mark_qsl_sent",
+            )
+        }
+        Change::QslCard { received, .. } => ops(
+            vec![LogOp::MarkQslCard {
+                id,
+                received: *received,
+            }],
+            "mark_qsl_card",
+        ),
+        Change::Delete { .. } => ops(vec![LogOp::Delete(id)], "delete_qso"),
+        Change::Hunt { .. }
+        | Change::ClearHunt {}
+        | Change::Activation { .. }
+        | Change::ClearActivation {}
+        | Change::SelfSpot { .. }
+        | Change::Spot { .. }
+        | Change::Settings { .. }
+        | Change::ProgramEdit { .. } => return Err(ChangeReason::ContextChanged),
+    };
+    // Refused — the contact changed, went, or kept changing (LogBusy) — or the log could not be
+    // read: nothing was changed, and the browser reads the log again.
+    let Ok(Ok(Some((expected, count, path, store)))) = made else {
+        return Err(ChangeReason::ContextChanged);
+    };
+    Ok(ChangeWork::Rewrite {
+        path,
+        expected,
+        count,
+        durable: store.then_some(durable),
+    })
 }
 
 fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
@@ -841,6 +874,14 @@ impl ChangeWork {
             Self::State => {
                 return ChangeOutcome::Applied {
                     evidence: ChangeEvidence::StationState,
+                    spot: None,
+                }
+            }
+            // A change to a contact is made before it is finished ([`change_found`]): one handed
+            // here unmade changed nothing.
+            Self::Row(_) => {
+                return ChangeOutcome::Rejected {
+                    reason: ChangeReason::ContextChanged,
                     spot: None,
                 }
             }

@@ -179,6 +179,15 @@ impl Records {
         self.mark(class);
         &mut self.values
     }
+    /// Mutable access to the records for a change another owner already classified and
+    /// marked: the log in memory FOLLOWING a change the station made (SPEC-2 v3 C19), which
+    /// adopts the station's watermarks as its own instead of taking a revision of its own — so
+    /// the two keep one revision, and a cache keyed on either answers for both.
+    pub(super) fn write_following(&mut self, marks: Watermarks) -> &mut Vec<Arc<QsoRecord>> {
+        self.obsolete_read_token();
+        self.marks = marks;
+        &mut self.values
+    }
     /// Take the next revision and move the watermarks this class moves (see [`OpClass`]).
     /// Every write in this module ends here, so a watermark can only move with one.
     fn mark(&mut self, class: OpClass) -> u64 {

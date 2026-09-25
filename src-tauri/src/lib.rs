@@ -345,9 +345,12 @@ mod whole_log_reader_tests {
             "one fold for every reader"
         );
 
-        engine_lock(&engine).import_adif(
+        tempo_app::logwrite::import_adif(
+            &engine,
             "<CALL:5>ZL1AB<BAND:3>15m<MODE:2>CW<QSO_DATE:8>20260109<TIME_ON:6>080000<EOR>\n",
-        );
+        )
+        .0
+        .expect("the import is made");
         let (after, _) = needs_kept(&engine, &tallies).expect("the log reads");
         assert_eq!(
             observed(&after),
@@ -2650,11 +2653,26 @@ mod durable_command_tests {
             .expect("every row the log holds carries an id")
     }
 
+    /// `op` on the contact `id`, made the way a command makes it: planned with the Engine lock
+    /// released and made under it (SPEC-2 v3 C19). Whether it was made, and its durability.
+    pub(super) fn by_command(
+        engine: &SharedEngine,
+        id: tempo_core::logbook::RecordId,
+        op: tempo_core::logbook::LogOp,
+    ) -> (bool, tempo_app::logstore::Durability) {
+        let (made, durability) = tempo_app::logwrite::change_ops(engine, id, None, &[op], "test");
+        (matches!(made, Ok(Ok(_))), durability)
+    }
+
     /// Mark a paper card on the contact at `at` — a change for a test to hold on a stalled disk.
     pub(super) fn card_at(engine: &SharedEngine, at: usize) -> bool {
-        let mut e = engine_lock(engine);
-        let id = id_at(&e, at);
-        e.mark_qsl_card(id, true)
+        let id = id_at(&engine_lock(engine), at);
+        by_command(
+            engine,
+            id,
+            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+        )
+        .0
     }
 
     /// The naive shape this replaces: the change and its wait run INSIDE the async task, so the
@@ -2688,10 +2706,13 @@ mod durable_command_tests {
         for i in 0..WAITS {
             let engine = std::sync::Arc::clone(&engine);
             let body = move || {
-                let mut eng = engine_lock(&engine);
-                eng.with_log_tickets(|eng| {
-                    Ok::<bool, String>(eng.mark_qsl_card(id_at(eng, i), true))
-                })
+                let id = id_at(&engine_lock(&engine), i);
+                let (made, durability) = by_command(
+                    &engine,
+                    id,
+                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                );
+                (Ok::<bool, String>(made), durability)
             };
             waits.push(if naive {
                 rt.spawn(async move { waits_on_the_worker(body).await })
@@ -2759,8 +2780,13 @@ mod durable_command_tests {
         let eng = std::sync::Arc::clone(&engine);
         let marked = rt
             .block_on(durable_command(move || {
-                let mut e = engine_lock(&eng);
-                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(id_at(e, 4), true)))
+                let id = id_at(&engine_lock(&eng), 4);
+                let (made, durability) = by_command(
+                    &eng,
+                    id,
+                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                );
+                (Ok::<bool, String>(made), durability)
             }))
             .expect("durable");
         assert!(marked);
@@ -2862,7 +2888,12 @@ mod lotw_batch_tests {
                 "premise: TQSL is handed the batch"
             );
             assert!(
-                engine_lock(engine).delete_qso(ids[0]),
+                super::durable_command_tests::by_command(
+                    engine,
+                    ids[0],
+                    tempo_core::logbook::LogOp::Delete(ids[0])
+                )
+                .0,
                 "deleted while TQSL runs"
             );
             Ok((0, String::new()))
@@ -2894,10 +2925,16 @@ mod lotw_batch_tests {
     fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
         let (dir, engine, ids) = station("lotw-edit", 4);
         let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
-            let mut eng = engine_lock(&engine);
-            let mut fixed = QsoRecord::clone(&eng.log_records()[1]);
+            let mut fixed = QsoRecord::clone(&engine_lock(&engine).log_records()[1]);
             fixed.call = "K1DUX".into();
-            assert!(eng.update_qso(ids[1], fixed), "corrected while TQSL runs");
+            let edit = tempo_core::logbook::LogOp::Edit {
+                id: ids[1],
+                rec: Box::new(fixed),
+            };
+            assert!(
+                super::durable_command_tests::by_command(&engine, ids[1], edit).0,
+                "corrected while TQSL runs"
+            );
             Ok((0, String::new()))
         })
         .expect("the upload ran");
@@ -2919,8 +2956,9 @@ mod lotw_batch_tests {
                 "{what}: every contact but the corrected one is marked"
             );
         }
+        let rows = engine_lock(&engine).log_rows();
         assert!(
-            engine_lock(&engine).lotw_unsent_ids() == vec![ids[1]],
+            tempo_app::station::lotw_unsent_ids(&rows).expect("the store reads") == vec![ids[1]],
             "the corrected contact is offered again"
         );
         assert!(
@@ -2960,8 +2998,12 @@ mod lotw_batch_tests {
     #[test]
     fn a_contact_with_no_known_time_is_never_signed() {
         let (dir, engine, ids) = station("lotw-timeless", 3);
-        let _ = engine_lock(&engine)
-            .import_adif("<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n");
+        tempo_app::logwrite::import_adif(
+            &engine,
+            "<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n",
+        )
+        .0
+        .expect("the import is made");
         let (at, timeless) = {
             let eng = engine_lock(&engine);
             let at = eng
@@ -2994,7 +3036,9 @@ mod lotw_batch_tests {
             !tempo_app::station::lotw_owed(&rows).expect("the store reads"),
             "only the timeless contact is unsent, and it is owed nothing"
         );
-        assert!(engine_lock(&engine).lotw_unsent_ids().is_empty());
+        assert!(tempo_app::station::lotw_unsent_ids(&rows)
+            .expect("the store reads")
+            .is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -3233,8 +3277,14 @@ mod logbook_startup_tests {
                 .is_some_and(|r| r.qsl_rcvd.card)
         };
         let hold = WriteHold::take(&db).expect("stall the store");
+        let id = id.expect("an id");
         assert!(
-            engine_lock(&engine).mark_qsl_card(id.unwrap(), true),
+            super::durable_command_tests::by_command(
+                &engine,
+                id,
+                tempo_core::logbook::LogOp::MarkQslCard { id, received: true }
+            )
+            .0,
             "not waited for"
         );
 
@@ -16504,6 +16554,41 @@ fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// Empty the RETIRED wanted list — its ONE writer (operator 2026-09-24, "One list"). The desktop
+/// calls this once the list's entries are on the watch list and that is on disk
+/// (`ui/src/features/watchlistFold.ts`); `Engine::apply_settings` keeps the live value against
+/// every form payload, so a surface holding a settings snapshot from before the fold cannot write
+/// the old entries back for the next launch to fold again.
+///
+/// A failed save is an error, not a log line: the caller then leaves the old list to the next
+/// launch, which folds nothing twice.
+#[tauri::command(async)]
+fn retire_wanted_calls(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let mut eng = engine_lock(&state);
+    eng.retire_wanted_calls()
+        .save(&settings_path())
+        .map_err(|e| format!("could not save the settings: {e}"))
+}
+
+/// The desktop's watch list, for the Needed board (operator 2026-09-24: "watched counts as
+/// needed"; `tempo_app::watchlist`). The main window sends the whole list on launch and after
+/// every edit (`ui/src/App.tsx`), then reads the board again. Only the main window: a torn-off
+/// panel holds no editor, and a Remote browser's own list is its own — the rows it is served
+/// follow the station's. `false` when refused. Held by the engine, which the native board and
+/// every Remote one read, so they cannot be served two different lists.
+#[tauri::command(async)]
+fn set_watch_list(
+    window: tauri::WebviewWindow,
+    state: State<'_, SharedEngine>,
+    entries: Vec<tempo_app::watchlist::WatchEntry>,
+) -> bool {
+    if window.label() != "main" {
+        return false;
+    }
+    engine_lock(&state).set_watch_list(entries);
+    true
+}
+
 /// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
 /// write path for it. A NARROW write, and here the narrowness is the point rather than the
 /// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
@@ -17105,8 +17190,8 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// or refuses when no row holds that content any more.
 ///
 /// The row is found in the store with the engine lock RELEASED — a read of the log never runs
-/// under it — and what was found is checked under the lock by [`locate_seen`], so a change
-/// landing between the two is refused like any other.
+/// under it — and the change is made only while it is still the version found
+/// ([`change_found`]), so a change landing between the two is refused like any other.
 fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRef, String> {
     use remote_service::operations::logging::{find, seen_target};
     let rows = engine_lock(engine).log_rows();
@@ -17117,12 +17202,46 @@ fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRe
     }
 }
 
-/// The contact [`find_seen`] found, if it is still the version found, under the engine lock.
-fn locate_seen(
-    eng: &mut Engine,
+/// `ops` made on the contact [`find_seen`] found, planned with the Engine lock released and made
+/// under it only while the contact is still the version found (SPEC-2 v3 C19). That check is the
+/// one C16's `locate` made under the lock, made where the change is. The contact as the change
+/// left it (`None`: it went), or the refusal the log commands give.
+fn change_found(
+    engine: &SharedEngine,
     found: &log_by_id::RowRef,
-) -> Result<tempo_core::logbook::RecordId, String> {
-    remote_service::operations::logging::locate(eng, found).ok_or_else(|| LOG_ROW_GONE.into())
+    context: &str,
+    ops: impl FnOnce(tempo_core::logbook::RecordId) -> Vec<tempo_core::logbook::LogOp>,
+) -> (
+    Result<Option<Arc<tempo_core::logbook::QsoRecord>>, String>,
+    tempo_app::logstore::Durability,
+) {
+    let Ok(id) = found.id.parse() else {
+        return (Err(LOG_ROW_GONE.into()), Default::default());
+    };
+    let ops = ops(id);
+    let (made, durability) = tempo_app::logwrite::change_row(
+        engine,
+        id,
+        context,
+        |_, row| {
+            tempo_app::station::StationCore::fresh_row(row, &found.edit_key)?;
+            Ok(tempo_app::station::ops_on(row, &ops))
+        },
+        |_, (_, after)| after,
+    );
+    (seen_outcome(made), durability)
+}
+
+/// What a log command answers for a change it made, or tried to make, to a contact it found:
+/// what the change answered, or why not, in the log commands' own words. A change that found
+/// nothing to change (a blank satellite name) is answered as the contact gone, as it always was.
+fn seen_outcome<T>(made: tempo_app::logwrite::RowOutcome<T>) -> Result<T, String> {
+    match made {
+        Ok(Ok(Some(out))) => Ok(out),
+        Ok(Err(tempo_app::station::RowRefusal::Busy)) => Err(tempo_app::station::LOG_BUSY.into()),
+        Ok(Ok(None)) | Ok(Err(_)) => Err(LOG_ROW_GONE.into()),
+        Err(_) => Err(LOG_UNREAD.into()),
+    }
 }
 
 /// The refusal a log command gives when the log could not be read to find its row: the store
@@ -17169,16 +17288,24 @@ fn durability_failed(why: String) -> String {
     format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
 }
 
-/// The contact `id` as a page of the log shows it — what a log command hands back so a
-/// follow-up (a QSL mark from the same edit form) can key the row it just changed.
-fn log_row(eng: &Engine, id: tempo_core::logbook::RecordId) -> Result<LoggedQso, String> {
-    let r = eng
-        .logged_row(id)
-        .map(|r| r.as_ref().clone())
-        .ok_or(LOG_ROW_GONE)?;
-    let mut q = LoggedQso::from(r);
+/// The contact `r` as a page of the log shows it — what a log command hands back, as its change
+/// left it, so a follow-up (a QSL mark from the same edit form) can key the row it just changed.
+fn logged_qso(r: &tempo_core::logbook::QsoRecord) -> LoggedQso {
+    let mut q = LoggedQso::from(r.clone());
     q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-    Ok(q)
+    q
+}
+
+/// A log command's answer for a change that leaves the contact in the log: the contact as the
+/// change left it ([`logged_qso`]).
+fn changed_row(
+    after: Result<Option<Arc<tempo_core::logbook::QsoRecord>>, String>,
+) -> Result<LoggedQso, String> {
+    after.and_then(|after| {
+        after
+            .map(|r| logged_qso(&r))
+            .ok_or_else(|| LOG_ROW_GONE.into())
+    })
 }
 
 /// Edit the logged contact `target` — a correction. Confirmation/credit/upload state is
@@ -17192,15 +17319,24 @@ async fn edit_qso(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let found = find_seen(&engine, &target);
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &found?)?;
-            if !eng.update_qso(id, record.into()) {
-                return Err(LOG_ROW_GONE.into());
-            }
-            log_row(eng, id)
-        })
+        let found = match find_seen(&engine, &target) {
+            Ok(found) => found,
+            Err(e) => return (Err(e), Default::default()),
+        };
+        let Ok(id) = found.id.parse() else {
+            return (Err(LOG_ROW_GONE.into()), Default::default());
+        };
+        // Planned with the Engine lock released, made under it only while the contact is still the
+        // version found (SPEC-2 v3 C19).
+        let record: tempo_core::logbook::QsoRecord = record.into();
+        let (made, durability) = tempo_app::logwrite::update_row(
+            &engine,
+            id,
+            &found.edit_key,
+            |_| record.clone(),
+            |_, (_, after)| after.clone(),
+        );
+        (changed_row(seen_outcome(made)), durability)
     })
     .await
 }
@@ -17257,15 +17393,14 @@ async fn mark_qsl_sent(
     let via = qsl_via_arg(via.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let found = find_seen(&engine, &target);
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &found?)?;
-            if !eng.mark_qsl_sent(id, via) {
-                return Err(LOG_ROW_GONE.into());
-            }
-            log_row(eng, id)
-        })
+        let found = match find_seen(&engine, &target) {
+            Ok(found) => found,
+            Err(e) => return (Err(e), Default::default()),
+        };
+        let (after, durability) = change_found(&engine, &found, "mark_qsl_sent", |id| {
+            vec![tempo_app::logwrite::qsl_sent(id, via)]
+        });
+        (changed_row(after), durability)
     })
     .await
 }
@@ -17285,15 +17420,14 @@ async fn mark_qsl_card(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let found = find_seen(&engine, &target);
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &found?)?;
-            if !eng.mark_qsl_card(id, received) {
-                return Err(LOG_ROW_GONE.into());
-            }
-            log_row(eng, id)
-        })
+        let found = match find_seen(&engine, &target) {
+            Ok(found) => found,
+            Err(e) => return (Err(e), Default::default()),
+        };
+        let (after, durability) = change_found(&engine, &found, "mark_qsl_card", |id| {
+            vec![tempo_core::logbook::LogOp::MarkQslCard { id, received }]
+        });
+        (changed_row(after), durability)
     })
     .await
 }
@@ -17358,15 +17492,17 @@ async fn set_sat_tag(
     let name = sat_name_arg(sat_name.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let found = find_seen(&engine, &target);
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &found?)?;
-            if !eng.set_sat_tag(id, name.as_deref()) {
-                return Err(LOG_ROW_GONE.into());
-            }
-            log_row(eng, id)
-        })
+        let found = match find_seen(&engine, &target) {
+            Ok(found) => found,
+            Err(e) => return (Err(e), Default::default()),
+        };
+        let (after, durability) = change_found(&engine, &found, "set_sat_tag", |id| {
+            vec![tempo_core::logbook::LogOp::SetSatTag {
+                id,
+                sat_name: name.clone(),
+            }]
+        });
+        (changed_row(after), durability)
     })
     .await
 }
@@ -17390,15 +17526,18 @@ async fn delete_qso(
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let found = find_seen(&engine, &target);
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &found?)?;
-            if !eng.delete_qso(id) {
-                return Err(LOG_ROW_GONE.into());
-            }
-            Ok(eng.snapshot())
-        })
+        let found = match find_seen(&engine, &target) {
+            Ok(found) => found,
+            Err(e) => return (Err(e), Default::default()),
+        };
+        let (gone, durability) = change_found(&engine, &found, "delete_qso", |id| {
+            vec![tempo_core::logbook::LogOp::Delete(id)]
+        });
+        let answer = gone.and_then(|after| match after {
+            None => Ok(engine_lock(&engine).snapshot()),
+            Some(_) => Err(LOG_ROW_GONE.into()),
+        });
+        (answer, durability)
     })
     .await
 }
@@ -18129,8 +18268,8 @@ fn read_need_alerts(
     // the same station: they read the same alerts, and those alerts read this.
     let hunted_rows = eng.log_rows();
     let snap = eng.snapshot();
-    // Operator "wanted" watch list (W1.5) — captured before the lock drops.
-    let wanted_calls = eng.settings().wanted_calls.clone();
+    // The watch list the desktop last sent — its stations lead the board (see the end).
+    let watch = eng.watch_list().to_vec();
     let confirm_tier = eng.settings().alert_confirm_tier;
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
@@ -18411,52 +18550,46 @@ fn read_need_alerts(
         // Re-sort: an activation that is ALSO a new one must land among the new ones.
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
-    // Wanted watch list (W1.5): a station on the operator's list must top the
-    // board even if it advances no award. This aggregated needs path carries no
-    // per-spot CQ status or SNR, so the cq_only/min_snr gates can't be honored
-    // here — the operator-facing controls for them are intentionally not shipped
-    // (only wanted_calls). We pass is_cq=true / snr=None so every watch-list hit
-    // surfaces; `wanted_match`/`wanted_alert` treat unknown SNR as passing.
-    if !wanted_calls.is_empty() {
-        let wcfg = propagation::WantedConfig {
-            calls: &wanted_calls,
-            cq_only: false,
-            min_snr: None,
+    // THE WATCH LIST (Settings ▸ Spots & Alerts): a heard station it names tops the board even
+    // when it advances no award — operator 2026-09-24, "watched counts as needed", which is what
+    // the retired wanted list did, fed now by the list the operator edits. Matched as the WATCH
+    // tile matches the roster, the Stations list and Spots (`tempo_app::watchlist::watched`:
+    // call or `*` pattern, entity, grid; identity only, worked or not), last of every pass so the
+    // rows it marks are the board's final rows. The Watch list chip keeps exactly these.
+    if !watch.is_empty() {
+        let names = |call: &str, entity: Option<&str>, grid: Option<&str>| {
+            tempo_app::watchlist::watched(&watch, call, entity, grid).is_some()
         };
-        // (a) Decorate existing rows that are on the watch list — loud, on top.
+        // (a) A row already on the board: marked, and first.
         for a in &mut alerts {
-            if !a.tags.contains(&propagation::NeedTag::Wanted)
-                && propagation::wanted_match(&a.call, true, None, &wcfg)
-            {
-                a.tags.insert(0, propagation::NeedTag::Wanted);
-                a.priority = a.priority.max(120);
-                a.headline = format!("Wanted · {}", a.headline);
+            if names(&a.call, Some(&a.entity), a.grid.as_deref()) {
+                propagation::mark_watched(a);
             }
         }
-        // (b) Surface a loud row for a wanted heard station that produced no
-        //     alert (an already-worked entity you still want to catch).
+        // (b) A heard station no need put there: a row of its own. One per call and band, as
+        //     the board already keeps them.
         for h in &heard {
-            let up = h.call.to_ascii_uppercase();
-            if up == me_up || alerts.iter().any(|a| a.call == up && a.band == h.band) {
+            let call = h.call.to_ascii_uppercase();
+            if call == me_up || alerts.iter().any(|a| a.call == call && a.band == h.band) {
                 continue;
             }
-            if let Some(mut a) = propagation::wanted_alert(
-                &h.call,
+            let entity = propagation::dxcc::resolve(&call).map(|i| i.entity);
+            if !names(&call, entity, h.grid.as_deref()) {
+                continue;
+            }
+            let mut a = propagation::watched_alert(
+                &call,
                 &h.band,
                 &h.mode,
                 h.grid.as_deref(),
-                true,
-                None,
-                &wcfg,
                 &*needs,
                 &needs.slots(),
-            ) {
-                // wanted_alert doesn't know the spot metadata — carry it over.
-                a.freq_mhz = h.freq_mhz;
-                a.admitted_at = h.admitted_at;
-                a.evidence = h.evidence.clone();
-                alerts.push(a);
-            }
+                confirm_tier,
+            );
+            a.freq_mhz = h.freq_mhz;
+            a.admitted_at = h.admitted_at;
+            a.evidence = h.evidence.clone();
+            alerts.push(a);
         }
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
@@ -18468,17 +18601,17 @@ fn read_need_alerts(
 #[tauri::command]
 async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
     let engine = Arc::clone(&state);
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19): the rows of the
+    // file's calls are read off the store, never under the lock.
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let (added, skipped, updated, total) = eng.import_adif(&text);
-            Ok(ImportStats {
-                added,
-                skipped,
-                updated,
-                total,
-            })
-        })
+        let (made, durability) = tempo_app::logwrite::import_adif(&engine, &text);
+        let made = made.map(|(added, skipped, updated, total)| ImportStats {
+            added,
+            skipped,
+            updated,
+            total,
+        });
+        (made, durability)
     })
     .await
 }
@@ -18504,8 +18637,8 @@ async fn sync_lotw_report(
         {
             let engine = Arc::clone(&state);
             durable_command(move || {
-                let mut eng = engine_lock(&engine);
-                eng.with_log_tickets(|eng| Ok(eng.merge_lotw_report(&text).into()))
+                let (summary, durability) = tempo_app::logwrite::merge_lotw_report(&engine, &text);
+                (summary.map(Into::into), durability)
             })
             .await
         },
@@ -20443,38 +20576,40 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // high-water (re-lock: the fetch ran without the engine lock held). Take the log's rows in
     // the same lock, then release: the own-echo lower bound (the oldest in-flight upload) is
     // read from the store once the merge is on disk.
-    let ((mut result, rows), merged): ((LotwSyncResult, tempo_app::logstore::LogRows), _) = {
+    //
+    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
+    // cursor is advanced once it is made.
+    let (summary, merged) = tempo_app::logwrite::merge_lotw_report(state, &body);
+    let mut result: LotwSyncResult = summary?.into();
+    let rows = {
         let mut eng = engine_lock(state);
-        eng.with_log_tickets(|eng| {
-            let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
-            if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-                // Advance the cursor ONLY if (a) the download is structurally complete —
-                // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-                // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-                // advancing would make the next `qso_qslsince` pull skip them forever (the
-                // merge above already ran, so keeping the old cursor just re-fetches the
-                // tail — reconcile is idempotent) — AND (b) the username is still the one
-                // this download used. If `set_settings` changed it during the (lock-free)
-                // fetch, it already reset the cursor to a full pull for the new identity —
-                // this high-water belongs to the old query, so binding it would risk
-                // skipping records on the next incremental pull. Persist via a narrow
-                // setter so the sync never disturbs live operation (no mode reset /
-                // TX-queue clear).
-                if is_complete_lotw_body(&body)
-                    && eng.settings().lotw_username.trim() == used_username.trim()
-                {
-                    let updated = eng.set_lotw_cursor(high_water);
-                    if let Err(e) = updated.save(&settings_path()) {
-                        conn_log(
-                            "LoTW",
-                            "error",
-                            format!("failed to persist the sync cursor: {e}"),
-                        );
-                    }
+        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+            // Advance the cursor ONLY if (a) the download is structurally complete —
+            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+            // advancing would make the next `qso_qslsince` pull skip them forever (the
+            // merge above already ran, so keeping the old cursor just re-fetches the
+            // tail — reconcile is idempotent) — AND (b) the username is still the one
+            // this download used. If `set_settings` changed it during the (lock-free)
+            // fetch, it already reset the cursor to a full pull for the new identity —
+            // this high-water belongs to the old query, so binding it would risk
+            // skipping records on the next incremental pull. Persist via a narrow
+            // setter so the sync never disturbs live operation (no mode reset /
+            // TX-queue clear).
+            if is_complete_lotw_body(&body)
+                && eng.settings().lotw_username.trim() == used_username.trim()
+            {
+                let updated = eng.set_lotw_cursor(high_water);
+                if let Err(e) = updated.save(&settings_path()) {
+                    conn_log(
+                        "LoTW",
+                        "error",
+                        format!("failed to persist the sync cursor: {e}"),
+                    );
                 }
             }
-            (summary, eng.log_rows())
-        })
+        }
+        eng.log_rows()
     }; // engine lock released before the second network fetch
        // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
     merged
@@ -20507,12 +20642,22 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
-                let (promoted, echoed) = engine_lock(state)
-                    .with_log_tickets(|eng| eng.merge_lotw_own_echo(&b, now_unix()));
-                result.promoted = promoted;
-                echoed
-                    .wait(tempo_app::logstore::DURABLE_WAIT)
-                    .map_err(durability_failed)?;
+                // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
+                let (promoted, echoed) =
+                    tempo_app::logwrite::merge_lotw_own_echo(state, &b, now_unix());
+                match promoted {
+                    Ok(promoted) => {
+                        result.promoted = promoted;
+                        echoed
+                            .wait(tempo_app::logstore::DURABLE_WAIT)
+                            .map_err(durability_failed)?;
+                    }
+                    Err(e) => conn_log(
+                        "LoTW",
+                        "error",
+                        format!("the own-QSO report was not merged: {e}"),
+                    ),
+                }
             }
             Ok(_) => conn_log(
                 "LoTW",
@@ -20581,11 +20726,9 @@ fn run_tqsl(tqsl_path: &str, args: &[String]) -> Result<(i32, String), String> {
 #[tauri::command]
 async fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
     let engine = Arc::clone(&state);
-    durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| Ok(eng.mark_lotw_uploaded_all()))
-    })
-    .await
+    // The pick and the stamps are both read off the store with the Engine lock released, and the
+    // stamps made under it (SPEC-2 v3 C19).
+    durable_command(move || tempo_app::logwrite::mark_lotw_uploaded_all(&engine, now_unix())).await
 }
 
 #[tauri::command]
@@ -20781,9 +20924,29 @@ fn lotw_upload_batch_with(
             skipped_deleted: 0,
         }),
         Some(outcome) => {
-            let (done, durable) = engine_lock(state).with_log_tickets(|eng| {
-                eng.stamp_lotw_batch(&signed, outcome, now_unix(), stamped)
-            });
+            // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
+            // the store, and stamped under the lock only while it is still the one TQSL signed.
+            let (done, durable) = tempo_app::logwrite::stamp_lotw_batch(
+                state,
+                &signed,
+                &tempo_core::logbook::UploadStatus {
+                    outcome,
+                    when_unix: now_unix(),
+                    detail: stamped,
+                },
+            );
+            if done.unrecorded > 0 {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!(
+                        "TQSL finished, but its result could not be recorded on the {} contacts \
+                         of this upload. They stay unsent and are offered again with the next \
+                         upload; LoTW ignores a contact it already has.",
+                        done.unrecorded
+                    ),
+                );
+            }
             if done.changed + done.gone > 0 {
                 conn_log(
                     "LoTW",
@@ -20930,12 +21093,13 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // complete — a truncated download must not skip unreceived records — AND (b) the
     // username is unchanged since this sync started (an in-flight change already
     // reset the cursor for the new account).
-    let (summary, merged) = {
+    //
+    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
+    // cursor is advanced once it is made.
+    let (summary, merged) = tempo_app::logwrite::merge_eqsl_report(state, &body);
+    let summary: LotwSyncResult = summary?.into();
+    {
         let mut eng = engine_lock(state);
-        let (summary, merged) = eng.with_log_tickets(|eng| {
-            let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
-            summary
-        });
         if tempo_core::eqsl::is_complete_eqsl_body(&body)
             && eng.settings().eqsl_username.trim() == used_username.trim()
         {
@@ -20944,8 +21108,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
                 eprintln!("tempo: failed to persist eQSL cursor: {e}");
             }
         }
-        (summary, merged)
-    };
+    }
     // On disk before the sync says so — off the lock, on the blocking pool.
     merged
         .wait(tempo_app::logstore::DURABLE_WAIT)
@@ -21046,6 +21209,12 @@ const QRZ_SYNC_UNREACHABLE: ConnDetail = conn_detail!(
     "the sync never reached QRZ — check the network, and whether antivirus or a proxy is \
      inspecting HTTPS traffic. This session's connection log has the exact message."
 );
+/// QRZ's logbook arrived and could not be merged: the log kept changing while the merge was
+/// planned, or could not be read (SPEC-2 v3 C19). Nothing was changed. Nexus's own words.
+const QRZ_SYNC_NOT_MERGED: ConnDetail = conn_detail!(
+    "QRZ's logbook arrived, but Nexus could not merge it into yours — the logbook kept changing \
+     while the merge was prepared, or could not be read. Nothing was changed; sync again to retry."
+);
 /// The sync merged, and the merge could not be shown to be on disk. Nexus's own words.
 const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
     "the sync merged QRZ's logbook into yours, but Nexus could not confirm the result was saved \
@@ -21118,8 +21287,12 @@ fn sync_qrz_since(
     if !fetched.ok {
         return Err(qrz_fetch_refused(fetched.reason));
     }
-    let ((added, summary), merged) =
-        engine_lock(engine).with_log_tickets(|eng| eng.merge_qrz_report(&fetched.adif));
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
+    let (made, merged) = tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
+    let (added, summary) = made.map_err(|e| QrzSyncFailure {
+        detail: QRZ_SYNC_NOT_MERGED,
+        message: ScreenReason::new(e),
+    })?;
     // The operator's sync button waits for the merge to reach the disk; the hourly automatic
     // sync does not (its next run would find the same state either way).
     if wait {
@@ -22095,18 +22268,19 @@ fn qrz_push_qso_impl(
     // written into `log.adi`, which TQSL signs and uploads to ARRL. QRZ's own reason goes to
     // the connection log and the operator's toast, and dies with the session. See
     // `tempo_core::logbook::UploadDetail`.
-    let ((), stamped) = {
-        let outcome = push.result.to_upload_outcome();
-        let detail = push.result.to_upload_detail();
-        engine_lock(engine).with_log_tickets(|eng| {
-            eng.stamp_qrz_upload(
-                &stamp_subject(named.as_deref(), &rec),
-                outcome,
-                now_unix(),
-                detail,
-            );
-        })
-    };
+    //
+    // Planned with the Engine lock released (SPEC-2 v3 C19): the row the push names is read off
+    // the store, and stamped under the lock only while it is still that row.
+    let (_, stamped) = tempo_app::logwrite::stamp_push(
+        engine,
+        &stamp_subject(named.as_deref(), &rec),
+        tempo_core::logbook::UploadService::Qrz,
+        tempo_core::logbook::UploadStatus {
+            outcome: push.result.to_upload_outcome(),
+            when_unix: now_unix(),
+            detail: push.result.to_upload_detail(),
+        },
+    );
     // The operator's push button waits for the stamp to reach the disk; the upload worker
     // does not (a stamp it loses is re-derived: a re-push answers Duplicate).
     if wait {
@@ -22718,15 +22892,17 @@ fn clublog_push_qso_impl(
     // ARRL. ClubLog's own body goes to the connection log and the toast. See
     // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
-        let detail = push.result.to_upload_detail();
-        let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
-            eng.stamp_clublog_upload(
-                &stamp_subject(named.as_deref(), &rec),
+        // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
+        let (_, stamped) = tempo_app::logwrite::stamp_push(
+            engine,
+            &stamp_subject(named.as_deref(), &rec),
+            tempo_core::logbook::UploadService::Clublog,
+            tempo_core::logbook::UploadStatus {
                 outcome,
-                now_unix(),
-                detail,
-            );
-        });
+                when_unix: now_unix(),
+                detail: push.result.to_upload_detail(),
+            },
+        );
         // The push button waits for the stamp; the upload worker does not (see QRZ's).
         if wait {
             stamped
@@ -22842,14 +23018,17 @@ fn eqsl_push_qso_impl(
             skipped_deleted: 0,
         }),
         Some(outcome) => {
-            let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
-                eng.stamp_eqsl_upload(
-                    &stamp_subject(named.as_deref(), &rec),
+            // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
+            let (_, stamped) = tempo_app::logwrite::stamp_push(
+                engine,
+                &stamp_subject(named.as_deref(), &rec),
+                tempo_core::logbook::UploadService::Eqsl,
+                tempo_core::logbook::UploadStatus {
                     outcome,
-                    now_unix(),
-                    None,
-                );
-            });
+                    when_unix: now_unix(),
+                    detail: None,
+                },
+            );
             // The push button waits for the stamp; the upload worker does not (see QRZ's).
             if wait {
                 stamped
@@ -24098,19 +24277,20 @@ async fn fd_merge_to_general(
 ) -> Result<(FdMergeReportDto, AppSnapshot), String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let report = eng.fd_merge_to_general()?;
+        // The merge's "already there" is read off the store with the Engine lock released, and
+        // the merge made under it (SPEC-2 v3 C19).
+        let (report, durability) = tempo_app::logwrite::fd_merge_to_general(&engine);
+        let answer = report.map(|report| {
             // ONE snapshot, taken after the merge and read for both answers. Two would be two
             // full logbook sweeps under the engine mutex — the shape that stalled the
             // waterfall — and the policy cannot change across the merge anyway.
-            let snap = eng.snapshot();
+            let snap = engine_lock(&engine).snapshot();
             let queued = snap
                 .field_day
                 .as_ref()
                 .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
                 .unwrap_or(false);
-            Ok((
+            (
                 FdMergeReportDto {
                     added: report.added(),
                     already: report.already,
@@ -24118,8 +24298,9 @@ async fn fd_merge_to_general(
                     queued,
                 },
                 snap,
-            ))
-        })
+            )
+        });
+        (answer, durability)
     })
     .await
 }
@@ -25777,16 +25958,15 @@ async fn import_pota_log(
     text: String,
 ) -> Result<PotaStampResult, String> {
     let engine = Arc::clone(&state);
+    // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
     durable_command(move || {
-        let mut eng = engine_lock(&engine);
-        eng.with_log_tickets(|eng| {
-            let (stamped, already, unmatched) = eng.import_pota_log(&text);
-            Ok(PotaStampResult {
-                stamped,
-                already,
-                unmatched,
-            })
-        })
+        let (made, durability) = tempo_app::logwrite::import_pota_log(&engine, &text);
+        let made = made.map(|(stamped, already, unmatched)| PotaStampResult {
+            stamped,
+            already,
+            unmatched,
+        });
+        (made, durability)
     })
     .await
 }
@@ -28844,6 +29024,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_rtty_macros,
             set_psk_macros,
             set_beta_updates,
+            retire_wanted_calls,
+            set_watch_list,
             set_launch_at_login,
             answer_remote_autostart_offer,
             set_fd_operator,
@@ -30449,7 +30631,7 @@ mod tests {
             .expect("the end of the command")
             .0;
         assert!(
-            body.contains("set_sat_tag(id, name.as_deref())"),
+            body.contains("sat_name: name.clone()"),
             "the command must pass the Option through — None is the removal"
         );
         assert!(
@@ -36735,42 +36917,88 @@ mod tests {
         cluster: &[&str],
         feed: &[(&str, &[propagation::OtaSpot])],
     ) -> Vec<propagation::NeedAlert> {
-        use std::sync::{Arc, Mutex};
-        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
-        let now = crate::now_unix();
-        let mut buf = SpotBuffer::new(100);
-        for call in cluster {
-            buf.push(ClusterSpot {
-                spotter: "W3LPL".into(), // the operator's own continent — the locality gate
-                dx_call: (*call).into(),
-                freq_khz: 14_025.0, // 20 m CW
-                comment: "CW 18 dB".into(),
-                time_utc: None,
-                received_unix: now as u64,
-                corroborators: Vec::new(),
-                rbn: false,
-            });
+        BoardStation::on_the_air(engine, cluster, feed).board()
+    }
+
+    /// A station with these stations on the air, whose Needed board can be read again after the
+    /// desktop sends it something — the engine stays reachable between reads.
+    struct BoardStation {
+        engine: SharedEngine,
+        spots: crate::SharedSpots,
+        ota: crate::SharedOtaSpots,
+        live: crate::SharedLivePaths,
+        region: crate::SharedRegionPaths,
+    }
+
+    impl BoardStation {
+        fn on_the_air(
+            engine: tempo_app::engine::Engine,
+            cluster: &[&str],
+            feed: &[(&str, &[propagation::OtaSpot])],
+        ) -> BoardStation {
+            use std::sync::{Arc, Mutex};
+            use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+            let now = crate::now_unix();
+            let mut buf = SpotBuffer::new(100);
+            for call in cluster {
+                buf.push(ClusterSpot {
+                    spotter: "W3LPL".into(), // the operator's own continent — the locality gate
+                    dx_call: (*call).into(),
+                    freq_khz: 14_025.0, // 20 m CW
+                    comment: "CW 18 dB".into(),
+                    time_utc: None,
+                    received_unix: now as u64,
+                    corroborators: Vec::new(),
+                    rbn: false,
+                });
+            }
+            let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
+            let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+            for (program, rows) in feed {
+                ota.lock()
+                    .unwrap()
+                    .insert((*program).into(), (now, rows.to_vec()));
+            }
+            let live: crate::SharedLivePaths =
+                Arc::new(Mutex::new(propagation::LiveSpots::default()));
+            let region =
+                crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+            let engine: SharedEngine = Arc::new(Mutex::new(engine));
+            BoardStation {
+                engine,
+                spots,
+                ota,
+                live,
+                region,
+            }
         }
-        let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
-        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        for (program, rows) in feed {
-            ota.lock()
-                .unwrap()
-                .insert((*program).into(), (now, rows.to_vec()));
+
+        /// The board, as the native window and every Remote browser read it.
+        fn board(&self) -> Vec<propagation::NeedAlert> {
+            crate::read_need_alerts(
+                engine_lock(&self.engine),
+                &Default::default(),
+                &self.live,
+                &self.region,
+                &self.spots,
+                &self.ota,
+            )
+            .unwrap()
         }
-        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
-        let region =
-            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
-        let engine: SharedEngine = Arc::new(Mutex::new(engine));
-        crate::read_need_alerts(
-            engine_lock(&engine),
-            &Default::default(),
-            &live,
-            &region,
-            &spots,
-            &ota,
-        )
-        .unwrap()
+
+        /// The desktop sends the station its watch list.
+        fn watching(&self, entries: &[(tempo_app::watchlist::WatchKind, &str)]) -> &Self {
+            engine_lock(&self.engine).set_watch_list(
+                entries
+                    .iter()
+                    .map(|(kind, value)| tempo_app::watchlist::WatchEntry {
+                        kind: *kind,
+                        value: (*value).into(),
+                    })
+                    .collect(),
+            );
+            self
+        }
     }
 
     /// Today's 0000Z on the real clock the board reads — a log timestamp that is always "today"
@@ -36883,6 +37111,231 @@ mod tests {
             board_park(&alerts, "K1ABC", "CW"),
             None,
             "…and then it is ambiguous, so the freshness filter is what decided the case above"
+        );
+    }
+
+    /// An engine whose settings carry the RETIRED wanted list — as an old settings.json, or a
+    /// restored backup, still does — so the board can be asked whether it reads it.
+    fn with_old_wanted_list(
+        mut e: tempo_app::engine::Engine,
+        list: &[&str],
+        confirm_tier: bool,
+    ) -> tempo_app::engine::Engine {
+        let mut s = e.settings().clone();
+        s.wanted_calls = list.iter().map(|c| c.to_string()).collect();
+        s.alert_confirm_tier = confirm_tier;
+        e.apply_restored_settings(s);
+        e
+    }
+
+    /// THE BOARD NO LONGER READS THE OLD WANTED LIST (operator 2026-09-24, "One list"). It had no
+    /// editor since the watch list replaced it, and went on tagging `Wanted` from settings.json:
+    /// a list the operator could neither see nor change. Its entries now join the watch list on the
+    /// first launch (the desktop's `features/watchlistFold`), and the board ranks by the watch
+    /// list, the one the operator edits (below).
+    #[test]
+    fn the_needed_board_does_not_tag_from_the_retired_wanted_list() {
+        let engine = with_old_wanted_list(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+            &["VK9*", "W1AW"],
+            true,
+        );
+        let alerts = needed_board_for(engine, &["VK9XX", "W1AW", "K1ABC"], &[]);
+        // Positive control: the board is there, and the listed stations are on it as the needs
+        // they are (an empty log: every station is a new one).
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "no VK9XX row: {alerts:?}"
+        );
+        let wanted: Vec<&str> = alerts
+            .iter()
+            .filter(|a| {
+                a.tags.contains(&propagation::NeedTag::Wanted) || a.headline.starts_with("Wanted")
+            })
+            .map(|a| a.call.as_str())
+            .collect();
+        assert!(
+            wanted.is_empty(),
+            "rows tagged from the retired wanted list: {wanted:?}"
+        );
+    }
+
+    /// …nor ADDS a row for a station on it that is no need at all. The old list surfaced every
+    /// heard station on it, worked or not; the watch list does that now, and only the watch list.
+    #[test]
+    fn the_needed_board_adds_no_row_for_a_worked_station_on_the_retired_list() {
+        let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
+        worked.mode = "CW".into();
+        worked.when_unix = (crate::now_unix() - 3_600) as u64;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(worked);
+        // The confirmation tier off, so a worked, unconfirmed W1AW is no need of any kind.
+        let engine = with_old_wanted_list(e, &["W1AW"], false);
+        let alerts = needed_board_for(engine, &["W1AW", "VK9XX"], &[]);
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "control: the board is there: {alerts:?}"
+        );
+        assert!(
+            !alerts.iter().any(|a| a.call == "W1AW"),
+            "a row for a worked station, from the retired list: {alerts:?}"
+        );
+    }
+
+    /// An operator who worked W1AW on 20 m CW an hour ago, with the confirmation tier off — so
+    /// W1AW, heard again, is no need of any kind.
+    fn w1aw_worked() -> tempo_app::engine::Engine {
+        let mut worked = pass_qso("W1AW", "FN31", "20m", 14.025);
+        worked.mode = "CW".into();
+        worked.when_unix = (crate::now_unix() - 3_600) as u64;
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(worked);
+        let mut s = e.settings().clone();
+        s.alert_confirm_tier = false;
+        e.apply_restored_settings(s);
+        e
+    }
+
+    /// ⭐ A WATCHED STATION THAT IS HEARD IS ON THE BOARD, FIRST — even when nothing else needs it
+    /// (operator 2026-09-24: "Yes, watched counts as needed", offered as "a watched station is on
+    /// the Needed board when heard, and the Watch list chip shows exactly your watched stations").
+    /// It counts as the Call Roster, the Stations list and Spots count it — worked or not — and
+    /// ranks above everything, a new one included, as the retired wanted list's stations did.
+    #[test]
+    fn a_watched_station_heard_is_on_the_board_first_even_when_nothing_else_needs_it() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX"], &[]);
+        station.watching(&[(WatchKind::Call, "W1AW")]);
+        let alerts = station.board();
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.call == "VK9XX" && a.tags.contains(&propagation::NeedTag::NewEntity)),
+            "control: the board is there, a new one on it: {alerts:?}"
+        );
+        let first = &alerts[0];
+        assert_eq!(
+            first.call, "W1AW",
+            "the watched station leads the board, above a new one: {alerts:?}"
+        );
+        assert_eq!(first.tags, vec![propagation::NeedTag::Wanted]);
+        assert_eq!(first.priority, propagation::NeedTag::Wanted.tier());
+        assert_eq!(first.headline, "Watch list — United States");
+        // The row is the spot's, so a click works it where it was heard.
+        assert_eq!((first.mode.as_str(), first.freq_mhz), ("CW", Some(14.025)));
+        assert!(first.evidence.is_some(), "and it says who heard it");
+    }
+
+    /// The control: a station nothing needs, that the watch list does not name, stays off — while
+    /// the list names others, a GRID entry among them that is W1AW's grid in the log: a cluster
+    /// spot carries no grid, and a grid-less station is unknown to a grid entry, never a hit.
+    #[test]
+    fn an_unwatched_station_nothing_needs_stays_off_the_board() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX"], &[]);
+        station.watching(&[
+            (WatchKind::Call, "VP8*"),
+            (WatchKind::Dxcc, "Bouvet"),
+            (WatchKind::Grid, "FN31"),
+        ]);
+        let alerts = station.board();
+        assert!(
+            alerts.iter().any(|a| a.call == "VK9XX"),
+            "control: the board is there: {alerts:?}"
+        );
+        assert!(
+            !alerts.iter().any(|a| a.call == "W1AW"),
+            "a station nothing needs and nothing names: {alerts:?}"
+        );
+        assert!(
+            !alerts
+                .iter()
+                .any(|a| a.tags.contains(&propagation::NeedTag::Wanted)),
+            "nothing on the board is on the list: {alerts:?}"
+        );
+    }
+
+    /// TAKING A STATION OFF THE WATCH LIST TAKES ITS ROW OFF once nothing else needs it — and a
+    /// station that is still needed stays, as its need, no longer first. The desktop sends the
+    /// edited list and reads the board again; this is that second read.
+    #[test]
+    fn taking_a_station_off_the_watch_list_takes_its_row_off_once_it_is_no_longer_needed() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["W1AW", "VK9XX", "3Y0J"], &[]);
+        let row = |alerts: &[propagation::NeedAlert], call: &str| {
+            alerts.iter().find(|a| a.call == call).cloned()
+        };
+        station.watching(&[(WatchKind::Call, "W1AW"), (WatchKind::Call, "VK9*")]);
+        let before = station.board();
+        assert!(row(&before, "W1AW").is_some(), "{before:?}");
+        let vk9 = row(&before, "VK9XX").unwrap();
+        assert_eq!(vk9.tags[0], propagation::NeedTag::Wanted);
+        assert!(vk9.tags.contains(&propagation::NeedTag::NewEntity));
+
+        station.watching(&[]);
+        let after = station.board();
+        assert_eq!(
+            row(&after, "W1AW"),
+            None,
+            "off the list and needed for nothing: off the board"
+        );
+        let vk9 = row(&after, "VK9XX").expect("still a new one");
+        assert!(!vk9.tags.contains(&propagation::NeedTag::Wanted), "{vk9:?}");
+        assert!(
+            vk9.priority < propagation::NeedTag::Wanted.tier(),
+            "{vk9:?}"
+        );
+        // The control: a station the list never named is the same row on both reads.
+        assert_eq!(row(&before, "3Y0J"), row(&after, "3Y0J"));
+        assert!(row(&after, "3Y0J").is_some());
+    }
+
+    /// Never the operator's own call: a pattern broad enough to name it (`KD9*`) must not put the
+    /// operator on their own board when their call reaches the evidence (a spot of their own).
+    #[test]
+    fn the_operators_own_call_is_never_a_watched_row() {
+        use tempo_app::watchlist::WatchKind;
+        let station = BoardStation::on_the_air(w1aw_worked(), &["KD9TAW", "VK9XX"], &[]);
+        station.watching(&[(WatchKind::Call, "KD9*"), (WatchKind::Call, "VK9*")]);
+        let alerts = station.board();
+        assert_eq!(
+            alerts[0].tags[0],
+            propagation::NeedTag::Wanted,
+            "control: the list marks what it names: {alerts:?}"
+        );
+        assert!(!alerts.iter().any(|a| a.call == "KD9TAW"), "{alerts:?}");
+    }
+
+    /// A WATCH ENTRY NAMES A ROW BY ENTITY AND BY GRID, as the WATCH tile does on the roster: a DXCC
+    /// entry by the station's cty.dat entity, a grid entry by the grid its evidence carried (here an
+    /// activator's spot). What neither names is left alone.
+    #[test]
+    fn a_watch_entry_names_a_row_by_entity_and_by_grid() {
+        use tempo_app::watchlist::WatchKind;
+        let mut park = live_spot("POTA", "K1ABC", "US-0001", 60);
+        park.grid = Some("FN31".into());
+        let station = BoardStation::on_the_air(
+            w1aw_worked(),
+            &["VK9XX", "3Y0J"],
+            &[("POTA", std::slice::from_ref(&park))],
+        );
+        station.watching(&[
+            (WatchKind::Dxcc, "Christmas Island"),
+            (WatchKind::Grid, "FN3*"),
+        ]);
+        let alerts = station.board();
+        let tags = |call: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call == call)
+                .map(|a| a.tags.clone())
+                .unwrap_or_else(|| panic!("no {call} row: {alerts:?}"))
+        };
+        assert_eq!(tags("VK9XX")[0], propagation::NeedTag::Wanted, "by entity");
+        assert_eq!(tags("K1ABC")[0], propagation::NeedTag::Wanted, "by grid");
+        assert!(
+            !tags("3Y0J").contains(&propagation::NeedTag::Wanted),
+            "Bouvet is not on the list"
         );
     }
 
@@ -37805,7 +38258,18 @@ mod tests {
         // A rewrite moves them all, as an append does.
         let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.band = "40m".into();
-        assert!(engine_lock(&engine).update_qso(edited.id.unwrap(), edited));
+        let id = edited.id.unwrap();
+        let (made, _) = tempo_app::logwrite::change_ops(
+            &engine,
+            id,
+            None,
+            &[tempo_core::logbook::LogOp::Edit {
+                id,
+                rec: Box::new(edited),
+            }],
+            "test",
+        );
+        assert!(matches!(made, Ok(Ok(_))));
         assert_eq!(folds(), 3, "an edit folds each tally again");
     }
 }

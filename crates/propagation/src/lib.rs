@@ -93,10 +93,10 @@ pub use model::{
     Confidence, ModeClass, PathSpot, PropMode, Region, Side, SpaceWx,
 };
 pub use needalert::{
-    activation_alert, heard_from_freq, heard_near_me, hf_admit_spotters, near_me_radius_km,
-    rank as rank_needs, skimmer_grid, strip_confirm_tier, vhf_max_terrestrial_km, wanted_alert,
-    wanted_match, workable_by_getting_out, Heard, HuntedActivations, NeedAlert, NeedTag, ParkRef,
-    WantedConfig, VHF_MIN_DX_KM,
+    activation_alert, heard_from_freq, heard_near_me, hf_admit_spotters, mark_watched,
+    near_me_radius_km, rank as rank_needs, skimmer_grid, strip_confirm_tier,
+    vhf_max_terrestrial_km, watched_alert, workable_by_getting_out, Heard, HuntedActivations,
+    NeedAlert, NeedTag, ParkRef, VHF_MIN_DX_KM,
 };
 pub use opening::{
     classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,

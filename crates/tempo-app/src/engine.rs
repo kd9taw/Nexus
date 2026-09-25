@@ -2468,6 +2468,10 @@ pub struct Engine {
     /// with no Remote service revokes a counter nobody reads rather than needing an `Option`.
     /// `halt_tx` moves it — see there for why.
     remote_transmit_stand_down: crate::remote_control::Revocation,
+    /// The operator's watch list, as the desktop's main window last sent it — what the Needed
+    /// board puts first ([`crate::watchlist`]). Not a setting: the list is the desktop's, kept in
+    /// its ui-state.json, and sent again on every launch and after every edit. Empty until then.
+    watch_list: Vec<crate::watchlist::WatchEntry>,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     remote_radio_command: Option<remote_radio::Request>,
     remote_radio_selection: Option<remote_selection::Request>,
@@ -4704,6 +4708,7 @@ impl Engine {
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
             remote_transmit_stand_down: Default::default(),
+            watch_list: Vec::new(),
             remote_amp_command: None,
             remote_radio_command: None,
             remote_radio_selection: None,
@@ -5184,6 +5189,12 @@ impl Engine {
         // with what the computer does at the next sign-in.
         let live_launch_at_login = self.settings.launch_at_login;
         let live_remote_autostart_offer_answered = self.settings.remote_autostart_offer_answered;
+        // The RETIRED wanted list (operator 2026-09-24, "One list"): read once by the desktop's
+        // fold into the watch list and then emptied by its one writer, `retire_wanted_calls`. A
+        // form payload is a snapshot that may predate the fold, and writing its copy back would
+        // have the next launch fold the old entries in AGAIN — returning one the operator had
+        // removed from the watch list since. No form owns it; a restore/reset does (below).
+        let live_wanted_calls = std::mem::take(&mut self.settings.wanted_calls);
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -5267,6 +5278,7 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            self.settings.wanted_calls = live_wanted_calls;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
@@ -5626,6 +5638,14 @@ impl Engine {
             .map(|c| c.trim().to_ascii_uppercase())
             .filter(|c| !c.is_empty() && seen.insert(c.clone()))
             .collect();
+    }
+
+    /// Empty the RETIRED wanted list — its one writer. The desktop calls this once the list's
+    /// entries are safely on the watch list (`ui/src/features/watchlistFold.ts`); nothing reads
+    /// the list otherwise, and no form payload can write it (see `apply_settings_inner`).
+    pub fn retire_wanted_calls(&mut self) -> &Settings {
+        self.settings.wanted_calls.clear();
+        &self.settings
     }
 
     /// ⛔ **THE ONE WRITER of the beta-channel opt-in** (Settings ▸ App updates). A NARROW
@@ -10338,25 +10358,55 @@ impl Engine {
     /// default**, on only when the operator turned it on for this session, and only to
     /// the destinations that session names. Queued as `CatchUp`, because a weekend's
     /// contacts arriving at once are history, not news.
-    #[allow(deprecated)] // SPEC-2 C19: the contest merge checks the whole log first
+    ///
+    /// In one breath, for an engine held with no Engine guard (a test's); the command reads the
+    /// log's merge identities with the lock released ([`crate::logwrite::fd_merge_to_general`]).
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
+        for _ in 0..crate::station::PLANS {
+            if !self.in_field_day() {
+                return Err("Field Day mode is not active".into());
+            }
+            let plan = self.station.log_plan();
+            let seen = plan.merge_identities()?;
+            if let Some(report) = self.fd_merge_planned(&plan, seen)? {
+                return Ok(report);
+            }
+        }
+        Err(crate::station::LOG_BUSY.into())
+    }
+
+    /// Whether a Field Day session is running.
+    pub(crate) fn in_field_day(&self) -> bool {
+        matches!(self.mode, Mode::FieldDay { .. })
+    }
+
+    /// [`Self::fd_merge_to_general`], planned: `seen` is every merge identity the general log held
+    /// when `plan` was taken ([`crate::station::LogPlan::merge_identities`], read with the lock
+    /// released). Made under the lock only if the log has not changed since — a row it did not
+    /// read could carry an identity it would merge again — and `Ok(None)` otherwise, changing
+    /// nothing: the caller plans again.
+    pub(crate) fn fd_merge_planned(
+        &mut self,
+        plan: &crate::station::LogPlan,
+        seen: std::collections::HashSet<String>,
+    ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Field Day mode is not active".into());
         };
+        if !self.station.unchanged_at_all_since(plan) {
+            return Ok(None);
+        }
         // Read the destinations through the session's own accessor, which answers
         // EMPTY whenever the switch is off — so "default OFF" is one function's
         // property and not a flag every caller has to remember to check.
         let legs = upload_legs::mask_for(station.log.session.upload_destinations());
-        let mut report = tempo_core::contest::merge_into_general(
-            &station.log,
-            &self.settings.fd_position_id,
-            &mut self.station.logbook,
-        );
+        // A row whose merge identity the general log already holds is skipped, which is what
+        // makes the merge safe to run twice.
+        let mut report =
+            tempo_core::contest::plan_merge(&station.log, &self.settings.fd_position_id, seen);
         if !report.written.is_empty() {
             // Each merged contact is filled before it is written (SPEC-2 v3 D2-A), as every
-            // insert is: the rows the merge just appended, and the copies an upload sends. Still
-            // the merge's append — the same rows, in the same hold of the lock, before anyone can
-            // have read them — so it is claimed as one.
+            // insert is — the rows the merge appends are the copies an upload sends.
             let (country, state) = (
                 self.station.dxcc_resolve.as_deref(),
                 self.station.state_resolve.as_deref(),
@@ -10364,22 +10414,16 @@ impl Engine {
             for rec in &mut report.written {
                 crate::station::fill_with(rec, country, state);
             }
-            let held = self
+            // The merge's append — the station's, as every contact's (SPEC-2 v3 C19): ids
+            // minted, the hot index told, the writer handed the rows. No SQL.
+            let (written, _) = self
                 .station
-                .logbook
-                .records_mut(tempo_core::logbook::OpClass::Append);
-            let from = held.len().saturating_sub(report.written.len());
-            for r in &mut held[from..] {
-                crate::station::fill_with(Arc::make_mut(r), country, state);
-            }
-            // MEMORY FIRST, then the append that stamps the shared log's freshness
-            // fingerprint — the same order and the same reason as `log_qso`.
-            self.station.append_to_log(&report.written);
+                .append(std::mem::take(&mut report.written), false);
+            report.written = written;
             for rec in &report.written {
                 self.station
                     .requeue_upload_at(rec.clone(), legs, 0, 0, UploadOrigin::CatchUp);
             }
-            self.station.sync_hot();
         }
         tempo_core::applog::info(
             "contest",
@@ -10391,7 +10435,7 @@ impl Engine {
                 report.refused
             ),
         );
-        Ok(report)
+        Ok(Some(report))
     }
 
     /// Set this session's upload policy — the §18.1 control. `enabled: false` is the
@@ -11063,6 +11107,18 @@ impl Engine {
         self.remote_transmit_stand_down = revocation;
     }
 
+    /// Take the desktop's watch list — whole, replacing the last one ([`crate::watchlist`]). The
+    /// command layer admits it from the main window only.
+    pub fn set_watch_list(&mut self, list: Vec<crate::watchlist::WatchEntry>) {
+        self.watch_list = list;
+    }
+
+    /// The watch list the desktop last sent, for the Needed board — the native one and every
+    /// Remote browser's, which read this same engine.
+    pub fn watch_list(&self) -> &[crate::watchlist::WatchEntry] {
+        &self.watch_list
+    }
+
     /// The generation a browser is shown as its `transmitEpoch`. Test-visible so a stand-down
     /// can be asserted to move it without reaching through the Remote service.
     pub fn remote_transmit_stand_down_generation(&self) -> u64 {
@@ -11366,22 +11422,14 @@ impl Engine {
                 self.station.pending_hunt = None;
             }
         }
-        // MEMORY FIRST — see the contract on `StationCore::append_to_log`. `save`
-        // rewrites the whole log from memory, and the append below stamps the
-        // fingerprint that says disk and memory agree. In the other order that claim
-        // is false until the end of this function, and an unwind inside it (the two
-        // `spawn`s below are the live candidates) leaves the contact on disk, out of
-        // memory and unrecoverable — the next rewrite deletes it.
-        // The log mints the row's id; this copy, which the append and every queue below
-        // carry, carries it too.
-        rec.id = Some(self.station.add_record(rec.clone()));
-        // Through the station's append (not a bare `Logbook::append`) so the shared
-        // log's freshness fingerprint moves with the file. Skip it and the recovery
-        // gate misses on the next upload stamp / Needed-board poll and re-parses the
-        // whole log — once per contact, on every contact.
-        let persisted = self
-            .station
-            .append_to_log_checked(std::slice::from_ref(&rec), sync);
+        // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
+        // row, and the writer is handed it — a channel send. NO SQL and no pass over the log,
+        // so the radio loop never waits on the disk (the FT gate): the duplicate guard above
+        // was the hot index's answer. On the 1.13 path the row is the log in memory's before it
+        // is appended to `log.adi` (memory first — see `StationCore::append`). This copy, which
+        // every queue below carries, carries the id the log gave it.
+        let (mut appended, persisted) = self.station.append(vec![rec], sync);
+        let rec = appended.pop().expect("one contact in, one out");
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
         // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
@@ -11408,9 +11456,6 @@ impl Engine {
             attempts: 0,
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
         });
-        // The hot index takes the new row: added to its station, its B4 keys and its badges —
-        // no pass over the log.
-        self.station.sync_hot();
         match persisted {
             Some(receipts) if sync => LogWriteOutcome::PendingSync(receipts),
             _ => LogWriteOutcome::Unconfirmed,
@@ -11538,10 +11583,14 @@ impl Engine {
     /// for a test that owns its engine. The upload itself reads its batch from the store.
     #[cfg(test)]
     pub fn lotw_upload_adif(&self, ids: &[tempo_core::logbook::RecordId]) -> String {
-        let batch: Vec<QsoRecord> = self
+        let rows = self
             .station
-            .rows_of(ids)
+            .log_view()
+            .rows(ids)
+            .expect("the test's log can be read");
+        let batch: Vec<QsoRecord> = ids
             .iter()
+            .filter_map(|id| rows.get(id))
             .map(|r| QsoRecord::clone(r))
             .collect();
         crate::station::lotw_batch_adif(
@@ -11556,8 +11605,11 @@ impl Engine {
     /// as ALREADY on LoTW — the operator's declaration that an imported legacy log was uploaded
     /// through another tool (Ham2K Polo, TQSL, etc.). Stamps them `Accepted` so they drop out of
     /// the unsent count and a bulk upload never re-pushes them. Returns how many were marked.
+    ///
+    /// In one breath, for an engine held with no Engine guard (a test's): the command picks and
+    /// stamps with the lock released ([`crate::logwrite::mark_lotw_uploaded_all`]).
     pub fn mark_lotw_uploaded_all(&mut self) -> usize {
-        let ids = self.station.lotw_unsent_ids();
+        let ids = self.lotw_unsent_ids();
         let n = ids.len();
         if n > 0 {
             self.station.stamp_lotw_upload(
@@ -22430,7 +22482,7 @@ contact yourself."
     }
 
     #[cfg(test)]
-    fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
+    pub(crate) fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.
         let decodes: Vec<modes::Decode> = self.hound_split(decodes.to_vec());
         let decodes = &decodes[..];
@@ -22746,9 +22798,29 @@ contact yourself."
         self.station.log_rows()
     }
 
-    /// See [`StationCore::apply_log_fills`] — the fill job's write (SPEC-2 v3 D2-A).
+    /// See [`StationCore::apply_log_fills`] — the fill job's write (SPEC-2 v3 D2-A), planned and
+    /// made in one breath for an engine held with no Engine guard; the job itself plans with the
+    /// lock released ([`crate::logwrite::fill`]).
     pub fn apply_log_fills(&mut self, fills: &[crate::station::LogFill], fill_ver: i64) -> usize {
         self.station.apply_log_fills(fills, fill_ver)
+    }
+
+    /// The station, for the log's write path ([`crate::logwrite`]): a plan taken under this
+    /// lock, and a planned change made under it.
+    pub(crate) fn station_mut(&mut self) -> &mut StationCore {
+        &mut self.station
+    }
+
+    /// The station, for the log's write path's decisions ([`crate::logwrite`]) and for a test in
+    /// another module that asks it directly.
+    pub(crate) fn station(&self) -> &StationCore {
+        &self.station
+    }
+
+    /// What a change to the log planned off the Engine lock reads — see
+    /// [`StationCore::log_plan`]. Taken under this lock, read after it is released.
+    pub fn log_plan(&mut self) -> crate::station::LogPlan {
+        self.station.log_plan()
     }
 
     /// The store's mirror of `log.adi`, as it stands.
@@ -22777,26 +22849,24 @@ contact yourself."
         self.station.take_in_log_file_if_changed()
     }
 
-    /// Send again, from memory, the logbook changes the database refused for a reason that can
-    /// pass, each once its wait is up — the automatic retry, which the snapshot poll drives. How
-    /// many went out. No I/O: a channel send each, like any change. See
+    /// Send again the logbook changes the database refused for a reason that can pass, each
+    /// once its wait is up, with the rows each holds — the automatic retry, which the snapshot
+    /// poll drives. How many went out. No I/O: a channel send each, like any change. See
     /// [`crate::logstore::LogStore::resend`].
-    #[allow(deprecated)] // SPEC-2 C19: the retry re-sends refused rows as memory holds them
     pub fn log_resend_due(&mut self) -> usize {
-        let station = &mut self.station;
-        match station.store.as_mut() {
-            Some(store) => store.resend(&station.logbook, false, std::time::Instant::now()),
+        let marks = self.station.marks();
+        match self.station.store.as_mut() {
+            Some(store) => store.resend(marks, false, std::time::Instant::now()),
             None => 0,
         }
     }
 
     /// [`Self::log_resend_due`] for every such change now, whatever its wait — a quit, and the
     /// quit's Keep trying.
-    #[allow(deprecated)] // SPEC-2 C19: the retry re-sends refused rows as memory holds them
     pub fn log_resend_all(&mut self) -> usize {
-        let station = &mut self.station;
-        match station.store.as_mut() {
-            Some(store) => store.resend(&station.logbook, true, std::time::Instant::now()),
+        let marks = self.station.marks();
+        match self.station.store.as_mut() {
+            Some(store) => store.resend(marks, true, std::time::Instant::now()),
             None => 0,
         }
     }
@@ -22865,12 +22935,6 @@ contact yourself."
     /// See [`StationCore::set_dxcc_resolver_shared`].
     pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<crate::station::DxccResolve>) {
         self.station.set_dxcc_resolver_shared(resolve)
-    }
-
-    /// The station, for a test in another module that asks it directly.
-    #[cfg(test)]
-    pub(crate) fn station(&self) -> &StationCore {
-        &self.station
     }
 
     /// See [`StationCore::set_state_resolver`].
@@ -23048,27 +23112,22 @@ contact yourself."
     /// the operator has ever run, and last weekend's correction must not rewrite this
     /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
     pub fn update_qso(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
-        if !self.station.update_qso(id, rec) {
+        let Some(after) = self.station.update_row(id, rec) else {
             return false;
-        }
-        self.correct_contest_row(id);
+        };
+        self.correct_contest_row(&after);
         true
     }
 
     /// The Field Day half of an edit: the contest log's own row, corrected to the general log's
-    /// edited contact `id` — see [`Self::update_qso`] for why this join lives here.
-    fn correct_contest_row(&mut self, id: tempo_core::logbook::RecordId) {
-        let Some((qid, call, band)) = self.station.row(id).map(|r| {
-            (
-                r.contest
-                    .as_deref()
-                    .map_or(String::new(), |c| c.qid.clone()),
-                r.call.clone(),
-                r.band.clone(),
-            )
-        }) else {
-            return;
-        };
+    /// edited contact `row`, as the edit left it — see [`Self::update_qso`] for why this join
+    /// lives here.
+    pub(crate) fn correct_contest_row(&mut self, row: &QsoRecord) {
+        let qid = row
+            .contest
+            .as_deref()
+            .map_or(String::new(), |c| c.qid.clone());
+        let (call, band) = (row.call.clone(), row.band.clone());
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
                 // Unconditional for a row this session owns: the band is a dupe-key
@@ -23088,30 +23147,62 @@ contact yourself."
         id: tempo_core::logbook::RecordId,
         edit_key: &str,
         edit: &tempo_core::logbook::QsoEdit,
-    ) -> Result<Result<(), crate::station::RowRefusal>, String> {
-        let done = self.station.edit_qso(id, edit_key, edit)?;
-        if done.is_ok() {
-            self.correct_contest_row(id);
-        }
-        Ok(done)
+    ) -> Result<Result<std::sync::Arc<QsoRecord>, crate::station::RowRefusal>, String> {
+        Ok(match self.station.edit_qso(id, edit_key, edit)? {
+            Ok((_, Some(after))) => {
+                self.correct_contest_row(&after);
+                Ok(after)
+            }
+            Ok((_, None)) => Err(crate::station::RowRefusal::Gone),
+            Err(refusal) => Err(refusal),
+        })
     }
 
-    /// The contact the log holds under `id`, if any.
+    /// The contact the log holds under `id`, if any, as this process knows it — read from the
+    /// store, with this process's changes still on their way to it laid over it
+    /// ([`crate::station::LogPlan::row`]).
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock (a debug build panics). A command takes
+    /// [`Self::log_view`] under the lock and reads after releasing it; a change it made answers
+    /// with the row the change left ([`crate::logwrite`]).
     pub fn logged_row(
         &self,
         id: tempo_core::logbook::RecordId,
     ) -> Option<std::sync::Arc<QsoRecord>> {
-        self.station.row(id)
+        match self.station.log_view().row(id) {
+            Ok(row) => row,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("a contact could not be read from the logbook: {e}"),
+                );
+                None
+            }
+        }
     }
 
-    /// See [`StationCore::fresh_row`]: the contact `id`, if it is still the version whose edit
-    /// key is `edit_key`.
+    /// See [`StationCore::log_view`]: what a read of rows by id takes under the lock and reads
+    /// after it is released.
+    pub fn log_view(&self) -> crate::station::LogPlan {
+        self.station.log_view()
+    }
+
+    /// The contact `id`, if it is still the version whose edit key is `edit_key`, by
+    /// [`StationCore::fresh_row`]'s rule — read from the store as [`Self::logged_row`] reads it.
+    /// A change made by a `RowRef` makes this check itself, on the row it planned on
+    /// ([`crate::logwrite`]); this answers the same question outside a change.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock (a debug build panics).
     pub fn fresh_log_row(
-        &mut self,
+        &self,
         id: tempo_core::logbook::RecordId,
         edit_key: &str,
     ) -> Result<std::sync::Arc<QsoRecord>, crate::station::RowRefusal> {
-        self.station.fresh_row(id, edit_key)
+        let row = self
+            .logged_row(id)
+            .ok_or(crate::station::RowRefusal::Gone)?;
+        StationCore::fresh_row(&row, edit_key)?;
+        Ok(row)
     }
 
     /// See [`StationCore::mark_qsl_sent`]. `None` = the operator withdrawing the mark.
@@ -23345,29 +23436,48 @@ contact yourself."
         self.station.diagnostics_inputs()
     }
 
-    /// See [`StationCore::lotw_unsent_ids`].
+    /// The contacts owed to LoTW, by id, in log order ([`crate::station::lotw_unsent_ids`]) —
+    /// read from the store, for an engine held with no Engine guard (a test's).
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
     pub fn lotw_unsent_ids(&self) -> Vec<tempo_core::logbook::RecordId> {
-        self.station.lotw_unsent_ids()
+        crate::station::lotw_unsent_ids(&self.log_rows()).unwrap_or_else(|e| {
+            tempo_core::applog::error(
+                "logbook",
+                &format!("the contacts owed to LoTW could not be read: {e}"),
+            );
+            Vec::new()
+        })
     }
 
-    /// See [`StationCore::stamp_lotw_upload`].
+    /// See [`StationCore::stamp_lotw_upload`]: how many were stamped.
     pub fn stamp_lotw_upload(
         &mut self,
         ids: &[tempo_core::logbook::RecordId],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
-    ) {
+    ) -> usize {
         self.station
             .stamp_lotw_upload(ids, outcome, when_unix, detail)
     }
 
-    /// See [`StationCore::lotw_signed`].
+    /// The contacts `ids` names as a LoTW batch hands them to TQSL: each one's id and its
+    /// fingerprint as the upload serialises it, in the order `ids` names them — read from the
+    /// store, for an engine held with no Engine guard (a test's; the upload takes them from the
+    /// batch it read, [`crate::station::LotwSigned::of`]). A contact the log no longer holds is
+    /// left out.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
     pub fn lotw_signed(
         &self,
         ids: &[tempo_core::logbook::RecordId],
     ) -> Vec<crate::station::LotwSigned> {
-        self.station.lotw_signed(ids)
+        let rows = self.station.log_view().rows(ids).unwrap_or_default();
+        ids.iter()
+            .filter_map(|id| rows.get(id))
+            .filter_map(|r| crate::station::LotwSigned::of(r))
+            .collect()
     }
 
     /// The ids of the contacts at `positions` in the log as it stands — the LEGACY input of a
@@ -29377,6 +29487,84 @@ mod tests {
         );
     }
 
+    /// ⛔ **No form payload may write the RETIRED wanted list** (operator 2026-09-24, "One
+    /// list"). The desktop folds the old hidden list into the watch list on its first launch and
+    /// then empties it through its one writer. A surface that read the settings before that — the
+    /// APRS cockpit keeps its copy for the whole session — posts the old entries back with any
+    /// control it saves; the next launch would fold them into the watch list AGAIN, bringing back
+    /// an entry the operator removed from the watch list in between.
+    #[test]
+    fn a_form_save_cannot_bring_back_the_retired_wanted_list() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.settings().wanted_calls.is_empty(),
+            "baseline: nothing to fold"
+        );
+        // A snapshot from a surface that read the settings before the fold emptied the list.
+        let mut stale = e.settings().clone();
+        stale.wanted_calls = vec!["VP8*".into(), "3Y0J".into()];
+        e.apply_settings(stale);
+        assert!(
+            e.settings().wanted_calls.is_empty(),
+            "a stale form payload wrote the retired wanted list back: {:?}",
+            e.settings().wanted_calls
+        );
+    }
+
+    /// The other half of the contract, and the positive control for the test above: a RESTORE is
+    /// the whole truth, as for every other one-writer field. An old backup's list comes back, and
+    /// the next launch folds it into the (restored) watch list — the same decision loading that
+    /// backup's settings.json makes, so the restore needs no migration of its own.
+    #[test]
+    fn a_restore_brings_the_old_list_back_for_the_next_launch_to_fold() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut bundle = e.settings().clone();
+        bundle.wanted_calls = vec!["VP8*".into()];
+        e.apply_restored_settings(bundle);
+        assert_eq!(e.settings().wanted_calls, vec!["VP8*".to_string()]);
+    }
+
+    /// The watch list is the DESKTOP's, sent whole (operator 2026-09-24: "watched counts as
+    /// needed"): the engine holds what it was last sent, and no settings payload — a form save,
+    /// a restore — reaches it, because it is not a setting at all.
+    #[test]
+    fn the_watch_list_is_what_the_desktop_last_sent_and_no_settings_payload_moves_it() {
+        use crate::watchlist::{WatchEntry, WatchKind};
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.watch_list().is_empty(),
+            "nothing until the desktop sends it"
+        );
+        let list = vec![WatchEntry {
+            kind: WatchKind::Call,
+            value: "VP8*".into(),
+        }];
+        e.set_watch_list(list.clone());
+        e.apply_settings(e.settings().clone());
+        e.apply_restored_settings(e.settings().clone());
+        assert_eq!(e.watch_list(), list.as_slice());
+        e.set_watch_list(Vec::new());
+        assert!(e.watch_list().is_empty(), "a later list replaces it whole");
+    }
+
+    /// The retired list's one writer does empty it — the positive control for the form test
+    /// above, which would otherwise pass on a list nothing can change.
+    #[test]
+    fn retire_wanted_calls_is_the_writer_that_empties_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut bundle = e.settings().clone();
+        bundle.wanted_calls = vec!["VP8*".into(), "3Y0J".into()];
+        e.apply_restored_settings(bundle);
+        let before_the_fold = e.settings().clone();
+        assert!(
+            e.retire_wanted_calls().wanted_calls.is_empty(),
+            "the verb empties it"
+        );
+        // …and a snapshot from before it cannot put the entries back.
+        e.apply_settings(before_the_fold);
+        assert!(e.settings().wanted_calls.is_empty());
+    }
+
     /// The positive control for both tests above: the switch must still work. Without this,
     /// the same code would pass by making the opt-in immovable, and nothing would say so.
     #[test]
@@ -34858,10 +35046,12 @@ mod tests {
         e.settings.lotw_use_adif_location = true;
 
         // Straight into the logbook, bypassing the funnel — this is what an ADIF written by an
-        // older build looks like after it is read back in.
+        // older build looks like after it is read back in. Appended as the station appends,
+        // into its store as well: the upload's rows are read from the store.
         let mut rec = e.qso_record("W9XYZ".into(), None, None);
         rec.station_callsign = None;
-        let id = e.station.logbook.add(rec);
+        let (appended, _) = e.station.append(vec![rec], false);
+        let id = appended[0].id.expect("an id");
 
         let adif = e.lotw_upload_adif(&[id]);
         assert!(

@@ -24,7 +24,8 @@ use std::sync::Arc;
 use tempo_core::logbook::hot::{pairs_between, HotIndex, HotKeys, RowPair};
 use tempo_core::logbook::writer::Change;
 use tempo_core::logbook::{
-    LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, Watermarks, WorkedSince,
+    LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService,
+    Watermarks, WorkedSince,
 };
 
 use crate::logstore::{LogStore, Opened, SessionRows};
@@ -75,6 +76,10 @@ pub struct LotwStamped {
     pub changed: usize,
     /// Contacts no longer in the log.
     pub gone: usize,
+    /// Contacts whose result could not be recorded at all: the logbook could not be read, or
+    /// kept changing under the stamp ([`RowRefusal::Busy`]). They stay unsent, and the next
+    /// batch signs them again (LoTW dedupes what it already has).
+    pub unrecorded: usize,
 }
 
 /// What the confirmation diagnostics read ([`StationCore::diagnostics_inputs`]), held apart
@@ -539,6 +544,156 @@ fn hot_mut(hot: &mut std::sync::Mutex<HotIndex>) -> &mut HotIndex {
     }
 }
 
+/// What a connector's push must read of a row to tell whether it is the contact pushed
+/// ([`tempo_core::logbook::same_push_key`]).
+const PUSH_KEY: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &["call", "band", "mode", "when_unix"],
+    uploads: false,
+};
+
+/// The row a connector's push names, as `plan` reads the log (SPEC-2 v3 C16's rule, read off
+/// the store — C19):
+///
+/// ⛔ **A push of a row the log holds NAMES that row, by its id, and the stamp lands there** —
+/// only while it is still the contact that was pushed (the same push key): one corrected since
+/// holds a contact the service never received, and one deleted since holds nothing. A push that
+/// names no row (from a page older than the ids) keeps the rule every push had, F9's fallback:
+/// the NEWEST contact with its push key — the store's candidates for its call, then the Rust
+/// match ([`LogPlan::newest`]).
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub fn push_target(plan: &LogPlan, pushed: &QsoRecord) -> Result<Option<Arc<QsoRecord>>, String> {
+    use tempo_core::logbook::same_push_key;
+    match pushed.id {
+        Some(id) => Ok(plan.row(id)?.filter(|r| same_push_key(r, pushed))),
+        None => plan.newest(&pushed.call, PUSH_KEY, |r| same_push_key(r, pushed)),
+    }
+}
+
+/// `rows`, each with `service`'s leg stamped `status` — a planned change's pairs. `None` when
+/// there is nothing to stamp.
+pub(crate) fn stamped_rows(
+    rows: &[Arc<QsoRecord>],
+    service: UploadService,
+    status: &tempo_core::logbook::UploadStatus,
+) -> Option<Vec<MadeRow>> {
+    let pairs: Vec<MadeRow> = rows
+        .iter()
+        .filter_map(|row| {
+            let id = row.id?;
+            let op = LogOp::Stamp {
+                id,
+                service,
+                status: status.clone(),
+            };
+            let (_, after) = ops_on(row, &[op])?;
+            Some((Arc::clone(row), after.map(Arc::new)))
+        })
+        .collect();
+    (!pairs.is_empty()).then_some(pairs)
+}
+
+/// What a change that answers [`RowRefusal::Busy`] says where a string is the answer.
+pub const LOG_BUSY: &str = "The logbook kept changing while this was being saved, so it was not \
+                            saved. Try again.";
+
+/// The contacts owed to LoTW ([`owed_to_lotw`]), by id, in log order — the "already uploaded"
+/// declaration's pick, read from the store (SPEC-2 v3 C19) with the Engine lock released.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`StationCore::log_rows`])
+/// under it.
+pub fn lotw_unsent_ids(rows: &crate::logstore::LogRows) -> Result<Vec<RecordId>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut owed = Vec::new();
+    rows.each(OWED_TO_LOTW, Scope::All, Order::Log, &mut |r| {
+        if let Some(id) = r.id.filter(|_| owed_to_lotw(r)) {
+            owed.push(id);
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(owed)
+}
+
+/// A LoTW batch's stamps, planned (SPEC-2 v3 C19): the contacts of the batch TQSL signed, found
+/// BY ID as `plan` reads the log, each stamped only where the row is still the one that was
+/// signed — and what that makes of the batch.
+///
+/// TQSL runs for tens of seconds with the engine lock released, and the log moves under it:
+/// the operator deletes or corrects a contact, another window's commit is taken in. A stamp
+/// addressed by position lands on whatever row slid into the gap — a contact LoTW never saw,
+/// marked sent, and so never uploaded at all. By id, a deleted contact is simply not found. A
+/// contact changed since it was signed is not stamped either: LoTW holds the version that was
+/// signed, so the row stays unsent and the next batch signs it as it now stands (LoTW dedupes
+/// what it already has). What is left unstamped is counted, for the caller to report.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub fn stamp_lotw_batch_plan(
+    plan: &LogPlan,
+    batch: &[LotwSigned],
+    status: &tempo_core::logbook::UploadStatus,
+) -> Result<(LotwStamped, Option<Vec<MadeRow>>), String> {
+    let ids: Vec<RecordId> = batch.iter().map(|s| s.id).collect();
+    let rows = plan.rows(&ids)?;
+    let mut signed: HashMap<RecordId, u64> = batch.iter().map(|s| (s.id, s.fingerprint)).collect();
+    let mut report = LotwStamped::default();
+    let mut hits = Vec::new();
+    // In the batch's order, each contact once.
+    for s in batch {
+        let Some(fingerprint) = signed.remove(&s.id) else {
+            continue;
+        };
+        match rows.get(&s.id) {
+            Some(row) if lotw_fingerprint(row) == fingerprint => hits.push(Arc::clone(row)),
+            Some(_) => report.changed += 1,
+            None => report.gone += 1,
+        }
+    }
+    report.stamped = hits.len();
+    Ok((report, stamped_rows(&hits, UploadService::Lotw, status)))
+}
+
+/// The fill job's fills (SPEC-2 v3 D2-A) laid over `rows`, the rows as a plan read them: a pair
+/// for each row that still lacks a field the job found, with it filled. A fill lands only in a
+/// field the row still lacks — one edited, filled or deleted since the job read it keeps what it
+/// has now — and never clears one (`None` is "nothing found").
+pub(crate) fn fill_pairs(
+    rows: &HashMap<RecordId, Arc<QsoRecord>>,
+    fills: &[LogFill],
+) -> Vec<MadeRow> {
+    fills
+        .iter()
+        .filter_map(|f| {
+            let row = rows.get(&f.id)?;
+            let country = f.country.clone().filter(|_| row.country.is_none());
+            let state = f.state.clone().filter(|_| row.state.is_none());
+            if country.is_none() && state.is_none() {
+                return None;
+            }
+            let mut now = QsoRecord::clone(row);
+            if country.is_some() {
+                now.country = country;
+            }
+            if state.is_some() {
+                now.state = state;
+            }
+            Some((Arc::clone(row), Some(Arc::new(now))))
+        })
+        .collect()
+}
+
+/// The class of a fill change: an upgrade — content a fold reads (a state, an entity's
+/// country), and no row moves — or, for a change that fills nothing and only records that the
+/// job has run, a stamp, which no fold is kept against.
+pub(crate) fn fill_class(filled: usize) -> OpClass {
+    if filled > 0 {
+        OpClass::Upgrade
+    } else {
+        OpClass::Stamp
+    }
+}
+
 /// Why a change addressed to one contact — by its id and the edit key of the version the caller
 /// holds ([`QsoEdit::key`]) — was not made. See [`StationCore::fresh_row`].
 #[derive(Debug, Clone, PartialEq)]
@@ -548,6 +703,11 @@ pub enum RowRefusal {
     /// The row is there, but changed since the caller read it — here as it now stands, for the
     /// caller to show and retry against.
     Changed(Arc<QsoRecord>),
+    /// `LogBusy` (SPEC-1 v2 R5, SPEC-2 v3 §4.6): the row kept changing under the change — made
+    /// so here, or in another window — every time it was planned ([`PLANS`] times), so nothing
+    /// was changed. New with the write path's plan off the Engine lock, and rare: another writer
+    /// has to change the row inside each plan's few milliseconds, four times running.
+    Busy,
 }
 
 /// The log's rows as they stood just before a change: what the store is told the change
@@ -555,6 +715,618 @@ pub enum RowRefusal {
 /// [`StationCore::change_base`].
 pub(crate) struct ChangeBase {
     rows: Vec<Arc<QsoRecord>>,
+}
+
+/// How many times a change is planned before it answers [`RowRefusal::Busy`]: once, and three
+/// times again (SPEC-2 v3 §4.6).
+pub const PLANS: usize = 4;
+
+/// Past this many calls, a bulk change's candidate rows are found in one pass over the log rather
+/// than a look-up per call ([`LogPlan::candidates`]): a whole foreign `log.adi` names most of it.
+const CANDIDATE_SEEKS: usize = 2_000;
+
+/// This process's recent changes to the log, newest last, each by the revision it left the log
+/// at — what a commit's precondition reads ([`StationCore::unchanged_since`], SPEC-2 v3 §4.6). A
+/// change reaches it where every change reaches the hot index ([`StationCore::follow`]).
+///
+/// Kept as far back as [`RECENT_CHANGES`] changes: a plan taken before the oldest cannot be
+/// checked, and plans again — a plan lives for milliseconds, so that is a plan that watched two
+/// hundred changes go by.
+#[derive(Debug, Default)]
+struct Recent {
+    /// `(revision, the rows it touched)` — each row as it stood before the change and as the
+    /// change left it, by id and by call as the store keys one
+    /// ([`tempo_core::logbook::sqlite::call_norm_of`]) — `None` for a change of more rows than
+    /// [`RECENT_ROWS`] (a merge, an import, a purge, another window's commits taken in, a write
+    /// the station did not make), which a plan reads as touching every row.
+    changes: VecDeque<(u64, Option<Vec<Touched>>)>,
+    /// The revision of the newest change that has left `changes`: a plan taken before it can no
+    /// longer be checked.
+    floor: u64,
+}
+
+/// One row a change touched, as [`Recent`] keeps it: its id, and its call as the store keys one.
+type Touched = (Option<RecordId>, String);
+
+/// How many changes [`Recent`] keeps.
+const RECENT_CHANGES: usize = 256;
+/// Past this many rows a change is kept as touching every row.
+const RECENT_ROWS: usize = 64;
+
+impl Recent {
+    /// A change that left the log at `revision`, touching the rows of `pairs`.
+    fn note(&mut self, revision: u64, pairs: &[RowPair]) {
+        let rows = (pairs.len() <= RECENT_ROWS).then(|| {
+            pairs
+                .iter()
+                .flat_map(|(b, a)| [b, a])
+                .flatten()
+                .map(|r| (r.id, tempo_core::logbook::sqlite::call_norm_of(&r.call)))
+                .collect()
+        });
+        self.push(revision, rows);
+    }
+
+    /// A change that left the log at `revision`, touching rows nobody listed.
+    fn note_any(&mut self, revision: u64) {
+        self.push(revision, None);
+    }
+
+    fn push(&mut self, revision: u64, rows: Option<Vec<Touched>>) {
+        self.changes.push_back((revision, rows));
+        while self.changes.len() > RECENT_CHANGES {
+            if let Some((gone, _)) = self.changes.pop_front() {
+                self.floor = self.floor.max(gone);
+            }
+        }
+    }
+
+    /// Whether no change since `revision` touched any of `ids`.
+    fn untouched_since(&self, revision: u64, ids: &[RecordId]) -> bool {
+        self.untouched_since_by(revision, |(id, _)| id.is_some_and(|id| ids.contains(&id)))
+    }
+
+    /// Whether no change since `revision` touched any of `ids`, or a row whose call is one of
+    /// `calls` (as the store keys a call: [`tempo_core::logbook::sqlite::call_norm_of`]) — a bulk
+    /// change's precondition: a row added or changed under a call it read is a row it did not
+    /// plan on.
+    fn untouched_since_calls(
+        &self,
+        revision: u64,
+        ids: &HashSet<RecordId>,
+        calls: &std::collections::BTreeSet<String>,
+    ) -> bool {
+        self.untouched_since_by(revision, |(id, call)| {
+            id.is_some_and(|id| ids.contains(&id)) || calls.contains(call)
+        })
+    }
+
+    /// Whether no change since `revision` touched a row `hits` names.
+    fn untouched_since_by(&self, revision: u64, hits: impl Fn(&Touched) -> bool) -> bool {
+        revision >= self.floor
+            && self
+                .changes
+                .iter()
+                .filter(|(at, _)| *at > revision)
+                .all(|(_, rows)| rows.as_ref().is_some_and(|rows| !rows.iter().any(&hits)))
+    }
+}
+
+/// What a change planned off the Engine lock reads — the log's rows, and this process's own
+/// changes the store may not hold yet — with where the log stood when it was taken: taken under
+/// the lock by [`StationCore::log_plan`], read after it is released, and handed back to the
+/// commit, which makes the change only if nothing it read has changed since (SPEC-2 v3 §4.6).
+#[derive(Debug, Clone)]
+pub struct LogPlan {
+    rows: crate::logstore::LogRows,
+    pending: crate::logstore::Pending,
+    /// The station's revision when the plan was taken.
+    rev: u64,
+    /// The store's count of another process's commits then — `None` on the 1.13 path.
+    foreign: Option<u64>,
+}
+
+impl LogPlan {
+    /// The rows `ids` name, as this process knows them — the store's (on the 1.13 path, the log
+    /// in memory's), with this process's changes the store may not hold yet laid over them
+    /// ([`crate::logstore::Pending`]) — by id. An id no row carries is absent.
+    ///
+    /// It reads the store AS IT STANDS, without waiting for the writer to take this process's
+    /// changes (SPEC-2 v3 P4's wait): every one it has not taken is laid over what it holds, so a
+    /// plan never waits for a stalled write.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock (a debug build panics).
+    pub fn rows(&self, ids: &[RecordId]) -> Result<HashMap<RecordId, Arc<QsoRecord>>, String> {
+        let found = match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| db.rows_by_ids(ids))
+                .map(|(found, _)| found),
+            memory => memory.rows_by_ids(ids).map(|(found, _)| found),
+        }
+        .map_err(|e| e.to_string())?;
+        let mut rows: HashMap<RecordId, Arc<QsoRecord>> = found
+            .into_iter()
+            .filter_map(|r| Some((r.id?, Arc::new(r))))
+            .collect();
+        for &id in ids {
+            match self.pending.row(id) {
+                Some(Some(row)) => {
+                    rows.insert(id, row);
+                }
+                Some(None) => {
+                    rows.remove(&id);
+                }
+                None => {}
+            }
+        }
+        Ok(rows)
+    }
+
+    /// The row `id` names, as [`Self::rows`] reads it: `None` when no row carries it.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub fn row(&self, id: RecordId) -> Result<Option<Arc<QsoRecord>>, String> {
+        Ok(self.rows(&[id])?.remove(&id))
+    }
+
+    /// The NEWEST row, in log order, that `call` might name and `is` accepts — as this process
+    /// knows the log, like [`Self::rows`]. The candidates are the store's rows whose `call_norm`
+    /// is `call`'s ([`tempo_core::logbook::sqlite::Scope::CallNorm`]), so `is` must accept only
+    /// rows whose call is `call` up to ASCII case and surrounding spaces — SQL narrows, Rust
+    /// decides (SPEC-2 v3 P2). `fields` are the columns `is` reads.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub fn newest(
+        &self,
+        call: &str,
+        fields: tempo_core::logbook::sqlite::Narrow,
+        is: impl Fn(&QsoRecord) -> bool,
+    ) -> Result<Option<Arc<QsoRecord>>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{call_norm_of, Order, Scope};
+        let norm = call_norm_of(call);
+        // This process's own rows the store may not have yet: appends on their way are the
+        // newest rows of all, and a row changed here is read as it now stands.
+        if !self.pending.is_empty() {
+            let mine = self
+                .pending
+                .rows_matching(|r| call_norm_of(&r.call) == norm);
+            let ids: Vec<RecordId> = mine.iter().filter_map(|r| r.id).collect();
+            let (stored, _) = self.rows.rows_by_ids(&ids).map_err(|e| e.to_string())?;
+            let stored: HashSet<RecordId> = stored.iter().filter_map(|r| r.id).collect();
+            if let Some(newest) = mine
+                .iter()
+                .rev()
+                .find(|r| r.id.is_some_and(|id| !stored.contains(&id)) && is(r))
+            {
+                return Ok(Some(Arc::clone(newest)));
+            }
+        }
+        let mut hit: Option<RecordId> = None;
+        self.rows
+            .each(
+                fields,
+                Scope::CallNorm(&norm),
+                Order::NewestFirst,
+                &mut |r| {
+                    let Some(id) = r.id else {
+                        return ControlFlow::Continue(());
+                    };
+                    let accepted = match self.pending.row(id) {
+                        Some(Some(mine)) => is(&mine),
+                        Some(None) => false,
+                        None => is(r),
+                    };
+                    if accepted {
+                        hit = Some(id);
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        match hit {
+            Some(id) => self.row(id),
+            None => Ok(None),
+        }
+    }
+
+    /// Every merge identity the log holds (`APP_NEXUS_QID`, a contest row's `qid`) as this process
+    /// knows the log ([`Self::rows`]): what the Field Day merge reads to skip a row already there
+    /// — one narrow pass over the store's `contest_qid`, whatever the log's size.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn merge_identities(&self) -> Result<HashSet<String>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+        const QIDS: Narrow = Narrow {
+            columns: &["contest_qid"],
+            uploads: false,
+        };
+        let qid = |r: &QsoRecord| {
+            r.contest
+                .as_deref()
+                .map(|c| c.qid.clone())
+                .filter(|q| !q.is_empty())
+        };
+        let mut seen = HashSet::new();
+        let mut keep = |r: &QsoRecord| {
+            // This process's own version of the row, where one is on its way: a row it deleted
+            // is not there, and one it changed carries what the change left.
+            match r.id.and_then(|id| self.pending.row(id)) {
+                Some(Some(mine)) => seen.extend(qid(&mine)),
+                Some(None) => {}
+                None => seen.extend(qid(r)),
+            }
+            ControlFlow::Continue(())
+        };
+        match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| {
+                    db.each_narrow(QIDS, Scope::All, Order::Log, &mut keep)
+                })
+                .map(|_| ()),
+            memory => memory
+                .each(QIDS, Scope::All, Order::Log, &mut keep)
+                .map(|_| ()),
+        }
+        .map_err(|e| e.to_string())?;
+        // Rows on their way the store has not taken at all.
+        seen.extend(
+            self.pending
+                .rows_matching(|r| qid(r).is_some())
+                .iter()
+                .filter_map(|r| qid(r)),
+        );
+        Ok(seen)
+    }
+
+    /// The rows of the log whose call is one `calls` names — each a call as the store keys it,
+    /// trimmed and ASCII-uppercased ([`tempo_core::logbook::sqlite::call_norm_of`]) — as this
+    /// process knows them ([`Self::rows`]), in log order: the CANDIDATE SUB-LOG a bulk change is
+    /// planned on (SPEC-2 v3 §4.6, C19 Part B), read by the `qso_callhist` index.
+    ///
+    /// ★ It holds every row a bulk change can pair with a row it brings. Every matcher those
+    /// changes use compares calls up to ASCII case — untrimmed (`reconcile`'s keys, the import's
+    /// dedup key) or with `eq_ignore_ascii_case` (the POTA stamps) — and two calls equal under
+    /// either are equal trimmed and ASCII-uppercased: they share a `call_norm`. A call with
+    /// characters outside ASCII is no exception, since ASCII case leaves those alone on both
+    /// sides alike.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn candidates(
+        &self,
+        calls: &std::collections::BTreeSet<String>,
+    ) -> Result<Vec<Arc<QsoRecord>>, String> {
+        self.candidates_seeking(calls, CANDIDATE_SEEKS)
+    }
+
+    /// [`Self::candidates`], looking each call up in the store only while there are no more than
+    /// `seeks` of them — a test's handle on the one-pass read.
+    fn candidates_seeking(
+        &self,
+        calls: &std::collections::BTreeSet<String>,
+        seeks: usize,
+    ) -> Result<Vec<Arc<QsoRecord>>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
+        const CALL_ONLY: Narrow = Narrow {
+            columns: &["call"],
+            uploads: false,
+        };
+        let mut ids: Vec<RecordId> = Vec::new();
+        let mut keep = |r: &QsoRecord| {
+            if calls.contains(&call_norm_of(&r.call)) {
+                ids.extend(r.id);
+            }
+            ControlFlow::Continue(())
+        };
+        match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| {
+                    if calls.len() > seeks {
+                        // Too many calls to look each up (a whole foreign log.adi): one pass.
+                        return db.each_narrow(CALL_ONLY, Scope::All, Order::Log, &mut keep);
+                    }
+                    for call in calls {
+                        db.each_narrow(CALL_ONLY, Scope::CallNorm(call), Order::Log, &mut keep)?;
+                    }
+                    Ok(())
+                })
+                .map(|_| ()),
+            // The 1.13 path: its log is in memory, and one pass finds the same rows.
+            memory => memory
+                .each(CALL_ONLY, Scope::All, Order::Log, &mut keep)
+                .map(|_| ()),
+        }
+        .map_err(|e| e.to_string())?;
+        // This process's rows on their way that carry one of these calls now: an append the store
+        // has not taken yet, or a row an edit gave one of these calls — read by id below, so a row
+        // the store holds keeps its place in the log.
+        let mine = self
+            .pending
+            .rows_matching(|r| calls.contains(&call_norm_of(&r.call)));
+        ids.extend(mine.iter().filter_map(|r| r.id));
+        let stored = match &self.rows {
+            crate::logstore::LogRows::Store(reads) => reads
+                .read(std::time::Duration::ZERO, |db| db.rows_by_ids(&ids))
+                .map(|(found, _)| found),
+            memory => memory.rows_by_ids(&ids).map(|(found, _)| found),
+        }
+        .map_err(|e| e.to_string())?;
+        let mut seen: HashSet<RecordId> = HashSet::with_capacity(stored.len());
+        let mut rows = Vec::with_capacity(stored.len());
+        for r in stored {
+            let Some(id) = r.id else { continue };
+            seen.insert(id);
+            let row = match self.pending.row(id) {
+                Some(Some(mine)) => mine,
+                Some(None) => continue,
+                None => Arc::new(r),
+            };
+            // A row an edit on its way took off these calls is not one of theirs any more.
+            if calls.contains(&call_norm_of(&row.call)) {
+                rows.push(row);
+            }
+        }
+        // Appends the store has not taken: the newest rows of all, in the order they were made.
+        rows.extend(
+            mine.into_iter()
+                .filter(|r| r.id.is_some_and(|id| seen.insert(id))),
+        );
+        Ok(rows)
+    }
+}
+
+/// Why a planned change was not made: a row it read is not the row it read any more — changed
+/// here, or in another window — and the caller plans again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stale;
+
+/// One change to the log as the station makes it — THE shape of every write (SPEC-2 v3 C19):
+/// the rows it takes out and puts in, as the hot index and the store are both told them.
+pub(crate) struct RowChange {
+    /// What kind of change it is: which watermarks it moves ([`OpClass`]).
+    pub(crate) class: OpClass,
+    /// The rows it takes out and puts in, in log order ([`RowPair`]).
+    pub(crate) pairs: Vec<RowPair>,
+    /// Every row goes first (a purge): its pairs name every row taken out.
+    pub(crate) clear: bool,
+    /// Written in the writer's bulk lane.
+    pub(crate) bulk: bool,
+    /// `log_meta` keys the store sets with its last chunk (the fill job's `fill_ver`).
+    pub(crate) meta: Vec<(&'static str, i64)>,
+}
+
+/// A change to one row: the row as the plan read it, and as the change leaves it (`None`: the row
+/// goes) — planned, or made.
+pub type MadeRow = (Arc<QsoRecord>, Option<Arc<QsoRecord>>);
+
+/// What a plan for one row decides, handed the row as it stands: `Ok(Some)` — the change's class
+/// and the row as it leaves it (`None`: the row goes); `Ok(None)` — nothing to change;
+/// `Err` — refused, changing nothing.
+pub type Decided = Result<Option<(OpClass, Option<QsoRecord>)>, RowRefusal>;
+
+/// What `ops`, made in order on `row`, leave: the widest class among them and the row as they
+/// leave it (`None`: removed) — or `None` when none of them changes anything (a satellite tag
+/// with a blank name). Each op's rule is its one implementation ([`LogOp::apply_to`]).
+pub fn ops_on(row: &QsoRecord, ops: &[LogOp]) -> Option<(OpClass, Option<QsoRecord>)> {
+    let mut now = Some(row.clone());
+    let mut class: Option<OpClass> = None;
+    for op in ops {
+        let Some(r) = &now else { break };
+        match op.apply_to(r) {
+            RowAfter::Now(next) => now = Some(*next),
+            RowAfter::Gone => now = None,
+            RowAfter::Unchanged => continue,
+        }
+        class = Some(class.map_or(op.class(), |c| wider(c, op.class())));
+    }
+    class.map(|c| (c, now))
+}
+
+/// A bulk change planned on the candidate sub-log ([`plan_on_candidates`]): what it read, and what
+/// it makes of it (SPEC-2 v3 §4.6, C19 Part B). Made under the Engine lock by
+/// [`StationCore::commit_bulk`], only while nothing it read — and no row of a call it read — has
+/// changed since.
+#[derive(Debug)]
+pub(crate) struct Planned {
+    /// The rows it read, each as it read them.
+    read: Vec<Arc<QsoRecord>>,
+    /// The calls whose rows it read, as the store keys a call: a change since to a row of one of
+    /// them — an append included — plans again.
+    calls: std::collections::BTreeSet<String>,
+    /// The ids rows it appends brought and keep, which the log held nowhere when it looked: one
+    /// taken since plans again.
+    kept: Vec<RecordId>,
+    /// What it changes: each held row it upgrades (as it read it, as it leaves it), in log order,
+    /// then each row it appends — whose id is `None` until the commit mints one.
+    pairs: Vec<RowPair>,
+    /// What a change to a held row is.
+    class: OpClass,
+}
+
+impl Planned {
+    /// Whether it changes nothing: no row upgraded and none appended.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// How many held rows it upgrades.
+    pub(crate) fn upgraded(&self) -> usize {
+        self.pairs
+            .iter()
+            .filter(|(before, _)| before.is_some())
+            .count()
+    }
+}
+
+/// ★ Plan a bulk change — an import, a report merge, the POTA stamps — on the candidate sub-log:
+/// the rows of the log whose call is one of `calls` (the calls of the rows it brings,
+/// [`LogPlan::candidates`]), handed to `op`, THE implementation of the change as it has always run
+/// on the whole log (`Logbook::import_adif_with`, `Logbook::merge_report`, …), on a log holding
+/// only those rows. Every row the change can pair with is one of them, so it decides exactly
+/// what it would decide over the whole log.
+///
+/// `ids` are the ids the rows it brings carry. A row keeps its own id only where the whole log
+/// holds that id nowhere — the rule `op` applies, which the sub-log alone cannot see — and every
+/// other row it appends is minted an id when the change is made. `class` is what a change to a
+/// held row is. What `op` answered, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_on_candidates<R>(
+    plan: &LogPlan,
+    calls: impl IntoIterator<Item = String>,
+    ids: &[RecordId],
+    class: OpClass,
+    op: impl FnOnce(&mut Logbook) -> R,
+) -> Result<(R, Planned), String> {
+    let calls: std::collections::BTreeSet<String> = calls
+        .into_iter()
+        .map(|c| tempo_core::logbook::sqlite::call_norm_of(&c))
+        .collect();
+    let read = plan.candidates(&calls)?;
+    let held = plan.rows(ids)?;
+    let free: HashSet<RecordId> = ids
+        .iter()
+        .filter(|id| !held.contains_key(id))
+        .copied()
+        .collect();
+    let mut sub = Logbook::new();
+    sub.replace_rows(read.clone());
+    let out = op(&mut sub);
+    let after = sub.records();
+    let mut pairs: Vec<RowPair> = read
+        .iter()
+        .zip(after)
+        .filter(|(b, a)| !Arc::ptr_eq(b, a) && ***b != ***a)
+        .map(|(b, a)| (Some(Arc::clone(b)), Some(Arc::clone(a))))
+        .collect();
+    let mut kept = Vec::new();
+    let mut taken = HashSet::new();
+    for a in after.iter().skip(read.len()) {
+        let mut row = QsoRecord::clone(a);
+        match row.id {
+            Some(id) if free.contains(&id) && taken.insert(id) => kept.push(id),
+            _ => row.id = None,
+        }
+        pairs.push((None, Some(Arc::new(row))));
+    }
+    Ok((
+        out,
+        Planned {
+            read,
+            calls,
+            kept,
+            pairs,
+            class,
+        },
+    ))
+}
+
+/// The calls and the ids of the records an ADIF text holds: what a bulk change bringing them is
+/// planned by ([`plan_on_candidates`]).
+fn calls_and_ids(text: &str) -> (Vec<String>, Vec<RecordId>) {
+    let rows = tempo_core::logbook::parse_adif(text);
+    let ids = rows.iter().filter_map(|r| r.id).collect();
+    (rows.into_iter().map(|r| r.call).collect(), ids)
+}
+
+/// An ADIF import planned ([`plan_on_candidates`]): the contacts the log lacks appended, the ones
+/// it holds upgraded from the rows restating them — `Logbook::import_adif`, on the rows of the
+/// text's calls. `(added, skipped, merged)`, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_import(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, usize, usize), Planned), String> {
+    let (calls, ids) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
+        let (added, skipped, merged) = log.import_adif(text);
+        (added.len(), skipped, merged)
+    })
+}
+
+/// A confirmation report planned (LoTW's, eQSL's): the logged contacts it matches upgraded —
+/// `Logbook::merge_report`, on the rows of the report's calls. Its summary, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_report(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<(tempo_core::reconcile::ReconcileSummary, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.merge_report(text)
+    })
+}
+
+/// A downloaded logbook planned (QRZ's fetch): its contacts the log lacks appended, and the ones it
+/// holds upgraded — `Logbook::merge_downloaded`, on the rows of the download's calls. How many it
+/// added and its summary, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_download(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, tempo_core::reconcile::ReconcileSummary), Planned), String> {
+    let (calls, ids) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
+        let (added, summary) = log.merge_downloaded(text);
+        (added.len(), summary)
+    })
+}
+
+/// A pota.app export's park references planned onto the logged contacts they match —
+/// `Logbook::stamp_ota_refs`, on the rows of the export's calls. `(stamped, already, unmatched)`,
+/// and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_ota_refs(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, usize, usize), Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.stamp_ota_refs(text)
+    })
+}
+
+/// LoTW's own-QSO report planned: the uploads it shows LoTW holds promoted to accepted, and the
+/// ones already accepted stamped again with its time — `Logbook::merge_own_echo`, on the rows of
+/// the report's calls. How many were newly promoted, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_own_echo(
+    plan: &LogPlan,
+    text: &str,
+    when_unix: i64,
+) -> Result<(usize, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Stamp, |log| {
+        log.merge_own_echo(text, when_unix)
+    })
+}
+
+/// The wider of two classes of change to held rows — the one whose watermarks cover both. Every
+/// class a change to one row can have is one of a chain (`IdOnly`/`Stamp` ⊂ `Upgrade` ⊂ `Key` ⊂
+/// `Structural`), so one of the two is always it; an append, which is not on the chain, is taken
+/// as the widest.
+fn wider(a: OpClass, b: OpClass) -> OpClass {
+    fn rank(c: OpClass) -> u8 {
+        match c {
+            OpClass::IdOnly | OpClass::Stamp => 0,
+            OpClass::Upgrade => 1,
+            OpClass::Key => 2,
+            OpClass::Structural | OpClass::Append => 3,
+        }
+    }
+    match if rank(a) >= rank(b) { a } else { b } {
+        OpClass::Append => OpClass::Structural,
+        w => w,
+    }
 }
 
 /// The operator's station: one log, one identity of record, one set of outbound
@@ -617,6 +1389,8 @@ pub struct StationCore {
     /// and keeps a copy, under a nonce of its own, for the rows its imports and merges still add
     /// (SPEC-2 v3 C19, Part B).
     minter: Minter,
+    /// This process's recent changes, by revision — what a commit's precondition reads.
+    recent: Recent,
     /// The store that owns the log — see [`crate::logstore`]. A new station holds an empty one
     /// in memory ([`LogStore::in_memory`]) until the launch gives it the operator's
     /// ([`Self::attach_store`]). `None` is the 1.13 path, where the log IS `log.adi`, appended
@@ -765,6 +1539,7 @@ impl StationCore {
             logbook,
             marks,
             minter,
+            recent: Recent::default(),
             store: empty_store(),
             store_problem: None,
             store_lingering: false,
@@ -926,7 +1701,7 @@ impl StationCore {
     /// un-confirmed. So a 1.13 instance's new contacts arrive; its edits arrive as the import
     /// rules have always treated a restated contact, and a contact it deleted stays — the
     /// visible trades a shared `log.adi` has always made, and never a contact lost.
-    #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the take-in runs under the lock (the launch's attach, the freshness poll), so it checks the log in memory; it moves into the open path
     pub(crate) fn take_in_log_file(
         &mut self,
         text: &str,
@@ -962,7 +1737,7 @@ impl StationCore {
     /// [`Self::persist_change`]) — a copy of pointers, never of a record. The index and the
     /// watermarks are brought up to the log first, so these are the rows the index holds and the
     /// pairs start from them.
-    #[allow(deprecated)] // SPEC-2 C19: Stage 1's before-picture of every change
+    #[allow(deprecated)] // SPEC-2 C19 (C, the cut): the 1.13 backfills, the take-in and another window's reload measure their change against the log in memory
     fn change_base(&mut self) -> ChangeBase {
         self.sync_hot();
         ChangeBase {
@@ -974,7 +1749,7 @@ impl StationCore {
     /// from `base` go to the writer thread — a channel send, no I/O — and the mirror lane is
     /// told. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was. Either
     /// way the hot index follows the change, row by row, from `base`.
-    #[allow(deprecated)] // SPEC-2 C19: Stage 1's diff of every change
+    #[allow(deprecated)] // SPEC-2 C19 (C, the cut): the 1.13 backfills, the take-in and another window's reload measure their change against the log in memory
     fn persist_change(&mut self, base: ChangeBase, context: &str) {
         match &self.store {
             Some(store) => {
@@ -988,13 +1763,359 @@ impl StationCore {
         self.catch_up_hot(Some(&base));
     }
 
-    /// Carry the last `count` rows — just appended in memory — to disk. The one-contact case:
-    /// no walk over the rest of the log.
-    #[allow(deprecated)] // SPEC-2 C19: Stage 1's appended rows
-    fn persist_appended(&mut self, count: usize) -> Option<tempo_core::logbook::writer::Ticket> {
-        let change = Change::appended(&self.logbook, count, self.store.as_ref()?.resolved());
-        // An append: on the 1.13 path its rows are appended to `log.adi`, as 1.13 appended them.
-        self.store.as_mut()?.submit_appended(change)
+    // ─── The write path: plan off the Engine lock, make under it (SPEC-2 v3 §4.6, C19 Part B) ───
+    //
+    // Every write the station makes is ONE `RowChange` — the rows it takes out and puts in — and
+    // reaches the store, the hot index and (until the cut) the log in memory as that one change
+    // ([`Self::commit`]). A change to rows the log already holds is PLANNED off the Engine lock,
+    // on the rows read from the store ([`Self::log_plan`], [`LogPlan::rows`]), and MADE under it
+    // only while those rows are still the rows it read ([`Self::unchanged_since`]); otherwise it
+    // is planned again, and after [`PLANS`] plans it answers [`RowRefusal::Busy`]. An append reads
+    // nothing: the FT auto-log builds its row, takes the duplicate guard's answer from the hot
+    // index, and commits — no SQL, so the radio loop never waits on the disk ([`Self::append`]).
+    //
+    // Until the cut the log in memory is a FOLLOWER: each change is laid over it
+    // ([`Logbook::follow`]), at the station's watermarks, so the tests and the parity oracle still
+    // read a whole log. Nothing in the write path plans on it.
+
+    /// What a change planned off the Engine lock reads: the log's rows ([`Self::log_rows`]), this
+    /// process's changes the store may not hold yet, and where the log stands. Taken under the
+    /// lock — handles and pointers, no I/O — and read after it is released ([`LogPlan::rows`]).
+    ///
+    /// Another window's commits are taken in first ([`Self::recover_external_appends`]), as
+    /// before every change to rows the log holds, so the plan and the hot index start from the
+    /// same picture.
+    pub fn log_plan(&mut self) -> LogPlan {
+        self.recover_external_appends();
+        self.sync_hot();
+        self.log_view()
+    }
+
+    /// [`Self::log_plan`] for a change that holds no position of any row across the re-read of
+    /// another window's commits, which may then MOVE rows: a contact another window deleted is
+    /// gone from the log in memory before the plan looks, rather than lingering until the next
+    /// freshness poll. The LoTW batch's stamps, which have always re-read this way.
+    pub fn log_plan_moving(&mut self) -> LogPlan {
+        if self.store.is_some() {
+            self.refresh_from_store(false);
+        } else {
+            self.recover_external_appends();
+        }
+        self.sync_hot();
+        self.log_view()
+    }
+
+    /// [`Self::log_plan`] with nothing taken in first — what a READ of rows by id takes under the
+    /// lock (the Logbook's answer to a change it just made, a test's look at a row), and the
+    /// plan's handles. Pointers and no I/O; read after the lock is released.
+    pub fn log_view(&self) -> LogPlan {
+        LogPlan {
+            rows: self.log_rows(),
+            pending: self.store.as_ref().map(|s| s.pending()).unwrap_or_default(),
+            rev: self.marks.revision,
+            foreign: self.store.as_ref().map(|s| s.foreign_commits()),
+        }
+    }
+
+    /// ★ The commit's precondition (SPEC-2 v3 §4.6): whether the rows a plan read — `rows`, as it
+    /// read them — are still those rows. Under the Engine lock, and no I/O in the ordinary case.
+    ///
+    /// - **This process's changes**: none made since the plan was taken touched one of them
+    ///   ([`Recent`]).
+    /// - **Another window's**: none committed since — or, when one has, its commits are taken in
+    ///   (as before every change) and each row the plan read is the row the log now holds.
+    ///   Another window's change to OTHER rows then costs nothing but that take-in.
+    ///
+    /// ⚠️ The second half compares against the log in memory, which is kept current with the
+    /// store's commits until the cut. After the cut this is what must answer it instead: the
+    /// store's own word on those rows (A's D4-A, or a precondition the writer checks).
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): another window's change to a planned row, read in the log in memory
+    pub(crate) fn unchanged_since(&mut self, plan: &LogPlan, rows: &[Arc<QsoRecord>]) -> bool {
+        let ids: Vec<RecordId> = rows.iter().filter_map(|r| r.id).collect();
+        if !self.recent.untouched_since(plan.rev, &ids) {
+            return false;
+        }
+        let foreign = self.store.as_ref().map(|s| s.foreign_commits());
+        if foreign == plan.foreign {
+            return true;
+        }
+        self.recover_external_appends();
+        let held: HashMap<RecordId, &Arc<QsoRecord>> = self
+            .logbook
+            .records()
+            .iter()
+            .filter_map(|r| r.id.filter(|id| ids.contains(id)).map(|id| (id, r)))
+            .collect();
+        rows.iter().all(|r| {
+            r.id.and_then(|id| held.get(&id))
+                .is_some_and(|h| ***h == **r)
+        })
+    }
+
+    /// Whether the log has not changed at all since `plan` was taken — here or in another window:
+    /// the precondition of a change whose plan read something no row by row check can hold (the
+    /// Field Day merge's "already there", read off every row's merge identity).
+    pub(crate) fn unchanged_at_all_since(&self, plan: &LogPlan) -> bool {
+        self.marks.revision == plan.rev
+            && self.store.as_ref().map(|s| s.foreign_commits()) == plan.foreign
+    }
+
+    /// ★ Make one change — THE way a row of the log changes (SPEC-2 v3 C19). Under the Engine
+    /// lock, no I/O: the station's watermarks move by the change's class; the log in memory
+    /// follows it (until the cut); the hot index follows its pairs ([`Self::follow`]); and it
+    /// goes to the writer as one [`Change`] built from the same pairs — a channel send — or, on
+    /// the 1.13 path, `log.adi` is rewritten (`context` names the change if that fails). The
+    /// ticket, when the store took it.
+    pub(crate) fn commit(
+        &mut self,
+        change: RowChange,
+        context: &str,
+    ) -> Option<tempo_core::logbook::writer::Ticket> {
+        let marks = self.make(&change);
+        let appends = !change.clear && change.pairs.iter().all(|(before, _)| before.is_none());
+        match self.store.as_mut() {
+            Some(store) => {
+                let mut c = Change::of_pairs(marks, change.clear, &change.pairs, store.resolved());
+                if change.bulk {
+                    c = c.in_bulk();
+                }
+                c.meta = change.meta;
+                // On the 1.13 path the store's lane keeps `log.adi` by the rule below: rows only
+                // appended are appended to it (SPEC-2 v3 C19, D1-A). The database takes either
+                // as any change.
+                if appends {
+                    store.submit_appended(c)
+                } else {
+                    store.submit(c)
+                }
+            }
+            // The 1.13 path, as it always was: rows only appended are appended to `log.adi`;
+            // any other change rewrites it whole; a change that touched no row (a purge of an
+            // empty log) writes nothing.
+            None => {
+                if appends {
+                    let rows: Vec<QsoRecord> = change
+                        .pairs
+                        .iter()
+                        .filter_map(|(_, after)| after.as_deref().cloned())
+                        .collect();
+                    if !rows.is_empty() {
+                        self.append_to_log_file(&rows, false);
+                    }
+                } else {
+                    self.save_log(context);
+                }
+                None
+            }
+        }
+    }
+
+    /// A change, made in memory: the watermarks it moves the log to, the log in memory
+    /// following it, and the hot index following its pairs — the half of [`Self::commit`] and
+    /// [`Self::append`] that does not touch the disk.
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the log in memory follows each change
+    fn make(&mut self, change: &RowChange) -> Watermarks {
+        // Up to the log as it stands, first: a write that reached it around the station (a
+        // test's) is taken in, so the pairs start where the index does.
+        self.sync_hot();
+        let mut marks = self.marks;
+        marks.mark(change.class);
+        // A change that also appends rows after the rows it changed (an import's new contacts
+        // beside the ones it upgraded) moves an append's watermarks too, after its own.
+        if change.class != OpClass::Append
+            && change
+                .pairs
+                .iter()
+                .any(|(before, after)| before.is_none() && after.is_some())
+        {
+            marks.mark(OpClass::Append);
+        }
+        self.logbook.follow(&change.pairs, change.clear, marks);
+        self.follow(&change.pairs, marks);
+        marks
+    }
+
+    /// ★ Make a change planned off the Engine lock (SPEC-2 v3 §4.6) — under it. `rows` are the
+    /// plan's pairs: each row as the plan read it, and as the change leaves it (`None`: it goes).
+    /// [`Stale`], changing nothing, when one of the rows it read is no longer the row the plan
+    /// read ([`Self::unchanged_since`]): the caller plans again.
+    ///
+    /// In a debug build the rows the plan read are held to the log in memory as well — the
+    /// oracle the store's rows answer to until the cut (SPEC-2 v3 P6).
+    pub(crate) fn commit_planned(
+        &mut self,
+        plan: &LogPlan,
+        class: OpClass,
+        rows: Vec<MadeRow>,
+        bulk: bool,
+        meta: Vec<(&'static str, i64)>,
+        context: &str,
+    ) -> Result<Option<tempo_core::logbook::writer::Ticket>, Stale> {
+        let read: Vec<Arc<QsoRecord>> = rows.iter().map(|(b, _)| Arc::clone(b)).collect();
+        if !self.unchanged_since(plan, &read) {
+            return Err(Stale);
+        }
+        #[cfg(debug_assertions)]
+        self.check_plan_against_memory(&read);
+        let pairs = rows.into_iter().map(|(b, a)| (Some(b), a)).collect();
+        Ok(self.commit(
+            RowChange {
+                class,
+                pairs,
+                clear: false,
+                bulk,
+                meta,
+            },
+            context,
+        ))
+    }
+
+    /// ★ Make a bulk change planned off the Engine lock on the candidate sub-log
+    /// ([`plan_on_candidates`]) — under it, in the writer's bulk lane. [`Stale`], changing
+    /// nothing, when a row it read has changed since, a row of a call it read was added or
+    /// changed, an id it keeps was taken, or another window committed: the caller plans again.
+    ///
+    /// Each row it appends is filled (its country and US state, SPEC-2 v3 D2-A) and given an id
+    /// here, as every insert is — the station mints the ones it did not keep its own of. A change
+    /// that only appends is an append; one that upgrades held rows is `planned`'s class, and its
+    /// appends move an append's watermarks after it ([`Self::make`]). What it made: the ticket,
+    /// and the rows it appended, as appended.
+    pub(crate) fn commit_bulk(
+        &mut self,
+        plan: &LogPlan,
+        planned: Planned,
+        context: &str,
+    ) -> Result<
+        (
+            Option<tempo_core::logbook::writer::Ticket>,
+            Vec<Arc<QsoRecord>>,
+        ),
+        Stale,
+    > {
+        let mut ids: HashSet<RecordId> = planned.read.iter().filter_map(|r| r.id).collect();
+        ids.extend(&planned.kept);
+        if !self
+            .recent
+            .untouched_since_calls(plan.rev, &ids, &planned.calls)
+            || self.store.as_ref().map(|s| s.foreign_commits()) != plan.foreign
+        {
+            return Err(Stale);
+        }
+        #[cfg(debug_assertions)]
+        self.check_plan_against_memory(&planned.read);
+        let class = if planned.upgraded() == 0 {
+            OpClass::Append
+        } else {
+            planned.class
+        };
+        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+        let mut appended = Vec::new();
+        let mut pairs = Vec::with_capacity(planned.pairs.len());
+        for (before, after) in planned.pairs {
+            match (before, after) {
+                (None, Some(row)) => {
+                    let mut row = QsoRecord::clone(&row);
+                    fill_with(&mut row, country, state);
+                    if row.id.is_none() {
+                        row.id = Some(self.minter.mint());
+                    }
+                    let row = Arc::new(row);
+                    appended.push(Arc::clone(&row));
+                    pairs.push((None, Some(row)));
+                }
+                pair => pairs.push(pair),
+            }
+        }
+        let ticket = self.commit(
+            RowChange {
+                class,
+                pairs,
+                clear: false,
+                bulk: true,
+                meta: Vec::new(),
+            },
+            context,
+        );
+        Ok((ticket, appended))
+    }
+
+    /// The P6 oracle, in a debug build: every row a plan read off the store — this process's own
+    /// changes still on their way laid over it — is the row the log in memory holds. Over a log
+    /// small enough for a test to feel nothing, and only while no other process has ever
+    /// committed to the store: another window's commit reaches the store at once and this
+    /// window's memory only when it is taken in, so there the two may differ for a moment by
+    /// design (the precondition's second half, [`Self::unchanged_since`]).
+    #[cfg(debug_assertions)]
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the debug build's oracle is the log in memory
+    fn check_plan_against_memory(&self, read: &[Arc<QsoRecord>]) {
+        if self.logbook.len() > DUAL_EXECUTION_ROWS
+            || self.store.as_ref().is_some_and(|s| s.foreign_commits() > 0)
+        {
+            return;
+        }
+        for r in read {
+            let held = self.logbook.records().iter().find(|h| h.id == r.id);
+            assert_eq!(
+                held.map(|h| h.as_ref()),
+                Some(r.as_ref()),
+                "the write path planned on a row the log in memory does not hold as it read it"
+            );
+        }
+    }
+
+    /// ★ Add contacts to the log — the append every logged contact makes (the FT auto-log, the
+    /// cockpit's Log button, the manual form, Remote) and the contest merge's rows — and hand them
+    /// back with their ids: the one each carries, or one the station mints.
+    ///
+    /// ⛔ **NO SQL, and no pass over the log** (SPEC-2 v3 §4.6; the FT gate): the rows are built
+    /// in memory, taken by the hot index, and handed to the writer as they are
+    /// ([`Change::appended`]) — a channel send — so the radio loop never waits on the disk. The
+    /// duplicate guard was asked of the hot index before this, by the caller.
+    ///
+    /// With `receipt`, a receipt per change for a caller that proves it on disk after releasing
+    /// the lock (Remote); `None` when nothing could be handed on (the 1.13 path's append
+    /// failed, or no log is set).
+    pub(crate) fn append(
+        &mut self,
+        mut recs: Vec<QsoRecord>,
+        receipt: bool,
+    ) -> (
+        Vec<QsoRecord>,
+        Option<Vec<tempo_core::logbook::LogAppendReceipt>>,
+    ) {
+        for r in &mut recs {
+            if r.id.is_none() {
+                r.id = Some(self.minter.mint());
+            }
+        }
+        let rows: Vec<Arc<QsoRecord>> = recs.iter().cloned().map(Arc::new).collect();
+        let marks = self.make(&RowChange {
+            class: OpClass::Append,
+            pairs: rows.iter().map(|r| (None, Some(Arc::clone(r)))).collect(),
+            clear: false,
+            bulk: false,
+            meta: Vec::new(),
+        });
+        let receipts = match self.store.as_mut() {
+            Some(store) => {
+                // An append: on the 1.13 path its rows are appended to `log.adi`, as 1.13
+                // appended them (SPEC-2 v3 C19, D1-A), where the database takes them as any
+                // change.
+                let ticket =
+                    store.submit_appended(Change::appended(&rows, marks, store.resolved()));
+                match (ticket, receipt) {
+                    // Redeemed once the change is safe: committed, and on the 1.13 path in
+                    // `log.adi` too.
+                    (Some(ticket), true) => Some(vec![store.receipt(ticket)]),
+                    (Some(_), false) => Some(Vec::new()),
+                    (None, _) => None,
+                }
+            }
+            // The 1.13 path: the rows are the log in memory's last (just followed), and are
+            // appended to `log.adi` behind them.
+            None => self.append_to_log_file(&recs, receipt),
+        };
+        (recs, receipts)
     }
 
     /// Point the Field Day contest log at its durable ADIF journal. Called once
@@ -1205,63 +2326,47 @@ impl StationCore {
     }
 
     /// Write the fills the background job found (SPEC-2 v3 D2-A, [`crate::logfill`]) into the
-    /// log and, as ONE change in the writer's bulk lane, into the store — with `fill_ver` on that
+    /// log, in one breath, as ONE change in the writer's bulk lane — with `fill_ver` on that
     /// change's last chunk, so the store names the resolver data its fills come from only once
-    /// every one of them is on disk. Returns how many contacts gained a field.
+    /// every one of them is on disk. Returns how many contacts gained a field. The job itself
+    /// plans its fills with the Engine lock released ([`crate::logwrite::fill`]); this is the
+    /// same plan and commit for an owner with the log in hand.
     ///
-    /// Each fill lands only in a field the contact still lacks: one edited, filled or deleted
-    /// since the job read it keeps what it has now. No disk and no resolver call under the lock
-    /// (the job resolved every call before it came here): one pass over the log, as any change
-    /// to held rows makes before the store owns the write path (C19). Nothing on the 1.13 path,
-    /// where the job never runs.
-    #[allow(deprecated)] // SPEC-2 C19: the fill job's fills, applied to the in-memory log
+    /// Each fill lands only in a field the contact still lacks, as the plan reads it: one edited,
+    /// filled or deleted since the job read it keeps what it has now ([`fill_pairs`]). Nothing on
+    /// the 1.13 path, where the job never runs.
     pub fn apply_log_fills(&mut self, fills: &[LogFill], fill_ver: i64) -> usize {
         if self.store.is_none() {
             return 0;
         }
-        // Another window's commits first, as every change to rows the log holds takes them.
-        self.recover_external_appends();
-        let base = self.change_base();
-        let by_id: HashMap<tempo_core::logbook::RecordId, &LogFill> =
-            fills.iter().map(|f| (f.id, f)).collect();
-        let hits: Vec<(usize, Option<String>, Option<String>)> = self
-            .logbook
-            .records()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, r)| {
-                let fill = by_id.get(&r.id?)?;
-                let country = fill.country.clone().filter(|_| r.country.is_none());
-                let state = fill.state.clone().filter(|_| r.state.is_none());
-                (country.is_some() || state.is_some()).then_some((i, country, state))
-            })
-            .collect();
-        if !hits.is_empty() {
-            // An upgrade, like the fills above: content a fold reads, and no row moves.
-            let records = self.logbook.records_mut(OpClass::Upgrade);
-            for (i, country, state) in &hits {
-                let r = Arc::make_mut(&mut records[*i]);
-                if let Some(c) = country {
-                    r.country = Some(c.clone());
+        let ids: Vec<RecordId> = fills.iter().map(|f| f.id).collect();
+        for _ in 0..PLANS {
+            let plan = self.log_plan();
+            let rows = match plan.rows(&ids) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tempo_core::applog::error(
+                        "logbook",
+                        &format!("the fill job could not read the logbook: {e}"),
+                    );
+                    return 0;
                 }
-                if let Some(s) = state {
-                    r.state = Some(s.clone());
-                }
+            };
+            let pairs = fill_pairs(&rows, fills);
+            let n = pairs.len();
+            let meta = vec![(crate::logfill::FILL_VER, fill_ver)];
+            if self
+                .commit_planned(&plan, fill_class(n), pairs, true, meta, "fill")
+                .is_ok()
+            {
+                return n;
             }
         }
-        // Sent even when nothing was filled: `fill_ver` is how the next launch knows the job
-        // has run over this data.
-        if let Some(store) = &self.store {
-            let mut change = Change::between(&base.rows, &self.logbook, store.resolved()).in_bulk();
-            change.meta.push((crate::logfill::FILL_VER, fill_ver));
-            if let Some(store) = self.store.as_mut() {
-                store.submit(change);
-            }
-        }
-        // A filled country is an entity the hot index keys on: it follows the fills row by row,
-        // as it follows every change the station makes (see `persist_change`).
-        self.catch_up_hot(Some(&base));
-        hits.len()
+        tempo_core::applog::warn(
+            "logbook",
+            "the fill job's contacts kept changing under it; it runs again at the next launch",
+        );
+        0
     }
 
     /// One-click HUNT: remember the activator + park so the NEXT QSO logged
@@ -1355,7 +2460,7 @@ impl StationCore {
 
     /// The station's position id, which the ids of the contacts it logs from now on carry (see
     /// [`RecordId`]); 0 until the profile has one.
-    #[allow(deprecated)] // SPEC-2 C19: the in-memory log still mints the rows its imports add (B)
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the log in memory still mints the rows a take-in of log.adi and the 1.13 recovery add
     pub(crate) fn set_posid(&mut self, posid: u32) {
         self.minter.set_posid(posid);
         self.logbook.set_posid(posid);
@@ -1394,14 +2499,14 @@ impl StationCore {
 
     /// ★ THE way a change to the log reaches the hot index (SPEC-2 v3 C19): `pairs`, the rows it
     /// took out and put in ([`RowPair`]), and `now`, the watermarks it left the log at, which the
-    /// station keeps from here. Every change the station makes ends here — the one-contact
-    /// append ([`Self::add_record`]) and every change measured against a [`ChangeBase`]
-    /// ([`Self::persist_change`]) — so the index hears of each as it is made, row by row.
-    ///
-    /// Until the write path plans its own changes (Part B), the in-memory log still makes each
-    /// one, and `now` is its watermarks after it.
+    /// station keeps from here. Every change the station makes ends here — the append
+    /// ([`Self::append`]), every change it commits ([`Self::commit`]), and each change still made
+    /// on the log in memory and measured against a [`ChangeBase`] (a take-in of `log.adi`, the
+    /// 1.13 backfills, another window's reload: [`Self::persist_change`]) — so the index hears of
+    /// each as it is made, row by row. For those last, `now` is the log's watermarks after it.
     #[allow(deprecated)] // SPEC-2 C19: a debug build checks the index against the in-memory log
     pub(crate) fn follow(&mut self, pairs: &[RowPair], now: Watermarks) {
+        self.recent.note(now.revision, pairs);
         let keys = StationKeys(self.dxcc_resolve.as_deref());
         let hot = hot_mut(&mut self.hot);
         hot.follow(pairs, self.marks.revision, now.revision, &keys);
@@ -1497,7 +2602,13 @@ impl StationCore {
             None => {
                 let keys = StationKeys(self.dxcc_resolve.as_deref());
                 hot_mut(&mut self.hot).catch_up(&self.logbook, &keys);
-                self.marks = self.logbook.marks();
+                let now = self.logbook.marks();
+                // A write the station did not make, with no pairs to say which rows it touched:
+                // a plan spanning it plans again.
+                if now.revision != self.marks.revision {
+                    self.recent.note_any(now.revision);
+                }
+                self.marks = now;
             }
         }
     }
@@ -1544,20 +2655,6 @@ impl StationCore {
             );
         }
         grid
-    }
-
-    /// Add a contact to the log in memory — the append `Engine::log_qso` makes before it is
-    /// carried to disk — and hand back its id: the one it carries, or one the station mints. The
-    /// hot index takes the row here ([`Self::follow`]), with no pass over the log.
-    #[allow(deprecated)] // SPEC-2 C19: the append to the in-memory log
-    pub(crate) fn add_record(&mut self, mut rec: QsoRecord) -> RecordId {
-        let id = *rec.id.get_or_insert_with(|| self.minter.mint());
-        // The index and the watermarks stand where the log does before the row goes in.
-        self.sync_hot();
-        self.logbook.add(rec);
-        let row = self.logbook.records().last().cloned();
-        self.follow(&[(None, row)], self.logbook.marks());
-        id
     }
 
     /// The contest session's sweep of the general log ([`Logbook::worked_keys_since`]'s answer),
@@ -1840,7 +2937,7 @@ impl StationCore {
     ///   per-record id and a tombstone — the same ingredient the edit trade above lacks, and
     ///   not something that can be added to an ADIF other loggers also read.
     #[allow(deprecated)] // SPEC-2 C19: another window's commits (D4)
-    fn recover_external_appends(&mut self) -> bool {
+    pub(crate) fn recover_external_appends(&mut self) -> bool {
         if self.on_log_file() {
             return self.take_in_log_file_changes();
         }
@@ -2031,9 +3128,11 @@ impl StationCore {
         }
     }
 
-    /// THE way to APPEND to the logbook file: write the records on the end, then
-    /// carry the freshness fingerprint forward so the recovery gate above does not
-    /// re-parse a multi-MB log we extended ourselves.
+    /// THE way to APPEND to the logbook file on the 1.13 path (no store): write the records on
+    /// the end, then carry the freshness fingerprint forward so the recovery gate above does not
+    /// re-parse a multi-MB log we extended ourselves. With `receipt`, a receipt per record for a
+    /// caller that syncs it after releasing the lock (Remote); `None` when an append failed or
+    /// no log is set. No rewrite, rollback, retry or second upload path.
     ///
     /// An append needs no recovery first — it cannot truncate anything — but it does
     /// move the file's `(mtime, len)`, and leaving the fingerprint behind made the
@@ -2072,27 +3171,12 @@ impl StationCore {
     /// first, always. Checked here in debug builds, where the invariant is relied on.
     ///
     /// [`adif_record_own_log`]: tempo_core::logbook::adif_record_own_log
-    pub(crate) fn append_to_log(&mut self, recs: &[QsoRecord]) {
-        let _ = self.append_to_log_checked(recs, false);
-    }
-
-    // The same memory-first append and fingerprint logic, with an explicit
-    // receipt for Remote. No rewrite, rollback, retry or second upload path.
-    #[allow(deprecated)] // SPEC-2 C19: Stage 1's append to the in-memory log
-    pub(crate) fn append_to_log_checked(
+    #[allow(deprecated)] // SPEC-2 C19 (C, D1): the log.adi fallback's append checks the log in memory
+    fn append_to_log_file(
         &mut self,
         recs: &[QsoRecord],
         receipt: bool,
     ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
-        if self.store.is_some() {
-            // The rows are already the log's last (memory first — see above); the writer is
-            // told, the mirror follows, and nothing here touches the disk. A receipt is the
-            // change's ticket, redeemed after every lock is released.
-            let ticket = self.persist_appended(recs.len())?;
-            // Redeemed once the change is safe: committed, and on the 1.13 path in `log.adi`.
-            let receipt = receipt.then(|| self.store.as_ref().map(|s| s.receipt(ticket)));
-            return Some(receipt.flatten().into_iter().collect());
-        }
         let path = self.log_path.clone()?;
         debug_assert!(
             {
@@ -2103,7 +3187,7 @@ impl StationCore {
                         .zip(recs)
                         .all(|(held, rec)| **held == *rec)
             },
-            "append_to_log: the records must already be in memory (see the contract above)"
+            "append_to_log_file: the records must already be in memory (see the contract above)"
         );
         let before = log_file_stamp(&path);
         let mut accountable = before.is_some() && before == self.last_log_mtime;
@@ -2224,181 +3308,251 @@ impl StationCore {
         true
     }
 
-    /// The contact the log holds under `id`, if any.
-    #[allow(deprecated)] // SPEC-2 C19: a row by id, from the in-memory log
-    pub(crate) fn row(&self, id: RecordId) -> Option<Arc<QsoRecord>> {
-        self.logbook
-            .records()
-            .iter()
-            .find(|r| r.id == Some(id))
-            .cloned()
+    /// ★ Plan and make a change to the contact `id` in one breath — for an owner holding the
+    /// station with no Engine guard (a test's own station or engine): the plan's read of the
+    /// store is made here, then the change, and the change is planned again while the row keeps
+    /// changing under it, [`PLANS`] times in all. A command holding the Engine lock makes the same
+    /// plan with the lock released and the same commit under it ([`crate::logwrite`]).
+    ///
+    /// `decide` is handed the row as it stands and answers what to make of it ([`Decided`]).
+    /// `Err` when the store could not be read; `Ok(Err)` when no row carries `id`, `decide`
+    /// refused, or the row kept changing ([`RowRefusal`]); `Ok(Ok(None))` when `decide` found
+    /// nothing to change; otherwise the row as the plan read it and as the change left it.
+    pub(crate) fn change_by_id(
+        &mut self,
+        id: RecordId,
+        context: &str,
+        mut decide: impl FnMut(&Self, &Arc<QsoRecord>) -> Decided,
+    ) -> Result<Result<Option<MadeRow>, RowRefusal>, String> {
+        for _ in 0..PLANS {
+            let plan = self.log_plan();
+            let Some(before) = plan.row(id)? else {
+                return Ok(Err(RowRefusal::Gone));
+            };
+            let (class, after) = match decide(self, &before) {
+                Ok(Some(made)) => made,
+                Ok(None) => return Ok(Ok(None)),
+                Err(refusal) => return Ok(Err(refusal)),
+            };
+            let after = after.map(Arc::new);
+            let rows = vec![(Arc::clone(&before), after.clone())];
+            if self
+                .commit_planned(&plan, class, rows, false, Vec::new(), context)
+                .is_ok()
+            {
+                return Ok(Ok(Some((before, after))));
+            }
+        }
+        Ok(Err(RowRefusal::Busy))
+    }
+
+    /// Make `ops` on the contact `id`, in one breath ([`Self::change_by_id`]): whether a row
+    /// carries `id` and took them. A row that kept changing under them is not changed, and says
+    /// so in the diagnostic log.
+    fn change_row(&mut self, id: RecordId, ops: &[LogOp], context: &str) -> bool {
+        match self.change_by_id(id, context, |_, row| Ok(ops_on(row, ops))) {
+            Ok(Ok(made)) => made.is_some(),
+            Ok(Err(RowRefusal::Busy)) => {
+                tempo_core::applog::warn(
+                    "logbook",
+                    &format!("{context}: the contact kept changing under the change; not made"),
+                );
+                false
+            }
+            Ok(Err(_)) => false,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("{context}: the logbook could not be read: {e}"),
+                );
+                false
+            }
+        }
     }
 
     /// The contact `id` names, if it is still the version whose edit key is `edit_key` — the
-    /// check every change addressed by a `RowRef` makes first, against the log as it stands:
-    /// another instance's appends are folded in before it looks, as before any change.
+    /// check every change addressed by a `RowRef` makes first, on the row as it stands.
     ///
     /// A key rather than the whole row, so the writes that happen on their own — an upload
     /// stamp, a confirmation from LoTW — never refuse an operator's edit ([`QsoEdit::key`]).
-    pub fn fresh_row(
-        &mut self,
-        id: RecordId,
-        edit_key: &str,
-    ) -> Result<Arc<QsoRecord>, RowRefusal> {
-        self.recover_external_appends();
-        let row = self.row(id).ok_or(RowRefusal::Gone)?;
-        if QsoEdit::project(&row).key() == edit_key {
-            Ok(row)
+    pub fn fresh_row(row: &Arc<QsoRecord>, edit_key: &str) -> Result<(), RowRefusal> {
+        if QsoEdit::project(row).key() == edit_key {
+            Ok(())
         } else {
-            Err(RowRefusal::Changed(row))
+            Err(RowRefusal::Changed(Arc::clone(row)))
         }
-    }
-
-    /// Apply one change to one contact, named by its id — the path every change an operator or
-    /// a stamp makes to ONE row takes. A change that finds no row (deleted since, or another
-    /// instance's) changes nothing and says so; it never falls back to a position.
-    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
-    fn change_row(&mut self, op: LogOp, context: &str) -> bool {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let done = !self.logbook.apply(op).is_empty();
-        if done {
-            self.persist_change(base, context);
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        done
     }
 
     /// Edit the contact `id` (a correction — busted call, wrong band, etc). Sync-derived
-    /// state is preserved by `Logbook::update_record`. Returns false if no row carries `id`.
-    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
-    pub fn update_qso(&mut self, id: RecordId, mut rec: QsoRecord) -> bool {
-        // Keep country populated on edits (the edit form doesn't carry it).
+    /// state is preserved by the edit ([`tempo_core::logbook::LogOp::Edit`]). Returns false if
+    /// no row carries `id`.
+    pub fn update_qso(&mut self, id: RecordId, rec: QsoRecord) -> bool {
+        self.update_row(id, rec).is_some()
+    }
+
+    /// [`Self::update_qso`], handing back the contact as the edit left it.
+    pub(crate) fn update_row(&mut self, id: RecordId, rec: QsoRecord) -> Option<Arc<QsoRecord>> {
+        let made = self.change_by_id(id, "update_qso", |sc, before| {
+            Ok(ops_on(before, &[sc.edit_op(id, rec.clone())]))
+        });
+        match made {
+            Ok(Ok(Some((before, Some(after))))) => {
+                self.requeue_if_corrected(&before, &after);
+                Some(after)
+            }
+            Ok(Ok(Some((_, None)))) | Ok(Ok(None)) | Ok(Err(_)) => None,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("update_qso: the logbook could not be read: {e}"),
+                );
+                None
+            }
+        }
+    }
+
+    /// The edit `rec` of the contact `id` as an op — with its country filled from the
+    /// station's resolver when the edit carries none (the edit form never does), which the edit
+    /// then keeps over the stored one.
+    pub(crate) fn edit_op(&self, id: RecordId, mut rec: QsoRecord) -> LogOp {
         if rec.country.is_none() {
             if let Some(resolve) = &self.dxcc_resolve {
                 rec.country = resolve(&rec.call);
             }
         }
-        // Recover another instance's appends BEFORE applying the edit, so the
-        // full-log rewrite below can't drop them (and so the pre-edit record is
-        // still present to dedup against — no stale copy is re-added).
-        self.recover_external_appends();
-        let base = self.change_base();
-        // A CALLSIGN correction is the one edit the services have to hear about again.
-        // `Logbook::update_record` clears the upload stamps for exactly that reason — "the
-        // services hold the OLD call, so clearing the upload stamps re-queues the corrected
-        // QSO to every one of them" — but clearing a stamp queues nothing, and nothing else
-        // ever re-scans for an unstamped record. So a busted call fixed in the log stayed
-        // busted at QRZ/ClubLog/eQSL/… for good, with the stamps that were the only evidence
-        // anything was owed now erased. Read the stored call BEFORE the update, under
-        // `update_record`'s own trimmed, case-insensitive rule, so the two can never disagree
-        // about what counts as a correction.
-        let call_changed = self
-            .row(id)
-            .is_some_and(|old| !rec.call.trim().eq_ignore_ascii_case(old.call.trim()));
-        let ok = !self
-            .logbook
-            .apply(LogOp::Edit {
-                id,
-                rec: Box::new(rec),
-            })
-            .is_empty();
-        if !ok {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        } else {
-            self.persist_change(base, "update_qso");
-            if call_changed {
-                self.requeue_corrected(id);
-            }
+        LogOp::Edit {
+            id,
+            rec: Box::new(rec),
         }
-        ok
     }
 
-    /// A contact whose CALLSIGN was just corrected, queued to every connector again — the
-    /// STORED record, not the incoming payload: `update_record` merges the fields the edit form
-    /// does not carry (park refs, TIME_OFF, the split leg), and the connectors must send the
-    /// whole contact, not the form's half of it.
-    fn requeue_corrected(&mut self, id: RecordId) {
-        if let Some(fixed) = self.row(id).map(|r| QsoRecord::clone(&r)) {
+    /// A contact whose CALLSIGN a change just corrected — `before` as the row stood, `after` as
+    /// the edit left it — queued to every connector again, as the edit left it.
+    ///
+    /// A CALLSIGN correction is the one edit the services have to hear about again. The edit
+    /// clears the upload stamps for exactly that reason — "the services hold the OLD call, so
+    /// clearing the upload stamps re-queues the corrected QSO to every one of them" — but
+    /// clearing a stamp queues nothing, and nothing else ever re-scans for an unstamped record.
+    /// So a busted call fixed in the log stayed busted at QRZ/ClubLog/eQSL/… for good, with the
+    /// stamps that were the only evidence anything was owed now erased. Read under the edit's
+    /// own trimmed, case-insensitive rule, so the two can never disagree about what counts as a
+    /// correction. The STORED record, not the incoming payload: the edit merges the fields the
+    /// form does not carry (park refs, TIME_OFF, the split leg), and the connectors must send
+    /// the whole contact, not the form's half of it.
+    pub(crate) fn requeue_if_corrected(&mut self, before: &QsoRecord, after: &QsoRecord) {
+        if !after.call.trim().eq_ignore_ascii_case(before.call.trim()) {
             // Every leg: every stamp was just cleared, so every connector is owed. The disabled
             // ones are dropped by the worker's own toggle check, the same way a freshly logged
             // contact's are.
-            self.requeue_upload(fixed, crate::engine::upload_legs::ALL, 0);
+            self.requeue_upload(after.clone(), crate::engine::upload_legs::ALL, 0);
         }
     }
 
-    /// The Logbook form's edit of the contact `id`, as ONE change: the field edit, and the
-    /// QSL-sent and paper-card marks where the edit changes them — what the form used to send as
-    /// three commands, each its own write (`QsoEdit`'s header).
-    ///
-    /// Refused — changing nothing — when no row carries `id`, or when the row is no longer the
-    /// version whose key is `edit_key`. `Err` of `Ok` is an edit the caller must not send again
-    /// as it is: its QSL-sent code is not one the form offers.
-    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
-    pub fn edit_qso(
-        &mut self,
+    /// The Logbook form's edit of the contact `id`, as ops on the row as it stands: the field
+    /// edit, and the QSL-sent and paper-card marks where the edit changes them — what the form
+    /// used to send as three commands, each its own write (`QsoEdit`'s header). Refused when the
+    /// row is no longer the version whose key is `edit_key`; `Err` for an edit the caller must not
+    /// send again as it is (its QSL-sent code is not one the form offers).
+    pub(crate) fn edit_ops(
+        &self,
         id: RecordId,
         edit_key: &str,
         edit: &QsoEdit,
-    ) -> Result<Result<(), RowRefusal>, String> {
-        let stored = match self.fresh_row(id, edit_key) {
-            Ok(row) => row,
-            Err(refusal) => return Ok(Err(refusal)),
-        };
-        let sent = edit.qsl_sent_change(&stored)?;
-        let card = edit.qsl_card_change(&stored);
-        let mut rec = edit.record(&stored);
+        stored: &Arc<QsoRecord>,
+    ) -> Result<Result<Vec<LogOp>, RowRefusal>, String> {
+        if let Err(refusal) = Self::fresh_row(stored, edit_key) {
+            return Ok(Err(refusal));
+        }
+        let sent = edit.qsl_sent_change(stored)?;
+        let card = edit.qsl_card_change(stored);
+        let mut rec = edit.record(stored);
         // Keep country populated on edits, as `update_qso` does: the form does not carry it.
         if let Some(resolve) = &self.dxcc_resolve {
             rec.country = resolve(&rec.call);
         }
-        let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
-        let base = self.change_base();
-        self.logbook.apply(LogOp::Edit {
+        let mut ops = vec![LogOp::Edit {
             id,
             rec: Box::new(rec),
-        });
-        // A corrected call goes back out to the connectors as the edit alone left the contact
-        // ([`Self::requeue_corrected`]) — as it did when the two marks were commands of their own
-        // that came after the edit.
-        let corrected = if call_changed { self.row(id) } else { None };
+        }];
         if let Some(via) = sent {
-            self.logbook.apply(LogOp::MarkQslSent {
+            ops.push(LogOp::MarkQslSent {
                 id,
                 via,
                 date_unix: now_unix_secs(),
             });
         }
         if let Some(received) = card {
-            self.logbook.apply(LogOp::MarkQslCard { id, received });
+            ops.push(LogOp::MarkQslCard { id, received });
         }
-        self.persist_change(base, "edit_qso");
-        if let Some(fixed) = corrected {
-            self.requeue_upload(QsoRecord::clone(&fixed), crate::engine::upload_legs::ALL, 0);
+        Ok(Ok(ops))
+    }
+
+    /// The Logbook form's edit of the contact `id`, as ONE change ([`Self::edit_ops`]), in one
+    /// breath ([`Self::change_by_id`]). Refused — changing nothing — when no row carries `id`,
+    /// when the row is no longer the version whose key is `edit_key`, or when it kept changing.
+    /// `Err` for an edit the caller must not send again as it is, or a store that could not be
+    /// read. What it made: the row as it was, and as the edit left it.
+    pub fn edit_qso(
+        &mut self,
+        id: RecordId,
+        edit_key: &str,
+        edit: &QsoEdit,
+    ) -> Result<Result<MadeRow, RowRefusal>, String> {
+        let mut bad = None;
+        let mut edited = None;
+        let made = self.change_by_id(id, "edit_qso", |sc, stored| {
+            match sc.edit_ops(id, edit_key, edit, stored) {
+                Ok(Ok(ops)) => {
+                    // The row as the field edit alone leaves it — what a corrected call goes back
+                    // out to the connectors as, below.
+                    edited = ops.first().and_then(|op| match op.apply_to(stored) {
+                        RowAfter::Now(row) => Some(*row),
+                        RowAfter::Gone | RowAfter::Unchanged => None,
+                    });
+                    Ok(ops_on(stored, &ops))
+                }
+                Ok(Err(refusal)) => Err(refusal),
+                Err(e) => {
+                    bad = Some(e);
+                    Ok(None)
+                }
+            }
+        })?;
+        if let Some(e) = bad {
+            return Err(e);
         }
-        Ok(Ok(()))
+        match made {
+            Ok(Some((before, after))) => {
+                // A corrected call goes back out to the connectors as the EDIT left the contact
+                // — as it did when the two marks were commands of their own that came after it.
+                if let Some(edited) = edited {
+                    self.requeue_if_corrected(&before, &edited);
+                }
+                Ok(Ok((before, after)))
+            }
+            Ok(None) => Ok(Err(RowRefusal::Gone)),
+            Err(refusal) => Ok(Err(refusal)),
+        }
     }
 
     /// Record — or WITHDRAW — the operator's QSL-sent declaration for the contact `id`.
     /// `Some(via)` marks it sent (bureau/direct/electronic, dated now); `None` clears the mark,
     /// which until now had no path at all while the received side has taken a bool since #152.
-    /// Never touches confirmation state in either direction. Persists by rewriting the ADIF —
-    /// a clear MUST be written, since it carries the operator decision that keeps a later
-    /// import from restoring the mark. Returns false if no row carries `id`.
+    /// Never touches confirmation state in either direction. A clear MUST be written, since it
+    /// carries the operator decision that keeps a later import from restoring the mark. Returns
+    /// false if no row carries `id`.
     pub fn mark_qsl_sent(
         &mut self,
         id: RecordId,
         via: Option<tempo_core::logbook::QslVia>,
     ) -> bool {
         self.change_row(
-            LogOp::MarkQslSent {
+            id,
+            &[LogOp::MarkQslSent {
                 id,
                 via,
                 date_unix: now_unix_secs(),
-            },
+            }],
             "mark_qsl_sent",
         )
     }
@@ -2406,52 +3560,64 @@ impl StationCore {
     /// Record whether a PAPER QSL card arrived for the contact `id` (#152) — an award-eligible
     /// confirmation, which the needs/awards model and the hot index both read.
     pub fn mark_qsl_card(&mut self, id: RecordId, received: bool) -> bool {
-        self.change_row(LogOp::MarkQslCard { id, received }, "mark_qsl_card")
+        self.change_row(id, &[LogOp::MarkQslCard { id, received }], "mark_qsl_card")
     }
 
     /// Set — or REMOVE — the satellite tag on the contact `id` (`PROP_MODE=SAT` + `SAT_NAME`).
     /// `Some(name)` tags the contact, `None` removes the tag; the name has already been
     /// gated against LoTW's accepted list by the command layer that owns the table.
     ///
-    /// Persists by rewriting the ADIF — a removal MUST be written: the wrongly tagged record
-    /// is what LoTW and the Satellite-VUCC fold are reading, and until the file says
-    /// otherwise the contact keeps claiming a bird it was never worked through.
-    /// `PROP_MODE=SAT` diverts a grid out of the per-band terrestrial sets into the
-    /// band-independent satellite one, which the hot index follows. Returns false if no row
-    /// carries `id`.
+    /// A removal MUST be written: the wrongly tagged record is what LoTW and the
+    /// Satellite-VUCC fold are reading, and until the store says otherwise the contact keeps
+    /// claiming a bird it was never worked through. `PROP_MODE=SAT` diverts a grid out of the
+    /// per-band terrestrial sets into the band-independent satellite one, which the hot index
+    /// follows. Returns false if no row carries `id`, and for a blank name.
     pub fn set_sat_tag(&mut self, id: RecordId, sat_name: Option<&str>) -> bool {
         self.change_row(
-            LogOp::SetSatTag {
+            id,
+            &[LogOp::SetSatTag {
                 id,
                 sat_name: sat_name.map(str::to_string),
-            },
+            }],
             "set_sat_tag",
         )
     }
 
     /// Delete the contact `id` (a mis-logged contact). Returns false if no row carries it.
     ///
-    /// Another instance's appends are recovered BEFORE the delete (in the change path), so the
-    /// rewrite drops only THIS record and keeps the other writer's QSOs.
+    /// Another instance's commits are taken in BEFORE the delete is planned
+    /// ([`Self::log_plan`]), so only THIS record goes and the other writer's QSOs stay.
     pub fn delete_qso(&mut self, id: RecordId) -> bool {
-        self.change_row(LogOp::Delete(id), "delete_qso")
+        self.change_row(id, &[LogOp::Delete(id)], "delete_qso")
     }
 
     /// Purge the ENTIRE logbook (operator-confirmed, destructive, irreversible).
-    /// Clears every contact in memory, rewrites the ADIF file to an empty log, and
-    /// recomputes the worked-entity/grid sets (so the roster B4 highlighting and
-    /// the needs/awards model reset too). Returns the number of contacts removed.
-    #[allow(deprecated)] // SPEC-2 C19: clears the in-memory log
+    /// Clears every contact, empties the store (one statement) and `log.adi` with it, and
+    /// resets the worked-entity/grid sets (so the roster B4 highlighting and the needs/awards
+    /// model reset too). Returns the number of contacts removed.
+    ///
+    /// A purge is ONE change, with no plan to make: it reads nothing the store holds, and
+    /// whatever the log holds when it runs is what goes.
+    #[allow(deprecated)] // SPEC-2 C19 (the cut): the hot index is told the purge row by row, from the log in memory
     pub fn clear_logbook(&mut self) -> usize {
-        let base = self.change_base();
-        let n = self.logbook.clear();
-        if n > 0 {
-            self.persist_change(base, "clear_logbook");
-            self.sync_hot();
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
+        self.sync_hot();
+        let pairs: Vec<RowPair> = self
+            .logbook
+            .records()
+            .iter()
+            .map(|r| (Some(Arc::clone(r)), None))
+            .collect();
+        let n = pairs.len();
+        self.commit(
+            RowChange {
+                class: OpClass::Structural,
+                pairs,
+                clear: n > 0,
+                bulk: true,
+                meta: Vec::new(),
+            },
+            "clear_logbook",
+        );
         n
     }
 
@@ -2461,125 +3627,70 @@ impl StationCore {
     /// snapshot derives real "needs" from the enlarged log (and roster B4
     /// highlighting updates).
     ///
-    /// Two write paths, because the import has two effects. New contacts are
-    /// APPENDED (cheap, and all an import used to do). But an import also upgrades
-    /// records already in the log — the confirmations and credits a LoTW/eQSL/QRZ
-    /// download restates — and an append cannot express a change to a record that
-    /// is already in the file. Those need the full rewrite, or the confirmations
-    /// live in memory until the next save and are lost outright if the app exits
-    /// first.
+    /// Two effects in ONE change: new contacts are APPENDED, and the records already in the
+    /// log that the import restates — the confirmations and credits a LoTW/eQSL/QRZ download
+    /// carries — are upgraded in place. Planned on the rows of the calls it brings
+    /// ([`plan_import`]), in one breath here; a command plans it with the Engine lock released
+    /// ([`crate::logwrite::import_adif`]).
     ///
-    /// That second path is why this now recovers first, like every other full-log
-    /// rewrite in this file. An append-only import was concurrency-safe by
-    /// construction and was the one exemption from the contract above; the moment it
-    /// could `rename()` a whole log over the file, the exemption stopped holding and
-    /// a stale copy silently deleted a second instance's QSOs.
-    ///
-    /// ORDER — before the MERGE, not merely before the WRITE, matching every sibling
-    /// site and the "BEFORE their mutation" requirement on
-    /// [`Self::recover_external_appends`]. A confirmation report is about contacts
-    /// already logged, and some of them may be logged only by the OTHER instance. Run
-    /// first, and such a row matches the recovered record and confirms it. Run after,
-    /// and the merge — looking at a log that does not contain it yet — reads the same
-    /// row as a brand-new contact and logs it a second time. So the late order costs
-    /// a duplicate and a lost confirmation even though it saves the file.
+    /// ORDER — another instance's commits are taken in before the import is planned
+    /// ([`Self::log_plan`]), as before every change. A confirmation report is about contacts
+    /// already logged, some of them perhaps only by the OTHER instance: taken in first, such a
+    /// row matches the recovered record and confirms it; after, the import reads it as a
+    /// brand-new contact and logs it a second time.
     ///
     /// A new row's COUNTRY and STATE are resolved BEFORE it joins the log, so it is appended
     /// complete — and an imported US contact carries its state from the moment it is imported,
     /// in the store as on every screen (SPEC-2 v3 D2-A). Companion mode imports one record per
-    /// contact WSJT-X logs, and WSJT-X writes no COUNTRY: filled afterwards by the backfill,
-    /// every such contact was an in-place write — a rewrite of the log's revision (a full
-    /// reload for every log view) and a whole-log `save` of log.adi, fsync included, per
-    /// contact.
-    #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
+    /// contact WSJT-X logs, and WSJT-X writes no COUNTRY: filled afterwards, every such contact
+    /// was an in-place write — a rewrite of the log's revision (a full reload for every log view)
+    /// and a whole-log `save` of log.adi, fsync included, per contact.
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
-        let (added, skipped, merged) = self
-            .logbook
-            .import_adif_with(text, |r| fill_with(r, country, state));
-        if self.store.is_some() {
-            // With the store the import and the rows it upgraded are ONE change of rows — no
-            // whole-log rewrite, whatever the import touched. Its new rows arrived filled, and
-            // the rows the log already held are the fill job's (D2-A), so nothing is backfilled
-            // here. In companion mode this runs once per contact WSJT-X logs, from the radio
-            // loop: it must not touch the disk, and it does not.
-            if merged == 0 {
-                // Only new contacts, at the end of the log: on the 1.13 path they are appended
-                // to `log.adi`, as 1.13's import appended them. The store writes the same change.
-                self.persist_appended(added.len());
-                self.catch_up_hot(Some(&base));
-            } else {
-                self.persist_change(base, "import_adif");
-            }
-        } else {
-            if merged > 0 {
-                self.save_log("import_adif"); // rewrites the whole log, `added` included
-            } else {
-                self.append_to_log(&added);
-            }
-            self.catch_up_hot(Some(&base));
-            self.backfill_country();
-        }
-        self.sync_hot();
-        (added.len(), skipped, merged, self.logbook.len())
+        let (added, skipped, merged) =
+            match self.bulk("import_adif", |plan| plan_import(plan, text)) {
+                Ok((counts, _)) => counts,
+                Err(e) => {
+                    tempo_core::applog::error("logbook", &format!("an import was not made: {e}"));
+                    (0, 0, 0)
+                }
+            };
+        self.backfill_after_bulk();
+        (added, skipped, merged, self.log_len())
     }
 
     /// Reconcile a confirmation/credit report (ADIF — e.g. a LoTW export) INTO the
     /// existing log: monotonically upgrade matched QSOs' confirmation + credit
-    /// (which a plain dedup-import would skip and lose), rewrite the ADIF file, and
-    /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
+    /// (which a plain dedup-import would skip and lose), and return the reconcile summary
+    /// (newly confirmed/credited + unmatched orphans). Planned on the rows of the report's calls
+    /// ([`plan_report`]).
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let summary = self.logbook.merge_report(text);
+        let summary = self.bulk_or_log("merge_lotw_report", |plan| plan_report(plan, text));
         self.last_lotw_reconcile = Some(summary.clone());
-        self.persist_change(base, "merge_lotw_report");
         summary
     }
 
     /// Stamp POTA/SOTA park refs from a pota.app hunter/activator export onto matching
     /// existing QSOs (stamp-only: never creates records, never overwrites a ref — the
     /// reviewed-adds half is a separate feature). Returns (stamped, already, unmatched).
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn import_pota_log(&mut self, text: &str) -> (usize, usize, usize) {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let out = self.logbook.stamp_ota_refs(text);
-        if out.0 > 0 {
-            self.persist_change(base, "import_pota_log");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        out
+        self.bulk_or_log("import_pota_log", |plan| plan_ota_refs(plan, text))
     }
 
     /// Merge a LoTW own-QSO report (`qso_qsl=no`) INTO the log: promote in-flight
     /// uploads (Pending / never-marked) to `Accepted` where LoTW confirms it holds
     /// your record — the step that turns a just-uploaded QSO into "waiting on the
     /// partner" (R2) and clears false "never uploaded" (R1) for out-of-band uploads.
-    /// Persists the log on any change. Returns the count newly promoted.
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
+    /// Persists the log when one is promoted ([`plan_own_echo`]). Returns the count newly
+    /// promoted.
     pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let promoted = self.logbook.merge_own_echo(text, when_unix);
-        if promoted > 0 {
-            self.persist_change(base, "merge_lotw_own_echo");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        promoted
+        self.bulk_or_log("merge_lotw_own_echo", |plan| {
+            plan_own_echo(plan, text, when_unix)
+        })
     }
 
     /// Record a QRZ Logbook push outcome on the just-pushed QSO (`upload.qrz`), so
     /// the diagnostics can show "never uploaded to QRZ" (R1) / "QRZ upload bounced"
-    /// (R9). Persists on change. Returns whether a record was stamped.
-    #[allow(deprecated)] // SPEC-2 C19: by id; an id-less push's newest match, from the log
+    /// (R9). Returns whether a record was stamped. See [`Self::stamp_push`].
     pub fn stamp_qrz_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -2592,21 +3703,11 @@ impl StationCore {
             when_unix,
             detail,
         };
-        self.recover_external_appends();
-        let base = self.change_base();
-        let changed = self.logbook.stamp_qrz_upload(pushed, status);
-        if changed {
-            self.persist_change(base, "stamp_qrz_upload");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        changed
+        self.stamp_push(pushed, UploadService::Qrz, status)
     }
 
     /// Record a ClubLog realtime push outcome on the just-pushed QSO
-    /// (`upload.clublog`). Persists on change. Returns whether a record was stamped.
-    #[allow(deprecated)] // SPEC-2 C19: by id; an id-less push's newest match, from the log
+    /// (`upload.clublog`). Returns whether a record was stamped. See [`Self::stamp_push`].
     pub fn stamp_clublog_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -2619,21 +3720,11 @@ impl StationCore {
             when_unix,
             detail,
         };
-        self.recover_external_appends();
-        let base = self.change_base();
-        let changed = self.logbook.stamp_clublog_upload(pushed, status);
-        if changed {
-            self.persist_change(base, "stamp_clublog_upload");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-        changed
+        self.stamp_push(pushed, UploadService::Clublog, status)
     }
 
     /// Record an eQSL ADIF-upload outcome on the just-pushed QSO (`upload.eqsl`).
-    /// Persists on change. Returns whether a record was stamped.
-    #[allow(deprecated)] // SPEC-2 C19: by id; an id-less push's newest match, from the log
+    /// Returns whether a record was stamped. See [`Self::stamp_push`].
     pub fn stamp_eqsl_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -2646,78 +3737,144 @@ impl StationCore {
             when_unix,
             detail,
         };
-        self.recover_external_appends();
-        let base = self.change_base();
-        let changed = self.logbook.stamp_eqsl_upload(pushed, status);
-        if changed {
-            self.persist_change(base, "stamp_eqsl_upload");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
+        self.stamp_push(pushed, UploadService::Eqsl, status)
+    }
+
+    /// Stamp a connector's answer for the QSO it was pushed (`pushed`) on the row that push
+    /// names ([`push_target`]), in one breath: planned on the store, made under the lock the
+    /// caller holds, planned again while the row keeps changing. Whether a record was stamped.
+    /// A command holding the Engine lock does the same with the lock released for the plan
+    /// ([`crate::logwrite::stamp_push`]).
+    pub(crate) fn stamp_push(
+        &mut self,
+        pushed: &QsoRecord,
+        service: UploadService,
+        status: tempo_core::logbook::UploadStatus,
+    ) -> bool {
+        for _ in 0..PLANS {
+            let plan = self.log_plan();
+            let target = match push_target(&plan, pushed) {
+                Ok(Some(row)) => row,
+                Ok(None) => return false,
+                Err(e) => {
+                    tempo_core::applog::error(
+                        "logbook",
+                        &format!("an upload stamp could not read the logbook: {e}"),
+                    );
+                    return false;
+                }
+            };
+            let Some(rows) = stamped_rows(&[target], service, &status) else {
+                return false;
+            };
+            if self
+                .commit_planned(
+                    &plan,
+                    OpClass::Stamp,
+                    rows,
+                    false,
+                    Vec::new(),
+                    "upload stamp",
+                )
+                .is_ok()
+            {
+                return true;
+            }
         }
-        changed
+        tempo_core::applog::warn(
+            "logbook",
+            "an upload stamp's contact kept changing under it; not stamped",
+        );
+        false
     }
 
     /// Merge an eQSL confirmation report into the log. Same generic reconcile path
     /// as [`Self::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
     /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let summary = self.logbook.merge_report(text);
+        let summary = self.bulk_or_log("merge_eqsl_report", |plan| plan_report(plan, text));
         self.last_eqsl_reconcile = Some(summary.clone());
-        self.persist_change(base, "merge_eqsl_report");
         summary
     }
 
     /// Two-way QRZ Logbook sync: merge a QRZ **FETCH** ADIF (the operator's whole
     /// book) INTO the log. QRZ returns both QSOs the operator logged elsewhere (e.g.
-    /// a phone app in the field) AND confirmation status, so this runs two passes:
-    /// first import genuinely-new QSOs (deduped), then reconcile confirmations onto
-    /// the QSOs already present. A QRZ-native confirmation (`APP_QRZLOG_STATUS`) lands
-    /// `confirmed` but NOT `award_confirmed`, by construction of the `qrz` channel, so
-    /// it can't inflate DXCC/WAS counts. Returns `(added, reconcile_summary)`.
-    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
+    /// a phone app in the field) AND confirmation status, so this adds the QSOs QRZ has that
+    /// we lack AND upgrades confirmations on the ones already present, in ONE consume-once
+    /// pass keyed identically, so a mode-spelling difference (e.g. a phone QSO re-uploaded as
+    /// USB vs our SSB) can't double-log the same contact ([`plan_download`]). A QRZ-native
+    /// confirmation (`APP_QRZLOG_STATUS`) lands `confirmed` but NOT `award_confirmed`, by
+    /// construction of the `qrz` channel, so it can't inflate DXCC/WAS counts. Returns
+    /// `(added, reconcile_summary)`.
     pub fn merge_qrz_report(
         &mut self,
         text: &str,
     ) -> (usize, tempo_core::reconcile::ReconcileSummary) {
-        self.recover_external_appends();
-        // ONE consume-once pass: add the QSOs QRZ has that we lack AND upgrade
-        // confirmations on the ones already present, keyed identically so a mode-
-        // spelling difference (e.g. a phone QSO re-uploaded as USB vs our SSB) can't
-        // double-log the same contact. A full save then captures both the appended
-        // rows and the reconciled confirmations.
-        let base = self.change_base();
-        let before = self.logbook.len();
-        let (added, summary) = self.logbook.merge_downloaded(text);
+        let (added, summary) =
+            self.bulk_or_log("merge_qrz_report", |plan| plan_download(plan, text));
         self.last_qrz_reconcile = Some(summary.clone());
-        if self.store.is_some() {
-            // One change of rows: the merge's adds and upgrades. The merge appends the contacts
-            // it adds, and each is filled here, before it is written (SPEC-2 v3 D2-A); the rows
-            // the log already held are the fill job's.
-            if self.logbook.len() > before {
-                let (country, state) =
-                    (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
-                for r in self
-                    .logbook
-                    .records_mut(OpClass::Upgrade)
-                    .iter_mut()
-                    .skip(before)
-                {
-                    fill_with(Arc::make_mut(r), country, state);
-                }
+        self.backfill_after_bulk();
+        (added, summary)
+    }
+
+    /// ★ Plan a bulk change on the candidate sub-log and make it, in one breath — for an owner
+    /// holding the station with no Engine guard (a test's own station or engine; a command
+    /// plans with the lock released, [`crate::logwrite`]). Planned again while what it read keeps
+    /// changing, [`PLANS`] plans in all. What the plan answered and the rows it appended, or why
+    /// not.
+    pub(crate) fn bulk<R>(
+        &mut self,
+        context: &str,
+        mut plan_it: impl FnMut(&LogPlan) -> Result<(R, Planned), String>,
+    ) -> Result<(R, Vec<Arc<QsoRecord>>), String> {
+        for _ in 0..PLANS {
+            let plan = self.log_plan();
+            let (out, planned) = plan_it(&plan)?;
+            if planned.is_empty() {
+                return Ok((out, Vec::new()));
             }
-            self.persist_change(base, "merge_qrz_report");
-        } else {
-            self.save_log("merge_qrz_report");
-            self.catch_up_hot(Some(&base));
+            if let Ok((_, appended)) = self.commit_bulk(&plan, planned, context) {
+                return Ok((out, appended));
+            }
+        }
+        Err(LOG_BUSY.into())
+    }
+
+    /// [`Self::bulk`] for a change whose answer is a report: one that could not be made says so
+    /// in the diagnostic log and answers an empty report.
+    fn bulk_or_log<R: Default>(
+        &mut self,
+        context: &str,
+        plan_it: impl FnMut(&LogPlan) -> Result<(R, Planned), String>,
+    ) -> R {
+        match self.bulk(context, plan_it) {
+            Ok((out, _)) => out,
+            Err(e) => {
+                tempo_core::applog::error("logbook", &format!("{context} was not made: {e}"));
+                R::default()
+            }
+        }
+    }
+
+    /// After a bulk change on the 1.13 path, what it has always done next: the backfill of every
+    /// record's country, from the resolver. The store's rows are filled another way (SPEC-2 v3
+    /// D2-A): each insert fills its own, and the fill job the ones an older build left.
+    pub(crate) fn backfill_after_bulk(&mut self) {
+        if self.store.is_none() {
             self.backfill_country();
         }
-        self.sync_hot();
-        (added.len(), summary)
+    }
+
+    /// How many contacts the log holds — read with no Engine guard, as a count of the store is.
+    fn log_len(&self) -> usize {
+        match self.log_rows().count() {
+            Ok((n, _)) => n as usize,
+            Err(e) => {
+                tempo_core::applog::error("logbook", &format!("the log could not be counted: {e}"));
+                0
+            }
+        }
     }
 
     /// A clone of all logbook records (oldest-first / newest-last).
@@ -2782,100 +3939,73 @@ impl StationCore {
         }
     }
 
-    /// The contacts (oldest-first, by id) not yet sent to LoTW: award-unconfirmed AND either
-    /// never uploaded or a prior bounce. `UploadState` IS the per-QSO cursor —
-    /// Pending/Accepted/Duplicate are excluded (don't re-send).
-    #[allow(deprecated)] // SPEC-2 C19: the "already uploaded" declaration picks from memory
-    pub fn lotw_unsent_ids(&self) -> Vec<RecordId> {
-        self.logbook
-            .records()
-            .iter()
-            .filter(|r| owed_to_lotw(r))
-            .filter_map(|r| r.id)
-            .collect()
-    }
-
-    /// The contacts `ids` names that the log still holds, in the order `ids` names them — one
-    /// pass over the log, however many are asked for.
-    #[allow(deprecated)] // SPEC-2 C19: a batch's rows as the log in memory holds them
-    pub(crate) fn rows_of(&self, ids: &[RecordId]) -> Vec<Arc<QsoRecord>> {
-        let wanted: HashSet<RecordId> = ids.iter().copied().collect();
-        let held: HashMap<RecordId, Arc<QsoRecord>> = self
-            .logbook
-            .records()
-            .iter()
-            .filter_map(|r| {
-                r.id.filter(|id| wanted.contains(id))
-                    .map(|id| (id, r.clone()))
-            })
-            .collect();
-        ids.iter().filter_map(|id| held.get(id).cloned()).collect()
-    }
-
-    /// Stamp `upload.lotw` on the contacts `ids` names, then save — the operator's "already
-    /// uploaded" declaration. By id, so a contact deleted since the ids were taken is simply not
-    /// found; a batch TQSL signed goes through [`Self::stamp_lotw_batch`], which also refuses a
-    /// contact changed since it was signed.
-    #[allow(deprecated)] // SPEC-2 C19: the write path changes the in-memory log
+    /// Stamp `upload.lotw` on the contacts `ids` names — the operator's "already uploaded"
+    /// declaration — in one breath: planned on the store, made under the lock the caller holds,
+    /// planned again while a contact keeps changing. By id, so a contact deleted since the ids
+    /// were taken is simply not found; a batch TQSL signed goes through
+    /// [`Self::stamp_lotw_batch`], which also refuses a contact changed since it was signed.
+    /// How many were stamped; none — said in the diagnostic log — when the store could not be
+    /// read or the contacts kept changing ([`RowRefusal::Busy`]).
     pub fn stamp_lotw_upload(
         &mut self,
         ids: &[RecordId],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
-    ) {
-        self.recover_external_appends();
-        let base = self.change_base();
-        let wanted: HashSet<RecordId> = ids.iter().copied().collect();
-        let hits: Vec<usize> = self
-            .logbook
-            .records()
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.id.is_some_and(|id| wanted.contains(&id)))
-            .map(|(i, _)| i)
-            .collect();
-        // One classified write for the whole batch — a stamp nothing derived reads, and
-        // taking it per row would move the revision once per stamped record.
-        let records = self.logbook.records_mut(OpClass::Stamp);
-        for i in hits {
-            Arc::make_mut(&mut records[i]).upload.lotw = Some(tempo_core::logbook::UploadStatus {
-                outcome,
-                when_unix,
-                detail,
-            });
-        }
-        self.persist_change(base, "lotw upload stamp");
+    ) -> usize {
+        let status = tempo_core::logbook::UploadStatus {
+            outcome,
+            when_unix,
+            detail,
+        };
+        self.stamp_lotw_ids(ids, &status).unwrap_or_else(|e| {
+            tempo_core::applog::warn("logbook", &format!("a LoTW upload stamp: {e}"));
+            0
+        })
     }
 
-    /// The contacts `ids` names as a LoTW batch hands them to TQSL: each one's id, and its
-    /// fingerprint as the upload serialises it, in the order `ids` names them. Taken in the same
-    /// hold of the lock as the batch file, so the two describe one state of the log; a contact
-    /// the log no longer holds is left out.
-    pub fn lotw_signed(&self, ids: &[RecordId]) -> Vec<LotwSigned> {
-        self.rows_of(ids)
-            .iter()
-            .filter_map(|r| {
-                Some(LotwSigned {
-                    id: r.id?,
-                    fingerprint: lotw_fingerprint(r),
-                })
-            })
-            .collect()
+    /// [`Self::stamp_lotw_upload`]'s plan and commit.
+    fn stamp_lotw_ids(
+        &mut self,
+        ids: &[RecordId],
+        status: &tempo_core::logbook::UploadStatus,
+    ) -> Result<usize, String> {
+        for _ in 0..PLANS {
+            let plan = self.log_plan();
+            let found = plan.rows(ids)?;
+            // In the order `ids` names them, each once.
+            let mut seen = HashSet::new();
+            let rows: Vec<Arc<QsoRecord>> = ids
+                .iter()
+                .filter(|id| seen.insert(**id))
+                .filter_map(|id| found.get(id).cloned())
+                .collect();
+            let Some(pairs) = stamped_rows(&rows, UploadService::Lotw, status) else {
+                return Ok(0);
+            };
+            let n = pairs.len();
+            let bulk = n > tempo_core::logbook::writer::CHUNK_ROWS;
+            if self
+                .commit_planned(
+                    &plan,
+                    OpClass::Stamp,
+                    pairs,
+                    bulk,
+                    Vec::new(),
+                    "lotw upload stamp",
+                )
+                .is_ok()
+            {
+                return Ok(n);
+            }
+        }
+        Err(LOG_BUSY.into())
     }
 
     /// Stamp `upload.lotw` on the contacts of a batch TQSL signed — found BY ID, and only where
-    /// the row is still the one that was signed.
-    ///
-    /// TQSL runs for tens of seconds with the engine lock released, and the log moves under it:
-    /// the operator deletes or corrects a contact, another window's commit is folded in. A
-    /// stamp addressed by position lands on whatever row slid into the gap — a contact LoTW
-    /// never saw, marked sent, and so never uploaded at all. By id, a deleted contact is simply
-    /// not found. A contact changed since it was signed is not stamped either: LoTW holds the
-    /// version that was signed, so the row stays unsent and the next batch signs it as it now
-    /// stands (LoTW dedupes what it already has). What is left unstamped is counted, for the
-    /// caller to report.
-    #[allow(deprecated)] // SPEC-2 C19: the stamp finds its rows in the whole log
+    /// the row is still the one that was signed — in one breath (see [`stamp_lotw_batch_plan`]
+    /// for the rule; a command holding the Engine lock plans with it released,
+    /// [`crate::logwrite::stamp_lotw_batch`]).
     pub fn stamp_lotw_batch(
         &mut self,
         batch: &[LotwSigned],
@@ -2883,45 +4013,48 @@ impl StationCore {
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> LotwStamped {
-        // Nothing is held by position across this, so the re-read may move rows — and should:
-        // a contact another window deleted while TQSL ran is then gone before the stamp looks
-        // for it, rather than lingering to be stamped and so written back into the store.
-        if self.store.is_some() {
-            self.refresh_from_store(false);
-        } else {
-            self.recover_external_appends();
-        }
-        let base = self.change_base();
-        let mut signed: HashMap<tempo_core::logbook::RecordId, u64> =
-            batch.iter().map(|s| (s.id, s.fingerprint)).collect();
-        let mut report = LotwStamped::default();
-        let mut hits = Vec::new();
-        for (i, r) in self.logbook.records().iter().enumerate() {
-            let Some(fingerprint) = r.id.and_then(|id| signed.remove(&id)) else {
-                continue;
+        let status = tempo_core::logbook::UploadStatus {
+            outcome,
+            when_unix,
+            detail,
+        };
+        for _ in 0..PLANS {
+            let plan = self.log_plan_moving();
+            let (report, pairs) = match stamp_lotw_batch_plan(&plan, batch, &status) {
+                Ok(planned) => planned,
+                Err(e) => {
+                    tempo_core::applog::error(
+                        "logbook",
+                        &format!("a LoTW upload's stamps could not read the logbook: {e}"),
+                    );
+                    return LotwStamped {
+                        unrecorded: batch.len(),
+                        ..LotwStamped::default()
+                    };
+                }
             };
-            if lotw_fingerprint(r) == fingerprint {
-                hits.push(i);
-            } else {
-                report.changed += 1;
+            let Some(pairs) = pairs else {
+                return report;
+            };
+            let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
+            if self
+                .commit_planned(
+                    &plan,
+                    OpClass::Stamp,
+                    pairs,
+                    bulk,
+                    Vec::new(),
+                    "lotw upload stamp",
+                )
+                .is_ok()
+            {
+                return report;
             }
         }
-        report.gone = signed.len();
-        report.stamped = hits.len();
-        if !hits.is_empty() {
-            // One classified write for the whole batch, as `stamp_lotw_upload` makes.
-            let records = self.logbook.records_mut(OpClass::Stamp);
-            for i in hits {
-                Arc::make_mut(&mut records[i]).upload.lotw =
-                    Some(tempo_core::logbook::UploadStatus {
-                        outcome,
-                        when_unix,
-                        detail,
-                    });
-            }
+        LotwStamped {
+            unrecorded: batch.len(),
+            ..LotwStamped::default()
         }
-        self.persist_change(base, "lotw upload stamp");
-        report
     }
 
     /// Append a completed SSTV image to the session gallery (newest last),
@@ -3137,7 +4270,11 @@ mod grid_tests {
         let mut sc = StationCore::new();
         sc.set_dxcc_resolver(counting(lookups.clone()));
 
+        // Confirmed as a contact is: through a channel (LoTW), which is what makes it
+        // award-confirmed — the store derives the flags from the channel it keeps.
         let mut confirmed = rec("DL1ABC", "20m", "JO31");
+        confirmed.qsl_rcvd.lotw = true;
+        confirmed.confirmed = true;
         confirmed.award_confirmed = true;
         let mut park = rec("K1ABC", "40m", "FN42");
         park.ota.their_ref = Some("US-0001".into());
@@ -3150,7 +4287,7 @@ mod grid_tests {
         ];
         for (i, r) in rows.into_iter().enumerate() {
             let before = lookups.load(Ordering::Relaxed);
-            sc.add_record(r);
+            sc.append(vec![r], false);
             sc.sync_hot();
             assert_eq!(
                 lookups.load(Ordering::Relaxed) - before,
@@ -3420,11 +4557,9 @@ mod grid_tests {
         // Instance A appends a contact we never see in memory.
         Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
 
-        // We log our own contact — memory first, then the file, as log_qso does, carrying the
-        // minted id back onto the copy we hand the writer so the two are the same record.
-        let mut k = rec("K5XYZ", "20m", "FN31");
-        k.id = Some(sc.logbook.add(k.clone()));
-        sc.append_to_log(std::slice::from_ref(&k));
+        // We log our own contact through the station's append, as log_qso does: memory first,
+        // then the file.
+        sc.append(vec![rec("K5XYZ", "20m", "FN31")], false);
         assert!(
             sc.last_log_mtime.is_none(),
             "a file we cannot account for must not be stamped as ours"
@@ -3475,10 +4610,8 @@ mod grid_tests {
         // Instance A appends a contact we never see in memory.
         Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
 
-        // We log our own contact, as log_qso does: memory first, then carried to the file.
-        let mut k = rec("K5XYZ", "20m", "FN31");
-        k.id = Some(sc.logbook.add(k.clone()));
-        sc.append_to_log(std::slice::from_ref(&k));
+        // We log our own contact through the station's append, as log_qso does.
+        let _ = sc.append(vec![rec("K5XYZ", "20m", "FN31")], false);
         let st = lane.flush(wait);
         assert!(!st.pending(), "{st:?}");
         assert_eq!(
@@ -3861,11 +4994,8 @@ mod hot_parity_tests {
         let n = sc.logbook.len();
         match rng.below(18) {
             0..=4 => {
-                // `Engine::log_qso`'s order: memory, the append, then the index.
-                let mut r = contact(rng);
-                r.id = Some(sc.add_record(r.clone()));
-                sc.append_to_log(std::slice::from_ref(&r));
-                sc.sync_hot();
+                // `Engine::log_qso`'s append: the station's, one change.
+                sc.append(vec![contact(rng)], false);
                 "log a contact"
             }
             5 if n > 0 => {
@@ -4161,9 +5291,7 @@ mod hot_parity_tests {
         sc.set_dxcc_resolver(resolve);
         sc.activation = Some(("POTA".into(), "US-1234".into()));
         for _ in 0..5 {
-            let mut r = contact(&mut rng);
-            r.id = Some(sc.add_record(r.clone()));
-            sc.sync_hot();
+            sc.append(vec![contact(&mut rng)], false);
         }
         HOT_REBUILDS.with(|c| c.set(0));
         HOT_CATCH_UPS.with(|c| c.set(0));
@@ -4187,9 +5315,9 @@ mod hot_parity_tests {
         assert_parity(&sc, &mut rng, "a write around the station, then an edit");
     }
 
-    /// The station mints the ids of the contacts it logs (SPEC-2 v3 C19) under its position id,
-    /// and the in-memory log's own minter — which still mints the rows an import adds — carries
-    /// the same position under a nonce of its own, so the two never hand out one id.
+    /// The station mints every id the log hands out (SPEC-2 v3 C19) — the contacts it logs and
+    /// the rows an import adds (C19 Part B) — under its position id and from one sequence, so no
+    /// two rows are ever handed one id.
     #[test]
     fn what_the_station_logs_and_what_an_import_adds_are_minted_under_one_position() {
         let mut rng = Rng(3);
@@ -4197,7 +5325,9 @@ mod hot_parity_tests {
         sc.set_posid(0x00c0_ffee);
         let mut logged = contact(&mut rng);
         logged.call = "W1AW".into();
-        let logged = sc.add_record(logged);
+        let logged = sc.append(vec![logged], false).0[0]
+            .id
+            .expect("the station minted it");
         let mut imported = contact(&mut rng);
         imported.call = "K1ABC".into();
         sc.import_adif(&format!("{}{}", adif_header(), adif_record(&imported)));
@@ -4207,14 +5337,19 @@ mod hot_parity_tests {
         match (logged, imported) {
             (
                 RecordId::Minted {
-                    posid: a, nonce: x, ..
+                    posid: a,
+                    nonce: x,
+                    seq: m,
                 },
                 RecordId::Minted {
-                    posid: b, nonce: y, ..
+                    posid: b,
+                    nonce: y,
+                    seq: n,
                 },
             ) => {
                 assert_eq!((a, b), (0x00c0_ffee, 0x00c0_ffee), "the station's position");
-                assert_ne!(x, y, "under nonces of their own");
+                assert_eq!(x, y, "one minter");
+                assert!(n > m, "the import's id is the next in its sequence");
             }
             other => panic!("both minted here: {other:?}"),
         }
@@ -4233,11 +5368,12 @@ mod hot_parity_tests {
         let mut newer = older.clone();
         newer.call = "W1AW/P".into();
         newer.grid = Some("EM12".into());
-        for r in [older, newer] {
-            sc.add_record(r);
-        }
+        sc.append(vec![older, newer], false);
         sc.sync_hot();
         assert_eq!(sc.newest_logged_grid("w1aw").as_deref(), Some("EM12"));
         assert!(sc.is_duplicate(&sc.logbook.records()[0].as_ref().clone()));
     }
 }
+
+#[cfg(test)]
+mod bulk_tests;

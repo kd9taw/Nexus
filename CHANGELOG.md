@@ -136,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **The Needed board now puts every station on your watch list at the top whenever it is heard.**
+  By call, prefix, country or grid, worked or not, as the WATCH tile already does on the Call
+  Roster, the Stations list and Spots. The Watch list chip shows exactly those stations. Any calls
+  left in the old hidden "Wanted watch list" setting are added to your watch list (Settings ▸ Spots
+  & Alerts) once, with a note saying so.
+
 - **Big logbooks no longer weigh on every window.** Each window now asks Nexus for just the contacts
   it shows instead of holding its own copy of the whole log. With 150,000 contacts that is about
   5 MB of a window's memory instead of 67 MB (6 MB instead of 208 MB at 500,000), the Logbook
@@ -146,6 +152,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to stay at the same scroll depth, showing whatever contacts had landed there in the new
   order. A contact logged while you are scrolled down still leaves the rows you are looking at
   exactly where they are.
+
+- **When the logbook is too busy to take a change, nothing changes and Nexus says so.** A change
+  that keeps meeting other changes on its way in — from a big import, another window or a sync —
+  is tried again a few times. If it still cannot be made, nothing is changed and Nexus says the
+  logbook was busy, so doing it again retries. That covers the Logbook's edits, QSL marks,
+  satellite tags and deletes (the row and your typing stay as they were) and an import, a LoTW,
+  eQSL or QRZ sync, the Field Day merge and the POTA stamps.
 
 - **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
   Every change to the log used to rewrite the whole of `log.adi` — every stamp, every

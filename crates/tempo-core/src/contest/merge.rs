@@ -108,14 +108,32 @@ impl MergeReport {
 /// defensive path for a journal that has been hand-edited or truncated — which is a file
 /// on disk, and this build does not get to assume it is well formed.
 pub fn merge_into_general(log: &FieldDayLog, posid: &str, into: &mut Logbook) -> MergeReport {
-    let mut report = MergeReport::default();
-    let mut seen: std::collections::HashSet<String> = into
+    let seen: std::collections::HashSet<String> = into
         .records()
         .iter()
         .filter_map(|r| r.contest.as_deref())
         .map(|c| c.qid.clone())
         .filter(|q| !q.is_empty())
         .collect();
+    let mut report = plan_merge(log, posid, seen);
+    for rec in &mut report.written {
+        // The log mints the row's id; the copy reported as written carries it too.
+        rec.id = Some(into.add(rec.clone()));
+    }
+    report
+}
+
+/// [`merge_into_general`]'s decision with the general log's merge identities named rather than
+/// read: `seen` is every `APP_NEXUS_QID` the general log holds, and the report's `written` are
+/// the rows to append, in order, WITHOUT ids — for a caller whose general log is not a
+/// [`Logbook`] in hand. The station appends them itself and mints their ids (SPEC-2 v3 C19); the
+/// rule for what is merged, refused or already there is this one function either way.
+pub fn plan_merge(
+    log: &FieldDayLog,
+    posid: &str,
+    mut seen: std::collections::HashSet<String>,
+) -> MergeReport {
+    let mut report = MergeReport::default();
     for q in log.qsos() {
         if q.seq == 0 {
             report.refused += 1;
@@ -130,10 +148,7 @@ pub fn merge_into_general(log: &FieldDayLog, posid: &str, into: &mut Logbook) ->
         // means by "already there", and a set that only knew about the log it started
         // with would be true of the first duplicate and false of the second.
         seen.insert(qid.clone());
-        let mut rec = record_for(log, q, qid);
-        // The log mints the row's id; the copy reported as written carries it too.
-        rec.id = Some(into.add(rec.clone()));
-        report.written.push(rec);
+        report.written.push(record_for(log, q, qid));
     }
     report
 }

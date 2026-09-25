@@ -3892,7 +3892,11 @@ export interface Settings {
    * whole-struct settings save deliberately cannot change it. */
   blockedCalls?: string[]
   // --- Wanted watch list / alert filters (W1.5) ---
-  /** Watch list: exact calls or trailing-* wildcard prefixes that raise a loud alert. */
+  /** RETIRED (2026-09-24): the old "Wanted watch list" — exact calls or trailing-* prefixes —
+   * with no editor since the watch list (`watchlist.ts`) replaced it. Read once, by the fold that
+   * adds its entries to the watch list (`features/watchlistFold`), then emptied through its one
+   * writer (`retireWantedCalls`); a whole-struct settings save cannot change it. Still sent by the
+   * station, because every Remote page in the field requires the key. */
   wantedCalls: string[]
   /** Pounce — how rare a spot must be before Nexus interrupts you the moment it appears. */
   pounceThreshold?: 'off' | 'atno' | 'atnoOrZone' | 'atnoZoneOrState'
