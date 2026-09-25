@@ -5702,7 +5702,7 @@ pub(crate) mod tests {
     fn a_contact_logged_while_an_edit_waits_for_a_read_is_in_log_adi_at_once() {
         let d = Dir::new("logged-ahead");
         let mut e = engine_on_log_file(&d, 10);
-        let edited = e.log_records()[3].call.clone();
+        let edited = e.stored_log()[3].call.clone();
         let (release, reader) = read_held_open(&e);
         assert!(e.mark_qsl_card(id_at(&e, 3), true), "the edit is made");
         e.log_qso(qso("W9LOGGED", 1_788_500_000));
@@ -5754,7 +5754,7 @@ pub(crate) mod tests {
     fn a_contact_logged_behind_an_edit_the_writer_gives_up_is_in_log_adi_at_once() {
         let d = Dir::new("logged-ahead-giveup");
         let mut e = engine_on_log_file(&d, 10);
-        let edited = e.log_records()[3].call.clone();
+        let edited = e.stored_log()[3].call.clone();
         let (release, reader) = read_held_open(&e);
         assert!(e.mark_qsl_card(id_at(&e, 3), true), "the edit is made");
         e.log_qso(qso("W9LOGGED", 1_788_500_000));
