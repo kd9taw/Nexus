@@ -1479,15 +1479,12 @@ pub struct WriteHold {
 }
 
 impl WriteHold {
-    /// Take the lock on the database at `path` (which must exist) — a file, or a store in memory
-    /// by its name ([`LogDb::memory_name`]).
+    /// Take the lock on the database at `path` (which must exist).
     pub fn take(path: &Path) -> Result<WriteHold> {
         quiet_memory_statistics();
         let conn = Connection::open_with_flags(
             path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_URI
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
         conn.execute_batch("BEGIN IMMEDIATE")?;
