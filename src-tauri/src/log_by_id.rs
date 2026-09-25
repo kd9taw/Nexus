@@ -252,6 +252,7 @@ pub(crate) async fn delete_row(engine: SharedEngine, target: RowRef) -> Result<R
 mod tests {
     use super::*;
     use crate::durable_command_tests::engine_on_store;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use std::path::Path;
     use tempo_app::engine::engine_lock;
     use tempo_core::logbook::{QslVia, UploadOutcome};
@@ -312,8 +313,7 @@ mod tests {
 
     /// The contact at `at`, as a caller that read it holds it.
     fn row_ref(engine: &SharedEngine, at: usize) -> (RowRef, QsoRecord) {
-        let eng = engine_lock(engine);
-        let row = QsoRecord::clone(&eng.log_records()[at]);
+        let row = QsoRecord::clone(&engine.lock().unwrap().stored_log()[at]);
         let target = RowRef {
             id: row.id.expect("an id").to_string(),
             edit_key: QsoEdit::project(&row).key(),
@@ -453,7 +453,7 @@ mod tests {
             let (made, _) = tempo_app::logwrite::change_ops(&engine, id, None, &[edit], "theirs");
             assert!(matches!(made, Ok(Ok(_))), "their edit is made");
         }
-        let before = engine_lock(&engine).log_records().to_vec();
+        let before = engine.lock().unwrap().stored_log();
         for answer in [
             rt.block_on(qsl_sent(engine.clone(), stale.clone(), Some("B".into()))),
             rt.block_on(qsl_card(engine.clone(), stale.clone(), false)),
@@ -477,8 +477,8 @@ mod tests {
             }
         }
         assert_eq!(
-            engine_lock(&engine).log_records(),
-            &before[..],
+            engine.lock().unwrap().stored_log(),
+            before,
             "nothing changed"
         );
 
@@ -499,7 +499,7 @@ mod tests {
             edit_key: target.edit_key,
         };
         assert!(rt.block_on(delete_row(engine.clone(), malformed)).is_err());
-        assert_eq!(engine_lock(&engine).log_records(), &before[..]);
+        assert_eq!(engine.lock().unwrap().stored_log(), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

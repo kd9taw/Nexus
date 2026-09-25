@@ -601,6 +601,7 @@ mod tests {
     //! contact is logged (P4) with the Engine lock free while it waits; and the kept answers
     //! reused across an upload stamp exactly where that is correct.
     use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
     use propagation::model::{Band, ModeClass};
     use propagation::OperatorNeeds;
     use tempo_core::logbook::sqlite::{Resolved, WriteHold};
@@ -835,8 +836,11 @@ mod tests {
             .expect("written");
     }
 
+    /// The log the oracles below fold: the store's rows ([`StoredLog`]). These tests hold the old
+    /// fold against the new one over the same rows; whether the store holds what the old write
+    /// path wrote (P6) is the Stage-1 lockstep suite's job (tempo-app's `stage1_tests`).
     fn records(e: &crate::SharedEngine) -> Vec<Arc<QsoRecord>> {
-        e.lock().unwrap().log_records().to_vec()
+        e.lock().unwrap().stored_log()
     }
 
     // ── the oracles: the code before C14, verbatim ──────────────────────────
@@ -1224,7 +1228,7 @@ mod tests {
     /// twin — including the fill job.
     /// The id of the contact at `at`: how a change names its contact (SPEC-2 C16).
     fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
-        e.log_records()[at]
+        e.stored_log()[at]
             .id
             .expect("every row the log holds carries an id")
     }
@@ -1233,7 +1237,7 @@ mod tests {
         let stem = g.pick(STEMS);
         let call = format!("{stem}{}{}", g.below(4), ["AB", "XYZ"][g.below(2)]);
         let when = NOW as u64 - 3_600 + step * 37;
-        let len = e.lock().unwrap().log_records().len();
+        let len = e.lock().unwrap().stored_log().len();
         let at = g.below(len);
         match g.below(11) {
             0 | 1 => {
@@ -1250,7 +1254,7 @@ mod tests {
             }
             3 if len > 0 => {
                 let mut eng = e.lock().unwrap();
-                let mut r = QsoRecord::clone(&eng.log_records()[at]);
+                let mut r = QsoRecord::clone(&eng.stored_log()[at]);
                 match g.below(3) {
                     0 => r.band = "40m".into(),
                     1 => r.call = call,
@@ -1282,7 +1286,7 @@ mod tests {
             }
             8 if len > 0 => {
                 let mut eng = e.lock().unwrap();
-                let pushed = QsoRecord::clone(&eng.log_records()[at]);
+                let pushed = QsoRecord::clone(&eng.stored_log()[at]);
                 let (outcome, detail) = if g.chance(2) {
                     (UploadOutcome::Accepted, None)
                 } else {
@@ -1294,7 +1298,7 @@ mod tests {
             }
             9 if len > 0 => {
                 let mut eng = e.lock().unwrap();
-                let r = QsoRecord::clone(&eng.log_records()[at]);
+                let r = QsoRecord::clone(&eng.stored_log()[at]);
                 let text = tempo_core::logbook::adif_record(&r)
                     .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC<EOR>");
                 let _ = eng.merge_lotw_report(&text);
@@ -1308,6 +1312,10 @@ mod tests {
                 );
             }
         }
+        // Back once the store holds the change, so the folds asked next are asked about it rather
+        // than about the disk's speed ([`StoredLog::caught_up`]); P4 itself is the test below
+        // that holds the writer.
+        e.caught_up();
     }
 
     /// ★ THE PROPERTY: over 16 seeded runs of 30 random changes each — logged contacts, imports,
@@ -1524,9 +1532,13 @@ mod tests {
 
         {
             let mut eng = e.lock().unwrap();
-            let pushed = QsoRecord::clone(&eng.log_records()[3]);
+            let pushed = QsoRecord::clone(&eng.stored_log()[3]);
             assert!(eng.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 2_000_000_000, None));
         }
+        // Asked once the store holds the stamp: a fold that reads it answers from the store as it
+        // stands if the writer is past READ_WAIT, and then keeps nothing
+        // ([`StoredLog::caught_up`]).
+        e.caught_up();
         assert_eq!(
             folds(),
             0,
@@ -1547,11 +1559,12 @@ mod tests {
         // The control: an edit moves every kept answer.
         {
             let mut eng = e.lock().unwrap();
-            let mut edited = QsoRecord::clone(&eng.log_records()[5]);
+            let mut edited = QsoRecord::clone(&eng.stored_log()[5]);
             edited.band = "6m".into();
             let id = id_at(&eng, 5);
             assert!(eng.update_qso(id, edited));
         }
+        e.caught_up();
         assert_eq!(folds(), 4, "control: an edit folds each again");
         assert_every_fold_agrees(&e, &tallies, "after the edit");
         settle(&e);

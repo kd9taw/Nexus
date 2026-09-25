@@ -2,6 +2,7 @@
 //! Only this test substitutes a vault and synthetic readings. No test mode, local
 //! origin allowance, synthetic RF data or credential export exists in the app.
 use super::*;
+use crate::remote_service::stored_log_tests::StoredLog;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -405,7 +406,7 @@ fn cloud_runtime_probe() {
                 "REMOTE_TEST:{}",
                 json!({"qso":snapshot.qso,"currentQsoLogKey":e.current_qso_log_key(),
                 "pendingQsoLogKey":e.pending_qso_log_key(),"pendingLog":snapshot.pending_log,
-                "records":e.get_log().into_iter().map(tempo_app::dto::LoggedQso::from).collect::<Vec<_>>(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
+                "records":e.stored_records().into_iter().map(tempo_app::dto::LoggedQso::from).collect::<Vec<_>>(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
                 "journal":root.join("ft-pending.json").is_file(),"samples":samples,"txEnabled":e.tx_enabled()})
             );
             std::io::stdout().flush().unwrap();
@@ -444,7 +445,7 @@ fn cloud_runtime_probe() {
             }
             println!(
                 "REMOTE_TEST:{}",
-                json!({"count":e.log_records().len(),"adif":std::fs::read_to_string(path).unwrap_or_default(),"txEnabled":e.snapshot().radio.tx_enabled})
+                json!({"count":e.stored_log().len(),"adif":std::fs::read_to_string(path).unwrap_or_default(),"txEnabled":e.snapshot().radio.tx_enabled})
             );
             std::io::stdout().flush().unwrap();
             continue;
@@ -543,7 +544,7 @@ fn cloud_runtime_probe() {
                 "REMOTE_TEST:{}",
                 json!({"tier":snapshot.link.tier,
                 "txEnabled":snapshot.radio.tx_enabled,"owned":e.remote_ft_tx_owned(),
-                "logCount":e.log_records().len()})
+                "logCount":e.stored_log().len()})
             );
             std::io::stdout().flush().unwrap();
             continue;
@@ -592,7 +593,7 @@ fn cloud_runtime_probe() {
             assert!(!e.snapshot().radio.tx_enabled);
             println!(
                 "REMOTE_TEST:{}",
-                json!({"prop":serde_json::from_slice::<serde_json::Value>(&serde_json::to_vec(&prop).unwrap()).unwrap(),"tleCount":expected_tles,"logCount":e.log_records().len(),"live":query::navigation::live(&e).unwrap()})
+                json!({"prop":serde_json::from_slice::<serde_json::Value>(&serde_json::to_vec(&prop).unwrap()).unwrap(),"tleCount":expected_tles,"logCount":e.stored_log().len(),"live":query::navigation::live(&e).unwrap()})
             );
             std::io::stdout().flush().unwrap();
             continue;
@@ -623,7 +624,7 @@ fn cloud_runtime_probe() {
             assert!(!e.snapshot().radio.tx_enabled);
             println!(
                 "REMOTE_TEST:{}",
-                json!({"state":e.js8_state(),"log":e.get_log().into_iter().map(|r| {
+                json!({"state":e.js8_state(),"log":e.stored_records().into_iter().map(|r| {
                     let mut q = tempo_app::dto::LoggedQso::from(r);
                     q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
                     q
@@ -752,7 +753,7 @@ fn cloud_runtime_probe() {
             println!(
                 "REMOTE_TEST:{}",
                 json!({ "rtty": crate::rtty_state_dto(&e), "psk": crate::psk_state_dto(&e),
-                "txEnabled": e.snapshot().radio.tx_enabled, "logCount": e.get_log().len() })
+                "txEnabled": e.snapshot().radio.tx_enabled, "logCount": e.stored_records().len() })
             );
             std::io::stdout().flush().unwrap();
             continue;
@@ -813,7 +814,7 @@ fn cloud_runtime_probe() {
                 })
                 .expect("the test's log reads"),
             );
-            let log_count = e.get_log().len();
+            let log_count = e.stored_records().len();
             drop(e);
             println!(
                 "REMOTE_TEST:{}",
@@ -828,7 +829,7 @@ fn cloud_runtime_probe() {
             let mut e = engine.lock().unwrap();
             e.import_adif(value["adif"].as_str().unwrap());
             let my_call = e.settings().mycall.clone();
-            let records = e.get_log();
+            let records = e.stored_records();
             drop(e);
             let awards = crate::awards_for_records(&records, &my_call);
             let geography = propagation::compute_log_stats(

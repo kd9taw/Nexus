@@ -1982,6 +1982,34 @@ impl StationCore {
         session_rows
     }
 
+    /// A take-in of a `log.adi`'s `text` in one breath — for an owner holding the station with no
+    /// Engine guard (a test's lockstep against the write path before C19 B): an import planned on
+    /// the store's rows ([`plan_import`]) and made, planned again while the rows it read keep
+    /// changing, then the file accepted for the mirror, as the launch's take-in is
+    /// ([`Self::take_in_at_attach`], which plans it during the open instead).
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    #[cfg(test)]
+    pub(crate) fn take_in_log_file(
+        &mut self,
+        text: &str,
+        stamp: Option<tempo_core::logbook::mirror::FileStamp>,
+    ) {
+        for _ in 0..PLANS {
+            let plan = self.plan_in_breath();
+            let Ok((_, planned)) = plan_import(&plan, text) else {
+                return;
+            };
+            if planned.is_empty() || self.commit_bulk(&plan, planned, "take in log.adi").is_ok() {
+                if let (Some(store), Some(stamp)) = (&self.store, stamp) {
+                    store.accept_log_file(stamp);
+                    store.refresh_mirror();
+                }
+                return;
+            }
+        }
+    }
+
     /// Make the take-in of a `log.adi` the store could not account for, planned at the open
     /// off the lock ([`AttachTakeIn::plan`]) — a file a 1.13 instance wrote to, the operator's own
     /// log from before the store, a restore — so the mirror may replace it without taking
