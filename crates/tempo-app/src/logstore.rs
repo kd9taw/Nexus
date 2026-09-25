@@ -30,13 +30,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tempo_core::logbook::hot::HotIndex;
 use tempo_core::logbook::mirror::{
     self, FileStamp, MirrorOptions, MirrorState, MirrorWriter, StoreSource,
 };
 use tempo_core::logbook::reader::LogReader;
 use tempo_core::logbook::sqlite::{self, LogDb, Resolved};
 use tempo_core::logbook::writer::{self, Change, LogWriter, Refusal, Ticket, Touched};
-use tempo_core::logbook::{migrate, Logbook, QsoRecord};
+use tempo_core::logbook::{migrate, Logbook, QsoRecord, Watermarks};
+
+use crate::station::{DxccResolve, StationKeys};
 
 /// cty.dat's answer for a record — the entity NAME and CQ zone the store writes beside it.
 /// Injected by the shell, which owns the table; tempo-app does not depend on `propagation`.
@@ -87,8 +90,133 @@ pub struct Opened {
     pub(crate) store: LogStore,
     pub(crate) records: Vec<QsoRecord>,
     pub(crate) foreign: Option<ForeignLog>,
+    /// The hot index of those records, built off the lock, when the caller asked for it
+    /// ([`HotBuild`]).
+    pub(crate) hot: Option<Prebuilt>,
     /// What the conversion did.
     pub outcome: migrate::Outcome,
+}
+
+/// How the launch has the open build the hot index ([`tempo_core::logbook::hot`]) from the rows
+/// it loads, before the engine is locked (SPEC-2 v3 C19): with the DXCC resolver the station
+/// will hold. The SAME resolver — the same `Arc` — is how the station knows the index is keyed
+/// as it keys its own; handed any other, it builds its own from the log instead
+/// ([`crate::station::StationCore::attach_store`]). The open also sets aside the rows a contest
+/// session restored at launch is swept from ([`SessionRows`]).
+#[derive(Clone)]
+pub struct HotBuild {
+    entity: Option<Arc<DxccResolve>>,
+}
+
+impl HotBuild {
+    /// Build with `entity` as the DXCC resolver — `None` for a station that has none.
+    pub fn keyed_by(entity: Option<Arc<DxccResolve>>) -> Self {
+        Self { entity }
+    }
+}
+
+/// A hot index the open built, the resolver it was keyed by, and the rows a contest session
+/// can be swept from: every loaded row from `bound` on.
+pub(crate) struct Prebuilt {
+    pub(crate) index: HotIndex,
+    pub(crate) entity: Option<Arc<DxccResolve>>,
+    pub(crate) recent: Vec<QsoRecord>,
+    pub(crate) bound: u64,
+}
+
+/// The log's rows from `bound` on — what a contest session's dupe sweep is built from (SPEC-2
+/// v3 C19) — read before the Engine lock is taken, and what they were read against, so that
+/// they are used only while they are still the log's rows
+/// ([`crate::engine::Engine::open_session_from`]).
+pub struct SessionRows {
+    pub(crate) rows: Vec<QsoRecord>,
+    /// Every row the log holds from here on is among `rows`.
+    pub(crate) bound: u64,
+    /// The log as the station held it when the rows were read.
+    pub(crate) marks: Watermarks,
+    /// Whether the rows are exactly the station's log from `bound` on: read in one picture of
+    /// the store that held every change the station had made, and no other window's the station
+    /// had not taken in.
+    pub(crate) exact: bool,
+    /// Whether the store answered in time ([`SESSION_READ_WAIT`]). One that did not — a big
+    /// import being written, say — is not asked again: the session's first snapshot sweeps the
+    /// log itself, as it always has.
+    pub(crate) ready: bool,
+}
+
+/// How long a read for a contest session ([`SessionRead::read`]) waits — for the store to hold
+/// the station's own changes, and for the writer's look at other windows' commits — before it
+/// gives the read up. The switch waits for the read, so a store busy with a big write costs the
+/// switch this, then the old way.
+pub const SESSION_READ_WAIT: Duration = Duration::from_millis(500);
+
+/// A read of [`SessionRows`] from the store, taken under the Engine lock
+/// ([`crate::engine::Engine::session_read`]) and made after it is released ([`Self::read`]).
+pub struct SessionRead {
+    reads: StoreReads,
+    writer: Arc<LogWriter>,
+    /// The count of other windows' commits the station's log had taken in when this was taken.
+    synced: u64,
+    bound: u64,
+    marks: Watermarks,
+}
+
+// Reads of the store's session rows, DEBUG BUILDS ONLY — per thread, like `LOG_SWEEPS`. The test
+// that pins "a switch that opens no session reads nothing" reads it. (A plain comment: doc
+// comments cannot attach through `thread_local!`.)
+#[cfg(debug_assertions)]
+thread_local! {
+    pub static SESSION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Every row the store holds logged at or after `bound`, whole — each as a whole-record load
+/// decodes it, the contest exchange included — in log order: the `qso_recent` index names them,
+/// and they are decoded by id.
+fn rows_since(db: &LogDb, bound: u64) -> sqlite::Result<Vec<QsoRecord>> {
+    let mut ids = Vec::new();
+    db.each_narrow(
+        sqlite::Narrow {
+            columns: &[],
+            uploads: false,
+        },
+        sqlite::Scope::Since(bound),
+        sqlite::Order::Log,
+        &mut |r| {
+            ids.extend(r.id);
+            std::ops::ControlFlow::Continue(())
+        },
+    )?;
+    db.rows_by_ids(&ids)
+}
+
+impl SessionRead {
+    /// Read the rows: every row the store holds from the bound on, whole, in log order, waited
+    /// for (P4) and read in one transaction. Then count other windows' commits NOW
+    /// ([`LogWriter::foreign_commits_now`]): one the read saw is counted by then, so a count
+    /// still at the station's says the read holds nothing the station has not taken in. Each
+    /// wait is [`SESSION_READ_WAIT`] at most.
+    ///
+    /// ⚠️ Disk I/O and two waits: never under the Engine lock (a debug build panics).
+    pub fn read(self) -> SessionRows {
+        #[cfg(debug_assertions)]
+        SESSION_READS.with(|c| c.set(c.get() + 1));
+        let bound = self.bound;
+        let read = self
+            .reads
+            .read(SESSION_READ_WAIT, |db| rows_since(db, bound));
+        let foreign = self.writer.foreign_commits_now(SESSION_READ_WAIT);
+        let (rows, ready) = match read {
+            Ok((rows, fresh)) => (rows, fresh == Freshness::Current && foreign.is_some()),
+            Err(_) => (Vec::new(), false),
+        };
+        SessionRows {
+            rows,
+            bound,
+            marks: self.marks,
+            exact: ready && foreign == Some(self.synced),
+            ready,
+        }
+    }
 }
 
 /// A `log.adi` written by something other than this store's mirror — a 1.13 instance, the
@@ -145,11 +273,13 @@ pub fn open(
 }
 
 /// [`open`], telling `progress` how far a first launch's conversion of `log.adi` has got — what
-/// the start-up screen shows while it works (see [`migrate::migrate_log_reporting`]).
+/// the start-up screen shows while it works (see [`migrate::migrate_log_reporting`]) — and
+/// building the hot index from the store as it opens, when `hot` asks for it.
 pub fn open_reporting(
     log_path: &Path,
     resolve: StoreResolve,
     network: Option<String>,
+    hot: Option<HotBuild>,
     progress: &mut dyn FnMut(migrate::Progress),
 ) -> Result<Opened, OpenError> {
     open_reporting_with(
@@ -157,6 +287,7 @@ pub fn open_reporting(
         resolve,
         network,
         MirrorOptions::default(),
+        hot,
         progress,
     )
 }
@@ -169,20 +300,28 @@ pub fn open_with(
     network: Option<String>,
     mirror_options: MirrorOptions,
 ) -> Result<Opened, OpenError> {
-    open_reporting_with(log_path, resolve, network, mirror_options, &mut |_| {})
+    open_reporting_with(
+        log_path,
+        resolve,
+        network,
+        mirror_options,
+        None,
+        &mut |_| {},
+    )
 }
 
-/// [`open_with`] and [`open_reporting`] in one: the mirror's timings, and the conversion's
-/// progress.
+/// [`open_with`] and [`open_reporting`] in one: the mirror's timings, the hot index, and the
+/// conversion's progress.
 fn open_reporting_with(
     log_path: &Path,
     resolve: StoreResolve,
     network: Option<String>,
     mut mirror_options: MirrorOptions,
+    hot: Option<HotBuild>,
     progress: &mut dyn FnMut(migrate::Progress),
 ) -> Result<Opened, OpenError> {
-    // All of it — the conversion, the load, the read of a foreign `log.adi`, the sweep — before
-    // the engine is locked.
+    // All of it — the conversion, the load, the hot index, the read of a foreign `log.adi`, the
+    // sweep — before the engine is locked.
     tempo_core::logbook::io_fence::off_engine_lock("opening the logbook store");
     if let Some(why) = network {
         return Err(OpenError::NetworkFolder(why));
@@ -192,6 +331,23 @@ fn open_reporting_with(
         .map_err(OpenError::Conversion)?;
     let db = LogDb::open(&db_path).map_err(OpenError::Store)?;
     let records = db.load_all().map_err(OpenError::Store)?;
+    // The hot index of exactly those rows, and the rows a session restored at launch is swept
+    // from, made here where the rows already are. (Once the log in memory goes, SPEC-2 v3 C19,
+    // the index comes from the store itself: `HotIndex::from_store`.)
+    let hot = hot.map(|HotBuild { entity }| {
+        let bound =
+            crate::engine::now_unix_secs().saturating_sub(crate::engine::SESSION_READ_WINDOW);
+        Prebuilt {
+            index: HotIndex::from_rows(&records, &StationKeys(entity.as_deref())),
+            entity,
+            recent: records
+                .iter()
+                .filter(|r| r.when_unix >= bound)
+                .cloned()
+                .collect(),
+            bound,
+        }
+    });
 
     // Does `log.adi` hold anything the store does not? A pristine mirror (some Nexus mirror's
     // own picture, unchanged since) cannot, and neither can the file this very open just
@@ -246,6 +402,7 @@ fn open_reporting_with(
         },
         records,
         foreign,
+        hot,
         outcome,
     })
 }
@@ -265,6 +422,23 @@ impl LogStore {
             writer: Arc::clone(&self.writer),
             after: self.writer.submitted_rev(),
         }
+    }
+
+    /// A read of the log's rows from `bound` on, for a contest session's sweep ([`SessionRead`]),
+    /// taken here under the Engine lock against `marks` — the log as the station holds it. No
+    /// I/O. `None` while the store is missing a change the station holds (one it refused): its
+    /// rows could not be the log's.
+    pub(crate) fn session_read(&self, bound: u64, marks: Watermarks) -> Option<SessionRead> {
+        if !self.dropped.is_empty() {
+            return None;
+        }
+        Some(SessionRead {
+            reads: self.reads(),
+            writer: Arc::clone(&self.writer),
+            synced: self.synced_foreign,
+            bound,
+            marks,
+        })
     }
 
     /// The database's path.
@@ -949,7 +1123,7 @@ impl Unsaved {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::engine::{engine_lock, engine_try_lock, Engine};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -4490,9 +4664,10 @@ mod tests {
         let d = Dir::new("progress");
         std::fs::write(d.log(), legacy_log(40)).unwrap();
         let mut seen = Vec::new();
-        let opened =
-            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
-                .expect("the store opens");
+        let opened = open_reporting_with(&d.log(), no_resolve(), None, fast(), None, &mut |p| {
+            seen.push(p)
+        })
+        .expect("the store opens");
         assert_eq!(
             opened.outcome,
             migrate::Outcome::Converted {
@@ -4517,9 +4692,10 @@ mod tests {
         drop(opened);
 
         seen.clear();
-        let again =
-            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
-                .expect("the store opens again");
+        let again = open_reporting_with(&d.log(), no_resolve(), None, fast(), None, &mut |p| {
+            seen.push(p)
+        })
+        .expect("the store opens again");
         assert_eq!(again.outcome, migrate::Outcome::AlreadyDone);
         assert!(seen.is_empty(), "{seen:?}");
     }
@@ -4567,6 +4743,225 @@ mod tests {
             stored(&d).iter().filter(|r| r.call == "W1DUP").count(),
             1,
             "once the store catches up it holds the contact once"
+        );
+    }
+
+    // ── the launch's hot index (SPEC-2 v3 C19) ──────────────────────────────
+
+    /// A launch after an earlier session deleted two contacts, so the rows the store hands back
+    /// carry rowids with gaps in them: the launch's index is keyed by those rowids.
+    fn a_store_with_gaps(tag: &str) -> Dir {
+        let d = Dir::new(tag);
+        std::fs::write(d.log(), legacy_log(40)).unwrap();
+        let mut e = engine_on_store(&d);
+        for call in ["K3ABC", "K17ABC"] {
+            let id = e
+                .log_records()
+                .iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.id)
+                .expect("a contact to delete");
+            assert!(e.delete_qso(id));
+        }
+        flush(&e);
+        d
+    }
+
+    /// ★ The launch's hot index is built by the store while it opens — before the engine is
+    /// locked — and the attach INSTALLS it, building nothing under the lock, when it was keyed by
+    /// the resolver the station holds: the one `Arc` the shell hands both. Installed, it answers
+    /// as the index the station would have built from its own rows, and follows the next contact
+    /// as that one would.
+    #[test]
+    #[cfg(debug_assertions)] // reads the debug build's rebuild counter
+    fn the_attach_installs_the_index_the_store_built_with_the_stations_resolver() {
+        use tempo_core::logbook::hot::{HotIndex, HOT_REBUILDS};
+        let d = a_store_with_gaps("hot-launch");
+        let resolver: Arc<crate::station::DxccResolve> = Arc::new(test_country);
+        let build = HotBuild::keyed_by(Some(Arc::clone(&resolver)));
+        let opened = open_reporting_with(
+            &d.log(),
+            no_resolve(),
+            None,
+            fast(),
+            Some(build),
+            &mut |_| {},
+        )
+        .expect("the store opens");
+        assert!(
+            opened.hot.is_some(),
+            "the store built the index as it opened"
+        );
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver_shared(Arc::clone(&resolver));
+        HOT_REBUILDS.with(|c| c.set(0));
+        e.attach_log_store(opened);
+        assert_eq!(
+            HOT_REBUILDS.with(|c| c.get()),
+            0,
+            "installed as the store built it, not built again under the lock"
+        );
+        let keys = crate::station::StationKeys(Some(&*resolver));
+        let own = |e: &Engine| HotIndex::build(&e.station().logbook, &keys);
+        assert!(
+            e.station().hot().answers_as(&own(&e)),
+            "the station's own index, exactly"
+        );
+        assert!(
+            e.station().hot().entity_worked_on("Entity of K5ABC", "20m"),
+            "keyed by the station's resolver"
+        );
+
+        HOT_REBUILDS.with(|c| c.set(0));
+        e.log_qso(qso("W9NEW", 1_788_000_000));
+        assert_eq!(
+            HOT_REBUILDS.with(|c| c.get()),
+            0,
+            "the next contact is followed, not rebuilt"
+        );
+        assert!(
+            e.station().hot().answers_as(&own(&e)),
+            "and followed as the station's own index follows it"
+        );
+        assert!(e.station().hot().worked_call("W9NEW"));
+    }
+
+    /// The CONTROL: an index the store keyed by any other resolver — even the same function in
+    /// another `Arc`, since two closures cannot be compared — is not installed. The attach builds
+    /// the station's own from its rows, as it always has, and the answers are the same.
+    #[test]
+    #[cfg(debug_assertions)] // reads the debug build's rebuild counter
+    fn an_index_keyed_by_another_resolver_is_built_again_not_installed() {
+        use tempo_core::logbook::hot::{HotIndex, HOT_REBUILDS};
+        let d = a_store_with_gaps("hot-other");
+        let build = HotBuild::keyed_by(Some(Arc::new(test_country)));
+        let opened = open_reporting_with(
+            &d.log(),
+            no_resolve(),
+            None,
+            fast(),
+            Some(build),
+            &mut |_| {},
+        )
+        .expect("the store opens");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let resolver: Arc<crate::station::DxccResolve> = Arc::new(test_country);
+        e.set_dxcc_resolver_shared(Arc::clone(&resolver));
+        HOT_REBUILDS.with(|c| c.set(0));
+        e.attach_log_store(opened);
+        assert_eq!(
+            HOT_REBUILDS.with(|c| c.get()),
+            1,
+            "built from the log, as before"
+        );
+        let keys = crate::station::StationKeys(Some(&*resolver));
+        assert!(e
+            .station()
+            .hot()
+            .answers_as(&HotIndex::build(&e.station().logbook, &keys)));
+    }
+
+    /// The launch's build, timed (SPEC-2 v3 C19; §3.4 measured 220 ms at 150k and 1.1 s at
+    /// 500k), and held to the build from the same rows loaded whole. A release bench:
+    ///
+    /// `HOT_BENCH_ROWS=500000 cargo test --release -p tempo-app --lib -- --ignored
+    /// the_launch_index_bench --nocapture`
+    #[test]
+    #[ignore = "a release bench: the launch's hot index build at 150k (or HOT_BENCH_ROWS) rows"]
+    fn the_launch_index_bench() {
+        use tempo_core::logbook::hot::HotIndex;
+        let n: usize = std::env::var("HOT_BENCH_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(150_000);
+        const BANDS: [&str; 10] = [
+            "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m",
+        ];
+        const MODES: [&str; 4] = ["FT8", "CW", "SSB", "FT4"];
+        const PREFIXES: [&str; 8] = ["W", "K", "N", "DL", "JA", "G", "VE", "PY"];
+        let d = Dir::new("hot-bench");
+        let mut log = tempo_core::logbook::Logbook::new();
+        for i in 0..n {
+            let station = i % 50_000;
+            let call = format!(
+                "{}{}{}{}",
+                PREFIXES[station % PREFIXES.len()],
+                station % 10,
+                ["AB", "XYZ", "CD", "EFG"][station / 10 % 4],
+                station / 40
+            );
+            let mut r = qso(&call, 1_600_000_000 + i as u64 * 97);
+            r.band = BANDS[i % BANDS.len()].into();
+            r.mode = MODES[i / 3 % MODES.len()].into();
+            r.grid = (i % 5 != 0).then(|| {
+                let c = |k: usize| (b'A' + (k % 18) as u8) as char;
+                format!("{}{}{}{}", c(i), c(i / 18), i % 10, i / 10 % 10)
+            });
+            r.qsl_rcvd.lotw = i % 3 == 0;
+            log.add(r);
+        }
+        {
+            let mut db = LogDb::open(&d.db()).expect("a store");
+            db.insert_all(log.records().iter().map(|r| (&**r, Resolved::default())))
+                .expect("written");
+        }
+        let resolver: Arc<crate::station::DxccResolve> = Arc::new(|call: &str| {
+            let base = tempo_core::message::base_call(call);
+            (base.len() >= 3).then(|| base[..2].to_string())
+        });
+        let keys = crate::station::StationKeys(Some(&*resolver));
+        let db = LogDb::open(&d.db()).expect("the store");
+        let t = Instant::now();
+        let (records, from_store) = db
+            .in_one_snapshot(|db| Ok((db.load_all()?, HotIndex::from_store(db, &keys)?)))
+            .expect("loaded");
+        let both = t.elapsed();
+        let t = Instant::now();
+        let alone = db
+            .in_one_snapshot(|db| HotIndex::from_store(db, &keys))
+            .expect("built");
+        let build = t.elapsed();
+        let copy = tempo_core::logbook::Logbook::from_store(records);
+        let t = Instant::now();
+        let from_rows = HotIndex::build(&copy, &keys);
+        let from_memory = t.elapsed();
+        assert!(
+            from_store.answers_as(&from_rows),
+            "the store's build is the log's"
+        );
+        assert!(alone.answers_as(&from_rows));
+
+        // The read before a contest session opens: the last four days and an hour, whole — here
+        // 2,000 contacts, a contest weekend's worth, on top of the lifetime log.
+        let now = crate::engine::now_unix_secs();
+        {
+            let mut db = LogDb::open(&d.db()).expect("the store");
+            let mut weekend = tempo_core::logbook::Logbook::new();
+            for k in 0..2_000u64 {
+                weekend.add(qso(&format!("K{k}REC"), now - k * 120));
+            }
+            db.insert_all(
+                weekend
+                    .records()
+                    .iter()
+                    .map(|r| (&**r, Resolved::default())),
+            )
+            .expect("written");
+        }
+        let bound = now.saturating_sub(crate::engine::SESSION_READ_WINDOW);
+        let t = Instant::now();
+        let session = db
+            .in_one_snapshot(|db| rows_since(db, bound))
+            .expect("read");
+        let session_read = t.elapsed();
+        assert_eq!(session.len(), 2_000, "the weekend, and nothing older");
+        println!(
+            "HOT-LAUNCH n={n} build_from_store_ms={:.1} load_all_plus_build_ms={:.1} \
+             build_from_memory_ms={:.1} session_read_2000_ms={:.1}",
+            build.as_secs_f64() * 1e3,
+            both.as_secs_f64() * 1e3,
+            from_memory.as_secs_f64() * 1e3,
+            session_read.as_secs_f64() * 1e3,
         );
     }
 }
