@@ -1374,7 +1374,8 @@ impl Authority {
                     // then taken again from the top with it, every check above made again
                     // against the station as it stands by then. Nothing has advanced, so a read
                     // the store's writer is still behind is `stationBusy`, as a busy Engine is.
-                    // `prepare_change` checks what was found, under the lock (`logging::locate`).
+                    // The change is made only while the contact is still the version found
+                    // (`logging::change_found`).
                     if let (Some(target @ logging::Target::Key(_)), None) =
                         (change.target(), &found)
                     {
@@ -1416,6 +1417,14 @@ impl Authority {
                         result_version: 4,
                     });
                     drop(c);
+                    // A change to a contact is made now, with every lock released: planned with the
+                    // Engine lock released and made under it (SPEC-2 v3 C19).
+                    let prepared = match prepared {
+                        Ok(logging::ChangeWork::Row(row)) => {
+                            logging::change_found(shared_engine, change, &row)
+                        }
+                        prepared => prepared,
+                    };
                     #[cfg(test)]
                     if let Some(probe) = &self.before_sync {
                         probe();

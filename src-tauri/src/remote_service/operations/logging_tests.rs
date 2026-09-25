@@ -1453,14 +1453,20 @@ fn a_self_spot_in_flight_holds_no_authority_lock_so_a_revoke_lands_at_once() {
 }
 
 /// The id of the contact `target` names, as the change path finds it: in one picture of the log
-/// with the Engine lock released (`find`), then checked under the lock (`locate`).
+/// with the Engine lock released (`find`), still that version when the change is made (the check
+/// `logging::change_found` makes, asked of the store here).
 fn found_id(
     f: &Fixture,
     target: &super::super::logging::Target,
 ) -> Option<tempo_core::logbook::RecordId> {
     let rows = f.engine.lock().unwrap().log_rows();
     let found = super::super::logging::find(&rows, target).expect("the log reads")?;
-    super::super::logging::locate(&mut f.engine.lock().unwrap(), &found)
+    let id = found.id.parse().ok()?;
+    let view = f.engine.lock().unwrap().log_view();
+    view.row(id)
+        .expect("the log reads")
+        .filter(|row| tempo_app::station::StationCore::fresh_row(row, &found.edit_key).is_ok())
+        .map(|_| id)
 }
 
 /// The shack's log view and a Remote browser are two writers of one log. The view used to
@@ -1487,8 +1493,7 @@ fn the_shacks_row_is_found_after_a_shift(f: &Fixture) {
     let stale_position = 1;
     let held_row = {
         let e = f.engine.lock().unwrap();
-        let id = e.log_records()[stale_position].id.unwrap();
-        crate::log_row(&e, id).unwrap()
+        crate::logged_qso(&e.log_records()[stale_position])
     };
     assert_eq!(held_row.call, "K1ABC");
     let held_target = super::super::logging::seen_target(&held_row);
@@ -1750,9 +1755,10 @@ fn a_key_target_is_found_with_both_locks_free_and_a_busy_store_advances_nothing(
 }
 
 /// ★ THE SHACK'S COMMANDS, SPLIT THE SAME WAY: the desktop's log commands find the row the view
-/// showed in the store with the engine lock released (`find_seen`), and check it under the lock
-/// (`locate_seen`). A row no contact holds any more is refused in the words the view always
-/// showed, whether it changed before the search or between the search and the lock; a store whose
+/// showed in the store with the engine lock released (`find_seen`), and change it only while it
+/// is still the version found (`change_found`: planned with the lock released, checked and made
+/// under it). A row no contact holds any more is refused in the words the view always showed,
+/// whether it changed before the search or between the search and the change; a store whose
 /// writer is still behind is refused as unread, nothing changed. The control: once the write
 /// lands, the row is found.
 #[test]
@@ -1763,13 +1769,10 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
     seed(&f);
     let seen = |call: &str| {
         let e = f.engine.lock().unwrap();
-        let id = e
-            .log_records()
-            .iter()
-            .find(|r| r.call == call)
-            .and_then(|r| r.id);
-        crate::log_row(&e, id.unwrap()).unwrap()
+        let row = e.log_records().iter().find(|r| r.call == call).cloned();
+        crate::logged_qso(&row.unwrap())
     };
+    let card = |id| vec![tempo_core::logbook::LogOp::MarkQslCard { id, received: true }];
     let comment = |text: &str| {
         let mut e = f.engine.lock().unwrap();
         let mut r = e
@@ -1785,8 +1788,14 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
 
     let held = seen("K1ABC");
     let found = crate::find_seen(&f.engine, &held).expect("the row the view shows");
-    let id = crate::locate_seen(&mut f.engine.lock().unwrap(), &found).expect("still that contact");
-    assert_eq!(Some(id.to_string()), held.id);
+    assert_eq!(
+        Some(found.id.clone()),
+        held.id,
+        "the contact the view shows"
+    );
+    let (changed, _) = crate::change_found(&f.engine, &found, "test", card);
+    let changed = changed.expect("still that contact").expect("in the log");
+    assert_eq!(changed.id.map(|id| id.to_string()), held.id);
 
     comment("changed before the search");
     assert_eq!(
@@ -1796,9 +1805,11 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
 
     let held = seen("K1ABC");
     let found = crate::find_seen(&f.engine, &held).expect("the row as it is now");
-    comment("changed between the search and the lock");
+    comment("changed between the search and the change");
     assert_eq!(
-        crate::locate_seen(&mut f.engine.lock().unwrap(), &found).unwrap_err(),
+        crate::change_found(&f.engine, &found, "test", card)
+            .0
+            .unwrap_err(),
         crate::LOG_ROW_GONE
     );
 
@@ -1839,7 +1850,7 @@ fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
             .map(|index| {
                 (
                     e.log_records()[index].as_ref().clone(),
-                    crate::log_row(&e, e.log_records()[index].id.unwrap()).unwrap(),
+                    crate::logged_qso(&e.log_records()[index]),
                 )
             })
             .collect()
@@ -2086,14 +2097,20 @@ fn a_stale_id_target_is_refused_on(store: bool) {
         assert!(e.update_qso(local.id.unwrap(), local));
     }
     let (bytes, before) = (written(&f), records(&f));
+    // Every kind of change to a row: an edit is made by a path of its own (`update_row`).
+    let mut edited = edit(&row(&f, "W1AW"));
+    edited["target"] = stale.clone();
     for sent in [
         json!({"kind":"delete","target":stale}),
         json!({"kind":"qslSent","target":stale,"via":"E"}),
+        json!({"kind":"qslCard","target":stale,"received":true}),
+        edited,
     ] {
-        let result = run(&f, &change(&f, sent)).unwrap();
+        let result = run(&f, &change(&f, sent.clone())).unwrap();
         assert_eq!(
             (result["outcome"].as_str(), result["reason"].as_str()),
-            (Some("rejected"), Some("contextChanged"))
+            (Some("rejected"), Some("contextChanged")),
+            "{sent}"
         );
         assert_eq!(written(&f), bytes);
         assert_eq!(records(&f), before);
