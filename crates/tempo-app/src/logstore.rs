@@ -5901,6 +5901,48 @@ pub(crate) mod tests {
         );
     }
 
+    /// ★ ON THE 1.13 PATH A LOGGED CONTACT'S RECEIPT IS REDEEMED ONLY ONCE `log.adi` HOLDS IT —
+    /// what a Remote log answers `fileSynced` on. While the file refuses the contact, the
+    /// receipt says so, at once, as 1.13's failed append did; once the file takes it, the lane
+    /// appends it, and it is there once.
+    #[cfg(unix)]
+    #[test]
+    fn a_receipt_on_the_1_13_path_is_redeemed_only_once_log_adi_holds_the_contact() {
+        use crate::engine::LogWriteOutcome;
+        use std::os::unix::fs::PermissionsExt;
+        let d = Dir::new("receipt-1-13");
+        std::fs::write(d.log(), legacy_log(2)).unwrap();
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_log_path(d.log());
+        let mode = |m| std::fs::set_permissions(d.log(), std::fs::Permissions::from_mode(m));
+        mode(0o444).unwrap();
+        let LogWriteOutcome::PendingSync(receipts) =
+            e.log_qso_for_sync(qso("W1RCPT", 1_788_500_000))
+        else {
+            panic!("logged, with a receipt");
+        };
+        assert_eq!(receipts.len(), 1);
+        let asked = Instant::now();
+        let redeemed: Result<Vec<()>, _> = receipts.into_iter().map(|r| r.sync()).collect();
+        mode(0o644).unwrap();
+        assert!(
+            redeemed.is_err(),
+            "not redeemed while log.adi refuses the contact"
+        );
+        assert!(
+            asked.elapsed() < Duration::from_secs(10),
+            "and said at once: {:?}",
+            asked.elapsed()
+        );
+        flush(&e);
+        let file = calls_in_file(&d);
+        assert_eq!(
+            file.iter().filter(|c| *c == "W1RCPT").count(),
+            1,
+            "then the lane appends it, once: {file:?}"
+        );
+    }
+
     /// The launch adopts the 1.13 path holding the engine lock, and loads `log.adi` into its
     /// store in memory under it, as 1.13 loaded the file: nothing on that path asserts the lock
     /// is free.
