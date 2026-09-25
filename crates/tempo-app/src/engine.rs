@@ -23747,7 +23747,7 @@ pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
         let ready = job.run();
         let mut eng = engine_lock(engine);
         match eng.station.take_shared_log(ready) {
-            Taken::Taken => took = true,
+            Taken::Made => took = true,
             Taken::Again => {}
             Taken::Nothing if file => {}
             Taken::Nothing | Taken::Later => return took,

@@ -955,9 +955,9 @@ pub(crate) enum FileFrom {
 /// What [`SharedLogJob::run`] read and planned, for [`StationCore::take_shared_log`] to make.
 pub(crate) enum SharedLogReady {
     /// The hot index, built again from the store.
-    Rebuilt(crate::logstore::IndexRows),
+    Rebuilt(Box<crate::logstore::IndexRows>),
     /// A take-in, planned on the store's rows.
-    Planned(TakenIn),
+    Planned(Box<TakenIn>),
     /// Nothing to take in after all: the file had changed again, or could not be read — it is
     /// looked at again on the next poll.
     Nothing,
@@ -980,8 +980,8 @@ pub(crate) struct TakenIn {
 /// What [`StationCore::take_shared_log`] made of what was read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Taken {
-    /// Taken in.
-    Taken,
+    /// Taken in: made.
+    Made,
     /// The log changed since it was read: ask again.
     Again,
     /// The store had not yet taken every change the station made when it was read — a big write
@@ -998,7 +998,7 @@ impl SharedLogJob {
     pub(crate) fn run(self) -> SharedLogReady {
         match self {
             SharedLogJob::Rebuild(read) => match read.read(crate::logstore::INDEX_READ_WAIT) {
-                Ok(rows) => SharedLogReady::Rebuilt(rows),
+                Ok(rows) => SharedLogReady::Rebuilt(Box::new(rows)),
                 Err(e) => SharedLogReady::Failed(e),
             },
             SharedLogJob::TakeIn(take) => take.run(),
@@ -1047,13 +1047,13 @@ impl FileTakeIn {
                 .map(|((added, _, merged), planned)| (planned, None, Some((added, merged)))),
         };
         match planned {
-            Ok((planned, file_ids, counts)) => SharedLogReady::Planned(TakenIn {
+            Ok((planned, file_ids, counts)) => SharedLogReady::Planned(Box::new(TakenIn {
                 plan,
                 planned,
                 from,
                 file_ids,
                 counts,
-            }),
+            })),
             Err(e) => SharedLogReady::Failed(e),
         }
     }
@@ -3387,7 +3387,7 @@ impl StationCore {
             // The lane is writing this log's own changes: the file is in motion, and it is ours.
             // It is looked at once the lane is done — or once the lane finds it changed by
             // something else, and holds its rewrite for exactly this.
-            let looking = !(lane_now.pending() && !lane_now.foreign_write);
+            let looking = !lane_now.pending() || lane_now.foreign_write;
             let stamp = tempo_core::logbook::mirror::file_stamp(&path);
             if looking && !(stamp.is_some() && stamp == lane_now.known) {
                 return Some(SharedLogJob::TakeIn(FileTakeIn {
@@ -3447,8 +3447,8 @@ impl StationCore {
                 if rows.marks != self.marks || rows.session != hot_session_key(&self.hot) {
                     return Taken::Again;
                 }
-                self.install_rebuilt(rows);
-                Taken::Taken
+                self.install_rebuilt(*rows);
+                Taken::Made
             }
             SharedLogReady::Planned(taken) => {
                 let TakenIn {
@@ -3457,7 +3457,7 @@ impl StationCore {
                     from,
                     file_ids,
                     counts,
-                } = taken;
+                } = *taken;
                 // A file holding nothing the log lacks changes nothing: it is only accounted for.
                 if !planned.is_empty() {
                     let from_file = matches!(from, FileFrom::Lane { .. });
@@ -3499,7 +3499,7 @@ impl StationCore {
                         ),
                     );
                 }
-                Taken::Taken
+                Taken::Made
             }
         }
     }
@@ -3661,7 +3661,7 @@ impl StationCore {
             let file = matches!(job, SharedLogJob::TakeIn(_));
             files &= !file;
             match self.take_shared_log(job.run()) {
-                Taken::Taken => took = true,
+                Taken::Made => took = true,
                 Taken::Again => {}
                 Taken::Nothing if file => {}
                 Taken::Nothing | Taken::Later => break,
