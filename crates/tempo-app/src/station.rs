@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tempo_core::logbook::hot::{pairs_between, HotIndex, HotKeys, RowPair};
+use tempo_core::logbook::hot::{HotIndex, HotKeys, RowPair};
 use tempo_core::logbook::writer::Change;
 use tempo_core::logbook::{
     LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService,
@@ -261,6 +261,55 @@ pub(crate) fn fill_with(
     if r.state.is_none() {
         r.state = state.and_then(|resolve| resolve(&r.call, r.grid.as_deref()));
     }
+}
+
+/// Fill every contact of `log` — a log nothing holds yet, or the store-less last resort's —
+/// with its country and state from the resolvers where it carries none ([`fill_with`]'s rule,
+/// row by row): the 1.13 path's load fills its rows so before they go into the store in memory
+/// (SPEC-2 v3 C19). Whether anything was filled. Resolved first and written only if something
+/// resolved: a mutable borrow of the rows marks the log rewritten, which every view reads as a
+/// whole new log.
+#[allow(deprecated)] // SPEC-2 C19: the 1.13 path's load fills the rows it loaded, before anything holds them
+#[allow(clippy::type_complexity)]
+fn fill_loaded(
+    log: &mut Logbook,
+    country: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    state: Option<&(dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync)>,
+) -> bool {
+    let fills: Vec<(usize, Option<String>, Option<String>)> = log
+        .records()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            let c = r
+                .country
+                .is_none()
+                .then(|| country.and_then(|f| f(&r.call)))
+                .flatten();
+            let st = r
+                .state
+                .is_none()
+                .then(|| state.and_then(|f| f(&r.call, r.grid.as_deref())))
+                .flatten();
+            (c.is_some() || st.is_some()).then_some((i, c, st))
+        })
+        .collect();
+    if fills.is_empty() {
+        return false;
+    }
+    // An upgrade: a filled country or state is content an index and a needs fold read, and no
+    // row moves.
+    let rows = log.records_mut(OpClass::Upgrade);
+    for (i, c, st) in fills {
+        let r = Arc::make_mut(&mut rows[i]);
+        if c.is_some() {
+            r.country = c;
+        }
+        if st.is_some() {
+            r.state = st;
+        }
+    }
+    true
 }
 
 /// One fill the background job found for a stored contact that lacked it — see
@@ -531,8 +580,8 @@ fn same_resolver(a: &Option<Arc<DxccResolve>>, b: &Option<Arc<DxccResolve>>) -> 
 }
 
 /// The hot index behind its lock, for a write through `&mut` — which no guard can be holding. A
-/// panic while one was held may have left it half-changed: it is let go of, and rebuilt at its
-/// next catch-up.
+/// panic while one was held may have left it half-changed: it is let go of, and built again from
+/// the store by the freshness poll ([`crate::engine::sync_shared_log`]).
 fn hot_mut(hot: &mut std::sync::Mutex<HotIndex>) -> &mut HotIndex {
     match hot.get_mut() {
         Ok(hot) => hot,
@@ -541,6 +590,35 @@ fn hot_mut(hot: &mut std::sync::Mutex<HotIndex>) -> &mut HotIndex {
             hot.invalidate();
             hot
         }
+    }
+}
+
+/// The revision of the log the hot index holds, asked without the checks
+/// [`StationCore::hot`] makes — by the freshness poll, which is what builds again an index that
+/// has let go of the log. `None` for one a panic left half-changed.
+fn hot_at(hot: &std::sync::Mutex<HotIndex>) -> Option<u64> {
+    match hot.try_lock() {
+        Ok(hot) => hot.at(),
+        Err(std::sync::TryLockError::Poisoned(_)) => None,
+        Err(std::sync::TryLockError::WouldBlock) => panic!(
+            "the hot index was asked for while this thread already holds it: take it once and \
+             pass it down (see StationCore::hot)"
+        ),
+    }
+}
+
+/// The contest session the hot index keeps a sweep for ([`HotIndex::session_key`]), asked as
+/// [`hot_at`] asks.
+fn hot_session_key(
+    hot: &std::sync::Mutex<HotIndex>,
+) -> Option<(u64, tempo_core::contest::DupeRule)> {
+    match hot.try_lock() {
+        Ok(hot) => hot.session_key(),
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().session_key(),
+        Err(std::sync::TryLockError::WouldBlock) => panic!(
+            "the hot index was asked for while this thread already holds it: take it once and \
+             pass it down (see StationCore::hot)"
+        ),
     }
 }
 
@@ -710,13 +788,6 @@ pub enum RowRefusal {
     Busy,
 }
 
-/// The log's rows as they stood just before a change: what the store is told the change
-/// against, and what the change's pairs for the hot index are measured from. See
-/// [`StationCore::change_base`].
-pub(crate) struct ChangeBase {
-    rows: Vec<Arc<QsoRecord>>,
-}
-
 /// How many times a change is planned before it answers [`RowRefusal::Busy`]: once, and three
 /// times again (SPEC-2 v3 §4.6).
 pub const PLANS: usize = 4;
@@ -810,6 +881,199 @@ impl Recent {
                 .filter(|(at, _)| *at > revision)
                 .all(|(_, rows)| rows.as_ref().is_some_and(|rows| !rows.iter().any(&hits)))
     }
+}
+
+/// What the freshness poll has to do off the Engine lock (SPEC-2 v3 C19, D4-A) — asked for under
+/// it ([`StationCore::shared_log_job`]: atomics and handles, no I/O), done with it released
+/// ([`Self::run`]), and made under it again ([`StationCore::take_shared_log`]).
+pub(crate) enum SharedLogJob {
+    /// Build the hot index again from the store: another window changed what it reads, or it has
+    /// let go of the log.
+    Rebuild(crate::logstore::IndexRead),
+    /// Take in a `log.adi` something other than Nexus wrote.
+    TakeIn(FileTakeIn),
+}
+
+/// A `log.adi` to take in: the plan's handles, the file, and which path it is on.
+pub(crate) struct FileTakeIn {
+    plan: LogPlan,
+    path: PathBuf,
+    from: FileFrom,
+}
+
+/// A `log.adi` the store could not account for at the open, and its take-in planned there, off
+/// the lock (SPEC-2 v3 C19) — made at the attach ([`StationCore::attach_store`]).
+pub(crate) struct AttachTakeIn {
+    plan: LogPlan,
+    planned: Result<((usize, usize, usize), Planned), String>,
+    file: crate::logstore::ForeignLog,
+}
+
+impl AttachTakeIn {
+    /// Plan the take-in of `file` on `store`'s rows: an import ([`plan_import`]).
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn plan(store: &LogStore, file: crate::logstore::ForeignLog) -> AttachTakeIn {
+        let plan = LogPlan {
+            rows: crate::logstore::LogRows::Store(store.reads()),
+            pending: store.pending(),
+            rev: 0,
+            foreign: Some(store.foreign_commits()),
+        };
+        let planned = plan_import(&plan, &file.text);
+        AttachTakeIn {
+            plan,
+            planned,
+            file,
+        }
+    }
+}
+
+/// Which path a `log.adi` to take in is on, and so how it is taken in.
+pub(crate) enum FileFrom {
+    /// The 1.13 path: another machine sharing the data folder wrote to the file this session's
+    /// lane keeps. 1.13's merge ([`Logbook::reconcile_disk_except`]: the other machine's contacts
+    /// added, shared ones brought up to date, nothing removed); its rows came from the file, so
+    /// the lane writes nothing for them. `lagging`: the lane still owed the file this log's
+    /// changes when it was asked.
+    Lane {
+        lane: Arc<tempo_core::logbook::logfile::LogFileWriter>,
+        lagging: bool,
+    },
+    /// The database path: the mirror refused to replace a file something other than Nexus wrote
+    /// mid-session — a 1.13 instance on the same folder. An import, with an import's rules; `stamp`
+    /// is the file the mirror refused.
+    Mirror {
+        stamp: Option<tempo_core::logbook::mirror::FileStamp>,
+    },
+    /// The database path: the file the launch read and could not take in at the attach
+    /// ([`StationCore::take_in_at_attach`]) — taken in from the text the launch read, whatever
+    /// the file holds now. An import, as the attach's would have been.
+    Launch { file: crate::logstore::ForeignLog },
+}
+
+/// What [`SharedLogJob::run`] read and planned, for [`StationCore::take_shared_log`] to make.
+pub(crate) enum SharedLogReady {
+    /// The hot index, built again from the store.
+    Rebuilt(crate::logstore::IndexRows),
+    /// A take-in, planned on the store's rows.
+    Planned(TakenIn),
+    /// Nothing to take in after all: the file had changed again, or could not be read — it is
+    /// looked at again on the next poll.
+    Nothing,
+    /// The store could not be read.
+    Failed(String),
+}
+
+/// A take-in of a `log.adi`, planned.
+pub(crate) struct TakenIn {
+    plan: LogPlan,
+    planned: Planned,
+    from: FileFrom,
+    /// On the 1.13 path, the file's stamp as it was read and the id of every row it holds — what
+    /// the lane is told it may now replace.
+    file_ids: Option<(tempo_core::logbook::mirror::FileStamp, HashSet<RecordId>)>,
+    /// An import's `(added, merged)`, for the diagnostic log.
+    counts: Option<(usize, usize)>,
+}
+
+/// What [`StationCore::take_shared_log`] made of what was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Taken {
+    /// Taken in.
+    Taken,
+    /// The log changed since it was read: ask again.
+    Again,
+    /// The store had not yet taken every change the station made when it was read — a big write
+    /// on its way: the next poll asks again.
+    Later,
+    /// Nothing to take in, or it could not be.
+    Nothing,
+}
+
+impl SharedLogJob {
+    /// Read, and plan, with the Engine lock released.
+    ///
+    /// ⚠️ Disk I/O: never under the Engine lock (a debug build panics).
+    pub(crate) fn run(self) -> SharedLogReady {
+        match self {
+            SharedLogJob::Rebuild(read) => match read.read(crate::logstore::INDEX_READ_WAIT) {
+                Ok(rows) => SharedLogReady::Rebuilt(rows),
+                Err(e) => SharedLogReady::Failed(e),
+            },
+            SharedLogJob::TakeIn(take) => take.run(),
+        }
+    }
+}
+
+impl FileTakeIn {
+    fn run(self) -> SharedLogReady {
+        let FileTakeIn { plan, path, from } = self;
+        // Statted before it is read: a write that lands during the read leaves it unaccounted,
+        // and it is read again.
+        let stamp = tempo_core::logbook::mirror::file_stamp(&path);
+        if let FileFrom::Mirror { stamp: refused } = &from {
+            // Only the file the mirror refused: one that has changed again since is refused
+            // again, and taken in on the next poll — never replaced on the strength of an older
+            // read.
+            if stamp.is_none() || stamp != *refused {
+                return SharedLogReady::Nothing;
+            }
+        }
+        let text = match &from {
+            FileFrom::Launch { file } => std::borrow::Cow::Borrowed(file.text.as_str()),
+            // Bytes, then a lossy decode, for 1.13's reason: a CP1252 `log.adi` is not UTF-8.
+            _ => match std::fs::read(&path) {
+                Ok(bytes) => std::borrow::Cow::Owned(String::from_utf8_lossy(&bytes).into_owned()),
+                Err(_) => return SharedLogReady::Nothing,
+            },
+        };
+        let planned = match &from {
+            FileFrom::Lane { lane, lagging } => {
+                // With the lane idle the file holds every change this log made, and the merge is
+                // 1.13's. With the lane still owing it changes, the file lags this log: a row it
+                // held when this log last accounted for it is this log's own, as it stood before
+                // those changes — a contact since edited or deleted here — and not another
+                // machine's news, so it is not merged back. What another machine added is.
+                let lagging = *lagging;
+                plan_file_merge(&plan, &text, &|id| lagging && lane.holds(id)).map(
+                    |(ids, planned)| {
+                        let file_ids = stamp.map(|stamp| (stamp, ids));
+                        (planned, file_ids, None)
+                    },
+                )
+            }
+            FileFrom::Mirror { .. } | FileFrom::Launch { .. } => plan_import(&plan, &text)
+                .map(|((added, _, merged), planned)| (planned, None, Some((added, merged)))),
+        };
+        match planned {
+            Ok((planned, file_ids, counts)) => SharedLogReady::Planned(TakenIn {
+                plan,
+                planned,
+                from,
+                file_ids,
+                counts,
+            }),
+            Err(e) => SharedLogReady::Failed(e),
+        }
+    }
+}
+
+/// A take-in of a `log.adi` another machine wrote to, on the 1.13 path (SPEC-2 v3 C19, D1-A):
+/// 1.13's merge ([`Logbook::reconcile_disk_except`], leaving out the rows `skip` names), planned
+/// on the rows of the file's calls ([`plan_on_candidates`]). The id of every row the file holds,
+/// and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_file_merge(
+    plan: &LogPlan,
+    text: &str,
+    skip: &dyn Fn(RecordId) -> bool,
+) -> Result<(HashSet<RecordId>, Planned), String> {
+    let (calls, ids) = tempo_core::logbook::file_calls_and_ids(text);
+    plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
+        log.reconcile_disk_except(text, skip)
+    })
 }
 
 /// What a change planned off the Engine lock reads — the log's rows, and this process's own
@@ -1091,8 +1355,10 @@ pub(crate) struct RowChange {
     pub(crate) class: OpClass,
     /// The rows it takes out and puts in, in log order ([`RowPair`]).
     pub(crate) pairs: Vec<RowPair>,
-    /// Every row goes first (a purge): its pairs name every row taken out.
-    pub(crate) clear: bool,
+    /// A purge: every row goes, and these are their ids — no pairs, for the store deletes them in
+    /// one statement and the hot index empties at once (SPEC-2 v3 C19, flag (c)), while a purge
+    /// the store refused and sends again takes out these rows and no row logged after it.
+    pub(crate) purged: Option<Vec<RecordId>>,
     /// Written in the writer's bulk lane.
     pub(crate) bulk: bool,
     /// `log_meta` keys the store sets with its last chunk (the fill job's `fill_ver`).
@@ -1403,13 +1669,16 @@ pub struct StationCore {
     /// The hot index set ([`tempo_core::logbook::hot`]): the duplicate guard, the B4 sets, the
     /// badges, the partner's logged grid, "last worked", the activation count and the contest
     /// session's sweep, each followed row by row as the log changes instead of swept from it.
-    /// A `Mutex` because the snapshot reads it through `&self` and it may catch up there; it is
-    /// only ever taken under the engine lock, so it never waits — see [`Self::hot`].
+    /// Always the index of the log as the station holds it (SPEC-2 v3 C19): every change reaches
+    /// it through [`Self::follow`], and a whole new picture is installed, never caught up with.
+    /// A `Mutex` because the snapshot reads it through `&self` and may open a contest session
+    /// there; it is only ever taken under the engine lock, so it never waits — see
+    /// [`Self::hot`].
     pub(crate) hot: std::sync::Mutex<HotIndex>,
-    /// Memory still holds a row another process deleted from the store: an in-place re-read
-    /// (made while a caller held positions into the log) could not remove it. The next
-    /// freshness poll does, whether or not anything else has changed.
-    pub(crate) store_lingering: bool,
+    /// A `log.adi` the launch read and could not take in at the attach — another window
+    /// committed in between, or the read failed — taken in by the next freshness poll
+    /// ([`Self::shared_log_job`]).
+    pub(crate) pending_take_in: Option<crate::logstore::ForeignLog>,
     /// ADIF file the logbook is persisted to, if the shell set one.
     pub(crate) log_path: Option<PathBuf>,
     /// Last-seen (mtime, byte length) of the SHARED `log.adi` — the freshness
@@ -1542,8 +1811,10 @@ impl StationCore {
             recent: Recent::default(),
             store: empty_store(),
             store_problem: None,
-            store_lingering: false,
-            hot: Default::default(),
+            pending_take_in: None,
+            // The index of the empty log, at the log's revision: current from the start, so the
+            // station never has to build one from the log it holds (SPEC-2 v3 C19).
+            hot: std::sync::Mutex::new(HotIndex::default().holding(marks.revision)),
             log_path: None,
             last_log_mtime: None,
             fd_log_path: None,
@@ -1604,7 +1875,16 @@ impl StationCore {
         // The file as the load reads it — statted first, so a write that lands during the load
         // leaves it unaccounted, and it is read again before anything replaces it.
         let read = tempo_core::logbook::mirror::file_stamp(&path);
-        let log = Logbook::load(&path);
+        let mut log = Logbook::load(&path);
+        // Each contact's country and state, filled from the resolvers where it carries none, as
+        // 1.13's load filled them — before the rows go anywhere (SPEC-2 v3 C19), so the store in
+        // memory, the hot index and every screen hold the same rows. A load that filled anything
+        // writes `log.adi` whole with them, as 1.13's did, once the store holds them.
+        let filled = fill_loaded(
+            &mut log,
+            self.dxcc_resolve.as_deref(),
+            self.state_resolve.as_deref(),
+        );
         self.store = match LogStore::fallback(&path, read, log.records(), resolve) {
             Ok(store) => Some(store),
             Err(e) => {
@@ -1618,13 +1898,22 @@ impl StationCore {
                 None
             }
         };
+        // The index of exactly the rows loaded, built from them as they are handed on.
+        let index = HotIndex::from_rows(
+            log.records().iter().map(|r| &**r),
+            &StationKeys(self.dxcc_resolve.as_deref()),
+        );
         self.logbook = log;
+        self.install_hot(index);
         self.minter = self.logbook.hand_over_minter();
         self.log_path = Some(path);
         self.last_log_mtime = None;
-        self.backfill_country();
-        self.backfill_state();
-        self.sync_hot();
+        if filled {
+            match &self.store {
+                Some(store) => store.rewrite_log_file(),
+                None => self.save_log("backfill"),
+            }
+        }
     }
 
     /// Make the store the owner of the log — the ordinary launch since the logbook moved into
@@ -1649,37 +1938,39 @@ impl StationCore {
         let Opened {
             store,
             records,
-            foreign,
+            take_in,
             hot,
             outcome,
         } = opened;
+        // The hot index the open built of these very rows off the lock (SPEC-2 v3 C19), when it
+        // was keyed by the resolver this station holds. Otherwise one is built of them here, as
+        // they are handed on.
+        let (index, recent) = match hot.filter(|h| same_resolver(&h.entity, &self.dxcc_resolve)) {
+            Some(built) => (built.index, Some((built.recent, built.bound))),
+            None => (
+                HotIndex::from_rows(records.iter(), &StationKeys(self.dxcc_resolve.as_deref())),
+                None,
+            ),
+        };
         self.logbook = Logbook::from_store(records);
         self.minter = self.logbook.hand_over_minter();
-        // The hot index the open built of these very rows off the lock (SPEC-2 v3 C19), when it
-        // was keyed by the resolver this station holds. Otherwise the catch-up below builds one
-        // from the log, as it always has.
-        let mut session_rows = None;
-        if let Some(built) = hot.filter(|h| same_resolver(&h.entity, &self.dxcc_resolve)) {
-            self.install_hot(built.index);
-            session_rows = Some(SessionRows {
-                rows: built.recent,
-                bound: built.bound,
-                marks: self.marks,
-                exact: true,
-                ready: true,
-            });
-        }
+        self.install_hot(index);
+        let session_rows = recent.map(|(rows, bound)| SessionRows {
+            rows,
+            bound,
+            marks: self.marks,
+            exact: true,
+        });
         self.log_path = store.log_path().map(Path::to_path_buf);
         self.last_log_mtime = None;
         self.store = Some(store);
         self.store_problem = None;
-        self.store_lingering = false;
-        if let Some(f) = foreign {
-            self.take_in_log_file(&f.text, f.stamp);
+        if let Some(take_in) = take_in {
+            self.take_in_at_attach(take_in);
         }
         // The conversion's last step, once: `log.adi` is still the file it read, which is not
         // the store's picture, and left so every launch until the first change would read it
-        // and take it in again — an import, which can write (see `take_in_log_file`).
+        // and take it in again — an import, which can write (see `take_in_at_attach`).
         if matches!(
             outcome,
             tempo_core::logbook::migrate::Outcome::Converted { .. }
@@ -1688,79 +1979,71 @@ impl StationCore {
                 store.refresh_mirror();
             }
         }
-        self.sync_hot();
         session_rows
     }
 
-    /// Take the contacts of a `log.adi` the store does not account for into the log — a file a
-    /// 1.13 instance wrote to, the operator's own log from before the store, a restore — so the
-    /// mirror may replace it without taking anything with it.
+    /// Make the take-in of a `log.adi` the store could not account for, planned at the open
+    /// off the lock ([`AttachTakeIn::plan`]) — a file a 1.13 instance wrote to, the operator's own
+    /// log from before the store, a restore — so the mirror may replace it without taking
+    /// anything with it.
     ///
     /// An IMPORT, with an import's rules: a contact the log lacks is added, one it holds is
     /// brought up to date monotonically (a confirmation, a stamp), and nothing is removed or
     /// un-confirmed. So a 1.13 instance's new contacts arrive; its edits arrive as the import
     /// rules have always treated a restated contact, and a contact it deleted stays — the
     /// visible trades a shared `log.adi` has always made, and never a contact lost.
-    #[allow(deprecated)] // SPEC-2 C19 (the cut): the take-in runs under the lock (the launch's attach, the freshness poll), so it checks the log in memory; it moves into the open path
-    pub(crate) fn take_in_log_file(
-        &mut self,
-        text: &str,
-        stamp: Option<tempo_core::logbook::mirror::FileStamp>,
-    ) {
-        let base = self.change_base();
-        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
-        let (added, _, merged) = self
-            .logbook
-            .import_adif_with(text, |r| fill_with(r, country, state));
-        self.persist_change(base, "take in log.adi");
-        if !added.is_empty() || merged > 0 {
+    ///
+    /// Made only while the store's rows are the rows the plan read. Another window committing
+    /// between the open and the attach, or a read that failed, leaves the file to the freshness
+    /// poll ([`crate::engine::sync_shared_log`]), which plans it again off the lock; until its
+    /// contacts are in, the mirror leaves the file where it is.
+    fn take_in_at_attach(&mut self, take_in: AttachTakeIn) {
+        let AttachTakeIn {
+            plan,
+            planned,
+            file,
+        } = take_in;
+        let plan = LogPlan {
+            rev: self.marks.revision,
+            ..plan
+        };
+        let made = match planned {
+            Ok(((added, _, merged), planned)) => {
+                if planned.is_empty() {
+                    Some((0, 0))
+                } else {
+                    self.commit_bulk(&plan, planned, "take in log.adi")
+                        .ok()
+                        .map(|_| (added, merged))
+                }
+            }
+            Err(e) => {
+                tempo_core::applog::warn(
+                    "logbook",
+                    &format!("log.adi could not be taken in at launch ({e}); it is taken in later"),
+                );
+                None
+            }
+        };
+        let Some((added, merged)) = made else {
+            self.pending_take_in = Some(file);
+            return;
+        };
+        if added > 0 || merged > 0 {
             tempo_core::applog::info(
                 "logbook",
                 &format!(
-                    "log.adi held contacts the logbook database did not: {} added, {} brought up \
-                     to date",
-                    added.len(),
-                    merged
+                    "log.adi held contacts the logbook database did not: {added} added, {merged} \
+                     brought up to date"
                 ),
             );
         }
-        if let (Some(store), Some(stamp)) = (&self.store, stamp) {
+        if let (Some(store), Some(stamp)) = (&self.store, file.stamp) {
             store.accept_log_file(stamp);
             // Its contacts are in: the mirror replaces it now, whether or not it held anything
             // new, so it is not read and taken in again at every launch.
             store.refresh_mirror();
         }
-    }
-
-    /// The rows as they stand, for measuring a change against: the store is told the change
-    /// against them, and the hot index follows it by the pairs measured from them (see
-    /// [`Self::persist_change`]) — a copy of pointers, never of a record. The index and the
-    /// watermarks are brought up to the log first, so these are the rows the index holds and the
-    /// pairs start from them.
-    #[allow(deprecated)] // SPEC-2 C19 (C, the cut): the 1.13 backfills, the take-in and another window's reload measure their change against the log in memory
-    fn change_base(&mut self) -> ChangeBase {
-        self.sync_hot();
-        ChangeBase {
-            rows: self.logbook.records().to_vec(),
-        }
-    }
-
-    /// Carry a change made in memory to disk. With the store, the rows whose contents differ
-    /// from `base` go to the writer thread — a channel send, no I/O — and the mirror lane is
-    /// told. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was. Either
-    /// way the hot index follows the change, row by row, from `base`.
-    #[allow(deprecated)] // SPEC-2 C19 (C, the cut): the 1.13 backfills, the take-in and another window's reload measure their change against the log in memory
-    fn persist_change(&mut self, base: ChangeBase, context: &str) {
-        match &self.store {
-            Some(store) => {
-                let change = Change::between(&base.rows, &self.logbook, store.resolved());
-                if let Some(store) = self.store.as_mut() {
-                    store.submit(change);
-                }
-            }
-            None => self.save_log(context),
-        }
-        self.catch_up_hot(Some(&base));
     }
 
     // ─── The write path: plan off the Engine lock, make under it (SPEC-2 v3 §4.6, C19 Part B) ───
@@ -1782,27 +2065,33 @@ impl StationCore {
     /// process's changes the store may not hold yet, and where the log stands. Taken under the
     /// lock — handles and pointers, no I/O — and read after it is released ([`LogPlan::rows`]).
     ///
-    /// Another window's commits are taken in first ([`Self::recover_external_appends`]), as
-    /// before every change to rows the log holds, so the plan and the hot index start from the
-    /// same picture.
+    /// Another window's commits are NOT taken in here (SPEC-2 v3 C19, D4-A): the plan reads the
+    /// store, which holds them — its read is the store's word on the rows — and the change is
+    /// made only from rows the hot index holds as the plan read them
+    /// ([`Self::unchanged_since`]); the index takes them in off the lock
+    /// ([`crate::engine::sync_shared_log`]). The store-less last resort re-reads `log.adi` first,
+    /// as 1.13 did before every change.
     pub fn log_plan(&mut self) -> LogPlan {
         self.recover_external_appends();
-        self.sync_hot();
         self.log_view()
     }
 
-    /// [`Self::log_plan`] for a change that holds no position of any row across the re-read of
-    /// another window's commits, which may then MOVE rows: a contact another window deleted is
-    /// gone from the log in memory before the plan looks, rather than lingering until the next
-    /// freshness poll. The LoTW batch's stamps, which have always re-read this way.
+    /// The plan a change made in one breath starts from — for an owner holding the station with
+    /// no Engine guard (a test's own station or engine): another window's commits and a
+    /// `log.adi` something else wrote are taken in first ([`Self::take_in_shared_log`]), as
+    /// [`crate::engine::log_plan`] takes them in off the lock for a command.
+    ///
+    /// ⚠️ It READS THE STORE when something changed: never under the Engine lock.
+    pub(crate) fn plan_in_breath(&mut self) -> LogPlan {
+        self.take_in_shared_log();
+        self.log_plan()
+    }
+
+    /// [`Self::log_plan`], for the LoTW batch's stamps, which used to re-read another window's
+    /// commits in a way that could move rows. Nothing is re-read into memory any more (SPEC-2
+    /// v3 C19), so the two are one.
     pub fn log_plan_moving(&mut self) -> LogPlan {
-        if self.store.is_some() {
-            self.refresh_from_store(false);
-        } else {
-            self.recover_external_appends();
-        }
-        self.sync_hot();
-        self.log_view()
+        self.log_plan()
     }
 
     /// [`Self::log_plan`] with nothing taken in first — what a READ of rows by id takes under the
@@ -1818,38 +2107,39 @@ impl StationCore {
     }
 
     /// ★ The commit's precondition (SPEC-2 v3 §4.6): whether the rows a plan read — `rows`, as it
-    /// read them — are still those rows. Under the Engine lock, and no I/O in the ordinary case.
+    /// read them — are still those rows. Under the Engine lock, and no I/O.
     ///
     /// - **This process's changes**: none made since the plan was taken touched one of them
     ///   ([`Recent`]).
-    /// - **Another window's**: none committed since — or, when one has, its commits are taken in
-    ///   (as before every change) and each row the plan read is the row the log now holds.
-    ///   Another window's change to OTHER rows then costs nothing but that take-in.
-    ///
-    /// ⚠️ The second half compares against the log in memory, which is kept current with the
-    /// store's commits until the cut. After the cut this is what must answer it instead: the
-    /// store's own word on those rows (A's D4-A, or a precondition the writer checks).
-    #[allow(deprecated)] // SPEC-2 C19 (the cut): another window's change to a planned row, read in the log in memory
-    pub(crate) fn unchanged_since(&mut self, plan: &LogPlan, rows: &[Arc<QsoRecord>]) -> bool {
+    /// - **Another window's** (SPEC-2 v3 C19, flag (b), the operator's (a)): none committed since
+    ///   the plan was taken. When one has, the change plans again and never writes over it: the
+    ///   plan's own read is the store's word on the rows. The cost, named: another window's
+    ///   stream of commits (a bulk import, in chunks) can keep a change here planning until it
+    ///   answers [`RowRefusal::Busy`].
+    /// - **The hot index** holds each of them as the plan read it ([`HotIndex::holds`]): the
+    ///   change's pairs can be followed only from rows it holds. A row another window changed
+    ///   before the plan, which this window has not taken in yet ([`crate::engine::sync_shared_log`]),
+    ///   is read one way and held another, and the change plans again.
+    pub(crate) fn unchanged_since(&self, plan: &LogPlan, rows: &[Arc<QsoRecord>]) -> bool {
         let ids: Vec<RecordId> = rows.iter().filter_map(|r| r.id).collect();
         if !self.recent.untouched_since(plan.rev, &ids) {
             return false;
         }
-        let foreign = self.store.as_ref().map(|s| s.foreign_commits());
-        if foreign == plan.foreign {
-            return true;
+        if self.store.as_ref().map(|s| s.foreign_commits()) != plan.foreign {
+            return false;
         }
-        self.recover_external_appends();
-        let held: HashMap<RecordId, &Arc<QsoRecord>> = self
-            .logbook
-            .records()
+        let hot = self.hot();
+        rows.iter().all(|r| hot.holds(r))
+    }
+
+    /// Whether the hot index holds every row `pairs` take out or change, as the change read it —
+    /// [`Self::unchanged_since`]'s third half, for a bulk change.
+    fn holds_as_read(&self, pairs: &[RowPair]) -> bool {
+        let hot = self.hot();
+        pairs
             .iter()
-            .filter_map(|r| r.id.filter(|id| ids.contains(id)).map(|id| (id, r)))
-            .collect();
-        rows.iter().all(|r| {
-            r.id.and_then(|id| held.get(&id))
-                .is_some_and(|h| ***h == **r)
-        })
+            .filter_map(|(before, _)| before.as_deref())
+            .all(|b| hot.holds(b))
     }
 
     /// Whether the log has not changed at all since `plan` was taken — here or in another window:
@@ -1871,19 +2161,50 @@ impl StationCore {
         change: RowChange,
         context: &str,
     ) -> Option<tempo_core::logbook::writer::Ticket> {
+        self.commit_as(change, context, false)
+    }
+
+    /// [`Self::commit`]; `from_file` for a change whose rows came FROM `log.adi` (the 1.13
+    /// path's take-in): the lane writes nothing for it.
+    fn commit_as(
+        &mut self,
+        change: RowChange,
+        context: &str,
+        from_file: bool,
+    ) -> Option<tempo_core::logbook::writer::Ticket> {
         let marks = self.make(&change);
-        let appends = !change.clear && change.pairs.iter().all(|(before, _)| before.is_none());
+        let appends =
+            change.purged.is_none() && change.pairs.iter().all(|(before, _)| before.is_none());
         match self.store.as_mut() {
             Some(store) => {
-                let mut c = Change::of_pairs(marks, change.clear, &change.pairs, store.resolved());
+                let mut c = Change::of_pairs(
+                    marks,
+                    change.purged.is_some(),
+                    &change.pairs,
+                    store.resolved(),
+                );
+                // A purge names the rows it takes out: one statement deletes them all, and a
+                // purge sent again after a refusal takes out these and no row logged since.
+                if let Some(ids) = change.purged {
+                    c.remove = ids;
+                }
                 if change.bulk {
                     c = c.in_bulk();
                 }
                 c.meta = change.meta;
+                // A stamp on held rows, and nothing else, moves nothing a hot index reads: it
+                // costs another window sharing the store no rebuild (SPEC-2 v3 C19, D4-A).
+                c.stamp_only = change.class == OpClass::Stamp
+                    && change
+                        .pairs
+                        .iter()
+                        .all(|(before, after)| before.is_some() && after.is_some());
                 // On the 1.13 path the store's lane keeps `log.adi` by the rule below: rows only
-                // appended are appended to it (SPEC-2 v3 C19, D1-A). The database takes either
-                // as any change.
-                if appends {
+                // appended are appended to it (SPEC-2 v3 C19, D1-A), and rows that came from it
+                // are not written back. The database takes any of them as any change.
+                if from_file {
+                    store.submit_quietly(c)
+                } else if appends {
                     store.submit_appended(c)
                 } else {
                     store.submit(c)
@@ -1915,9 +2236,9 @@ impl StationCore {
     /// [`Self::append`] that does not touch the disk.
     #[allow(deprecated)] // SPEC-2 C19 (the cut): the log in memory follows each change
     fn make(&mut self, change: &RowChange) -> Watermarks {
-        // Up to the log as it stands, first: a write that reached it around the station (a
-        // test's) is taken in, so the pairs start where the index does.
-        self.sync_hot();
+        // The pairs start where the index does: nothing reached the log around the station.
+        let at = hot_mut(&mut self.hot).at();
+        self.check_in_step(at);
         let mut marks = self.marks;
         marks.mark(change.class);
         // A change that also appends rows after the rows it changed (an import's new contacts
@@ -1930,8 +2251,17 @@ impl StationCore {
         {
             marks.mark(OpClass::Append);
         }
-        self.logbook.follow(&change.pairs, change.clear, marks);
-        self.follow(&change.pairs, marks);
+        self.logbook
+            .follow(&change.pairs, change.purged.is_some(), marks);
+        if change.purged.is_some() {
+            debug_assert!(
+                change.pairs.is_empty(),
+                "a purge is told with no row pairs: it takes out every row"
+            );
+            self.follow_purge(marks);
+        } else {
+            self.follow(&change.pairs, marks);
+        }
         marks
     }
 
@@ -1962,7 +2292,7 @@ impl StationCore {
             RowChange {
                 class,
                 pairs,
-                clear: false,
+                purged: None,
                 bulk,
                 meta,
             },
@@ -1992,12 +2322,33 @@ impl StationCore {
         ),
         Stale,
     > {
+        self.commit_bulk_as(plan, planned, context, false)
+    }
+
+    /// [`Self::commit_bulk`]; `from_file` for a change whose rows came FROM `log.adi` — the 1.13
+    /// path taking in what another machine wrote to it — for which the lane writes nothing
+    /// ([`LogStore::submit_quietly`]).
+    #[allow(clippy::type_complexity)]
+    fn commit_bulk_as(
+        &mut self,
+        plan: &LogPlan,
+        planned: Planned,
+        context: &str,
+        from_file: bool,
+    ) -> Result<
+        (
+            Option<tempo_core::logbook::writer::Ticket>,
+            Vec<Arc<QsoRecord>>,
+        ),
+        Stale,
+    > {
         let mut ids: HashSet<RecordId> = planned.read.iter().filter_map(|r| r.id).collect();
         ids.extend(&planned.kept);
         if !self
             .recent
             .untouched_since_calls(plan.rev, &ids, &planned.calls)
             || self.store.as_ref().map(|s| s.foreign_commits()) != plan.foreign
+            || !self.holds_as_read(&planned.pairs)
         {
             return Err(Stale);
         }
@@ -2026,15 +2377,16 @@ impl StationCore {
                 pair => pairs.push(pair),
             }
         }
-        let ticket = self.commit(
+        let ticket = self.commit_as(
             RowChange {
                 class,
                 pairs,
-                clear: false,
+                purged: None,
                 bulk: true,
                 meta: Vec::new(),
             },
             context,
+            from_file,
         );
         Ok((ticket, appended))
     }
@@ -2092,7 +2444,7 @@ impl StationCore {
         let marks = self.make(&RowChange {
             class: OpClass::Append,
             pairs: rows.iter().map(|r| (None, Some(Arc::clone(r)))).collect(),
-            clear: false,
+            purged: None,
             bulk: false,
             meta: Vec::new(),
         });
@@ -2149,14 +2501,91 @@ impl StationCore {
     /// the hot index it has the store build with the same one ([`crate::logstore::HotBuild`]).
     pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<DxccResolve>) {
         self.dxcc_resolve = Some(resolve);
-        // Every row's entity comes from the resolver, so a new one re-keys the hot index: it is
-        // rebuilt at its next catch-up — the backfill's, below.
-        match self.hot.get_mut() {
-            Ok(hot) => hot.invalidate(),
-            Err(poisoned) => poisoned.into_inner().invalidate(),
+        // Every row's entity comes from the resolver, so a new one re-keys the hot index.
+        self.rekey_hot();
+        self.backfill_log_in_memory("backfill_country");
+    }
+
+    /// Build the hot index again under the DXCC resolver the station now holds, which keys
+    /// every row's entity (SPEC-2 v3 C19). An index of no row is the same under any resolver,
+    /// and that is the launch's case: it sets the resolver before the log is attached, and the
+    /// attach installs an index keyed by it. Otherwise the index is built from the store — or,
+    /// with no store, from the log in memory, which is then the log — and one the store cannot
+    /// build in time is let go of, to be built by the freshness poll
+    /// ([`crate::engine::sync_shared_log`]).
+    ///
+    /// ⚠️ With rows it READS THE STORE, so it is for an owner holding no Engine guard (a test's
+    /// engine); the launch holds no row when it calls it.
+    fn rekey_hot(&mut self) {
+        let session = {
+            let hot = hot_mut(&mut self.hot);
+            if hot.rows() == 0 {
+                return;
+            }
+            hot.session_key()
+        };
+        let index = match &self.store {
+            Some(store) => store
+                .index_read(self.dxcc_resolve.clone(), session, self.marks)
+                .read(crate::logstore::INDEX_READ_WAIT)
+                .ok()
+                .filter(|built| built.exact && built.marks == self.marks)
+                .map(|built| built.index),
+            None => Some(self.index_of_log_in_memory(session)),
+        };
+        match index {
+            Some(index) => self.install_hot(index),
+            None => hot_mut(&mut self.hot).invalidate(),
         }
-        self.backfill_country();
-        self.sync_hot();
+    }
+
+    /// The hot index of the log in memory — the log itself on the 1.13 path when not even a
+    /// store in memory could be opened, the last resort SPEC-2 v3 C19 (C19L) retires.
+    #[allow(deprecated)] // SPEC-2 C19 (C19L): the store-less last resort's log is the log in memory
+    fn index_of_log_in_memory(
+        &self,
+        session: Option<(u64, tempo_core::contest::DupeRule)>,
+    ) -> HotIndex {
+        let mut index = HotIndex::from_rows(
+            self.logbook.records().iter().map(|r| &**r),
+            &StationKeys(self.dxcc_resolve.as_deref()),
+        );
+        if let Some((cutoff, rule)) = session {
+            index.install_session(cutoff, rule, self.logbook.records().iter().map(|r| &**r));
+        }
+        index
+    }
+
+    /// The store-less last resort's hot index, built again from the log in memory — that
+    /// session's log — after a change made on it directly: 1.13's recovery of another instance's
+    /// appends, its backfill. A plan spanning it plans again.
+    fn reindex_log_in_memory(&mut self) {
+        let index = self.index_of_log_in_memory(hot_session_key(&self.hot));
+        self.install_hot(index);
+        self.recent.note_any(self.marks.revision);
+    }
+
+    /// The store-less last resort's backfill, as 1.13 made it after a load, an import or a new
+    /// resolver: another instance's appends taken in first ([`Self::recover_external_appends`] —
+    /// the M18 data-loss class: a full rewrite without them drops them), every contact's country
+    /// and state filled where it carries none, and `log.adi` written whole if anything was.
+    /// Nothing with a store: the store's rows are filled as they are inserted, and the fill job
+    /// fills what an older build left (SPEC-2 v3 D2-A); the 1.13 path's load fills its rows
+    /// before they go into its store ([`Self::set_log_path_resolved`]).
+    #[allow(deprecated)] // SPEC-2 C19 (C19L): the store-less last resort's log is the log in memory
+    fn backfill_log_in_memory(&mut self, context: &str) {
+        if self.store.is_some() {
+            return;
+        }
+        self.recover_external_appends();
+        if fill_loaded(
+            &mut self.logbook,
+            self.dxcc_resolve.as_deref(),
+            self.state_resolve.as_deref(),
+        ) {
+            self.save_log(context);
+            self.reindex_log_in_memory();
+        }
     }
 
     /// Inject the (callsign, heard grid) → US state resolver (the command layer passes a
@@ -2173,63 +2602,7 @@ impl StationCore {
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.state_resolve = Some(Box::new(resolve));
-        self.backfill_state();
-    }
-
-    /// Resolve a US state for any logged record that lacks one. No-op without a resolver;
-    /// persists the log if anything changed.
-    ///
-    /// WHY THIS EXISTS: one question — "what state is this call in?" — used to be answered by
-    /// two different resolvers on the two sides of the same comparison. The heard side resolved
-    /// it from the FCC index; the worked side could only read a logged ADIF STATE, and every
-    /// record Nexus generated hardcoded `state: None`. So a state could be worked and still
-    /// report as needed forever. Filling the record is what makes both sides read the same
-    /// source. See [`Self::backfill_country`] — same shape, same reasons, same ordering.
-    fn backfill_state(&mut self) {
-        if self.state_resolve.is_none() {
-            return;
-        }
-        // Same ordering as backfill_country and for the same reason: pull in records a second
-        // instance appended BEFORE the full-log rewrite below, or this silently drops them
-        // (the M18 data-loss class). Doing it first also backfills the recovered records.
-        self.recover_external_appends();
-        let base = self.change_base();
-        if self.fill_state() {
-            self.persist_change(base, "backfill_state");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-    }
-
-    /// Fill a US state into every record that lacks one and that the resolver can place — IN
-    /// MEMORY, writing nothing. Returns whether anything was filled. [`Self::backfill_state`]
-    /// persists it. The store's rows are filled another way: each insert fills its own, and the
-    /// fill job the ones an older build left ([`Self::apply_log_fills`], SPEC-2 v3 D2-A).
-    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback's backfill (D1)
-    fn fill_state(&mut self) -> bool {
-        let Some(resolve) = self.state_resolve.take() else {
-            return false;
-        };
-        // Resolved first, written only if something resolved — see `backfill_country`.
-        let fills: Vec<(usize, String)> = self
-            .logbook
-            .records()
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.state.is_none())
-            .filter_map(|(i, r)| resolve(&r.call, r.grid.as_deref()).map(|st| (i, st)))
-            .collect();
-        self.state_resolve = Some(resolve);
-        if fills.is_empty() {
-            return false;
-        }
-        // An upgrade: a filled state is content a needs fold reads, and no row moves.
-        let records = self.logbook.records_mut(OpClass::Upgrade);
-        for (i, st) in fills {
-            Arc::make_mut(&mut records[i]).state = Some(st);
-        }
-        true
+        self.backfill_log_in_memory("backfill_state");
     }
 
     /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a
@@ -2269,62 +2642,6 @@ impl StationCore {
         !c.trim().is_empty() && f(c.trim())
     }
 
-    /// Resolve a DXCC country for any logged record that lacks one (e.g. a log
-    /// loaded/imported from an ADIF without `COUNTRY`, or older Nexus records).
-    /// No-op without a resolver; persists the log if anything changed. Run after
-    /// load / import / resolver-set so the logbook + awards are country-complete.
-    fn backfill_country(&mut self) {
-        if self.dxcc_resolve.is_none() {
-            return;
-        }
-        // Pull in any records a second instance appended BEFORE the full-log
-        // rewrite below, so backfill can't silently drop them (the M18 data-loss
-        // class). Doing it before the loop also backfills the recovered records.
-        self.recover_external_appends();
-        let base = self.change_base();
-        if self.fill_country() {
-            self.persist_change(base, "backfill_country");
-        } else {
-            // Nothing changed — though the write may still have moved the log's revision.
-            self.catch_up_hot(Some(&base));
-        }
-    }
-
-    /// Fill a DXCC country into every record that lacks one and that the resolver can place —
-    /// IN MEMORY, writing nothing. Returns whether anything was filled.
-    /// [`Self::backfill_country`] persists it. The store's rows are filled another way: each
-    /// insert fills its own, and the fill job the ones an older build left
-    /// ([`Self::apply_log_fills`], SPEC-2 v3 D2-A).
-    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback's backfill (D1)
-    fn fill_country(&mut self) -> bool {
-        let Some(resolve) = self.dxcc_resolve.take() else {
-            return false;
-        };
-        // Resolved first, written only if something resolved. A mutable borrow of the records
-        // marks the log REWRITTEN (`Logbook::revision`), which sends every log view a full
-        // reload, and this runs after every import — in companion mode, once per contact
-        // WSJT-X logs — where it usually has nothing to fill. A row the resolver cannot place
-        // stays empty and is looked up again next time, as before.
-        let fills: Vec<(usize, String)> = self
-            .logbook
-            .records()
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.country.is_none())
-            .filter_map(|(i, r)| resolve(&r.call).map(|c| (i, c)))
-            .collect();
-        self.dxcc_resolve = Some(resolve);
-        if fills.is_empty() {
-            return false;
-        }
-        // Likewise: the entity index reads `country`, and no row moves.
-        let records = self.logbook.records_mut(OpClass::Upgrade);
-        for (i, c) in fills {
-            Arc::make_mut(&mut records[i]).country = Some(c);
-        }
-        true
-    }
-
     /// Write the fills the background job found (SPEC-2 v3 D2-A, [`crate::logfill`]) into the
     /// log, in one breath, as ONE change in the writer's bulk lane — with `fill_ver` on that
     /// change's last chunk, so the store names the resolver data its fills come from only once
@@ -2341,7 +2658,7 @@ impl StationCore {
         }
         let ids: Vec<RecordId> = fills.iter().map(|f| f.id).collect();
         for _ in 0..PLANS {
-            let plan = self.log_plan();
+            let plan = self.plan_in_breath();
             let rows = match plan.rows(&ids) {
                 Ok(rows) => rows,
                 Err(e) => {
@@ -2460,30 +2777,31 @@ impl StationCore {
 
     /// The station's position id, which the ids of the contacts it logs from now on carry (see
     /// [`RecordId`]); 0 until the profile has one.
-    #[allow(deprecated)] // SPEC-2 C19 (the cut): the log in memory still mints the rows a take-in of log.adi and the 1.13 recovery add
+    #[allow(deprecated)] // SPEC-2 C19 (C19L): the store-less last resort's log in memory still mints the rows 1.13's recovery adds
     pub(crate) fn set_posid(&mut self, posid: u32) {
         self.minter.set_posid(posid);
         self.logbook.set_posid(posid);
     }
 
-    /// The hot index set ([`tempo_core::logbook::hot`]), caught up with the log as it stands and
-    /// held until the returned guard drops.
+    /// The hot index set ([`tempo_core::logbook::hot`]), held until the returned guard drops.
     ///
     /// ⚠️ **Take it once and pass it down.** The lock is only ever taken under the engine lock,
     /// by one thread, so it never waits — which means a second take on the same thread while
     /// the first guard lives can only be a re-entry, and waiting for it would hang the radio
     /// loop forever. It panics instead, naming the mistake.
     ///
-    /// Every change the station makes reaches the index as it is made ([`Self::follow`]), so the
-    /// catch-up here finds nothing to do. It is there for a write that reached the log some other
-    /// way (a test's): with no pairs to follow, it takes in a stamp or an append and rebuilds
-    /// after anything else ([`HotIndex::catch_up`]).
-    #[allow(deprecated)] // SPEC-2 C19: the index catches up from the in-memory log
+    /// ★ It is the index of the log as the station holds it, with nothing to catch up (SPEC-2
+    /// v3 C19): every change the station makes reaches it as it is made ([`Self::follow`]), and
+    /// a whole new picture — a load, the attach, another window's commits — is installed whole.
+    /// A debug build checks that here. One that has let go of the log (a panic while it was
+    /// held, a change it could not follow) answers from what it holds until the freshness poll
+    /// builds it again from the store ([`crate::engine::sync_shared_log`]).
     pub(crate) fn hot(&self) -> Hot<'_> {
-        let mut hot = match self.hot.try_lock() {
+        let hot = match self.hot.try_lock() {
             Ok(hot) => hot,
             Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-                // A panic while it was held may have left it half-changed: start again.
+                // A panic while it was held may have left it half-changed: it is let go of, and
+                // built again from the store.
                 let mut hot = poisoned.into_inner();
                 hot.invalidate();
                 hot
@@ -2493,8 +2811,39 @@ impl StationCore {
                  and pass it down (see StationCore::hot)"
             ),
         };
-        hot.catch_up(&self.logbook, &StationKeys(self.dxcc_resolve.as_deref()));
+        self.check_in_step(hot.at());
         Hot(hot)
+    }
+
+    /// DEBUG BUILDS: whether the log in memory is still the log, for the oracles that hold the
+    /// hot index to it until the cut (SPEC-2 v3 C19): it follows every change this station makes,
+    /// and none another window makes — those the index takes in by building itself again from
+    /// the store ([`crate::engine::sync_shared_log`]) — so once another window has committed, the
+    /// two may differ by design.
+    #[cfg(debug_assertions)]
+    fn copy_is_the_log(&self) -> bool {
+        self.store.as_ref().is_none_or(|s| s.foreign_commits() == 0)
+    }
+
+    /// DEBUG BUILDS: the index holds the log as the station holds it — nothing reached the log
+    /// around the station ([`Self::follow`] is the way in), and the log in memory, which follows
+    /// each change until the cut, stands where the station does. What stood in for this before
+    /// SPEC-2 v3 C19 was a catch-up from the log in memory, which hid such a write; now it is a
+    /// panic that names it.
+    #[allow(deprecated)] // SPEC-2 C19: a debug build holds the log in memory to the station's watermarks until the cut
+    fn check_in_step(&self, at: Option<u64>) {
+        debug_assert_eq!(
+            at,
+            Some(self.marks.revision),
+            "hot index: not the log the station holds — a change reached it some way other than \
+             StationCore::follow, or it was let go of and not built again"
+        );
+        debug_assert_eq!(
+            self.logbook.revision(),
+            self.marks.revision,
+            "a write reached the log in memory around the station (StationCore::follow is the way \
+             in)"
+        );
     }
 
     /// ★ THE way a change to the log reaches the hot index (SPEC-2 v3 C19): `pairs`, the rows it
@@ -2508,20 +2857,41 @@ impl StationCore {
     pub(crate) fn follow(&mut self, pairs: &[RowPair], now: Watermarks) {
         self.recent.note(now.revision, pairs);
         let keys = StationKeys(self.dxcc_resolve.as_deref());
+        #[cfg(debug_assertions)]
+        let oracle = self.copy_is_the_log();
         let hot = hot_mut(&mut self.hot);
         hot.follow(pairs, self.marks.revision, now.revision, &keys);
         self.marks = now;
-        // The station brings the index up to the log before every change it makes, so the pairs
-        // always describe the log the index holds: one it had to let go of is a bug here.
+        // The index holds the log as the station holds it, and a change's pairs name rows it
+        // holds as it holds them ([`Self::unchanged_since`]): one it had to let go of is a bug.
         debug_assert_eq!(
             hot.at(),
             Some(now.revision),
             "hot index: a change the station made could not be followed"
         );
         #[cfg(debug_assertions)]
-        if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
+        if oracle && self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
             hot.verify(&self.logbook, &keys);
         }
+    }
+
+    /// ★ The purge reaching the hot index (SPEC-2 v3 C19, flag (c)): every row taken out at once,
+    /// told with no row pairs, so the purge of a 500,000-row log costs the index one reset and
+    /// not a pair per row ([`HotIndex::purge`]). `now` is the watermarks it left the log at. It
+    /// touched every row, so a plan spanning it plans again.
+    #[allow(deprecated)] // SPEC-2 C19: a debug build checks the index against the in-memory log
+    fn follow_purge(&mut self, now: Watermarks) {
+        self.recent.note_any(now.revision);
+        let hot = hot_mut(&mut self.hot);
+        hot.purge(self.marks.revision, now.revision);
+        self.marks = now;
+        debug_assert_eq!(
+            hot.at(),
+            Some(now.revision),
+            "hot index: the purge could not be followed"
+        );
+        #[cfg(debug_assertions)]
+        hot.verify(&self.logbook, &StationKeys(self.dxcc_resolve.as_deref()));
     }
 
     /// Make `index` — the index of the log as it stands, built somewhere else (the store, off
@@ -2529,6 +2899,8 @@ impl StationCore {
     #[allow(deprecated)] // SPEC-2 C19: the index is installed as the in-memory log's
     fn install_hot(&mut self, index: HotIndex) {
         let rev = self.logbook.revision();
+        #[cfg(debug_assertions)]
+        let oracle = self.copy_is_the_log();
         let hot = hot_mut(&mut self.hot);
         *hot = index.holding(rev);
         self.marks = self.logbook.marks();
@@ -2537,12 +2909,16 @@ impl StationCore {
         // oracle's pass is not the station's work, so the counters tests read are left as they
         // were.
         #[cfg(debug_assertions)]
-        if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
+        if oracle && self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
             use tempo_core::logbook::{hot::HOT_REBUILDS, LOG_SWEEPS};
             let keys = StationKeys(self.dxcc_resolve.as_deref());
             hot.verify(&self.logbook, &keys);
             let counts = (HOT_REBUILDS.with(|c| c.get()), LOG_SWEEPS.with(|c| c.get()));
-            let own = HotIndex::build(&self.logbook, &keys);
+            let mut own = HotIndex::build(&self.logbook, &keys);
+            // An index built again while a contest session is open opens it again too.
+            if let Some((cutoff, rule)) = hot.session_key() {
+                own.install_session(cutoff, rule, self.logbook.records().iter().map(|r| &**r));
+            }
             HOT_REBUILDS.with(|c| c.set(counts.0));
             LOG_SWEEPS.with(|c| c.set(counts.1));
             assert!(
@@ -2562,13 +2938,15 @@ impl StationCore {
         rule: tempo_core::contest::DupeRule,
         rows: &[QsoRecord],
     ) {
+        #[cfg(debug_assertions)]
+        let oracle = self.copy_is_the_log();
         let hot = hot_mut(&mut self.hot);
         hot.install_session(cutoff, rule, rows);
         // ⛔ The debug build's oracle, on a log small enough to afford it: the session opened
         // from rows read elsewhere is the sweep of the log this station holds. The oracle's
         // sweep is not the station's work, so the counters tests read are left as they were.
         #[cfg(debug_assertions)]
-        if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
+        if oracle && self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
             use tempo_core::logbook::LOG_SWEEPS;
             let opened = hot.worked_since(&self.logbook, cutoff, &rule);
             let sweeps = LOG_SWEEPS.with(|c| c.get());
@@ -2581,38 +2959,6 @@ impl StationCore {
         }
     }
 
-    /// Bring the hot index, and the watermarks the station keeps, up to the log as it stands —
-    /// after a load, or a write that reached the log around the station (a test's). After a
-    /// change the station made, which it follows as it makes it ([`Self::follow`]), there is
-    /// nothing to do.
-    pub(crate) fn sync_hot(&mut self) {
-        self.catch_up_hot(None);
-    }
-
-    /// Bring the hot index up to the log: by the pairs of the change made since `before` — the
-    /// log as it stood when the change began ([`Self::follow`]) — or, with no `before`, by
-    /// finding out from the log itself ([`HotIndex::catch_up`]).
-    #[allow(deprecated)] // SPEC-2 C19: the index follows the in-memory log's changes
-    fn catch_up_hot(&mut self, before: Option<&ChangeBase>) {
-        match before {
-            Some(base) => {
-                let pairs = pairs_between(&base.rows, self.logbook.records());
-                self.follow(&pairs, self.logbook.marks());
-            }
-            None => {
-                let keys = StationKeys(self.dxcc_resolve.as_deref());
-                hot_mut(&mut self.hot).catch_up(&self.logbook, &keys);
-                let now = self.logbook.marks();
-                // A write the station did not make, with no pairs to say which rows it touched:
-                // a plan spanning it plans again.
-                if now.revision != self.marks.revision {
-                    self.recent.note_any(now.revision);
-                }
-                self.marks = now;
-            }
-        }
-    }
-
     /// `log_qso`'s duplicate guard: whether `rec` is a contact the log already holds, from the
     /// hot index's station lists (see [`tempo_core::logbook::dedup`]).
     ///
@@ -2622,7 +2968,7 @@ impl StationCore {
     pub(crate) fn is_duplicate(&self, rec: &QsoRecord) -> bool {
         let duplicate = self.hot().is_duplicate(rec);
         #[cfg(debug_assertions)]
-        if self.logbook.len() <= DUAL_EXECUTION_ROWS {
+        if self.copy_is_the_log() && self.logbook.len() <= DUAL_EXECUTION_ROWS {
             assert_eq!(
                 duplicate,
                 tempo_core::logbook::dedup::scan_for_duplicate(&self.logbook, rec),
@@ -2640,7 +2986,7 @@ impl StationCore {
     pub(crate) fn newest_logged_grid(&self, call: &str) -> Option<String> {
         let grid = self.hot().newest_grid(call);
         #[cfg(debug_assertions)]
-        if self.logbook.len() <= DUAL_EXECUTION_ROWS {
+        if self.copy_is_the_log() && self.logbook.len() <= DUAL_EXECUTION_ROWS {
             let scanned = self
                 .logbook
                 .records()
@@ -2658,16 +3004,17 @@ impl StationCore {
     }
 
     /// The contest session's sweep of the general log ([`Logbook::worked_keys_since`]'s answer),
-    /// from the hot index: swept once when a session opens or its start or rule changes, and
-    /// followed row by row after that.
-    #[allow(deprecated)] // SPEC-2 C19: a session opened is swept from the in-memory log once
+    /// from the hot index: opened from the store's rows by the command that opens the session
+    /// ([`crate::engine::with_session_rows`]) and followed row by row after that. It sweeps
+    /// nothing (SPEC-2 v3 C19, the operator's "retry briefly, then refuse"): `None` when no such
+    /// session was opened — which a command that could not read the rows refused to do.
     pub(crate) fn worked_since(
         &self,
         cutoff: u64,
         rule: &tempo_core::contest::DupeRule,
-    ) -> WorkedSince {
+    ) -> Option<WorkedSince> {
         let mut hot = self.hot();
-        hot.0.worked_since(&self.logbook, cutoff, rule)
+        hot.0.session(cutoff, rule)
     }
 
     /// Drain the freshly-logged QSOs awaiting connector auto-upload (FIFO).
@@ -2936,16 +3283,14 @@ impl StationCore {
     ///   back. Distinguishing "deleted there" from "not yet written there" needs a persisted
     ///   per-record id and a tombstone — the same ingredient the edit trade above lacks, and
     ///   not something that can be added to an ADIF other loggers also read.
-    #[allow(deprecated)] // SPEC-2 C19: another window's commits (D4)
+    #[allow(deprecated)] // SPEC-2 C19 (C19L): the store-less last resort's log is the log in memory
     pub(crate) fn recover_external_appends(&mut self) -> bool {
-        if self.on_log_file() {
-            return self.take_in_log_file_changes();
-        }
+        // With a store — the database, or on the 1.13 path the store in memory — another
+        // window's commits and a `log.adi` something else wrote are taken in off the Engine
+        // lock, planned on the store's rows ([`crate::engine::sync_shared_log`]). What follows
+        // is the store-less last resort, which runs on `log.adi` exactly as 1.13 did.
         if self.store.is_some() {
-            // IN PLACE: every caller of this is about to change a row it may be holding BY
-            // POSITION, and the 1.13 recovery it stands in for only ever appended, so positions
-            // held across it stayed true. A re-read here must not move a row either.
-            return self.refresh_from_store(true);
+            return false;
         }
         let Some(path) = self.log_path.clone() else {
             return false;
@@ -2979,9 +3324,8 @@ impl StationCore {
             // Field-level MERGE, not an additive import: fold in another instance's appends AND
             // upgrade shared records' confirmation/upload/QSL-sent state from disk, so this
             // instance's imminent full-file rewrite can't clobber what the other one wrote.
-            let base = self.change_base();
             self.logbook.reconcile_disk(&disk);
-            self.catch_up_hot(Some(&base));
+            self.reindex_log_in_memory();
         }
         self.last_log_mtime = stamp;
         true
@@ -2993,138 +3337,188 @@ impl StationCore {
         self.store.as_ref().is_some_and(|s| s.lane().is_some())
     }
 
-    /// [`Self::take_in_log_file_changes`] on the 1.13 path, and nothing on the store path —
-    /// what a quit and the exit run before they wait for `log.adi`.
-    pub(crate) fn take_in_log_file_if_changed(&mut self) -> bool {
-        if !self.on_log_file() {
-            return false;
-        }
-        let took = self.take_in_log_file_changes();
-        if took {
-            self.sync_hot();
-        }
-        took
-    }
+    // ─── Another window's commits, and a `log.adi` something else wrote (SPEC-2 v3 C19, D4-A) ───
+    //
+    // Taken in off the Engine lock, in three steps: what there is to do, asked under the lock
+    // ([`Self::shared_log_job`] — atomics and handles, no I/O); the read, and the plan, made with
+    // it released ([`SharedLogJob::run`]); and the result made under it again
+    // ([`Self::take_shared_log`]) — only while it is still the station's log's, and otherwise
+    // asked for again. [`crate::engine::sync_shared_log`] runs the three.
 
-    /// The 1.13 path's recovery, on the store in memory that holds its log (SPEC-2 v3 C19,
-    /// D1-A): when `log.adi` is not the file the lane last wrote or this station last took in —
-    /// another Nexus sharing the data folder appended to it, or rewrote it — merge it in as 1.13
-    /// did ([`Logbook::reconcile_disk`]: the other machine's contacts added, shared ones brought
-    /// up to date, nothing removed), hand the merge to the store, and tell the lane the file is
-    /// accounted for. Whether it read the file.
-    ///
-    /// Under the engine lock, as 1.13's was, and at the points 1.13 recovered: before a change
-    /// to rows the log holds, and on the freshness poll ([`Self::sync_shared_log_if_changed`]).
-    /// The merge's rows came from the file, so the lane writes nothing for them.
-    ///
-    /// ⚠️ One thing 1.13 never had to handle: the lane writes AFTER a change, so the file can
-    /// lag the log. While the lane is writing this log's own changes the file is not looked at.
-    /// Once the lane holds a rewrite because the file changed under it, the file is taken in
-    /// without the rows it held when this log last accounted for it
-    /// ([`LogFileWriter::holds`](tempo_core::logbook::logfile::LogFileWriter::holds)): such a row
-    /// is this log's own as it stood before the changes still owed — a contact deleted or edited
-    /// here since, which must not come back — and what another machine added is taken in. The
-    /// trade: an upgrade the other machine made to one of those rows in that moment (a
-    /// confirmation, a stamp) is not taken in; it comes back when that machine next rewrites the
-    /// file. In the same race 1.13 lost the other machine's whole write, its new contacts too.
-    /// (A contact the OTHER machine deleted still comes back with this machine's next rewrite,
-    /// as in 1.13: that one this log still holds.)
-    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1)
-    fn take_in_log_file_changes(&mut self) -> bool {
-        let Some(path) = self.log_path.clone() else {
-            return false;
-        };
-        let Some(lane) = self.store.as_ref().and_then(|s| s.lane()).cloned() else {
-            return false;
-        };
-        let lane_now = lane.status();
-        // The lane is writing this log's own changes: the file is in motion, and it is ours. It
-        // is looked at once the lane is done — or once the lane finds it changed by something
-        // else, and holds its rewrite for exactly this.
-        if lane_now.pending() && !lane_now.foreign_write {
-            return false;
-        }
-        // The fingerprint gate, as 1.13's, against the file the lane last wrote or accepted.
-        let stamp = tempo_core::logbook::mirror::file_stamp(&path);
-        if stamp.is_some() && stamp == lane_now.known {
-            return false;
-        }
-        // Bytes, then a lossy decode, for 1.13's reason: a CP1252 `log.adi` is not UTF-8.
-        let Ok(bytes) = std::fs::read(&path) else {
-            return false;
-        };
-        let disk = String::from_utf8_lossy(&bytes);
-        let mut ids = HashSet::new();
-        if !disk.is_empty() {
-            let base = self.change_base();
-            // With the lane idle the file holds every change this log made, and the merge is
-            // 1.13's. With the lane still owing it changes, the file lags this log: a row it
-            // held when this log last accounted for it is this log's own, as it stood before
-            // those changes — a contact since edited or deleted here — and not another
-            // machine's news, so it is not merged back. What another machine added is.
-            let lagging = lane_now.pending();
-            ids = self
-                .logbook
-                .reconcile_disk_except(&disk, &|id| lagging && lane.holds(id));
-            if let Some(store) = self.store.as_mut() {
-                let change = Change::between(&base.rows, &self.logbook, store.resolved());
-                store.submit_quietly(change);
-            }
-            self.catch_up_hot(Some(&base));
-        }
-        if let Some(stamp) = stamp {
-            lane.accept(stamp, ids);
-        }
-        true
-    }
-
-    /// The store's answer to [`Self::recover_external_appends`]: if ANOTHER process — a second
-    /// radio window on this data folder — has committed to the store since memory last matched
-    /// it, re-read the store and lay this process's own changes still in flight over it (see
-    /// [`crate::logstore::LogStore::reload`]). Whether anything was re-read.
-    ///
-    /// The question is an atomic read, so it costs nothing when nothing changed. The re-read
-    /// happens only after another process wrote, at exactly the points the 1.13 path re-read
-    /// `log.adi` — before a change to existing rows, and on the freshness poll — and it closes
-    /// the gaps that path had to leave open: rows are matched by id, so an edit made in the
-    /// other window arrives as an edit (not a duplicate), and a contact deleted there is gone
-    /// here too (not resurrected by this window's next rewrite, because there is none).
-    ///
-    /// `in_place` keeps every row where it is — see [`crate::logstore::LogStore::reload`]: a
-    /// row the other process deleted then lingers until a re-read that may move rows (the
-    /// freshness poll) removes it.
-    #[allow(deprecated)] // SPEC-2 C19: another window's commits (D4)
-    fn refresh_from_store(&mut self, in_place: bool) -> bool {
-        let Some(store) = self.store.as_ref() else {
-            return false;
-        };
-        if !store.foreign_changed() && (in_place || !self.store_lingering) {
-            return false;
-        }
-        let base = self.change_base();
+    /// ★ Another window's stamps, taken in under the Engine lock at no cost: a commit of another
+    /// window's that moved nothing a hot index reads ([`LogStore::foreign_index_moves`] where it
+    /// was) leaves the index as it is. The station's watermarks move by a stamp, so every view
+    /// keyed on them reads the store again. Whether there were any.
+    #[allow(deprecated)] // SPEC-2 C19: the log in memory keeps the station's watermarks until the cut
+    pub(crate) fn take_in_foreign_stamps(&mut self) -> bool {
         let Some(store) = self.store.as_mut() else {
             return false;
         };
-        match store.reload(self.logbook.records(), in_place) {
-            Ok((rows, lingering)) => {
-                self.store_lingering = lingering;
-                // The store's rows carry their fills (SPEC-2 v3 D2-A: every insert fills before
-                // it writes, and the fill job writes what an older build left), so the rows
-                // re-read are the rows every screen shows, and nothing is filled here.
-                self.logbook.replace_rows(rows);
-                self.catch_up_hot(Some(&base));
-                true
+        if !store.foreign_changed() || store.foreign_index_changed() {
+            return false;
+        }
+        store.foreign_stamps_taken();
+        let mut marks = self.marks;
+        marks.mark(OpClass::Stamp);
+        self.logbook.follow(&[], false, marks);
+        self.recent.note_any(marks.revision);
+        let hot = hot_mut(&mut self.hot);
+        hot.follow(&[], self.marks.revision, marks.revision, &StationKeys(None));
+        self.marks = marks;
+        true
+    }
+
+    /// What there is to take in off the Engine lock, asked under it — no I/O: a `log.adi`
+    /// something other than Nexus wrote, the hot index to build again from the store, or
+    /// nothing. See [`crate::engine::sync_shared_log`].
+    pub(crate) fn shared_log_job(&self, files: bool) -> Option<SharedLogJob> {
+        let store = self.store.as_ref()?;
+        let path = self.log_path.clone().filter(|_| files);
+        // The file the launch read and could not take in at the attach.
+        if let (Some(file), Some(path)) = (&self.pending_take_in, path.clone()) {
+            return Some(SharedLogJob::TakeIn(FileTakeIn {
+                plan: self.log_view(),
+                path,
+                from: FileFrom::Launch { file: file.clone() },
+            }));
+        }
+        // The 1.13 path: `log.adi` changed by something other than this session's lane.
+        if let (Some(lane), Some(path)) = (store.lane().cloned(), path.clone()) {
+            let lane_now = lane.status();
+            // The lane is writing this log's own changes: the file is in motion, and it is ours.
+            // It is looked at once the lane is done — or once the lane finds it changed by
+            // something else, and holds its rewrite for exactly this.
+            let looking = !(lane_now.pending() && !lane_now.foreign_write);
+            let stamp = tempo_core::logbook::mirror::file_stamp(&path);
+            if looking && !(stamp.is_some() && stamp == lane_now.known) {
+                return Some(SharedLogJob::TakeIn(FileTakeIn {
+                    plan: self.log_view(),
+                    path,
+                    from: FileFrom::Lane {
+                        lagging: lane_now.pending(),
+                        lane,
+                    },
+                }));
             }
-            Err(e) => {
+        }
+        // The database path: the mirror refused to replace `log.adi`, which something other
+        // than Nexus wrote mid-session — a 1.13 instance on the same folder.
+        if let (Some(status), Some(path)) = (store.mirror_status(), path) {
+            if status.foreign_write {
+                let stamp = tempo_core::logbook::mirror::file_stamp(&path);
+                if stamp.is_some() && stamp == status.foreign_stamp {
+                    return Some(SharedLogJob::TakeIn(FileTakeIn {
+                        plan: self.log_view(),
+                        path,
+                        from: FileFrom::Mirror { stamp },
+                    }));
+                }
+            }
+        }
+        // Another window changed what the index reads, or the index let go of the log.
+        let current = hot_at(&self.hot) == Some(self.marks.revision);
+        if !current || store.foreign_index_changed() {
+            return Some(SharedLogJob::Rebuild(store.index_read(
+                self.dxcc_resolve.clone(),
+                hot_session_key(&self.hot),
+                self.marks,
+            )));
+        }
+        None
+    }
+
+    /// ★ Make what [`SharedLogJob::run`] read and planned, under the Engine lock: only while it
+    /// is still the log's — the station has made no change since the index read, a take-in's
+    /// rows are still the rows it read — and otherwise [`Taken::Again`], for it to be asked
+    /// for again.
+    pub(crate) fn take_shared_log(&mut self, ready: SharedLogReady) -> Taken {
+        match ready {
+            SharedLogReady::Nothing => Taken::Nothing,
+            SharedLogReady::Failed(why) => {
                 tempo_core::applog::error(
                     "logbook",
-                    &format!(
-                        "another Nexus window changed the logbook, and this one could not read \
-                         the change: {e}"
-                    ),
+                    &format!("another change to the logbook could not be taken in: {why}"),
                 );
-                false
+                Taken::Nothing
             }
+            SharedLogReady::Rebuilt(rows) => {
+                if !rows.exact {
+                    return Taken::Later;
+                }
+                if rows.marks != self.marks || rows.session != hot_session_key(&self.hot) {
+                    return Taken::Again;
+                }
+                self.install_rebuilt(rows);
+                Taken::Taken
+            }
+            SharedLogReady::Planned(taken) => {
+                let TakenIn {
+                    plan,
+                    planned,
+                    from,
+                    file_ids,
+                    counts,
+                } = taken;
+                // A file holding nothing the log lacks changes nothing: it is only accounted for.
+                if !planned.is_empty() {
+                    let from_file = matches!(from, FileFrom::Lane { .. });
+                    if self
+                        .commit_bulk_as(&plan, planned, "take in log.adi", from_file)
+                        .is_err()
+                    {
+                        return Taken::Again;
+                    }
+                }
+                match from {
+                    FileFrom::Lane { lane, .. } => {
+                        if let Some((stamp, ids)) = file_ids {
+                            lane.accept(stamp, ids);
+                        }
+                    }
+                    FileFrom::Mirror { stamp } => {
+                        if let (Some(store), Some(stamp)) = (&self.store, stamp) {
+                            store.accept_log_file(stamp);
+                            // Its contacts are in: the mirror replaces it now, whether or not it
+                            // held anything new, so it is not read and taken in again.
+                            store.refresh_mirror();
+                        }
+                    }
+                    FileFrom::Launch { file } => {
+                        self.pending_take_in = None;
+                        if let (Some(store), Some(stamp)) = (&self.store, file.stamp) {
+                            store.accept_log_file(stamp);
+                            store.refresh_mirror();
+                        }
+                    }
+                }
+                if let Some((added, merged)) = counts.filter(|&(a, m)| a > 0 || m > 0) {
+                    tempo_core::applog::info(
+                        "logbook",
+                        &format!(
+                            "log.adi held contacts the logbook did not: {added} added, {merged} \
+                             brought up to date"
+                        ),
+                    );
+                }
+                Taken::Taken
+            }
+        }
+    }
+
+    /// Install a hot index built again from the store ([`crate::logstore::IndexRead`]): the
+    /// station's watermarks move as for any change, so every view keyed on them reads the store
+    /// again, and a plan spanning it plans again; the other windows' commits the read followed
+    /// are taken in.
+    #[allow(deprecated)] // SPEC-2 C19: the log in memory keeps the station's watermarks until the cut
+    fn install_rebuilt(&mut self, rows: crate::logstore::IndexRows) {
+        let mut marks = self.marks;
+        marks.mark(OpClass::Structural);
+        self.logbook.follow(&[], false, marks);
+        self.recent.note_any(marks.revision);
+        *hot_mut(&mut self.hot) = rows.index.holding(marks.revision);
+        self.marks = marks;
+        if let Some(store) = self.store.as_mut() {
+            store.foreign_taken(rows.foreign, rows.foreign_index);
         }
     }
 
@@ -3243,69 +3637,39 @@ impl StationCore {
         }
     }
 
-    /// Two-instance freshness watcher: if the SHARED `log.adi`'s mtime moved since we last
-    /// looked — i.e. the OTHER instance logged or confirmed something — fold its changes in and
-    /// rebuild the worked-before/needs index. When nothing changed this is a single `stat`, so
-    /// it is cheap to call on every Needed-board poll; that is what keeps a MONITORING radio
-    /// (parked, not logging, so it never hits the stamp/save recovery path) from showing a DXCC
-    /// as "needed" that the other radio just worked, with no save or restart required. Returns
-    /// true when it actually re-read (so the caller can refresh anything derived downstream).
-    pub fn sync_shared_log_if_changed(&mut self) -> bool {
-        if self.store.is_some() && !self.on_log_file() {
-            // Another window's commits, and — if the mirror has stopped because `log.adi` holds
-            // something it cannot account for — that file, taken in so the mirror can resume.
-            let reloaded = self.refresh_from_store(false);
-            let took_in = self.take_in_refused_log_file();
-            if reloaded || took_in {
-                self.sync_hot();
-            }
-            return reloaded || took_in;
-        }
-        let Some(path) = self.log_path.clone() else {
-            return false;
-        };
-        // A missing file / stat error leaves us on last-good; the recovery owns
-        // the mtime gate and records what it read.
-        if std::fs::metadata(&path).and_then(|m| m.modified()).is_err() {
-            return false;
-        }
-        if !self.recover_external_appends() {
-            return false;
-        }
-        self.sync_hot();
-        true
-    }
-
-    /// If the mirror refused to replace `log.adi` because something other than Nexus wrote it
-    /// mid-session — a 1.13 instance on the same folder — take that file in, so its contacts are
-    /// in the log and the mirror can go back to keeping the file current. Whether it did.
+    /// ★ The freshness poll in one breath — [`crate::engine::sync_shared_log`] for an owner
+    /// holding the station with no Engine guard (a test's own station or engine): another
+    /// window's commits, and a `log.adi` something other than Nexus wrote, taken in — read and
+    /// planned here, made here. Whether anything was taken in.
     ///
-    /// Reads `log.adi` under the engine lock, as the 1.13 path's recovery did; it happens only
-    /// after a foreign write, and only on the freshness poll.
-    fn take_in_refused_log_file(&mut self) -> bool {
-        let Some(store) = self.store.as_ref() else {
-            return false;
-        };
-        let Some(status) = store.mirror_status() else {
-            return false;
-        };
-        if !status.foreign_write {
-            return false;
+    /// It is what keeps a MONITORING radio (parked, not logging) from showing a DXCC as
+    /// "needed" that the other radio just worked, with no save or restart required. When
+    /// nothing changed it costs a few atomic reads and, on the 1.13 path, one `stat`.
+    ///
+    /// ⚠️ It READS THE STORE when something changed: never under the Engine lock (a debug build
+    /// panics). The store-less last resort re-reads `log.adi` as 1.13 did.
+    pub(crate) fn take_in_shared_log(&mut self) -> bool {
+        if self.store.is_none() {
+            return self.recover_external_appends();
         }
-        let Some(path) = self.log_path.clone() else {
-            return false;
-        };
-        let stamp = tempo_core::logbook::mirror::file_stamp(&path);
-        // Only the file the mirror refused: one that has changed again since is refused again,
-        // and taken in on the next poll — never replaced on the strength of an older read.
-        if stamp.is_none() || stamp != status.foreign_stamp {
-            return false;
+        let mut took = self.take_in_foreign_stamps();
+        let mut files = true;
+        for _ in 0..PLANS {
+            let Some(job) = self.shared_log_job(files) else {
+                break;
+            };
+            // A file is taken in once a poll: after that, only the index is asked about.
+            let file = matches!(job, SharedLogJob::TakeIn(_));
+            files &= !file;
+            match self.take_shared_log(job.run()) {
+                Taken::Taken => took = true,
+                Taken::Again => {}
+                Taken::Nothing if file => {}
+                Taken::Nothing | Taken::Later => break,
+            }
+            took |= self.take_in_foreign_stamps();
         }
-        let Ok(bytes) = std::fs::read(&path) else {
-            return false;
-        };
-        self.take_in_log_file(&String::from_utf8_lossy(&bytes), stamp);
-        true
+        took
     }
 
     /// ★ Plan and make a change to the contact `id` in one breath — for an owner holding the
@@ -3325,7 +3689,7 @@ impl StationCore {
         mut decide: impl FnMut(&Self, &Arc<QsoRecord>) -> Decided,
     ) -> Result<Result<Option<MadeRow>, RowRefusal>, String> {
         for _ in 0..PLANS {
-            let plan = self.log_plan();
+            let plan = self.plan_in_breath();
             let Some(before) = plan.row(id)? else {
                 return Ok(Err(RowRefusal::Gone));
             };
@@ -3596,23 +3960,19 @@ impl StationCore {
     /// resets the worked-entity/grid sets (so the roster B4 highlighting and the needs/awards
     /// model reset too). Returns the number of contacts removed.
     ///
-    /// A purge is ONE change, with no plan to make: it reads nothing the store holds, and
-    /// whatever the log holds when it runs is what goes.
-    #[allow(deprecated)] // SPEC-2 C19 (the cut): the hot index is told the purge row by row, from the log in memory
+    /// A purge is ONE change, with no plan to make and no row named: it reads nothing the store
+    /// holds, whatever the log holds when it runs is what goes, and how many that is is the hot
+    /// index's count of the rows it holds (SPEC-2 v3 C19, flag (c)).
     pub fn clear_logbook(&mut self) -> usize {
-        self.sync_hot();
-        let pairs: Vec<RowPair> = self
-            .logbook
-            .records()
-            .iter()
-            .map(|r| (Some(Arc::clone(r)), None))
-            .collect();
-        let n = pairs.len();
+        let (n, ids) = {
+            let hot = self.hot();
+            (hot.rows(), hot.ids())
+        };
         self.commit(
             RowChange {
                 class: OpClass::Structural,
-                pairs,
-                clear: n > 0,
+                pairs: Vec::new(),
+                purged: (n > 0).then_some(ids),
                 bulk: true,
                 meta: Vec::new(),
             },
@@ -3752,7 +4112,7 @@ impl StationCore {
         status: tempo_core::logbook::UploadStatus,
     ) -> bool {
         for _ in 0..PLANS {
-            let plan = self.log_plan();
+            let plan = self.plan_in_breath();
             let target = match push_target(&plan, pushed) {
                 Ok(Some(row)) => row,
                 Ok(None) => return false,
@@ -3829,7 +4189,7 @@ impl StationCore {
         mut plan_it: impl FnMut(&LogPlan) -> Result<(R, Planned), String>,
     ) -> Result<(R, Vec<Arc<QsoRecord>>), String> {
         for _ in 0..PLANS {
-            let plan = self.log_plan();
+            let plan = self.plan_in_breath();
             let (out, planned) = plan_it(&plan)?;
             if planned.is_empty() {
                 return Ok((out, Vec::new()));
@@ -3861,9 +4221,7 @@ impl StationCore {
     /// record's country, from the resolver. The store's rows are filled another way (SPEC-2 v3
     /// D2-A): each insert fills its own, and the fill job the ones an older build left.
     pub(crate) fn backfill_after_bulk(&mut self) {
-        if self.store.is_none() {
-            self.backfill_country();
-        }
+        self.backfill_log_in_memory("backfill_country");
     }
 
     /// How many contacts the log holds — read with no Engine guard, as a count of the store is.
@@ -3971,7 +4329,7 @@ impl StationCore {
         status: &tempo_core::logbook::UploadStatus,
     ) -> Result<usize, String> {
         for _ in 0..PLANS {
-            let plan = self.log_plan();
+            let plan = self.plan_in_breath();
             let found = plan.rows(ids)?;
             // In the order `ids` names them, each once.
             let mut seen = HashSet::new();
@@ -4019,7 +4377,7 @@ impl StationCore {
             detail,
         };
         for _ in 0..PLANS {
-            let plan = self.log_plan_moving();
+            let plan = self.plan_in_breath();
             let (report, pairs) = match stamp_lotw_batch_plan(&plan, batch, &status) {
                 Ok(planned) => planned,
                 Err(e) => {
@@ -4261,10 +4619,8 @@ mod grid_tests {
         fn rebuilt(sc: &StationCore) -> Vec<bool> {
             let mut fresh = StationCore::new();
             fresh.set_dxcc_resolver(counting(Arc::new(AtomicUsize::new(0))));
-            for r in sc.logbook.records() {
-                fresh.logbook.add(r.as_ref().clone());
-            }
-            fresh.sync_hot();
+            // A station that logged the same rows, in the same order, from nothing.
+            fresh.append(sc.stored_records(), false);
             badge_answers(&fresh)
         }
         let lookups = Arc::new(AtomicUsize::new(0));
@@ -4289,7 +4645,6 @@ mod grid_tests {
         for (i, r) in rows.into_iter().enumerate() {
             let before = lookups.load(Ordering::Relaxed);
             sc.append(vec![r], false);
-            sc.sync_hot();
             assert_eq!(
                 lookups.load(Ordering::Relaxed) - before,
                 1,
@@ -4326,7 +4681,6 @@ mod grid_tests {
         // square. Both sides now normalize to the 4-char square grids are awarded at.
         let mut sc = StationCore::new();
         sc.append(vec![rec("W1AW", "20m", "FN31PR")], false);
-        sc.sync_hot();
 
         assert!(
             sc.hot().grid_worked_on("FN31", "20m"),
@@ -4348,7 +4702,6 @@ mod grid_tests {
         let mut r = rec("K1ABC", "20m", "FN31");
         r.ota.their_ref = Some("US-0001,US-0002".into());
         sc.append(vec![r], false);
-        sc.sync_hot();
         assert!(sc.park_worked("US-0001"), "the first park");
         assert!(sc.park_worked("us-0002"), "…and the second");
         assert!(
@@ -4363,7 +4716,6 @@ mod grid_tests {
         // on any band or mode? The log writes the call as it was worked — W6A/P for a
         // special-event portable — while the cluster spots W6A.
         let mut sc = StationCore::new();
-        sc.sync_hot();
         assert_eq!(sc.last_worked_unix("W6A"), None, "control: an empty log");
 
         let mut late = rec("W6A/P", "40m", "DM04");
@@ -4372,7 +4724,6 @@ mod grid_tests {
         early.when_unix = 1_000;
         // The later contact goes in FIRST, so "latest wins" cannot be "last row wins".
         sc.append(vec![late, early], false);
-        sc.sync_hot();
         assert_eq!(
             sc.last_worked_unix("W6A"),
             Some(5_000),
@@ -4388,7 +4739,6 @@ mod grid_tests {
         // Deleting the later contact falls back to the earlier one — the answer follows the
         // rows, it does not accumulate.
         assert!(sc.delete_qso(sc.stored_log()[0].id.unwrap()));
-        sc.sync_hot();
         assert_eq!(sc.last_worked_unix("W6A"), Some(1_000));
     }
 
@@ -4396,7 +4746,6 @@ mod grid_tests {
     fn a_malformed_grid_never_counts_as_worked() {
         let mut sc = StationCore::new();
         sc.append(vec![rec("W1AW", "20m", "FN")], false);
-        sc.sync_hot();
         assert!(
             !sc.hot().grid_worked_on("FN", "20m"),
             "a 2-char fragment is not a square"
@@ -4486,7 +4835,7 @@ mod grid_tests {
         sc.set_log_path(path.clone());
         let lane = std::sync::Arc::clone(sc.store.as_ref().and_then(LogStore::lane).unwrap());
         assert!(
-            !sc.take_in_log_file_if_changed(),
+            !sc.take_in_shared_log(),
             "the file the launch read is not read again"
         );
         let file = std::fs::metadata(&path).unwrap().ino();
@@ -4512,7 +4861,7 @@ mod grid_tests {
             .collect();
         assert_eq!(calls, ["W1AW", "K5XYZ"], "the contact is in it");
         assert!(
-            !sc.take_in_log_file_if_changed(),
+            !sc.take_in_shared_log(),
             "our own append must not reopen the gate — every later call would re-read the log"
         );
         assert_eq!(
@@ -4658,10 +5007,7 @@ mod grid_tests {
         sc.log_path = Some(path.clone());
 
         // First look (last mtime = None) folds X in and indexes it.
-        assert!(
-            sc.sync_shared_log_if_changed(),
-            "first look reads the shared log"
-        );
+        assert!(sc.take_in_shared_log(), "first look reads the shared log");
         assert_eq!(sc.stored_log().len(), 1);
         assert!(
             sc.hot().grid_worked_on("JO31", "20m"),
@@ -4673,7 +5019,7 @@ mod grid_tests {
         let y = rec("JA1XYZ", "40m", "PM95");
         write(&[x, y]);
         sc.last_log_mtime = None;
-        assert!(sc.sync_shared_log_if_changed(), "a changed log is re-read");
+        assert!(sc.take_in_shared_log(), "a changed log is re-read");
         assert_eq!(
             sc.stored_log().len(),
             2,
@@ -4685,10 +5031,7 @@ mod grid_tests {
         );
 
         // Nothing changed → a cheap no-op (stat only), so it's safe on every Needed-board poll.
-        assert!(
-            !sc.sync_shared_log_if_changed(),
-            "unchanged mtime → no re-read"
-        );
+        assert!(!sc.take_in_shared_log(), "unchanged mtime → no re-read");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -4844,7 +5187,6 @@ mod hot_parity_tests {
     use super::*;
     use crate::test_util::StoredLog;
     use tempo_core::logbook::dedup::scan_for_duplicate;
-    use tempo_core::logbook::hot::{HOT_CATCH_UPS, HOT_REBUILDS};
     use tempo_core::logbook::{adif_header, adif_record, QslVia, UploadOutcome};
     use tempo_core::message::{base_call, same_call};
 
@@ -5233,18 +5575,19 @@ mod hot_parity_tests {
             "after {what}: activation count"
         );
         assert_eq!(
-            sc.worked_since(T0 + 1_000, &FD),
+            sc.worked_since(T0 + 1_000, &FD)
+                .expect("the session was opened on the empty log"),
             log.worked_keys_since(T0 + 1_000, &FD),
             "after {what}: the session sweep"
         );
     }
 
     /// ★ Seeded random runs of every write the station makes, with the oracles asked after each
-    /// — and the index rebuilt NOT ONCE after the station set it up: every change, the stamps
-    /// and the merges included, is followed row by row. And followed through ONE door
-    /// ([`StationCore::follow`], SPEC-2 v3 C19): after every write the index already holds the
-    /// log, before anything asks it, and no catch-up from the log is ever needed; the watermarks
-    /// the station keeps are the log's own.
+    /// — and every change, the stamps and the merges included, followed row by row through ONE
+    /// door ([`StationCore::follow`], SPEC-2 v3 C19): after every write the index already holds
+    /// the log, before anything asks it — there is no catch-up from the log left to hide a write
+    /// that went around it (the control below) — and the watermarks the station keeps are the
+    /// log's own.
     #[test]
     fn the_station_answers_as_before_c13_through_every_write_path_without_a_rebuild() {
         for seed in 0..24u64 {
@@ -5253,9 +5596,9 @@ mod hot_parity_tests {
             sc.set_dxcc_resolver(resolve);
             sc.set_hunted_parks_import(["K-0001".to_string()]);
             sc.activation = Some(("POTA".into(), "US-1234".into()));
-            sc.sync_hot();
-            HOT_REBUILDS.with(|c| c.set(0));
-            HOT_CATCH_UPS.with(|c| c.set(0));
+            // A contest session opened on the empty log, which needs no rows read: every write
+            // below is followed into its sweep too.
+            assert!(sc.worked_since(T0 + 1_000, &FD).is_some());
             for step in 0..60 {
                 let what = change(&mut sc, &mut rng);
                 let at = format!("seed {seed} step {step}: {what}");
@@ -5269,52 +5612,30 @@ mod hot_parity_tests {
                     (sc.logbook.marks(), sc.logbook.revision() as u32),
                     "{at}: the station's watermarks, or the snapshot's tick, are not the log's"
                 );
-                assert_eq!(
-                    (
-                        HOT_REBUILDS.with(|c| c.get()),
-                        HOT_CATCH_UPS.with(|c| c.get())
-                    ),
-                    (0, 0),
-                    "{at}: the index was rebuilt, or caught up from the log — the station's \
-                     own writes are followed row by row, through `follow`"
-                );
                 assert_parity(&sc, &mut rng, &at);
             }
         }
     }
 
-    /// A write that reached the log around the station — a test's, or a path not yet taught — is
-    /// taken in before the next change is walked, so the change is still followed row by row:
-    /// the picture a change starts from is the one the index holds.
+    /// ★ THE POSITIVE CONTROL for the index having nothing to catch up (SPEC-2 v3 C19): a write
+    /// that reaches the log around the station — a test's, or a path not yet taught — is named
+    /// by a debug build at the next look at the index. A catch-up from the log in memory used to
+    /// take such a write in, and so hid it; the run above is what pins that no write the station
+    /// makes goes around it.
     #[test]
-    fn a_write_around_the_station_is_taken_in_before_the_next_change() {
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a write reached the log in memory around the station")]
+    fn a_write_around_the_station_is_named_at_the_next_look_at_the_index() {
         let mut rng = Rng(7);
         let mut sc = StationCore::new();
         sc.set_dxcc_resolver(resolve);
-        sc.activation = Some(("POTA".into(), "US-1234".into()));
         for _ in 0..5 {
             sc.append(vec![contact(&mut rng)], false);
         }
-        HOT_REBUILDS.with(|c| c.set(0));
-        HOT_CATCH_UPS.with(|c| c.set(0));
+        let _ = sc.hot().is_duplicate(&contact(&mut rng));
         // Around the station: an append straight onto the log.
         sc.logbook.add(contact(&mut rng));
-        let second = id_at(&sc, 1);
-        assert!(sc.update_qso(second, contact(&mut rng)));
-        assert_eq!(
-            HOT_REBUILDS.with(|c| c.get()),
-            0,
-            "the edit after it was followed, not rebuilt"
-        );
-        // The POSITIVE CONTROL for the property's "no catch-up": a write made around the station
-        // is exactly what one counts.
-        assert_eq!(
-            HOT_CATCH_UPS.with(|c| c.get()),
-            1,
-            "the append around the station was caught up from the log, once"
-        );
-        assert_eq!(sc.marks(), sc.logbook.marks());
-        assert_parity(&sc, &mut rng, "a write around the station, then an edit");
+        let _ = sc.hot().is_duplicate(&contact(&mut rng));
     }
 
     /// The station mints every id the log hands out (SPEC-2 v3 C19) — the contacts it logs and
@@ -5371,7 +5692,6 @@ mod hot_parity_tests {
         newer.call = "W1AW/P".into();
         newer.grid = Some("EM12".into());
         sc.append(vec![older, newer], false);
-        sc.sync_hot();
         assert_eq!(sc.newest_logged_grid("w1aw").as_deref(), Some("EM12"));
         assert!(sc.is_duplicate(&sc.stored_log()[0].as_ref().clone()));
     }

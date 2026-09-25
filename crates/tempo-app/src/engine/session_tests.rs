@@ -2,7 +2,9 @@
 //! session, from the logbook's rows read before the command takes the Engine lock and installed
 //! in the same hold as the switch. So no snapshot ever sees the session without it, and none
 //! sweeps the log to make it (the operator's pick: the command waits until the sweep is ready).
-//! `set_mode` itself is untouched: every switch here goes through it, wrapped or not.
+//! With no log in memory left to sweep (the C19 cut), a command that cannot read the rows is
+//! refused after its tries: retry briefly, then refuse. `set_mode` itself is untouched: every
+//! switch here goes through it, wrapped or not.
 
 use super::*;
 use crate::logstore::tests::{engine_on_store, flush, no_resolve, qso, Dir};
@@ -24,8 +26,9 @@ fn ready(d: &Dir) -> Engine {
 }
 
 /// Switch to `spec` through the wrap, as the `set_mode` command does. Whether the session's
-/// sweep was installed from the rows read before the switch.
-fn switch(m: &Mutex<Engine>, spec: &str) -> bool {
+/// sweep was installed from the rows read before the switch — or, when they could not be read,
+/// the refusal, and no switch.
+fn switch(m: &Mutex<Engine>, spec: &str) -> Result<bool, String> {
     with_session_rows(
         m,
         |e| e.mode_opens_session(spec),
@@ -61,8 +64,9 @@ fn journal(d: &Dir, rows: &[(&str, u64)]) {
 
 /// ★ A Field Day session opened through the wrap has its sweep BEFORE its first snapshot: the
 /// snapshot sweeps nothing, and the session holds this session's general-log contacts and not
-/// the ones before it. The CONTROL is the same switch made directly: its first snapshot sweeps
-/// the log, as every session's did before.
+/// the ones before it. The CONTROL is the same switch made directly, without the rows: no
+/// session's sweep is open at all — nothing sweeps a log to make one any more (SPEC-2 v3 C19) —
+/// which is why every command that opens a session goes through the wrap.
 #[test]
 fn a_field_day_opened_through_the_wrap_has_its_sweep_before_its_first_snapshot() {
     for wrapped in [true, false] {
@@ -78,31 +82,35 @@ fn a_field_day_opened_through_the_wrap_has_its_sweep_before_its_first_snapshot()
         flush(&e);
         let m = Mutex::new(e);
         if wrapped {
-            assert!(switch(&m, "fieldday-sp"), "opened with its sweep");
+            assert_eq!(switch(&m, "fieldday-sp"), Ok(true), "opened with its sweep");
         } else {
             engine_lock(&m).set_mode("fieldday-sp").expect("the switch");
         }
         let mut e = m.into_inner().expect("not poisoned");
         master_on(&mut e);
+        if !wrapped {
+            let Mode::FieldDay { station, .. } = &e.mode else {
+                panic!("in Field Day");
+            };
+            let (start, rule) = (station.log.session.start_unix, station.log.dupe_rule());
+            assert!(
+                e.station.worked_since(start, &rule).is_none(),
+                "CONTROL: a session opened directly, without its rows, has no sweep"
+            );
+            continue;
+        }
         LOG_SWEEPS.with(|c| c.set(0));
         let _ = e.snapshot();
-        let sweeps = LOG_SWEEPS.with(|c| c.get());
         let b4 = e.session_b4().expect("a session is open");
         assert!(
             b4.worked_this_session("W1AW") && !b4.worked_this_session("N0OLD"),
-            "this session's contact, and not the one before it (wrapped: {wrapped})"
+            "this session's contact, and not the one before it"
         );
-        if wrapped {
-            assert_eq!(
-                sweeps, 0,
-                "the first snapshot sweeps nothing: the sweep was ready"
-            );
-        } else {
-            assert_eq!(
-                sweeps, 1,
-                "CONTROL: a session opened directly is swept by its snapshot"
-            );
-        }
+        assert_eq!(
+            LOG_SWEEPS.with(|c| c.get()),
+            0,
+            "the first snapshot sweeps nothing: the sweep was ready"
+        );
     }
 }
 
@@ -116,13 +124,13 @@ fn a_switch_that_opens_no_session_reads_nothing() {
     let reads = || SESSION_READS.with(|c| c.get());
     SESSION_READS.with(|c| c.set(0));
     for spec in ["qso-monitor", "chat", "qso-monitor"] {
-        switch(&m, spec);
+        switch(&m, spec).expect("switched");
     }
     assert_eq!(reads(), 0, "a switch between ordinary modes reads nothing");
-    switch(&m, "fieldday-sp");
+    switch(&m, "fieldday-sp").expect("switched");
     assert_eq!(reads(), 1, "entering Field Day opens a session: one read");
     for spec in ["fieldday-run", "fieldday-sp", "chat"] {
-        switch(&m, spec);
+        switch(&m, spec).expect("switched");
     }
     assert_eq!(
         reads(),
@@ -153,7 +161,7 @@ fn the_tx_gate_answers_alike_after_a_switch_through_the_wrap() {
         direct.set_mode(from).expect("from");
         engine_lock(&wrapped).set_mode(from).expect("from");
         direct.set_mode(to).expect("to");
-        switch(&wrapped, to);
+        switch(&wrapped, to).expect("switched");
         let w = engine_lock(&wrapped);
         for om in [Digital, Phone, Cw, Rtty, Keyboard] {
             assert_eq!(
@@ -192,7 +200,7 @@ fn a_session_starts_no_earlier_than_the_rows_read_for_it_reach() {
     let past = now - SESSION_READ_WINDOW - 600;
     journal(&d, &[("K1ABC", inside), ("K2ABC", past)]);
     let m = Mutex::new(e);
-    assert!(switch(&m, "fieldday-sp"), "opened with its sweep");
+    assert_eq!(switch(&m, "fieldday-sp"), Ok(true), "opened with its sweep");
     let e = engine_lock(&m);
     let Mode::FieldDay { station, .. } = &e.mode else {
         panic!("in Field Day");
@@ -213,8 +221,8 @@ fn a_session_starts_no_earlier_than_the_rows_read_for_it_reach() {
 }
 
 /// Rows read before the log changed are not its rows after: a contact logged between the read
-/// and the switch makes them stale, and a stale read is not installed — the session's first
-/// snapshot sweeps the log instead, as it always has.
+/// and the switch makes them stale, and a stale read is not installed — the wrap reads again
+/// (below), and never opens a session from rows that are not the log's.
 #[test]
 fn rows_read_before_the_log_changed_are_not_its_rows_after() {
     let d = Dir::new("session-stale");
@@ -250,8 +258,9 @@ fn rows_that_saw_another_windows_contact_wait_for_it_to_be_taken_in() {
         "a read that saw another window's contact is not this window's log"
     );
     let m = Mutex::new(a);
-    assert!(
+    assert_eq!(
         switch(&m, "fieldday-sp"),
+        Ok(true),
         "taken in, read again, and opened"
     );
     let mut a = m.into_inner().expect("not poisoned");
@@ -332,7 +341,6 @@ fn rows_that_start_after_the_session_are_not_installed() {
         bound,
         marks: e.station.marks(),
         exact: true,
-        ready: true,
     };
     assert!(
         !e.open_session_from(read(start + 1, &e)),
@@ -344,34 +352,41 @@ fn rows_that_start_after_the_session_are_not_installed() {
     );
 }
 
-/// A store that does not answer in time — a big write holding its lock — is not waited for
-/// again: the switch reads once, opens the session without the rows, and its first snapshot
-/// sweeps the log itself, as every session's did before, with the same answers.
+/// ★ A store that does not answer in time — a big write holding its lock — is asked again,
+/// briefly, and then the switch is REFUSED (SPEC-2 v3 C19, the operator's "retry briefly, then
+/// refuse"): nothing was switched, and the command says the logbook was busy. The CONTROL: the
+/// same switch once the store answers opens the session with its sweep.
 #[test]
-fn a_store_that_does_not_answer_in_time_is_not_waited_for_again() {
+fn a_store_that_does_not_answer_in_time_refuses_the_switch_after_its_tries() {
     let d = Dir::new("session-busy");
     let mut e = ready(&d);
     let hold = WriteHold::take(&d.db()).expect("hold the write lock");
-    // A contact the store cannot take while the lock is held: the read waits for it, and gives
-    // up.
+    // A contact the store cannot take while the lock is held: every read waits for it, and
+    // gives up.
     e.log_qso(qso("W1AW", now_unix_secs() + 60));
     let m = Mutex::new(e);
     SESSION_READS.with(|c| c.set(0));
-    assert!(!switch(&m, "fieldday-sp"), "opened without the rows");
-    // Counted, not timed: the read waits `SESSION_READ_WAIT` twice (1.0 s measured alone), and a
-    // wall-clock bound on that fails under the full suite's load while nothing is wrong. One
-    // read is what says the busy store was not waited out a second and a third time.
-    assert_eq!(SESSION_READS.with(|c| c.get()), 1, "read once, not again");
+    assert_eq!(
+        switch(&m, "fieldday-sp"),
+        Err(SESSION_BUSY.to_string()),
+        "refused: the rows could not be read"
+    );
+    // Counted, not timed: each read waits `SESSION_READ_WAIT` twice (1.0 s measured alone), and a
+    // wall-clock bound on that fails under the full suite's load while nothing is wrong.
+    assert_eq!(
+        SESSION_READS.with(|c| c.get()),
+        3,
+        "read three times, then refused"
+    );
+    assert!(!engine_lock(&m).in_field_day(), "nothing was switched");
     drop(hold);
+    assert_eq!(
+        switch(&m, "fieldday-sp"),
+        Ok(true),
+        "CONTROL: once the store answers, the session opens with its sweep"
+    );
     let mut e = m.into_inner().expect("not poisoned");
     master_on(&mut e);
-    LOG_SWEEPS.with(|c| c.set(0));
-    let _ = e.snapshot();
-    assert_eq!(
-        LOG_SWEEPS.with(|c| c.get()),
-        1,
-        "the first snapshot swept the log"
-    );
     let b4 = e.session_b4().expect("a session is open");
     assert!(b4.worked_this_session("W1AW"));
 }

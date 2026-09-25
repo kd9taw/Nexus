@@ -678,7 +678,19 @@ pub struct Batch<'a> {
     /// Other `log_meta` keys, set in the same transaction — a change's own facts about its
     /// rows, on its last chunk only, like the watermarks (`fill_ver`, SPEC-2 v3 D2-A).
     pub meta: &'a [(&'static str, i64)],
+    /// Move the shared [`INDEX_SEQ`] on by one, in the same transaction: the last chunk of a
+    /// change a hot index must be built again for, when another window made it (every change
+    /// but a stamp — [`super::writer::Change::stamp_only`]).
+    pub index_move: bool,
 }
+
+/// The `log_meta` key every process sharing the store moves on by one, in the transaction of the
+/// last chunk of each change that is not a stamp: ONE sequence across windows, where the
+/// watermarks each window writes are its own (SPEC-2 v3 C19, D4-A). A window that sees it moved
+/// by more than its own changes moved it knows another window changed what a hot index reads,
+/// and builds its own again; a window's stamps leave it where it was, and cost the other window
+/// nothing.
+pub const INDEX_SEQ: &str = "index_seq";
 
 /// The logbook's database.
 #[derive(Debug)]
@@ -895,6 +907,14 @@ impl LogDb {
         }
     }
 
+    /// The shared [`INDEX_SEQ`]: how many changes other than stamps every process sharing the
+    /// store has made to it — nought for a store none has moved it in.
+    pub fn index_seq(&self) -> Result<u64> {
+        Ok(self
+            .meta(INDEX_SEQ)?
+            .map_or(0, |v| u64::try_from(v).unwrap_or(0)))
+    }
+
     /// Write one `log_meta` value.
     pub fn set_meta(&self, k: &str, v: i64) -> Result<()> {
         self.conn.execute(
@@ -1060,6 +1080,13 @@ impl LogDb {
                 for (k, v) in b.meta {
                     set.execute(params![k, v])?;
                 }
+            }
+            if b.index_move {
+                tx.execute(
+                    "INSERT INTO log_meta (k, v) VALUES (?1, 1)
+                     ON CONFLICT(k) DO UPDATE SET v = v + 1",
+                    [INDEX_SEQ],
+                )?;
             }
         }
         tx.commit()?;
@@ -3566,6 +3593,7 @@ mod tests {
             upsert: &write,
             marks: None,
             meta: &[],
+            index_move: false,
         };
         db.apply(batch()).expect("first write");
         db.apply(batch()).expect("the same row written again");

@@ -87,8 +87,12 @@ pub struct LogStore {
     dropped: Vec<Dropped>,
     /// The latest refusal, in the store's words — what the screen says while any is held.
     last_refusal: Option<String>,
-    /// The writer's count of ANOTHER process's commits when memory last matched the store.
+    /// The writer's count of ANOTHER process's commits when the station last took them in.
     synced_foreign: u64,
+    /// The writer's count of ANOTHER process's changes a hot index must be built again for,
+    /// when the station's index was last built from a read that followed them
+    /// ([`LogWriter::foreign_index_moves`]).
+    synced_index: u64,
     /// Tickets being collected for a command that will wait on them (see
     /// [`crate::engine::Engine::with_log_tickets`]).
     collector: Option<Vec<Ticket>>,
@@ -111,11 +115,13 @@ impl std::fmt::Debug for LogStore {
 }
 
 /// What [`open`] hands the station: the store, the records to hold, and — when `log.adi`
-/// held something the store did not account for — that file, to be taken in.
+/// held something the store did not account for — that file's take-in, planned.
 pub struct Opened {
     pub(crate) store: LogStore,
     pub(crate) records: Vec<QsoRecord>,
-    pub(crate) foreign: Option<ForeignLog>,
+    /// A `log.adi` the store cannot account for, planned as an import on the store's rows off
+    /// the lock, here, and made at the attach, first thing (SPEC-2 v3 C19).
+    pub(crate) take_in: Option<crate::station::AttachTakeIn>,
     /// The hot index of those records, built off the lock, when the caller asked for it
     /// ([`HotBuild`]).
     pub(crate) hot: Option<Prebuilt>,
@@ -164,16 +170,12 @@ pub struct SessionRows {
     /// the store that held every change the station had made, and no other window's the station
     /// had not taken in.
     pub(crate) exact: bool,
-    /// Whether the store answered in time ([`SESSION_READ_WAIT`]). One that did not — a big
-    /// import being written, say — is not asked again: the session's first snapshot sweeps the
-    /// log itself, as it always has.
-    pub(crate) ready: bool,
 }
 
 /// How long a read for a contest session ([`SessionRead::read`]) waits — for the store to hold
 /// the station's own changes, and for the writer's look at other windows' commits — before it
 /// gives the read up. The switch waits for the read, so a store busy with a big write costs the
-/// switch this, then the old way.
+/// switch this for each of its tries, and then a refusal ([`crate::engine::with_session_rows`]).
 pub const SESSION_READ_WAIT: Duration = Duration::from_millis(500);
 
 /// A read of [`SessionRows`] from the store, taken under the Engine lock
@@ -224,13 +226,17 @@ impl SessionRead {
     ///
     /// ⚠️ Disk I/O and two waits: never under the Engine lock (a debug build panics).
     pub fn read(self) -> SessionRows {
+        self.read_within(SESSION_READ_WAIT)
+    }
+
+    /// [`Self::read`], each wait up to `wait` — longer at launch
+    /// ([`crate::engine::with_session_rows_at_launch`]).
+    pub fn read_within(self, wait: Duration) -> SessionRows {
         #[cfg(debug_assertions)]
         SESSION_READS.with(|c| c.set(c.get() + 1));
         let bound = self.bound;
-        let read = self
-            .reads
-            .read(SESSION_READ_WAIT, |db| rows_since(db, bound));
-        let foreign = self.writer.foreign_commits_now(SESSION_READ_WAIT);
+        let read = self.reads.read(wait, |db| rows_since(db, bound));
+        let foreign = self.writer.foreign_commits_now(wait);
         let (rows, ready) = match read {
             Ok((rows, fresh)) => (rows, fresh == Freshness::Current && foreign.is_some()),
             Err(_) => (Vec::new(), false),
@@ -240,14 +246,82 @@ impl SessionRead {
             bound,
             marks: self.marks,
             exact: ready && foreign == Some(self.synced),
-            ready,
         }
+    }
+}
+
+/// How long a build of the hot index from the store ([`IndexRead::read`]) waits for the store to
+/// hold every change the station has made before the build is given up — made again later.
+pub const INDEX_READ_WAIT: Duration = Duration::from_secs(2);
+
+/// A build of the hot index from the store (SPEC-2 v3 C19) — for an index that has to be built
+/// again whole: under a new DXCC resolver, after another window's commits moved it, or once it
+/// has let go of the log. Taken under the Engine lock ([`LogStore::index_read`]: handles, no
+/// I/O) and made after it is released ([`Self::read`]).
+pub struct IndexRead {
+    reads: StoreReads,
+    entity: Option<Arc<DxccResolve>>,
+    /// The contest session the index keeps a sweep for, opened again in the build from whole
+    /// rows: [`HotIndex::from_store`] reads no contest exchange.
+    session: Option<(u64, tempo_core::contest::DupeRule)>,
+    /// The log as the station held it when this was taken.
+    marks: Watermarks,
+    /// Other windows' commits counted when this was taken — before the read, so one that lands
+    /// during it is counted after and costs another build rather than being missed.
+    foreign: u64,
+    /// And how many of them moved what a hot index reads ([`LogWriter::foreign_index_moves`]).
+    foreign_index: u64,
+    /// The store held no change the station holds that it refused ([`LogStore::resend`]'s).
+    whole: bool,
+}
+
+/// The hot index [`IndexRead::read`] built, and what it was built against.
+pub struct IndexRows {
+    pub(crate) index: HotIndex,
+    pub(crate) session: Option<(u64, tempo_core::contest::DupeRule)>,
+    pub(crate) marks: Watermarks,
+    pub(crate) foreign: u64,
+    pub(crate) foreign_index: u64,
+    /// Whether it is the index of the station's log: read in one picture of the store that held
+    /// every change the station had made. One that is not is never installed.
+    pub(crate) exact: bool,
+}
+
+impl IndexRead {
+    /// Build it: every row the store holds, keyed as the station keys them, and the session's
+    /// rows from whole records — in ONE read transaction, once the store holds every change the
+    /// station had made when this was taken (up to `wait`).
+    ///
+    /// ⚠️ Disk I/O and a wait: never under the Engine lock (a debug build panics). A whole-log
+    /// read — 0.40 s at 150,000 contacts, 1.2–1.5 s at 500,000 (release).
+    pub fn read(self, wait: Duration) -> Result<IndexRows, String> {
+        let keys = StationKeys(self.entity.as_deref());
+        let session = self.session;
+        let (index, fresh) = self
+            .reads
+            .read(wait, |db| {
+                let mut index = HotIndex::from_store(db, &keys)?;
+                if let Some((cutoff, rule)) = session {
+                    index.install_session(cutoff, rule, &rows_since(db, cutoff)?);
+                }
+                Ok(index)
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(IndexRows {
+            index,
+            session,
+            marks: self.marks,
+            foreign: self.foreign,
+            foreign_index: self.foreign_index,
+            exact: self.whole && fresh == Freshness::Current,
+        })
     }
 }
 
 /// A `log.adi` written by something other than this store's mirror — a 1.13 instance, the
 /// operator, a restore — read at open so its contacts can be taken in before anything may
 /// replace the file.
+#[derive(Clone)]
 pub(crate) struct ForeignLog {
     pub(crate) text: String,
     pub(crate) stamp: Option<FileStamp>,
@@ -393,9 +467,12 @@ fn open_reporting_with(
         }
     };
     // What the mirror may replace though it is not a pristine picture: the file just converted,
-    // or the one about to be taken in — for exactly as long as it keeps this stamp.
+    // for exactly as long as it keeps this stamp. The one about to be taken in is accepted once
+    // its contacts are in the store — at the attach, or on the poll that takes it in if the
+    // attach could not ([`crate::station::StationCore::attach_store`]) — and until then the
+    // mirror leaves it where it is.
     mirror_options.accepted = match mirror::mirror_state(log_path) {
-        MirrorState::Foreign => mirror::file_stamp(log_path),
+        MirrorState::Foreign if converted_now => mirror::file_stamp(log_path),
         _ => None,
     };
     // The copies beside the log are swept as every launch has always swept them — `stat`-cheap
@@ -404,6 +481,7 @@ fn open_reporting_with(
 
     let writer = Arc::new(LogWriter::start(db));
     let synced_foreign = writer.foreign_commits();
+    let synced_index = writer.foreign_index_moves();
     // Opens nothing yet: a session that never reads the store costs nothing for it.
     let reader = Arc::new(LogReader::new(&db_path));
     // The mirror pictures the store itself, streamed off a read connection (SPEC-2 v3 C15).
@@ -412,24 +490,29 @@ fn open_reporting_with(
         Arc::new(StoreSource::new(Arc::clone(&reader), Arc::clone(&writer))),
         mirror_options,
     ));
+    let store = LogStore {
+        writer,
+        reader,
+        mirror: Some(mirror),
+        lane: None,
+        log_path: Some(log_path.to_path_buf()),
+        db_path,
+        resolve,
+        inflight: Vec::new(),
+        dropped: Vec::new(),
+        last_refusal: None,
+        synced_foreign,
+        synced_index,
+        collector: None,
+        placeholder: false,
+    };
+    // The file's take-in, planned here on the store's rows — an import, with an import's rules —
+    // so the attach, under the lock, only makes it.
+    let take_in = foreign.map(|f| crate::station::AttachTakeIn::plan(&store, f));
     Ok(Opened {
-        store: LogStore {
-            writer,
-            reader,
-            mirror: Some(mirror),
-            lane: None,
-            log_path: Some(log_path.to_path_buf()),
-            db_path,
-            resolve,
-            inflight: Vec::new(),
-            dropped: Vec::new(),
-            last_refusal: None,
-            synced_foreign,
-            collector: None,
-            placeholder: false,
-        },
+        store,
         records,
-        foreign,
+        take_in,
         hot,
         outcome,
     })
@@ -442,6 +525,7 @@ impl LogStore {
         let db_path = LogDb::memory_name();
         let writer = Arc::new(LogWriter::start(LogDb::open(&db_path)?));
         let synced_foreign = writer.foreign_commits();
+        let synced_index = writer.foreign_index_moves();
         Ok(LogStore {
             writer,
             reader: Arc::new(LogReader::new(&db_path)),
@@ -454,6 +538,7 @@ impl LogStore {
             dropped: Vec::new(),
             last_refusal: None,
             synced_foreign,
+            synced_index,
             collector: None,
             placeholder: false,
         })
@@ -493,6 +578,7 @@ impl LogStore {
         let writer = Arc::new(LogWriter::start(LogDb::open(&db_path)?));
         drop(loader);
         let synced_foreign = writer.foreign_commits();
+        let synced_index = writer.foreign_index_moves();
         let reader = Arc::new(LogReader::new(&db_path));
         let lane = Arc::new(LogFileWriter::start(
             log_path.to_path_buf(),
@@ -513,6 +599,7 @@ impl LogStore {
             dropped: Vec::new(),
             last_refusal: None,
             synced_foreign,
+            synced_index,
             collector: None,
             placeholder: false,
         })
@@ -562,6 +649,26 @@ impl LogStore {
             bound,
             marks,
         })
+    }
+
+    /// A build of the hot index from the store ([`IndexRead`]), keyed by `entity` and with
+    /// `session` opened again, taken here under the Engine lock against `marks` — the log as the
+    /// station holds it. No I/O.
+    pub(crate) fn index_read(
+        &self,
+        entity: Option<Arc<DxccResolve>>,
+        session: Option<(u64, tempo_core::contest::DupeRule)>,
+        marks: Watermarks,
+    ) -> IndexRead {
+        IndexRead {
+            reads: self.reads(),
+            entity,
+            session,
+            marks,
+            foreign: self.writer.foreign_commits(),
+            foreign_index: self.writer.foreign_index_moves(),
+            whole: self.dropped.is_empty(),
+        }
     }
 
     /// The database's path.
@@ -839,8 +946,8 @@ impl LogStore {
         self.collector.take().unwrap_or_default()
     }
 
-    /// Whether ANOTHER process has committed to the store since memory last matched it. An
-    /// atomic read — no I/O — so it is safe to ask under any lock.
+    /// Whether ANOTHER process has committed to the store since the station last took its
+    /// commits in. An atomic read — no I/O — so it is safe to ask under any lock.
     pub(crate) fn foreign_changed(&self) -> bool {
         self.writer.foreign_commits() != self.synced_foreign
     }
@@ -852,42 +959,25 @@ impl LogStore {
         self.writer.foreign_commits()
     }
 
-    /// The log after another process's commits: every row as the store holds it now, with this
-    /// process's own changes still in flight laid over it. `in_place` keeps every row where
-    /// memory has it ([`writer::merge_reloaded_in_place`]) — for a change about to be made BY
-    /// POSITION — and a row another process deleted is then kept and reported; otherwise the
-    /// log becomes the store's, in the store's order ([`writer::merge_reloaded`]). Reads the
-    /// store on a connection of its own.
-    ///
-    /// ⚠️ This READS the database, and the caller holds the engine lock. It runs only when
-    /// another process has written — two radio windows sharing one data folder — at exactly
-    /// the points the old two-instance recovery re-read the whole of `log.adi` under the same
-    /// lock, so it costs nothing a shared log did not already cost. A stalled WRITE does not
-    /// stall it: in WAL mode a reader never waits for a writer.
-    pub(crate) fn reload(
-        &mut self,
-        held: &[Arc<QsoRecord>],
-        in_place: bool,
-    ) -> Result<(Vec<Arc<QsoRecord>>, bool), String> {
-        // Read the count BEFORE the load: a commit that lands during it is counted after, and
-        // costs another reload rather than being missed.
-        let seen = self.writer.foreign_commits();
-        self.collect(Instant::now());
-        let pending: Vec<Touched> = self
-            .inflight
-            .iter()
-            .map(|f| f.held.touched())
-            .chain(self.dropped.iter().map(|d| d.held.touched()))
-            .collect();
-        let stored = LogDb::open(&self.db_path)
-            .and_then(|db| db.load_all())
-            .map_err(|e| e.to_string())?;
-        self.synced_foreign = seen;
-        Ok(if in_place {
-            writer::merge_reloaded_in_place(stored, held, &pending)
-        } else {
-            (writer::merge_reloaded(stored, held, &pending), false)
-        })
+    /// Whether ANOTHER process has made a change a hot index must be built again for since the
+    /// station's index was last built from the store ([`LogWriter::foreign_index_moves`]) — every
+    /// change but a stamp (SPEC-2 v3 C19, D4-A). An atomic read, no I/O.
+    pub(crate) fn foreign_index_changed(&self) -> bool {
+        self.writer.foreign_index_moves() != self.synced_index
+    }
+
+    /// Another process's commits counted so far are taken in, and none of them moved what a hot
+    /// index reads: they were stamps, which cost the station nothing but its watermarks. One that
+    /// moved it is counted by [`Self::foreign_index_changed`], which this leaves as it was.
+    pub(crate) fn foreign_stamps_taken(&mut self) {
+        self.synced_foreign = self.writer.foreign_commits();
+    }
+
+    /// The station's hot index was built again from a read of the store made after another
+    /// process's commits reached these counts ([`IndexRead`]): they are taken in.
+    pub(crate) fn foreign_taken(&mut self, foreign: u64, foreign_index: u64) {
+        self.synced_foreign = self.synced_foreign.max(foreign);
+        self.synced_index = self.synced_index.max(foreign_index);
     }
 
     /// The store has taken in the `log.adi` with `stamp`: the mirror may replace it now.
@@ -903,6 +993,16 @@ impl LogStore {
     pub(crate) fn refresh_mirror(&self) {
         if let Some(m) = &self.mirror {
             m.dirty(self.writer.submitted_rev());
+        }
+    }
+
+    /// On the 1.13 path, have the lane write `log.adi` whole from the store as it stands — the
+    /// load's fill of the contacts' countries and states, when it filled any, as 1.13's load
+    /// wrote the file after its backfill (SPEC-2 v3 C19). A file another machine changed since
+    /// the load is held, as every rewrite is, until it has been taken in. Nothing elsewhere.
+    pub(crate) fn rewrite_log_file(&self) {
+        if let Some(lane) = &self.lane {
+            let _ = lane.rewrite(self.writer.submitted_rev());
         }
     }
 
@@ -1328,16 +1428,6 @@ impl Held {
         }
     }
 
-    /// The rows it touches, as a reload of the store must keep them ([`writer::merge_reloaded`]).
-    fn touched(&self) -> Touched {
-        if self.clear {
-            return Touched::All;
-        }
-        let mut ids = self.remove.clone();
-        ids.extend(self.upsert.iter().filter_map(|w| w.rec.id));
-        Touched::Rows(ids)
-    }
-
     fn touches(&self, ids: &std::collections::HashSet<RecordId>) -> bool {
         self.remove.iter().any(|id| ids.contains(id))
             || self
@@ -1367,6 +1457,9 @@ impl Held {
             upsert: self.upsert.clone(),
             marks,
             meta: Vec::new(),
+            // Sent again, it moves the shared `index_seq` as any change may: the rows it carries
+            // are as they now stand, and a stamp's are no exception worth the risk.
+            stamp_only: false,
         }
     }
 
@@ -1569,6 +1662,7 @@ impl Unsaved {
 pub(crate) mod tests {
     use super::*;
     use crate::engine::{engine_lock, engine_try_lock, Engine};
+    use crate::test_util::StoredLog;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
@@ -4580,12 +4674,11 @@ pub(crate) mod tests {
         assert_eq!(e.snapshot().log_save_trouble, None, "and the screen clears");
     }
 
-    /// ⛔ A DROPPED CHANGE SURVIVES ANOTHER WINDOW'S COMMIT TO THE SAME ROW. When a second window
-    /// on the same data folder commits, this window re-reads the store and keeps its own version
-    /// of every row it has a change of its own for — the change on its way. A change the writer
-    /// dropped is no longer on its way, and it is still this window's: if the re-read took the
-    /// store's copy, memory would lose it, and the re-send (built from memory) would carry the
-    /// loss to disk. So the re-read keeps those rows too, and the re-send lands them.
+    /// ⛔ A DROPPED CHANGE SURVIVES ANOTHER WINDOW'S COMMIT TO THE SAME ROW. A change the writer
+    /// dropped is no longer on its way, and it is still this window's: its rows are held by the
+    /// store that dropped it, and a second window's commit to the same row — which this window
+    /// takes in by building its hot index again, never by re-reading rows into memory (SPEC-2 v3
+    /// C19, D4-A) — does not touch them. The re-send lands them.
     #[test]
     fn another_windows_commit_does_not_erase_a_change_waiting_to_be_sent_again() {
         use tempo_core::logbook::LogOp;
@@ -4628,22 +4721,10 @@ pub(crate) mod tests {
             .wait_durable(&t, DURABLE_WAIT)
             .expect("B's change lands");
 
-        let (merged, _) = a
-            .store
-            .reload(log_a.records(), false)
-            .expect("A re-reads the store");
-        let row = merged.iter().find(|r| r.id == Some(id)).expect("the row");
-        assert!(
-            row.qsl_rcvd.card,
-            "A keeps its own version of the row it has a dropped change for"
-        );
-
-        // And the change A kept lands when it is sent again.
-        let mut log_after = tempo_core::logbook::Logbook::new();
-        for r in merged {
-            log_after.add(QsoRecord::clone(&r));
-        }
-        assert_eq!(a.store.resend(log_after.marks(), true, Instant::now()), 1);
+        // Nothing re-reads the store into A's memory (SPEC-2 v3 C19, D4-A): the change A's
+        // writer dropped is held by A's store, its rows with it, whatever B commits — and it
+        // lands when it is sent again.
+        assert_eq!(a.store.resend(log_a.marks(), true, Instant::now()), 1);
         assert!(a.store.unsaved().wait(DURABLE_WAIT).saved());
         assert!(
             stored(&d)
@@ -4681,18 +4762,38 @@ pub(crate) mod tests {
         f()
     }
 
+    /// The row `call` names in the store the engine's log is in — the store two windows share.
     fn find(e: &Engine, call: &str) -> Option<QsoRecord> {
-        e.log_records()
-            .iter()
-            .find(|r| r.call == call)
-            .map(|r| QsoRecord::clone(r))
+        e.stored_records().into_iter().find(|r| r.call == call)
     }
 
-    /// ★ Two radio windows on ONE data folder — the shipped two-instance mode, now on one store.
+    /// Whether the window's hot index holds a contact with `call` — the dupe guard's, the B4's and
+    /// the badges' answer: what another window's contact reaches this one through (SPEC-2 v3
+    /// C19, D4-A).
+    fn indexed(e: &Engine, call: &str) -> bool {
+        e.station().hot().worked_call(&call.to_ascii_uppercase())
+    }
+
+    /// ★ D4-A's parity: the window's hot index answers as one built from the store the windows
+    /// share, keyed as it keys its own — every other window's commit taken in.
+    fn index_is_the_stores(e: &Engine, d: &Dir, what: &str) {
+        let db = LogDb::open(&d.db()).expect("the store opens");
+        let keys = StationKeys(e.station().dxcc_resolve.as_deref());
+        let built = db
+            .in_one_snapshot(|db| HotIndex::from_store(db, &keys))
+            .expect("built from the store");
+        assert!(e.station().hot().answers_as(&built), "{what}");
+    }
+
+    /// ★ Two radio windows on ONE data folder — the shipped two-instance mode, on one store
+    /// (SPEC-2 v3 C19, D4-A: nothing re-reads the store into a window's memory; its hot index is
+    /// built again from the store, off the lock).
     ///
-    /// - A contact one window logs reaches the other on its freshness poll, with no restart.
-    /// - A stamp made in one window survives the other window's change to the same row: the
-    ///   second window re-reads before it changes anything, as the 1.13 path re-read `log.adi`.
+    /// - A contact one window logs reaches the other's hot index on its freshness poll — its
+    ///   dupe guard, its B4, its badges — with no restart, and the other window's views reload.
+    /// - A stamp made in one window costs the other no rebuild, and survives the other window's
+    ///   change to the same row: a change planned before another window's commit plans again,
+    ///   and its plan reads the store.
     /// - An edit made in one window arrives in the other AS AN EDIT, and a delete as a delete —
     ///   the two gaps a shared `log.adi` had to leave open (a duplicate, a resurrection),
     ///   closed, because rows are matched by id.
@@ -4702,26 +4803,29 @@ pub(crate) mod tests {
         std::fs::write(d.log(), legacy_log(12)).unwrap();
         let mut a = engine_on_store(&d);
         let mut b = engine_on_store(&d);
-        same_log(
-            a.log_records(),
-            b.log_records(),
-            "both open on the same log",
-        );
+        index_is_the_stores(&b, &d, "both open on the same log");
 
-        // A logs; B sees it.
+        // A logs; B's index takes it in on its poll, and B's views reload.
         a.log_qso(qso("W1AAA", 1_788_000_000));
         flush(&a);
+        let tick = b.station().log_tick();
+        assert!(!indexed(&b, "W1AAA"), "premise: B has not polled");
         assert!(
             eventually(|| {
-                b.sync_shared_log_if_changed();
-                find(&b, "W1AAA").is_some()
+                b.take_in_shared_log();
+                indexed(&b, "W1AAA")
             }),
-            "B picks up A's contact on its freshness poll"
+            "B's index answers A's contact after its freshness poll"
+        );
+        assert_ne!(
+            b.station().log_tick(),
+            tick,
+            "and B's views read the log again"
         );
 
-        // A stamps a row; B then marks a card on THE SAME row. B must not write its stale copy
-        // of the row over A's stamp.
-        let target = QsoRecord::clone(&a.log_records()[2]);
+        // A stamps a row: B takes it in at no cost — no rebuild — and B's mark of a card on THE
+        // SAME row does not write B's plan over A's stamp.
+        let target = find(&a, "K2ABC").expect("held");
         assert!(a.stamp_qrz_upload(
             &target,
             tempo_core::logbook::UploadOutcome::Accepted,
@@ -4729,77 +4833,93 @@ pub(crate) mod tests {
             None
         ));
         flush(&a);
-        // Wait until B's writer has SEEN A's stamp commit — without B polling — so the change
-        // below is the case under test: a foreign commit B has not yet folded in.
         assert!(eventually(|| b.log_store_foreign_pending()));
+        #[cfg(debug_assertions)]
+        tempo_core::logbook::hot::HOT_REBUILDS.with(|c| c.set(0));
+        assert!(b.take_in_shared_log(), "B takes A's stamp in");
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            tempo_core::logbook::hot::HOT_REBUILDS.with(|c| c.get()),
+            0,
+            "at no cost: B's index is not built again for a stamp"
+        );
         assert!(b.mark_qsl_card(target.id.unwrap(), true));
         flush(&b);
-        let row = stored(&d)
-            .into_iter()
-            .find(|r| r.id == target.id)
-            .expect("stored");
+        let row = find(&b, "K2ABC").expect("stored");
         assert!(row.qsl_rcvd.card, "B's mark is stored");
         assert!(
             row.upload.qrz.is_some(),
             "and A's stamp survived B's change to the same row"
         );
 
-        // A edits a row's CALL; B sees an edit, not a new contact beside the old one.
+        // A edits a row's CALL, and deletes another; B's index sees an edit and a delete.
         let mut edited = find(&a, "K5ABC").unwrap();
         edited.call = "K5ABD".into();
         assert!(a.update_qso(edited.id.unwrap(), edited));
-        // A deletes a row; B must not bring it back.
         let gone = find(&a, "K7ABC").and_then(|r| r.id).unwrap();
         assert!(a.delete_qso(gone));
         flush(&a);
+        #[cfg(debug_assertions)]
+        tempo_core::logbook::hot::HOT_REBUILDS.with(|c| c.set(0));
         assert!(eventually(|| {
-            b.sync_shared_log_if_changed();
-            find(&b, "K5ABD").is_some()
+            b.take_in_shared_log();
+            indexed(&b, "K5ABD")
         }));
-        assert!(find(&b, "K5ABC").is_none(), "an edit, not a duplicate");
-        assert!(find(&b, "K7ABC").is_none(), "a delete, not a resurrection");
+        #[cfg(debug_assertions)]
+        assert!(
+            tempo_core::logbook::hot::HOT_REBUILDS.with(|c| c.get()) >= 1,
+            "CONTROL: an edit builds B's index again, from the store"
+        );
+        assert!(!indexed(&b, "K5ABC"), "an edit, not a duplicate");
+        assert!(!indexed(&b, "K7ABC"), "a delete, not a resurrection");
 
-        // And B's own next change does not resurrect or duplicate anything either.
+        // And B's own next contact reaches A the same way.
         b.log_qso(qso("W2BBB", 1_788_000_900));
         flush(&b);
         assert!(eventually(|| {
-            a.sync_shared_log_if_changed();
-            find(&a, "W2BBB").is_some()
+            a.take_in_shared_log();
+            indexed(&a, "W2BBB")
         }));
-        same_log(a.log_records(), b.log_records(), "the two windows agree");
-        same_log(&stored(&d), a.log_records(), "and so does the store");
+        assert!(eventually(|| {
+            b.take_in_shared_log();
+            !b.log_store_foreign_pending()
+        }));
+        index_is_the_stores(&a, &d, "A's index is the store's");
+        index_is_the_stores(&b, &d, "and so is B's");
+        assert_eq!(
+            stored(&d).len(),
+            13,
+            "12, and W1AAA and W2BBB, less K7ABC; K5ABC edited in place"
+        );
     }
 
-    /// ⛔ A POSITION HELD ACROSS ANOTHER WINDOW'S DELETE STILL NAMES ITS CONTACT. Until SPEC-2's
-    /// C16 the Logbook and the Remote found a row, then changed it by position, in one hold of
-    /// the engine lock — and the change first folds in whatever another window committed. A
-    /// fold-in that removed the other window's deleted row would shift every row after it, and
-    /// the change would land on a different contact. So the fold-in a change makes moves
-    /// nothing; the deleted row lingers until the next freshness poll, which may move rows
-    /// because nobody holds a position across it. Every change is addressed by id since C16, so
-    /// nothing holds a position any more; this pins the in-place fold-in until it goes (§4.7).
+    /// ⛔ A CHANGE AFTER ANOTHER WINDOW'S DELETE LANDS ON ITS CONTACT. Before C16 a change found
+    /// its row by position after folding another window's commits into memory, and a fold-in
+    /// that removed a deleted row above it would have moved it onto another contact. Now the
+    /// change names its row by id, its plan reads the store — A's delete and all — and B takes
+    /// the delete in first, off the Engine lock (SPEC-2 v3 C19, D4-A): the card lands on the
+    /// contact B meant, and only it, and B's index loses the deleted contact.
     #[test]
-    fn a_position_held_across_another_windows_delete_still_names_its_contact() {
+    fn a_change_after_another_windows_delete_lands_on_its_contact() {
         let d = Dir::new("positions");
         std::fs::write(d.log(), legacy_log(10)).unwrap();
         let mut a = engine_on_store(&d);
         let mut b = engine_on_store(&d);
-        let target = QsoRecord::clone(&b.log_records()[5]);
+        let target = find(&b, "K5ABC").expect("held");
 
         assert!(
-            a.delete_qso(id_at(&a, 1)),
+            a.delete_qso(find(&a, "K1ABC").and_then(|r| r.id).unwrap()),
             "A deletes a row ABOVE B's target"
         );
         flush(&a);
         assert!(eventually(|| b.log_store_foreign_pending()));
-
-        // B changes the row at position 5, by its id — without polling first.
-        assert!(b.mark_qsl_card(target.id.unwrap(), true));
-        assert_eq!(
-            b.log_records()[5].id,
-            target.id,
-            "position 5 is still B's contact"
+        assert!(
+            indexed(&b, "K1ABC"),
+            "premise: B has not taken the delete in"
         );
+
+        // B changes its target, by its id.
+        assert!(b.mark_qsl_card(target.id.unwrap(), true));
         flush(&b);
         let marked: Vec<_> = stored(&d)
             .into_iter()
@@ -4811,29 +4931,83 @@ pub(crate) mod tests {
             vec![target.id],
             "the card went on the contact B meant, and only it"
         );
-
-        // The poll, which holds no position, finishes the fold-in: A's delete arrives.
-        assert!(b.sync_shared_log_if_changed());
-        assert_eq!(b.log_records().len(), 9, "the deleted row is gone from B");
-        assert!(
-            b.log_records().iter().all(|r| r.call != "K1ABC"),
-            "and it is the row A deleted"
-        );
-        // And A, polling in turn, has B's card: the two windows agree.
+        assert!(!indexed(&b, "K1ABC"), "and the delete was taken in first");
+        index_is_the_stores(&b, &d, "B's index is the store's");
         assert!(eventually(|| {
-            a.sync_shared_log_if_changed();
-            a.log_records().iter().any(|r| r.qsl_rcvd.card)
+            a.take_in_shared_log();
+            !a.log_store_foreign_pending()
         }));
-        same_log(b.log_records(), a.log_records(), "the two windows agree");
+        index_is_the_stores(&a, &d, "and so is A's");
     }
 
-    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S FILLS — and a window opened before
-    /// them takes them in. The fills are in the store (D2-A), so a re-read of it — the freshness
-    /// poll's, which may move rows, and the in-place one a change makes first — brings them
-    /// with every row it takes; the other window's own contacts arrive filled, because it fills
-    /// before it writes.
+    /// ★ D4-A's precondition: a change is followed by the hot index only from rows it holds as
+    /// the change read them. B plans a change without taking another window's commits in first,
+    /// and reads a row A has since edited — a row B's index holds as it stood before: the change
+    /// answers Stale, changing nothing, rather than be followed from a row the index does not
+    /// hold. The CONTROL: once B's index has taken A's edit in, the same change is made.
     #[test]
-    fn another_windows_commit_keeps_this_ones_fills() {
+    fn a_change_read_from_a_row_the_index_has_not_taken_in_plans_again() {
+        use crate::station::Stale;
+        use tempo_core::logbook::OpClass;
+        let d = Dir::new("holds");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let mut edited = find(&a, "K3ABC").expect("held");
+        let id = edited.id.expect("an id");
+        edited.band = "40m".into();
+        assert!(a.update_qso(id, edited));
+        flush(&a);
+        assert!(eventually(|| b.log_store_foreign_pending()));
+
+        let change = |b: &mut Engine| -> Result<(), Stale> {
+            // The plan's handles, taken with nothing taken in: another window's commit landed
+            // BEFORE the plan, so only the index can say the row is not the one it holds.
+            let plan = b.station_mut().log_plan();
+            let read = plan.row(id).expect("the store reads").expect("held");
+            assert_eq!(
+                read.band, "40m",
+                "the plan reads A's edit: the store's word"
+            );
+            let mut after = QsoRecord::clone(&read);
+            after.comment = Some("B's note".into());
+            b.station_mut()
+                .commit_planned(
+                    &plan,
+                    OpClass::Key,
+                    vec![(read, Some(Arc::new(after)))],
+                    false,
+                    Vec::new(),
+                    "test",
+                )
+                .map(|_| ())
+        };
+        assert!(
+            change(&mut b).is_err(),
+            "B's index holds the row as it stood before A's edit: Stale"
+        );
+        assert!(
+            find(&b, "K3ABC").unwrap().comment.is_none(),
+            "and nothing was made"
+        );
+        assert!(b.take_in_shared_log(), "B takes A's edit in");
+        assert!(change(&mut b).is_ok(), "CONTROL: then the change is made");
+        flush(&b);
+        assert_eq!(
+            find(&b, "K3ABC").unwrap().comment.as_deref(),
+            Some("B's note")
+        );
+        index_is_the_stores(&b, &d, "B's index followed it");
+    }
+
+    /// ⛔ THE FILLS ARE THE STORE'S, AND ANOTHER WINDOW'S CHANGE KEEPS THEM. The fills are in the
+    /// store (D2-A), and nothing re-reads the store into a window's memory any more (SPEC-2 v3
+    /// C19, D4-A): a window opened before the fills were saved plans its next change on the
+    /// store's rows, fills and all, so the change keeps them — it never writes back a row as the
+    /// window loaded it. And another window's own contacts arrive filled, because it fills before
+    /// it writes.
+    #[test]
+    fn another_windows_change_keeps_the_fills() {
         let d = Dir::new("refill");
         std::fs::write(d.log(), legacy_log(6)).unwrap();
         flush(&engine_on_store(&d)); // the conversion: every row unfilled
@@ -4846,70 +5020,52 @@ pub(crate) mod tests {
             "premise: the fill job filled every row"
         );
         flush(&a.lock().unwrap());
-        let unfilled = |e: &Mutex<Engine>| {
-            e.lock()
-                .unwrap()
-                .log_records()
-                .iter()
+        let unfilled = || {
+            stored(&d)
+                .into_iter()
                 .filter(|r| r.country.is_none())
-                .map(|r| r.call.clone())
+                .map(|r| r.call)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(unfilled(&a), Vec::<String>::new(), "premise: A filled them");
-        assert_eq!(
-            unfilled(&early).len(),
-            6,
-            "premise: the early window has not"
-        );
-        assert!(eventually(|| {
-            early.lock().unwrap().sync_shared_log_if_changed();
-            unfilled(&early).is_empty()
-        }));
+        assert_eq!(unfilled(), Vec::<String>::new(), "premise: A filled them");
 
+        // The early window marks a card on a contact it loaded unfilled — once its writer has
+        // seen A's commits, as the debug build's oracle (the log in memory, which no longer
+        // follows another window's commits) needs to know to stand aside.
+        assert!(eventually(|| early.lock().unwrap().log_store_foreign_pending()));
+        let first = find(&early.lock().unwrap(), "K0ABC")
+            .and_then(|r| r.id)
+            .unwrap();
+        assert!(early.lock().unwrap().mark_qsl_card(first, true));
+        flush(&early.lock().unwrap());
+        let row = find(&early.lock().unwrap(), "K0ABC").unwrap();
+        assert!(row.qsl_rcvd.card, "the card is stored");
+        assert_eq!(unfilled(), Vec::<String>::new(), "and every fill with it");
+
+        // Another window's contact arrives filled, and reaches A's index on its poll.
         let b = launch_with_resolvers(&d);
         b.lock().unwrap().log_qso(qso("W1AAA", 1_788_000_000));
         flush(&b.lock().unwrap());
+        assert!(
+            find(&b.lock().unwrap(), "W1AAA").is_some_and(|r| r.country.is_some()),
+            "B's contact is stored filled"
+        );
         assert!(eventually(|| {
             let mut a = a.lock().unwrap();
-            a.sync_shared_log_if_changed();
-            find(&a, "W1AAA").is_some()
+            a.take_in_shared_log();
+            indexed(&a, "W1AAA")
         }));
-        assert_eq!(
-            unfilled(&a),
-            Vec::<String>::new(),
-            "after the freshness poll's re-read, every row carries its country — the new one too"
-        );
-
-        b.lock().unwrap().log_qso(qso("W2BBB", 1_788_000_100));
-        flush(&b.lock().unwrap());
-        assert!(eventually(|| a.lock().unwrap().log_store_foreign_pending()));
-        let first = id_at(&a.lock().unwrap(), 0);
-        assert!(
-            a.lock().unwrap().mark_qsl_card(first, true),
-            "a change, which re-reads in place"
-        );
-        assert!(
-            find(&a.lock().unwrap(), "W2BBB").is_some(),
-            "premise: the change re-read"
-        );
-        assert_eq!(
-            unfilled(&a),
-            Vec::<String>::new(),
-            "after a change's in-place re-read, likewise"
-        );
-        flush(&a.lock().unwrap());
-        same_log(
-            a.lock().unwrap().log_records(),
-            &stored(&d),
-            "and A shows what the store holds",
-        );
+        assert!(eventually(|| {
+            let mut a = a.lock().unwrap();
+            a.take_in_shared_log();
+            !a.log_store_foreign_pending()
+        }));
+        index_is_the_stores(&a.lock().unwrap(), &d, "A's index is the store's");
     }
 
     /// ⛔ A LoTW STAMP DOES NOT BRING BACK A CONTACT ANOTHER WINDOW DELETED WHILE TQSL RAN.
-    /// The stamp finds its contacts by id, so it holds no position and its re-read may move
-    /// rows: the contact the other window deleted is gone before the stamp looks for it. The
-    /// in-place re-read a change by position makes would keep it, stamp it, and so write it
-    /// back into the store.
+    /// The stamp finds its contacts by id in the store, where the contact the other window
+    /// deleted is gone: it is counted gone, never stamped, and so never written back.
     #[test]
     fn a_lotw_stamp_does_not_bring_back_a_contact_another_window_deleted() {
         use tempo_core::logbook::UploadOutcome;
@@ -4921,7 +5077,7 @@ pub(crate) mod tests {
         let signed = a.lotw_signed(&ids);
         assert_eq!(signed.len(), 5, "premise: A hands TQSL five contacts");
 
-        let deleted = b.log_records()[2].id;
+        let deleted = find(&b, "K2ABC").and_then(|r| r.id);
         assert!(
             b.delete_qso(deleted.unwrap()),
             "B deletes one while A's TQSL runs"
@@ -4939,12 +5095,13 @@ pub(crate) mod tests {
             rows.iter().all(|r| r.upload.lotw.is_some()),
             "and every other contact carries the stamp"
         );
-        same_log(a.log_records(), &rows, "A holds what the store holds");
         assert_eq!(
             (done.stamped, done.changed, done.gone),
             (4, 0, 1),
             "four stamped; the deleted contact is counted gone"
         );
+        assert!(!indexed(&a, "K2ABC"), "and A's index has let it go");
+        index_is_the_stores(&a, &d, "A's index is the store's");
     }
 
     /// ★ THE DIAGNOSIS NAMES THE CONTACTS IT READ — so what is done by its report acts on the contacts
@@ -5058,7 +5215,7 @@ pub(crate) mod tests {
         // Control: a pristine file takes nothing in.
         {
             let opened = open_fast(&d);
-            assert!(opened.foreign.is_none(), "control: nothing to take in");
+            assert!(opened.take_in.is_none(), "control: nothing to take in");
         }
 
         // A 1.13 build appends its own contact to the file.
@@ -5122,7 +5279,7 @@ pub(crate) mod tests {
             "and left the appended contact where it was"
         );
 
-        assert!(e.sync_shared_log_if_changed(), "the poll takes the file in");
+        assert!(e.take_in_shared_log(), "the poll takes the file in");
         assert!(find(&e, "W9LIVE").is_some());
         e.log_qso(qso("W1THREE", 1_788_001_400));
         flush(&e);
@@ -5557,7 +5714,7 @@ pub(crate) mod tests {
             "premise: the lane holds its rewrite for the other machine's file: {:?}",
             lane.status()
         );
-        assert!(sc.take_in_log_file_if_changed(), "the file is taken in");
+        assert!(sc.take_in_shared_log(), "the file is taken in");
         let st = lane.flush(DURABLE_WAIT);
         assert!(!st.pending(), "and then written: {st:?}");
         let held = calls_held(&sc);
@@ -5603,10 +5760,7 @@ pub(crate) mod tests {
             calls_in_file(&d).contains(&"W7OTHER".to_string()),
             "and the other machine's contact is still in the file"
         );
-        assert!(
-            sc.sync_shared_log_if_changed(),
-            "the freshness poll takes it in"
-        );
+        assert!(sc.take_in_shared_log(), "the freshness poll takes it in");
         let st = lane.flush(DURABLE_WAIT);
         assert!(
             !st.pending() && !st.foreign_write,
@@ -5656,7 +5810,7 @@ pub(crate) mod tests {
             "an export counts it: the store has it"
         );
         // What the quit runs before it waits: the file taken in, so the lane can write.
-        assert!(sc.take_in_log_file_if_changed());
+        assert!(sc.take_in_shared_log());
         let s = unsaved.wait(DURABLE_WAIT);
         assert!(s.saved(), "{s:?}");
         let on_disk = Logbook::load(&d.log());
@@ -5906,10 +6060,7 @@ pub(crate) mod tests {
                 rec: Box::new(fixed),
             });
             other.save(&d.log()).unwrap();
-            assert!(
-                sc.sync_shared_log_if_changed(),
-                "{how}: the file is taken in"
-            );
+            assert!(sc.take_in_shared_log(), "{how}: the file is taken in");
             let held = calls_held(&sc);
             assert!(
                 held.contains(&theirs[1].call) && held.contains(&"K1FIX".to_string()),
@@ -5926,10 +6077,7 @@ pub(crate) mod tests {
                 !calls_in_file(&d).contains(&gone.call),
                 "premise: gone from the file"
             );
-            assert!(
-                sc.sync_shared_log_if_changed(),
-                "{how}: the file is taken in"
-            );
+            assert!(sc.take_in_shared_log(), "{how}: the file is taken in");
             assert!(
                 calls_held(&sc).contains(&gone.call),
                 "{how}: this machine still holds it"
@@ -6327,7 +6475,7 @@ pub(crate) mod tests {
 
     /// The CONTROL: an index the store keyed by any other resolver — even the same function in
     /// another `Arc`, since two closures cannot be compared — is not installed. The attach builds
-    /// the station's own from its rows, as it always has, and the answers are the same.
+    /// the station's own from the rows the open loaded, and the answers are the same.
     #[test]
     #[cfg(debug_assertions)] // reads the debug build's rebuild counter
     fn an_index_keyed_by_another_resolver_is_built_again_not_installed() {
@@ -6351,7 +6499,7 @@ pub(crate) mod tests {
         assert_eq!(
             HOT_REBUILDS.with(|c| c.get()),
             1,
-            "built from the log, as before"
+            "built from the rows it loaded, as they are handed on"
         );
         let keys = crate::station::StationKeys(Some(&*resolver));
         assert!(e

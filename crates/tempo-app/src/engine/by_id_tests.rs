@@ -52,7 +52,6 @@ fn contact(n: u64, call: &str) -> QsoRecord {
 fn engine_holding(rows: &[QsoRecord]) -> Engine {
     let mut e = Engine::new("K2DEF", "FN31", 0);
     let _ = e.station.append(rows.to_vec(), false);
-    e.station.sync_hot();
     let contacts =
         |rows: &[QsoRecord]| -> Vec<_> { rows.iter().map(|r| (r.id, r.call.clone())).collect() };
     assert_eq!(
@@ -541,11 +540,6 @@ fn the_lotw_verbs_by_id_touch_exactly_the_contacts_they_name() {
         by_hand,
         [id(5), id(3), id(0)],
         "a batch by hand: in its own order, only what is held with a time of day"
-    );
-    assert_eq!(
-        e.ids_at_positions(&[2, 0, 99]),
-        [id(2), id(0)],
-        "the Awards buckets' positions, as they stand"
     );
 
     assert!(e.delete_qso(id(0)), "a delete above both");
