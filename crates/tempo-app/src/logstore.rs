@@ -662,7 +662,8 @@ impl LogStore {
     /// up on — carries them as they now stand, so the earlier one lets them go: sent again, it
     /// must not write back a row older than the new change (SPEC-2 v3 C19: the retry holds its
     /// own refused change, and a later change to the same row wins, as it always has). A purge
-    /// lets every held row go.
+    /// lets every held row go; and an earlier purge holds the rows it took out by id, so a later
+    /// change that writes one of them again takes it back from the purge as from any change.
     fn supersede(&mut self, change: &Change) {
         let Touched::Rows(ids) = Touched::of(change) else {
             for held in self.held_mut() {
@@ -743,8 +744,16 @@ impl LogStore {
                 );
             }
             self.last_refusal = Some(refusal.reason.clone());
+            let mut held = f.held;
+            if held.clear {
+                // A purge the writer gave up on is the rows it took out from here on, never every
+                // row again: a contact logged after it may land before it is sent again, and it
+                // is not one of them ([`Self::resend`]). A plan reads that contact as the store
+                // holds it, not as gone.
+                Arc::make_mut(&mut held).clear = false;
+            }
             self.dropped.push(Dropped {
-                held: f.held,
+                held,
                 rev: f.ticket.revision(),
                 refusal,
                 resends: f.resends,
@@ -769,6 +778,14 @@ impl LogStore {
     /// writes back a row older than one the store already has. What is left may be nothing at
     /// all, and it is sent anyway: its landing is what tells the writer the revision it lost is
     /// no longer missing.
+    ///
+    /// ⚠️ **A purge is sent again as the rows it took out, never as "every row"** — the same
+    /// promise, for the one change whose first send is not its rows: that send drops every row
+    /// in one statement. Once the writer has given it up it is the rows it took out
+    /// ([`Self::collect`]), and a re-send takes out those and no other. A contact logged after
+    /// the purge, which may have landed while the purge waited and which "every row" would take
+    /// with it, is not one of them; nor is a row another window committed that this one never
+    /// saw. A purge that did not happen never takes a contact it did not know.
     pub(crate) fn resend(&mut self, marks: Watermarks, all: bool, now: Instant) -> usize {
         self.collect(now);
         let (go, stay): (Vec<Dropped>, Vec<Dropped>) = std::mem::take(&mut self.dropped)
@@ -1341,11 +1358,14 @@ struct Dropped {
 
 /// One change's rows, as this process holds them until the store does: what it purged, removed
 /// and wrote. Each written row is the row AS IT STOOD after the change — state, never a delta —
-/// which is what lets it be read in the store's place, and sent again, safely.
+/// which is what lets it be read in the store's place, and sent again, safely. A purge's
+/// `remove` is the rows it took out, by id: while it is on its way its `clear` answers for every
+/// row, and once the writer has given it up the list is all it holds ([`LogStore::collect`]). A
+/// set, since a purge's list is the whole log and a plan asks it of every row it reads.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Held {
     clear: bool,
-    remove: Vec<RecordId>,
+    remove: std::collections::HashSet<RecordId>,
     upsert: Vec<sqlite::RowWrite>,
 }
 
@@ -1353,7 +1373,7 @@ impl Held {
     fn of(change: &Change) -> Held {
         Held {
             clear: change.clear,
-            remove: change.remove.clone(),
+            remove: change.remove.iter().copied().collect(),
             upsert: change.upsert.clone(),
         }
     }
@@ -1363,13 +1383,13 @@ impl Held {
         if self.clear {
             return Touched::All;
         }
-        let mut ids = self.remove.clone();
+        let mut ids: Vec<RecordId> = self.remove.iter().copied().collect();
         ids.extend(self.upsert.iter().filter_map(|w| w.rec.id));
         Touched::Rows(ids)
     }
 
     fn touches(&self, ids: &std::collections::HashSet<RecordId>) -> bool {
-        self.remove.iter().any(|id| ids.contains(id))
+        ids.iter().any(|id| self.remove.contains(id))
             || self
                 .upsert
                 .iter()
@@ -1378,7 +1398,9 @@ impl Held {
 
     /// Let go of `ids`: a later change carries them.
     fn release(&mut self, ids: &std::collections::HashSet<RecordId>) {
-        self.remove.retain(|id| !ids.contains(id));
+        for id in ids {
+            self.remove.remove(id);
+        }
         self.upsert
             .retain(|w| w.rec.id.is_none_or(|id| !ids.contains(&id)));
     }
@@ -1393,7 +1415,7 @@ impl Held {
                 writer::Priority::Interactive
             },
             clear: self.clear,
-            remove: self.remove.clone(),
+            remove: self.remove.iter().copied().collect(),
             upsert: self.upsert.clone(),
             marks,
             meta: Vec::new(),
@@ -1414,16 +1436,22 @@ impl Held {
 /// for sending again — as a plan reads them ([`LogStore::pending`], SPEC-2 v3 C19). A plan reads
 /// a row from the store; if one of these says something of it, that is the row as this process
 /// knows it, whatever the store holds, because the store has not taken it yet (or never will
-/// on its own). Each row is held by one change at most — a later change takes it over — so
-/// the answer does not depend on the order they are asked in.
+/// on its own). A later change takes a row over from an earlier one ([`LogStore::supersede`]),
+/// so a row is held by one change at most, with one exception: a purge on its way says EVERY row
+/// is gone, since its first send drops every row, so a row written after it is held by two —
+/// the purge, and the change that wrote it. The newer is the row ([`Self::row`]). Once the writer
+/// has given the purge up, it is the rows it took out, like any other change
+/// ([`LogStore::collect`]).
 #[derive(Debug, Clone, Default)]
 pub struct Pending(Vec<(u64, Arc<Held>)>);
 
 impl Pending {
     /// What this process's changes the store may not hold say of the row `id`: `Some(Some(row))`
-    /// the row as they left it, `Some(None)` gone, `None` nothing — the store's row stands.
+    /// the row as they left it, `Some(None)` gone, `None` nothing — the store's row stands. The
+    /// newest change that says something of it answers: a contact logged after a purge still on
+    /// its way is there, not gone.
     pub fn row(&self, id: RecordId) -> Option<Option<Arc<QsoRecord>>> {
-        self.0.iter().find_map(|(_, h)| h.says(id))
+        self.0.iter().rev().find_map(|(_, h)| h.says(id))
     }
 
     /// Every row these changes wrote that `keep` accepts, in the order the changes were made.
