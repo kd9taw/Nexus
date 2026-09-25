@@ -22699,6 +22699,16 @@ contact yourself."
         self.station.on_log_file()
     }
 
+    /// The launch's engine, from its creation until the launch attaches the operator's log: its
+    /// store is an empty placeholder the attach replaces (SPEC-2 v3 C19), and a change sent to it
+    /// would be lost with it. In a debug build none may be — one is a panic that names it; a
+    /// release build checks nothing. The attach, and the 1.13 path, replace the placeholder.
+    pub fn refuse_log_changes_until_attached(&mut self) {
+        if let Some(store) = self.station.store.as_mut() {
+            store.placeholder_until_attached();
+        }
+    }
+
     /// Take the store away (its lane makes what it still owes `log.adi` one last try as it
     /// goes): from here on the session is the last resort, with no store at all and `log.adi`
     /// written by 1.13's own code — the oracle a test holds the 1.13 path to.

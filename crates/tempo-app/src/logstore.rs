@@ -92,6 +92,10 @@ pub struct LogStore {
     /// Tickets being collected for a command that will wait on them (see
     /// [`crate::engine::Engine::with_log_tickets`]).
     collector: Option<Vec<Ticket>>,
+    /// The launch's placeholder: the empty store in memory its engine holds until the attach
+    /// replaces it with the operator's log ([`Self::placeholder_until_attached`]). No change may
+    /// reach it.
+    placeholder: bool,
 }
 
 impl std::fmt::Debug for LogStore {
@@ -422,6 +426,7 @@ fn open_reporting_with(
             last_refusal: None,
             synced_foreign,
             collector: None,
+            placeholder: false,
         },
         records,
         foreign,
@@ -450,6 +455,7 @@ impl LogStore {
             last_refusal: None,
             synced_foreign,
             collector: None,
+            placeholder: false,
         })
     }
 
@@ -508,7 +514,16 @@ impl LogStore {
             last_refusal: None,
             synced_foreign,
             collector: None,
+            placeholder: false,
         })
+    }
+
+    /// Make this the launch's placeholder: the store the launch's engine holds until the attach
+    /// replaces it with the operator's log (the database, or on the 1.13 path `log.adi` loaded
+    /// into memory). A change sent to it would be lost with it, so in a debug build none may be:
+    /// one is a panic that names it. A release build checks nothing.
+    pub(crate) fn placeholder_until_attached(&mut self) {
+        self.placeholder = true;
     }
 
     /// The lane that keeps `log.adi` on the 1.13 path, if this store is that session's.
@@ -615,6 +630,11 @@ impl LogStore {
 
     /// [`Self::send`], telling the 1.13 path's lane what the change asks of `log.adi`.
     fn send_as(&mut self, change: Change, resends: u32, to_file: ToFile) -> Ticket {
+        debug_assert!(
+            !self.placeholder,
+            "a change reached the launch's placeholder log before the launch attached the \
+             operator's: the attach replaces it, and the change would be lost with it"
+        );
         let touched = Touched::of(&change);
         let ticket = self.writer.submit(change);
         self.inflight.push(InFlight {
@@ -3562,6 +3582,42 @@ pub(crate) mod tests {
                 let file = String::from_utf8_lossy(&std::fs::read(d.log()).unwrap()).into_owned();
                 assert!(!file.contains("W9EARLY"), "nor is it in log.adi ({what})");
             }
+        }
+    }
+
+    /// ★ POSITIVE CONTROL for the launch's guard: a change sent to the launch's engine before the
+    /// attach — which would be lost with the placeholder the attach replaces — is a panic in a
+    /// debug build, naming it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "a change reached the launch's placeholder log before the launch attached"
+    )]
+    fn a_change_before_the_launch_attaches_the_log_is_refused_in_a_debug_build() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.refuse_log_changes_until_attached();
+        e.log_qso(qso("W9EARLY", 1_788_300_000));
+    }
+
+    /// The attach, and the 1.13 path, replace the launch's placeholder: its engine then logs as
+    /// any does, into the operator's log. Reading the placeholder before (the launch seeds the
+    /// decoder's hash table from it) is no change, and is allowed.
+    #[test]
+    fn the_attach_and_the_1_13_path_replace_the_launchs_placeholder() {
+        for on_file in [false, true] {
+            let d = Dir::new(&format!("placeholder-{on_file}"));
+            std::fs::write(d.log(), legacy_log(3)).unwrap();
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.refuse_log_changes_until_attached();
+            assert_eq!(e.log_rows().count().expect("reads").0, 0, "a read");
+            if on_file {
+                e.set_log_path(d.log());
+            } else {
+                e.attach_log_store(open_fast(&d));
+            }
+            e.log_qso(qso("W9LATE", 1_788_300_000));
+            flush(&e);
+            assert_eq!(e.log_records().len(), 4, "on_file {on_file}");
         }
     }
 

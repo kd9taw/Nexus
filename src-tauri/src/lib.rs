@@ -3482,7 +3482,11 @@ mod logbook_startup_tests {
     /// - no command reaches the engine before the attach: the main window waits on a page that
     ///   runs nothing (pinned in `the_main_window_is_shown_only_once_the_log_is_attached`), the
     ///   pop-outs open only by its command, and the splash is granted no command and invokes
-    ///   none.
+    ///   none;
+    /// - and at run time, the launch's engine refuses a change from the moment it is made until
+    ///   the attach (`Engine::refuse_log_changes_until_attached`): a debug build — every test run
+    ///   and CI's end-to-end launch — panics on one, naming it, so a writer added out of order
+    ///   anywhere, however indirectly, is found rather than lost.
     ///
     /// Source-scanned, like the launch tests beside it: what is under test is the order the
     /// launch calls things in.
@@ -3537,10 +3541,22 @@ mod logbook_startup_tests {
         ] {
             assert!(second_half < at(finish, w), "`{w}` starts after the attach");
         }
-        for (name, body) in [
-            ("run", body_of(src, "pub fn run() {")),
-            ("build_app", body_of(src, "fn build_app(")),
-        ] {
+        let run = body_of(src, "pub fn run() {");
+        let made = at(run, "let mut launched = Engine::with_settings(settings);");
+        let refused = at(run, "launched.refuse_log_changes_until_attached();");
+        assert!(
+            made < refused
+                && run[made..refused]
+                    .lines()
+                    .skip(1)
+                    .all(|l| l.trim().is_empty() || l.trim_start().starts_with("//")),
+            "the launch's engine refuses a change from the moment it is made"
+        );
+        assert!(
+            refused < at(run, "Arc::new(Mutex::new(launched))"),
+            "before anything else can reach it"
+        );
+        for (name, body) in [("run", run), ("build_app", body_of(src, "fn build_app("))] {
             for w in writers {
                 assert!(
                     !body.contains(w),
@@ -3560,6 +3576,70 @@ mod logbook_startup_tests {
             !splash.contains("invoke") && !splash.contains("__TAURI"),
             "and the splash invokes none"
         );
+    }
+
+    /// ★ THE LAUNCH WINDOW, WHAT IF (SPEC-2 v3 C19). A contact written between the engine's creation
+    /// and the attach — which the order above rules out, and a debug build refuses — would be in
+    /// no log afterwards: not in the log the attach hands the session (in memory and in its
+    /// store), not in `log.adi`, and not at the next launch. On the database and on the 1.13 path
+    /// alike, through the launch's own calls, and as before C19, when the engine's log before the
+    /// attach was an empty log in memory with nowhere to write.
+    #[test]
+    fn a_contact_written_before_the_attach_would_be_in_no_log_after_it() {
+        for network in [None, Some("an NFS share".to_string())] {
+            let path = if network.is_some() {
+                "the 1.13 path"
+            } else {
+                "the database"
+            };
+            let dir = folder(&format!("window-{}", network.is_some()), Some(3));
+            let log = dir.join("log.adi");
+            let opened = open_logbook_store(&log, network.clone(), &mut |_| {});
+            // Not refused: this is the case the order and the refusal keep from happening.
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let early = {
+                let mut l = tempo_core::logbook::Logbook::new();
+                l.import_adif(
+                    "<CALL:7>W9EARLY<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901\
+                     <TIME_ON:6>140000<EOR>\n",
+                );
+                let mut r = tempo_core::logbook::QsoRecord::clone(&l.records()[0]);
+                r.id = None;
+                r
+            };
+            e.log_qso(early);
+            assert_eq!(
+                e.log_records().len(),
+                1,
+                "premise: written before the attach"
+            );
+            adopt_logbook(&mut e, &log, opened);
+            assert_eq!(e.log_on_file(), network.is_some(), "premise: {path}");
+            let held: Vec<String> = e.log_records().iter().map(|r| r.call.clone()).collect();
+            assert_eq!(held.len(), 3, "{path}: the operator's log, whole: {held:?}");
+            assert!(!held.contains(&"W9EARLY".to_string()), "{path}: {held:?}");
+            let mut stored = Vec::new();
+            e.log_rows()
+                .each_record(Duration::from_secs(60), &mut |r| {
+                    stored.push(r.call.clone());
+                    std::ops::ControlFlow::Continue(())
+                })
+                .expect("the store reads");
+            assert_eq!(stored, held, "{path}: nor in its store");
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+            let file = std::fs::read_to_string(&log).expect("log.adi");
+            assert!(!file.contains("W9EARLY"), "{path}: nor in log.adi");
+            drop(e);
+            let next = launch(&log, network.clone(), false);
+            assert_eq!(next.log_on_file(), network.is_some(), "premise: {path}");
+            let calls: Vec<&str> = next.log_records().iter().map(|r| &*r.call).collect();
+            assert_eq!(calls.len(), 3, "{path}: the next launch: {calls:?}");
+            assert!(
+                !calls.contains(&"W9EARLY"),
+                "{path}: nor at the next launch"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// ★ SPEC-2 v3 D2-A: the fill job starts once the main window is shown, and on a thread of
@@ -26661,7 +26741,11 @@ pub fn run() {
     // profile. That is harmless only because nothing reads the registry and the cap forbids a
     // second chain — and re-registering chains when the radio set changes is the first thing the
     // cap-lift has to solve. It is not papered over here, where it would be untestable.
-    let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    let mut launched = Engine::with_settings(settings);
+    // Until `start_on_the_logbook` attaches the operator's log, the engine's log is a placeholder
+    // the attach replaces: a change reaching it would be lost, so a debug build refuses one.
+    launched.refuse_log_changes_until_attached();
+    let engine: SharedEngine = Arc::new(Mutex::new(launched));
     #[cfg(feature = "radio")]
     {
         let host_engine = engine.clone();
