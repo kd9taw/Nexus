@@ -285,6 +285,17 @@ struct Fixture {
     engine: crate::SharedEngine,
     connection: u64,
     dir: std::path::PathBuf,
+    /// Declared last, so dropped last: the folder goes once the engine has, and with it every
+    /// thread of the engine's that writes the log there (the 1.13 path's `log.adi` lane, the
+    /// store's mirror), each joined after its last try at what it still owed.
+    _folder: Folder,
+}
+/// A fixture's folder, removed when it is dropped.
+struct Folder(std::path::PathBuf);
+impl Drop for Folder {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
 }
 impl Fixture {
     fn new() -> Self {
@@ -304,6 +315,7 @@ impl Fixture {
             authority,
             engine: Arc::new(Mutex::new(engine)),
             connection,
+            _folder: Folder(dir.clone()),
             dir,
         }
     }
@@ -352,10 +364,63 @@ impl Fixture {
         serde_json::from_value(json!({"type":"logManual","requestId":id(),"stationBootId":state["stationBootId"],"leaseId":state["leaseId"],"expectedRevision":state["revision"],"commandWindowId":state["commandWindowId"],"clientSequence":state["nextSequence"],"record":{"call":"W1AW","grid":"FN31","country":null,"state":"CT","band":"20m","freqMhz":14.25,"mode":"SSB","rstSent":"59","rstRcvd":"57","name":"Joe","qth":"Newington","comment":"Remote test","notes":"Keep this note","whenUnix":super::super::now_ms()/1000,"confirmed":false,"awardConfirmed":false}})).unwrap()
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.dir).unwrap();
-    }
+/// ★ THE FOLDER GOES LAST. Since SPEC-2 v3 C19 (D1-A) a session on the 1.13 path writes its
+/// `log.adi` a moment after each change, on a thread of its own (the log's lane), and the lane
+/// makes what it still owes one last try as the engine goes: the engine's drop returns once it
+/// has. A fixture that removed its folder while its engine lived raced that lane: a write landing
+/// during the removal failed it (directory not empty), and one landing after it made the folder
+/// again. Here the lane still owes a write when the fixture goes (the folder refuses the new
+/// `contacts.adi`), and the folder is gone once the fixture is, and stays gone. The control:
+/// once the folder takes the file, the engine's own drop writes it before it returns.
+#[cfg(unix)]
+#[test]
+fn the_fixtures_folder_goes_after_its_engine_and_the_logs_lane() {
+    use std::os::unix::fs::PermissionsExt;
+    let refuse_new_files = |dir: &std::path::Path, refuse: bool| {
+        let mode = if refuse { 0o500 } else { 0o700 };
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let owing = || {
+        let f = Fixture::new();
+        refuse_new_files(&f.dir, true);
+        f.engine.lock().unwrap().import_adif(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>",
+        );
+        assert!(
+            f.engine
+                .lock()
+                .unwrap()
+                .flush_log_store(Duration::from_millis(200))
+                .is_err(),
+            "premise: log.adi is still owed the contact"
+        );
+        f
+    };
+
+    let f = owing();
+    refuse_new_files(&f.dir, false);
+    let Fixture {
+        engine,
+        dir,
+        _folder: folder,
+        ..
+    } = f;
+    assert_eq!(Arc::strong_count(&engine), 1, "premise: the only handle");
+    drop(engine);
+    assert_eq!(
+        tempo_core::logbook::Logbook::load(&dir.join("contacts.adi")).len(),
+        1,
+        "control: the engine's drop wrote what log.adi was owed"
+    );
+    drop(folder);
+
+    let f = owing();
+    let dir = f.dir.clone();
+    drop(f);
+    assert!(
+        !dir.exists(),
+        "the folder is gone, and nothing made it again"
+    );
 }
 
 fn control_state(f: &Fixture, now: Instant) -> Value {

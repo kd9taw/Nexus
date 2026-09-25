@@ -273,6 +273,39 @@ pub(in crate::remote_service) fn settle(e: &crate::SharedEngine) {
         .expect("written");
 }
 
+/// Changes to the log made as a command makes them, each planned with the Engine lock released
+/// and made under it ([`tempo_app::logwrite::change_ops`]), in order, on a thread of their own,
+/// started from inside a read of the log (a test's seam hook, holding no Engine guard). It returns
+/// once the FIRST is made, with the thread, which answers whether each was.
+///
+/// ⚠️ On a store in memory, a test makes more than one change during a read only this way. SQLite's
+/// `memdb` has no WAL: an open read holds off every commit until it ends, and a commit waiting for
+/// its turn holds off every read that begins meanwhile, a change's plan among them. So a second
+/// change made on the reading thread plans behind a commit that waits for that thread's own read,
+/// a wait only the store's 5 s busy timeout ends. A command makes its changes on a thread of its
+/// own, and so do these: the first while the read runs, the next once the one before it has
+/// committed, after the read.
+pub(in crate::remote_service) fn changed_by_a_command(
+    engine: &crate::SharedEngine,
+    changes: Vec<(tempo_core::logbook::RecordId, tempo_core::logbook::LogOp)>,
+) -> std::thread::JoinHandle<Vec<bool>> {
+    let (first, first_made) = std::sync::mpsc::channel();
+    let engine = Arc::clone(engine);
+    let changing = std::thread::spawn(move || {
+        changes
+            .into_iter()
+            .map(|(id, op)| {
+                let (made, _) =
+                    tempo_app::logwrite::change_ops(&engine, id, None, &[op], "a test's change");
+                let _ = first.send(());
+                matches!(made, Ok(Ok(_)))
+            })
+            .collect()
+    });
+    let _ = first_made.recv();
+    changing
+}
+
 /// The contact at `at` in log order, as the log in memory holds it.
 pub(in crate::remote_service) fn record_at(e: &Engine, at: usize) -> QsoRecord {
     QsoRecord::clone(&e.log_records()[at])
