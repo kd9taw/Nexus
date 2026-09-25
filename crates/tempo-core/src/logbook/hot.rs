@@ -31,14 +31,16 @@
 //!
 //! Two other ways in, and neither is a change:
 //!
-//! - **A build** — a log loaded or replaced, a resolver changed: a pass over the whole log,
-//!   counted by `LOG_SWEEPS` and, in debug builds, by [`HOT_REBUILDS`], so a test can pin where it
-//!   may and may not happen.
-//! - **A catch-up** ([`HotIndex::catch_up`]) — for a write that reached the in-memory log without
-//!   being followed (a test's, made around the station): a write no index reads moves the index
-//!   on, appends are put in as a change's are, and anything else is a build. It goes with the
-//!   in-memory log (SPEC-2 v3 C19). Debug builds count it ([`HOT_CATCH_UPS`]), so a test can pin
-//!   that no write the station makes needs it.
+//! - **A build** — a log loaded or attached, a resolver changed, another window's changes taken
+//!   in: a pass over the whole log — from the store ([`HotIndex::from_store`]) or from rows in
+//!   hand ([`HotIndex::from_rows`]) — counted, in debug builds, by [`HOT_REBUILDS`], so a test
+//!   can pin where it may and may not happen.
+//! - **A catch-up** ([`HotIndex::catch_up`]) — for a write that reached a [`Logbook`] without
+//!   being followed: a write no index reads moves the index on, appends are put in as a change's
+//!   are, and anything else is a build. The station never takes one (SPEC-2 v3 C19): its index
+//!   holds the log as it holds it, and a debug build names a write that went around it. Kept for
+//!   the model's own tests until the log in memory goes; debug builds count it
+//!   ([`HOT_CATCH_UPS`]).
 //!
 //! # Order
 //!
@@ -345,8 +347,7 @@ pub type RowPair = (Option<Arc<QsoRecord>>, Option<Arc<QsoRecord>>);
 #[derive(Debug, Default)]
 pub struct HotIndex {
     /// The revision of the log the index holds; `None` until it is built, after
-    /// [`Self::invalidate`], and after a change it could not follow — the next catch-up builds
-    /// it.
+    /// [`Self::invalidate`], and after a change it could not follow — until it is built again.
     at: Option<u64>,
     /// How many rows it holds.
     rows: usize,
@@ -388,8 +389,9 @@ impl HotIndex {
         index
     }
 
-    /// Forget the log: the next catch-up rebuilds. For a change the index cannot follow row by
-    /// row — a new DXCC resolver re-keys every row's entity.
+    /// Forget the log: the index is built again whole — for the station, from the store, by
+    /// its freshness poll (SPEC-2 v3 C19). For an index a panic may have left half-changed, or
+    /// one that could not follow a change row by row.
     pub fn invalidate(&mut self) {
         self.at = None;
     }
@@ -566,10 +568,10 @@ impl HotIndex {
     /// rows it took out and put in, in log order ([`RowPair`]), and it took the log from revision
     /// `from` to revision `to`.
     ///
-    /// Applied only to the log they describe. An index already at `to` has the change (a
-    /// catch-up took it in first). One at neither `from` nor `to` holds some other state of the
-    /// log, which these pairs cannot bring up to date: it lets go of the log and is built again
-    /// at its next catch-up — as is one handed a row to take out that it does not hold.
+    /// Applied only to the log they describe. An index already at `to` has the change. One at
+    /// neither `from` nor `to` holds some other state of the log, which these pairs cannot bring
+    /// up to date: it lets go of the log, to be built again whole — as does one handed a row to
+    /// take out that it does not hold.
     pub fn follow(&mut self, pairs: &[RowPair], from: u64, to: u64, keys: &dyn HotKeys) {
         match self.at {
             Some(at) if at == to => return,

@@ -536,9 +536,9 @@ impl HotKeys for StationKeys<'_> {
     }
 }
 
-/// The hot index ([`tempo_core::logbook::hot`]), caught up with the log, held for as long as
-/// this lives — see [`StationCore::hot`]. Asked in the station's own terms: a band is the label
-/// as logged or dialled, keyed here the way the index was.
+/// The hot index ([`tempo_core::logbook::hot`]) — the index of the log as the station holds it —
+/// held for as long as this lives: see [`StationCore::hot`]. Asked in the station's own terms: a
+/// band is the label as logged or dialled, keyed here the way the index was.
 pub(crate) struct Hot<'a>(std::sync::MutexGuard<'a, HotIndex>);
 
 impl std::ops::Deref for Hot<'_> {
@@ -1866,7 +1866,7 @@ impl StationCore {
     /// ([`LogStore::fallback`]), so every reader of the log reads a store on either path. The
     /// store's lane keeps `log.adi` with 1.13's rules: a pure append appended, anything else
     /// rewritten whole, a change saved once it is in the file, and a file another machine
-    /// changed taken in before it is replaced ([`Self::take_in_log_file_changes`]).
+    /// changed taken in before it is replaced ([`crate::engine::sync_shared_log`]).
     ///
     /// Should the store not open even in memory, the session runs on `log.adi` exactly as 1.13
     /// did, with no store at all, and the diagnostic log says so.
@@ -1927,7 +1927,7 @@ impl StationCore {
     /// ([`crate::logfill`], [`Self::apply_log_fills`]) that runs again only when the resolvers'
     /// data changes. So this attach fills nothing and writes nothing, and memory, the store and
     /// every screen reading either hold the same rows. The one write an open itself can make is
-    /// taking in a `log.adi` the store cannot account for ([`Self::take_in_log_file`]) —
+    /// taking in a `log.adi` the store cannot account for ([`Self::take_in_at_attach`]) —
     /// contacts that are in no store at all.
     ///
     /// Hands back the rows a contest session restored at launch is swept from, when the open set
@@ -2849,10 +2849,9 @@ impl StationCore {
     /// ★ THE way a change to the log reaches the hot index (SPEC-2 v3 C19): `pairs`, the rows it
     /// took out and put in ([`RowPair`]), and `now`, the watermarks it left the log at, which the
     /// station keeps from here. Every change the station makes ends here — the append
-    /// ([`Self::append`]), every change it commits ([`Self::commit`]), and each change still made
-    /// on the log in memory and measured against a [`ChangeBase`] (a take-in of `log.adi`, the
-    /// 1.13 backfills, another window's reload: [`Self::persist_change`]) — so the index hears of
-    /// each as it is made, row by row. For those last, `now` is the log's watermarks after it.
+    /// ([`Self::append`]) and every change it commits ([`Self::commit`]) — so the index hears of
+    /// each as it is made, row by row. A purge is followed as one ([`Self::follow_purge`]), and
+    /// another window's changes by building the index again ([`Self::take_shared_log`]).
     #[allow(deprecated)] // SPEC-2 C19: a debug build checks the index against the in-memory log
     pub(crate) fn follow(&mut self, pairs: &[RowPair], now: Watermarks) {
         self.recent.note(now.revision, pairs);

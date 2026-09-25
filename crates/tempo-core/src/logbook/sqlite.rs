@@ -3917,9 +3917,9 @@ mod tests {
     /// the rows — and read one statement at a time, each statement saw the store as it stood
     /// when THAT statement began. A contact committed between the child tables and the rows came
     /// back without its children: its foreign tags and its upload stamps had been read before it
-    /// existed. The re-read after another window's commit (`LogStore::reload`) loads while this
-    /// process's own writer, or the other window's, may commit, and a contact read that way and
-    /// later written back from memory takes its tags and stamps out of the store for good.
+    /// existed. A load made while this process's own writer, or another window's, may commit,
+    /// whose contact is later written back from memory, takes that contact's tags and stamps out
+    /// of the store for good.
     ///
     /// The contact is committed through a second connection at exactly that point.
     #[test]

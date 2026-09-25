@@ -23,8 +23,8 @@
 //!   the session on `log.adi` exactly as 1.13 did, which is the one outcome that can never lose
 //!   a contact.
 //! - [`LogStore`]: the handles, the tickets a command is collecting, and this process's own
-//!   changes still on their way to disk — which is what lets a reload after ANOTHER process's
-//!   write keep them (see [`LogStore::reload`]).
+//!   changes still on their way to disk — which a plan reads in place of the store's rows
+//!   ([`Pending`]), and which another window's commits never take away.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
