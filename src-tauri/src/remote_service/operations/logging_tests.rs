@@ -322,6 +322,9 @@ const SEED: &str = "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<QSO_DATE:8>
 fn seed(f: &Fixture) {
     f.engine.lock().unwrap().import_adif(SEED);
     assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
+    // In the file, as 1.13's import had written it before it returned: on the 1.13 path the
+    // file is written on its own lane since SPEC-2 v3 C19 (D1-A).
+    let _ = written(f);
 }
 
 /// The rows exactly as the browser's log page receives them.
@@ -548,7 +551,7 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
         local.comment = Some("changed at the shack".into());
         assert!(e.update_qso(local.id.unwrap(), local));
     }
-    let bytes = adif(&f);
+    let bytes = written(&f);
     for kind in [
         edit(&stale),
         json!({"kind":"delete","target":target(&stale)}),
@@ -593,7 +596,7 @@ fn a_delete_is_idempotent_across_a_dropped_response_and_never_reaches_a_later_co
     assert!(!String::from_utf8_lossy(&adif(&f)).contains("W1AW"));
     // The same contact logged again later is a new row; replaying the old delete cannot touch it.
     f.engine.lock().unwrap().import_adif(SEED);
-    let bytes = adif(&f);
+    let bytes = written(&f);
     assert_eq!(run(&f, &delete).unwrap(), result);
     assert_eq!(f.engine.lock().unwrap().log_records().len(), 2);
     assert_eq!(adif(&f), bytes);
@@ -648,6 +651,7 @@ fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
     std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o555)).unwrap();
     let probe = std::fs::write(f.dir.join("probe"), b"x").is_err();
     let result = run(&f, &request);
+    let untouched = adif(&f) == bytes;
     std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     if !probe {
         // The write went through DESPITE 0o555, so this process is root (or holds
@@ -686,7 +690,18 @@ fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
     let result = result.unwrap();
     assert_eq!(result["outcome"], "unknown");
     assert_eq!(result["reason"], "persistenceUnconfirmed");
-    assert_eq!(adif(&f), bytes);
+    assert!(
+        untouched,
+        "the file is as it was while the folder refuses it"
+    );
+    // The edit is the log's all the same, and on the 1.13 path its lane writes it once the
+    // folder takes it — where 1.13 wrote it with its next save.
+    f.engine
+        .lock()
+        .unwrap()
+        .flush_log_store(std::time::Duration::from_secs(60))
+        .expect("written once the folder takes it");
+    assert_ne!(adif(&f), bytes, "and then the file holds the edit");
 }
 
 #[test]
@@ -1916,8 +1931,9 @@ fn station_1_14_on(store: bool) -> Fixture {
 }
 
 /// What the log's file holds once everything submitted is written — the store's writer and its
-/// `log.adi` mirror flushed (nothing to flush on the 1.13 path) — so a comparison of the file
-/// is not a race with the mirror, and the fixture's folder can go.
+/// `log.adi` mirror flushed, or on the 1.13 path the lane that writes `log.adi` (SPEC-2 v3 C19,
+/// D1-A) — so a comparison of the file is not a race with either, and the fixture's folder can
+/// go.
 fn written(f: &Fixture) -> Vec<u8> {
     f.engine
         .lock()

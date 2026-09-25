@@ -8,9 +8,10 @@
 //! whole-file `log.adi` rewrite that the logbook database exists to remove, and the runtime
 //! starvation behind #335's frozen waterfall. The store keeps two promises about it:
 //!
-//! 1. **Its writes run on the log lanes** — the database writer's thread (`nexus-logdb`) and the
-//!    `log.adi` mirror's (`nexus-log-mirror`). Neither can take the Engine lock: this crate cannot
-//!    name the Engine. [`on_log_lane`] asserts it.
+//! 1. **Its writes run on the log lanes** — the database writer's thread (`nexus-logdb`), the
+//!    `log.adi` mirror's (`nexus-log-mirror`) and, on the 1.13 path, the `log.adi` lane's
+//!    (`nexus-log-file`). None can take the Engine lock: this crate cannot name the Engine.
+//!    [`on_log_lane`] asserts it.
 //! 2. **Everything else it does on the disk, and every wait for the lanes, runs with no Engine
 //!    lock held on the thread doing it** — opening and converting the store (before the engine
 //!    is locked at launch), and a command waiting for its own change to commit (after it has
@@ -71,8 +72,12 @@
 //!   publishes the same file by a rename checked against the hold under that lock, and a write
 //!   still queued on another thread could land after it; and `settings.json`. Neither is the
 //!   logbook store;
-//! - everything on the 1.13 path, which runs the session on `log.adi` itself when the store
-//!   could not be opened: its loads, appends and whole-file saves are under the lock by design.
+//! - the 1.13 path's reads of `log.adi` — the launch's load of it into a store in memory, and
+//!   the station taking in a file another machine changed — under the lock by design, as 1.13's
+//!   were. Its writes are not: since SPEC-2 v3 C19 (D1-A) its appends and rewrites run on the
+//!   `log.adi` lane ([`on_log_lane`]), and a wait for them is fenced ([`off_engine_lock`]). A
+//!   session with no store at all — the last resort, when not even one in memory can be made —
+//!   loads, appends and saves as 1.13 did, under the lock.
 //!
 //! The primitives underneath (`LogDb`, `Logbook::save`, the ring's own functions) are shared
 //! with those paths and with the tests that drive them directly, so the fence stands at the
