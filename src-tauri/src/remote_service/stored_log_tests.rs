@@ -18,11 +18,14 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tempo_app::logstore::{Freshness, LogRows};
+    use tempo_core::logbook::sqlite::LogDb;
+    use tempo_core::logbook::{adif_record_own_log, Logbook, QsoRecord};
 
-    /// On the store and on the 1.13 path, the read is the log in memory — every record, whole,
-    /// in log order — including a contact logged a moment before it is asked (P4).
+    /// On the store and on the 1.13 path, the read is the log — every record, whole, in log order —
+    /// including a contact logged a moment before it is asked (P4): as the database holds it, read
+    /// on a connection of its own, and on the 1.13 path as `log.adi`, the log's home there, holds it.
     #[test]
-    fn the_stored_log_is_the_log_in_memory_on_both_paths() {
+    fn the_stored_log_is_the_log_on_both_paths() {
         let text = synthetic_log(400, 0x0C19_D0A1);
         let d = Dir::new("stored-log");
         std::fs::write(d.log(), &text).unwrap();
@@ -33,17 +36,31 @@ mod tests {
             e.lock().unwrap().log_qso(parse_one(
                 "<CALL:5>ZD7AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260829<TIME_ON:6>030000<EOR>",
             ));
-            let eng = e.lock().unwrap();
-            let stored = eng.stored_log();
-            // The copy this read replaces, as its oracle while the copy still exists.
-            let held = eng.log_records().to_vec();
-            assert_eq!(stored, held, "{arm}");
+            let stored = e.lock().unwrap().stored_log();
             assert!(
                 stored.iter().any(|r| r.call == "ZD7AA"),
                 "{arm}: logged just now"
             );
-            drop(eng);
             settle(&e);
+            let on_disk: Vec<QsoRecord> = if e.lock().unwrap().log_on_file() {
+                Logbook::load(&d.memory_log())
+                    .records()
+                    .iter()
+                    .map(|r| QsoRecord::clone(r))
+                    .collect()
+            } else {
+                LogDb::open(&d.db())
+                    .and_then(|db| db.load_all())
+                    .expect("the database reads")
+            };
+            let own = |rows: &mut dyn Iterator<Item = &QsoRecord>| -> Vec<String> {
+                rows.map(adif_record_own_log).collect()
+            };
+            assert_eq!(
+                own(&mut stored.iter().map(|r| r.as_ref())),
+                own(&mut on_disk.iter()),
+                "{arm}: every record, whole, in log order"
+            );
         }
     }
 

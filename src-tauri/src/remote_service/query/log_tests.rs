@@ -37,7 +37,7 @@ impl Dir {
         self.0.join("log.sqlite3")
     }
     /// The `log.adi` of a session on the 1.13 path ([`memory`]), beside the store's own.
-    pub(super) fn memory_log(&self) -> std::path::PathBuf {
+    pub(in crate::remote_service) fn memory_log(&self) -> std::path::PathBuf {
         self.0.join("memory.adi")
     }
 }
