@@ -136,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **Big logbooks no longer weigh on every window.** Each window now asks Nexus for just the contacts
+  it shows instead of holding its own copy of the whole log. With 150,000 contacts that is about
+  5 MB of a window's memory instead of 67 MB (6 MB instead of 208 MB at 500,000), the Logbook
+  opens in a quarter of a second instead of over two, and recording an upload no longer sends the
+  whole log (112 MB at 150,000 contacts) to every open window again.
+
 - **Sorting, searching or filtering the Logbook now takes you back to the first contact.** The list
   used to stay at the same scroll depth, showing whatever contacts had landed there in the new
   order. A contact logged while you are scrolled down still leaves the rows you are looking at
@@ -214,6 +220,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have renamed, which is why it only ever warns.
 
 ### Fixed
+
+- **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
+  deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
+  eQSL buttons could upload or push the neighbouring contact instead.
+
+- **The Logbook no longer overwrites a change made elsewhere.** If a contact was edited or deleted
+  in another window (or by a sync) before your edit, QSL mark, satellite tag or delete reached it,
+  nothing is changed, Nexus tells you so, and the Logbook shows the contact as it is now.
 
 - **The Logbook no longer slides contacts out from under the pointer when the log changes.** With
   the list scrolled down, a contact the FT sequencer logged went in above everything on screen and
