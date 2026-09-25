@@ -24,6 +24,9 @@ pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
 pub mod remote_transmit;
+// Debug builds only, like the station's parity tests: they read the debug build's counters.
+#[cfg(all(test, debug_assertions))]
+mod session_tests;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -22600,11 +22603,64 @@ contact yourself."
     }
 
     /// Make the store the owner of the log — the ordinary launch. See
-    /// [`StationCore::attach_store`] and [`crate::logstore`].
-    pub fn attach_log_store(&mut self, opened: crate::logstore::Opened) {
-        self.station.attach_store(opened);
+    /// [`StationCore::attach_store`] and [`crate::logstore`]. Hands back the rows a contest
+    /// session restored at launch is swept from, when the open set them aside
+    /// ([`Self::open_session_from`]).
+    pub fn attach_log_store(
+        &mut self,
+        opened: crate::logstore::Opened,
+    ) -> Option<crate::logstore::SessionRows> {
+        let rows = self.station.attach_store(opened);
         // A fresh log, whose ids start without the position id — as after `set_log_path`.
         self.sync_log_posid();
+        rows
+    }
+
+    /// Whether switching to `spec` opens a contest session: a Field Day mode entered from any
+    /// other mode, where [`Self::set_mode`] builds the session anew. A switch between Field Day
+    /// modes keeps the session that is open, and every other switch opens none.
+    pub fn mode_opens_session(&self, spec: &str) -> bool {
+        spec.starts_with("fieldday") && !matches!(self.mode, Mode::FieldDay { .. })
+    }
+
+    /// The read a command that opens a contest session makes BEFORE it takes the Engine lock to
+    /// open it (SPEC-2 v3 C19; see [`with_session_rows`]): the log's rows from the earliest time
+    /// the session can start, read from the store off the lock. Taken here, under the lock; no
+    /// I/O. `None` without a store (the 1.13 path), or while the store is missing a change this
+    /// window holds.
+    pub fn session_read(&self) -> Option<crate::logstore::SessionRead> {
+        let bound = now_unix_secs().saturating_sub(SESSION_READ_WINDOW);
+        self.station
+            .store
+            .as_ref()?
+            .session_read(bound, self.station.marks())
+    }
+
+    /// Whether `rows` are still this window's log from their bound on: read exactly, and the log
+    /// unchanged since.
+    pub fn session_rows_current(&self, rows: &crate::logstore::SessionRows) -> bool {
+        rows.exact && rows.marks == self.station.marks()
+    }
+
+    /// Build the open contest session's dupe sweep from `rows`, right after the command that
+    /// opened it — under the same hold of the lock — when they are still the log's rows and cover
+    /// the session from its start. Whether it did: when not, the session's first snapshot sweeps
+    /// the log itself, as it always has.
+    pub fn open_session_from(&mut self, rows: crate::logstore::SessionRows) -> bool {
+        if !self.session_rows_current(&rows) {
+            return false;
+        }
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return false;
+        };
+        let (cutoff, rule) = (station.log.session.start_unix, station.log.dupe_rule());
+        // A session that starts before the rows do (a clock stepped back more than the read's
+        // margin) is swept from the log by its first snapshot instead.
+        if cutoff < rows.bound {
+            return false;
+        }
+        self.station.install_session(cutoff, rule, &rows.rows);
+        true
     }
 
     /// Record why the store could not be opened this session: the log runs on `log.adi` as
@@ -22764,6 +22820,17 @@ contact yourself."
         resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_dxcc_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_dxcc_resolver_shared`].
+    pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<crate::station::DxccResolve>) {
+        self.station.set_dxcc_resolver_shared(resolve)
+    }
+
+    /// The station, for a test in another module that asks it directly.
+    #[cfg(test)]
+    pub(crate) fn station(&self) -> &StationCore {
+        &self.station
     }
 
     /// See [`StationCore::set_state_resolver`].
@@ -23379,6 +23446,63 @@ fn report_in(msg: Option<Msg>) -> Option<i32> {
         Some(Msg::Report { snr, .. }) | Some(Msg::RReport { snr, .. }) => Some(snr),
         _ => None,
     }
+}
+
+/// How far back a contest session's rows are read before the command that opens it
+/// ([`Engine::session_read`]). A new session starts now, or at its oldest contact restored from
+/// the Field Day journal if that is earlier — and the journal gives back only the last four
+/// days ([`Engine::set_mode`] merges it from `now - 4 days`). So four days reach every row a
+/// session can hold, and the hour on top absorbs a clock step between the read and the switch.
+/// A test pins the journal's window to this one.
+pub const SESSION_READ_WINDOW: u64 = 4 * 86_400 + 3_600;
+
+/// Run `then` under the Engine lock with the rows a contest session's dupe sweep is built from,
+/// read BEFORE the lock is taken when `opens` says `then` opens a session (SPEC-2 v3 C19). The
+/// operator's pick: the command waits until the sweep is ready, so no snapshot ever sees the
+/// session without it, and the sweep is never made under the lock.
+///
+/// The rows are read off the lock ([`crate::logstore::SessionRead::read`]), the lock is taken,
+/// the rows are checked to be still the log's, and `then` runs in that same hold — `then` opens
+/// the session and hands the rows to [`Engine::open_session_from`]. A log that changed in
+/// between is read again, another window's commits taken in first, up to three times. After
+/// that, or at once when the store does not answer in time, `then` runs without rows, and the
+/// session's first snapshot sweeps the log itself, as it always has.
+///
+/// A command that opens no session reads nothing: `then` runs at once, in the first hold.
+pub fn with_session_rows<T>(
+    engine: &std::sync::Mutex<Engine>,
+    opens: impl Fn(&Engine) -> bool,
+    then: impl FnOnce(&mut Engine, Option<crate::logstore::SessionRows>) -> T,
+) -> T {
+    const TRIES: usize = 3;
+    for _ in 0..TRIES {
+        let read = {
+            let mut eng = engine_lock(engine);
+            if !opens(&eng) {
+                return then(&mut eng, None);
+            }
+            match eng.session_read() {
+                Some(read) => read,
+                None => return then(&mut eng, None),
+            }
+        };
+        let rows = read.read();
+        let mut eng = engine_lock(engine);
+        if !opens(&eng) {
+            return then(&mut eng, None);
+        }
+        if eng.session_rows_current(&rows) {
+            return then(&mut eng, Some(rows));
+        }
+        // A store too busy to answer in time is not asked again.
+        if !rows.ready {
+            return then(&mut eng, None);
+        }
+        // What changed may be another window's commits the read saw: taken in before the next.
+        eng.sync_shared_log_if_changed();
+    }
+    let mut eng = engine_lock(engine);
+    then(&mut eng, None)
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
