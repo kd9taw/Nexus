@@ -78,6 +78,15 @@ pub const SCHEMA_VERSION: i64 = 1;
 /// real wait in milliseconds; this is the ceiling, not the expectation.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// How long a READ of a store in memory ([`LogDb::memory_name`]) waits for the write lock. Such
+/// a store has no WAL: a commit waits for every read open on it, and while it waits, a read that
+/// begins waits for the commit — a change's plan made just after another change, say. So that
+/// read waits out the one before it, however long, as an edit on the 1.13 path never failed
+/// because a read was running: a read always ends. The bound is only so a read left open by a
+/// defect is an error, not a hang. A file store's reads never wait for its writer (WAL) and keep
+/// [`BUSY_TIMEOUT_MS`].
+const MEMORY_READ_WAIT_MS: u32 = 60_000;
+
 /// Turn SQLite's memory statistics off, once, before this process opens its first connection —
 /// SQLite's own recommended setting (`SQLITE_DEFAULT_MEMSTATUS=0`). With them on, every
 /// allocation SQLite makes takes one process-wide mutex to count itself, so connections working
@@ -706,6 +715,12 @@ impl LogDb {
         std::path::PathBuf::from(format!("file:/nexus-log-{n}?vfs=memdb"))
     }
 
+    /// Whether `path` names a store in memory ([`LogDb::memory_name`]).
+    fn is_memory_name(path: &Path) -> bool {
+        path.to_str()
+            .is_some_and(|p| p.starts_with("file:/nexus-log-") && p.ends_with("?vfs=memdb"))
+    }
+
     /// Lift the cap SQLite's `memdb` VFS puts on an in-memory store — 1 GiB unless it is raised.
     /// A session on the 1.13 path holds the operator's whole log in one ([`LogDb::memory_name`]),
     /// and a lifetime log must never be refused for its size: past the cap every write would
@@ -789,6 +804,8 @@ impl LogDb {
     ///   at all when the WAL index is absent, and this one may be the first to arrive.
     /// - **It refuses a store of another schema version**, as [`LogDb::open`] does — and,
     ///   unlike it, never stamps one on a database that has none.
+    /// - **On a store in memory it waits out the write lock** ([`MEMORY_READ_WAIT_MS`]): there a
+    ///   read that begins behind a commit waits for the reads that commit is waiting for.
     pub fn open_reader(path: &Path) -> Result<LogDb> {
         use rusqlite::OpenFlags;
         quiet_memory_statistics();
@@ -798,7 +815,12 @@ impl LogDb {
                 | OpenFlags::SQLITE_OPEN_URI
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+        let wait = if LogDb::is_memory_name(path) {
+            MEMORY_READ_WAIT_MS
+        } else {
+            BUSY_TIMEOUT_MS
+        };
+        conn.busy_timeout(std::time::Duration::from_millis(wait.into()))?;
         conn.pragma_update(None, "query_only", true)?;
         let db = LogDb { conn };
         match db.meta("schema_version")? {
@@ -2610,6 +2632,68 @@ mod tests {
         file.lift_memory_cap()
             .expect("a file store is left as it is");
         drop(file);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A READ OF A STORE IN MEMORY WAITS OUT THE WRITE LOCK (the 1.13 path, SPEC-2 v3 C19
+    /// D1-A). There a writer's lock keeps a new read out, and the writer waits for the reads
+    /// already open, so a change's plan made just after another change can find the lock taken
+    /// for as long as another read runs. The plan waits it out, as a 1.13 edit never failed
+    /// because a read was running: held here past the 5 s a file store's connections wait, the
+    /// read answers once the lock is free. The control: a file store's reads keep their 5 s, and
+    /// under the same lock do not wait at all (WAL).
+    #[test]
+    fn a_read_of_a_store_in_memory_waits_out_the_write_lock() {
+        let busy = |db: &LogDb| -> i64 {
+            db.conn
+                .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+                .unwrap()
+        };
+        let name = LogDb::memory_name();
+        let holder = LogDb::open(&name).expect("the store in memory");
+        holder
+            .conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("its lock");
+        let reading = name.clone();
+        let read =
+            std::thread::spawn(move || LogDb::open_reader(&reading).and_then(|db| db.row_count()));
+        std::thread::sleep(std::time::Duration::from_millis(6_000));
+        assert!(
+            !read.is_finished(),
+            "the read waits while the lock is held, past the 5 s a file store's reads wait"
+        );
+        holder
+            .conn
+            .execute_batch("ROLLBACK")
+            .expect("the lock let go");
+        assert_eq!(
+            read.join().expect("the read ran").expect("and answered"),
+            0,
+            "once the lock is free"
+        );
+        assert_eq!(
+            busy(&LogDb::open_reader(&name).unwrap()),
+            i64::from(MEMORY_READ_WAIT_MS)
+        );
+
+        let dir = std::env::temp_dir().join(format!("nexus-read-wait-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("log.sqlite3");
+        drop(LogDb::open(&file).expect("a file store"));
+        assert_eq!(
+            busy(&LogDb::open_reader(&file).unwrap()),
+            i64::from(BUSY_TIMEOUT_MS),
+            "control: a file store's reads keep their wait"
+        );
+        let hold = WriteHold::take(&file).expect("its lock");
+        let started = std::time::Instant::now();
+        assert_eq!(LogDb::open_reader(&file).unwrap().row_count().unwrap(), 0);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "and never wait for its writer (WAL)"
+        );
+        drop(hold);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

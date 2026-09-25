@@ -5583,6 +5583,210 @@ pub(crate) mod tests {
         assert_eq!(on_disk.len(), 4, "with the other machine's contact");
     }
 
+    /// An engine on the 1.13 path, its `log.adi` in `d` holding `n` contacts, every one of them
+    /// in its store in memory.
+    fn engine_on_log_file(d: &Dir, n: usize) -> Engine {
+        std::fs::write(d.log(), legacy_log(n)).unwrap();
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_log_path(d.log());
+        assert!(e.log_on_file(), "premise: the 1.13 path");
+        e.flush_log_store(DURABLE_WAIT).expect("settled");
+        e
+    }
+
+    /// A read of `e`'s log held open on a thread of its own, as a long pass over it holds its
+    /// store, until the sender sends or is dropped. The thread answers the read.
+    fn read_held_open(
+        e: &Engine,
+    ) -> (
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<Result<Freshness, sqlite::Error>>,
+    ) {
+        let rows = e.log_rows();
+        let (open, opened) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            let mut first = true;
+            rows.each_record(Duration::ZERO, &mut |_| {
+                if std::mem::take(&mut first) {
+                    let _ = open.send(());
+                    let _ = released.recv();
+                }
+                std::ops::ControlFlow::Continue(())
+            })
+        });
+        opened.recv().expect("the read is open");
+        (release, reader)
+    }
+
+    /// ★ A CONTACT LOGGED WHILE AN EDIT WAITS FOR A READ IS IN `log.adi` AT ONCE (the 1.13 path,
+    /// SPEC-2 v3 C19 D1-A). On the store in memory an edit's commit waits for a read open on
+    /// it, and the edit's rewrite of `log.adi` waits with it. A contact logged meanwhile — the FT
+    /// auto-log's append — goes into the file at once, as 1.13 appended it: a launch from the
+    /// file as it then stands, which is what a crash leaves, has it. Once the read ends, the file
+    /// holds both, the contact once.
+    #[test]
+    fn a_contact_logged_while_an_edit_waits_for_a_read_is_in_log_adi_at_once() {
+        let d = Dir::new("logged-ahead");
+        let mut e = engine_on_log_file(&d, 10);
+        let edited = e.log_records()[3].call.clone();
+        let (release, reader) = read_held_open(&e);
+        assert!(e.mark_qsl_card(id_at(&e, 3), true), "the edit is made");
+        e.log_qso(qso("W9LOGGED", 1_788_500_000));
+        let ahead = eventually_for(Duration::from_millis(1_500), || {
+            calls_in_file(&d).contains(&"W9LOGGED".to_string())
+        });
+        let crash = Logbook::load(&d.log());
+        drop(release);
+        reader.join().expect("the read ran").expect("and read");
+        assert!(
+            ahead,
+            "the logged contact is in log.adi while the edit waits: {:?}",
+            calls_in_file(&d)
+        );
+        assert!(
+            !crash
+                .records()
+                .iter()
+                .any(|r| r.call == edited && r.qsl_rcvd.card),
+            "premise: the edit waited for the read"
+        );
+        let s = e.log_unsaved().wait(DURABLE_WAIT);
+        assert!(s.saved(), "{s:?}");
+        let on_disk = Logbook::load(&d.log());
+        assert!(
+            on_disk
+                .records()
+                .iter()
+                .any(|r| r.call == edited && r.qsl_rcvd.card),
+            "then the edit is in it"
+        );
+        assert_eq!(
+            calls_in_file(&d)
+                .iter()
+                .filter(|c| *c == "W9LOGGED")
+                .count(),
+            1,
+            "and the contact, once"
+        );
+    }
+
+    /// ★ …AND WHEN THE WRITER GIVES THE EDIT UP (the operator's "never silently lose a contact",
+    /// on the 1.13 path). A read held open past the writer's four tries (about 21 s) while an
+    /// edit and then a logged contact are made: the contact is in `log.adi` at once, and a launch
+    /// from the file while the edit is held has it. The writer gives the edit up and the screen
+    /// says so; the edit is kept, sent again once its wait is up (the snapshot poll's re-send)
+    /// and saved, and then the file holds both, the contact once.
+    #[test]
+    fn a_contact_logged_behind_an_edit_the_writer_gives_up_is_in_log_adi_at_once() {
+        let d = Dir::new("logged-ahead-giveup");
+        let mut e = engine_on_log_file(&d, 10);
+        let edited = e.log_records()[3].call.clone();
+        let (release, reader) = read_held_open(&e);
+        assert!(e.mark_qsl_card(id_at(&e, 3), true), "the edit is made");
+        e.log_qso(qso("W9LOGGED", 1_788_500_000));
+        assert!(
+            eventually_for(Duration::from_millis(1_500), || {
+                calls_in_file(&d).contains(&"W9LOGGED".to_string())
+            }),
+            "the logged contact is in log.adi at once"
+        );
+        let gave_up = eventually_for(Duration::from_secs(60), || {
+            e.snapshot().log_save_trouble.is_some()
+        });
+        let launch = Logbook::load(&d.log());
+        drop(release);
+        reader.join().expect("the read ran").expect("and read");
+        assert!(
+            gave_up,
+            "premise: the writer gave the edit up, and the screen says so"
+        );
+        assert!(
+            launch.records().iter().any(|r| r.call == "W9LOGGED"),
+            "a launch from log.adi while the edit is held has the logged contact"
+        );
+        assert!(
+            !launch
+                .records()
+                .iter()
+                .any(|r| r.call == edited && r.qsl_rcvd.card),
+            "premise: the edit is held"
+        );
+        assert!(
+            eventually_for(Duration::from_secs(30), || e.log_resend_due() > 0),
+            "the edit is sent again once its wait is up"
+        );
+        let s = e.log_unsaved().wait(DURABLE_WAIT);
+        assert!(s.saved(), "{s:?}");
+        e.flush_log_store(DURABLE_WAIT).expect("written");
+        assert_eq!(e.snapshot().log_save_trouble, None, "the screen clears");
+        let on_disk = Logbook::load(&d.log());
+        assert!(
+            on_disk
+                .records()
+                .iter()
+                .any(|r| r.call == edited && r.qsl_rcvd.card),
+            "then the file holds the edit"
+        );
+        assert_eq!(
+            calls_in_file(&d)
+                .iter()
+                .filter(|c| *c == "W9LOGGED")
+                .count(),
+            1,
+            "and the contact, once"
+        );
+    }
+
+    /// ★ A SECOND EDIT DURING A LONG READ WAITS FOR IT, as a 1.13 edit never failed because a
+    /// read was running (the 1.13 path). A read held 6 s on the store in memory — past the 5 s a
+    /// connection waited for a lock — and two edits made while it runs: the first is made at
+    /// once, and the writer waits for the read to commit it; the second's plan waits behind that
+    /// writer, and is made once the writer lets its lock go — at its first retry, about 5 s in,
+    /// or when the read ends — never the whole minute such a read may wait for the lock. Both are
+    /// saved then, with nothing on the screen.
+    #[test]
+    fn a_second_edit_during_a_long_read_waits_for_it_on_the_1_13_path() {
+        let d = Dir::new("second-edit");
+        let mut e = engine_on_log_file(&d, 10);
+        let (first, second) = (id_at(&e, 3), id_at(&e, 5));
+        let hold = Duration::from_secs(6);
+        let (release, reader) = read_held_open(&e);
+        let started = Instant::now();
+        let timer = std::thread::spawn(move || {
+            std::thread::sleep(hold);
+            let _ = release.send(());
+        });
+        assert!(
+            e.mark_qsl_card(first, true),
+            "the first edit is made at once"
+        );
+        // Long enough for the writer to have taken its lock for the first, and to wait for the
+        // read holding it.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            e.mark_qsl_card(second, true),
+            "the second edit waits for the read, and is made"
+        );
+        let waited = started.elapsed();
+        assert!(
+            waited < hold + Duration::from_secs(2),
+            "no longer than the read: {waited:?}"
+        );
+        timer.join().expect("the timer ran");
+        reader.join().expect("the read ran").expect("and read");
+        let s = e.log_unsaved().wait(DURABLE_WAIT);
+        assert!(s.saved(), "{s:?}");
+        assert_eq!(e.snapshot().log_save_trouble, None, "nothing on the screen");
+        let carded: Vec<_> = Logbook::load(&d.log())
+            .records()
+            .iter()
+            .filter(|r| r.qsl_rcvd.card)
+            .map(|r| r.call.clone())
+            .collect();
+        assert_eq!(carded, ["K3ABC", "K5ABC"], "both are in log.adi");
+    }
+
     /// ★ THE NAS TRADES ARE 1.13'S (the operator's D1 choice, pinned). Two machines on one
     /// `log.adi`: an edit made on the other machine arrives here as a second contact beside the
     /// one it edited, and a contact deleted there comes back with this machine's next rewrite —
