@@ -2,13 +2,39 @@
 //! two engines over a virtual channel complete a ragchew QSO and a Field Day
 //! exchange, and the results surface in each engine's snapshot (the UI contract).
 
-// Reads the in-memory log's deprecated handles (SPEC-2's census ratchet); moves in C19.
-#![allow(deprecated)]
+use std::ops::ControlFlow;
 
 use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
+use tempo_app::logstore::Freshness;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};
+use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
 use tempo_core::tempo_fast;
+
+/// Whether `e`'s log holds a contact with `call`, asked as every reader of the log asks it: the
+/// rows of that call (the store's call index; on the 1.13 path the log in memory), read with no
+/// Engine guard held and only once every change made before the question is in.
+fn log_holds(e: &Engine, call: &str) -> bool {
+    const CALL: Narrow = Narrow {
+        columns: &["call"],
+        uploads: false,
+    };
+    let mut held = false;
+    let fresh = e
+        .log_rows()
+        .each(
+            CALL,
+            Scope::CallNorm(&call_norm_of(call)),
+            Order::Log,
+            &mut |r| {
+                held |= r.call == call;
+                ControlFlow::Continue(())
+            },
+        )
+        .expect("the log reads");
+    assert!(matches!(fresh, Freshness::Current), "the log is current");
+    held
+}
 
 /// Real audio capture normalizes the soundcard int16 to f32 (÷32768); the VirtualAir
 /// harness instead emits f32 at the ×100 int16 scale (paired with channel::to_i16). The
@@ -56,14 +82,18 @@ fn qso_mode_completes_through_the_engine() {
     b.call_station("W9XYZ");
 
     let b_done = |e: &Engine| e.snapshot().qso.map(|q| q.state == "Done").unwrap_or(false);
-    let a_logged = |e: &Engine| e.get_log().iter().any(|q| q.call == "K2DEF");
+    let a_logged = |e: &Engine| log_holds(e, "K2DEF");
     run(&mut a, &mut b, 60, |a, b| a_logged(a) && b_done(b));
 
     // The answerer (monitor) reaches Done with the runner as its DX.
     assert!(b_done(&b), "B qso: {:?}", b.snapshot().qso);
     assert_eq!(b.snapshot().qso.unwrap().dxcall.as_deref(), Some("W9XYZ"));
     // The runner logged the contact...
-    assert!(a_logged(&a), "A logged K2DEF: {:?}", a.get_log());
+    assert!(a_logged(&a), "A logged K2DEF");
+    assert!(
+        !log_holds(&a, "W9XYZ"),
+        "control: the question finds only a call A logged"
+    );
     // ...and, because it was RUNNING, returns to calling CQ to work the next caller
     // (WSJT-X run workflow) — give it a few more periods to process its own RR73.
     run(&mut a, &mut b, 12, |a, _| {

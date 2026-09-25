@@ -5,6 +5,7 @@
 use super::*;
 use crate::dto::LoggedQso;
 use crate::station::RowRefusal;
+use crate::test_util::StoredLog;
 use tempo_core::logbook::{OtaEdit, QslSent, QslVia, QsoEdit, RecordId, UploadOutcome};
 
 /// A contact as a log holds it, under a fixed id, so two engines can hold the same one — with
@@ -42,12 +43,23 @@ fn contact(n: u64, call: &str) -> QsoRecord {
     r
 }
 
+/// An engine whose log holds exactly `rows`, each under its own id — appended as the station
+/// appends a contact (into the log in memory, its index and the engine's store, keeping the id a
+/// row brings), so a read of the log finds them there.
+///
+/// The premise is on the contacts, not every field: the store keeps the QSL channels and derives
+/// the confirmation flags from them, so a fixture's hand-set flag comes back as its channels say.
 fn engine_holding(rows: &[QsoRecord]) -> Engine {
     let mut e = Engine::new("K2DEF", "FN31", 0);
-    // Appended as the station appends a contact — into the log in memory, its index and the
-    // engine's store — so a read of the log finds them there.
     let _ = e.station.append(rows.to_vec(), false);
     e.station.sync_hot();
+    let contacts =
+        |rows: &[QsoRecord]| -> Vec<_> { rows.iter().map(|r| (r.id, r.call.clone())).collect() };
+    assert_eq!(
+        contacts(&e.stored_records()),
+        contacts(rows),
+        "premise: the log holds exactly the contacts given, each under its own id"
+    );
     e
 }
 
@@ -326,10 +338,7 @@ fn the_one_change_stores_what_the_form_s_three_commands_stored() {
         );
 
         let rows = |e: &Engine| -> Vec<QsoRecord> {
-            e.log_records()
-                .iter()
-                .map(|r| QsoRecord::clone(r))
-                .collect()
+            e.stored_log().iter().map(|r| QsoRecord::clone(r)).collect()
         };
         let (was, now) = (rows(&old), rows(&new));
         let now: Vec<QsoRecord> = now
@@ -372,7 +381,7 @@ fn a_change_by_id_lands_on_its_contact_after_a_delete_above_it() {
 
     assert!(e.delete_qso(rows[0].id.expect("an id")), "a delete above");
     assert_eq!(
-        e.log_records()[1].id,
+        e.stored_log()[1].id,
         Some(target),
         "control: the target moved up — its old position now names nothing"
     );
@@ -386,8 +395,8 @@ fn a_change_by_id_lands_on_its_contact_after_a_delete_above_it() {
     fixed.comment = Some("fixed".into());
     assert!(e.update_qso(target, fixed));
 
-    let now: Vec<_> = e
-        .log_records()
+    let log = e.stored_log();
+    let now: Vec<_> = log
         .iter()
         .map(|r| {
             (
@@ -416,9 +425,9 @@ fn a_change_by_id_lands_on_its_contact_after_a_delete_above_it() {
         "every change is on W3CCC, and W2BBB — at its old place — is untouched"
     );
     assert!(e.delete_qso(target));
-    assert_eq!(e.log_records().len(), 1);
+    assert_eq!(e.stored_log().len(), 1);
     assert_eq!(
-        e.log_records()[0].call,
+        e.stored_log()[0].call,
         "W2BBB",
         "the delete took the target"
     );
@@ -449,14 +458,14 @@ fn a_change_to_a_gone_or_changed_contact_is_refused_and_changes_nothing() {
     let mut theirs = QsoRecord::clone(&e.logged_row(id).expect("held"));
     theirs.grid = Some("FN42".into());
     assert!(e.update_qso(id, theirs));
-    let (before, tick) = (e.log_records().to_vec(), e.snapshot().log_tick);
+    let (before, tick) = (e.stored_log(), e.snapshot().log_tick);
     match e.edit_qso(id, &key, &mine) {
         Ok(Err(RowRefusal::Changed(now))) => {
             assert_eq!(now.grid.as_deref(), Some("FN42"), "as it now stands")
         }
         other => panic!("a changed contact must be refused: {other:?}"),
     }
-    assert_eq!(e.log_records(), &before[..], "the refusal changed nothing");
+    assert_eq!(e.stored_log(), before, "the refusal changed nothing");
     assert_eq!(e.snapshot().log_tick, tick, "nothing to reload");
 
     // A QSL-sent code the form does not offer: refused before anything is looked at.
@@ -464,7 +473,7 @@ fn a_change_to_a_gone_or_changed_contact_is_refused_and_changes_nothing() {
     let mut odd = QsoEdit::project(&e.logged_row(id).expect("held"));
     odd.qsl_sent_via = Some("X".into());
     assert!(e.edit_qso(id, &key, &odd).is_err());
-    assert_eq!(e.log_records(), &before[..]);
+    assert_eq!(e.stored_log(), before);
 
     // Gone: deleted, and never in this log.
     assert!(e.delete_qso(id));
@@ -480,7 +489,7 @@ fn a_change_to_a_gone_or_changed_contact_is_refused_and_changes_nothing() {
         Err(RowRefusal::Gone)
     );
     assert!(!e.mark_qsl_card(id, true), "a mark finds no contact either");
-    assert_eq!(e.log_records().len(), 1);
+    assert_eq!(e.stored_log().len(), 1);
 }
 
 /// The LoTW verbs by id: a stamp lands on exactly the contacts it names, wherever they now sit;
@@ -542,7 +551,7 @@ fn the_lotw_verbs_by_id_touch_exactly_the_contacts_they_name() {
     assert!(e.delete_qso(id(0)), "a delete above both");
     e.stamp_lotw_upload(&[id(2), id(1)], UploadOutcome::Pending, 1_788_000_000, None);
     let stamped = |e: &Engine| -> Vec<(String, Option<UploadOutcome>)> {
-        e.log_records()
+        e.stored_log()
             .iter()
             .map(|r| (r.call.clone(), r.upload.lotw.as_ref().map(|s| s.outcome)))
             .collect()
