@@ -1127,6 +1127,36 @@ impl Durability {
         self.tickets.len()
     }
 
+    /// This and `later`, as one: every change of both, for a command made in several changes
+    /// (the "already uploaded" declaration, a chunk at a time) to wait for them all. Each ticket
+    /// is waited for on its own, and the 1.13 path's lane saves what it is handed in order, so
+    /// the later count covers the earlier changes.
+    pub(crate) fn and(mut self, later: Durability) -> Durability {
+        if later.is_empty() {
+            return self;
+        }
+        self.writer = later.writer;
+        self.tickets.extend(later.tickets);
+        self.lane = later.lane;
+        self
+    }
+
+    /// [`Self::wait`] for the store alone: every change is in the logbook database, whatever the
+    /// 1.13 path's `log.adi` still owes. What a command made in many changes paces itself by,
+    /// change by change, while the lane rewrites the file once for all it is handed together and
+    /// the command's own wait covers it at the end. ⚠️ Never call it holding a lock.
+    pub(crate) fn wait_stored(&self, deadline: Duration) -> Result<(), String> {
+        let Some(writer) = &self.writer else {
+            return Ok(());
+        };
+        let start = std::time::Instant::now();
+        for t in &self.tickets {
+            let left = deadline.saturating_sub(start.elapsed());
+            writer.wait_durable(t, left).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Wait until every change is on disk, or say why not. ⚠️ Never call it holding a lock —
     /// and from an async command, only inside `spawn_blocking`: a wait of up to a minute must
     /// not pin a runtime worker the rest of the app needs.

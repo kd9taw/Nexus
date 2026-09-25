@@ -1215,3 +1215,333 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
         );
     }
 }
+
+/// How many contacts the store at `db` holds stamped as uploaded to LoTW, once `engine`'s writer
+/// has written every change made before the call.
+fn lotw_stamped(engine: &Mutex<Engine>, db: &std::path::Path) -> usize {
+    flush(&engine_lock(engine));
+    lotw_in_store(db)
+}
+
+/// How many contacts the store at `db` holds stamped as uploaded to LoTW as it stands, with no
+/// wait for a writer.
+fn lotw_in_store(db: &std::path::Path) -> usize {
+    tempo_core::logbook::sqlite::LogDb::open(db)
+        .unwrap()
+        .load_all()
+        .unwrap()
+        .iter()
+        .filter(|r| r.upload.lotw.is_some())
+        .count()
+}
+
+/// ★ "ALREADY UPLOADED" IS DECLARED A CHUNK AT A TIME (SPEC-2 v3 §4.11: no log path holds the
+/// Engine lock past 5 ms). The declaration stamps every contact still owed to LoTW — on the
+/// bench's 500,000-contact log a third of a million, which one change held the lock over half a
+/// second to make. In chunks, each change is bounded by the chunk and not by the log: ten owed
+/// contacts in chunks of three are four changes of at most three contacts, as the store says at
+/// each chunk's plan, and every contact is stamped. Made again, it finds nothing owed and changes
+/// nothing.
+#[test]
+fn already_uploaded_is_declared_a_chunk_at_a_time_and_again_changes_nothing() {
+    let d = Dir::new("lotw-chunks");
+    // Eleven contacts, ten owed: the first is logged at a bare midnight, a time the log does not
+    // know, and LoTW is never offered a contact without one.
+    let engine = shared(&d, 11);
+    let rows = engine_lock(&engine).log_rows();
+    let ids = station::lotw_unsent_ids(&rows).expect("read");
+    assert_eq!(ids.len(), 10, "premise: ten contacts owed to LoTW");
+    // What the store holds stamped when each chunk is planned: what the changes before it made.
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let hook = {
+        let (engine, seen, db) = (Arc::clone(&engine), Rc::clone(&seen), d.db());
+        move || seen.borrow_mut().push(lotw_stamped(&engine, &db))
+    };
+    let (made, durability) = racing(hook, || {
+        mark_lotw_uploaded_in_chunks(&engine, 1_900_000_000, 3)
+    });
+    assert_eq!(made, Ok(10), "every owed contact is stamped");
+    let marks: Vec<usize> = std::iter::once(0)
+        .chain(seen.borrow().iter().skip(1).copied())
+        .chain([lotw_stamped(&engine, &d.db())])
+        .collect();
+    let changes: Vec<usize> = marks.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(
+        changes,
+        [3, 3, 3, 1],
+        "ten owed contacts in chunks of three: four changes, none of more than three"
+    );
+    assert_eq!(durability.len(), 4, "four changes to wait for");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    for &id in &ids {
+        assert_eq!(
+            stored_row(&d, id).upload.lotw.map(|s| s.when_unix),
+            Some(1_900_000_000),
+            "each stamped by the declaration"
+        );
+    }
+
+    let before = stored(&d);
+    let (again, durability) = mark_lotw_uploaded_in_chunks(&engine, 1_900_000_100, 3);
+    assert_eq!(again, Ok(0), "made again, nothing is owed");
+    assert!(durability.is_empty(), "and nothing is written");
+    flush(&engine_lock(&engine));
+    assert_eq!(stored(&d), before, "the log is as the declaration left it");
+}
+
+/// A declaration stopped partway keeps the chunks it made and says how far it got; made again, it
+/// picks only what is still owed, so it completes the rest and stamps nothing twice. Here another
+/// writer changes a contact of the second chunk under every plan, which stops it as LogBusy — a
+/// crash or a quit between chunks leaves the same log.
+#[test]
+fn a_declaration_stopped_partway_keeps_its_chunks_and_again_completes_it() {
+    let d = Dir::new("lotw-chunks-busy");
+    // Ten owed: the first of the eleven has no known time.
+    let engine = shared(&d, 11);
+    let rows = engine_lock(&engine).log_rows();
+    let ids = station::lotw_unsent_ids(&rows).expect("read");
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (engine, plans, raced) = (Arc::clone(&engine), Rc::clone(&plans), ids[3]);
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() > 1 {
+                // Every plan of the second chunk: another writer changes one of its contacts.
+                let stamp = qrz_stamp(raced, plans.get() as i64);
+                let (made, _) = change_ops(&engine, raced, None, &[stamp], "theirs");
+                assert!(matches!(made, Ok(Ok(_))), "their stamp is made");
+            }
+        }
+    };
+    let (made, durability) = racing(hook, || {
+        mark_lotw_uploaded_in_chunks(&engine, 1_900_000_000, 3)
+    });
+    let said = made.expect_err("the second chunk kept changing");
+    assert!(said.contains("3 of 10"), "it says how far it got: {said}");
+    assert_eq!(
+        plans.get(),
+        1 + PLANS,
+        "the first chunk planned once, the second {PLANS} times, and nothing after it"
+    );
+    assert_eq!(durability.len(), 1, "the first chunk's change, to wait for");
+    durability
+        .wait(DURABLE_WAIT)
+        .expect("the first chunk on disk");
+    flush(&engine_lock(&engine));
+    for (k, &id) in ids.iter().enumerate() {
+        assert_eq!(
+            stored_row(&d, id).upload.lotw.is_some(),
+            k < 3,
+            "contact {k}: the first chunk stands, and nothing after it was made"
+        );
+    }
+    assert_eq!(
+        stored_row(&d, ids[3]).upload.qrz.map(|s| s.when_unix),
+        Some((1 + PLANS) as i64),
+        "every one of their stamps was made"
+    );
+
+    let (again, durability) = mark_lotw_uploaded_in_chunks(&engine, 1_900_000_100, 3);
+    assert_eq!(again, Ok(7), "made again, only what is still owed");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    for (k, &id) in ids.iter().enumerate() {
+        assert_eq!(
+            stored_row(&d, id).upload.lotw.map(|s| s.when_unix),
+            Some(if k < 3 { 1_900_000_000 } else { 1_900_000_100 }),
+            "contact {k}: stamped once, by the declaration that reached it"
+        );
+    }
+}
+
+/// A contact a change settles after the pick — a LoTW upload stamps it while the declaration works
+/// through the chunks before its own — is no longer owed when its chunk is planned, and is left as
+/// that change made it: the declaration never writes "already uploaded" over what an upload
+/// recorded. Every other contact is declared.
+#[test]
+fn a_contact_an_upload_stamps_before_its_chunk_is_left_as_the_upload_made_it() {
+    let d = Dir::new("lotw-chunks-settled");
+    // Ten owed: the first of the eleven has no known time.
+    let engine = shared(&d, 11);
+    let rows = engine_lock(&engine).log_rows();
+    let ids = station::lotw_unsent_ids(&rows).expect("read");
+    let uploaded = ids[5];
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (engine, plans) = (Arc::clone(&engine), Rc::clone(&plans));
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                // While the first chunk is planned: an upload's stamp on a contact of the second.
+                let pending = LogOp::Stamp {
+                    id: uploaded,
+                    service: UploadService::Lotw,
+                    status: UploadStatus {
+                        outcome: UploadOutcome::Pending,
+                        when_unix: 7,
+                        detail: None,
+                    },
+                };
+                let (made, _) = change_ops(&engine, uploaded, None, &[pending], "a LoTW upload");
+                assert!(matches!(made, Ok(Ok(_))), "the upload's stamp is made");
+            }
+        }
+    };
+    let (made, durability) = racing(hook, || {
+        mark_lotw_uploaded_in_chunks(&engine, 1_900_000_000, 3)
+    });
+    assert_eq!(
+        made,
+        Ok(9),
+        "every contact still owed when its chunk was planned"
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let upload = stored_row(&d, uploaded).upload.lotw.expect("stamped");
+    assert_eq!(
+        (upload.outcome, upload.when_unix),
+        (UploadOutcome::Pending, 7),
+        "the upload's own stamp stands"
+    );
+    for &id in ids.iter().filter(|&&id| id != uploaded) {
+        assert_eq!(
+            stored_row(&d, id).upload.lotw.map(|s| s.when_unix),
+            Some(1_900_000_000),
+            "and every other contact is declared"
+        );
+    }
+}
+
+/// On the 1.13 path the declaration is saved once it is in `log.adi`, its home there: the chunks'
+/// changes, joined, are waited for to the last one, so when the command returns the file holds
+/// every stamp — not only the first chunk's.
+#[test]
+fn on_the_1_13_path_every_chunk_is_in_log_adi_when_the_declaration_is_saved() {
+    let d = Dir::new("lotw-chunks-1-13");
+    std::fs::write(d.log(), legacy_log(11)).unwrap();
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.set_log_path(d.log());
+    assert!(e.log_on_file(), "premise: the 1.13 path");
+    let engine = Arc::new(Mutex::new(e));
+    let (made, durability) = mark_lotw_uploaded_in_chunks(&engine, 1_900_000_000, 3);
+    assert_eq!(made, Ok(10), "every owed contact is stamped");
+    assert_eq!(durability.len(), 4, "four changes to wait for");
+    durability.wait(DURABLE_WAIT).expect("in log.adi");
+    let on_disk = tempo_core::logbook::Logbook::load(&d.log());
+    assert_eq!(
+        on_disk
+            .records()
+            .iter()
+            .filter(|r| r
+                .upload
+                .lotw
+                .as_ref()
+                .is_some_and(|s| s.when_unix == 1_900_000_000))
+            .count(),
+        10,
+        "log.adi holds every chunk's stamps"
+    );
+}
+
+/// The declaration moves at the pace the store takes it: each chunk is in the store before the
+/// next is planned. So its changes never pile up in flight, where each later commit, under the
+/// Engine lock, and each later plan's read would look through them row by row — a backlog the
+/// size of the log on a big one, since the store's writer takes a few thousand rows a second.
+/// Here the writer is held while the first chunk is made, and let go a moment later: the second
+/// chunk is planned only once the first is in the store.
+#[test]
+fn each_chunk_is_in_the_store_before_the_next_is_planned() {
+    let d = Dir::new("lotw-chunks-paced");
+    // Ten owed: the first of the eleven has no known time.
+    let engine = shared(&d, 11);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let hook = {
+        let (seen, db) = (Rc::clone(&seen), d.db());
+        move || {
+            // What the store holds as each chunk is planned, with no wait for the writer.
+            seen.borrow_mut().push(lotw_in_store(&db));
+            if seen.borrow().len() == 1 {
+                let hold = WriteHold::take(&db).expect("hold the writer");
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    drop(hold);
+                });
+            }
+        }
+    };
+    let (made, durability) = racing(hook, || {
+        mark_lotw_uploaded_in_chunks(&engine, 1_900_000_000, 3)
+    });
+    assert_eq!(made, Ok(10), "every owed contact is stamped");
+    assert_eq!(
+        *seen.borrow(),
+        [0, 3, 6, 9],
+        "each chunk planned once the chunks before it are in the store"
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+}
+
+/// How many contacts the store at `db` holds with a country, as it stands.
+fn with_country_in_store(db: &std::path::Path) -> usize {
+    tempo_core::logbook::sqlite::LogDb::open(db)
+        .unwrap()
+        .load_all()
+        .unwrap()
+        .iter()
+        .filter(|r| r.country.is_some())
+        .count()
+}
+
+/// The fill job moves at the pace the store takes it: a chunk of fills is planned only once every
+/// chunk but the one made last is in the store — the writer takes that one while the next is
+/// planned — and the last, which carries `fill_ver`, only once every earlier fill is. On the first
+/// launch after an update it may fill every contact of a big log while every screen is loading.
+/// Here the writer is held while the first chunk is made, and let go a moment later.
+#[test]
+fn a_chunk_of_fills_is_planned_only_once_the_chunks_before_the_last_are_stored() {
+    let d = Dir::new("fill-chunks-paced");
+    let engine = shared(&d, 10);
+    let fills: Vec<LogFill> = stored(&d)
+        .iter()
+        .filter_map(|r| r.id)
+        .map(|id| LogFill {
+            id,
+            country: Some("Found".into()),
+            state: None,
+        })
+        .collect();
+    assert_eq!(
+        (fills.len(), with_country_in_store(&d.db())),
+        (10, 0),
+        "premise: ten contacts, none with a country yet"
+    );
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let hook = {
+        let (seen, db) = (Rc::clone(&seen), d.db());
+        move || {
+            // What the store holds as each chunk is planned, with no wait for the writer.
+            seen.borrow_mut().push(with_country_in_store(&db));
+            if seen.borrow().len() == 1 {
+                let hold = WriteHold::take(&db).expect("hold the writer");
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    drop(hold);
+                });
+            }
+        }
+    };
+    let filled = racing(hook, || fill_in_chunks(&engine, &fills, 7, 3)).expect("the job writes");
+    assert_eq!(filled, 10, "every contact gains its country");
+    let seen = seen.borrow().clone();
+    assert_eq!(seen.len(), 4, "four chunks planned once each: {seen:?}");
+    assert_eq!(
+        seen[1], 0,
+        "premise: the writer was held while the second chunk was planned"
+    );
+    assert!(
+        seen[2] >= 3,
+        "each chunk planned once the chunks before the last made are in the store: {seen:?}"
+    );
+    assert_eq!(
+        seen[3], 9,
+        "the last chunk, with fill_ver, planned once every earlier fill is in the store"
+    );
+}

@@ -159,7 +159,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is tried again a few times. If it still cannot be made, nothing is changed and Nexus says the
   logbook was busy, so doing it again retries. That covers the Logbook's edits, QSL marks,
   satellite tags and deletes (the row and your typing stay as they were) and an import, a LoTW,
-  eQSL or QRZ sync, the Field Day merge and the POTA stamps.
+  eQSL or QRZ sync, the Field Day merge and the POTA stamps. **Mark on LoTW** is the one
+  exception. It marks a few thousand QSOs at a time, so a big log does not hold the radio up for
+  the whole of it at once. If it stops partway — the logbook stays busy, or Nexus closes — the
+  QSOs it had marked stay marked, and when the logbook was busy Nexus says how many of how many it
+  reached. Marking again finishes the rest and marks none of them twice.
 
 - **A change made in another window on the same logbook no longer makes the radio wait.** Two
   Nexus windows can share one logbook, and each used to read the whole log again, while the radio
