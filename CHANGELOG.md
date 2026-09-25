@@ -153,6 +153,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. A contact logged while you are scrolled down still leaves the rows you are looking at
   exactly where they are.
 
+- **When the logbook is too busy to take a change, nothing changes and the Logbook says so.** An
+  edit, QSL mark, satellite tag or delete that keeps meeting other changes on its way in — a big
+  import, another window, a sync — is tried again a few times. If it still cannot be made, the
+  Logbook says the logbook was busy and nothing changed, leaves the row and your typing as they
+  were, and saving again retries.
+
 - **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
   Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
   confirmation, every edit — and on a big log that rewrite was long enough to make the radio and
@@ -226,10 +232,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have renamed, which is why it only ever warns.
 
 ### Fixed
-
-- **A change the logbook was too busy to save now says so.** The Logbook could report "Updated",
-  "Marked QSL sent" or "Deleted" for a change that was never saved. It now says the logbook was busy
-  and nothing changed, leaves the row and your typing as they were, and saving again retries.
 
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
