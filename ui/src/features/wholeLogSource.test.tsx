@@ -11,7 +11,7 @@
 //   - the requests the window makes do not change: one `get_log_delta` however many views start,
 //     none when a view's question changes (a keystroke in a call box), one per tick;
 //   - a view that is not reading (remote mode) asks for nothing.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { LogDelta } from '../api'
 import type { LoggedQso } from '../types'
@@ -41,6 +41,10 @@ function Reader({ id, q, tick }: { id: string; q: LogQuestion | null; tick?: num
 const text = (id: string) => screen.getByTestId(id).textContent
 const settle = () => act(() => new Promise((r) => setTimeout(r, 30)))
 
+// The window's source asks the engine now (C17); this adapter is chosen here, as a window chose it.
+beforeEach(() => {
+  setLogSource(wholeLogSource)
+})
 afterEach(() => {
   cleanup()
   api.getLogDelta.mockReset()

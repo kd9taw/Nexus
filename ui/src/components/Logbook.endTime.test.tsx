@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -24,12 +25,12 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
     deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     editQsoById: vi.fn(() => Promise.resolve({})),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
@@ -47,7 +48,7 @@ vi.mock('../api', () => {
 const at = (h: number, m: number, s = 0) => Math.floor(Date.UTC(2026, 8, 14, h, m, s) / 1000)
 
 function seedLog(whenUnix: number, timeOffUnix: number | null) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+  engineLog.mockResolvedValue([
     {
       call: 'VE3ABC', grid: 'FN03', band: '40m', freqMhz: 7.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,

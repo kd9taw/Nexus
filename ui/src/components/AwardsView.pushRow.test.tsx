@@ -14,14 +14,15 @@ import { AwardsView } from './AwardsView'
 import { t } from '../i18n'
 import { clublogPushQso, getConfirmationDiagnostics, qrzPushQso } from '../api'
 import type { DiagnosticsReport, LoggedQso } from '../types'
+import type { LogQuestion } from '../features/logAnswers'
 import fixture from '../remote-web/__fixtures__/insights.json'
 
 const engine = vi.hoisted(() => ({ log: [] as unknown[] }))
 vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(),
-  getLog: vi.fn(async () => engine.log),
-  getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: engine.log })),
+  // The engine answers each question over its log (features/logAnswers.testkit).
+  askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[])),
   getJourney: vi.fn(async () => {
     throw new Error('unsupported')
   }),

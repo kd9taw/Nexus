@@ -14,7 +14,7 @@
 //
 // The standard-log variant is rendered alongside both, because the guards are the reason the
 // strip's other consumers (Phone and CW off Field Day, Satellites) are unaffected.
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterAll, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import type { AppSnapshot, FieldDayStatus } from '../types'
@@ -78,6 +78,11 @@ function renderStd() {
 }
 
 afterEach(() => cleanup())
+// A box the operator leaves closes its type-ahead list 150 ms later, from a timer the strip does not
+// clear when it unmounts. Let the last test's land while this file's window still exists (after it,
+// React has no `window` to read, and the run fails on an error in no test) — as the Logbook's
+// scrolling suites wait for the list's own 150 ms timer.
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)))
 
 describe('LogEntry — the FD strip takes no focus when it mounts', () => {
   it('leaves focus where the operator put it — the cockpits key off the space bar', () => {

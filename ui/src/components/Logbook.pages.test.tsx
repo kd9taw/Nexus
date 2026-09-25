@@ -27,7 +27,8 @@ const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
-    getLogDelta: vi.fn(async () => ({ revision: engine.revision, full: true, rows: engine.log })),
+    // The engine answers each question from its log (features/logAnswers.testkit).
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[], engine.revision)),
     deleteQsoById: vi.fn(() => Promise.resolve({})),
     editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),

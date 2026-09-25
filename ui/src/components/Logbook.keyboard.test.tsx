@@ -20,7 +20,7 @@ import { deleteQsoById, type RowRef } from '../api'
 import { t } from '../i18n'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
-import { answerFrom } from '../features/logAnswers'
+import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import { StationControlContext } from '../stationAccess'
 import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
 import type { QueryPage } from '../remote-web/application-query-protocol'
@@ -30,7 +30,8 @@ const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
-    getLogDelta: vi.fn(async () => ({ revision: engine.revision, full: true, rows: engine.log })),
+    // The engine answers each question from its log (features/logAnswers.testkit).
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, engine.log as LoggedQso[], engine.revision)),
     deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),

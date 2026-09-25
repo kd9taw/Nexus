@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -20,14 +21,12 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
     deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     editQsoById: vi.fn(() => Promise.resolve({ kind: 'applied' })),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
@@ -61,9 +60,9 @@ function oneContact(over: Record<string, unknown> = {}) {
 }
 
 async function renderLog(over: Record<string, unknown> = {}) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(oneContact(over))
+  engineLog.mockResolvedValue(oneContact(over))
   const utils = render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />)
-  await waitFor(() => expect(utils.container.querySelector('.log-scroll > div')).not.toBeNull())
+  await waitFor(() => expect(utils.container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
   return utils
 }
 

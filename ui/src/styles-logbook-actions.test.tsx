@@ -4,7 +4,7 @@ import { render, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseRules, specificity, cmpSpec } from './cssCascade'
-import * as api from './api'
+import type { LogQuestion } from './features/logAnswers'
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE LOGBOOK ROW'S ACTION CLUSTER MUST FIT ITS GRID TRACK.
@@ -172,14 +172,12 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('./api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('./features/logAnswers.testkit')).answerAs(q, await engineLog())),
     deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
@@ -201,7 +199,7 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
   // wide table is rendered by seeding it rather than by driving the chip.
   window.localStorage.setItem('nexus.logbook.moreColumns', moreColumns ? '1' : '0')
   const { Logbook } = await import('./components/Logbook')
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+  engineLog.mockResolvedValue([
     {
       call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,

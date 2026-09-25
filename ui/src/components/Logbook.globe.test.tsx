@@ -6,8 +6,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, waitFor, cleanup, act } from '@testing-library/react'
 import { Logbook } from './Logbook'
-import * as api from '../api'
 import { LOGBOOK_GLOBE_KEY, setLogbookGlobeShown } from '../features/logbookGlobe'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -22,14 +22,12 @@ beforeAll(() => {
 // A capable GPU, so the globe's own gate is open and only the new setting decides.
 vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true }))
 vi.mock('./QsoGlobe', () => ({ default: () => <div data-testid="qso-globe" /> }))
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
-    // the whole log (a valid answer), stocked through `getLog` as before.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
     deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
@@ -51,7 +49,7 @@ const qso = {
 }
 
 async function mount() {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([qso])
+  engineLog.mockResolvedValue([qso])
   const view = render(<Logbook defaultBand="40m" defaultFreqMhz={7.074} defaultMode="FT8" />)
   await waitFor(() => expect(view.container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
   return view.container

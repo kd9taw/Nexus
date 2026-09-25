@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -32,12 +33,12 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
     deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: noop(),
@@ -70,7 +71,7 @@ function logRow(tagged: boolean) {
 }
 
 async function renderLog(tagged: boolean) {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([logRow(tagged)])
+  engineLog.mockResolvedValue([logRow(tagged)])
   const { container } = render(
     <Logbook defaultBand="70cm" defaultFreqMhz={435.5} defaultMode="SSB" />,
   )
@@ -148,7 +149,7 @@ describe('correcting a satellite tag from inside Nexus', () => {
 // resolve the wrong way for every operator who fixed a busted call on a satellite contact.
 describe('the edit form still carries neither satellite field', () => {
   it('sends no propMode or satName when a busted call is corrected', async () => {
-    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([logRow(true)])
+    engineLog.mockResolvedValue([logRow(true)])
     const { container } = render(
       <Logbook defaultBand="70cm" defaultFreqMhz={435.5} defaultMode="SSB" />,
     )

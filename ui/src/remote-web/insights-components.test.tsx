@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AwardsJourney } from '../components/AwardsJourney'
 import { StatsView } from '../components/StatsView'
-import { getAwards, getConfirmationDiagnostics, getLog, getLogDelta, getLogStats, uploadLotwReport, uploadLotwReportByIds } from '../api'
+import { askLog, getAwards, getConfirmationDiagnostics, getLog, getLogDelta, getLogStats, uploadLotwReport, uploadLotwReportByIds } from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 import type { DiagnosticsReport } from '../types'
 import fixture from './__fixtures__/insights.json'
 
@@ -12,6 +13,8 @@ vi.mock('../api', () => ({
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
   getLog: vi.fn(async () => []), getLogStats: vi.fn(async () => fixture.geography),
   getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: [] })),
+  // The engine, over an empty log.
+  askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, [])),
   getJourney: vi.fn(async () => { throw new Error('unsupported') }),
   uploadLotwReport: vi.fn(), uploadLotwReportByIds: vi.fn(), qrzPushQso: vi.fn(), clublogPushQso: vi.fn(), eqslPushQso: vi.fn(),
 }))
@@ -24,6 +27,7 @@ it('renders the existing official award cards and chase filters from a remote su
   expect(getConfirmationDiagnostics).not.toHaveBeenCalled()
   expect(getLog).not.toHaveBeenCalled()
   expect(getLogDelta).not.toHaveBeenCalled()
+  expect(askLog).not.toHaveBeenCalled()
   const journey = screen.getByRole('tab', { name: 'Journey' }) as HTMLButtonElement
   expect(journey.disabled).toBe(true)
   expect(screen.getByRole('tab', { name: 'Official Awards' }).getAttribute('aria-selected')).toBe('true')
@@ -37,6 +41,7 @@ it('renders full-log Statistics using the supplied totals and the existing chart
   expect((await screen.findAllByText('2301')).length).toBeGreaterThan(0)
   expect(getLog).not.toHaveBeenCalled()
   expect(getLogDelta).not.toHaveBeenCalled()
+  expect(askLog).not.toHaveBeenCalled()
   expect(getLogStats).not.toHaveBeenCalled()
   expect(container.querySelectorAll('.stats-bar-fill').length).toBeGreaterThan(5)
   expect(screen.getByText('2012')).toBeTruthy()
@@ -46,16 +51,15 @@ it('preserves the native award and statistics read paths', async () => {
   const view = render(<AwardsJourney showGamification={false} />)
   await waitFor(() => expect(getAwards).toHaveBeenCalledOnce())
   expect(getConfirmationDiagnostics).toHaveBeenCalledOnce()
-  // Neither view holds the log (SPEC-2 v3 C17b): Awards asks `LogSource` only for the rows a
-  // diagnosis names — there is no diagnosis here, so it reads nothing — and Statistics asks for
-  // its roll-up, which the whole-log adapter answers from the window's copy: its first read.
+  // Neither view holds the log (SPEC-2 v3 C17b): Awards asks the engine about a contact only when
+  // a button that names one is pressed — nothing here — and Statistics asks for its roll-up.
   await new Promise((r) => setTimeout(r, 30))
-  expect(getLogDelta).not.toHaveBeenCalled()
+  expect(askLog).not.toHaveBeenCalled()
   view.unmount()
   render(<StatsView />)
   await waitFor(() => expect(getLogStats).toHaveBeenCalledOnce())
-  await waitFor(() => expect(getLogDelta).toHaveBeenCalledOnce())
-  expect(getLogDelta).toHaveBeenCalledWith(0, 0)
+  await waitFor(() => expect(askLog).toHaveBeenCalledWith({ kind: 'statistics' }))
+  expect(getLogDelta).not.toHaveBeenCalled()
   expect(getLog).not.toHaveBeenCalled()
 })
 

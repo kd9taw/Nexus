@@ -4,10 +4,10 @@
 // history, a roster's summary, a count — and holds the answer. The questions and their answers are
 // `logAnswers.ts`; this module is the contract a source of answers keeps, and the hook views use.
 //
-// Two sources exist or will:
-//   - `wholeLogSource` (now): answers from the window's copy of the whole log, with the views' own
-//     functions — identical to what they computed, by construction. It is the default.
-//   - the engine's (C17a): asks over IPC and holds only answers. It keeps the same five promises.
+// The window's source asks the ENGINE (SPEC-2 v3 C17): `createAskingLogSource` over `askLog`, one
+// IPC call per question, holding only the answers — a page of the Logbook, one call's history, a
+// count. No window holds the log. (Until C17 every window held the whole of it, and read all of
+// it again after every upload stamp.)
 //
 // THE CONTRACT
 //   peek(q)    What the source already holds for `q`, synchronously, or undefined. It MUST return
@@ -29,9 +29,10 @@
 // render, and a source swapped under mounted views would leave them subscribed to the old one.
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { askLog } from '../api'
+import { createAskingLogSource } from './askingLogSource'
 import { questionKey, type AnswerTo, type LogPage, type LogQuestion } from './logAnswers'
 import type { LogQuery } from './logQuery'
-import { wholeLogSource } from './wholeLogSource'
 
 export interface LogSource {
   peek<Q extends LogQuestion>(q: Q): AnswerTo<Q> | undefined
@@ -42,7 +43,11 @@ export interface LogSource {
   refresh(): void
 }
 
-let current: LogSource = wholeLogSource
+/** The engine's answers. `async`: a transport that throws before it returns a promise would throw
+ *  out of a view's effect (`want`) instead of rejecting. */
+const askingTheEngine = (): LogSource => createAskingLogSource(async (q) => askLog(q))
+
+let current: LogSource = askingTheEngine()
 
 /** The window's source of log answers. */
 export function logSource(): LogSource {
@@ -54,9 +59,10 @@ export function setLogSource(source: LogSource): void {
   current = source
 }
 
-/** Tests: back to the default, after every test (src/test-setup.ts). */
+/** Tests: back to the default — a fresh one, holding no answers — after every test
+ *  (src/test-setup.ts). */
 export function __resetLogSourceForTests(): void {
-  current = wholeLogSource
+  current = askingTheEngine()
 }
 ;(globalThis as { __nexusTestResets?: Set<() => void> }).__nexusTestResets?.add(__resetLogSourceForTests)
 
