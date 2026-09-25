@@ -14,6 +14,7 @@ import { dismissToast, subscribeToasts, type Toast } from '../toast'
 import { t } from '../i18n'
 import type { LoggedQso, UploadReport } from '../types'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -25,19 +26,19 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: vi.fn(() => Promise.resolve({})),
-    markQslCard: vi.fn(() => Promise.resolve({})),
+    markQslSentById: vi.fn(() => Promise.resolve({})),
+    markQslCardById: vi.fn(() => Promise.resolve({})),
     syncLotwReport: noop(), uploadLotwReport: vi.fn(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -61,7 +62,7 @@ beforeEach(() => {
   unsubscribe = subscribeToasts((now) => {
     toasts = now
   })
-  vi.mocked(api.getLog).mockResolvedValue(unsent)
+  engineLog.mockResolvedValue(unsent)
 })
 afterEach(() => {
   cleanup()

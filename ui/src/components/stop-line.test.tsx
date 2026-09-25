@@ -310,7 +310,6 @@ vi.mock('../api', async (importOriginal) => {
     getJs8State: vi.fn(async () => js8State),
     // The JS8 roster joins against the logbook (features/callHistory) for its ✓/Name/
     // Comment columns; the auto-stub's `{}` is not a log this sweep can render against.
-    getLog: vi.fn(async () => []),
     // `js8_enter` fires on the rising edge of `active`; the auto-stub would answer `{}` and
     // the cockpit would then render a state with no `armed` — pin the fixture.
     js8Enter: vi.fn(async () => js8State),

@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
-import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -29,19 +29,19 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
-    logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
+    logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }
@@ -62,7 +62,7 @@ function qso(over: Record<string, unknown> = {}) {
 }
 
 async function table(rows: Record<string, unknown>[]): Promise<HTMLElement> {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(rows)
+  engineLog.mockResolvedValue(rows)
   const { container } = render(<Logbook defaultBand="40m" defaultFreqMhz={7.074} defaultMode="FT8" />)
   return waitFor(() => {
     const r = container.querySelector('.logbook-row:not(.head)')

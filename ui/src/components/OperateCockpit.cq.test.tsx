@@ -24,7 +24,6 @@ const startCq = vi.fn(async () => null)
 const pushToast = vi.fn()
 
 vi.mock('../api', () => ({
-  getLog: vi.fn(async () => []),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
   getSettings: vi.fn(async () => ({})),

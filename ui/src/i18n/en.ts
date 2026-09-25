@@ -1354,6 +1354,15 @@ export const EN = {
   'logbook.delete.confirm': 'Delete QSO',
   'logbook.delete.failed': 'Could not delete the QSO',
   'logbook.delete.done': 'Deleted {{call}}',
+  // A change to one contact that was NOT made: after this window read the contact it was changed
+  // — in another window (a Remote browser), or by a sync filling in a blank field — or deleted.
+  // Nothing was written, and the list (or the edit form) now shows the contact as it is.
+  'logbook.delete.changed':
+    '{{call}} changed in another window or by a sync, so it was not deleted. Here it is now — check it, and delete it again if you still want to.',
+  'logbook.delete.gone': '{{call}} was already deleted in another window.',
+  'logbook.change.changed':
+    '{{call}} changed in another window or by a sync, so this was not saved. Here it is now — check it and try again.',
+  'logbook.change.gone': '{{call}} was deleted in another window, so this was not saved.',
 
   // ── The log strip (the cockpits' LOG pane, "Log this QSO") ──────────────────────────
   // One component serves Phone, CW and Satellites, plus a Field Day variant, so these keys

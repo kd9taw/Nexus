@@ -526,11 +526,11 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
         .unwrap_or_default()
 }
 
-/// The identity of a row the SHACK's log view showed: the row itself, exactly as `get_log`
-/// handed it out. The station keys it the way a browser keys its page row — the same canonical
+/// The identity of a row the SHACK's log view showed: the row itself, exactly as the view was
+/// handed it. The station keys it the way a browser keys its page row — the same canonical
 /// bytes, the same SHA-256 — and [`locate`] then finds the record whose OWN key matches, so
 /// the row is a claim to be matched, never an address to trust. The view computes no hash (the
-/// desktop webview has no proven `crypto.subtle`), and `get_log` hands out no keys: keying a
+/// desktop webview has no proven `crypto.subtle`), and the view is handed no such keys: keying a
 /// whole log on every reload would cost a serialise and a digest per record under the engine
 /// lock, where keying one row on one click costs nothing anyone can notice.
 pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> Target {

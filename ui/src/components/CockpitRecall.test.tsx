@@ -24,6 +24,7 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { distanceLabel, bearingLabel } from '../grid'
 import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
+import type { LogQuestion } from '../features/logAnswers'
 
 const PHOTO = 'https://cdn-xfer.qrz.com/x/w1abc/photo.jpg'
 
@@ -80,7 +81,7 @@ const decodeState = {
 }
 
 // Union of the two cockpits' api surfaces (the structure-test mocks) + LogEntry's own:
-// getLog feeds the prior-contact history, qrzLookup is the call resolution under test.
+// askLog answers the prior-contact history, qrzLookup is the call resolution under test.
 vi.mock('../api', async (importOriginal) => {
   // ⭐ DERIVED FROM THE REAL MODULE, not a hand-kept list. A hand-kept mock omits any export
   // added after it was written, and a component that calls one THROWS ON MOUNT — so the suite
@@ -104,9 +105,8 @@ vi.mock('../api', async (importOriginal) => {
     fdLogManual: vi.fn(async () => ({})),
     contestLogManual: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})),
-    getLog: vi.fn(async () => priorQsos),
-    // …read through the shared log store, which asks get_log_delta: the whole log, every time.
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: priorQsos })),
+    // …asked of the engine, which answers over this log.
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, priorQsos)),
     lookupPark: vi.fn(async () => null),
     lookupParkLive: vi.fn(async () => null),
     qrzLookup: vi.fn(async () => resolved),

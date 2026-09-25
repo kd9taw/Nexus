@@ -21,9 +21,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tempo_core::logbook::hot::{HotIndex, HotKeys};
+use tempo_core::logbook::hot::{pairs_between, HotIndex, HotKeys, RowPair};
 use tempo_core::logbook::writer::Change;
-use tempo_core::logbook::{LogOp, Logbook, OpClass, QsoEdit, QsoRecord, RecordId, WorkedSince};
+use tempo_core::logbook::{
+    LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, Watermarks, WorkedSince,
+};
 
 use crate::logstore::{LogStore, Opened};
 
@@ -512,6 +514,20 @@ impl Hot<'_> {
     }
 }
 
+/// The hot index behind its lock, for a write through `&mut` — which no guard can be holding. A
+/// panic while one was held may have left it half-changed: it is let go of, and rebuilt at its
+/// next catch-up.
+fn hot_mut(hot: &mut std::sync::Mutex<HotIndex>) -> &mut HotIndex {
+    match hot.get_mut() {
+        Ok(hot) => hot,
+        Err(poisoned) => {
+            let hot = poisoned.into_inner();
+            hot.invalidate();
+            hot
+        }
+    }
+}
+
 /// Why a change addressed to one contact — by its id and the edit key of the version the caller
 /// holds ([`QsoEdit::key`]) — was not made. See [`StationCore::fresh_row`].
 #[derive(Debug, Clone, PartialEq)]
@@ -523,11 +539,10 @@ pub enum RowRefusal {
     Changed(Arc<QsoRecord>),
 }
 
-/// The log's rows as they stood just before a change, and the revision they stood at: what the
-/// store is told the change against, and what the hot index walks to follow it. See
+/// The log's rows as they stood just before a change: what the store is told the change
+/// against, and what the change's pairs for the hot index are measured from. See
 /// [`StationCore::change_base`].
 pub(crate) struct ChangeBase {
-    rev: u64,
     rows: Vec<Arc<QsoRecord>>,
 }
 
@@ -581,6 +596,16 @@ pub struct StationCore {
                 that moves it"
     )]
     pub(crate) logbook: Logbook,
+    /// The log's watermarks: the revision at which each kind of change last happened
+    /// ([`Watermarks`]), which every cache over the log is kept against. The station keeps them,
+    /// so they outlive the in-memory log (SPEC-2 v3 C19), and they move as each change is
+    /// followed ([`Self::follow`]).
+    marks: Watermarks,
+    /// Mints the ids of the contacts the station logs, under its position id
+    /// ([`Self::set_posid`]). Each load's log hands over its own ([`Logbook::hand_over_minter`])
+    /// and keeps a copy, under a nonce of its own, for the rows its imports and merges still add
+    /// (SPEC-2 v3 C19, Part B).
+    minter: Minter,
     /// The store that owns the log on disk, once [`Self::attach_store`] has run — see
     /// [`crate::logstore`]. `None` is the 1.13 path, where the log IS `log.adi`, appended to and
     /// rewritten whole: what a session falls back to when the store cannot be opened, and what
@@ -688,6 +713,9 @@ impl StationCore {
     /// real ones in at startup (log path, cty.dat/rarity/LoTW resolvers, journals).
     #[allow(deprecated)] // SPEC-2 C19: the station is built around the in-memory log
     pub(crate) fn new() -> Self {
+        let mut logbook = Logbook::new();
+        let minter = logbook.hand_over_minter();
+        let marks = logbook.marks();
         Self {
             clock: crate::clocksync::ClockState::default(),
             clock_owner_note: String::new(),
@@ -698,7 +726,9 @@ impl StationCore {
             upload_note: None,
             upload_ok: false,
             upload_tick: 0,
-            logbook: Logbook::new(),
+            logbook,
+            marks,
+            minter,
             store: None,
             store_problem: None,
             store_lingering: false,
@@ -744,6 +774,7 @@ impl StationCore {
     pub fn set_log_path(&mut self, path: PathBuf) {
         self.store = None;
         self.logbook = Logbook::load(&path);
+        self.minter = self.logbook.hand_over_minter();
         self.log_path = Some(path);
         self.backfill_country();
         self.backfill_state();
@@ -772,6 +803,7 @@ impl StationCore {
             outcome,
         } = opened;
         self.logbook = Logbook::from_store(records);
+        self.minter = self.logbook.hand_over_minter();
         self.log_path = Some(store.log_path().to_path_buf());
         self.last_log_mtime = None;
         self.store = Some(store);
@@ -835,14 +867,14 @@ impl StationCore {
     }
 
     /// The rows as they stand, for measuring a change against: the store is told the change
-    /// against them, and the hot index follows it by walking from them (see
-    /// [`Self::persist_change`]) — a copy of pointers, never of a record. The index is caught up
-    /// first, so these are the rows it holds and the walk can start from them.
+    /// against them, and the hot index follows it by the pairs measured from them (see
+    /// [`Self::persist_change`]) — a copy of pointers, never of a record. The index and the
+    /// watermarks are brought up to the log first, so these are the rows the index holds and the
+    /// pairs start from them.
     #[allow(deprecated)] // SPEC-2 C19: Stage 1's before-picture of every change
     fn change_base(&mut self) -> ChangeBase {
         self.sync_hot();
         ChangeBase {
-            rev: self.logbook.revision(),
             rows: self.logbook.records().to_vec(),
         }
     }
@@ -1214,9 +1246,21 @@ impl StationCore {
     /// log loaded by [`Self::set_log_path`], and a LoTW own-QSO echo that re-stamps rows already
     /// on file without counting them as promoted. Read off the revision, a write path cannot
     /// forget it.
-    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub(crate) fn log_tick(&self) -> u32 {
-        self.logbook.revision() as u32
+        self.marks.revision as u32
+    }
+
+    /// The log's watermarks, as the station keeps them — see [`Watermarks`] and [`Self::follow`].
+    pub(crate) fn marks(&self) -> Watermarks {
+        self.marks
+    }
+
+    /// The station's position id, which the ids of the contacts it logs from now on carry (see
+    /// [`RecordId`]); 0 until the profile has one.
+    #[allow(deprecated)] // SPEC-2 C19: the in-memory log still mints the rows its imports add (B)
+    pub(crate) fn set_posid(&mut self, posid: u32) {
+        self.minter.set_posid(posid);
+        self.logbook.set_posid(posid);
     }
 
     /// The hot index set ([`tempo_core::logbook::hot`]), caught up with the log as it stands and
@@ -1227,10 +1271,10 @@ impl StationCore {
     /// the first guard lives can only be a re-entry, and waiting for it would hang the radio
     /// loop forever. It panics instead, naming the mistake.
     ///
-    /// The catch-up here has no picture of the log before a change, so it follows only what
-    /// needs none — a stamp, an append — and rebuilds after anything else. Every change the
-    /// station makes is followed as it is made ([`Self::persist_change`]), so a rebuild here
-    /// means a write reached the log some other way (a test, or a path that should be taught).
+    /// Every change the station makes reaches the index as it is made ([`Self::follow`]), so the
+    /// catch-up here finds nothing to do. It is there for a write that reached the log some other
+    /// way (a test's): with no pairs to follow, it takes in a stamp or an append and rebuilds
+    /// after anything else ([`HotIndex::catch_up`]).
     #[allow(deprecated)] // SPEC-2 C19: the index catches up from the in-memory log
     pub(crate) fn hot(&self) -> Hot<'_> {
         let mut hot = match self.hot.try_lock() {
@@ -1246,38 +1290,61 @@ impl StationCore {
                  and pass it down (see StationCore::hot)"
             ),
         };
-        hot.catch_up(
-            &self.logbook,
-            None,
-            &StationKeys(self.dxcc_resolve.as_deref()),
-        );
+        hot.catch_up(&self.logbook, &StationKeys(self.dxcc_resolve.as_deref()));
         Hot(hot)
     }
 
-    /// Bring the hot index up to the log as it stands — after a write that is not a change the
-    /// station follows itself (an append made through [`Self::add_record`], a load).
+    /// ★ THE way a change to the log reaches the hot index (SPEC-2 v3 C19): `pairs`, the rows it
+    /// took out and put in ([`RowPair`]), and `now`, the watermarks it left the log at, which the
+    /// station keeps from here. Every change the station makes ends here — the one-contact
+    /// append ([`Self::add_record`]) and every change measured against a [`ChangeBase`]
+    /// ([`Self::persist_change`]) — so the index hears of each as it is made, row by row.
+    ///
+    /// Until the write path plans its own changes (Part B), the in-memory log still makes each
+    /// one, and `now` is its watermarks after it.
+    #[allow(deprecated)] // SPEC-2 C19: a debug build checks the index against the in-memory log
+    pub(crate) fn follow(&mut self, pairs: &[RowPair], now: Watermarks) {
+        let keys = StationKeys(self.dxcc_resolve.as_deref());
+        let hot = hot_mut(&mut self.hot);
+        hot.follow(pairs, self.marks.revision, now.revision, &keys);
+        self.marks = now;
+        // The station brings the index up to the log before every change it makes, so the pairs
+        // always describe the log the index holds: one it had to let go of is a bug here.
+        debug_assert_eq!(
+            hot.at(),
+            Some(now.revision),
+            "hot index: a change the station made could not be followed"
+        );
+        #[cfg(debug_assertions)]
+        if self.logbook.len() <= tempo_core::logbook::hot::VERIFY_ROWS {
+            hot.verify(&self.logbook, &keys);
+        }
+    }
+
+    /// Bring the hot index, and the watermarks the station keeps, up to the log as it stands —
+    /// after a load, or a write that reached the log around the station (a test's). After a
+    /// change the station made, which it follows as it makes it ([`Self::follow`]), there is
+    /// nothing to do.
     pub(crate) fn sync_hot(&mut self) {
         self.catch_up_hot(None);
     }
 
-    /// Bring the hot index up to the log, walking from `before` — the log as it stood when the
-    /// change began — when there is one. See [`HotIndex::catch_up`].
-    #[allow(deprecated)] // SPEC-2 C19: the index catches up from the in-memory log
+    /// Bring the hot index up to the log: by the pairs of the change made since `before` — the
+    /// log as it stood when the change began ([`Self::follow`]) — or, with no `before`, by
+    /// finding out from the log itself ([`HotIndex::catch_up`]).
+    #[allow(deprecated)] // SPEC-2 C19: the index follows the in-memory log's changes
     fn catch_up_hot(&mut self, before: Option<&ChangeBase>) {
-        let keys = StationKeys(self.dxcc_resolve.as_deref());
-        let hot = match self.hot.get_mut() {
-            Ok(hot) => hot,
-            Err(poisoned) => {
-                let hot = poisoned.into_inner();
-                hot.invalidate();
-                hot
+        match before {
+            Some(base) => {
+                let pairs = pairs_between(&base.rows, self.logbook.records());
+                self.follow(&pairs, self.logbook.marks());
             }
-        };
-        hot.catch_up(
-            &self.logbook,
-            before.map(|b| (b.rev, b.rows.as_slice())),
-            &keys,
-        );
+            None => {
+                let keys = StationKeys(self.dxcc_resolve.as_deref());
+                hot_mut(&mut self.hot).catch_up(&self.logbook, &keys);
+                self.marks = self.logbook.marks();
+            }
+        }
     }
 
     /// `log_qso`'s duplicate guard: whether `rec` is a contact the log already holds, from the
@@ -1325,11 +1392,17 @@ impl StationCore {
     }
 
     /// Add a contact to the log in memory — the append `Engine::log_qso` makes before it is
-    /// carried to disk — and hand back the id the log gave it. The hot index takes the row at
-    /// the caller's [`Self::sync_hot`], after the append.
+    /// carried to disk — and hand back its id: the one it carries, or one the station mints. The
+    /// hot index takes the row here ([`Self::follow`]), with no pass over the log.
     #[allow(deprecated)] // SPEC-2 C19: the append to the in-memory log
-    pub(crate) fn add_record(&mut self, rec: QsoRecord) -> RecordId {
-        self.logbook.add(rec)
+    pub(crate) fn add_record(&mut self, mut rec: QsoRecord) -> RecordId {
+        let id = *rec.id.get_or_insert_with(|| self.minter.mint());
+        // The index and the watermarks stand where the log does before the row goes in.
+        self.sync_hot();
+        self.logbook.add(rec);
+        let row = self.logbook.records().last().cloned();
+        self.follow(&[(None, row)], self.logbook.marks());
+        id
     }
 
     /// The contest session's sweep of the general log ([`Logbook::worked_keys_since`]'s answer),
@@ -3255,7 +3328,7 @@ mod hot_parity_tests {
     //! in-memory log the station still holds.
     use super::*;
     use tempo_core::logbook::dedup::scan_for_duplicate;
-    use tempo_core::logbook::hot::HOT_REBUILDS;
+    use tempo_core::logbook::hot::{HOT_CATCH_UPS, HOT_REBUILDS};
     use tempo_core::logbook::{adif_header, adif_record, QslVia, UploadOutcome};
     use tempo_core::message::{base_call, same_call};
 
@@ -3654,7 +3727,10 @@ mod hot_parity_tests {
 
     /// ★ Seeded random runs of every write the station makes, with the oracles asked after each
     /// — and the index rebuilt NOT ONCE after the station set it up: every change, the stamps
-    /// and the merges included, is followed row by row.
+    /// and the merges included, is followed row by row. And followed through ONE door
+    /// ([`StationCore::follow`], SPEC-2 v3 C19): after every write the index already holds the
+    /// log, before anything asks it, and no catch-up from the log is ever needed; the watermarks
+    /// the station keeps are the log's own.
     #[test]
     fn the_station_answers_as_before_c13_through_every_write_path_without_a_rebuild() {
         for seed in 0..24u64 {
@@ -3665,15 +3741,30 @@ mod hot_parity_tests {
             sc.activation = Some(("POTA".into(), "US-1234".into()));
             sc.sync_hot();
             HOT_REBUILDS.with(|c| c.set(0));
+            HOT_CATCH_UPS.with(|c| c.set(0));
             for step in 0..60 {
                 let what = change(&mut sc, &mut rng);
+                let at = format!("seed {seed} step {step}: {what}");
                 assert_eq!(
-                    HOT_REBUILDS.with(|c| c.get()),
-                    0,
-                    "seed {seed} step {step}: {what} rebuilt the index — the station's own \
-                     writes are followed row by row"
+                    sc.hot.lock().expect("not poisoned").at(),
+                    Some(sc.logbook.revision()),
+                    "{at}: the index does not hold the log — the write was not followed"
                 );
-                assert_parity(&sc, &mut rng, &format!("seed {seed} step {step}: {what}"));
+                assert_eq!(
+                    (sc.marks(), sc.log_tick()),
+                    (sc.logbook.marks(), sc.logbook.revision() as u32),
+                    "{at}: the station's watermarks, or the snapshot's tick, are not the log's"
+                );
+                assert_eq!(
+                    (
+                        HOT_REBUILDS.with(|c| c.get()),
+                        HOT_CATCH_UPS.with(|c| c.get())
+                    ),
+                    (0, 0),
+                    "{at}: the index was rebuilt, or caught up from the log — the station's \
+                     own writes are followed row by row, through `follow`"
+                );
+                assert_parity(&sc, &mut rng, &at);
             }
         }
     }
@@ -3693,6 +3784,7 @@ mod hot_parity_tests {
             sc.sync_hot();
         }
         HOT_REBUILDS.with(|c| c.set(0));
+        HOT_CATCH_UPS.with(|c| c.set(0));
         // Around the station: an append straight onto the log.
         sc.logbook.add(contact(&mut rng));
         let second = id_at(&sc, 1);
@@ -3700,9 +3792,50 @@ mod hot_parity_tests {
         assert_eq!(
             HOT_REBUILDS.with(|c| c.get()),
             0,
-            "the edit after it was walked, not rebuilt"
+            "the edit after it was followed, not rebuilt"
         );
+        // The POSITIVE CONTROL for the property's "no catch-up": a write made around the station
+        // is exactly what one counts.
+        assert_eq!(
+            HOT_CATCH_UPS.with(|c| c.get()),
+            1,
+            "the append around the station was caught up from the log, once"
+        );
+        assert_eq!(sc.marks(), sc.logbook.marks());
         assert_parity(&sc, &mut rng, "a write around the station, then an edit");
+    }
+
+    /// The station mints the ids of the contacts it logs (SPEC-2 v3 C19) under its position id,
+    /// and the in-memory log's own minter — which still mints the rows an import adds — carries
+    /// the same position under a nonce of its own, so the two never hand out one id.
+    #[test]
+    fn what_the_station_logs_and_what_an_import_adds_are_minted_under_one_position() {
+        let mut rng = Rng(3);
+        let mut sc = StationCore::new();
+        sc.set_posid(0x00c0_ffee);
+        let mut logged = contact(&mut rng);
+        logged.call = "W1AW".into();
+        let logged = sc.add_record(logged);
+        let mut imported = contact(&mut rng);
+        imported.call = "K1ABC".into();
+        sc.import_adif(&format!("{}{}", adif_header(), adif_record(&imported)));
+        let imported = sc.logbook.records()[1]
+            .id
+            .expect("an import's row carries an id");
+        match (logged, imported) {
+            (
+                RecordId::Minted {
+                    posid: a, nonce: x, ..
+                },
+                RecordId::Minted {
+                    posid: b, nonce: y, ..
+                },
+            ) => {
+                assert_eq!((a, b), (0x00c0_ffee, 0x00c0_ffee), "the station's position");
+                assert_ne!(x, y, "under nonces of their own");
+            }
+            other => panic!("both minted here: {other:?}"),
+        }
     }
 
     /// ★ POSITIVE CONTROL for the debug build's dual execution: the partner's logged grid is the

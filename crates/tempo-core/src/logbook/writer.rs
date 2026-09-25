@@ -66,8 +66,8 @@
 //! (C6). This is the mechanism and its proof.
 
 use super::io_fence;
-use super::sqlite::{self, Batch, LogDb, RowWrite, Watermarks};
-use super::{Effects, LogOp, Logbook, QsoRecord, RecordId};
+use super::sqlite::{self, Batch, LogDb, RowWrite};
+use super::{Effects, LogOp, Logbook, QsoRecord, RecordId, Watermarks};
 use crate::applog;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};

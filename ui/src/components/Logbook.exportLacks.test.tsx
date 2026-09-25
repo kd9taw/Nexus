@@ -14,6 +14,7 @@ import { dismissToast, subscribeToasts, type Toast } from '../toast'
 import { t } from '../i18n'
 import type { LogExport, LoggedQso } from '../types'
 import * as api from '../api'
+import type { LogQuestion } from '../features/logAnswers'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -25,20 +26,20 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
+/** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
+const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const getLog = vi.fn()
   return {
-    getLog,
-    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
+    askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
     exportGeneralLog: vi.fn(),
     saveTextToDownloads: vi.fn(async () => '/tmp/nexus-log.adi'),
-    deleteQso: noop(), importAdif: noop(), editQso: vi.fn(async () => ({})),
+    deleteQsoById: noop(), importAdif: noop(), editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: vi.fn(),
     logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -64,7 +65,7 @@ beforeEach(() => {
   unsubscribe = subscribeToasts((now) => {
     toasts = now
   })
-  vi.mocked(api.getLog).mockResolvedValue(oneContact)
+  engineLog.mockResolvedValue(oneContact)
 })
 afterEach(() => {
   cleanup()
@@ -87,8 +88,15 @@ function open() {
 async function exportAdif(exported: LogExport) {
   vi.mocked(api.exportGeneralLog).mockResolvedValue(exported)
   open()
-  fireEvent.click(await screen.findByRole('button', { name: 'Export ADIF' }))
+  fireEvent.click(await pressable('Export ADIF'))
   await screen.findByText(t('logbook.export.done', { count: 2, path: '/tmp/nexus-log.adi' }))
+}
+
+/** A button the operator can press: an export waits for the log's size, as its button does. */
+async function pressable(name: string) {
+  const button = (await screen.findByRole('button', { name })) as HTMLButtonElement
+  await waitFor(() => expect(button.disabled).toBe(false))
+  return button
 }
 
 /** Toasts about what an export lacks, by the words only they say. */
@@ -123,7 +131,7 @@ describe('an export the logbook database had not caught up with', () => {
   it('says it for the CSV export too', async () => {
     vi.mocked(api.exportGeneralLog).mockResolvedValue(file(1, 0))
     open()
-    fireEvent.click(await screen.findByRole('button', { name: 'Export CSV' }))
+    fireEvent.click(await pressable('Export CSV'))
     // CSV counts its rows minus the header line.
     await screen.findByText(t('logbook.export.done', { count: 1, path: '/tmp/nexus-log.adi' }))
     expect(lackToasts().map((x) => x.message)).toEqual([t('logbook.export.lacks.saving', { count: 1 })])
@@ -149,7 +157,7 @@ describe('an export the logbook database had not caught up with', () => {
       .mockResolvedValueOnce(file(3, 0))
     vi.mocked(api.exportGeneralLog).mockResolvedValue(file(1, 0))
     open()
-    fireEvent.click(await screen.findByRole('button', { name: t('logbook.export.perOperator.label') }))
+    fireEvent.click(await pressable(t('logbook.export.perOperator.label')))
     await screen.findByText(t('logbook.export.perOperator.done', { count: 3 }))
     await waitFor(() => expect(lackToasts()).toHaveLength(1))
     expect(lackToasts()[0].message).toBe(t('logbook.export.lacks.saving', { count: 3 }))

@@ -4505,7 +4505,6 @@ impl Engine {
     }
 
     /// Construct from full [`Settings`].
-    #[allow(deprecated)] // SPEC-2 C19: the Engine is built around the in-memory log
     pub fn with_settings(settings: Settings) -> Self {
         // Passive launch (safety): never auto-transmit on startup. The CQ beacon
         // is a deliberate, per-session opt-in — even if a saved settings file has
@@ -4592,7 +4591,7 @@ impl Engine {
             app,
             station: {
                 let mut station = StationCore::new();
-                station.logbook.set_posid(log_posid(&settings));
+                station.set_posid(log_posid(&settings));
                 station
             },
             settings,
@@ -22596,9 +22595,8 @@ contact yourself."
     }
 
     /// Hand the log the position id its minted ids carry (see [`log_posid`]).
-    #[allow(deprecated)] // SPEC-2 C19: the minter outlives the in-memory log
     fn sync_log_posid(&mut self) {
-        self.station.logbook.set_posid(log_posid(&self.settings));
+        self.station.set_posid(log_posid(&self.settings));
     }
 
     /// Make the store the owner of the log — the ordinary launch. See
@@ -23163,33 +23161,29 @@ contact yourself."
 
     /// The log's revision — the key a whole-log result is cached against. See
     /// [`tempo_core::logbook::Logbook::revision`].
-    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_revision(&self) -> u64 {
-        self.station.logbook.revision()
+        self.station.marks().revision
     }
 
     /// The revision of the log's last change a fold over its content must be built again for
     /// — every change but an upload stamp, a QSL-sent mark or an id's adoption. The key a fold
     /// that reads none of those is kept against (SPEC-2 v3 §4.4). See
     /// [`tempo_core::logbook::OpClass`] for which change moves which watermark.
-    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_index_rev(&self) -> u64 {
-        self.station.logbook.index_rev()
+        self.station.marks().index_rev
     }
 
     /// The revision of the log's last change to any contact's content — everything but an
     /// append. See [`tempo_core::logbook::OpClass`].
-    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_content_rev(&self) -> u64 {
-        self.station.logbook.content_rev()
+        self.station.marks().content_rev
     }
 
     /// The revision of the log's last change to a contact's identifying fields — an append, an
     /// edit, a delete. What an index keyed on calls is kept against. See
     /// [`tempo_core::logbook::OpClass`].
-    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_key_rev(&self) -> u64 {
-        self.station.logbook.key_rev()
+        self.station.marks().key_rev
     }
 
     /// Worked before (B4), call scope, for each of `keys` — a call as the hot index keys it,
@@ -23214,9 +23208,8 @@ contact yourself."
 
     /// Whether the log only grew since it stood at `revision`. See
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
-    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_appended_only_since(&self, revision: u64) -> bool {
-        self.station.logbook.appended_only_since(revision)
+        self.station.marks().appended_only_since(revision)
     }
 
     /// See [`StationCore::get_log`].
