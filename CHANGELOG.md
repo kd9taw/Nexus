@@ -153,11 +153,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. A contact logged while you are scrolled down still leaves the rows you are looking at
   exactly where they are.
 
-- **When the logbook is too busy to take a change, nothing changes and the Logbook says so.** An
-  edit, QSL mark, satellite tag or delete that keeps meeting other changes on its way in — a big
-  import, another window, a sync — is tried again a few times. If it still cannot be made, the
-  Logbook says the logbook was busy and nothing changed, leaves the row and your typing as they
-  were, and saving again retries.
+- **When the logbook is too busy to take a change, nothing changes and Nexus says so.** A change
+  that keeps meeting other changes on its way in — from a big import, another window or a sync —
+  is tried again a few times. If it still cannot be made, nothing is changed and Nexus says the
+  logbook was busy, so doing it again retries. That covers the Logbook's edits, QSL marks,
+  satellite tags and deletes (the row and your typing stay as they were) and an import, a LoTW,
+  eQSL or QRZ sync, the Field Day merge and the POTA stamps.
 
 - **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
   Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
