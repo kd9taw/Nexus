@@ -113,11 +113,11 @@ enum Answer {
     File(String),
 }
 
-/// A refused read of the log, in this operation's own words — the only ones a page accepts in an
+/// A refused read of the log in an operation's words — the only ones a page accepts in an
 /// operation reply (`OPERATION_ERRORS`, ui/src/remote-web/operation-protocol.ts): a writer still
 /// behind is `stationBusy`, which a page retries; a store that cannot be read is
-/// `stationUnavailable`.
-fn in_operation_words(refused: &'static str) -> &'static str {
+/// `stationUnavailable`. The export's reads, and a log change's search for its key target.
+pub(super) fn in_operation_words(refused: &'static str) -> &'static str {
     match refused {
         "applicationBusy" => "stationBusy",
         _ => "stationUnavailable",

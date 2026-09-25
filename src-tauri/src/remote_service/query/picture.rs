@@ -34,7 +34,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use tempo_app::logstore::{Freshness, LogRows, READ_WAIT};
-use tempo_core::logbook::sqlite::{LogDb, Narrow, Order, Scope};
+use tempo_core::logbook::sqlite::{call_norm_of, LogDb, Narrow, Order, Scope};
 use tempo_core::logbook::{QsoRecord, RecordId};
 
 /// What a read says when the store could not be read. Never an empty answer, which would call
@@ -48,9 +48,9 @@ pub(in crate::remote_service) enum Picture<'a> {
     Memory(&'a [Arc<QsoRecord>]),
 }
 
-/// A contact a pass handed over: its place in log order in this picture, and its id — what its
-/// whole record is fetched by ([`Picture::whole`]). Two picks are the same pick when they are the
-/// same place, which in one picture is the same contact.
+/// A contact a pass handed over: its place in log order in this picture (among the contacts its
+/// pass visited), and its id — what its whole record is fetched by ([`Picture::whole`]). Two
+/// picks of one pass are the same pick when they are the same place, which is the same contact.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::remote_service) struct Pick {
     pub(super) at: usize,
@@ -82,12 +82,24 @@ impl Picture<'_> {
         narrow: Narrow,
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
+        self.each_in(Scope::All, narrow, each)
+    }
+
+    /// [`Self::each`] over only the contacts `scope` holds: on the store through the index that
+    /// holds them, on the 1.13 path by the same test made here. A scope narrows, it never decides
+    /// (P2): a reader still tests every contact it is handed.
+    pub(in crate::remote_service) fn each_in(
+        &self,
+        scope: Scope<'_>,
+        narrow: Narrow,
+        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
         #[cfg(test)]
         seam(Seam::Each);
         match self {
             Picture::Store(db) => {
                 let (mut at, mut answer) = (0, Ok(()));
-                db.each_narrow(narrow, Scope::All, Order::Log, &mut |q| {
+                db.each_narrow(narrow, scope, Order::Log, &mut |q| {
                     let pick = Pick { at, id: q.id };
                     at += 1;
                     match each(pick, q) {
@@ -104,6 +116,7 @@ impl Picture<'_> {
             Picture::Memory(rows) => rows
                 .iter()
                 .enumerate()
+                .filter(|(_, q)| holds(scope, q))
                 .try_for_each(|(at, q)| each(Pick { at, id: q.id }, q)),
         }
     }
@@ -155,6 +168,16 @@ impl Picture<'_> {
                 .map_err(|_| UNREADABLE),
             Picture::Memory(rows) => Ok(rows.len()),
         }
+    }
+}
+
+/// Whether `scope` holds the contact `q`: the store's own test for each scope ([`Scope`]), made on
+/// the 1.13 path's rows.
+fn holds(scope: Scope<'_>, q: &QsoRecord) -> bool {
+    match scope {
+        Scope::All => true,
+        Scope::Since(t) => q.when_unix >= t,
+        Scope::CallNorm(norm) => call_norm_of(&q.call) == norm,
     }
 }
 

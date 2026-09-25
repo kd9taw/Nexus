@@ -16946,7 +16946,7 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// The log commands below take the ROW the UI showed (`target`, as `get_log` handed it out),
 /// and never a position. The station keys that row exactly as a Remote browser keys its page
 /// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
-/// `remote_service::operations::logging::{seen_target, locate}`. They used to take
+/// `remote_service::operations::logging::{seen_target, find, locate}`. They used to take
 /// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
 /// which held while the desktop was the log's only writer. Remote made it a second writer:
 /// a browser's delete removed a row and shifted every later one, and the shack's next Delete
@@ -16954,13 +16954,32 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// with another contact's fields and its confirmations stripped as a "callsign correction" —
 /// under a toast naming the row the operator meant. The key finds the row where it is today,
 /// or refuses when no row holds that content any more.
+///
+/// The row is found in the store with the engine lock RELEASED — a read of the log never runs
+/// under it — and what was found is checked under the lock by [`locate_seen`], so a change
+/// landing between the two is refused like any other.
+fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRef, String> {
+    use remote_service::operations::logging::{find, seen_target};
+    let rows = engine_lock(engine).log_rows();
+    match find(&rows, &seen_target(seen)) {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(LOG_ROW_GONE.into()),
+        Err(_) => Err(LOG_UNREAD.into()),
+    }
+}
+
+/// The contact [`find_seen`] found, if it is still the version found, under the engine lock.
 fn locate_seen(
     eng: &mut Engine,
-    seen: &LoggedQso,
+    found: &log_by_id::RowRef,
 ) -> Result<tempo_core::logbook::RecordId, String> {
-    use remote_service::operations::logging::{locate, seen_target};
-    locate(eng, &seen_target(seen)).ok_or_else(|| LOG_ROW_GONE.into())
+    remote_service::operations::logging::locate(eng, found).ok_or_else(|| LOG_ROW_GONE.into())
 }
+
+/// The refusal a log command gives when the log could not be read to find its row: the store
+/// unreadable, or its writer still behind the changes made before the command was asked.
+const LOG_UNREAD: &str =
+    "Nexus could not read the logbook to find that contact just now — nothing was changed. Try again in a moment.";
 
 /// The refusal every log command gives for a row it cannot find: the log changed under the
 /// view (a Remote delete, an edit, a connector stamp) and the operator must look again.
@@ -17024,9 +17043,10 @@ async fn edit_qso(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.update_qso(id, record.into()) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17088,9 +17108,10 @@ async fn mark_qsl_sent(
     let via = qsl_via_arg(via.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.mark_qsl_sent(id, via) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17115,9 +17136,10 @@ async fn mark_qsl_card(
 ) -> Result<LoggedQso, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.mark_qsl_card(id, received) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17187,9 +17209,10 @@ async fn set_sat_tag(
     let name = sat_name_arg(sat_name.as_deref())?;
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.set_sat_tag(id, name.as_deref()) {
                 return Err(LOG_ROW_GONE.into());
             }
@@ -17218,9 +17241,10 @@ async fn delete_qso(
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let found = find_seen(&engine, &target);
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let id = locate_seen(eng, &target)?;
+            let id = locate_seen(eng, &found?)?;
             if !eng.delete_qso(id) {
                 return Err(LOG_ROW_GONE.into());
             }

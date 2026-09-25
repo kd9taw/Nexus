@@ -1164,19 +1164,19 @@ mod tests {
     }
 
     /// ★ THE KEYS STILL MATCH. A browser names the row it changes by the bytes of the row it was
-    /// served, and the change path finds the contact whose own row — built from the log in
-    /// memory — has those bytes (`operations::logging::{seen_target, locate}`). Every row of a
-    /// window read from the store is found, at its own place: a change made from a page served
-    /// out of the store reaches the contact the page showed.
+    /// served, and the change path finds the contact whose own row has those bytes — in the
+    /// store, then checked under the Engine lock (`operations::logging::{seen_target, find,
+    /// locate}`). Every row of a window read from the store is found, as the contact it was: a
+    /// change made from a page served out of the store reaches the contact the page showed.
     #[test]
     fn every_row_served_from_the_store_is_found_by_the_change_path_at_its_own_place() {
-        use crate::remote_service::operations::logging::{locate, seen_target};
+        use crate::remote_service::operations::logging::{find, locate, seen_target};
         let d = Dir::new("keys");
         std::fs::write(d.log(), synthetic_log(2_500, 0x0C18_A4E7)).unwrap();
         let store = launch(&d);
         let (rows, _, _) = log_capture(&store, "", false).unwrap();
         assert_eq!(rows.len(), 2_000, "premise: a full window");
-        let mut eng = store.lock().unwrap();
+        let log = store.lock().unwrap().log_rows();
         for row in &rows {
             let seen: tempo_app::dto::LoggedQso = serde_json::from_value(row.clone()).unwrap();
             assert_eq!(
@@ -1184,11 +1184,13 @@ mod tests {
                 *row,
                 "premise: the row a browser holds is the row it was sent"
             );
-            let at = locate(&mut eng, &seen_target(&seen))
+            let found = find(&log, &seen_target(&seen))
+                .expect("the log reads")
                 .unwrap_or_else(|| panic!("the change path finds the row it served: {row}"));
+            let at = locate(&mut store.lock().unwrap(), &found)
+                .unwrap_or_else(|| panic!("and it is still that contact: {row}"));
             assert_eq!(Some(at.to_string()), seen.id, "the contact it served");
         }
-        drop(eng);
         settle(&store);
     }
 
