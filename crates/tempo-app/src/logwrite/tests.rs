@@ -155,7 +155,7 @@ fn a_log_adi_taken_in_under_a_plan_on_the_1_13_path_is_planned_again() {
             let _ = other.merge_report(&report);
             other.save(&path).unwrap();
             assert!(
-                engine_lock(&engine).sync_shared_log_if_changed(),
+                crate::engine::sync_shared_log(&engine),
                 "premise: the freshness poll takes the file in"
             );
         }
@@ -272,11 +272,14 @@ fn another_windows_change_under_the_plan_is_planned_again() {
     );
 }
 
-/// The control for the test above: another window's commit to a DIFFERENT row is no reason to
-/// plan again. It is taken in, the row this change planned on is still the row it read, and the
-/// change is made on the first plan.
+/// Flag (b), the operator's rule (SPEC-2 v3 C19, Q2 (a)): another window's commit since a plan
+/// was taken plans the change again, even one to ANOTHER row — the second plan's read is the
+/// store's word, and nothing is ever written over. That second plan takes the other window's
+/// commit in first, off the lock ([`crate::engine::log_plan`]), and the change is made; both
+/// stand. (Before the cut a commit to another row cost no second plan: the commit compared the
+/// rows it read with the log in memory, which is gone.)
 #[test]
-fn another_windows_change_to_another_row_is_no_reason_to_plan_again() {
+fn another_windows_change_to_another_row_plans_again_and_both_stand() {
     let d = Dir::new("race-window-other");
     let a = shared(&d, 6);
     let b = Arc::new(Mutex::new(engine_on_store(&d)));
@@ -299,7 +302,11 @@ fn another_windows_change_to_another_row_is_no_reason_to_plan_again() {
     };
     let (made, durability) = racing(hook, || change_ops(&a, id, None, &[card(id)], "window A"));
     assert!(matches!(made, Ok(Ok(_))), "{made:?}");
-    assert_eq!(plans.get(), 1, "B changed another row: planned once");
+    assert_eq!(
+        plans.get(),
+        2,
+        "planned again: another window committed after the plan was taken"
+    );
     durability.wait(DURABLE_WAIT).expect("on disk");
     assert!(stored_row(&d, id).qsl_rcvd.card, "A's card");
     assert_eq!(
@@ -307,15 +314,9 @@ fn another_windows_change_to_another_row_is_no_reason_to_plan_again() {
         Some(9),
         "B's stamp on its row"
     );
-    assert_eq!(
-        engine_lock(&a)
-            .log_records()
-            .iter()
-            .find(|r| r.id == Some(other))
-            .and_then(|r| r.upload.qrz.as_ref())
-            .map(|s| s.when_unix),
-        Some(9),
-        "and A took it in"
+    assert!(
+        !engine_lock(&a).log_store_foreign_pending(),
+        "and A took B's commit in, off the lock, before its second plan"
     );
 }
 
