@@ -730,6 +730,32 @@ impl LogStore {
         Some(ticket)
     }
 
+    /// [`Self::submit`] for a purge — a `clear` change that names no row — with `taken`, the hot
+    /// index as it stood, for the rows it took out (SPEC-2 v3 C19, §4.11): held as the purge's
+    /// rows, moved and never listed, so the purge costs the Engine lock the same whatever the
+    /// log's size. `None` for `taken` when the index could not say (it had not followed the log):
+    /// the purge is made and holds no rows, so one the writer gives up on is sent again as nothing,
+    /// never as every row.
+    pub(crate) fn submit_purge(
+        &mut self,
+        change: Change,
+        taken: Option<HotIndex>,
+    ) -> Option<Ticket> {
+        debug_assert!(
+            change.clear && change.remove.is_empty() && change.upsert.is_empty(),
+            "a purge names no row: its first send drops them all"
+        );
+        self.collect(Instant::now());
+        self.supersede(&change);
+        let taken = PurgedIndex::new(taken.unwrap_or_default(), &self.writer);
+        let held = Held::purge(Arc::new(taken));
+        let ticket = self.send_held(change, Arc::new(held), None, 0, ToFile::Rewrite);
+        if let Some(c) = &mut self.collector {
+            c.push(ticket.clone());
+        }
+        Some(ticket)
+    }
+
     /// Hand a change to the writer and its revision to the mirror, and keep the change in flight
     /// with its rows — `resends` times sent again already. No I/O, and no copy of the log: the
     /// mirror reads the store once it holds the change.
@@ -739,13 +765,29 @@ impl LogStore {
 
     /// [`Self::send`], telling the 1.13 path's lane what the change asks of `log.adi`.
     fn send_as(&mut self, change: Change, resends: u32, to_file: ToFile) -> Ticket {
+        let held = Arc::new(Held::of(&change));
+        self.send_held(change, held, None, resends, to_file)
+    }
+
+    /// [`Self::send_as`] with the change's rows as this process holds them, `held`, and any rows
+    /// the writer lists itself ([`writer::RemoveLater`]).
+    fn send_held(
+        &mut self,
+        change: Change,
+        held: Arc<Held>,
+        later: Option<writer::RemoveLater>,
+        resends: u32,
+        to_file: ToFile,
+    ) -> Ticket {
         debug_assert!(
             !self.placeholder,
             "a change reached the launch's placeholder log before the launch attached the \
              operator's: the attach replaces it, and the change would be lost with it"
         );
-        let held = Arc::new(Held::of(&change));
-        let ticket = self.writer.submit(change);
+        let ticket = match later {
+            Some(later) => self.writer.submit_removing_later(change, later),
+            None => self.writer.submit(change),
+        };
         self.inflight.push(InFlight {
             ticket: ticket.clone(),
             held,
@@ -906,7 +948,16 @@ impl LogStore {
         let sent = go.len();
         for d in go {
             let change = d.held.change(d.rev, marks);
-            self.send(change, d.resends + 1);
+            match d.held.remove_later() {
+                // A purge the writer gave up on: the rows it took out, listed on the writer's
+                // thread, and held as they were for a plan to read meanwhile.
+                Some(later) => {
+                    self.send_held(change, d.held, Some(later), d.resends + 1, ToFile::Rewrite);
+                }
+                None => {
+                    self.send(change, d.resends + 1);
+                }
+            }
         }
         tempo_core::applog::info(
             "logbook",
@@ -1411,17 +1462,77 @@ struct Dropped {
     due: Instant,
 }
 
+/// The rows a purge took out, as the hot index held them when it went (SPEC-2 v3 C19, §4.11):
+/// taken whole under the Engine lock, in one move, and never listed there — a purge's first send
+/// drops every row and needs no list. The list is made only where it is wanted, off the lock: a
+/// plan asks whether a row is one of them ([`Self::holds`], the set built the first time), and a
+/// purge the writer gave up on is sent again as exactly these rows, listed on the writer's thread
+/// ([`writer::RemoveLater`]). Freed on the writer's thread too, whoever lets go of it last: the
+/// log's index freed under the lock, or on the radio loop, is the hold §4.11 bounds. It holds the
+/// writer's [`writer::Disposer`], never the writer: that send never blocks, and a drop that owned
+/// the writer could be the one to stop it, and wait there for its thread.
+pub(crate) struct PurgedIndex {
+    index: HotIndex,
+    ids: std::sync::OnceLock<std::collections::HashSet<RecordId>>,
+    disposer: writer::Disposer,
+}
+
+impl PurgedIndex {
+    /// The rows a purge took out, `index`, freed on `writer`'s thread once let go.
+    fn new(index: HotIndex, writer: &LogWriter) -> PurgedIndex {
+        PurgedIndex {
+            index,
+            ids: std::sync::OnceLock::new(),
+            disposer: writer.disposer(),
+        }
+    }
+
+    /// Whether `id` is one of the rows the purge took out.
+    fn holds(&self, id: RecordId) -> bool {
+        self.ids
+            .get_or_init(|| self.index.ids().into_iter().collect())
+            .contains(&id)
+    }
+
+    /// The rows the purge took out, but for `released`: what a purge sent again takes out.
+    fn ids_except(&self, released: &std::collections::HashSet<RecordId>) -> Vec<RecordId> {
+        let mut ids = self.index.ids();
+        ids.retain(|id| !released.contains(id));
+        ids
+    }
+}
+
+impl std::fmt::Debug for PurgedIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PurgedIndex({} rows)", self.index.rows())
+    }
+}
+
+impl Drop for PurgedIndex {
+    fn drop(&mut self) {
+        let rows = (
+            std::mem::take(&mut self.index),
+            std::mem::take(&mut self.ids),
+        );
+        self.disposer.dispose(Box::new(rows));
+    }
+}
+
 /// One change's rows, as this process holds them until the store does: what it purged, removed
 /// and wrote. Each written row is the row AS IT STOOD after the change — state, never a delta —
-/// which is what lets it be read in the store's place, and sent again, safely. A purge's
-/// `remove` is the rows it took out, by id: while it is on its way its `clear` answers for every
-/// row, and once the writer has given it up the list is all it holds ([`LogStore::collect`]). A
-/// set, since a purge's list is the whole log and a plan asks it of every row it reads.
+/// which is what lets it be read in the store's place, and sent again, safely. A purge's rows are
+/// the index it took out, less any a later change took over since (`released`): while it is on
+/// its way its `clear` answers for every row, and once the writer has given it up those rows are
+/// all it holds ([`LogStore::collect`]).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Held {
     clear: bool,
     remove: std::collections::HashSet<RecordId>,
     upsert: Vec<sqlite::RowWrite>,
+    purged: Option<Arc<PurgedIndex>>,
+    /// Ids a later change took over from the purge: noted as they come, never looked up in its
+    /// rows, so a later change costs the purge's `Held` what that change touches and nothing more.
+    released: std::collections::HashSet<RecordId>,
 }
 
 impl Held {
@@ -1430,11 +1541,22 @@ impl Held {
             clear: change.clear,
             remove: change.remove.iter().copied().collect(),
             upsert: change.upsert.clone(),
+            ..Held::default()
+        }
+    }
+
+    /// A purge on its way: every row gone, and the rows it took out, `taken`.
+    fn purge(taken: Arc<PurgedIndex>) -> Held {
+        Held {
+            clear: true,
+            purged: Some(taken),
+            ..Held::default()
         }
     }
 
     fn touches(&self, ids: &std::collections::HashSet<RecordId>) -> bool {
-        ids.iter().any(|id| self.remove.contains(id))
+        (self.purged.is_some() && !ids.is_empty())
+            || ids.iter().any(|id| self.remove.contains(id))
             || self
                 .upsert
                 .iter()
@@ -1448,6 +1570,18 @@ impl Held {
         }
         self.upsert
             .retain(|w| w.rec.id.is_none_or(|id| !ids.contains(&id)));
+        if self.purged.is_some() {
+            self.released.extend(ids.iter().copied());
+        }
+    }
+
+    /// A purge's rows, as a re-send takes them out: listed on the writer's thread.
+    fn remove_later(&self) -> Option<writer::RemoveLater> {
+        let taken = Arc::clone(self.purged.as_ref()?);
+        let released = self.released.clone();
+        Some(writer::RemoveLater(Box::new(move || {
+            taken.ids_except(&released)
+        })))
     }
 
     /// The change again, as it now stands: under revision `rev`, with `marks`.
@@ -1476,7 +1610,12 @@ impl Held {
         if let Some(w) = self.upsert.iter().find(|w| w.rec.id == Some(id)) {
             return Some(Some(Arc::clone(&w.rec)));
         }
-        (self.clear || self.remove.contains(&id)).then_some(None)
+        let purged = || {
+            self.purged
+                .as_ref()
+                .is_some_and(|p| !self.released.contains(&id) && p.holds(id))
+        };
+        (self.clear || self.remove.contains(&id) || purged()).then_some(None)
     }
 }
 
@@ -1515,9 +1654,9 @@ impl Pending {
     /// Whether nothing is held: every change this process made is in the store, or on its way to
     /// it with nothing a plan must read in its place.
     pub fn is_empty(&self) -> bool {
-        self.0
-            .iter()
-            .all(|(_, h)| !h.clear && h.remove.is_empty() && h.upsert.is_empty())
+        self.0.iter().all(|(_, h)| {
+            !h.clear && h.remove.is_empty() && h.upsert.is_empty() && h.purged.is_none()
+        })
     }
 }
 
@@ -6753,5 +6892,154 @@ pub(crate) mod tests {
             from_memory.as_secs_f64() * 1e3,
             session_read.as_secs_f64() * 1e3,
         );
+    }
+
+    /// ★ A PURGE'S ROWS ARE THE INDEX IT TOOK OUT, LESS WHAT A LATER CHANGE TOOK OVER (SPEC-2 v3
+    /// C19, landing 33's rule, now without a list made under the lock). On its way the purge says
+    /// every row is gone. Once the writer has given it up it says so of the rows it took out and
+    /// no other, a row a later change brought back (an import restoring a contact with its old id)
+    /// is that change's, and sent again it takes out exactly those rows — listed on the writer's
+    /// thread, never where the lock is held.
+    #[test]
+    fn a_purges_rows_are_the_index_it_took_out_less_what_a_later_change_took_over() {
+        let d = Dir::new("purge-held");
+        let writer = open_fast(&d).store.writer();
+        let rows = minted(&["K1AAA", "K2BBB", "K3CCC"], 1);
+        let ids: Vec<RecordId> = rows.iter().filter_map(|r| r.id).collect();
+        let mut held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)));
+        let later = RecordId::Minted {
+            posid: 0,
+            nonce: 7,
+            seq: 99,
+        };
+
+        // On its way: every row gone, whatever row it is asked of.
+        for id in ids.iter().chain([&later]) {
+            assert_eq!(held.says(*id), Some(None), "on its way, {id:?} is gone");
+        }
+
+        // Given up (what `collect` makes of it): the rows it took out, and no other.
+        held.clear = false;
+        for id in &ids {
+            assert_eq!(held.says(*id), Some(None), "{id:?}, taken out, is gone");
+        }
+        assert_eq!(
+            held.says(later),
+            None,
+            "a row it never held is not its to say"
+        );
+
+        // A later change brings the second row back under its old id: that row is the change's.
+        let brought_back = std::collections::HashSet::from([ids[1]]);
+        assert!(
+            held.touches(&brought_back),
+            "a later change's rows reach the purge"
+        );
+        held.release(&brought_back);
+        assert_eq!(held.says(ids[1]), None, "brought back, it is not gone");
+        assert_eq!(held.says(ids[0]), Some(None), "the rest still are");
+
+        // Sent again: exactly the rows it took out, less the one brought back.
+        let mut again = (held
+            .remove_later()
+            .expect("a purge's rows, for the writer")
+            .0)();
+        again.sort_by_key(|id| id.to_string());
+        let mut expected = vec![ids[0], ids[2]];
+        expected.sort_by_key(|id| id.to_string());
+        assert_eq!(again, expected, "the rows it took out, and no other");
+    }
+
+    /// ★ A PURGE'S ROWS LET GO LAST, ON THE WRITER'S THREAD, LEAVE THE WRITER WRITING (SPEC-2 v3
+    /// C19, §4.11). A purge the writer gave up on is sent again with its rows listed on the
+    /// writer's thread, and the list holds the purge's rows until it runs: with the store gone
+    /// first (a quit, the re-send still on its way) that thread is the one to let them go. They
+    /// are freed there, and the writer writes the re-send and stops. Rows that held the writer
+    /// itself made that thread its last owner, and its stop a join of itself: the thread died
+    /// with the re-send unwritten.
+    #[test]
+    fn a_purges_rows_let_go_last_on_the_writers_thread_leave_it_writing() {
+        let d = Dir::new("purge-last-owner");
+        let writer = Arc::new(LogWriter::start(LogDb::open(&d.db()).expect("open")));
+        let rows = minted(&["K1AAA", "K2BBB", "K3CCC"], 1);
+        let write = |rows: &[QsoRecord]| -> Vec<sqlite::RowWrite> {
+            rows.iter()
+                .map(|r| sqlite::RowWrite::new(Arc::new(r.clone())))
+                .collect()
+        };
+        let seed = writer.submit(Change {
+            rev: 1,
+            upsert: write(&rows),
+            ..Change::default()
+        });
+        writer.wait_durable(&seed, DURABLE_WAIT).expect("the log");
+        let held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)));
+
+        // Another program holds the database: the writer stalls inside the next write, and the
+        // re-send, sent once it is retrying there, waits behind it holding the purge's rows.
+        let hold = WriteHold::take(&d.db()).expect("hold the database");
+        writer.submit(Change {
+            rev: 2,
+            upsert: write(&minted(&["K4DDD"], 4)),
+            ..Change::default()
+        });
+        assert!(
+            eventually(|| matches!(writer.status().state, writer::WriteState::Retrying { .. })),
+            "premise: the writer is stalled inside the write"
+        );
+        let resent = writer.submit_removing_later(
+            Change {
+                rev: 3,
+                ..Change::default()
+            },
+            held.remove_later().expect("a purge's rows, for the writer"),
+        );
+        // The store is gone: nothing but the re-send holds the purge's rows now.
+        drop(held);
+        let stopping = std::thread::spawn(move || drop(writer));
+        drop(hold);
+
+        assert!(
+            eventually(|| resent.is_resolved()),
+            "the purge sent again is written: the writer's thread let its rows go and went on"
+        );
+        assert_eq!(resent.refusal(), None, "and written without a refusal");
+        stopping.join().expect("the writer stops");
+        let in_store: Vec<String> = stored(&d).into_iter().map(|r| r.call).collect();
+        assert_eq!(
+            in_store,
+            ["K4DDD"],
+            "the store holds the contact logged after the purge, and none of the rows it took out"
+        );
+    }
+
+    /// Contacts `calls`, a minute apart, under the ids a station mints, from `first`.
+    fn minted(calls: &[&str], first: u32) -> Vec<QsoRecord> {
+        (first..)
+            .zip(calls)
+            .map(|(seq, call)| {
+                let mut r = qso(call, 1_788_000_000 + u64::from(seq) * 60);
+                r.id = Some(RecordId::Minted {
+                    posid: 0,
+                    nonce: 7,
+                    seq,
+                });
+                r
+            })
+            .collect()
+    }
+
+    /// The hot index of `rows`, as a purge takes it out.
+    fn purged(rows: &[QsoRecord]) -> HotIndex {
+        struct Keys;
+        impl tempo_core::logbook::hot::HotKeys for Keys {
+            fn band_key(&self, band: &str) -> String {
+                band.to_ascii_lowercase()
+            }
+            fn entity(&self, _: &str) -> Option<String> {
+                None
+            }
+        }
+        HotIndex::from_rows(rows, &Keys)
     }
 }

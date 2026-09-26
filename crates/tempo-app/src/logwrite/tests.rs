@@ -598,6 +598,123 @@ mod purge {
             "log.adi holds the contact logged after the purge, and none of the rows it took out"
         );
     }
+
+    /// ★ A PURGE SENT AGAIN TAKES OUT EXACTLY THE ROWS IT TOOK OUT: never a contact logged after
+    /// it, nor one a later change brought back under its own id (SPEC-2 v3 C19, §4.11). The rows
+    /// are the hot index the purge took, and the writer lists them on its own thread when the
+    /// re-send arrives. Another program holds the database past the writer's retry ladder (about
+    /// 21 s: this test waits it out), and the writer gives the purge up. Then a contact is logged,
+    /// and one of the purged contacts is imported back, its id kept; the purge is sent again, and
+    /// the store holds those two and none of the other rows it took out.
+    #[test]
+    fn a_purge_sent_again_spares_a_new_contact_and_one_brought_back() {
+        let d = Dir::new("purge-resend-brought-back");
+        let engine = shared(&d, 6);
+        let back = stored(&d)
+            .into_iter()
+            .nth(2)
+            .expect("a contact to bring back");
+        let hold = WriteHold::take(&d.db()).expect("another program holds the database");
+        engine_lock(&engine).clear_logbook();
+        assert!(
+            eventually_for(Duration::from_secs(90), || {
+                engine_lock(&engine).log_unsaved().standing().retryable == 1
+            }),
+            "premise: the writer gives the purge up"
+        );
+        drop(hold);
+
+        engine_lock(&engine).log_qso(qso("K1NEW", 1_788_000_060));
+        let restated = adif_header() + &tempo_core::logbook::adif_record_own_log(&back);
+        let (made, _) = import_adif(&engine, &restated);
+        let (added, _, _, _) = made.expect("the import is made");
+        assert_eq!(added, 1, "premise: the purged contact comes back as new");
+        assert_eq!(
+            named(&engine, &back.call),
+            back.id.expect("an id"),
+            "premise: brought back under its own id"
+        );
+        assert!(
+            eventually(|| stored(&d).iter().any(|r| r.call == "K1NEW")),
+            "the new contact lands while the purge waits"
+        );
+
+        let due = engine_lock(&engine).log_resend_due();
+        let sent = due + engine_lock(&engine).log_resend_all();
+        assert_eq!(sent, 1, "the purge, sent again");
+        let unsaved = engine_lock(&engine).log_unsaved();
+        assert!(unsaved.wait(DURABLE_WAIT).saved(), "and it lands");
+        flush(&engine_lock(&engine));
+        let mut in_store: Vec<String> = stored(&d).into_iter().map(|r| r.call).collect();
+        in_store.sort();
+        let mut expected = vec!["K1NEW".to_string(), back.call.clone()];
+        expected.sort();
+        assert_eq!(
+            in_store, expected,
+            "the store holds the new contact and the one brought back, and none of the rest"
+        );
+    }
+
+    /// Held by the writer's thread while it frees it, until the test lets go: a writer away from
+    /// its channels for as long as the test says — as one retrying a write another program holds
+    /// up is, but stalled until released rather than until a timeout ends it.
+    struct Stall {
+        inside: std::sync::mpsc::Sender<()>,
+        until: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl Drop for Stall {
+        fn drop(&mut self) {
+            let _ = self.inside.send(());
+            let _ = self.until.recv();
+        }
+    }
+
+    /// ★ A PURGE THAT LANDED IS LET GO UNDER THE LOCK WITHOUT WAITING ON THE WRITER (SPEC-2 v3
+    /// C19, §4.11). The next change finds the purge landed and lets its rows go under the Engine
+    /// lock, sending them to the writer's thread to be freed there. With that thread stalled, the
+    /// contact is logged and the lock let go all the same: a send that waited for the thread to
+    /// take them would hold the Engine lock, and the radio loop behind it, for as long as the
+    /// writer is stalled.
+    #[test]
+    fn a_purge_that_landed_is_let_go_under_the_lock_without_waiting_on_a_stalled_writer() {
+        let d = Dir::new("purge-let-go-stalled");
+        let engine = shared(&d, 6);
+        engine_lock(&engine).clear_logbook();
+        let unsaved = engine_lock(&engine).log_unsaved();
+        assert!(unsaved.wait(DURABLE_WAIT).saved(), "the purge lands");
+
+        let (inside, stalled) = std::sync::mpsc::channel();
+        let (release, until) = std::sync::mpsc::channel();
+        let disposer = engine_lock(&engine).log_store_writer().disposer();
+        disposer.dispose(Box::new(Stall { inside, until }));
+        stalled.recv().expect("the writer's thread is stalled");
+
+        let (logged_tx, logged) = std::sync::mpsc::channel();
+        let logger = {
+            let engine = Arc::clone(&engine);
+            std::thread::spawn(move || {
+                engine_lock(&engine).log_qso(qso("K1BBB", 1_788_000_060));
+                let _ = logged_tx.send(());
+            })
+        };
+        let in_time = logged.recv_timeout(Duration::from_secs(10)).is_ok();
+        drop(release);
+        logger.join().expect("the contact is logged");
+        assert!(
+            in_time,
+            "the contact is logged, and the lock let go, while the writer is stalled"
+        );
+
+        flush(&engine_lock(&engine));
+        let in_store: Vec<String> = stored(&d).into_iter().map(|r| r.call).collect();
+        assert_eq!(
+            in_store,
+            ["K1BBB"],
+            "once the writer goes on, the store holds the contact and none of the rows the \
+             purge took out"
+        );
+    }
 }
 
 /// ★ A CORRECTION BY A `RowRef` IS MADE ONLY ON THE VERSION FOUND (SPEC-2 v3 C19). The desktop's

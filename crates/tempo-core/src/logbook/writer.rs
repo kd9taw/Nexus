@@ -141,9 +141,10 @@ pub struct Change {
     pub priority: Priority,
     /// Drop every row first — in one statement, whatever `remove` names.
     pub clear: bool,
-    /// Rows the log no longer holds. A purge's are every row it took out: the writer does not
-    /// write them, since `clear` drops every row in one statement, but the process that sent it
-    /// keeps them, and a re-send after the writer gave the purge up takes out exactly those.
+    /// Rows the log no longer holds. A purge's are not written: `clear` drops every row in one
+    /// statement. The process that sent it keeps the rows it took out, and a re-send after the
+    /// writer gave the purge up takes out exactly those — listed on the writer's thread when the
+    /// sender holds them as an index ([`RemoveLater`]).
     pub remove: Vec<RecordId>,
     /// Rows as the log now holds them.
     pub upsert: Vec<RowWrite>,
@@ -348,8 +349,7 @@ impl Change {
     /// A row put in, or changed, is written as it now stands; one whose content did not change
     /// (an edit that set what was already there) writes nothing, as [`Self::between`] never
     /// wrote one; one taken out is removed. A purge (`clear`) is ONE statement, never a delete per
-    /// row: its pairs name every row taken out, and they are its `remove`, which the writer does
-    /// not write — a re-send of a purge the writer gave up takes out exactly those.
+    /// row: the rows its pairs take out are its `remove`, which the writer does not write.
     pub fn of_pairs(
         marks: Watermarks,
         clear: bool,
@@ -606,8 +606,52 @@ type CopyRequest = (
     std::sync::mpsc::SyncSender<std::result::Result<u64, String>>,
 );
 
+/// Rows a change takes out that its sender does not list: named by a function the writer calls on
+/// its own thread when the change arrives, so the list is made in the order the change was sent,
+/// and never under the lock the sender sends from (SPEC-2 v3 §4.11). A purge the writer gave up
+/// on is sent again as the rows it took out, which is the whole log's ids ([`LogWriter::
+/// submit_removing_later`]).
+pub struct RemoveLater(pub Box<dyn FnOnce() -> Vec<RecordId> + Send>);
+
+impl std::fmt::Debug for RemoveLater {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RemoveLater(..)")
+    }
+}
+
+/// Something a sender lets go of for the writer's thread to free ([`Disposer`]).
+type Gone = Box<dyn std::any::Any + Send>;
+
+/// Frees what it is handed on the writer's thread: a free the size of the log (a purge's rows)
+/// that must not run under the lock its owner lets go of it in, nor on the radio loop that may
+/// hold that lock then ([`LogWriter::disposer`]).
+///
+/// ⚠️ **It never waits on the writer**, which a drop under the Engine lock must not do. Its
+/// channel is unbounded (`std::sync::mpsc::channel`), so a send never blocks however stalled the
+/// writer is, and once the writer has stopped the send hands the value back and it is dropped
+/// here, on the caller's thread. It holds no [`LogWriter`]: a value holding one can be the
+/// writer's last owner, and then its drop is the writer's stop, which joins the writer's thread.
+/// Let go of on that thread — a purge's rows are, once the list [`RemoveLater`] made there is
+/// done with them — that is a join of itself: the thread panics, and what it was writing is
+/// lost. Nor does it hold the channel whose close stops the writer, so it never keeps a stopping
+/// writer running.
+#[derive(Debug, Clone)]
+pub struct Disposer(Option<Sender<Gone>>);
+
+impl Disposer {
+    /// Free `gone` on the writer's thread, or here when the writer has stopped.
+    pub fn dispose(&self, gone: Box<dyn std::any::Any + Send>) {
+        if let Some(tx) = &self.0 {
+            // A writer that has stopped hands it back, and it is dropped here.
+            let _ = tx.send(gone);
+        }
+    }
+}
+
 enum Msg {
     Write(Box<Change>, Arc<Slot>),
+    /// A change and the rows it takes out besides its own `remove` ([`RemoveLater`]).
+    WriteRemovingLater(Box<Change>, Arc<Slot>, RemoveLater),
     Copy(CopyRequest),
     /// Look for another process's commits now, and answer with the count
     /// ([`LogWriter::foreign_commits_now`]).
@@ -628,6 +672,8 @@ const FOREIGN_POLL: Duration = Duration::from_millis(500);
 #[derive(Debug)]
 pub struct LogWriter {
     tx: Option<Sender<Msg>>,
+    /// What [`Self::disposer`] hands out.
+    disposer: Disposer,
     shared: Arc<Shared>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -640,12 +686,13 @@ impl LogWriter {
     /// and putting the disk back under the Engine lock.
     pub fn start(db: LogDb) -> LogWriter {
         let (tx, rx) = channel::<Msg>();
+        let (gone_tx, gone) = channel::<Gone>();
         let shared = Arc::new(Shared::default());
         let thread = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("nexus-logdb".into())
-                .spawn(move || pump(db, &rx, &shared))
+                .spawn(move || pump(db, &rx, &gone, &shared))
                 .ok()
         };
         let live = thread.is_some();
@@ -656,6 +703,7 @@ impl LogWriter {
         }
         LogWriter {
             tx: live.then_some(tx),
+            disposer: Disposer(live.then_some(gone_tx)),
             shared,
             thread,
         }
@@ -663,6 +711,23 @@ impl LogWriter {
 
     /// Queue one change. **Never touches the disk** — see the module header.
     pub fn submit(&self, change: Change) -> Ticket {
+        self.submit_as(change, Msg::Write)
+    }
+
+    /// [`Self::submit`] for a change that also takes out the rows `later` names, listed on the
+    /// writer's thread when the change arrives: a list the size of the log the sender never
+    /// makes under its lock.
+    pub fn submit_removing_later(&self, change: Change, later: RemoveLater) -> Ticket {
+        self.submit_as(change, |c, slot| Msg::WriteRemovingLater(c, slot, later))
+    }
+
+    /// A [`Disposer`] onto this writer's thread: for a value let go of under a lock, which it
+    /// frees there. It keeps nothing of the writer.
+    pub fn disposer(&self) -> Disposer {
+        self.disposer.clone()
+    }
+
+    fn submit_as(&self, change: Change, msg: impl FnOnce(Box<Change>, Arc<Slot>) -> Msg) -> Ticket {
         let slot = Arc::new(Slot {
             done: Mutex::new(None),
             cv: Condvar::new(),
@@ -678,7 +743,7 @@ impl LogWriter {
         let sent = self
             .tx
             .as_ref()
-            .is_some_and(|tx| tx.send(Msg::Write(Box::new(change), slot)).is_ok());
+            .is_some_and(|tx| tx.send(msg(Box::new(change), slot)).is_ok());
         if !sent {
             // No thread, or it is gone. The change is lost, and saying so now beats a waiter
             // discovering it at its deadline. The status moves BEFORE the slot, for the same
@@ -1090,7 +1155,7 @@ fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, seq: &IndexSeq, shared: &Sh
     *seen = Some(now);
 }
 
-fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
+fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Shared) {
     io_fence::enter_log_lane();
     let mut queue: VecDeque<Job> = VecDeque::new();
     // Copies wait for the queue ahead of them to empty: a copy must hold every change
@@ -1118,9 +1183,17 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     let mut closed = false;
 
     loop {
+        // What senders let go of for this thread to free ([`Disposer`]): at every turn, so after
+        // each chunk, and within [`FOREIGN_POLL`] while idle.
+        gone.try_iter().for_each(drop);
         loop {
             match rx.try_recv() {
                 Ok(Msg::Write(c, slot)) => {
+                    unresolved.insert(c.rev);
+                    queue.push_back(Job::new(*c, slot));
+                }
+                Ok(Msg::WriteRemovingLater(mut c, slot, later)) => {
+                    c.remove.extend((later.0)());
                     unresolved.insert(c.rev);
                     queue.push_back(Job::new(*c, slot));
                 }
@@ -1154,6 +1227,11 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
             }
             match rx.recv_timeout(FOREIGN_POLL) {
                 Ok(Msg::Write(c, slot)) => {
+                    unresolved.insert(c.rev);
+                    queue.push_back(Job::new(*c, slot));
+                }
+                Ok(Msg::WriteRemovingLater(mut c, slot, later)) => {
+                    c.remove.extend((later.0)());
                     unresolved.insert(c.rev);
                     queue.push_back(Job::new(*c, slot));
                 }
