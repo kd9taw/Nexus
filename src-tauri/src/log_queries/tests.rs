@@ -1482,13 +1482,36 @@ fn synthetic_log(d: &Dir, n: usize) {
     std::fs::write(d.log(), adif).expect("log.adi");
 }
 
+// The §4.11 bench's instruments (the lock watcher, SQLite's heap, the load line), by source from
+// `crates/tempo-app/tests/support/lock_watch.rs`: the one copy, which tempo-app's
+// `tests/log_bench.rs` includes too. Moving either file breaks this path at build time.
+#[path = "../../../crates/tempo-app/tests/support/lock_watch.rs"]
+mod lock_watch;
+
 /// The engine's log questions timed on a synthetic lifetime log in the store —
 /// `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio --release -- --ignored
-/// --nocapture log_query_bench` (`LOG_QUERY_BENCH_ROWS` sets the size; 150,000 by default).
+/// --nocapture log_query_bench` (`LOG_QUERY_BENCH_ROWS` sets the size; 150,000 by default). In a
+/// worktree, which lacks the gitignored AI CW model, a release build with `radio` refuses to build
+/// without `NEXUS_ALLOW_MISSING_AICW=1`; the bench needs no model.
+///
+/// With §4.11's instruments (SPEC-2 v3): each question's longest Engine-lock hold, seen by a
+/// watcher thread beside it, against the 5 ms bound on any log path — an answer is read off the
+/// store with the lock released, so a hold is the handles alone — and the most SQLite's heap
+/// held while it answered. Reported now; asserted once the cut removes the log in memory
+/// (`AFTER_THE_CUT`). The Rust heap is not counted here: a counting allocator would count every
+/// test in this binary, not the bench's; tempo-app's `log_bench` counts the log path's.
 #[test]
 #[ignore = "a release-build bench, run by hand"]
 fn log_query_bench() {
-    use std::time::Instant;
+    use lock_watch::{Holds, Watcher};
+    use std::cell::RefCell;
+    use std::time::{Duration, Instant};
+    /// Whether the cut has removed the log in memory: the hold bound is asserted from then on.
+    const AFTER_THE_CUT: bool = false;
+    /// §4.11's bound on an Engine-lock hold in any log path.
+    const HOLD_BOUND: Duration = Duration::from_millis(5);
+    lock_watch::keep_sqlite_statistics();
+    println!("{}", lock_watch::load_line("LOG_QUERY_BENCH"));
     let n: usize = std::env::var("LOG_QUERY_BENCH_ROWS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1504,65 +1527,128 @@ fn log_query_bench() {
     let mut e = Engine::new("K2DEF", "FN31", 0);
     e.attach_log_store(opened);
     let engine: SharedEngine = Arc::new(Mutex::new(e));
+    println!(
+        "LOG_QUERY_BENCH rows={n} SQLite's heap once the log is attached: {}",
+        lock_watch::sqlite_heap().map_or("not counted: its statistics are off".into(), |b| {
+            format!("{:.1} MiB", b as f64 / (1024.0 * 1024.0))
+        })
+    );
+    let watcher = Watcher::start(&engine);
+    let _ = watcher.holds();
+    /// One step as the bench saw it: how long it took, what the watcher saw, and the most
+    /// SQLite's heap held while it ran.
+    struct Step {
+        name: &'static str,
+        took: f64,
+        holds: Holds,
+        peak: Option<i64>,
+    }
+    let steps: RefCell<Vec<Step>> = RefCell::new(Vec::new());
     let resolve = |call: &str| cty(call);
     let queries = LogQueries::default();
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
-    let run = |q: Value| -> (Value, f64) {
+    let step = |name: &'static str, f: &mut dyn FnMut() -> Value| -> (Value, f64) {
+        let _ = lock_watch::sqlite_heap_peak();
         let t = Instant::now();
-        let a = ask(&queries, &engine, q, &resolve);
-        (a, ms(t))
+        let a = f();
+        let took = ms(t);
+        steps.borrow_mut().push(Step {
+            name,
+            took,
+            holds: watcher.holds(),
+            peak: lock_watch::sqlite_heap_peak(),
+        });
+        (a, took)
+    };
+    let run = |name: &'static str, q: Value| -> (Value, f64) {
+        step(name, &mut || ask(&queries, &engine, q.clone(), &resolve))
     };
     let query = |sort: &str, asc: bool, search: &str| json!({"sort": sort, "asc": asc, "search": search, "needsConfirmOnly": false});
     let page = |q: Value, offset: usize| json!({"kind": "page", "query": q, "offset": offset, "limit": 100});
-    let (first, default_cold) = run(page(query("time", false, ""), 0));
-    let (_, default_warm) = run(page(query("time", false, ""), n / 2));
-    let (_, call_cold) = run(page(query("call", true, ""), 0));
-    let (_, call_warm) = run(page(query("call", true, ""), n / 2));
-    let (_, search_ssb) = run(page(query("time", false, "ssb"), 0));
-    let (_, search_z) = run(page(query("time", false, "z"), 0));
-    let (_, search_call) = run(page(query("time", false, "k3b"), 0));
+    let (first, default_cold) = run("default_order_cold", page(query("time", false, ""), 0));
+    let (_, default_warm) = run("default_page_warm", page(query("time", false, ""), n / 2));
+    let (_, call_cold) = run("call_order_cold", page(query("call", true, ""), 0));
+    let (_, call_warm) = run("call_page_warm", page(query("call", true, ""), n / 2));
+    let (_, search_ssb) = run("search_ssb", page(query("time", false, "ssb"), 0));
+    let (_, search_z) = run("search_z", page(query("time", false, "z"), 0));
+    let (_, search_call) = run("search_call", page(query("time", false, "k3b"), 0));
     let id = first["keys"][50].as_str().unwrap().to_string();
-    let (_, locate) = run(json!({"kind": "locate", "query": query("call", true, ""), "id": id}));
-    let (_, row) = run(json!({"kind": "row", "id": id}));
+    let (_, locate) = run(
+        "locate",
+        json!({"kind": "locate", "query": query("call", true, ""), "id": id}),
+    );
+    let (_, row) = run("row", json!({"kind": "row", "id": id}));
     let (history, call_history) = run(
+        "call_history",
         json!({"kind": "callHistory", "call": "K3B003", "band": "20m", "mode": "FT8", "matchMode": false}),
     );
     let calls: Vec<String> = (0..20).map(|i| format!("K{}B{:03}", i % 10, i)).collect();
-    let (_, calls_summary) = run(json!({"kind": "callsSummary", "calls": calls}));
+    let (_, calls_summary) = run(
+        "calls_summary",
+        json!({"kind": "callsSummary", "calls": calls}),
+    );
     let many: Vec<String> = (0..100)
         .map(|i| format!("K{}C{:03}", i % 10, i * 7))
         .collect();
-    let (_, worked_calls) = run(json!({"kind": "workedCalls", "calls": many}));
-    let (_, entity_cold) = run(json!({"kind": "entity", "entity": "Japan"}));
-    let (_, entity_warm) = run(json!({"kind": "entity", "entity": "Canada"}));
-    {
+    let (_, worked_calls) = run(
+        "worked_calls",
+        json!({"kind": "workedCalls", "calls": many}),
+    );
+    let (_, entity_cold) = run("entity_cold", json!({"kind": "entity", "entity": "Japan"}));
+    let (_, entity_warm) = run("entity_warm", json!({"kind": "entity", "entity": "Canada"}));
+    let mut appended = Some({
         let mut r = logged(&engine, id.parse().unwrap());
         r.id = None;
         r.call = "JA1NEW".into();
         r.when_unix += 10;
-        engine_lock(&engine).log_qso(r);
-    }
-    let (_, entity_after_append) = run(json!({"kind": "entity", "entity": "Japan"}));
-    let (_, rows_at) = run(json!({"kind": "rowsAt", "indices": [0, 10, n / 3, n / 2, n - 1]}));
-    let (_, log_size) = run(json!({"kind": "logSize"}));
-    let (_, page_after_append) = run(page(query("time", false, ""), 0));
-    // The folds: each cold, then kept; after a LoTW upload stamp only the backlog folds again.
-    let (_, grids_cold) = run(json!({"kind": "workedGrids"}));
-    let (_, grids_warm) = run(json!({"kind": "workedGrids"}));
-    let (_, points_all) = run(json!({"kind": "gridPoints", "band": "all"}));
-    let (_, points_band) = run(json!({"kind": "gridPoints", "band": "20m"}));
-    let (_, bands_cold) = run(json!({"kind": "bandsInLog"}));
-    let (_, stats_cold) = run(json!({"kind": "statistics"}));
-    let (_, stats_warm) = run(json!({"kind": "statistics"}));
-    let (_, backlog_cold) = run(json!({"kind": "lotwBacklog"}));
-    let signed = tempo_app::station::LotwSigned::of(&logged(&engine, id.parse().unwrap()));
-    tempo_app::logwrite::stamp_lotw_batch(
-        &engine,
-        &[signed.expect("an id")],
-        &accepted(1_790_000_000),
+        r
+    });
+    step("log a contact", &mut || {
+        if let Some(r) = appended.take() {
+            engine_lock(&engine).log_qso(r);
+        }
+        Value::Null
+    });
+    let (_, entity_after_append) = run(
+        "entity_after_append",
+        json!({"kind": "entity", "entity": "Japan"}),
     );
-    let (_, backlog_after_stamp) = run(json!({"kind": "lotwBacklog"}));
-    let (_, grids_after_stamp) = run(json!({"kind": "workedGrids"}));
+    let (_, rows_at) = run(
+        "rows_at",
+        json!({"kind": "rowsAt", "indices": [0, 10, n / 3, n / 2, n - 1]}),
+    );
+    let (_, log_size) = run("log_size", json!({"kind": "logSize"}));
+    let (_, page_after_append) = run(
+        "default_page_after_append",
+        page(query("time", false, ""), 0),
+    );
+    // The folds: each cold, then kept; after a LoTW upload stamp only the backlog folds again.
+    let (_, grids_cold) = run("worked_grids_cold", json!({"kind": "workedGrids"}));
+    let (_, grids_warm) = run("worked_grids_warm", json!({"kind": "workedGrids"}));
+    let (_, points_all) = run(
+        "grid_points_all",
+        json!({"kind": "gridPoints", "band": "all"}),
+    );
+    let (_, points_band) = run(
+        "grid_points_20m",
+        json!({"kind": "gridPoints", "band": "20m"}),
+    );
+    let (_, bands_cold) = run("bands_in_log", json!({"kind": "bandsInLog"}));
+    let (_, stats_cold) = run("statistics_cold", json!({"kind": "statistics"}));
+    let (_, stats_warm) = run("statistics_warm", json!({"kind": "statistics"}));
+    let (_, backlog_cold) = run("lotw_backlog_cold", json!({"kind": "lotwBacklog"}));
+    let signed = tempo_app::station::LotwSigned::of(&logged(&engine, id.parse().unwrap()));
+    step("a LoTW upload's stamp", &mut || {
+        tempo_app::logwrite::stamp_lotw_batch(
+            &engine,
+            &[signed.expect("an id")],
+            &accepted(1_790_000_000),
+        );
+        Value::Null
+    });
+    let (_, backlog_after_stamp) = run("lotw_backlog_after_stamp", json!({"kind": "lotwBacklog"}));
+    let (_, grids_after_stamp) = run("worked_grids_after_stamp", json!({"kind": "workedGrids"}));
+    drop(watcher);
     println!(
         "LOG_QUERY_BENCH_FOLDS rows={n} worked_grids_cold={grids_cold:.1}ms worked_grids_warm={grids_warm:.3}ms \
          grid_points_all={points_all:.1}ms grid_points_20m={points_band:.1}ms bands_in_log={bands_cold:.1}ms \
@@ -1578,5 +1664,49 @@ fn log_query_bench() {
          entity_after_append={entity_after_append:.2}ms rows_at={rows_at:.2}ms log_size={log_size:.2}ms \
          default_page_after_append={page_after_append:.1}ms",
         history["count"]
+    );
+    println!(
+        "  longest Engine-lock hold, by step (the bound is {:.0} ms, {}), with its time, how many \
+         holds the watcher saw, the longest it did not look (a hold can read short by up to that), \
+         and the most SQLite's heap held while it ran:",
+        HOLD_BOUND.as_secs_f64() * 1000.0,
+        if AFTER_THE_CUT {
+            "asserted"
+        } else {
+            "asserted after the cut"
+        }
+    );
+    let mut broken = Vec::new();
+    for Step {
+        name,
+        took,
+        holds: h,
+        peak,
+    } in steps.borrow().iter()
+    {
+        let over = h.longest > HOLD_BOUND;
+        println!(
+            "    {:>9.3} ms  {name}{}  [took {took:.2} ms, {} holds, blind at most {:.3} ms, SQLite \
+             peak {}]",
+            h.longest.as_secs_f64() * 1000.0,
+            if over { "  ← over" } else { "" },
+            h.holds,
+            h.blind.as_secs_f64() * 1000.0,
+            peak.map_or("not counted".into(), |b| format!(
+                "{:.1} MiB",
+                b as f64 / (1024.0 * 1024.0)
+            )),
+        );
+        if AFTER_THE_CUT && over {
+            broken.push(format!(
+                "{name} held the Engine lock {:.3} ms",
+                h.longest.as_secs_f64() * 1000.0
+            ));
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "§4.11's hold bound, broken at {n} rows:\n  {}",
+        broken.join("\n  ")
     );
 }
