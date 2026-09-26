@@ -19345,6 +19345,118 @@ mod tests {
         );
     }
 
+    /// …so a SWITCH sends exactly one: the handoff's, to the radio being left. Its context halt
+    /// adds none, and the radio switched to (the rig in hand when the tick ends) gets nothing.
+    #[test]
+    fn a_switch_sends_one_voice_memory_stop_and_only_to_the_radio_left() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let (yaesu_before, icom_before) = (
+            yaesu_log.lock().unwrap().len(),
+            icom_log.lock().unwrap().len(),
+        );
+        engine.lock().unwrap().set_active_radio(icom);
+        let (mut last_active, mut backend) = (0u32, MockBackend::new());
+        for now in [40.0, 60.0, 80.0] {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                now,
+            );
+        }
+        assert_eq!(last_active, icom, "premise: the handoff adopted the Icom");
+        let count = |log: &Arc<Mutex<Vec<String>>>, from: usize| {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| *l == "\\stop_voice_mem")
+                .count()
+        };
+        assert_eq!(count(&yaesu_log, yaesu_before), 1, "one, to the radio left");
+        assert_eq!(
+            count(&icom_log, icom_before),
+            0,
+            "none to the radio switched to"
+        );
+    }
+
+    /// …and a same-radio CAT REBUILD (a settings save) sends none: its unkey goes out, its
+    /// context halt asks for nothing, and the reopened connection gets no voice-memory stop.
+    #[test]
+    fn a_cat_rebuild_sends_no_voice_memory_stop() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (reopen_addr, _reopen_port, reopen_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, _icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.baud = 9600; // a CAT change the loop must rebuild for
+            e.apply_settings(s);
+        }
+        let before = yaesu_log.lock().unwrap().len();
+        let reopened = std::cell::Cell::new(0);
+        let mut rr = |_: &Transport, _: bool| {
+            reopened.set(reopened.get() + 1);
+            (
+                Rig::with_control(Some(reopen_addr.clone()), PttMode::Cat),
+                None,
+                CatProbe::status(Some(true), ""),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let (mut backend, mut station) = (MockBackend::new(), StationSinks::new());
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        for now in [40.0, 60.0] {
+            handoff_if_switched(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &pending,
+            );
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            reopened.get(),
+            1,
+            "premise: the loop rebuilt the connection"
+        );
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            sent_at(&sent, "T 0").is_some(),
+            "premise: the rebuild's unkey went to the old connection: {sent:?}"
+        );
+        assert!(
+            sent_at(&sent, "\\stop_voice_mem").is_none(),
+            "no voice-memory stop on the old connection: {sent:?}"
+        );
+        let after = reopen_log.lock().unwrap().clone();
+        assert!(
+            sent_at(&after, "\\stop_voice_mem").is_none(),
+            "…nor on the reopened one: {after:?}"
+        );
+    }
+
     /// Two radios, each configured through the flat settings form (which edits whatever is
     /// active), radio 0 active. Returns the engine, radio 1's id, both radios' MONITOR
     /// transports (`Transport::from_profile`), and radio 0's transport as the loop applies it.
