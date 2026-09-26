@@ -721,6 +721,8 @@ impl RigBackend for OmniBackend {
 /// [`serve_connection`] per client against one shared backend, and key the rig DOWN at Drop.
 pub struct OmniDaemon {
     slot: RigSlot,
+    /// Where the rigctld listener is bound: `tcp_port`, or the port the OS chose for 0.
+    local_addr: std::net::SocketAddr,
     stop: Arc<AtomicBool>,
     tcp_thread: Option<std::thread::JoinHandle<()>>,
     /// Held for its `Drop` alone: it stops and joins the COM apartment thread. Never read.
@@ -739,6 +741,7 @@ impl OmniDaemon {
     ) -> std::io::Result<OmniDaemon> {
         let (link, worker) = OmniWorker::start(factory).map_err(std::io::Error::from)?;
         let listener = std::net::TcpListener::bind(("127.0.0.1", tcp_port))?;
+        let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let tx_intent = Arc::new(AtomicBool::new(false));
         let backend = Arc::new(OmniBackend::new(link, slot, tx_intent.clone()));
@@ -774,6 +777,7 @@ impl OmniDaemon {
         };
         Ok(OmniDaemon {
             slot,
+            local_addr,
             stop,
             tcp_thread: Some(tcp_thread),
             _worker: worker,
@@ -795,6 +799,12 @@ impl OmniDaemon {
     /// The slot this daemon drives.
     pub fn slot(&self) -> RigSlot {
         self.slot
+    }
+
+    /// The address the rigctld listener is bound to — see `CivDaemon::local_addr`: a test
+    /// starts on port 0 and reads the port here, never by probing `:0` and letting go.
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.local_addr
     }
 
     /// OmniRig's own status sentence for this slot — what the CAT pill shows when the shim is
@@ -833,7 +843,7 @@ mod tests {
     use super::*;
     use crate::rigctld_server::{handle_command, Handled};
     use std::io::{BufRead, BufReader, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpStream;
     use std::sync::Mutex as StdMutex;
 
     /// ⭐ ISSUES #144 / #161 / D#150 / D#196 — the DIAL CHOICE, which is the whole decidable
@@ -1159,11 +1169,9 @@ mod tests {
     /// same seam production uses.
     #[test]
     fn omnirig_not_installed_is_a_clear_start_error() {
-        let Err(e) = OmniDaemon::start_with(
-            Box::new(|| Err(OmniError::NotInstalled)),
-            RigSlot::Rig1,
-            free_port(),
-        ) else {
+        let Err(e) =
+            OmniDaemon::start_with(Box::new(|| Err(OmniError::NotInstalled)), RigSlot::Rig1, 0)
+        else {
             panic!("a missing OmniRig must not start a daemon")
         };
         let msg = e.to_string();
@@ -1180,7 +1188,7 @@ mod tests {
         let d = OmniDaemon::start_with(
             Box::new(|| Ok(Box::new(Arc::new(MockOmni::online())) as Box<dyn OmniRigClient>)),
             RigSlot::Rig1,
-            free_port(),
+            0,
         )
         .expect("a present OmniRig starts");
         assert!(d.is_alive());
@@ -1195,7 +1203,7 @@ mod tests {
         let Err(e) = OmniDaemon::start_with(
             Box::new(|| Err(OmniError::NeedsElevation)),
             RigSlot::Rig1,
-            free_port(),
+            0,
         ) else {
             panic!("an elevation refusal must not start a daemon")
         };
@@ -1297,13 +1305,13 @@ mod tests {
     fn the_daemon_serves_the_rigctld_protocol_on_its_port() {
         let mock = Arc::new(MockOmni::online());
         let m = mock.clone();
-        let port = free_port();
         let d = OmniDaemon::start_with(
             Box::new(move || Ok(Box::new(m) as Box<dyn OmniRigClient>)),
             RigSlot::Rig2,
-            port,
+            0,
         )
         .expect("daemon starts");
+        let port = d.local_addr().port();
         assert_eq!(d.slot(), RigSlot::Rig2);
         assert!(d.health().is_ok(), "an online mock is healthy");
 
@@ -1339,7 +1347,7 @@ mod tests {
         let d = OmniDaemon::start_with(
             Box::new(move || Ok(Box::new(m) as Box<dyn OmniRigClient>)),
             RigSlot::Rig1,
-            free_port(),
+            0,
         )
         .expect("daemon starts");
         *mock.ptt.lock().unwrap() = true; // on the air
@@ -1362,7 +1370,7 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("Windows-only"), "{msg}");
         // …and starting a daemon fails with that same sentence rather than binding a port.
-        let Err(err) = OmniDaemon::start(RigSlot::Rig1, free_port()) else {
+        let Err(err) = OmniDaemon::start(RigSlot::Rig1, 0) else {
             panic!("a daemon must not start without COM")
         };
         assert!(err.to_string().contains("Windows-only"), "{err}");
@@ -1397,14 +1405,5 @@ mod tests {
                 "only 4 is ST_ONLINE, not {code}"
             );
         }
-    }
-
-    /// Bind :0 to learn a free port, then release it — the same trick the CI-V daemon's tests
-    /// use, and race-free enough for a test.
-    fn free_port() -> u16 {
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let p = l.local_addr().unwrap().port();
-        drop(l);
-        p
     }
 }
