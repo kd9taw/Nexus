@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.15.0] — 2026-09-26
 
 ### Added
 
@@ -85,10 +85,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   things always get through regardless of what you have picked: a station calling YOU, and
   anything on your watch list. Leave every box clear and nothing changes — that is how it ships,
   and an operator who never opens the setting hears exactly what they heard before. (#174)
+- **The POTA/SOTA board marks the activation you are hunting.** After you press HUNT, that
+  activator's row at that park is highlighted and scrolled into view, and it stays marked while you
+  scroll. An activator moving a few kHz within the same park does not scroll the board under you.
+  The mark goes when you clear the hunt or log the contact.
+- **The Phone cockpit is laid out as a receiver and a transmitter, and has AF gain, RF gain,
+  squelch and an S-meter.** The two panes named after Hamlib's terms, which put the speech
+  processor and VOX among the receive controls, are now **Receiver** (an S-meter with a printed
+  scale, then filter width, the attenuator and preamp, RF gain, NB, NR, the notches, AGC, AF gain
+  and squelch) and **Transmitter** (mic gain, speech processor, VOX and the monitor level). AF
+  gain, RF gain and squelch are new, through Hamlib and through Nexus's own CI-V. With AF nearly
+  off, or the squelch up outside FM, the control shows **DECODE?**: if your soundcard is fed from
+  the radio's speaker or headphone jack, AF silences FT8, RTTY and PSK as well, and on most radios
+  a closed squelch mutes the USB audio too. A control your radio has not reported is named once at
+  the foot of its pane, **Not on this radio: …**, instead of taking a row, and without rig control
+  every row stays on screen, greyed, under one line that says they need CAT. The automatic notch
+  is now labelled **Auto notch** in Phone and CW, and the manual one **Manual notch**, on every
+  radio: on a Yaesu the old **Notch** and **MN** read the wrong way round.
+- **Phone shows what goes out when you key, and the transmit meters keep their last reading.** A
+  line above the meters gives the frequency your next over goes out on, with any split and XIT
+  already in it, then the mode, the split offset, XIT, and your power beside the watts the radio
+  measured on the last over, marked where the radio confirmed a figure and where Nexus only
+  commanded it. On FM through a repeater it gives no transmit frequency rather than the one you
+  are listening on, and with VOX on it warns that Stop TX cannot unkey a transmitter your voice is
+  keying. In Phone and CW the SWR, ALC, power and compression meters now keep the last over's
+  reading, dimmed, until you key again, instead of vanishing when you unkey. The power meter's
+  full scale is the radio's **Rated power (W)**, a new setting for each radio in Settings ▸ Radio
+  ▸ Rig & CAT (100 W unless you change it), so a QRP set reads across the whole bar instead of
+  sitting on the first mark.
 - **The attenuator, the preamp and the transmit monitor are now controls you can reach.** Nexus
-  has been able to drive all three over CAT for a while, and there was nothing on screen to drive
-  them with — so an operator fighting a strong neighbour on a crowded band had to reach past the
-  app to the radio's own front panel for the one control that fixes it. The pad and the preamp
+  had no way to set any of the three, through Hamlib or its own CI-V, so an operator fighting a
+  strong neighbour on a crowded band had to reach past the app to the radio's own front panel
+  for the one control that fixes it. The pad and the preamp
   now sit at the head of the Phone cockpit's Receiver pane, where the signal meets them, and the
   monitor level sits at the end of the Transmitter pane with the rest of what shapes your audio.
   The pad and preamp are offered as the steps your radio actually has — one 20 dB pad on some
@@ -101,6 +129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the swap was not, so the one gesture split operating is built on — listen on B, work on A, put
   them back — meant two presses and a lost frequency, or a trip to the radio. The new A⇄B button
   sits with the pair it acts on; both VFOs keep their frequencies and simply change places.
+- **Beam at the station you are working, the short way or the long way, from Phone too.** The
+  rotator strip's **→ CALL** button, which turns the antenna toward the station you are working,
+  was on the CW and Operate cockpits only; Phone has it now. Beside it, **LP** turns the antenna to
+  the long-path heading. They are two buttons rather than a switch, so the path you asked for is
+  never in doubt, and the message after each names the path it took. The Remote page's rotator
+  strip is unchanged. (#338)
 - **The log shows a contact's date and its time as two columns instead of one.** One "Time (UTC)"
   column printed the whole instant — `2026-09-14 00:58Z` — in a single cell, so the dates could
   not be read down the column and the time of day sat wherever the date's width left it. They are
@@ -231,11 +265,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
   it had already taken in are kept; importing the file again adds the rest without duplicating
   any.
-- **If Nexus cannot open a logbook at all, it now says why and does not start.** Your logbook
+- **If Nexus cannot open a logbook at all, it says why and does not start.** Your logbook
   always lives in a database now: on disk, or in memory when `log.adi` is the log's home, as on a
-  network drive. In the rare case that not even the one in memory can be opened, Nexus used to
-  carry on with `log.adi` alone, the old way. It now stops before anything can be logged and says
-  why — in a message box on Windows, and in its diagnostic log on every system.
+  network drive. In the rare case that not even the one in memory can be opened, Nexus stops
+  before anything can be logged and says why — in a message box on Windows, and in its
+  diagnostic log on every system.
 - **The dated backups of your logbook keep several days of copies again, however big the log.**
   Nexus keeps dated copies of `log.adi` in the `backups/` folder beside it — one a day while the
   log changes, and one before anything makes it smaller. That folder was capped at 64 MB, which
@@ -251,16 +285,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has, then keeps the window open with **Saving your logbook…** and the number of changes still
   to write, and closes the moment they are saved. A quick save shows nothing at all. If the disk
   has not taken them after a minute, or refuses one, Nexus asks: **Keep trying**, or **Quit
-  without the last N changes**. It used to give up after ten seconds without a word. Restarting
-  after an update, and installing one on Windows, save the same way first.
+  without the last N changes**. Restarting after an update, and installing one on Windows, save
+  the same way first.
 - **A contact the logbook could not save is kept and sent again, and the screen says so.** If
   the disk is full, fails a write, or another program holds the logbook for too long, Nexus keeps
   the change in memory and sends it again (after a few seconds, then about once a minute) until
   the logbook takes it. A message stays on screen while that is happening, with the reason, and
   another says so when every change is saved again. A change the logbook refuses outright, which
   sending again cannot fix, is kept for the session instead, and the quit asks about it. At the
-  quit, **Keep trying** now really sends those changes again, so freeing some disk space and
-  pressing it saves them.
+  quit, **Keep trying** sends those changes again, so freeing some disk space and pressing it
+  saves them.
 - **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
   notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
   with the Sub band selected on the radio. The frequency and mode Nexus shows are now Main's too,
@@ -268,10 +302,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode change made from Nexus goes to Main as well. Split works exactly as before. Needs checking
   on a real IC-7610.
 - **IC-7610 on native CI-V: the attenuator offers all fifteen of the radio's steps, 3 to 45 dB in
-  3 dB steps**, where Nexus offered 6, 12 and 18. The list is the one Icom documents for the
-  radio. Where the Receiver pane is too narrow for every step in one row, the steps wrap onto a
-  second row rather than running off the edge. Every other radio offers the same steps as before.
-  Needs checking on a real IC-7610.
+  3 dB steps**, rather than the 6, 12 and 18 that Hamlib lists for it. The list is the one Icom
+  documents for the radio. Where the Receiver pane is too narrow for every step in one row, the
+  steps wrap onto a second row rather than running off the edge. Needs checking on a real
+  IC-7610.
 - **On a cross-band satellite pass, the licence check and the band strip follow the band you
   transmit on.** On an IC-9700 or IC-905 using native CI-V the uplink goes out on the Sub band,
   so the band strip now shades the phone segment of the uplink's band rather than the
@@ -283,7 +317,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
   plain ADIF file — the worst a share could do was cost you the most recent contacts, and the rest
-  of the file still read back. Nexus is moving the logbook into a database, and a database is not
+  of the file still read back. The logbook now lives in a database, and a database is not
   so forgiving: file locking across a network is the classic way to corrupt one, and the worst case
   is a log that will not open at all. So a Windows share (`\\nas\ham\nexus`) or a folder on an
   NFS or SMB mount is refused now, with the reason and what to do instead.
@@ -363,6 +397,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that transmission nothing, and a PTT release may not end one. Stop TX, a logger's Halt TX and
   the high-SWR cutoff now also ask the radio to stop its voice memory, after they unkey it. A
   radio whose CAT link offers no such stop is unaffected.
+
+- **After a radio switch, an Icom on Nexus's own CI-V connection uses its own Data mode
+  setting.** The D1, D2 or D3 chosen for the radio you switched to could be replaced by the
+  previous radio's, and on an Icom that setting picks which audio input it transmits from. The
+  setting now follows the radio.
 
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
@@ -532,6 +571,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a SOTA record lost any POTA tags it carried. They now stay with the contact and are written
   back out with it.
 
+- **A two-fer activation, a Field Day contact after a restart and a contact imported without a
+  mode are now written as proper ADIF.** A two-fer you activate is written with one park in
+  `MY_SIG_INFO` and both in `MY_POTA_REF`: the pair in `MY_SIG_INFO` named a park that does not
+  exist, in `log.adi` and in every upload built from it. A Field Day contact in FT4, Q65, FST4 or
+  another MFSK submode keeps its submode when Nexus restarts mid-event, instead of coming back as
+  plain `MFSK` in the file you submit and in your logbook when you merge. A contact imported with no
+  mode or no grid no longer writes an empty `MODE` or `GRIDSQUARE` field.
+
 - **Getting started now tells a WSJT-X operator which switch keeps JTAlert and GridTracker
   working.** Its "Coming from WSJT-X?" note said both keep working, and they do, but only once
   **WSJT-X UDP API** in Settings ▸ Logging & Connectors ▸ Integrations & Feeds is on, and it
@@ -554,6 +601,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   XIT figure are gone, and an XIT change aimed at one is refused, including from a browser. RIT
   is unchanged, and so is XIT on every other radio.
 
+- **An Icom on Nexus's own CI-V connection has its manual notch and speech-processor depth
+  back.** Turning native CI-V on, the connection that brings the Icom panadapter, took the
+  manual notch button and the processor depth slider off the Phone cockpit without a word,
+  because the native connection could not answer for either. It now can. The notch frequency
+  cannot be set over native CI-V, the same as through Hamlib.
+
 - **The transmit lock now judges the sideband you picked in Phone.** Picking USB, LSB or AM in
   the Phone cockpit, or recalling a saved memory in its own sideband, changed what the radio
   sent, but the licence check went on judging the sideband the band normally uses. So a General
@@ -563,6 +616,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused the same way. Nothing that was locked before is unlocked, and with the mode on AUTO
   nothing changes.
 
+- **On FM through a repeater, the transmit lock now judges the repeater's input, where you
+  transmit, not the output you listen on.** The shift stays set when you tune away from a
+  repeater with the knob, so near a band edge the input could fall outside the band (on 70 cm the
+  shift is 5 MHz) with nothing locked. APRS and FM satellites are still judged simplex. A shift set
+  only on the radio's own front panel is still invisible to Nexus.
+
+- **The transmit lock now checks RTTY sent as audio tones on the sideband the radio is on.** It
+  took the tones to sit below the dial, which is right on LSB, the usual way. With the radio on the
+  upper sideband (RTTY-R, or a data mode on USB) the signal sits above the dial, so near the top of
+  a segment it could go out past the edge with nothing locked: on 20 m a dial of 14.1495 sends at
+  14.1516, past the top of the data segment at 14.150. The radio's own report of its mode decides,
+  and when Nexus cannot read it, both sides must be inside your privileges.
+
 - **A station in the Stations list no longer runs under its own SNR badge.** At the 1024×768
   floor the list is about 250 px wide, which left the callsign room for three or four letters,
   so every call ran under the SNR number and the chips carried on over the Work button. A long
@@ -571,6 +637,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is that narrow, and the second line trims itself with "…" as it was always meant to. On a
   full band the cards are the same height as before; on a quiet band they are now that same
   compact height.
+
+- **The spots on the 3-D map no longer flicker.** Every dot on the Connect globe was rebuilt about
+  three times a second, so the spots blinked constantly, and the ring that marks your QTH restarted
+  before it could spread. Each is now redrawn only when it changes.
 
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
@@ -823,10 +893,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A previous contact's comment can be read in the callsign card without hovering it.** The
   "Previous contacts" list in the lookup card clipped each comment to one line and put the rest
   in a tooltip, which is the same dead end the Logbook's Comment column had before it opened in
-  place. Click a comment and it opens to its full length right there in the card; click again and
-  it folds back. Clicking anywhere else on the line still takes you to that contact in the
-  Logbook, and so does Enter — reading a comment no longer throws you out of the card in the
-  middle of working someone. (#162)
+  place. Click the small ▾ beside a comment and it opens to its full length right there in the
+  card; click it again and it folds back. Clicking anywhere else on the line, the comment's own
+  text included, still takes you to that contact in the Logbook, and so does Enter — reading a
+  comment no longer throws you out of the card in the middle of working someone. (#162)
 - **The setup wizard can now reach every rig in the catalog, not just the common ones.** The
   wizard's radio list showed about fifty curated rigs and had no way to see past them, so if
   yours was not among them there was nothing you could do in the wizard about it — Settings has
@@ -834,7 +904,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "my radio is missing": radios reported as absent were in the catalog the whole time, just out
   of reach on the one screen a new operator actually meets. The same box is now on both of the
   wizard's radio pickers, unticked by default so the short list stays the default, and the full
-  Hamlib catalog loads the first time you tick it.
+  Hamlib catalog loads the first time you tick it. The IC-7600, which a tester had taken to be
+  unsupported, is now in the short list itself.
 - **The FT-890 now gets its one true CAT rate instead of being left on the default.** That radio
   talks at 4,800 baud and nothing else, so picking it and being left on the 38,400 default meant
   it simply never answered — the same failure the fixed-rate table was built to end, on a rig the
@@ -843,6 +914,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FT-890 was absent from that dump, and every check ran over the dump — so the one radio that
   needed catching was the one radio nothing could see. The dump is rebuilt, and it is now checked
   against the radio list itself, so a rig added later cannot go unnoticed the same way.
+- **A radio found by Detect my radio is named for the radio, not for its USB chip.** With a radio
+  whose USB port is a bridge chip (reported on an FTDX10 with a CP2105), the chip's name, "CP2105
+  Dual USB to UART Bridge Controller", was stored as the radio's, and every contact logged after
+  that recorded it as your rig. Nexus now uses the catalog's name, and at start-up corrects a stored
+  name the catalog shows to be wrong. Contacts already logged keep the rig they were given, and a
+  label the detection gave the radio in Settings is left for you to rename.
+- **"NO RF POWER" no longer shows while the radio is transmitting normally.** An FT-710 reported a
+  power setting below the lowest its own CAT says it can be set to, and Nexus took that as no power
+  at all. A reading under the radio's declared minimum is now treated as a bad reading; radios that
+  really can be set to zero still get the warning.
 - **Nexus Remote: re-sending a logging request no longer reports the station as busy when the
   contact had already been logged.** If a browser's reply went missing and it asked again, the
   station answered the repeat with "the station was busy" instead of the receipt for the entry
@@ -851,7 +932,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on file. It is now served from that record straight away, and only genuinely new work waits
   for the radio.
 - **"Hide confirmed" no longer hides a station calling you either.** Same fix as the −B4 one
-  above, on the other decluttering chip: it hides every station from an entity you have already
+  below, on the other decluttering chip: it hides every station from an entity you have already
   confirmed on the band, which took your partner's RR73 away the moment the contact was logged.
 - **Garbled text on the band can no longer be read as a message to you — or answered.** A
   decoded line only counts as a real exchange now if BOTH callsigns in it are callsigns. It used
@@ -939,6 +1020,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   League keep no per-contact record of what they already hold, so they have no sweep — for those
   it is still the button on the row, or an ADIF export. The catch-up lines in the Connections log
   now also name the service actually catching up; every one of them said Club Log before.
+- **Your private note on a contact is no longer sent to logbook services.** The **Notes** field,
+  which the Logbook shows as a private note, went out with every contact sent to QRZ, Club Log,
+  eQSL, HRDLog and Cloudlog/Wavelog, and in the WSJT-X UDP feed, although the **Comment** is the
+  field marked as shared on the QSL. It now stays in your own records: `log.adi`, your ADIF
+  exports, and DXKeeper or HRD Logbook if Nexus forwards contacts to them. A note an earlier
+  version sent is not taken back.
 - **The A/B indicator now follows the radio, not just what Nexus last asked for.** Nexus told the
   rig which VFO to use and never asked it back, so pressing **A/B** on the radio's own front panel
   left the indicator showing the other one — and it stayed wrong until you changed VFO from Nexus.
@@ -968,12 +1055,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the click and the serial did not, so an F-key macro went out with the new station's call and the
   previous station's number. On phone it was worse: the cockpit showed that number as the exchange
   to read aloud, with no macro on screen to contradict it.
+- **The contest dupe warnings name only what the contest's rule checks.** In Sweepstakes a station
+  counts once on any band, so one you worked on 40 m is a dupe on 20 m, but the log strip's warning
+  named 20 m and your mode, and the **Contest dupe** badge named 20 m too, so checking 20 m found
+  nothing. In CQ WW and CQ WPX, which count by band alone, the strip also named the mode. The band
+  and the mode are now named only where the rule uses them. Field Day's warning is unchanged.
 - **The transmit SWR meter no longer gives you a figure to act on for a rig it cannot calibrate.**
   Nexus only arms the high-SWR cutoff for rigs whose SWR scale it can vouch for — but on every other
   rig the meter was still turning red past 2:1 and advising you to keep it under 2:1. On a Xiegu,
   1.2:1 on the radio's own panel arrives here as 6:1. The reading stays, because it still moves the
   right way while you tune, but the colour coding and the threshold advice are gone and the label
   reads `SWR?`.
+- **On a FlexRadio, Settings no longer calls the high-SWR cutoff verified when nothing is measuring
+  SWR.** The cutoff reads the Flex's own SWR meter, which arrives only while **Flex native
+  panadapter (early access)** is on, and that is off by default, so on a standard setup the cutoff
+  could not stop anything while Settings said it was verified. Settings now says so and names the
+  switch. The cutoff itself is unchanged.
 - **Turning Field Day on or off now re-arms the RTTY auto-sequencer after a finished contact.** The
   sequencer rests in **Done** once a contact completes, and the switch only took effect from
   **Idle**. So Field Day starting mid-session left every following contact going out with your
@@ -996,9 +1093,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A contest contact keeps its frequency on the way into your main logbook.** Merging a contest
   into the lifetime log — the file that goes to LoTW, QRZ and Club Log — wrote the band and threw
   the dial away, so every row from a contest weekend arrived with no frequency at all. On VHF that
-  lost the segment with it: 144.200 SSB and 146.520 FM both landed as plain `2m`. The dial each
-  contact was logged on now travels with it, and a contact that never knew its dial still writes
-  no frequency rather than a zero. **Field Day is included** — its log is written by the same
+  lost the segment with it: 144.200 SSB and 146.520 FM both landed as plain `2m`. The frequency
+  each contact went out on now travels with it, with the one you listened on beside it when you
+  worked split, and a contact that never knew its dial still writes no frequency rather than a
+  zero. **Field Day is included** — its log is written by the same
   code that restores it after a restart, so leaving the frequency out of the file was also
   leaving it out of the recovery, and a restart mid-event quietly blanked the dial on every
   contact already in the log.
@@ -1052,8 +1150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 A released section is history and is not rewritten, so two credits it got wrong are corrected here.
 
-- **#290** was credited as done. Only the give-up notice shipped; the catch-up sweep that ClubLog
-  has is still not available to the other connectors, and that half of the issue remains open.
+- **#290** was credited as done. Only the give-up notice shipped in 1.14.0. The catch-up sweep
+  that ClubLog has reaches QRZ and eQSL in this release (see Fixed); HRDLog, N3FJP, Cloudlog and
+  World Radio League still have none.
 - **#334** was credited as done. Only the band-display half shipped — a rig answering `PKTUSB` on
   its FT8 channel now matches its band-plan channel instead of reading "custom". The spontaneous
   band jumps reported alongside it are not addressed.
