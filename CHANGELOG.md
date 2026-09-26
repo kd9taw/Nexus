@@ -207,6 +207,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
   it had already taken in are kept; importing the file again adds the rest without duplicating
   any.
+- **If Nexus cannot open a logbook at all, it now says why and does not start.** Your logbook
+  always lives in a database now: on disk, or in memory when `log.adi` is the log's home, as on a
+  network drive. In the rare case that not even the one in memory can be opened, Nexus used to
+  carry on with `log.adi` alone, the old way. It now stops before anything can be logged and says
+  why — in a message box on Windows, and in its diagnostic log on every system.
 - **The dated backups of your logbook keep several days of copies again, however big the log.**
   Nexus keeps dated copies of `log.adi` in the `backups/` folder beside it — one a day while the
   log changes, and one before anything makes it smaller. That folder was capped at 64 MB, which

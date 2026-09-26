@@ -11432,9 +11432,9 @@ impl Engine {
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
         // row, and the writer is handed it — a channel send. NO SQL and no pass over the log,
         // so the radio loop never waits on the disk (the FT gate): the duplicate guard above
-        // was the hot index's answer. On the 1.13 path the row is the log in memory's before it
-        // is appended to `log.adi` (memory first — see `StationCore::append`). This copy, which
-        // every queue below carries, carries the id the log gave it.
+        // was the hot index's answer. On the 1.13 path the store in memory takes the row the
+        // same way, and its lane appends it to `log.adi` after it (see `StationCore::append`).
+        // This copy, which every queue below carries, carries the id the log gave it.
         let (mut appended, persisted) = self.station.append(vec![rec], sync);
         let rec = appended.pop().expect("one contact in, one out");
         self.push_to_hrd(&rec);
@@ -20114,11 +20114,7 @@ contact yourself."
         s.upload_tick = self.station.upload_tick;
         s.log_tick = self.station.log_tick();
         s.log_store_problem = self.station.store_problem.clone();
-        s.log_save_trouble = self
-            .station
-            .store
-            .as_ref()
-            .and_then(|store| store.save_trouble());
+        s.log_save_trouble = self.station.store.save_trouble();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -22669,10 +22665,16 @@ contact yourself."
     }
 
     /// See [`StationCore::set_log_path_resolved`] — the launch's 1.13 path, with cty.dat's
-    /// answer for the columns the store writes beside each contact.
-    pub fn set_log_path_resolved(&mut self, path: PathBuf, resolve: crate::logstore::StoreResolve) {
-        self.station.set_log_path_resolved(path, resolve);
+    /// answer for the columns the store writes beside each contact. `Err` — why — when not even
+    /// a store in memory opens: the launch stops and says so (SPEC-2 v3 C19, C19L).
+    pub fn set_log_path_resolved(
+        &mut self,
+        path: PathBuf,
+        resolve: crate::logstore::StoreResolve,
+    ) -> Result<(), String> {
+        self.station.set_log_path_resolved(path, resolve)?;
         self.sync_log_posid();
+        Ok(())
     }
 
     /// Hand the log the position id its minted ids carry (see [`log_posid`]).
@@ -22704,14 +22706,10 @@ contact yourself."
     /// The read a command that opens a contest session makes BEFORE it takes the Engine lock to
     /// open it (SPEC-2 v3 C19; see [`with_session_rows`]): the log's rows from the earliest time
     /// the session can start, read from the store off the lock. Taken here, under the lock; no
-    /// I/O. `None` without a store (the 1.13 path), or while the store is missing a change this
-    /// window holds.
+    /// I/O. `None` while the store is missing a change this window holds.
     pub fn session_read(&self) -> Option<crate::logstore::SessionRead> {
         let bound = now_unix_secs().saturating_sub(SESSION_READ_WINDOW);
-        self.station
-            .store
-            .as_ref()?
-            .session_read(bound, self.station.marks())
+        self.station.store.session_read(bound, self.station.marks())
     }
 
     /// Whether `rows` are still this window's log from their bound on: read exactly, and the log
@@ -22759,9 +22757,10 @@ contact yourself."
     }
 
     /// Whether the log is in a store this session: the database, or on the 1.13 path one in
-    /// memory ([`Self::log_on_file`]).
+    /// memory ([`Self::log_on_file`]). Always, since SPEC-2 v3 C19 (C19L): no session runs without
+    /// one. Kept for the callers that still ask.
     pub fn log_store_open(&self) -> bool {
-        self.station.store.is_some()
+        true
     }
 
     /// Whether this session is on the 1.13 path: `log.adi` is the log's durable home, kept as
@@ -22775,44 +22774,43 @@ contact yourself."
     /// would be lost with it. In a debug build none may be — one is a panic that names it; a
     /// release build checks nothing. The attach, and the 1.13 path, replace the placeholder.
     pub fn refuse_log_changes_until_attached(&mut self) {
-        if let Some(store) = self.station.store.as_mut() {
-            store.placeholder_until_attached();
-        }
-    }
-
-    /// Take the store away (its lane makes what it still owes `log.adi` one last try as it
-    /// goes): from here on the session is the last resort, with no store at all and `log.adi`
-    /// written by 1.13's own code — the oracle a test holds the 1.13 path to.
-    #[cfg(test)]
-    pub(crate) fn without_log_store(&mut self) {
-        self.station.store = None;
+        self.station.store.placeholder_until_attached();
     }
 
     /// Whether ANOTHER process has committed to the store since this engine's log last matched
     /// it — a change the next freshness poll, or the next change to existing rows, folds in.
     pub fn log_store_foreign_pending(&self) -> bool {
-        self.station
-            .store
-            .as_ref()
-            .is_some_and(|s| s.foreign_changed())
+        self.station.store.foreign_changed()
     }
 
     /// The store's writer, for a caller that waits or copies with every lock released.
-    pub fn log_store_writer(
-        &self,
-    ) -> Option<std::sync::Arc<tempo_core::logbook::writer::LogWriter>> {
-        self.station.store.as_ref().map(|s| s.writer())
+    pub fn log_store_writer(&self) -> std::sync::Arc<tempo_core::logbook::writer::LogWriter> {
+        self.station.store.writer()
     }
 
     /// A read of the logbook store, taken under this lock and used after it is released — see
     /// [`crate::logstore::StoreReads`]. It will see every change made to the log before this
-    /// call. `None` on the 1.13 path, where the log has no store.
-    pub fn log_store_reads(&self) -> Option<crate::logstore::StoreReads> {
-        self.station.store.as_ref().map(|s| s.reads())
+    /// call.
+    pub fn log_store_reads(&self) -> crate::logstore::StoreReads {
+        self.station.store.reads()
     }
 
     /// The log's rows for a pass over them, taken under this lock and read after it is released
-    /// — see [`crate::logstore::LogRows`]. The store's; on the 1.13 path, the log in memory.
+    /// — see [`crate::logstore::LogRows`]: the store's, on either path.
+    ///
+    /// The log is read here, and from the store. The copy of it in memory, and every handle on
+    /// that copy, are gone (SPEC-2 v3 C19), and no build can name one — the second example below
+    /// does not compile, where the first, alike but for the handle it asks for, does:
+    ///
+    /// ```no_run
+    /// let e = tempo_app::engine::Engine::new("K2DEF", "FN31", 0);
+    /// let _rows = e.log_rows();
+    /// ```
+    ///
+    /// ```compile_fail,E0599
+    /// let e = tempo_app::engine::Engine::new("K2DEF", "FN31", 0);
+    /// let _rows = e.log_records();
+    /// ```
     pub fn log_rows(&self) -> crate::logstore::LogRows {
         self.station.log_rows()
     }
@@ -22844,20 +22842,17 @@ contact yourself."
 
     /// The store's mirror of `log.adi`, as it stands.
     pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
-        self.station.store.as_ref().and_then(|s| s.mirror_status())
+        self.station.store.mirror_status()
     }
 
-    /// Write everything submitted to the store, and the mirror, waiting up to `deadline` —
-    /// the exit path. `Ok` at once when there is no store (the 1.13 path wrote inline).
+    /// Write everything submitted to the store, and the mirror or the 1.13 path's `log.adi`,
+    /// waiting up to `deadline` — the exit path.
     ///
     /// ⚠️ It WAITS, so a caller holding the engine lock holds it for the wait. The exit path
     /// may: the radio loop has stopped by then. Anything else takes [`Self::log_store_writer`]
     /// and waits with the lock released.
     pub fn flush_log_store(&self, deadline: std::time::Duration) -> Result<(), String> {
-        match self.station.store.as_ref() {
-            Some(store) => store.flush(deadline),
-            None => Ok(()),
-        }
+        self.station.store.flush(deadline)
     }
 
     /// Send again the logbook changes the database refused for a reason that can pass, each
@@ -22866,52 +22861,38 @@ contact yourself."
     /// [`crate::logstore::LogStore::resend`].
     pub fn log_resend_due(&mut self) -> usize {
         let marks = self.station.marks();
-        match self.station.store.as_mut() {
-            Some(store) => store.resend(marks, false, std::time::Instant::now()),
-            None => 0,
-        }
+        self.station
+            .store
+            .resend(marks, false, std::time::Instant::now())
     }
 
     /// [`Self::log_resend_due`] for every such change now, whatever its wait — a quit, and the
     /// quit's Keep trying.
     pub fn log_resend_all(&mut self) -> usize {
         let marks = self.station.marks();
-        match self.station.store.as_mut() {
-            Some(store) => store.resend(marks, true, std::time::Instant::now()),
-            None => 0,
-        }
+        self.station
+            .store
+            .resend(marks, true, std::time::Instant::now())
     }
 
     /// What a quit still has to wait for — see [`crate::logstore::Unsaved`]. Handles only, no
-    /// I/O: the quit takes it under the lock and waits on it with the lock released. Nothing
-    /// on the 1.13 path, which wrote `log.adi` inline.
+    /// I/O: the quit takes it under the lock and waits on it with the lock released.
     pub fn log_unsaved(&self) -> crate::logstore::Unsaved {
-        self.station
-            .store
-            .as_ref()
-            .map(|s| s.unsaved())
-            .unwrap_or_default()
+        self.station.store.unsaved()
     }
 
     /// Run `f`, and hand back what it did together with the durability of every change it made
     /// to the log — what an operator command waits on AFTER it has released the engine lock
-    /// ([`crate::logstore::Durability::wait`]). Empty on the 1.13 path, which wrote inline.
+    /// ([`crate::logstore::Durability::wait`]).
     pub fn with_log_tickets<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> T,
     ) -> (T, crate::logstore::Durability) {
-        if let Some(store) = self.station.store.as_mut() {
-            store.begin_collecting();
-        }
+        self.station.store.begin_collecting();
         let out = f(self);
-        let durability = match self.station.store.as_mut() {
-            Some(store) => {
-                let tickets = store.take_collected();
-                store.durability(tickets)
-            }
-            None => crate::logstore::Durability::default(),
-        };
-        (out, durability)
+        let store = &mut self.station.store;
+        let tickets = store.take_collected();
+        (out, store.durability(tickets))
     }
 
     /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
@@ -23333,41 +23314,6 @@ contact yourself."
         self.station.merge_qrz_report(text)
     }
 
-    /// Immutable log view for bounded read models. Does not sync, recover or write a file.
-    #[deprecated(
-        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
-                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
-                that moves it"
-    )]
-    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
-    pub fn log_records(&self) -> &[std::sync::Arc<QsoRecord>] {
-        self.station.logbook.records()
-    }
-
-    /// The log's revision and a copy of the pointers to its records, taken without cloning a
-    /// record. See [`tempo_core::logbook::Logbook::snapshot`]: take it under the engine lock,
-    /// then do the real work after releasing it.
-    #[deprecated(
-        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
-                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
-                that moves it"
-    )]
-    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
-    pub fn log_snapshot(&self) -> tempo_core::logbook::LogSnapshot {
-        self.station.logbook.snapshot()
-    }
-
-    /// Retain across chunked reads to detect any intervening log mutation/replacement.
-    #[deprecated(
-        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
-                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
-                that moves it"
-    )]
-    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
-    pub fn log_read_token(&self) -> std::sync::Arc<()> {
-        self.station.logbook.read_token()
-    }
-
     /// The log's revision — the key a whole-log result is cached against. See
     /// [`tempo_core::logbook::Logbook::revision`].
     pub fn log_revision(&self) -> u64 {
@@ -23419,16 +23365,6 @@ contact yourself."
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
     pub fn log_appended_only_since(&self, revision: u64) -> bool {
         self.station.marks().appended_only_since(revision)
-    }
-
-    /// See [`StationCore::get_log`].
-    #[deprecated(
-        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
-                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
-                that moves it"
-    )]
-    pub fn get_log(&self) -> Vec<QsoRecord> {
-        self.station.get_log()
     }
 
     /// See [`StationCore::confirmation_diagnostics`] — a read of the store, so for an engine no
@@ -23588,14 +23524,6 @@ contact yourself."
     pub fn take_in_shared_log(&mut self) -> bool {
         self.station.take_in_shared_log()
     }
-
-    /// The freshness poll's old name, for the callers not yet moved to [`sync_shared_log`] —
-    /// which reads with the Engine lock released. This one is [`Self::take_in_shared_log`], in
-    /// one breath: under the Engine lock a debug build panics at its first read of the store.
-    #[deprecated(note = "SPEC-2 C19: take engine::sync_shared_log before the Engine lock")]
-    pub fn sync_shared_log_if_changed(&mut self) -> bool {
-        self.take_in_shared_log()
-    }
 }
 
 /// The signal report carried by an outgoing `Report` / `RReport` message, if
@@ -23726,7 +23654,7 @@ fn session_rows_within<T>(
 ///   merge), and made under it, while the rows it read are still the log's.
 ///
 /// When nothing changed it costs two atomic reads under the lock and, on the 1.13 path, one
-/// `stat`. The store-less last resort re-reads `log.adi` under the lock, as 1.13 did.
+/// `stat`.
 pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
     use crate::station::Taken;
     let mut took = false;
@@ -23734,9 +23662,6 @@ pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
     for _ in 0..crate::station::PLANS {
         let job = {
             let mut eng = engine_lock(engine);
-            if eng.station.store.is_none() {
-                return eng.station.recover_external_appends() || took;
-            }
             took |= eng.station.take_in_foreign_stamps();
             match eng.station.shared_log_job(files) {
                 Some(job) => job,

@@ -12,11 +12,6 @@
 //! and reads [`AppState::snapshot`] out; here those edges are exercised by unit
 //! tests over synthetic decodes.
 
-// Test code reads the in-memory log freely — fixtures and oracles — so the handles on it that are
-// marked `#[deprecated]` (SPEC-2's census ratchet) are allowed under `cfg(test)`; production code
-// names, at each use, the step that moves it. The tests move to the store-backed accessor in C19.
-#![cfg_attr(test, allow(deprecated))]
-
 pub mod alltxt;
 pub mod bandplan;
 pub mod clocksync;

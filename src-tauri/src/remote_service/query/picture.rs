@@ -31,20 +31,23 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
+#[cfg(test)]
 use std::sync::Arc;
 
 use tempo_app::logstore::{Freshness, LogRows, READ_WAIT};
-use tempo_core::logbook::sqlite::{call_norm_of, LogDb, Narrow, Order, Scope};
+use tempo_core::logbook::sqlite::{LogDb, Narrow, Order, Scope};
 use tempo_core::logbook::{QsoRecord, RecordId};
 
 /// What a read says when the store could not be read. Never an empty answer, which would call
 /// every station on the air a new one.
 const UNREADABLE: &str = "applicationUnavailable";
 
-/// The log as one read sees it: the store inside one read transaction, or on the 1.13 path the
-/// log in memory as a copy of its pointers. [`read`] makes it, for the length of one read.
+/// The log as one read sees it: the store inside one read transaction, on either path — the log is
+/// only ever in a store (SPEC-2 v3 C19). [`read`] makes it, for the length of one read. A test may
+/// hand a reader rows of its own making instead (`Memory`), to hold an algorithm to rows it chose.
 pub(in crate::remote_service) enum Picture<'a> {
     Store(&'a LogDb),
+    #[cfg(test)]
     Memory(&'a [Arc<QsoRecord>]),
 }
 
@@ -113,6 +116,7 @@ impl Picture<'_> {
                 .map_err(|_| UNREADABLE)?;
                 answer
             }
+            #[cfg(test)]
             Picture::Memory(rows) => rows
                 .iter()
                 .enumerate()
@@ -146,6 +150,7 @@ impl Picture<'_> {
                     .map(|id| found.remove(id).ok_or(UNREADABLE))
                     .collect()
             }
+            #[cfg(test)]
             Picture::Memory(rows) => picks
                 .iter()
                 .map(|p| {
@@ -166,18 +171,20 @@ impl Picture<'_> {
                 .row_count()
                 .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
                 .map_err(|_| UNREADABLE),
+            #[cfg(test)]
             Picture::Memory(rows) => Ok(rows.len()),
         }
     }
 }
 
 /// Whether `scope` holds the contact `q`: the store's own test for each scope ([`Scope`]), made on
-/// the 1.13 path's rows.
+/// a test's own rows.
+#[cfg(test)]
 fn holds(scope: Scope<'_>, q: &QsoRecord) -> bool {
     match scope {
         Scope::All => true,
         Scope::Since(t) => q.when_unix >= t,
-        Scope::CallNorm(norm) => call_norm_of(&q.call) == norm,
+        Scope::CallNorm(norm) => tempo_core::logbook::sqlite::call_norm_of(&q.call) == norm,
     }
 }
 
@@ -213,7 +220,6 @@ pub(in crate::remote_service) fn read<T>(
                 Freshness::Stale(_) => Err("applicationBusy"),
             }
         }
-        LogRows::Memory(records) => f(&Picture::Memory(records)),
     }
 }
 

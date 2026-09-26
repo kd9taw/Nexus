@@ -28,11 +28,6 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
-// Test code reads the in-memory log freely — fixtures and oracles — so the handles on it that are
-// marked `#[deprecated]` (SPEC-2's census ratchet) are allowed under `cfg(test)`; production code
-// names, at each use, the step that moves it. The tests move to the store-backed accessor in C19.
-#![cfg_attr(test, allow(deprecated))]
-
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -2360,7 +2355,7 @@ async fn set_data_folder(
             copy,
             install.as_deref(),
             data_folder_location::mount_table().as_deref(),
-            live.as_deref(),
+            Some(&*live),
         )
     })
     .await
@@ -3114,7 +3109,7 @@ mod logbook_startup_tests {
         let opened = open_logbook_store(log, network, &mut |_| {});
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_dxcc_resolver(move |call| places.then(|| format!("Entity of {call}")));
-        adopt_logbook(&mut e, log, opened);
+        adopt_logbook(&mut e, log, opened).expect("the log is adopted");
         e
     }
 
@@ -3329,9 +3324,7 @@ mod logbook_startup_tests {
     fn moving_the_data_folder_carries_a_change_still_on_its_way_to_disk() {
         let (dir, engine) = engine_on_store("move-live", 10);
         let db = database_path(&dir.join("log.adi"));
-        let writer = engine_lock(&engine)
-            .log_store_writer()
-            .expect("the store is open");
+        let writer = engine_lock(&engine).log_store_writer();
         let marked = |to: &Path, row: usize| {
             let id = Some(id_at(&engine, row));
             LogDb::open(&database_path(&to.join("log.adi")))
@@ -3595,6 +3588,13 @@ mod logbook_startup_tests {
         );
         let finish = body_of(src, "fn finish_launch(");
         let second_half = at(finish, "start_on_the_logbook(&d, logbook_store, rest);");
+        assert!(
+            finish[second_half..].starts_with(
+                "start_on_the_logbook(&d, logbook_store, rest);\n    if let Err(why) = started {\n        \
+                 stop_for_no_log(&why);\n        handle.exit(1);\n        return;\n    }"
+            ),
+            "a log that cannot be kept even in memory stops the launch with the reason (C19L)"
+        );
         for w in [
             "remote_service_for(",
             "pouncer::run(",
@@ -3609,19 +3609,31 @@ mod logbook_startup_tests {
             assert!(second_half < at(finish, w), "`{w}` starts after the attach");
         }
         let run = body_of(src, "pub fn run() {");
-        let made = at(run, "let mut launched = Engine::with_settings(settings);");
-        let refused = at(run, "launched.refuse_log_changes_until_attached();");
+        let built = body_of(src, "fn launch_engine(");
+        let checked = at(built, "tempo_app::station::can_keep_a_log()?;");
+        let made = at(built, "let mut launched = Engine::with_settings(settings);");
+        let refused = at(built, "launched.refuse_log_changes_until_attached();");
+        assert!(
+            checked < made,
+            "the launch asks whether a log can be kept before it builds the engine (C19L)"
+        );
         assert!(
             made < refused
-                && run[made..refused]
+                && built[made..refused]
                     .lines()
                     .skip(1)
                     .all(|l| l.trim().is_empty() || l.trim_start().starts_with("//")),
             "the launch's engine refuses a change from the moment it is made"
         );
+        let stopped = at(
+            run,
+            "Err(why) => {\n            stop_for_no_log(&why);\n            return;\n        }",
+        );
         assert!(
-            refused < at(run, "Arc::new(Mutex::new(launched))"),
-            "before anything else can reach it"
+            at(run, "launch_engine(settings)") < stopped
+                && stopped < at(run, "Arc::new(Mutex::new(launched))"),
+            "a computer that cannot keep a log stops with the reason, before anything else can \
+             reach an engine"
         );
         for (name, body) in [("run", run), ("build_app", body_of(src, "fn build_app("))] {
             for w in writers {
@@ -3680,7 +3692,7 @@ mod logbook_startup_tests {
                 1,
                 "premise: written before the attach"
             );
-            adopt_logbook(&mut e, &log, opened);
+            adopt_logbook(&mut e, &log, opened).expect("the log is adopted");
             assert_eq!(e.log_on_file(), network.is_some(), "premise: {path}");
             let stored: Vec<String> = e.stored_log().iter().map(|r| r.call.clone()).collect();
             assert_eq!(
@@ -3857,6 +3869,29 @@ mod logbook_startup_tests {
         );
     }
 
+    /// ★ A COMPUTER THAT CANNOT KEEP A LOG STOPS BEFORE ANY ENGINE IS BUILT (SPEC-2 v3 C19, C19L:
+    /// the operator's "stop with a clear message"). With every open of a store in memory failing
+    /// on this thread, as on a computer where SQLite cannot open even that, the launch's engine is
+    /// not built: the launch answers the reason the operator is shown, and `run()` returns on it
+    /// (pinned beside the launch order above). An Engine built on this thread would stop on the
+    /// same open, so a pass proves none was. The control: with stores opening again, the same
+    /// call builds the launch's engine.
+    #[test]
+    fn a_computer_that_cannot_keep_a_log_stops_before_any_engine_is_built() {
+        tempo_app::station::fail_empty_stores_on_this_thread(true);
+        let launched = launch_engine(Settings::default());
+        tempo_app::station::fail_empty_stores_on_this_thread(false);
+        let why = launched.err().expect("the launch stops");
+        assert!(
+            why.contains("could not be opened even in memory"),
+            "and says why: {why}"
+        );
+        assert!(
+            launch_engine(Settings::default()).is_ok(),
+            "control: a computer that can keep a log builds the launch's engine"
+        );
+    }
+
     /// The fallback survives the move to the launch's second half: a database that cannot be
     /// opened still runs the session on `log.adi`, whole, and a contact logged in it lands there.
     /// Through the two calls the launch makes — `open_logbook_store`, with a progress sink as
@@ -3871,7 +3906,7 @@ mod logbook_startup_tests {
         assert!(opened.is_err(), "premise: the database would not open");
 
         let mut e = Engine::new("K2DEF", "FN31", 0);
-        adopt_logbook(&mut e, &log, opened);
+        adopt_logbook(&mut e, &log, opened).expect("the log is adopted");
         assert!(
             e.log_on_file(),
             "the session is not on the database: log.adi is its log"
@@ -4795,6 +4830,48 @@ fn stand_down_for_a_conversion_elsewhere() {
     }
 }
 
+/// The launch stops: this computer cannot keep a log, not even in a store in memory (SPEC-2 v3 C19,
+/// C19L — the operator's "stop with a clear message"). Said in the diagnostic log and on stderr
+/// and, on Windows, in a message box, as the launch's other refusals are; the caller then returns
+/// without starting anything that reads or writes the log.
+fn stop_for_no_log(why: &str) {
+    let text = format!(
+        "Nexus cannot keep a log on this computer, so it did not start.\n\n{why}\n\n\
+         A diagnostic log has been written to:\n{}",
+        diag_log_path().display()
+    );
+    tempo_core::applog::error(
+        "startup",
+        &format!("no log can be kept, so the launch stops: {why}"),
+    );
+    tempo_core::applog::flush();
+    eprintln!("nexus: {text}");
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: *mut std::ffi::c_void,
+                text: *const u16,
+                caption: *const u16,
+                utype: u32,
+            ) -> i32;
+        }
+        const MB_ICONERROR: u32 = 0x0000_0010;
+        const MB_SETFOREGROUND: u32 = 0x0001_0000;
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let text = wide(&text);
+        let caption = wide("Nexus");
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONERROR | MB_SETFOREGROUND,
+            );
+        }
+    }
+}
+
 /// Hand this session's log to the engine: the database, when [`open_logbook_store`] opened it —
 /// `log.adi` is from then on its mirror — or, when it could not, `log.adi` itself, run exactly
 /// as 1.13 ran it, with the reason kept, written to the diagnostic log and carried in the
@@ -4804,11 +4881,14 @@ fn stand_down_for_a_conversion_elsewhere() {
 /// written from here fills both first. What an older build left unfilled is written by the fill
 /// job once the window is up ([`spawn_log_fill`]); the attach itself fills and writes nothing
 /// (see `StationCore::attach_store`).
+///
+/// `Err` — why — when the database could not be used and not even a store in memory opens for
+/// `log.adi`: the launch stops and says so (SPEC-2 v3 C19, C19L).
 fn adopt_logbook(
     eng: &mut Engine,
     log: &Path,
     opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
-) {
+) -> Result<(), String> {
     match opened {
         Ok(opened) => {
             let what = match opened.outcome {
@@ -4830,6 +4910,7 @@ fn adopt_logbook(
             // session's rows once its lock is released, after the attach has taken in any
             // `log.adi` another program wrote ([`resume_field_day`]).
             let _ = eng.attach_log_store(opened);
+            Ok(())
         }
         Err(e) => {
             let why = e.to_string();
@@ -4840,8 +4921,9 @@ fn adopt_logbook(
                 }
                 _ => tempo_core::applog::error("logbook", &line),
             }
-            eng.set_log_path_resolved(log.to_path_buf(), store_resolve());
+            eng.set_log_path_resolved(log.to_path_buf(), store_resolve())?;
             eng.note_log_store_problem(&e);
+            Ok(())
         }
     }
 }
@@ -27140,10 +27222,13 @@ pub fn run() {
     // profile. That is harmless only because nothing reads the registry and the cap forbids a
     // second chain — and re-registering chains when the radio set changes is the first thing the
     // cap-lift has to solve. It is not papered over here, where it would be untestable.
-    let mut launched = Engine::with_settings(settings);
-    // Until `start_on_the_logbook` attaches the operator's log, the engine's log is a placeholder
-    // the attach replaces: a change reaching it would be lost, so a debug build refuses one.
-    launched.refuse_log_changes_until_attached();
+    let launched = match launch_engine(settings) {
+        Ok(launched) => launched,
+        Err(why) => {
+            stop_for_no_log(&why);
+            return;
+        }
+    };
     let engine: SharedEngine = Arc::new(Mutex::new(launched));
     #[cfg(feature = "radio")]
     {
@@ -27385,6 +27470,19 @@ fn resume_field_day(engine: &SharedEngine) {
     }
 }
 
+/// The launch's Engine, on a computer that can keep a log — asked FIRST (SPEC-2 v3 C19, C19L): the
+/// Engine keeps its log in a store from the moment it is made, and a computer that cannot open
+/// even a store in memory would stop the Engine's own creation. `Err` is the reason, for
+/// [`stop_for_no_log`]; no Engine was built.
+fn launch_engine(settings: Settings) -> Result<Engine, String> {
+    tempo_app::station::can_keep_a_log()?;
+    let mut launched = Engine::with_settings(settings);
+    // Until `start_on_the_logbook` attaches the operator's log, the engine's log is a placeholder
+    // the attach replaces: a change reaching it would be lost, so a debug build refuses one.
+    launched.refuse_log_changes_until_attached();
+    Ok(launched)
+}
+
 /// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
 /// logbook is open.
 ///
@@ -27397,7 +27495,7 @@ fn start_on_the_logbook(
     d: &BuildDeps,
     logbook_store: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
     rest: LaunchRest,
-) {
+) -> Result<(), String> {
     let LaunchRest {
         persisted_source,
         #[cfg(feature = "radio")]
@@ -27531,7 +27629,9 @@ fn start_on_the_logbook(
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
         // The rows a Field Day session restored below is swept from, set aside by the open.
-        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
+        // A log that cannot be kept at all stops the launch here, before anything starts.
+        let adopted = adopt_logbook(&mut eng, &logbook_path(), logbook_store);
+        adopted?;
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -28631,6 +28731,7 @@ fn start_on_the_logbook(
             }
         });
     }
+    Ok(())
 }
 
 /// The launch from the moment the splash is on screen: open the logbook — converting `log.adi` on
@@ -28689,7 +28790,12 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         // The last note. The relay delivers it, then ends when this sender drops.
         let _ = notes.send(SplashNote::Opening);
     }
-    start_on_the_logbook(&d, logbook_store, rest);
+    let started = start_on_the_logbook(&d, logbook_store, rest);
+    if let Err(why) = started {
+        stop_for_no_log(&why);
+        handle.exit(1);
+        return;
+    }
     LAUNCH_ATTACHED.store(true, std::sync::atomic::Ordering::SeqCst);
     tempo_core::applog::info("startup", "logbook attached; starting what waits on it");
     handle.manage(remote_service_for(

@@ -253,11 +253,6 @@ fn unreadable(e: sqlite::Error) -> String {
     format!("the logbook could not be read: {e}")
 }
 
-/// A pass over the log in memory (the 1.13 path) runs with no Engine guard held.
-fn off_lock(work: &str) {
-    tempo_core::logbook::io_fence::whole_log_off_engine_lock(work);
-}
-
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -525,14 +520,6 @@ impl LogQueries {
                     Ok(b.finish())
                 }
             }),
-            LogRows::Memory(rows) => {
-                off_lock("an order of the log in memory");
-                let order = query::order(
-                    rows.iter().enumerate().map(|(i, r)| (i as u32, r.as_ref())),
-                    query,
-                );
-                Ok((order, Freshness::Current))
-            }
         }
     }
 
@@ -559,14 +546,6 @@ impl LogQueries {
                     .filter_map(|(&h, r)| r.map(|r| (h, r)))
                     .collect();
                 (rows, size)
-            }
-            LogRows::Memory(all) => {
-                off_lock("a page of the log in memory");
-                let rows = slice
-                    .iter()
-                    .filter_map(|&p| all.get(p as usize).map(|r| (p, QsoRecord::clone(r))))
-                    .collect();
-                (rows, all.len() as u64)
             }
         };
         let keys = rows.iter().map(|(h, r)| key_of(r, *h)).collect();
@@ -596,10 +575,6 @@ impl LogQueries {
             Err(()) => None,
             Ok(id) => match &c.rows {
                 LogRows::Store(reads) => read(reads, |db| db.rowid_of(&id))?.0,
-                LogRows::Memory(rows) => {
-                    off_lock("a place in the log in memory");
-                    rows.iter().position(|r| r.id == Some(id)).map(|p| p as u32)
-                }
             },
         };
         json(LocateAnswer {
@@ -627,12 +602,6 @@ impl LogQueries {
                 })?
                 .0
             }
-            LogRows::Memory(rows) => {
-                off_lock("a row of the log in memory");
-                rows.iter()
-                    .find(|r| r.id == Some(id))
-                    .map(|r| QsoRecord::clone(r))
-            }
         };
         Ok(row.map(|r| logged(r, resolve)))
     }
@@ -656,13 +625,6 @@ impl LogQueries {
                 rowids
                     .iter()
                     .map(|r| r.and_then(|_| found.next().flatten()))
-                    .collect()
-            }
-            LogRows::Memory(all) => {
-                off_lock("rows of the log in memory");
-                indices
-                    .iter()
-                    .map(|&i| position(i, all.len()).map(|p| QsoRecord::clone(&all[p])))
                     .collect()
             }
         };
@@ -690,7 +652,6 @@ impl LogQueries {
     fn log_size(&self, c: &Capture) -> Result<u64, String> {
         match &c.rows {
             LogRows::Store(reads) => Ok(read(reads, |db| db.row_count())?.0),
-            LogRows::Memory(rows) => Ok(rows.len() as u64),
         }
     }
 
@@ -780,15 +741,6 @@ impl LogQueries {
                 Ok(db.rows_at(&rowids)?.into_iter().flatten().collect())
             })?
             .0),
-            LogRows::Memory(rows) => {
-                off_lock("a call's rows in the log in memory");
-                let wanted: HashSet<&str> = keys.iter().map(String::as_str).collect();
-                Ok(rows
-                    .iter()
-                    .filter(|r| wanted.contains(r.call.trim().to_ascii_uppercase().as_str()))
-                    .map(|r| QsoRecord::clone(r))
-                    .collect())
-            }
         }
     }
 
@@ -870,13 +822,6 @@ impl LogQueries {
                     })
                 })?;
                 (last, fresh)
-            }
-            LogRows::Memory(rows) => {
-                off_lock("the entities of the log in memory");
-                for r in rows.iter().skip(from as usize) {
-                    count(&mut index, r);
-                }
-                (rows.len() as u32, Freshness::Current)
             }
         };
         let built = Arc::new(EntityCache {

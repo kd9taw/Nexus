@@ -66,15 +66,6 @@ impl Source {
         }
     }
 
-    /// `rows`, with nothing owed to them — the log in memory as a test hands it over.
-    #[cfg(test)]
-    pub(crate) fn of_rows(rows: LogRows) -> Source {
-        Source {
-            rows,
-            unsaved: Unsaved::default(),
-        }
-    }
-
     /// The export source of a store a test opened, and of the changes submitted to it.
     #[cfg(test)]
     pub(crate) fn of_store(store: &crate::logstore::LogStore) -> Source {

@@ -167,8 +167,8 @@ pub fn off_engine_lock(op: &str) {
 ///
 /// Not disk work, and the same rule for the same reason: the radio loop needs that lock every
 /// 20 ms, and a pass over a lifetime log takes tens to hundreds of milliseconds (a needs fold
-/// over 500,000 contacts, 225 ms). Take the log's rows under the lock — a copy of pointers,
-/// `Engine::log_snapshot` — release it, then do the work. SPEC-2 v3's C12 put every such pass a
+/// over 500,000 contacts, 225 ms). Take the log's rows under the lock — the store's handles,
+/// `Engine::log_rows` — release it, then do the work. SPEC-2 v3's C12 put every such pass a
 /// poll or a timer runs behind this assertion.
 #[inline]
 #[track_caller]

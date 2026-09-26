@@ -133,6 +133,18 @@ impl Minter {
         self.posid = posid;
     }
 
+    /// The position id the ids it mints from here carry.
+    pub fn posid(&self) -> u32 {
+        self.posid
+    }
+
+    /// A minter for a log whose rows carry `ids`: under `posid`, and clear of the nonce of every
+    /// minted id among them — the station's, for a log it did not load itself (SPEC-2 v3 C19: the
+    /// store's rows, read in the pass that builds the hot index).
+    pub fn clear_of<'a>(posid: u32, ids: impl IntoIterator<Item = &'a RecordId>) -> Self {
+        Self::new(posid, &minted_nonces(ids))
+    }
+
     pub fn mint(&mut self) -> RecordId {
         if self.next_seq == u32::MAX {
             // Four billion rows in one session: start a fresh run under a new nonce rather
@@ -160,6 +172,17 @@ impl Clone for Minter {
     fn clone(&self) -> Self {
         Self::drawing(self.posid, &HashSet::from([self.nonce]), draw_nonce)
     }
+}
+
+/// The nonce of every minted id among `ids` — what a minter for the log they name draws clear of.
+/// A provisional id was minted by no one, and names none.
+fn minted_nonces<'a>(ids: impl IntoIterator<Item = &'a RecordId>) -> HashSet<u64> {
+    ids.into_iter()
+        .filter_map(|id| match id {
+            RecordId::Minted { nonce, .. } => Some(*nonce),
+            RecordId::Provisional { .. } => None,
+        })
+        .collect()
 }
 
 /// 64 bits from the OS-seeded hasher keys (every `RandomState` has fresh ones), mixed with the
@@ -315,6 +338,38 @@ mod tests {
         let m = Minter::drawing(0, &taken, || draws.next().unwrap());
         assert_eq!(m.nonce, 11, "the first free draw, not the first draw");
         assert_eq!(draws.next(), Some(12), "and it stopped drawing there");
+    }
+
+    /// The station's minter for a log it did not load itself (SPEC-2 v3 C19): drawn clear of the
+    /// nonce of every minted id the log's rows carry — and of nothing a provisional id's hash
+    /// happens to equal.
+    #[test]
+    fn a_minter_for_a_log_is_drawn_clear_of_every_nonce_its_rows_carry() {
+        let ids = [
+            RecordId::Minted {
+                posid: 1,
+                nonce: 7,
+                seq: 1,
+            },
+            RecordId::Provisional {
+                hash: 11,
+                ordinal: 0,
+            },
+            RecordId::Minted {
+                posid: 2,
+                nonce: 9,
+                seq: 4,
+            },
+        ];
+        let taken = minted_nonces(&ids);
+        assert_eq!(taken, HashSet::from([7, 9]));
+        let mut draws = [9, 7, 11].into_iter();
+        let m = Minter::drawing(3, &taken, || draws.next().unwrap());
+        assert_eq!(
+            (m.posid, m.nonce),
+            (3, 11),
+            "the first draw no row's id carries"
+        );
     }
 
     /// A copied log mints under a nonce of its own: two Logbooks cloned from one must not
