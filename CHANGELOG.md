@@ -264,6 +264,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (seen with an IC-9700 on native CI-V), and the radio could fall back to Hamlib's rigctld instead
   of its native CI-V connection. The radio you leave is now picked up only after Nexus releases it.
 
+- **A radio switch can no longer leave the radio you switched away from transmitting.** If the
+  switch landed at one particular moment in Nexus's radio cycle, the connection to the radio you
+  were leaving was closed even when its key-up had failed, and a radio connected through Hamlib
+  then had nothing left that could key it up. The radio you leave is still keyed up at once, as
+  before, but its connection is now closed only by the switch itself, which waits while the radio
+  is still transmitting.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.

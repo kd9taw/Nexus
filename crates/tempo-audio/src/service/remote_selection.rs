@@ -203,6 +203,9 @@ impl RadioLoop {
                     *last_active,
                 ));
                 *last_active = radio;
+                // Handed over here, not by this tick's handoff: `step()` must not read the
+                // settings' new radio as a switch the handoff has not seen.
+                self.handed_over = Some(radio);
                 self.adopt_selection_readback(eng, &configuration, &readback, fm);
                 // Physical cleanup above already serviced these native handoff
                 // aborts. Do not send another keyer flush on the incoming radio.
