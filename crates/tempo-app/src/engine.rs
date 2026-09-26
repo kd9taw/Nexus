@@ -2560,6 +2560,11 @@ pub struct Engine {
     /// request simply replaces an unconsumed one — the newest ask wins, as everywhere else
     /// in the one-shot family.
     pending_voice_mem: Option<VoiceMemCmd>,
+    /// One-shot: a halt (Stop TX, a logger's HaltTx, the SWR cutoff; see [`Self::halt_tx`]) asks
+    /// the radio loop to also tell the rig in hand to stop a voice memory it may be playing, after
+    /// the unkey and the aborts. Nexus never keyed that transmission, so nothing else in the halt
+    /// reaches it. A context halt neither sets nor clears it ([`Self::halt_tx_for_context_change`]).
+    voice_mem_halt: bool,
     /// The TX frequency Nexus COMMANDED and the rig ACKNOWLEDGED — the ONLY transmit frequency
     /// the privilege gate is allowed to judge.
     ///
@@ -4731,6 +4736,7 @@ impl Engine {
             observed_split: None,
             split_dirty: false,
             pending_voice_mem: None,
+            voice_mem_halt: false,
             rit_hz: 0,
             xit_hz: 0,
             active_vfo_b: false,
@@ -7635,6 +7641,12 @@ impl Engine {
     /// One-shot consume for the radio loop — `take_split_request`'s shape.
     pub fn take_voice_mem(&mut self) -> Option<VoiceMemCmd> {
         self.pending_voice_mem.take()
+    }
+
+    /// Did a halt ask for a voice-memory stop since the loop last looked? One-shot; see
+    /// [`Self::halt_tx`] and the `voice_mem_halt` field.
+    pub fn take_voice_mem_halt(&mut self) -> bool {
+        std::mem::take(&mut self.voice_mem_halt)
     }
 
     /// The rig REJECTED the split command at `tx_mhz` — drop the desired state
@@ -13259,6 +13271,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.sstv_abort = true;
         self.sstv_tx_mode = None;
         self.sstv_tx_progress = None;
+        // …and a voice memory the RIG may be playing on its own: Nexus never keyed it, so only
+        // a stop of its own reaches it. The loop sends that after the unkey and the aborts.
+        self.voice_mem_halt = true;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         // JS8: outbox, pending autoreply and HB schedule go too — halt is total (spec
@@ -13345,7 +13360,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     | OperatingMode::Rtty
                     | OperatingMode::Keyboard
             );
-        let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        // A context halt is not a Stop TX: it neither asks the loop for a voice-memory stop nor
+        // drops one the operator's own halt asked for a moment ago (see `voice_mem_halt`).
+        let (retune, watchdog_start, voice_mem_halt) = (
+            self.immediate_retune,
+            self.tx_watchdog_start,
+            self.voice_mem_halt,
+        );
         // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
         // before the `if restore` below, so a context change still printed TWO lines — the
         // collapsed one and then `transmit ARMED by …:8798` from the restore's own
@@ -13353,6 +13374,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // second time this same pair has been logged as its steps.
         self.quiet_tx_log = true;
         self.halt_tx();
+        self.voice_mem_halt = voice_mem_halt;
         tempo_core::applog::info(
             "tx",
             &match (was, restore) {
@@ -27032,6 +27054,27 @@ mod tests {
         assert!(
             e.take_atu_tune(),
             "a press after the switch belongs to the new radio"
+        );
+    }
+
+    /// ★ A halt asks the loop for a voice-memory stop, once. A context halt neither asks for one
+    /// nor drops the one the operator's own Stop TX asked for a moment before it.
+    #[test]
+    fn a_halt_asks_for_a_voice_memory_stop_and_a_context_halt_does_not() {
+        let mut e = phone_armed_engine();
+        e.halt_tx();
+        assert!(
+            e.take_voice_mem_halt(),
+            "Stop TX asks the loop for the voice-memory stop"
+        );
+        assert!(!e.take_voice_mem_halt(), "…once");
+        e.halt_tx_for_context_change("band change");
+        assert!(!e.take_voice_mem_halt(), "a context halt does not ask");
+        e.halt_tx();
+        e.halt_tx_for_context_change("radio handoff");
+        assert!(
+            e.take_voice_mem_halt(),
+            "…nor does it drop the one Stop TX asked for"
         );
     }
 

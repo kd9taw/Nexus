@@ -316,6 +316,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one a logger sends through Nexus's CAT link, used to be refused. It is now sent as the radio's
   own Voice TX memory stop.
 
+- **Stop TX now also stops a voice memory the radio is playing.** Nexus never keyed a voice
+  memory started by a logger through its CAT link, or from the radio's own panel, so Stop TX sent
+  that transmission nothing, and a PTT release may not end one. Stop TX, a logger's Halt TX and
+  the high-SWR cutoff now also ask the radio to stop its voice memory, after they unkey it. A
+  radio whose CAT link offers no such stop is unaffected.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.
