@@ -2462,6 +2462,10 @@ fn handoff_if_switched(
     // ONLY a conn whose CAT config matches what we now want — a stale conn is dropped + reopened).
     let mut want_cat = want_active.clone();
     want_cat.broker_self_port = None;
+    // …and the keying port: a monitor's transport never carries one (`Transport::from_profile`)
+    // and its rig never opens one. The adopted rig keys from `want_active` (`ptt_mode_for`), and
+    // `install_handoff_connection` carries the port into `applied`.
+    want_cat.ptt_serial_port = String::new();
     // Adopt ONLY a LIVE conn: a monitor whose rigctld failed to bind / whose CAT probe never connected
     // is parked in the pool as a `Rig::vox()` (no control channel — see `open_monitor`). Adopting that
     // dead conn would install a control-less rig as the active radio, and because `state.applied` is
@@ -2471,6 +2475,11 @@ fn handoff_if_switched(
     // `open_cat` (no is_alive gate, self-healing) — exactly how the startup radio stays healthy.
     if let Some(idx) = p.iter_mut().position(|c| {
         c.id == active
+            // A radio that keys on its CAT port (RTS/DTR on the port its daemon holds) keys
+            // through a daemon TOLD to (`-P`, `open_serial_ptt`). The monitor's daemon was not:
+            // it would key by the model's default PTT type instead of the configured line. So
+            // such a radio is never adopted; the fallback opens it fresh, keying line and all.
+            && !keys_on_the_cat_port(&want_active)
             && c.rig.has_control()
             // Mirror reconcile's keep-gate: a live TCP cache over a DEAD daemon is a zombie —
             // adopting it installs dead CAT as the active radio with `applied` matching, so
@@ -5163,6 +5172,10 @@ impl RadioLoop {
         // method without reopening either connection.
         rig.set_ptt_mode(ptt_mode_for(want_active));
         old_rig.set_ptt_mode(PttMode::Vox);
+        // The outgoing rig was unkeyed before this (the handoff holds a still-keyed rig back;
+        // a Remote selection confirms it idle), and a monitor never keys: its keying port goes
+        // now, so the pool never holds one — another radio may key on that same port.
+        old_rig.release_ptt_port();
         let old_proc = self.rigctld_proc.take();
         // The background radio must stop its scope stream so it does not crowd
         // out the slow monitor reads. This updates the native daemon's demand.
@@ -5172,9 +5185,13 @@ impl RadioLoop {
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // Monitor comparison strips the broker port. The active side retains
         // it so ordinary reconciliation does not tear down either connection.
+        // The keying port likewise: a monitor never carries one, and the active
+        // side keys with the one the operator configured.
         old_transport.broker_self_port = None;
+        old_transport.ptt_serial_port = String::new();
         self.rigctld_proc = conn.rigctld_proc;
         self.applied.broker_self_port = want_active.broker_self_port;
+        self.applied.ptt_serial_port = want_active.ptt_serial_port.clone();
         self.reset_for_handoff();
         self.remote_radio_id = Some(conn.id);
         MonitorConn {
@@ -18593,6 +18610,364 @@ mod tests {
             icom_log.lock().unwrap().iter().any(|l| l == "F 14200000"),
             "the Icom is tuned once it is the loop's: {:?}",
             icom_log.lock().unwrap()
+        );
+    }
+
+    /// Two radios, each configured through the flat settings form (which edits whatever is
+    /// active), radio 0 active. Returns the engine, radio 1's id, both radios' MONITOR
+    /// transports (`Transport::from_profile`), and radio 0's transport as the loop applies it.
+    fn two_radio_engine(
+        radio0: impl FnOnce(&mut tempo_app::settings::Settings),
+        radio1: impl FnOnce(&mut tempo_app::settings::Settings),
+    ) -> (Arc<Mutex<Engine>>, u32, Transport, Transport, Transport) {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (r1, monitor0, monitor1, applied0) = {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            let mut s = e.settings().clone();
+            radio0(&mut s);
+            e.apply_settings(s);
+            let r1 = e.add_radio();
+            e.set_active_radio(r1);
+            let mut s = e.settings().clone();
+            radio1(&mut s);
+            e.apply_settings(s);
+            e.set_active_radio(0);
+            let monitor = |id: u32| {
+                Transport::from_profile(e.settings().radios.iter().find(|p| p.id == id).unwrap())
+            };
+            (
+                r1,
+                monitor(0),
+                monitor(r1),
+                Transport::from_settings(e.settings()),
+            )
+        };
+        (engine, r1, monitor0, monitor1, applied0)
+    }
+
+    /// A live monitor connection for radio `id`, as the monitor thread opens one: read-only.
+    fn live_monitor(id: u32, transport: Transport, cat: &str) -> MonitorConn {
+        MonitorConn {
+            id,
+            transport,
+            rig: Rig::with_control(Some(cat.to_string()), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }
+    }
+
+    /// ★ A radio with a keying port of its own (RTS on one port, CAT on another) is ADOPTED at
+    /// a switch, from its monitor connection, instantly, and keys on the port the operator
+    /// configured. The monitor connection never carried that port (a monitor never keys), so
+    /// the match leaves it out and the handoff carries it into `applied`: nothing is torn down
+    /// or reopened, that tick or the next.
+    #[test]
+    fn a_radio_with_its_own_keying_port_is_adopted_and_keys_on_that_port() {
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, _, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "cat".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1035;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.ptt_serial_port = "tempo-test-key-b".into();
+                s.rigctld_port = port1;
+            },
+        );
+        assert!(
+            monitor1.ptt_serial_port.is_empty(),
+            "premise: a monitor transport carries no keying port"
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        let mut rig = Rig::with_control(Some(cat0), PttMode::Cat);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let reopened = std::cell::Cell::new(0);
+        let mut rr = |_: &Transport, _: bool| {
+            reopened.set(reopened.get() + 1);
+            (Rig::vox(), None, CatProbe::status(None, ""))
+        };
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(last_active, r1);
+        for tick in 1..=2 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(tick) * 20.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            reopened.get(),
+            0,
+            "adopted from its monitor connection: nothing reopened"
+        );
+        assert_eq!(
+            state.applied.ptt_serial_port, "tempo-test-key-b",
+            "the configured keying port is the active side's"
+        );
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: "tempo-test-key-b".into(),
+                line: SerialLine::Rts
+            },
+            "it keys on that port, on its line"
+        );
+    }
+
+    /// ★ …and the radio switched AWAY from goes to the monitor pool WITHOUT its keying port. Its
+    /// connection is kept (the monitor's own transport never carried the port, so nothing
+    /// differs), and nothing in the pool holds the port it keyed on: a monitor never keys, and
+    /// another radio may key on that port.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn the_radio_switched_away_from_is_monitored_and_lets_go_of_its_keying_port() {
+        use crate::control_line::fake_ports;
+        fake_ports::install("tempo-test-key-a");
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, monitor0, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.ptt_serial_port = "tempo-test-key-a".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "cat".into();
+                s.rig_model = 3081;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.rigctld_port = port1;
+            },
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        let mut rig = Rig::with_control(Some(cat0), ptt_mode_for(&applied0));
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        // The active radio has keyed on its port, so its rig holds it.
+        rig.ptt(false).unwrap();
+        assert!(
+            fake_ports::state("tempo-test-key-a").held,
+            "premise: the active rig holds its keying port"
+        );
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(last_active, r1);
+        assert!(
+            !fake_ports::state("tempo-test-key-a").held,
+            "nothing in the pool holds the keying port"
+        );
+        let opens = std::cell::Cell::new(0);
+        reconcile_pool_with_open(&pool, &[(0, monitor0)], r1, &engine, 0.0, |_| {
+            opens.set(opens.get() + 1);
+            (Rig::vox(), None, Some(false))
+        });
+        assert_eq!(
+            opens.get(),
+            0,
+            "the handed-back connection is kept, not recycled"
+        );
+        assert!(pool.lock().unwrap().iter().any(|c| c.id == 0));
+    }
+
+    /// ★ SO2R: two radios key through ONE controller port, RTS for one and DTR for the other. A
+    /// switch hands the port from the radio the operator left to the radio they chose, both
+    /// ways: the new radio keys on its own line, and the old one's line stays low.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn two_radios_sharing_one_keying_port_each_key_after_a_switch() {
+        use crate::control_line::fake_ports::{self, State};
+        fake_ports::install("tempo-test-so2r");
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, _, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.ptt_serial_port = "tempo-test-so2r".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "dtr".into();
+                s.rig_model = 1035;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.ptt_serial_port = "tempo-test-so2r".into();
+                s.rigctld_port = port1;
+            },
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        let mut rig = Rig::with_control(Some(cat0), ptt_mode_for(&applied0));
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        rig.ptt(false).unwrap();
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+
+        for (to, keyed) in [
+            (
+                r1,
+                State {
+                    held: true,
+                    rts: false,
+                    dtr: true,
+                },
+            ),
+            (
+                0,
+                State {
+                    held: true,
+                    rts: true,
+                    dtr: false,
+                },
+            ),
+        ] {
+            engine.lock().unwrap().set_active_radio(to);
+            handoff_if_switched(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &pending,
+            );
+            assert_eq!(last_active, to, "premise: switched to radio {to}");
+            if let Err(e) = rig.ptt(true) {
+                panic!("radio {to} keys on the shared port: {e}");
+            }
+            assert_eq!(
+                fake_ports::state("tempo-test-so2r"),
+                keyed,
+                "radio {to} keys on its own line, and only on it"
+            );
+            rig.ptt(false).unwrap();
+        }
+    }
+
+    /// ★ A radio that keys on its CAT port (RTS on the port its daemon holds) is never adopted
+    /// from its monitor connection, whose daemon was not told to key (no `-P`) and would key by
+    /// the model's default PTT type instead. The switch falls back and opens it fresh, through
+    /// the keying-line path.
+    #[test]
+    fn a_radio_that_keys_on_its_cat_port_is_reopened_not_adopted() {
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, _, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "cat".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1035;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.ptt_serial_port = String::new();
+                s.rigctld_port = port1;
+            },
+        );
+        assert!(
+            keys_on_the_cat_port(&monitor1),
+            "premise: radio 1 keys on its CAT port"
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        let mut rig = Rig::with_control(Some(cat0), PttMode::Cat);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let opened = std::cell::RefCell::new(Vec::new());
+        let mut rr = |t: &Transport, _: bool| {
+            opened.borrow_mut().push(t.clone());
+            (Rig::vox(), None, CatProbe::status(None, ""))
+        };
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let opened = opened.into_inner();
+        assert_eq!(opened.len(), 1, "opened fresh, not adopted");
+        assert!(
+            keys_on_the_cat_port(&opened[0]),
+            "through the keying-line path, whose daemon keys on the line"
         );
     }
 

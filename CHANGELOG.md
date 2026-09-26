@@ -271,6 +271,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before, but its connection is now closed only by the switch itself, which waits while the radio
   is still transmitting.
 
+- **A radio with its own PTT port now switches instantly, and a radio keeps its keying line
+  after a switch.** A radio keyed by RTS or DTR on a port of its own was closed and reopened at
+  every switch to it. It now switches as quickly as any other radio and keys on the port you
+  configured. The radio you leave lets go of its PTT port at the switch, so two radios keyed
+  through one controller port (SO2R) each key after a switch. A radio keyed by RTS or DTR on its
+  CAT port could, after a switch, key by another method than the one you chose (usually the
+  radio's own CAT command). It is now reopened at every switch to it, so it keeps keying on its
+  line. The connection that keeps your other radios live in the background never opens a PTT
+  port.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.
