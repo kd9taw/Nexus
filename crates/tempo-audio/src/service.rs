@@ -19101,6 +19101,56 @@ mod tests {
         );
     }
 
+    /// ★ …and on a native CI-V Icom that stop is `28 00 00` on the wire, after the unkey
+    /// (`1C 00 00`) and the CW stop (`17 FF`). The radio's connection goes back to the pool still
+    /// up: the first read on it answers.
+    #[test]
+    fn a_switch_stops_a_native_icoms_voice_memory_with_28_00_00_after_its_unkey() {
+        let (daemon, _, regs) = civ_daemon_rig(false);
+        let yaesu_port = daemon.local_addr().port();
+        let yaesu_addr = format!("127.0.0.1:{yaesu_port}");
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        state.rigctld_proc = Some(CatDaemon::Native(daemon));
+        let before = regs.lock().unwrap().log.len();
+        engine.lock().unwrap().set_active_radio(icom);
+        let mut last_active = 0u32;
+        let mut backend = MockBackend::new();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            40.0,
+        );
+        assert_eq!(last_active, icom, "premise: the handoff adopted the Icom");
+        let frames = regs.lock().unwrap().log[before..].to_vec();
+        let at = |cmd: u8, data: &[u8]| frames.iter().position(|(c, d)| *c == cmd && d == data);
+        let (unkey, morse) = (at(0x1C, &[0x00, 0x00]), at(0x17, &[0xFF]));
+        assert!(
+            unkey.is_some() && morse.is_some(),
+            "premise: the unkey and the CW stop on the wire: {frames:02x?}"
+        );
+        let voice = at(0x28, &[0x00, 0x00]);
+        assert!(
+            voice.is_some(),
+            "the voice memory stop on the wire: {frames:02x?}"
+        );
+        assert!(unkey < voice && morse < voice, "…after both: {frames:02x?}");
+        let mut monitors = pool.lock().unwrap();
+        let native = monitors
+            .iter_mut()
+            .find(|c| c.id == 0)
+            .expect("the radio being left is monitored");
+        assert!(
+            native.rig.read_freq().is_ok(),
+            "its connection is still up: the first read answers"
+        );
+    }
+
     /// Two radios, each configured through the flat settings form (which edits whatever is
     /// active), radio 0 active. Returns the engine, radio 1's id, both radios' MONITOR
     /// transports (`Transport::from_profile`), and radio 0's transport as the loop applies it.

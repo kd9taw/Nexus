@@ -311,6 +311,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to stop its voice memory, right after unkeying it. That includes a radio chosen from a Remote
   browser. A radio whose CAT link offers no such stop is unaffected.
 
+- **Icom radios on Nexus's native CI-V connection now take a voice-memory stop.** On the IC-7300,
+  IC-7610, IC-9700, IC-705 and IC-905 with native CI-V, the stop that a radio switch sends, and
+  one a logger sends through Nexus's CAT link, used to be refused. It is now sent as the radio's
+  own Voice TX memory stop.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.

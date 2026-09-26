@@ -752,6 +752,9 @@ pub(crate) mod tests_support {
                         // is the #275 refusal this fixture exists to produce.
                         (0x27, Some(0x15)) if r.scope_fixed => Some((0xFA, Vec::new())),
                         (0x27, _) => None, // scope enable/disable, span in centre
+                        // Voice TX memory (`28 00`, `00` = stop): acked. Whether a real rig acks
+                        // a stop with nothing playing is a bench question; tests assert the frame.
+                        (0x28, Some(0x00)) => None,
                         _ => Some((0xFA, Vec::new())), // NAK anything unknown
                     }
                 };

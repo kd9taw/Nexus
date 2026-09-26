@@ -261,6 +261,32 @@ pub fn send_morse(radio: u8, text: &str) -> Frame {
 pub fn stop_morse(radio: u8) -> Frame {
     Frame::command(radio, 0x17, &[0xFF])
 }
+/// Stop a Voice TX memory transmission (cmd `28 00`, data `00`; `01`–`08` would START T1–T8).
+pub fn stop_voice_tx(radio: u8) -> Frame {
+    Frame::command(radio, 0x28, &[0x00, 0x00])
+}
+/// Does Icom's own reference for this radio define `28 00 00` as the Voice TX memory STOP?
+///
+/// Every model here does, and each was read, not inferred from Hamlib:
+/// - IC-9700: A7508-3EX-4 p. 12, "Voice TX Memory (00=Stop, 01=T1 to 08=T8)";
+/// - IC-7610: A7380-7EX-4, the same;
+/// - IC-705: A7560-8EX-6 p. 17, "Transmit the Voice TX Memory (00=Stop, 01=T1 ~ 08=T8)";
+/// - IC-905: A7711-9EX-2 p. 16, the same;
+/// - IC-7300: the IC-7300MK2 reference (rev 0, p. 15, "Stops the Voice TX memory
+///   transmission"), and the original's Full Manual (A7292-4EX-12, command table:
+///   "0x00=Cancel TX").
+///
+/// No wildcard arm, so a model added to [`IcomModel`] has to be checked against its own
+/// reference before it can send this.
+pub fn voice_tx_stop_defined(model: IcomModel) -> bool {
+    match model {
+        IcomModel::Ic7300
+        | IcomModel::Ic7610
+        | IcomModel::Ic9700
+        | IcomModel::Ic705
+        | IcomModel::Ic905 => true,
+    }
+}
 /// Keyer speed (cmd `14 0C`): WPM 6–48 mapped onto the 0–255 level scale.
 pub fn set_keyer_speed_wpm(radio: u8, wpm: u32) -> Frame {
     let wpm = wpm.clamp(6, 48);
