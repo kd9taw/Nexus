@@ -19,6 +19,8 @@
 //!   * Errors carry a stable `error.code` to branch on, never the message.
 //!   * The auth key travels in a header, never in this body — so unlike the QRZ/HRDLog
 //!     builders there is no secret to redact here; the transport owns that.
+//!   * There is no zone field: a contact has no CQ or ITU zone and no contest-exchange
+//!     field (checked 2026-09-26), so a CQ WW zone stays in the local log as `CQZ`.
 
 use crate::logbook::{QsoRecord, UploadOutcome};
 
@@ -91,14 +93,22 @@ pub fn build_contact_json(
     if let Some(v) = r.comment.as_deref().filter(|s| !s.is_empty()) {
         put("notes", v.to_string().into());
     }
-    if let Some(p) = r.tx_power {
-        put("txPwr", freq_number(p));
+    // A STRING in their spec ("Watts.", `maxLength` 20), unlike `freq`, and spelled the
+    // way the ADIF writer spells `TX_PWR`. A value that cannot fill the field is left out:
+    // sent, it would be bounced, and the contact would go with it.
+    if let Some(p) = r
+        .tx_power
+        .filter(|p| p.is_finite())
+        .map(|p| format!("{p}"))
+        .filter(|p| p.len() <= 20)
+    {
+        put("txPwr", p.into());
     }
     serde_json::Value::Object(o).to_string()
 }
 
-/// `freq`/`txPwr` as a JSON number (their spec types them numeric). Falls back to 0
-/// for a non-finite value rather than emitting invalid JSON.
+/// `freq` as a JSON number, which is how their spec types it. Falls back to 0 for a
+/// non-finite value rather than emitting invalid JSON.
 fn freq_number(v: f64) -> serde_json::Value {
     serde_json::Number::from_f64(v)
         .map(serde_json::Value::Number)
@@ -211,6 +221,58 @@ mod tests {
         assert_eq!(v["programId"], "Nexus");
         assert_eq!(v["freq"], 14.074);
         assert_eq!(v["timestamp"], "2026-08-31T20:00:00Z");
+    }
+
+    /// ⭐ **The JSON TYPES are the contract too, not only the names.** Their spec types `freq`
+    /// as a number and `txPwr` as a STRING (`"maxLength": 20`, "Watts."), re-read 2026-09-26.
+    /// Every optional field is set here, so this key list is every name the builder can
+    /// emit, and `state` is among them.
+    #[test]
+    fn every_optional_field_goes_out_under_its_spec_name_and_type() {
+        let mut r = rec();
+        r.state = Some("MA".into());
+        r.name = Some("Example".into());
+        r.qth = Some("Newington".into());
+        r.comment = Some("tnx".into());
+        r.tx_power = Some(100.0);
+        let json = |r: &QsoRecord| -> serde_json::Value {
+            serde_json::from_str(&build_contact_json(r, "KD9TAW", Some("lb-1"))).unwrap()
+        };
+        let v = json(&r);
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "band",
+                "call",
+                "freq",
+                "gridsquare",
+                "logbookId",
+                "mode",
+                "name",
+                "notes",
+                "programId",
+                "qth",
+                "rstRcvd",
+                "rstSent",
+                "state",
+                "stationCallsign",
+                "timestamp",
+                "txPwr",
+            ]
+        );
+        assert_eq!(v["state"], "MA");
+        assert!(v["freq"].is_number(), "{v}");
+        assert_eq!(v["txPwr"], "100", "a string, in watts: {v}");
+        r.tx_power = Some(5.5);
+        assert_eq!(json(&r)["txPwr"], "5.5");
+        // A value the field cannot hold is left out rather than sent to be bounced, which
+        // would lose the whole contact over its power.
+        for bad in [1e30, f64::NAN] {
+            r.tx_power = Some(bad);
+            assert!(json(&r).get("txPwr").is_none(), "{bad}");
+        }
     }
 
     /// WRL folds MODE/SUBMODE into one field: "send 'FT8', not 'MFSK' plus a
