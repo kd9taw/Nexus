@@ -110,6 +110,80 @@ fn domain_by_id(spec: &ExchangeSpec, id: &str) -> Option<&'static Domain> {
     spec.fields.iter().find_map(|f| find(&f.kind, id))
 }
 
+/// ADIF 3.1.7's `STATE` codes (`Primary_Administrative_Subdivision`) for the four DXCC
+/// entities whose stations send a state or province in a contest exchange, keyed by the
+/// country file's entity name. Read from `https://adif.org/317/ADIF_317.htm` on 2026-09-26:
+/// the United States (291) lists the 48 contiguous states and DC, Alaska (6) and Hawaii
+/// (110) are entities of their own with one code each, and Canada (1) lists 13.
+const ADIF_STATES: [(&str, &[&str]); 4] = [
+    (
+        "United States",
+        &[
+            "AL", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "ID", "IL", "IN", "IA",
+            "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH",
+            "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX",
+            "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+        ],
+    ),
+    ("Alaska", &["AK"]),
+    ("Hawaii", &["HI"]),
+    (
+        "Canada",
+        &[
+            "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+        ],
+    ),
+];
+
+/// The contest spellings of a Canadian call area that ADIF spells differently. CQ WW RTTY's
+/// QTH list (IV.C.3) splits Newfoundland into NF (VO1) and LB (VO2) and writes NWT and PEI;
+/// ADIF has one province, NL, and NT and PE.
+const CALL_AREA_TO_ADIF: [(&str, &str); 4] =
+    [("NF", "NL"), ("LB", "NL"), ("NWT", "NT"), ("PEI", "PE")];
+
+/// A contest code as ADIF spells it: [`CALL_AREA_TO_ADIF`]'s spelling, else the code.
+fn adif_spelling(code: &str) -> &str {
+    CALL_AREA_TO_ADIF
+        .iter()
+        .find(|(contest, _)| *contest == code)
+        .map_or(code, |(_, adif)| adif)
+}
+
+/// ⭐ **The worked station's `STATE`, from what it SENT** — the state or province in its
+/// received exchange, spelled as ADIF spells it, or `None`.
+///
+/// **Why the merge asks this rather than [`directed_columns`].** A directed column is one
+/// tag applied to every value of a slot, and CQ WW RTTY's QTH cannot have one: `NWT`, `NF`,
+/// `LB` and `PEI` are not ADIF `STATE` values, so its rules file exports the slot under no
+/// tag (see the seed's `_provenance`), and the contest log and its own export keep the
+/// sponsor's codes. Four of the codes need MAPPING, which a tag cannot say. The general-log
+/// record is the one every upload service reads, so the merge maps them here and writes
+/// `QsoRecord::state`.
+///
+/// A value counts only when both hold:
+/// * the domain it matched IS a list of states and provinces: every code in it spells, in
+///   ADIF, a `STATE` of one of the four entities. An ARRL section (`CT`) or a county is not
+///   a state even where its code looks like one, and it is refused here rather than read by
+///   its spelling;
+/// * its ADIF spelling is a `STATE` of the station's OWN entity. A VE3 that sent `MA` claims
+///   nothing, and what it sent stays in `SRX_STRING`.
+pub(crate) fn received_state(row: &LoggedQso, spec: &ExchangeSpec) -> Option<&'static str> {
+    let is_adif_state = |code: &str| ADIF_STATES.iter().any(|(_, codes)| codes.contains(&code));
+    let (_, own) = ADIF_STATES
+        .iter()
+        .find(|(entity, _)| row.entity.as_deref() == Some(*entity))?;
+    row.rx.iter().find_map(|v| {
+        let raw = v.raw.trim().to_ascii_uppercase();
+        let code = own.iter().copied().find(|c| *c == adif_spelling(&raw))?;
+        let domain = v.domain.and_then(|id| domain_by_id(spec, id))?;
+        domain
+            .values
+            .iter()
+            .all(|(c, _)| is_adif_state(adif_spelling(c)))
+            .then_some(code)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

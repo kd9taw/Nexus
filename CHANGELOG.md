@@ -924,6 +924,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remembered separately, so turning Field mode off puts the screen back to the contrast *you*
   chose rather than clearing it, and while Field mode is on the High contrast row says so.
 
+- **A contest contact merged into your logbook keeps the state or province the other station
+  sent, and both signal reports.** In CQ WW RTTY, the QTH a US or Canadian station sends
+  (599 05 MA) stayed in the contest log and never reached the contact's State field, and the
+  reports never reached its RST fields, so World Radio League, QRZ and the other logbooks a merge
+  uploads to got neither. The state now goes in as the standard ADIF code (NF and LB become NL,
+  NWT becomes NT, PEI becomes PE), and the reports go in for any contest whose exchange has them.
+  World Radio League has no field for a CQ zone, so the zone stays in your own log and in your
+  Cabrillo file.
+
 ### Corrections to 1.14.0
 
 A released section is history and is not rewritten, so two credits it got wrong are corrected here.
