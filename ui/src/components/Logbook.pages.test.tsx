@@ -13,7 +13,7 @@
 //      placeholder in its place, and a page cut from an OLDER order than the first page's is never
 //      shown beside it (v2 R4) — the rows of one view come from one order.
 
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
@@ -64,6 +64,10 @@ afterEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
 })
+// The list's end-of-scroll report comes 150 ms after the last scroll event, from a timer the list
+// does not clear when it unmounts. Let the last test's land while this file's window still exists
+// (after it, React has no `window` to read, and the run fails on an error in no test).
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)))
 
 const contact = (i: number, over: Partial<LoggedQso> = {}): LoggedQso =>
   ({
