@@ -523,7 +523,7 @@ mod lockstep {
     /// Every contact the store holds, once every change submitted is written — waiting longer
     /// than a screen would, so a busy box is not a divergence.
     fn stored(sc: &StationCore) -> Vec<QsoRecord> {
-        let reads = sc.store.as_ref().expect("the station has a store").reads();
+        let reads = sc.store.reads();
         let (rows, fresh) = reads
             .rows(std::time::Duration::from_secs(30))
             .expect("the store reads");
@@ -813,8 +813,8 @@ mod lockstep {
         Some(format!("contact {i}: {} / {}", near(&x), near(&y)))
     }
 
-    /// The store is Stage 1's log — and, while it lives, so is the copy in memory. Every contact
-    /// in it carries an id of its own, so no id the station minted was adopted twice.
+    /// The store is Stage 1's log. Every contact in it carries an id of its own, so no id the
+    /// station minted was adopted twice.
     fn assert_same(sc: &StationCore, s1: &Stage1, what: &str) {
         let want: Vec<QsoRecord> = s1
             .logbook
@@ -828,15 +828,6 @@ mod lockstep {
             want.len(),
             "{what}: a contact without an id of its own"
         );
-        let held: Vec<QsoRecord> = sc
-            .logbook
-            .records()
-            .iter()
-            .map(|r| QsoRecord::clone(r))
-            .collect();
-        if let Some(d) = difference(&held, &want) {
-            panic!("{what}: the copy in memory is not Stage 1's log: {d}");
-        }
         if let Some(d) = difference(&stored(sc), &want) {
             panic!("{what}: the store is not Stage 1's log: {d}");
         }
@@ -904,8 +895,7 @@ mod lockstep {
                 history.push(what);
                 assert_same(&sc, &s1, &format!("seed {seed} step {step}: {what}"));
                 if step % 10 == 9 {
-                    let store = sc.store.as_ref().unwrap();
-                    store
+                    sc.store
                         .flush(std::time::Duration::from_secs(60))
                         .expect("written");
                     match std::fs::read_to_string(d.log()) {
@@ -927,8 +917,6 @@ mod lockstep {
                 }
             }
             sc.store
-                .as_ref()
-                .unwrap()
                 .flush(std::time::Duration::from_secs(60))
                 .expect("written");
         }
