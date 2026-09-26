@@ -125,6 +125,18 @@ fn selection_worker_adopts_warm_and_cold_connections_and_does_not_replay_the_ret
         } else {
             vec![]
         }));
+        // A tick with no switch in flight: the loop holds radio 0's port, as it does from
+        // `run_radio` on.
+        let mut held = 0;
+        handoff_if_switched(
+            &s.engine,
+            &pool,
+            &mut s.rig,
+            &mut s.state,
+            &mut held,
+            &AtomicBool::new(false),
+        );
+        let monitor_view = connection(&s, &incoming).transport;
         let receipt = queue(&s, 1);
         let opens = std::cell::Cell::new(0);
         let engine = s.engine.clone();
@@ -154,6 +166,12 @@ fn selection_worker_adopts_warm_and_cold_connections_and_does_not_replay_the_ret
                 .collect::<Vec<_>>(),
             [0]
         );
+        // Radio 1's port is the loop's now: a monitor pass still working from the picture
+        // before the selection must not open it. Radio 0 is the monitor's again.
+        reconcile_pool_with_open(&pool, &[(1, monitor_view)], 0, &s.engine, 0.0, |_| {
+            panic!("the monitor opened the radio the loop just adopted")
+        });
+        assert!(pool.claims.try_claim(0).is_some());
         let saved = Settings::load(&s.path);
         assert_eq!(saved.active_radio, 1);
         assert_eq!(saved.audio_in, "incoming-capture");

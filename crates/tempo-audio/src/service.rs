@@ -41,7 +41,7 @@ mod monitor_claims;
 mod remote_radio;
 mod remote_selection;
 mod selection_connection;
-use monitor_claims::RadioClaims;
+use monitor_claims::{RadioClaim, RadioClaims};
 
 /// The daemon serving the rigctld protocol on a radio's TCP port: Hamlib's spawned
 /// `rigctld` (classic), or Nexus's own native CI-V daemon (`icom_native_cat` — same
@@ -1738,6 +1738,9 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // monitor thread pauses its pool work while set, so a switch never queues behind slow
     // monitor CAT reads (the pool lock is otherwise held for whole read bursts).
     let switch_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // The loop's own radio is claimed before the monitor thread exists: its port is this loop's
+    // (`RadioLoop::port_claims`).
+    state.settle_port_claims(&pool.claims);
     {
         let mon_engine = engine.clone();
         let mon_pool = pool.clone();
@@ -2355,6 +2358,8 @@ fn handoff_if_switched(
         // the switch currently in flight, so it must vanish with the intent.
         state.handoff_deferred = false;
         pending.store(false, Ordering::Relaxed);
+        // …and so does any port claim a switch left behind.
+        state.settle_port_claims(&pool.claims);
         return;
     }
     // Switch in flight: pause the monitor thread's pool work so this handoff isn't
@@ -2441,10 +2446,12 @@ fn handoff_if_switched(
             return;
         }
     };
-    if pool.claims.contains(active) {
+    if pool.claims.contains(active) && !state.holds_port_claim(active) {
         // An open already in flight owns this radio's port. Do not fall back
         // to a second open: its result will enter the pool before the claim is
         // released, and the ordinary next-tick handoff can adopt or recover it.
+        // (The loop's own claim is not one: a switch straight back to a radio
+        // it still holds, undone before `step()` rebuilt.)
         state.handoff_deferred = true;
         return;
     }
@@ -2483,6 +2490,10 @@ fn handoff_if_switched(
             e.clear_rig_smeter();
         }
         p.push(state.install_handoff_connection(rig, conn, &want_active, *last_active));
+        // The incoming radio's port is the loop's now and the outgoing radio's connection is the
+        // pool's: the claims follow them, under the same pool lock.
+        state.claim_port(&pool.claims, active);
+        state.release_port_claims_except(active);
         *last_active = active;
     } else {
         // Fallback: no MATCHING live conn for the new active (never opened / model 0 / a stale conn from
@@ -2492,6 +2503,10 @@ fn handoff_if_switched(
         // (both radios configured) always ADOPTS above. An in-flight monitor open holds its claim
         // until its result reaches the pool; the deferral above prevents a competing fallback open.
         p.retain(|c| c.id != active);
+        // step() opens the incoming radio, so it is the loop's from here. The outgoing radio's
+        // port stays the loop's until that rebuild drops its daemon; the next tick without a
+        // switch in flight lets its claim go (`RadioLoop::settle_port_claims`).
+        state.claim_port(&pool.claims, active);
         {
             let mut e = engine_lock(engine);
             e.forget_radio_live(active);
@@ -2902,6 +2917,16 @@ struct RadioLoop {
     tune_queued_ms: f32,
     applied: Transport,
     remote_radio_id: Option<u32>,
+    /// The monitor pool's claims on the radios whose CAT ports this loop holds: the radio its
+    /// connection belongs to ([`Self::remote_radio_id`]), and, through a switch that falls back
+    /// to a rebuild, the incoming radio as well. The monitor thread neither opens, closes nor
+    /// polls a claimed radio, and that is the point. The engine flips `active_radio` the moment
+    /// a switch is asked for, so the monitor wants the OUTGOING radio before this loop has let
+    /// go of its port, and a second open of a held port fails ("Access is denied." on Windows;
+    /// a native CI-V radio then fell back to a rigctld). A claim goes only once its port is no
+    /// longer this loop's: its connection handed to the pool, or its daemon dropped. Claims
+    /// decide who may OPEN a port, and nothing else; no key-up waits on one.
+    port_claims: Vec<RadioClaim>,
     remote_connection: Option<RemoteConnection>,
     /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
@@ -3557,6 +3582,7 @@ impl RadioLoop {
     fn new(applied: Transport, rigctld_proc: Option<CatDaemon>, cfg: &RadioConfig) -> Self {
         Self {
             remote_radio_id: None,
+            port_claims: Vec::new(),
             remote_connection: None,
             yaesu_wf: None,
             yaesu_wf_key: None,
@@ -5028,6 +5054,51 @@ impl RadioLoop {
                     }
                 })
             }
+        }
+    }
+
+    /// Claim radio `id`'s port for this loop ([`Self::port_claims`]). Idempotent. A radio someone
+    /// else has claimed stays theirs; the callers that must have it hold the pool lock and have
+    /// checked that no one does.
+    fn claim_port(&mut self, claims: &RadioClaims, id: u32) {
+        if !self.holds_port_claim(id) {
+            if let Some(claim) = claims.try_claim(id) {
+                self.port_claims.push(claim);
+            }
+        }
+    }
+
+    /// Keep a claim someone took for this loop: a Remote selection's lease, on the radio it
+    /// just installed.
+    fn keep_port_claim(&mut self, claim: RadioClaim) {
+        if !self.holds_port_claim(claim.id()) {
+            self.port_claims.push(claim);
+        }
+    }
+
+    fn holds_port_claim(&self, id: u32) -> bool {
+        self.port_claims.iter().any(|claim| claim.id() == id)
+    }
+
+    /// Let go of every claim but radio `id`'s. Only where the ports they cover are no longer
+    /// this loop's: their connection is in the pool, or their daemon has been dropped.
+    fn release_port_claims_except(&mut self, id: u32) {
+        self.port_claims.retain(|claim| claim.id() == id);
+    }
+
+    /// Hold exactly the claim on the radio this loop's connection belongs to. Run where no switch
+    /// is in flight: before the monitor thread starts, and on every tick without one. That is
+    /// where a claim a switch left behind goes: a fallback's outgoing radio, whose daemon
+    /// `step()` has dropped since, or the incoming radio of a switch undone before the rebuild.
+    /// It needs no pool lock: with no switch in flight the loop's radio is the active one, which
+    /// the monitor never opens, and it releases only ports that are no longer the loop's.
+    fn settle_port_claims(&mut self, claims: &RadioClaims) {
+        match self.remote_radio_id {
+            Some(id) => {
+                self.claim_port(claims, id);
+                self.release_port_claims_except(id);
+            }
+            None => self.port_claims.clear(),
         }
     }
 
@@ -17894,6 +17965,175 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ★ THE MONITOR NEVER OPENS A PORT THE RADIO LOOP STILL HOLDS — a switch, BEFORE the
+    /// handoff (1.15.0-test1: an IC-9700 on native CI-V logged "Access is denied." and started a
+    /// rigctld at a band-routed switch away from it). The engine flips `active_radio` the moment
+    /// the switch is asked for, and the monitor thread, reading it on its own schedule, wants the
+    /// outgoing radio before the loop's next tick has handed it over. The loop's claim on its
+    /// own radio keeps the monitor off that port. After the handoff the outgoing radio is the
+    /// monitor's again, and the incoming one the loop's: a pass still working from the picture
+    /// before the switch must not open that one either.
+    #[test]
+    fn the_monitor_never_opens_the_outgoing_radio_before_the_handoff_has_it() {
+        let (engine, pool, mut state, r1, _) = switch_scene();
+        // The radio the loop's connection belongs to, as `run_radio` records it.
+        state.remote_radio_id = Some(0);
+        let profile = |id: u32| {
+            let e = engine.lock().unwrap();
+            Transport::from_profile(e.settings().radios.iter().find(|p| p.id == id).unwrap())
+        };
+        let (radio0, radio1) = (profile(0), profile(r1));
+        let mut rig = Rig::vox();
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let opened = std::cell::RefCell::new(Vec::new());
+        let open = |t: &Transport| {
+            opened.borrow_mut().push(t.rigctld_port);
+            (Rig::vox(), None, Some(false))
+        };
+        // A tick with no switch in flight.
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+
+        // The switch, and a monitor pass landing before the loop's next tick.
+        engine.lock().unwrap().set_active_radio(r1);
+        reconcile_pool_with_open(&pool, &[(0, radio0.clone())], r1, &engine, 0.0, open);
+        assert!(
+            opened.borrow().is_empty(),
+            "radio 0's port is still the loop's: {:?}",
+            opened.borrow()
+        );
+
+        // The loop's tick: radio 1 adopted, radio 0's connection handed to the pool.
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(last_active, r1, "premise: the handoff adopted radio 1");
+        reconcile_pool_with_open(&pool, &[(r1, radio1)], 0, &engine, 0.0, open);
+        assert!(
+            opened.borrow().is_empty(),
+            "radio 1's port is the loop's now: {:?}",
+            opened.borrow()
+        );
+
+        // Radio 0 is the monitor's again: kept or replaced, and polled.
+        reconcile_pool_with_open(&pool, &[(0, radio0)], r1, &engine, 0.0, open);
+        poll_monitors(&pool, r1, &engine, &pending);
+        assert!(
+            pool.lock()
+                .unwrap()
+                .iter()
+                .any(|c| c.id == 0 && c.ticks > 0),
+            "radio 0 came back to the monitor once the handoff had it"
+        );
+    }
+
+    /// ★ …and through a FALLBACK: the handoff lets the monitor run again (`pending` cleared)
+    /// before `step()`'s rebuild has dropped the outgoing radio's daemon, whose port the monitor
+    /// would then meet held. The claim holds the port until that daemon is gone, and the next
+    /// tick lets it go.
+    #[test]
+    fn the_monitor_never_opens_the_outgoing_radio_before_the_fallback_drops_its_daemon() {
+        let (engine, pool, mut state, r1, _) = switch_scene();
+        // No live connection for radio 1: the handoff falls back to a rebuild.
+        pool.lock().unwrap().clear();
+        state.remote_radio_id = Some(0);
+        let radio0 = {
+            let e = engine.lock().unwrap();
+            Transport::from_profile(e.settings().radios.iter().find(|p| p.id == 0).unwrap())
+        };
+        let mut rig = Rig::vox();
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let mut rr = |_: &Transport, _: bool| (Rig::vox(), None, CatProbe::status(None, ""));
+        let opened = std::cell::RefCell::new(Vec::new());
+        let open = |t: &Transport| {
+            opened.borrow_mut().push(t.rigctld_port);
+            (Rig::vox(), None, Some(false))
+        };
+        // A tick with no switch in flight.
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(
+            last_active, r1,
+            "premise: the fallback completed the switch intent"
+        );
+        assert!(
+            !pending.load(std::sync::atomic::Ordering::Relaxed),
+            "premise: the monitor may run again"
+        );
+        reconcile_pool_with_open(&pool, &[(0, radio0.clone())], r1, &engine, 0.0, open);
+        assert!(
+            opened.borrow().is_empty(),
+            "radio 0's daemon has not been dropped yet: {:?}",
+            opened.borrow()
+        );
+
+        // step(): the rig_differs rebuild drops radio 0's daemon and opens radio 1.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                1.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            state.remote_radio_id,
+            Some(r1),
+            "premise: the rebuild moved the loop to radio 1"
+        );
+        // The next tick: no switch in flight, and radio 0's port is no longer the loop's.
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        reconcile_pool_with_open(&pool, &[(0, radio0.clone())], r1, &engine, 0.0, open);
+        assert_eq!(
+            *opened.borrow(),
+            vec![radio0.rigctld_port],
+            "radio 0 came back to the monitor once its daemon was dropped"
+        );
     }
 
     #[test]

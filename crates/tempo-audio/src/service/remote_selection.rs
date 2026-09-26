@@ -210,7 +210,10 @@ impl RadioLoop {
                 let _ = eng.take_rtty_abort();
                 let _ = eng.take_psk_abort();
                 let _ = eng.take_sstv_abort();
-                drop(claim);
+                // The incoming radio's port is this loop's now and the outgoing connection is
+                // in the pool: the lease's claim becomes the loop's, and the outgoing one goes.
+                self.keep_port_claim(claim);
+                self.release_port_claims_except(radio);
             },
         );
         drop(eng);

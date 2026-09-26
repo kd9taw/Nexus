@@ -2,6 +2,8 @@
 //! monitor pool. Tokens hold no mutex across I/O; their drop releases the claim.
 //! All pool users must check/claim while holding the pool lock, so deciding to
 //! open and removing an existing connection cannot race another pool user.
+//! The radio loop also claims the radio whose port it holds, for as long as it
+//! holds it (`RadioLoop::port_claims`), so that no monitor opens a held port.
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -30,6 +32,13 @@ impl RadioClaims {
                 registry: self.clone(),
                 id,
             })
+    }
+}
+
+impl RadioClaim {
+    /// The radio this claim is on.
+    pub(super) fn id(&self) -> u32 {
+        self.id
     }
 }
 

@@ -257,6 +257,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Switching radios no longer reaches for the port of the radio you just left.** Nexus keeps the
+  radios you are not using connected in the background, and when you switched radios (by band
+  routing, the radio buttons or a Remote browser) that background connection could try to open the
+  radio you had just left before Nexus had let go of it. On Windows this logged "Access is denied."
+  (seen with an IC-9700 on native CI-V), and the radio could fall back to Hamlib's rigctld instead
+  of its native CI-V connection. The radio you leave is now picked up only after Nexus releases it.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.
