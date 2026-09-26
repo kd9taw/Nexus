@@ -1321,10 +1321,11 @@ pub(crate) struct RowChange {
     pub(crate) class: OpClass,
     /// The rows it takes out and puts in, in log order ([`RowPair`]).
     pub(crate) pairs: Vec<RowPair>,
-    /// A purge: every row goes, and these are their ids — no pairs, for the store deletes them in
-    /// one statement and the hot index empties at once (SPEC-2 v3 C19, flag (c)), while a purge
-    /// the store refused and sends again takes out these rows and no row logged after it.
-    pub(crate) purged: Option<Vec<RecordId>>,
+    /// A purge: every row goes — no pairs, for the store deletes them in one statement and the
+    /// hot index empties at once (SPEC-2 v3 C19, flag (c)). The rows it took out are the index as
+    /// it stood, handed to the store whole ([`crate::logstore::LogStore::submit_purge`]), so a
+    /// purge the store refused and sends again takes out those rows and no row logged after it.
+    pub(crate) purged: bool,
     /// Written in the writer's bulk lane.
     pub(crate) bulk: bool,
     /// `log_meta` keys the store sets with its last chunk (the fill job's `fill_ver`).
@@ -2165,21 +2166,10 @@ impl StationCore {
         from_file: bool,
     ) -> Option<tempo_core::logbook::writer::Ticket> {
         let _ = context;
-        let marks = self.make(&change);
-        let appends =
-            change.purged.is_none() && change.pairs.iter().all(|(before, _)| before.is_none());
+        let (marks, taken) = self.make(&change);
+        let appends = !change.purged && change.pairs.iter().all(|(before, _)| before.is_none());
         let store = &mut self.store;
-        let mut c = Change::of_pairs(
-            marks,
-            change.purged.is_some(),
-            &change.pairs,
-            store.resolved(),
-        );
-        // A purge names the rows it takes out: one statement deletes them all, and a purge sent
-        // again after a refusal takes out these and no row logged since.
-        if let Some(ids) = change.purged {
-            c.remove = ids;
-        }
+        let mut c = Change::of_pairs(marks, change.purged, &change.pairs, store.resolved());
         if change.bulk {
             c = c.in_bulk();
         }
@@ -2194,7 +2184,11 @@ impl StationCore {
         // On the 1.13 path the store's lane keeps `log.adi` by the rule below: rows only appended
         // are appended to it (SPEC-2 v3 C19, D1-A), and rows that came from it are not written
         // back. The database takes any of them as any change.
-        if from_file {
+        // A purge names no row: one statement deletes them all, and the rows it took out go with it
+        // as the index held them — moved, never listed under the lock (SPEC-2 v3 §4.11).
+        if change.purged {
+            store.submit_purge(c, taken)
+        } else if from_file {
             store.submit_quietly(c)
         } else if appends {
             store.submit_appended(c)
@@ -2205,8 +2199,8 @@ impl StationCore {
 
     /// A change, made in memory: the watermarks it moves the log to, and the hot index following
     /// its pairs — the half of [`Self::commit`] and [`Self::append`] that does not touch the
-    /// disk.
-    fn make(&mut self, change: &RowChange) -> Watermarks {
+    /// disk. A purge hands back the index as it stood, for its rows ([`Self::follow_purge`]).
+    fn make(&mut self, change: &RowChange) -> (Watermarks, Option<HotIndex>) {
         // The pairs start where the index does: nothing reached the log around the station.
         let at = hot_mut(&mut self.hot).at();
         self.check_in_step(at);
@@ -2222,16 +2216,15 @@ impl StationCore {
         {
             marks.mark(OpClass::Append);
         }
-        if change.purged.is_some() {
+        if change.purged {
             debug_assert!(
                 change.pairs.is_empty(),
                 "a purge is told with no row pairs: it takes out every row"
             );
-            self.follow_purge(marks);
-        } else {
-            self.follow(&change.pairs, marks);
+            return (marks, self.follow_purge(marks));
         }
-        marks
+        self.follow(&change.pairs, marks);
+        (marks, None)
     }
 
     /// ★ Make a change planned off the Engine lock (SPEC-2 v3 §4.6) — under it. `rows` are the
@@ -2256,7 +2249,7 @@ impl StationCore {
             RowChange {
                 class,
                 pairs,
-                purged: None,
+                purged: false,
                 bulk,
                 meta,
             },
@@ -2343,7 +2336,7 @@ impl StationCore {
             RowChange {
                 class,
                 pairs,
-                purged: None,
+                purged: false,
                 bulk: true,
                 meta: Vec::new(),
             },
@@ -2378,10 +2371,10 @@ impl StationCore {
             }
         }
         let rows: Vec<Arc<QsoRecord>> = recs.iter().cloned().map(Arc::new).collect();
-        let marks = self.make(&RowChange {
+        let (marks, _) = self.make(&RowChange {
             class: OpClass::Append,
             pairs: rows.iter().map(|r| (None, Some(Arc::clone(r)))).collect(),
-            purged: None,
+            purged: false,
             bulk: false,
             meta: Vec::new(),
         });
@@ -2721,13 +2714,14 @@ impl StationCore {
     }
 
     /// ★ The purge reaching the hot index (SPEC-2 v3 C19, flag (c)): every row taken out at once,
-    /// told with no row pairs, so the purge of a 500,000-row log costs the index one reset and
-    /// not a pair per row ([`HotIndex::purge`]). `now` is the watermarks it left the log at. It
-    /// touched every row, so a plan spanning it plans again.
-    fn follow_purge(&mut self, now: Watermarks) {
+    /// told with no row pairs, so the purge of a 500,000-row log costs the index one swap and not
+    /// a pair per row ([`HotIndex::purge_taking`]): the index as it stood is handed back, for the
+    /// rows the purge took out, and never freed here under the Engine lock. `now` is the
+    /// watermarks it left the log at. It touched every row, so a plan spanning it plans again.
+    fn follow_purge(&mut self, now: Watermarks) -> Option<HotIndex> {
         self.recent.note_any(now.revision);
         let hot = hot_mut(&mut self.hot);
-        hot.purge(self.marks.revision, now.revision);
+        let taken = hot.purge_taking(self.marks.revision, now.revision);
         self.marks = now;
         debug_assert_eq!(
             hot.at(),
@@ -2735,6 +2729,7 @@ impl StationCore {
             "hot index: the purge could not be followed"
         );
         debug_assert_eq!(hot.rows(), 0, "hot index: a purge leaves no row");
+        taken
     }
 
     /// Make `index` — the index of the log as it stands, built again elsewhere (the store, under
@@ -3511,15 +3506,12 @@ impl StationCore {
     /// holds, whatever the log holds when it runs is what goes, and how many that is is the hot
     /// index's count of the rows it holds (SPEC-2 v3 C19, flag (c)).
     pub fn clear_logbook(&mut self) -> usize {
-        let (n, ids) = {
-            let hot = self.hot();
-            (hot.rows(), hot.ids())
-        };
+        let n = self.hot().rows();
         self.commit(
             RowChange {
                 class: OpClass::Structural,
                 pairs: Vec::new(),
-                purged: (n > 0).then_some(ids),
+                purged: n > 0,
                 bulk: true,
                 meta: Vec::new(),
             },

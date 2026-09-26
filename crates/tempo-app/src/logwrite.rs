@@ -330,9 +330,12 @@ pub fn mark_lotw_uploaded_all(
 }
 
 /// How many contacts one change of the "already uploaded" declaration stamps: a bound on what one
-/// plan reads whole and one commit holds the lock for, whatever the log's size — the fill job's
-/// ([`FILL_CHUNK`]).
-pub const STAMP_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
+/// plan reads whole and one commit holds the lock for, whatever the log's size. Set by SPEC-2 v3
+/// §4.11's 5 ms bound on an Engine-lock hold, as the fill job's is ([`FILL_CHUNK`]): at 4,096 the
+/// declaration's longest hold on the §4.11 bench was 3.07–3.91 ms at 500,000 contacts; at 1,024,
+/// 0.86–0.98 ms (1.93 ms with the watcher's blind spot added), for 1–4% more time on the whole
+/// declaration.
+pub const STAMP_CHUNK: usize = 1_024;
 
 /// [`mark_lotw_uploaded_all`], `chunk` contacts to a change: each chunk planned with the Engine
 /// lock released and made under it, planned again while its contacts keep changing — [`PLANS`]
@@ -643,8 +646,14 @@ pub fn fd_merge_to_general(
 }
 
 /// How many fills one change of the fill job carries: a bound on what one plan reads whole and
-/// one commit holds the lock for, whatever the log's size.
-pub const FILL_CHUNK: usize = tempo_core::logbook::sqlite::RECORD_CHUNK;
+/// one commit holds the lock for, whatever the log's size. Its own value, set by SPEC-2 v3 §4.11's
+/// 5 ms bound on an Engine-lock hold, not the store's read chunk (`RECORD_CHUNK`). A chunk's commit
+/// costs the lock about 0.7 µs a row at 500,000 contacts — the check that every row is as the
+/// plan read it, then the change — so 4,096 rows held it 2.5–3.2 ms, and a transient that slowed
+/// a whole hold twofold took one to 6.4 ms. At 1,024 the §4.11 bench's longest fill hold was
+/// 1.37–1.40 ms at 500,000 contacts (2.63 ms with the watcher's blind spot added), for 8–10% more
+/// time on the whole job.
+pub const FILL_CHUNK: usize = 1_024;
 
 /// Write the fill job's fills (SPEC-2 v3 D2-A) — each planned with the Engine lock released, a
 /// chunk of [`FILL_CHUNK`] at a time, and made under the lock only where the field is still empty
