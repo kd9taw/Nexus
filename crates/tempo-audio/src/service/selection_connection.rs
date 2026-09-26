@@ -95,7 +95,8 @@ impl SelectionConnection {
     }
 
     /// The caller holds the pool lock while installing the active slot, then
-    /// releases the returned claim. Dropping this lease alone returns the radio
+    /// keeps the returned claim for as long as it holds the radio's port
+    /// (`RadioLoop::port_claims`). Dropping this lease alone returns the radio
     /// to monitoring; only this consuming operation transfers its ownership.
     pub(super) fn adopt(mut self) -> (MonitorConn, RadioClaim) {
         (
