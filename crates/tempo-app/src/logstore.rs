@@ -1977,7 +1977,6 @@ pub(crate) mod tests {
         let back = tempo_core::logbook::Logbook::load(&d.log());
         same_log(back.records(), &e.stored_log(), "the mirror is the log");
         assert!(mirror.contains("W9NEW"));
-        same_log(&stored(&d), e.log_records(), "and so is the store");
     }
 
     // ── launch writes nothing ───────────────────────────────────────────────
@@ -2095,11 +2094,7 @@ pub(crate) mod tests {
             log.iter().all(|r| r.country.is_none() && r.state.is_none()),
             "the attach filled nothing"
         );
-        {
-            let eng = e.lock().unwrap();
-            same_log(eng.log_records(), &stored(&d), "memory is the store");
-            flush(&eng);
-        }
+        flush(&e.lock().unwrap());
         assert_eq!(disk_picture(&d), converted, "and wrote nothing");
 
         let done = fill(&e, 7);
@@ -2113,14 +2108,6 @@ pub(crate) mod tests {
             "every contact lacked a field; all but the Q call gained one"
         );
         flush(&e.lock().unwrap());
-        {
-            let eng = e.lock().unwrap();
-            same_log(
-                eng.log_records(),
-                &stored(&d),
-                "the store holds exactly what the screens show",
-            );
-        }
         let log = e.stored_log();
         assert_eq!(log.len(), 42, "premise: every contact");
         for r in log {
@@ -2190,7 +2177,6 @@ pub(crate) mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].state.as_deref(), Some("WI"), "in the store");
         assert_eq!(rows[0].country.as_deref(), Some("Entity of K9ABC"));
-        same_log(e.lock().unwrap().log_records(), &rows, "and on the screens");
     }
 
     /// ★ D2-A: EVERY insert fills country and state before it writes — a logged contact, an
@@ -2233,11 +2219,6 @@ pub(crate) mod tests {
             assert_eq!(r.country, test_country(call), "{call}'s country, written");
             assert_eq!(r.state.as_deref(), Some("WI"), "{call}'s state, written");
         }
-        same_log(
-            e.lock().unwrap().log_records(),
-            &rows,
-            "the store is what the screens show",
-        );
 
         // A Field Day merge into the general log.
         let d = Dir::new("insert-fills-fd");
@@ -2265,11 +2246,6 @@ pub(crate) mod tests {
             merged("W1AW").state,
             None,
             "a call no resolver places stays empty"
-        );
-        same_log(
-            e.lock().unwrap().log_records(),
-            &rows,
-            "the store is what the screens show",
         );
     }
 
@@ -2315,11 +2291,6 @@ pub(crate) mod tests {
                 (Some("Found".into()), Some("WI".into())),
             ],
             "the operator's state kept; the deleted contact not brought back"
-        );
-        same_log(
-            eng.log_records(),
-            &stored(&d),
-            "and the store holds the same",
         );
     }
 
@@ -2576,13 +2547,13 @@ pub(crate) mod tests {
             }
             let (store, memory) = {
                 let eng = e.lock().unwrap();
-                (eng.log_rows(), LogRows::Memory(eng.log_records().to_vec()))
+                (eng.log_rows(), LogRows::Memory(eng.stored_log()))
             };
             assert!(matches!(store, LogRows::Store(_)), "premise: the store's");
             let held: Vec<QsoRecord> = e
                 .lock()
                 .unwrap()
-                .log_records()
+                .stored_log()
                 .iter()
                 .map(|r| as_passed(r))
                 .collect();
@@ -2637,7 +2608,7 @@ pub(crate) mod tests {
         }
         let (store, memory, held) = {
             let eng = e.lock().unwrap();
-            let held = eng.log_records().to_vec();
+            let held = eng.stored_log();
             (eng.log_rows(), LogRows::Memory(held.clone()), held)
         };
         let old = |legs: u8, room: usize| -> Vec<(QsoRecord, u8)> {
@@ -2885,11 +2856,7 @@ pub(crate) mod tests {
                         matches!(eng.log_rows(), LogRows::Store(_)),
                         "premise: the store's rows"
                     );
-                    let held: Vec<QsoRecord> = eng
-                        .log_records()
-                        .iter()
-                        .map(|r| QsoRecord::clone(r))
-                        .collect();
+                    let held: Vec<QsoRecord> = eng.stored_records();
                     (
                         crate::logexport::Source::of(&eng),
                         tempo_core::logbook::Logbook::from_store(held),
@@ -3041,7 +3008,7 @@ pub(crate) mod tests {
                 let want = {
                     let eng = e.lock().unwrap();
                     flush(&eng);
-                    mirror::mirror_adif(eng.log_records())
+                    mirror::mirror_adif(&eng.stored_log())
                 };
                 let got = std::fs::read(d.log()).unwrap();
                 assert!(
@@ -3171,7 +3138,7 @@ pub(crate) mod tests {
                     let eng = e.lock().unwrap();
                     let ids = eng.lotw_unsent_ids();
                     let memory: Vec<QsoRecord> = eng
-                        .log_records()
+                        .stored_log()
                         .iter()
                         .filter(|r| r.id.is_some_and(|id| ids.contains(&id)))
                         .map(|r| QsoRecord::clone(r))
@@ -3225,7 +3192,7 @@ pub(crate) mod tests {
         let e = launch_with_resolvers(&d);
         let (rows, held) = {
             let eng = e.lock().unwrap();
-            (eng.log_rows(), eng.log_records().to_vec())
+            (eng.log_rows(), eng.stored_log())
         };
         assert!(matches!(rows, LogRows::Store(_)), "premise: the store's");
         let ids: Vec<tempo_core::logbook::RecordId> = held.iter().filter_map(|r| r.id).collect();
@@ -3851,7 +3818,11 @@ pub(crate) mod tests {
         drop(hold);
         let (rows, fresh) = reads.rows(DURABLE_WAIT).expect("read");
         assert_eq!(fresh, Freshness::Current);
-        same_log(&rows, e.log_records(), "a read of the store is the log");
+        assert_eq!(rows.len(), 11, "the store as the change left it");
+        assert!(
+            rows.iter().any(|r| r.call == "W1READ"),
+            "with the contact made before the read was asked for"
+        );
     }
 
     /// ★ A NEW STATION KEEPS ITS LOG IN A STORE (SPEC-2 v3 C19, D1-A): an empty one in this
@@ -4074,8 +4045,6 @@ pub(crate) mod tests {
             w.wait(DURABLE_WAIT)
                 .expect("durable once the lock is released");
         }
-        let e = engine_lock(&engine);
-        same_log(&stored(&d), e.log_records(), "after the stall");
     }
 
     // ── C11: the fence ──────────────────────────────────────────────────────
@@ -4230,8 +4199,6 @@ pub(crate) mod tests {
         durable
             .wait(DURABLE_WAIT)
             .expect("durable once the lock is released");
-        let e = crate::engine::engine_lock(&engine);
-        same_log(&stored(&d), e.log_records(), "after the stall");
         assert!(
             stored(&d).iter().any(|r| r.call == "W1ABC"),
             "the store has the contact"
@@ -6247,10 +6214,10 @@ pub(crate) mod tests {
                 })
                 .expect("the store reads");
             assert_eq!(fresh, Freshness::Current, "seed {seed}");
-            same_log(
-                &stored,
-                eng.log_records(),
-                &format!("seed {seed}: the store is the log"),
+            assert_eq!(
+                stored.len(),
+                old.lock().unwrap().stored_log().len(),
+                "seed {seed}: the store holds as many contacts as 1.13's log"
             );
         }
         assert_eq!(steps, 8 * 40);
@@ -6500,7 +6467,7 @@ pub(crate) mod tests {
             "installed as the store built it, not built again under the lock"
         );
         let keys = crate::station::StationKeys(Some(&*resolver));
-        let own = |e: &Engine| HotIndex::build(&e.station().logbook, &keys);
+        let own = |e: &Engine| HotIndex::from_rows(e.stored_records().iter(), &keys);
         assert!(
             e.station().hot().answers_as(&own(&e)),
             "the station's own index, exactly"
@@ -6556,7 +6523,7 @@ pub(crate) mod tests {
         assert!(e
             .station()
             .hot()
-            .answers_as(&HotIndex::build(&e.station().logbook, &keys)));
+            .answers_as(&HotIndex::from_rows(e.stored_records().iter(), &keys)));
     }
 
     /// The launch's build, timed (SPEC-2 v3 C19; §3.4 measured 220 ms at 150k and 1.1 s at

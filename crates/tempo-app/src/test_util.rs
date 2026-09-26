@@ -18,10 +18,9 @@
 //! [`Engine`] a test owns, call it with no guard held; on the engine a command shares
 //! (`Mutex<Engine>`) it takes the lock for the handles alone and reads with it released.
 //!
-//! ⚠️ **It is not the oracle.** While the copy exists, a test comparing the store with the log in
-//! memory (P6: `same_log(&stored(..), e.log_records(), ..)`) compares two things; the same test on
-//! this read would compare the store with itself. Those stay on the copy until the cut hands them
-//! the Stage-1 engine.
+//! ⚠️ **It is not the oracle.** A test comparing the store with this read compares the store with
+//! itself. What a change should have left is Stage 1's log (`stage1_tests`, the write path before
+//! C19 B, run in lockstep), or a fact the test states about the contacts it made.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
@@ -125,11 +124,12 @@ mod tests {
     use super::*;
     use crate::logstore::tests::{engine_on_store, legacy_log, qso, Dir};
 
-    /// On the store and on the 1.13 path, the read is the log in memory — every record, whole,
-    /// in log order — including a contact logged a moment before it is asked (P4); and on the
-    /// engine a command shares, it is read with the lock released.
+    /// On the store and on the 1.13 path, the read is what the store holds — every record, whole,
+    /// in log order, as a connection of its own loads it — including a contact logged a moment
+    /// before it is asked (P4); and on the engine a command shares, it is read with the lock
+    /// released.
     #[test]
-    fn the_stored_log_is_the_log_in_memory_on_both_paths() {
+    fn the_stored_log_is_what_the_store_holds_on_both_paths() {
         let (on_store, on_file) = (Dir::new("stored-log"), Dir::new("stored-log-1-13"));
         for d in [&on_store, &on_file] {
             std::fs::write(d.log(), legacy_log(40)).unwrap();
@@ -142,8 +142,23 @@ mod tests {
         ] {
             e.log_qso(qso("ZD7AA", 1_788_000_000));
             let stored = e.stored_log();
-            // The copy this read replaces, as its oracle while the copy still exists.
-            let held = e.log_records().to_vec();
+            // The oracle: the store's rows as a connection of its own loads them — a read apart
+            // from the one under test, once the writer has taken the contact (the read above
+            // waited for it).
+            let path = e
+                .station()
+                .store
+                .as_ref()
+                .expect("a store")
+                .db_path()
+                .to_path_buf();
+            let held: Vec<Arc<QsoRecord>> = tempo_core::logbook::sqlite::LogDb::open_reader(&path)
+                .expect("the store opens")
+                .load_all()
+                .expect("the store loads")
+                .into_iter()
+                .map(Arc::new)
+                .collect();
             assert_eq!(stored, held, "{arm}");
             assert_eq!(stored.len(), 41, "{arm}");
             assert!(

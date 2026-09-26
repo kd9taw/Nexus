@@ -1232,8 +1232,10 @@ mod tests {
     //
     // SPEC-2 v3 C18: the Connect and satellite coverage reads one picture of the logbook store
     // now, and a capture's log identity is the log's revision. The oracle is the code before
-    // C18, VERBATIM — its context keyed on the log's read token and its chunked fold of the log
-    // in memory — beside the store that log mirrors.
+    // C18, VERBATIM — its chunked fold beside the store that log mirrors — but for the one thing
+    // the log in memory took with it: the read token its context was keyed on. Since the cut
+    // (SPEC-2 v3 C19, decision (A)) that key is the log's revision too, the station's watermark,
+    // which moves with every change to the store's rows made in any window.
 
     #[derive(Clone)]
     struct OldContext {
@@ -1242,7 +1244,7 @@ mod tests {
         model: String,
         power: Option<f64>,
         gain: f64,
-        log: Arc<()>,
+        log: u64,
     }
     impl OldContext {
         fn read(engine: &crate::SharedEngine) -> Result<Self, &'static str> {
@@ -1263,7 +1265,7 @@ mod tests {
                 model: s.prop_engine.clone(),
                 power: s.station_power_w,
                 gain: s.ant_tx_gain_dbi + s.ant_rx_gain_dbi,
-                log: e.log_read_token(),
+                log: e.log_revision(),
             })
         }
         fn same(&self, other: &Self) -> bool {
@@ -1272,7 +1274,7 @@ mod tests {
                 && self.model == other.model
                 && self.power == other.power
                 && self.gain == other.gain
-                && Arc::ptr_eq(&self.log, &other.log)
+                && self.log == other.log
         }
     }
     struct OldLogContext {

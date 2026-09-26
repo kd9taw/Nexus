@@ -8,12 +8,18 @@ use crate::logstore::tests::{
     engine_on_store, eventually, flush, id_at, legacy_log, qso, same_log, stored, Dir,
 };
 use crate::logstore::DURABLE_WAIT;
+use crate::stage1_tests::{lotw_fingerprint, Stage1};
+use crate::station::StationKeys;
 use crate::test_util::StoredLog;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use tempo_core::logbook::sqlite::WriteHold;
-use tempo_core::logbook::{adif_header, adif_record, LogOp, QsoRecord, UploadOutcome};
+use tempo_core::logbook::hot::HotIndex;
+use tempo_core::logbook::sqlite::{LogDb, WriteHold};
+use tempo_core::logbook::{
+    adif_header, adif_record, LogOp, Logbook, QsoRecord, UploadDetail, UploadOutcome,
+};
 
 thread_local! {
     // A writer racing the planned changes made on this thread: run by `change_row` after its
@@ -109,11 +115,6 @@ fn a_row_another_writer_changes_under_the_plan_is_planned_again_and_both_changes
         row.upload.qrz.map(|s| s.when_unix),
         Some(7),
         "and their stamp, which a commit of the first plan would have written over"
-    );
-    same_log(
-        &stored(&d),
-        engine_lock(&engine).log_records(),
-        "the store is the log in memory",
     );
 }
 
@@ -225,11 +226,6 @@ fn a_row_that_keeps_changing_answers_log_busy_and_changes_nothing() {
         row.upload.qrz.map(|s| s.when_unix),
         Some(PLANS as i64),
         "every one of their stamps was"
-    );
-    same_log(
-        &stored(&d),
-        engine_lock(&engine).log_records(),
-        "the store is the log in memory",
     );
 }
 
@@ -354,11 +350,6 @@ fn a_plan_reads_this_processs_changes_the_store_has_not_taken_yet() {
         row.upload.qrz.map(|s| s.when_unix),
         Some(5),
         "and the second"
-    );
-    same_log(
-        &stored(&d),
-        engine_lock(&engine).log_records(),
-        "the store is the log in memory",
     );
 }
 
@@ -561,11 +552,6 @@ mod purge {
             ["K1BBB"],
             "the store holds the contact logged after the purge, and none of the rows it took out"
         );
-        same_log(
-            &stored(&d),
-            engine_lock(&engine).log_records(),
-            "the store is the log in memory",
-        );
         assert!(
             eventually(|| engine_lock(&engine).log_unsaved().is_empty()),
             "log.adi catches up"
@@ -667,11 +653,6 @@ fn a_correction_by_an_edit_key_is_made_only_on_the_version_found() {
     assert!(matches!(made, Ok(Ok(Some(Some(_))))), "control: {made:?}");
     durability.wait(DURABLE_WAIT).expect("on disk");
     assert_eq!(stored_row(&d, id).comment.as_deref(), Some("second"));
-    same_log(
-        &stored(&d),
-        engine_lock(&engine).log_records(),
-        "the store is the log in memory",
-    );
 }
 
 /// One decode, as the air hands it to the sequencer.
@@ -748,7 +729,6 @@ fn the_ft_auto_log_reads_nothing_from_the_store_under_the_engine_lock() {
             "{call} reaches the store once the write clears"
         );
     }
-    same_log(&rows, e.log_records(), "the store is the log in memory");
 }
 
 /// ★ A BULK CHANGE'S PRECONDITION (SPEC-2 v3 §4.6, C19 Part B). An import is planned on the rows of
@@ -790,11 +770,6 @@ fn an_import_planned_before_a_contact_of_its_call_is_logged_plans_again() {
         stored(&d).iter().filter(|r| r.call == "W9RACE").count(),
         1,
         "one contact"
-    );
-    same_log(
-        &stored(&d),
-        engine_lock(&engine).log_records(),
-        "the store is the log in memory",
     );
 }
 
@@ -991,19 +966,123 @@ impl Gen {
     }
 }
 
-/// ★ P6 THROUGH EVERY WRITE PATH (SPEC-2 v3 C19 Part B): seeded random runs of every kind of
-/// change the app makes — the commands' planned changes (the marks, the tag, a delete, the
-/// form's edit, a correction of a row found by what was shown, the connector stamps by id and by
-/// push key, the LoTW batch and the "already uploaded" declaration, the fill job), the FT
-/// append, the purge, and the bulk merges — with the store compared to the log in memory after
-/// EACH. The log in memory follows every change the station commits; nothing plans on it.
+/// The row `id` as the store holds it, if it does.
+fn stored_row_opt(d: &Dir, id: RecordId) -> Option<QsoRecord> {
+    stored(d).into_iter().find(|r| r.id == Some(id))
+}
+
+/// The date the station gave `id`'s QSL-sent mark, or its withdrawal, which is dated too — as
+/// the store holds it: the date Stage 1's mark takes (the second difference in
+/// [`crate::stage1_tests`]' header).
+fn sent_date(d: &Dir, id: RecordId) -> u64 {
+    stored_row_opt(d, id)
+        .and_then(|r| match r.qsl_sent.sent {
+            true => r.qsl_sent.date_unix,
+            false => r.qsl_sent.cleared_unix,
+        })
+        .unwrap_or(0)
+}
+
+/// The FT append, as Stage 1 takes it: the contact the station appended — carrying the id the
+/// station minted — or nothing, when the station's duplicate guard refused it.
+fn appended(engine: &Arc<Mutex<Engine>>, d: &Dir, s1: &mut Stage1) {
+    flush(&engine_lock(engine));
+    let rows = stored(d);
+    if rows.len() == s1.logbook.len() + 1 {
+        s1.add_record(rows.last().expect("one more").clone());
+    }
+}
+
+/// The rows a write appended at `from` and after, whose ids Stage 1's log minted, take the ids
+/// the station minted for them — only where the id on each side is new, one Stage 1 did not
+/// hold before the write (`stage1_tests`' `adopt_minted`, over the store's rows).
+fn adopt_minted(d: &Dir, s1: &mut Stage1, from: usize, held: &HashSet<RecordId>) {
+    let station = stored(d);
+    if station.len() != s1.logbook.len() {
+        return;
+    }
+    let new = |id: Option<RecordId>| id.is_some_and(|id| !held.contains(&id));
+    let minted: Vec<(usize, RecordId)> = s1
+        .logbook
+        .records()
+        .iter()
+        .zip(&station)
+        .enumerate()
+        .skip(from)
+        .filter(|(_, (mine, theirs))| mine.id != theirs.id && new(mine.id) && new(theirs.id))
+        .map(|(i, (_, theirs))| (i, theirs.id.expect("new")))
+        .collect();
+    if !minted.is_empty() {
+        let records = s1.logbook.records_mut(tempo_core::logbook::OpClass::IdOnly);
+        for (i, id) in minted {
+            Arc::make_mut(&mut records[i]).id = Some(id);
+        }
+    }
+}
+
+/// The store holds Stage 1's log, contact for contact, each with an id of its own.
+fn the_store_is_stage_1s(d: &Dir, s1: &Stage1, what: &str) {
+    let want: Vec<QsoRecord> = s1
+        .logbook
+        .records()
+        .iter()
+        .map(|r| QsoRecord::clone(r))
+        .collect();
+    let ids: HashSet<RecordId> = want.iter().filter_map(|r| r.id).collect();
+    assert_eq!(
+        ids.len(),
+        want.len(),
+        "{what}: a contact without an id of its own"
+    );
+    let got = stored(d);
+    assert_eq!(
+        got.len(),
+        want.len(),
+        "{what}: the store's count is Stage 1's"
+    );
+    if let Some((i, (g, w))) = got.iter().zip(&want).enumerate().find(|(_, (g, w))| g != w) {
+        panic!("{what}: the store is not Stage 1's log at contact {i}:\n  {g:?}\n  {w:?}");
+    }
+}
+
+/// The station's hot index answers as one built from the store, keyed as the station keys it —
+/// built with the Engine lock released, compared under it.
+fn the_index_is_the_stores(engine: &Arc<Mutex<Engine>>, d: &Dir, what: &str) {
+    let resolve = engine_lock(engine).station().dxcc_resolve.clone();
+    let built = {
+        let db = LogDb::open(&d.db()).expect("the store opens");
+        db.in_one_snapshot(|db| HotIndex::from_store(db, &StationKeys(resolve.as_deref())))
+            .expect("built from the store")
+    };
+    assert!(
+        engine_lock(engine).station().hot().answers_as(&built),
+        "{what}: the hot index is not the store's"
+    );
+}
+
+/// ★ P6 THROUGH EVERY WRITE PATH, AGAINST STAGE 1 (SPEC-2 v3 C19): seeded random runs of every
+/// kind of change the app makes as a command — the commands' planned changes (the marks, the
+/// tag, a delete, the form's edit, a correction of a row found by what was shown, the connector
+/// stamps by id and by push key, the LoTW batch and the "already uploaded" declaration, the fill
+/// job), the FT append, the purge, and the bulk merges — each made alike to Stage 1's log, the
+/// write path before C19 B verbatim ([`crate::stage1_tests`]). After EACH the store holds Stage
+/// 1's log, and the station's hot index answers as one built from the store: the index is the
+/// one follower of the store the cut leaves, and what the FT gate's duplicate guard reads. Until
+/// the cut this compared the store with the log in memory, which followed each change as well;
+/// the in-breath twins of these commands are held to Stage 1 by `stage1_tests` itself.
 #[test]
-fn the_store_is_the_log_in_memory_after_every_write_path() {
+fn every_write_path_leaves_the_store_as_stage_1_would_and_the_index_follows() {
     const CALLS: [&str; 5] = ["K1ABC", "W9XYZ", "DL1AB", "K2DEF/P", "JA1AA"];
     let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
     for seed in 0..6u64 {
         let d = Dir::new(&format!("p6-{seed}"));
         let engine = shared(&d, 10);
+        // Stage 1 starts from the log the store was converted to, with the station's resolvers
+        // (none).
+        let mut s1 = Stage1 {
+            logbook: Logbook::from_store(stored(&d)),
+            ..Stage1::default()
+        };
         let mut g = Gen(seed);
         for step in 0..45u64 {
             let len = engine.stored_log().len();
@@ -1011,30 +1090,41 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
             let id = (len > 0).then(|| id_at(&*engine, at));
             let call = CALLS[g.below(CALLS.len())];
             let when = 1_788_000_000 + step * 97;
+            let (from, held): (usize, HashSet<RecordId>) = (
+                s1.logbook.len(),
+                s1.logbook.records().iter().filter_map(|r| r.id).collect(),
+            );
             let kind = match (g.below(18), id) {
                 (0 | 1, _) | (_, None) => {
                     engine_lock(&engine).log_qso(qso(call, when));
+                    appended(&engine, &d, &mut s1);
                     "append"
                 }
                 (2, Some(id)) => {
                     let _ = change_ops(&engine, id, None, &[card(id)], "card");
+                    s1.mark_qsl_card(id, true);
                     "card"
                 }
                 (3, Some(id)) => {
                     let via = (g.below(2) == 0).then_some(tempo_core::logbook::QslVia::Bureau);
                     let _ = change_ops(&engine, id, None, &[qsl_sent(id, via)], "sent");
+                    flush(&engine_lock(&engine));
+                    s1.mark_qsl_sent(id, via, sent_date(&d, id));
                     "qsl sent"
                 }
                 (4, Some(id)) => {
+                    let sat_name = (g.below(2) == 0).then(|| "RS-44".to_string());
                     let tag = LogOp::SetSatTag {
                         id,
-                        sat_name: (g.below(2) == 0).then(|| "RS-44".into()),
+                        sat_name: sat_name.clone(),
                     };
                     let _ = change_ops(&engine, id, None, &[tag], "sat");
+                    s1.set_sat_tag(id, sat_name.as_deref());
                     "sat tag"
                 }
                 (5, Some(id)) => {
                     let _ = change_ops(&engine, id, None, &[LogOp::Delete(id)], "delete");
+                    s1.delete_qso(id);
                     "delete"
                 }
                 (6, Some(id)) => {
@@ -1050,6 +1140,9 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                     }
                     let (made, _) = edit_row(&engine, id, &key, &edit);
                     assert!(matches!(made, Ok(Ok(_))), "{made:?}");
+                    flush(&engine_lock(&engine));
+                    let copy = s1.edit_qso(id, &key, &edit, sent_date(&d, id));
+                    assert!(matches!(copy, Ok(Ok(()))), "Stage 1's edit: {copy:?}");
                     "edit"
                 }
                 (7, Some(id)) => {
@@ -1070,6 +1163,14 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         detail: None,
                     };
                     let _ = stamp_push(&engine, &pushed, service, status);
+                    let (outcome, when) = (UploadOutcome::Accepted, when as i64);
+                    match service {
+                        UploadService::Qrz => s1.stamp_qrz_upload(&pushed, outcome, when, None),
+                        UploadService::Clublog => {
+                            s1.stamp_clublog_upload(&pushed, outcome, when, None)
+                        }
+                        _ => s1.stamp_eqsl_upload(&pushed, outcome, when, None),
+                    };
                     "connector stamp"
                 }
                 (8, Some(_)) => {
@@ -1081,10 +1182,18 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         .take(4)
                         .collect();
                     let rows = view.rows(&ids).expect("read");
-                    let signed: Vec<LotwSigned> = ids
+                    let signed_rows: Vec<&Arc<QsoRecord>> = ids
                         .iter()
                         .filter_map(|id| rows.get(id))
+                        .filter(|r| LotwSigned::of(r).is_some())
+                        .collect();
+                    let signed: Vec<LotwSigned> = signed_rows
+                        .iter()
                         .filter_map(|r| LotwSigned::of(r))
+                        .collect();
+                    let pairs: Vec<(RecordId, u64)> = signed_rows
+                        .iter()
+                        .map(|r| (r.id.expect("an id"), lotw_fingerprint(r)))
                         .collect();
                     let status = UploadStatus {
                         outcome: UploadOutcome::Pending,
@@ -1092,10 +1201,19 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         detail: None,
                     };
                     let _ = stamp_lotw_batch(&engine, &signed, &status);
+                    s1.stamp_lotw_batch(&pairs, UploadOutcome::Pending, when as i64, None);
                     "lotw batch"
                 }
                 (9, Some(_)) => {
+                    let rows = engine_lock(&engine).log_rows();
+                    let owed = station::lotw_unsent_ids(&rows).expect("the store reads");
                     let _ = mark_lotw_uploaded_all(&engine, when as i64);
+                    s1.stamp_lotw_upload(
+                        &owed,
+                        UploadOutcome::Accepted,
+                        when as i64,
+                        Some(UploadDetail::OperatorDeclared),
+                    );
                     "already uploaded"
                 }
                 (10, Some(id)) => {
@@ -1105,6 +1223,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         state: Some("WI".into()),
                     }];
                     fill(&engine, &fills, step as i64).expect("the fill job writes");
+                    s1.apply_log_fills(&fills);
                     "fill"
                 }
                 (11, Some(_)) => {
@@ -1113,6 +1232,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
                     let (made, _) = merge_lotw_report(&engine, &text);
                     made.expect("the report merges");
+                    s1.merge_lotw_report(&text);
                     "report merge"
                 }
                 (12, Some(_)) => {
@@ -1123,6 +1243,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         + &adif_record(&row_at(&engine, at)).replace("<EOR>", "<QSL_RCVD:1>Y<EOR>");
                     let (made, _) = import_adif(&engine, &text);
                     made.expect("the import is made");
+                    s1.import_adif(&text);
                     "import"
                 }
                 (13, Some(_)) => {
@@ -1133,6 +1254,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                             .replace("<EOR>", "<APP_QRZLOG_STATUS:1>C<EOR>");
                     let (made, _) = merge_qrz_report(&engine, &text);
                     made.expect("the download merges");
+                    s1.merge_qrz_report(&text);
                     "qrz download"
                 }
                 (14, Some(_)) => {
@@ -1141,6 +1263,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         .replace("<EOR>", "<SIG:4>POTA<SIG_INFO:6>K-0001<EOR>");
                     let (made, _) = import_pota_log(&engine, &text);
                     made.expect("the stamps are made");
+                    s1.import_pota_log(&text);
                     "pota stamps"
                 }
                 (15, Some(_)) => {
@@ -1148,6 +1271,7 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                     let text = adif_record(&row_at(&engine, at));
                     let (made, _) = merge_lotw_own_echo(&engine, &text, step as i64 + 1);
                     made.expect("the report merges");
+                    s1.merge_lotw_own_echo(&text, step as i64 + 1);
                     "own echo"
                 }
                 (16, Some(id)) => {
@@ -1167,25 +1291,33 @@ fn the_store_is_the_log_in_memory_after_every_write_path() {
                         |_, _| (),
                     );
                     assert!(matches!(made, Ok(Ok(Some(())))), "{made:?}");
+                    s1.update_qso(
+                        id,
+                        QsoRecord {
+                            call: call.into(),
+                            comment: Some(format!("corrected {step}")),
+                            ..QsoRecord::clone(&row)
+                        },
+                    );
                     "correction"
                 }
                 (_, Some(_)) if g.below(4) == 0 => {
                     engine_lock(&engine).clear_logbook();
+                    s1.clear_logbook();
                     "purge"
                 }
                 (_, Some(_)) => {
                     engine_lock(&engine).log_qso(qso(call, when));
+                    appended(&engine, &d, &mut s1);
                     "append"
                 }
             };
             *kinds.entry(kind).or_default() += 1;
-            let e = engine_lock(&engine);
-            flush(&e);
-            same_log(
-                &stored(&d),
-                e.log_records(),
-                &format!("seed {seed} step {step}: {kind}"),
-            );
+            flush(&engine_lock(&engine));
+            adopt_minted(&d, &mut s1, from, &held);
+            let at = format!("seed {seed} step {step}: {kind}");
+            the_store_is_stage_1s(&d, &s1, &at);
+            the_index_is_the_stores(&engine, &d, &at);
         }
     }
     // Every path was taken, each more than once: a run that never reached one proves nothing

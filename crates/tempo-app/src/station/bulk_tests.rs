@@ -416,5 +416,4 @@ fn a_bulk_change_moves_the_watermarks_of_what_it_did() {
         after.shape_rev, before.shape_rev,
         "no row edited or removed"
     );
-    assert_eq!(sc.marks(), sc.logbook.marks(), "the log in memory followed");
 }
