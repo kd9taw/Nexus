@@ -8913,6 +8913,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-1);
 }
+/* …and a pad list may be LONG. The IC-7610 publishes fifteen 3 dB pads, and in the 3-column
+   layout the Receiver pane's column is narrower than sixteen chips: measured in Chrome at
+   1920×1080, the 33–45 dB chips sat past the column's clip edge (overflow-x: hidden), on
+   screen nowhere. The row wraps instead. A list that fits — every other radio's — never
+   wraps, and lays out exactly as it did. */
+.ph-steps {
+  flex-wrap: wrap;
+}
 
 /* THE TWO CHAIN PANES (Phone Receiver / Transmitter, 2026-09-20). One wrapping row of
    control groups in signal order; the pane is fit="content", so the wrap IS the height and
@@ -8951,6 +8959,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   margin: 0;
   font-size: 10px;
   color: var(--text-dim);
+}
+/* THE SUB RECEIVER STRIP (dual-receiver radios) — a second `.ph-chain` below Main's, in the
+   same receiver pane, drawn only when the radio has a Sub this build offers. It takes the
+   chain's wrap and gaps and sets NO size of its own: the pane is fit="content", so the wrap is
+   the height. The rule on top is the one thing that says "a different receiver starts here". */
+.ph-subrx {
+  border-top: 1px solid var(--border-soft);
+}
+/* SUB and the Sub's dial, band and sideband — the dial reads like a readout, not a label. */
+.ph-subrx-head {
+  gap: var(--space-2);
+}
+.ph-subrx-dial,
+.ph-subrx-tag {
+  font-size: var(--fs-label);
+  color: var(--text);
 }
 /* A warning ON the transmit contract — VOX, which changes what keys the rig. Warning colour
    AND a plate that reads VOX, never colour alone. */

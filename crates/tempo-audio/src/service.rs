@@ -7216,6 +7216,37 @@ impl RadioLoop {
                                 }
                             }
                         }
+                        // THE SUB RECEIVER'S LEVELS (dual-receiver radios; see
+                        // `tempo_app::engine::sub_controls`). Every poll tells the engine whether
+                        // the daemon serving this radio can NAME the Sub — only Nexus's own CI-V
+                        // daemon, on a radio it addresses per receiver — and only then is anything
+                        // sent, as `L Sub …`. A Hamlib daemon would read "Sub" as a level name,
+                        // so on any other path the requests are dropped and the controls go.
+                        //
+                        // ⚠️ WITHHELD, NOT DROPPED, WHILE KEYED — the XIT/VFO rule below, and for
+                        // a sharper reason: on an IC-9700 a Sub write SELECTS the Sub band for the
+                        // command and hands it back, and no selection may move while anything is
+                        // on the air. `operator_keyed` also sees the inferred key, which this
+                        // block's own gate does not.
+                        if !self.operator_keyed() {
+                            let names_sub = self
+                                .rigctld_proc
+                                .as_ref()
+                                .and_then(CatDaemon::native)
+                                .is_some_and(|d| d.names_receivers());
+                            // Drained under the lock, the lock RELEASED, then the CAT writes.
+                            let writes = engine_lock(engine).take_sub_level_requests(names_sub);
+                            for w in writes {
+                                let ok = rig
+                                    .set_rx_level_on(
+                                        tempo_app::dualrx::ReceiverId::Sub,
+                                        w.level.token(),
+                                        w.value,
+                                    )
+                                    .is_ok();
+                                engine_lock(engine).observe_sub_level(w, ok);
+                            }
+                        }
                         // ⚠️ THE ATU TUNE-UP — THIS KEYS THE TRANSMITTER. The radio puts its own
                         // carrier into its tuner for a second or two, so this is NOT the
                         // receive-side `set_func` above wearing a different token; it is a keying
@@ -7721,8 +7752,16 @@ impl RadioLoop {
                                         // it back) — report it DONE for the
                                         // binding rail. Gated on a real control
                                         // channel like the dial acknowledgment.
+                                        // It names the receiver it wrote, for the
+                                        // engine's receiver model (D1's source);
+                                        // the gate judges `tx_hz` either way.
                                         if rig.has_control() {
-                                            engine_lock(engine).rig_split_applied(tx_hz);
+                                            let rx = if self.split_on_sub {
+                                                tempo_app::dualrx::ReceiverId::Sub
+                                            } else {
+                                                tempo_app::dualrx::ReceiverId::Main
+                                            };
+                                            engine_lock(engine).rig_split_applied_on(tx_hz, rx);
                                         }
                                         format!("split ON — TX {tx_mhz:.4} MHz ({vfo_name})")
                                     } else {
@@ -25774,6 +25813,13 @@ mod tests {
             Some(145_965_000),
             "uplink confirmed by the rig's ack"
         );
+        // …and the engine was told WHICH receiver carries it: satellite mode transmits out of
+        // the Sub band, so the Sub is the transmit source (D1).
+        assert_eq!(
+            eng.tx_source(),
+            tempo_app::dualrx::ReceiverId::Sub,
+            "the loop names the receiver the uplink was written to"
+        );
     }
 
     /// Every rigctld line this scene put on the wire, with the split verbs
@@ -25789,6 +25835,308 @@ mod tests {
             })
             .map(|l| l.trim().to_string())
             .collect()
+    }
+
+    // ── THE SUB RECEIVER'S LEVELS, through the loop (dual-receiver programme) ──────────────
+
+    /// The native CI-V daemon over a fake radio at `addr`, and a Rig pointed at it.
+    fn civ_daemon_rig_at(
+        addr: u8,
+        model: crate::civ::commands::IcomModel,
+    ) -> (CivDaemon, Rig, Arc<Mutex<Regs>>) {
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+        let port = d.local_addr().port();
+        (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
+    }
+
+    /// An engine on Hamlib `model`, nothing else changed.
+    fn engine_on(model: u32) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.rig_model = model;
+            eng.apply_settings(s);
+        }
+        engine
+    }
+
+    /// Receive-time loop ticks, each with the heavy read-back poll forced due, on one loop state
+    /// that keeps its rig and daemon between ticks. `before` runs ahead of every tick (a test
+    /// uses it to key the rig), and the whole run is under a watchdog: a tick that wedges on
+    /// the engine mutex cannot fail an assertion, it never returns.
+    fn heavy_ticks(
+        engine: &Arc<Mutex<Engine>>,
+        rig: Rig,
+        daemon: Option<CatDaemon>,
+        ticks: usize,
+        before: fn(&mut RadioLoop),
+    ) {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let eng = Arc::clone(engine);
+        std::thread::Builder::new()
+            .name("sub-level-ticks".into())
+            .spawn(move || {
+                let mut rig = rig;
+                let mut backend = MockBackend::new();
+                let mut state = loop_state_for(&eng);
+                state.rigctld_proc = daemon;
+                let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+                let mut station = StationSinks::new();
+                for _ in 0..ticks {
+                    state.last_rig_poll = -1000.0; // the heavy poll is due (at now = 0)
+                    before(&mut state);
+                    state
+                        .step(
+                            &eng,
+                            &mut backend,
+                            &mut rig,
+                            &sinks,
+                            0.0,
+                            &mut ra,
+                            &mut rr,
+                            &mut station,
+                        )
+                        .unwrap();
+                }
+                let _ = done_tx.send(());
+            })
+            .unwrap();
+        done_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the loop ticks wedged or panicked (its own message is above)");
+    }
+
+    /// ⭐ A SUB CONTROL REACHES THE SUB, AND ONLY THE SUB — end to end: the engine's request, the
+    /// loop's receive-time poll, `L Sub …` on Nexus's own CI-V daemon, the radio's per-receiver
+    /// command, and the radio's answer back in the snapshot. On an IC-7610 the Sub is named on
+    /// the wire (`29 01`); on an IC-9700 it is selected for the write and handed back.
+    #[test]
+    fn a_sub_level_rides_the_loop_to_the_sub_and_leaves_main_alone() {
+        use crate::civ::commands::IcomModel;
+        use tempo_app::engine::sub_controls::SubLevel;
+        for (addr, icom, model, level, sub_cmd) in [
+            (0x98u8, IcomModel::Ic7610, 3078u32, SubLevel::Af, 0x01u8),
+            (0xA2, IcomModel::Ic9700, 3081, SubLevel::Rf, 0x02),
+        ] {
+            let (d, rig, regs) = civ_daemon_rig_at(addr, icom);
+            let engine = engine_on(model);
+            // The first receive-time polls report the route (a first tick may be a retune).
+            heavy_ticks(&engine, rig, Some(CatDaemon::Native(d)), 2, |_| {});
+            assert_eq!(
+                engine.lock().unwrap().sub_commandable(),
+                Some(true),
+                "{icom:?}: the native daemon names the Sub, and the loop said so"
+            );
+            let main_before = regs.lock().unwrap().levels.get(&sub_cmd).copied();
+            engine
+                .lock()
+                .unwrap()
+                .request_sub_level(level, 0.25)
+                .expect("offered");
+            // A fresh daemon + rig for the second run: the first run's were moved and dropped.
+            // The request and the route live in the ENGINE, which is what this checks carries it.
+            let (d, rig, regs) = civ_daemon_rig_at(addr, icom);
+            let main_before_2 = regs.lock().unwrap().levels.get(&sub_cmd).copied();
+            heavy_ticks(&engine, rig, Some(CatDaemon::Native(d)), 2, |_| {});
+            let r = regs.lock().unwrap();
+            assert_eq!(
+                r.sub_levels.get(&sub_cmd),
+                Some(&63),
+                "{icom:?}: the Sub's {level:?} moved"
+            );
+            assert_eq!(
+                r.levels.get(&sub_cmd).copied(),
+                main_before_2,
+                "{icom:?}: Main's {level:?} did not"
+            );
+            assert!(!r.sel_sub, "{icom:?}: the selection is Main's again");
+            drop(r);
+            let _ = main_before;
+            assert_eq!(
+                engine.lock().unwrap().sub_level_accepted(level),
+                Some(0.25),
+                "{icom:?}: the radio's acceptance reached the snapshot"
+            );
+        }
+    }
+
+    /// A rigctld that ACCEPTS everything and answers the reads a receive-time poll makes — the
+    /// dial, the mode, PTT — logging every line. (A stub that refused anything would keep the
+    /// loop retrying its retune, and the receive-time poll would never run.)
+    fn accepting_rigctld_stub() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let Ok(mut out) = stream.try_clone() else {
+                    return;
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let reply = match line.trim() {
+                        "f" => "14074000\n",
+                        "m" => "PKTUSB\n3000\n",
+                        "t" => "0\n",
+                        _ => "RPRT 0\n",
+                    };
+                    rec.lock().unwrap().push(line);
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// A Hamlib-served dual-receiver radio: the loop reports that the path cannot name the Sub,
+    /// and NOT ONE `L Sub` line reaches a daemon that would read "Sub" as a level name.
+    #[test]
+    fn a_hamlib_served_radio_is_never_sent_a_sub_level() {
+        use tempo_app::engine::sub_controls::SubLevel;
+        let (addr, seen) = accepting_rigctld_stub();
+        let engine = engine_on(3078);
+        {
+            // A request queued while the route read as reachable — the worst case for this
+            // check: it is waiting when the loop meets a daemon that cannot carry it.
+            let mut eng = engine.lock().unwrap();
+            assert!(eng.take_sub_level_requests(true).is_empty());
+            eng.request_sub_level(SubLevel::Af, 0.5).expect("offered");
+        }
+        heavy_ticks(&engine, Rig::rigctld(&addr), None, 2, |_| {});
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            lines.iter().any(|l| l.trim() == "f"),
+            "the receive-time poll ran (the dial was read): {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("Sub")),
+            "no Sub-named line may reach a Hamlib daemon: {lines:?}"
+        );
+        assert_eq!(engine.lock().unwrap().sub_commandable(), Some(false));
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .request_sub_level(SubLevel::Af, 0.5)
+                .is_err(),
+            "and the engine now refuses the control"
+        );
+    }
+
+    /// ⚠️ WITHHELD, NOT DROPPED, WHILE KEYED — on the scene this matters for: an IC-9700 on a
+    /// satellite pass through the native daemon, where a Sub write SELECTS the Sub band for the
+    /// command and hands it back. The rig here is keyed the way a mic-keyed 9700 shows it — by
+    /// answering the pass's transmit leg — which the heavy poll's own gate cannot see (it asks
+    /// the PTT poll), so the write must take the tighter test itself. The request waits, and
+    /// lands on the first unkeyed tick.
+    #[test]
+    fn a_sub_level_waits_out_a_keyed_rig_and_lands_after() {
+        use crate::civ::commands::IcomModel;
+        use tempo_app::engine::sub_controls::SubLevel;
+        let engine = sat_pick_engine(); // RS-44 on an IC-9700: Main down, Sub up
+        let (d, mut rig, regs) = civ_daemon_rig_at(0xA2, IcomModel::Ic9700);
+        let mut state = loop_state_for(&engine);
+        state.rigctld_proc = Some(CatDaemon::Native(d));
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut ticks = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            for _ in 0..n {
+                state.last_rig_poll = -1000.0; // the heavy poll is due (at now = 0)
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        0.0,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        ticks(&mut state, &mut rig, 3);
+        assert!(
+            regs.lock().unwrap().satmode,
+            "scene: the pass is up on the radio"
+        );
+        assert_eq!(
+            engine.lock().unwrap().sub_commandable(),
+            Some(true),
+            "scene: the route is known"
+        );
+
+        // KEY DOWN, as the frequency reports it: a transmitting 9700 answers the uplink.
+        regs.lock().unwrap().main_hz = 145_965_000;
+        ticks(&mut state, &mut rig, 2);
+        assert!(
+            engine.lock().unwrap().sat_inferred_keyed(),
+            "scene: the rig is answering with the pass's transmit leg — it is keyed"
+        );
+        assert!(!state.rig_keyed, "scene: the PTT poll believes RX");
+        engine
+            .lock()
+            .unwrap()
+            .request_sub_level(SubLevel::Rf, 0.25)
+            .expect("offered");
+        let n = regs.lock().unwrap().log.len();
+        ticks(&mut state, &mut rig, 3);
+        let keyed: Vec<(u8, Vec<u8>)> = regs.lock().unwrap().log[n..].to_vec();
+        assert!(
+            keyed.iter().any(|(c, _)| *c == 0x03),
+            "scene AND control: the heavy poll ran while keyed (the dial was read) — without \
+             it this cannot tell a guard from a loop that never ran: {keyed:02x?}"
+        );
+        // An RF gain WRITE carries the level (`14 02 <hi> <lo>`); the poll's read of Main's
+        // RF (`14 02` alone) is the heavy poll doing its ordinary work.
+        assert!(
+            !keyed
+                .iter()
+                .any(|(c, d)| *c == 0x14 && d.len() == 3 && d[0] == 0x02),
+            "no RF write while keyed: {keyed:02x?}"
+        );
+        assert!(
+            !keyed
+                .iter()
+                .any(|(c, d)| *c == 0x07 && d.first() == Some(&0xD1)),
+            "no Sub selection while keyed: {keyed:02x?}"
+        );
+        assert_eq!(regs.lock().unwrap().sub_levels.get(&0x02), None);
+        assert_eq!(
+            engine.lock().unwrap().sub_level_accepted(SubLevel::Rf),
+            None
+        );
+
+        // UNKEY: the receive leg comes back, the inference retires, and the write lands.
+        regs.lock().unwrap().main_hz = 435_640_000;
+        ticks(&mut state, &mut rig, 3);
+        assert!(
+            !engine.lock().unwrap().sat_inferred_keyed(),
+            "control: the receive leg retired the inference"
+        );
+        assert_eq!(
+            regs.lock().unwrap().sub_levels.get(&0x02),
+            Some(&63),
+            "WITHHELD, NOT DROPPED: the Sub's RF landed after the over"
+        );
+        assert!(
+            !regs.lock().unwrap().sel_sub,
+            "the selection is Main's again"
+        );
+        assert_eq!(
+            engine.lock().unwrap().sub_level_accepted(SubLevel::Rf),
+            Some(0.25)
+        );
     }
 
     #[test]
@@ -26058,6 +26406,16 @@ mod tests {
         assert!(r.split, "0F 01 — the shipped A/B split");
         assert!(!r.satmode, "no satellite mode on a terrestrial split");
         assert_eq!(r.unselected_hz, 14_235_000, "the TX dial rides 25 01");
+        // The split was ACKNOWLEDGED (the gate now judges the TX dial, not the RX dial) — the
+        // control that makes the next assertion mean something — and it is Main's VFO B.
+        let eng = engine.lock().unwrap();
+        let judged = eng.snapshot().radio.tx_emission_mhz.unwrap_or(0.0);
+        assert!((judged - 14.235).abs() < 1e-9, "judged {judged}");
+        assert_eq!(
+            eng.tx_source(),
+            tempo_app::dualrx::ReceiverId::Main,
+            "a VFO B split is Main's"
+        );
     }
 
     #[test]
