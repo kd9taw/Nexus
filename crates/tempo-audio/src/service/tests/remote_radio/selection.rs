@@ -1917,3 +1917,48 @@ fn a_refused_selection_gives_the_shared_keying_port_back() {
         },
     );
 }
+
+/// ★ A selection from a Remote browser is a switch, so the radio being left is told to stop a
+/// voice memory it may be playing, right after its unkey and its CW flush. Afterwards every stop
+/// Nexus has reaches the radio selected.
+#[test]
+fn a_selection_stops_the_outgoing_radios_voice_memory_after_its_unkey() {
+    let _station = selection_test_lock();
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
+    let mut s = station(&outgoing);
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = queue(&s, 1);
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        },
+        "premise: the Icom is selected"
+    );
+    let lines = outgoing.lines.lock().unwrap().clone();
+    let at = |cmd: &str| lines.iter().position(|line| line == cmd);
+    let (unkey, morse, voice) = (at("T 0"), at("\\stop_morse"), at("\\stop_voice_mem"));
+    assert!(
+        unkey.is_some() && morse.is_some(),
+        "premise: the unkey and the CW flush: {lines:?}"
+    );
+    assert!(
+        voice.is_some(),
+        "the radio being left is told to stop its voice memory: {lines:?}"
+    );
+    assert!(
+        unkey < voice && morse < voice,
+        "…after its unkey and its CW flush: {lines:?}"
+    );
+    assert!(
+        !incoming
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line == "\\stop_voice_mem"),
+        "…and only that radio"
+    );
+}

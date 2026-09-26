@@ -305,6 +305,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A voice-memory playback a logger asked for at that moment could play on the new radio. Both are
   now dropped at the switch; press again for the radio you chose.
 
+- **Switching radios now stops a voice memory the radio you leave may be playing.** After a
+  switch, Stop TX reaches only the radio you switched to, so a voice memory still playing on the
+  radio you left had nothing in Nexus that could stop it. The switch now asks the radio you leave
+  to stop its voice memory, right after unkeying it. That includes a radio chosen from a Remote
+  browser. A radio whose CAT link offers no such stop is unaffected.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.
