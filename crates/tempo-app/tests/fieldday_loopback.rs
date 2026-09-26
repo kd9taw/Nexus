@@ -49,8 +49,7 @@ fn reusable_listener(port: u16) -> std::net::TcpListener {
     raw.into()
 }
 
-fn start_host(eng: &Shared, port: u16) -> Arc<AtomicBool> {
-    let listener = reusable_listener(port);
+fn start_host(eng: &Shared, listener: std::net::TcpListener) -> Arc<AtomicBool> {
     let sd = Arc::new(AtomicBool::new(false));
     let backend: Arc<dyn ClubBackend> = Arc::new(EngineClubBackend(eng.clone()));
     let sd2 = sd.clone();
@@ -103,18 +102,16 @@ fn host_three_positions_outage_and_host_restart_converge_on_the_union() {
     let _ = std::fs::remove_dir_all(&dir);
     let journal = dir.join("fd_event_test.jsonl");
 
-    // An OS-assigned free port, reused across the host restart.
-    let port = {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        probe.local_addr().unwrap().port()
-    };
+    // An OS-assigned port, held from here on and bound again by the host restart.
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
     let addr = format!("127.0.0.1:{port}");
 
     // The host engine — ALSO position #1, joined over its own loopback
     // listener (zero special cases for the host's own contacts).
     let host = fd_engine("W9ABC", "aaaa0001", "HQ", &addr);
     engine_lock(&host).fd_host_start(journal.clone()).unwrap();
-    let host_sd = start_host(&host, port);
+    let host_sd = start_host(&host, listener);
     let host_pump_sd = start_pump(&host, &addr);
 
     // Two more positions.
@@ -189,7 +186,7 @@ fn host_three_positions_outage_and_host_restart_converge_on_the_union() {
         6,
         "the journal replay alone rebuilds the whole club log"
     );
-    let host2_sd = start_host(&host2, port);
+    let host2_sd = start_host(&host2, reusable_listener(port));
     let host2_pump_sd = start_pump(&host2, &addr);
 
     // The surviving pumps reconnect on backoff; one more contact proves the
@@ -248,17 +245,15 @@ fn renaming_a_position_reaches_the_club_board_on_the_live_connection() {
     // fix spans the wire, the club log and the engine's identity seam.
     let dir = std::env::temp_dir().join(format!("fd-rename-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let port = {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        probe.local_addr().unwrap().port()
-    };
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
     let addr = format!("127.0.0.1:{port}");
 
     let host = fd_engine("W9ABC", "aaaa0001", "HQ", &addr);
     engine_lock(&host)
         .fd_host_start(dir.join("fd_event_rename.jsonl"))
         .unwrap();
-    let host_sd = start_host(&host, port);
+    let host_sd = start_host(&host, listener);
     let p2 = fd_engine("W9ABC", "bbbb0002", "CW tent", &addr);
     let p2_sd = start_pump(&p2, &addr);
 
