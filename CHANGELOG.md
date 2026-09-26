@@ -299,6 +299,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch waits for a still-transmitting radio to stop, or while Test CAT holds the radio's port,
   is dropped the same way. Earlier releases could send that one to the radio being left too.
 
+- **A tune-up or voice-memory playback pressed just before a radio switch no longer goes to the
+  radio you switch to.** An ATU tune-up pressed for one radio could start on the other if you
+  switched radios, or a band change switched them for you, within a few seconds of the press.
+  A voice-memory playback a logger asked for at that moment could play on the new radio. Both are
+  now dropped at the switch; press again for the radio you chose.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.

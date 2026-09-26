@@ -314,6 +314,9 @@ mod tests {
             engine.rtty_abort = false;
             engine.psk_abort = false;
             engine.sstv_abort = false;
+            // A tune-up and a voice-memory play pressed for the radio being left.
+            engine.pending_atu_tune = Some(crate::engine::now_unix_secs());
+            engine.pending_voice_mem = Some(crate::engine::VoiceMemCmd::Play(1));
         }
         let epoch = guarded.decode_epoch;
         let generation = guarded.tx_gate_gen;
@@ -333,6 +336,13 @@ mod tests {
         assert!(guarded.split_dirty && guarded.immediate_retune);
         assert!(guarded.slot_tx_abort && guarded.cw_abort && guarded.rtty_abort);
         assert!(guarded.psk_abort && guarded.sstv_abort);
+        // The Remote commit switches through the same reset, so the presses go with it.
+        for engine in [&local, &guarded] {
+            assert!(
+                engine.pending_atu_tune.is_none() && engine.pending_voice_mem.is_none(),
+                "a tune-up or voice-memory play pressed for the radio being left is dropped"
+            );
+        }
         // A complete reverse switch proves the consumed guard was released,
         // and retains the outgoing radio's banked live edits.
         guarded.set_active_radio_with_decoder_guard(0, decoder_guard());

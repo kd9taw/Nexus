@@ -5853,6 +5853,14 @@ impl Engine {
         // routing, satellite routing, the coverage fallback, the operator's own radio button —
         // arrives here, so this one line covers all of them.
         self.halt_tx_for_context_change("radio handoff");
+        // …and the two keying presses `halt_tx` leaves queued, both pressed for the radio being
+        // LEFT. The loop drains them later, against whichever radio it then holds: the ATU press
+        // at the incoming radio's first heavy poll (still inside `ATU_REQUEST_MAX_AGE_SECS`, and
+        // Phone is re-armed just above), the voice-memory command on the next tick. The latter
+        // goes whole, a STOP too, since the radio that may be playing is the one being left and
+        // the loop would send the STOP to the incoming one.
+        self.pending_atu_tune = None;
+        self.pending_voice_mem = None;
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -26990,6 +26998,69 @@ mod tests {
             e.pending_atu_tune.is_none(),
             "…and it is consumed, not left to key on the next poll"
         );
+    }
+
+    /// ★ A tune-up pressed for the radio being LEFT never fires on the one switched to. The press
+    /// waits for the loop's heavy poll, and the incoming radio's first poll comes a moment after
+    /// the switch, well inside `ATU_REQUEST_MAX_AGE_SECS`, with every gate passing again: Phone
+    /// is re-armed by the switch and the new radio reports a tuner of its own.
+    #[test]
+    fn a_switch_drops_a_tune_up_pressed_for_the_radio_being_left() {
+        let mut e = phone_armed_engine();
+        let other = e.add_radio(); // add_radio makes the new rig active…
+        e.set_active_radio(0); // …so start on radio 0
+        e.set_frequency(14.290, "20m", "USB");
+        e.observe_rig_tuner(Some(true), true);
+        e.atu_tune()
+            .expect("scene guard: radio 0 may run its tuner");
+        e.set_active_radio(other);
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "radio 0's press goes with the switch"
+        );
+        // The incoming radio, on a phone dial, reports a tuner: nothing but the drop stands
+        // between radio 0's press and a tune-up here.
+        e.set_frequency(14.290, "20m", "USB");
+        e.observe_rig_tuner(Some(true), true);
+        assert!(
+            e.atu_tune_gate().is_ok(),
+            "scene guard: the new radio could run a tune-up"
+        );
+        assert!(!e.take_atu_tune(), "radio 0's press never tunes radio 1");
+        // A press made after the switch is the new radio's own, and fires.
+        e.atu_tune().unwrap();
+        assert!(
+            e.take_atu_tune(),
+            "a press after the switch belongs to the new radio"
+        );
+    }
+
+    /// ★ …and a voice-memory command pending at a switch goes with it, PLAY or STOP. The loop
+    /// would send either to the radio switched TO: the PLAY was meant for the radio being left,
+    /// and the STOP is not for the radio that may be playing, which is the one being left.
+    #[test]
+    fn a_switch_drops_a_pending_voice_memory_command() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let other = e.add_radio();
+        e.set_active_radio(0);
+        let play: fn(&mut Engine) = |e| e.request_voice_mem(1);
+        let stop: fn(&mut Engine) = Engine::request_voice_mem_stop;
+        for (queue, cmd) in [(play, VoiceMemCmd::Play(1)), (stop, VoiceMemCmd::Stop)] {
+            let from = e.settings().active_radio;
+            queue(&mut e);
+            // Choosing the radio already active is no switch, and drops nothing.
+            e.set_active_radio(from);
+            assert_eq!(e.pending_voice_mem, Some(cmd), "no switch, nothing dropped");
+            e.set_active_radio(if from == 0 { other } else { 0 });
+            assert_eq!(
+                e.take_voice_mem(),
+                None,
+                "{cmd:?}, pending at the switch, goes with it"
+            );
+        }
+        // A PLAY asked for after the switch is the new radio's, and stays.
+        e.request_voice_mem(2);
+        assert_eq!(e.take_voice_mem(), Some(VoiceMemCmd::Play(2)));
     }
 
     #[test]
