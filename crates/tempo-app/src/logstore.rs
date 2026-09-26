@@ -6699,9 +6699,16 @@ pub(crate) mod tests {
     /// picture and names every id the store holds — the ids the station's minter is drawn clear
     /// of (`Minter::clear_of`) — and the contact logged next carries an id no row of the log
     /// carries. On the database and on the 1.13 path.
+    ///
+    /// A random 64-bit draw never meets the fixture's nonces, so the station's first draws are
+    /// forced (`Minter::force_log_draws`): two nonces rows carry, then one none does. A minter
+    /// drawn clear of fewer ids than the index names takes the first, and mints an id a row holds.
     #[test]
     fn the_launchs_minter_steers_clear_of_every_id_the_log_holds() {
         use std::collections::HashSet;
+        use tempo_core::logbook::Minter;
+        // No row's nonce: the fixture's are 1000..1060.
+        const FREE: u64 = 2_000;
         // 60 contacts, each logged in a session of its own: 60 nonces.
         let mut text = adif_header();
         for i in 0..60u64 {
@@ -6717,6 +6724,7 @@ pub(crate) mod tests {
             let how = home(on_file);
             let d = Dir::new(&format!("minter-{on_file}"));
             std::fs::write(d.log(), &text).unwrap();
+            Minter::force_log_draws([1_000, 1_001, FREE]);
             let mut e = if on_file {
                 let mut e = Engine::new("K2DEF", "FN31", 0);
                 e.set_log_path(d.log());
@@ -6749,8 +6757,8 @@ pub(crate) mod tests {
             let logged = e.stored_log().last().and_then(|r| r.id).expect("minted");
             assert!(!held.contains(&logged), "{how}: an id no row carries");
             assert!(
-                matches!(logged, RecordId::Minted { nonce, .. } if !nonces.contains(&nonce)),
-                "{how}: under a nonce no row carries: {logged:?}"
+                matches!(logged, RecordId::Minted { nonce, .. } if nonce == FREE),
+                "{how}: under the first draw no row carries, past two that rows do: {logged:?}"
             );
         }
     }

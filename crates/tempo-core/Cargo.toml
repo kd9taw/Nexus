@@ -55,6 +55,12 @@ md-5 = "0.10.6"
 # and the `cc` build-script crate were already here at compatible versions.
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 
+[features]
+# `test-util`: the draw hook a test forces a log's minter with (`Minter::force_log_draws`), for
+# another crate's tests: a dev-dependency naming this feature turns it on, so no shipped build
+# compiles it.
+test-util = []
+
 [dev-dependencies]
 # (serde_json is a real dependency above since the fd_rules data loader — the
 # WSJT-X predicate-oracle tests and the fd_rules integration tests use it too.)

@@ -142,7 +142,16 @@ impl Minter {
     /// minted id among them — the station's, for a log it did not load itself (SPEC-2 v3 C19: the
     /// store's rows, read in the pass that builds the hot index).
     pub fn clear_of<'a>(posid: u32, ids: impl IntoIterator<Item = &'a RecordId>) -> Self {
-        Self::new(posid, &minted_nonces(ids))
+        Self::drawing(posid, &minted_nonces(ids), draw_for_a_log)
+    }
+
+    /// TESTS ONLY: the next draws a minter for a log makes on this thread ([`Self::clear_of`], the
+    /// station's for the log it installs) are `nonces`, in order, before any random one. A random
+    /// 64-bit draw never meets the nonces a test log's rows carry, so without this a minter drawn
+    /// clear of none of them passes every test one drawn clear of all of them does.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn force_log_draws(nonces: impl IntoIterator<Item = u64>) {
+        FORCED_LOG_DRAWS.with(|forced| forced.borrow_mut().extend(nonces));
     }
 
     pub fn mint(&mut self) -> RecordId {
@@ -197,6 +206,26 @@ fn draw_nonce() -> u64 {
         .unwrap_or(0)
         .hash(&mut h);
     h.finish()
+}
+
+// TESTS ONLY — per thread, like `hot::HOT_REBUILDS`, because the harness runs tests in parallel.
+// (Plain comments: doc comments cannot attach through `thread_local!`.)
+//
+// `FORCED_LOG_DRAWS`: the draws a test forced on a minter for a log ([`Minter::force_log_draws`]).
+#[cfg(any(test, feature = "test-util"))]
+thread_local! {
+    static FORCED_LOG_DRAWS: std::cell::RefCell<std::collections::VecDeque<u64>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// A draw for a minter for a log ([`Minter::clear_of`]): [`draw_nonce`]'s, after any draw a test
+/// forced first. The same draw as every other minter's in a build without the test hook.
+fn draw_for_a_log() -> u64 {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(forced) = FORCED_LOG_DRAWS.with(|forced| forced.borrow_mut().pop_front()) {
+        return forced;
+    }
+    draw_nonce()
 }
 
 /// FNV-1a, 64-bit: fixed forever, because a provisional id is only stable while its hash is.
