@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 /// A thread beside the bench that spins `try_lock` on the shared engine and keeps, since it was
 /// last asked: the longest run of "held" it saw, how many runs, how many times it looked, and
 /// the longest it went WITHOUT looking. That last is its blind spot: descheduled, it sees a hold
-/// that begins meanwhile only when it runs again, so a hold can read short by up to that much —
-/// the instrument can underestimate as well as overestimate, and says by how much.
+/// that begins or ends meanwhile only when it runs again, so a hold can read short or long by up
+/// to that much, and two holds with a gap it missed read as one.
 pub struct Watcher {
     stop: Arc<AtomicBool>,
     seen: Arc<Seen>,

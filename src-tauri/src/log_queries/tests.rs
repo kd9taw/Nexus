@@ -1667,8 +1667,8 @@ fn log_query_bench() {
     );
     println!(
         "  longest Engine-lock hold, by step (the bound is {:.0} ms, {}), with its time, how many \
-         holds the watcher saw, the longest it did not look (a hold can read short by up to that), \
-         and the most SQLite's heap held while it ran:",
+         holds the watcher saw, the longest it did not look (a hold can read short or long by up \
+         to that), and the most SQLite's heap held while it ran:",
         HOLD_BOUND.as_secs_f64() * 1000.0,
         if AFTER_THE_CUT {
             "asserted"

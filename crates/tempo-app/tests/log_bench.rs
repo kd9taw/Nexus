@@ -15,8 +15,10 @@
 //!    log call makes on the calling thread, against a whole-log one (a pointer per contact), and
 //!    the bytes it allocates, at each size.
 //! 3. **No Engine-lock hold over 5 ms in any log path**: timed by a watcher thread that spins
-//!    `try_lock` on the shared engine and times each run of "held". It can only overestimate a
-//!    hold: two holds with a gap shorter than one of its spins read as one.
+//!    `try_lock` on the shared engine and times each run of "held". Its reading can be off either
+//!    way by up to the longest it went without looking, which it reports as its blind spot: a
+//!    hold that begins while it is not looking reads short, one that ends then reads long, and two
+//!    holds with a gap it missed read as one.
 //! 4. **The snapshot after a logged contact under 1 ms**, the median of 41: C13's acceptance
 //!    (SPEC-2), carried here when C13's own bench was retired.
 //!
@@ -609,7 +611,7 @@ fn bench(n: usize) -> Vec<String> {
     println!(
         "  longest Engine-lock hold, by path (the bound is {:.0} ms), with how many holds the \
          watcher saw, the mean time between its looks, and the longest it did not look (a hold \
-         can read short by up to that):",
+         can read short or long by up to that):",
         ms(HOLD_BOUND)
     );
     for (path, h) in &holds {
