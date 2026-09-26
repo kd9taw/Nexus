@@ -15,6 +15,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
+import { waitOutTheListsScrollTimer } from './Logbook.testkit'
 import { ConfirmHost } from '../confirm'
 import { deleteQsoById, type RowRef } from '../api'
 import { t } from '../i18n'
@@ -81,9 +82,7 @@ afterEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
 })
-// The list's end-of-scroll report fires 150 ms after a scroll, from a timer it does not clear on
-// unmount; let the last one land while this file's window exists.
-afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)))
+afterAll(waitOutTheListsScrollTimer)
 
 /** `n` contacts, newest last in the log: newest-first, index k is K{n-1-k}ABC. */
 const log = (n: number) =>
