@@ -82,9 +82,7 @@ pub fn fill_log_store(
         }
         eng.log_rows()
     };
-    let LogRows::Store(reads) = rows else {
-        return Ok(FillOutcome::default());
-    };
+    let LogRows::Store(reads) = rows;
     let ((current, lacking), _) = reads
         .read(READ_WAIT, |db| {
             if db.meta(FILL_VER)? == Some(version) {
