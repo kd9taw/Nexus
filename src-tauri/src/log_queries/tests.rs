@@ -1497,7 +1497,7 @@ mod lock_watch;
 /// With §4.11's instruments (SPEC-2 v3): each question's longest Engine-lock hold, seen by a
 /// watcher thread beside it, against the 5 ms bound on any log path — an answer is read off the
 /// store with the lock released, so a hold is the handles alone — and the most SQLite's heap
-/// held while it answered. Reported now; asserted once the cut removes the log in memory
+/// held while it answered. The hold is asserted since the cut removed the log in memory
 /// (`AFTER_THE_CUT`). The Rust heap is not counted here: a counting allocator would count every
 /// test in this binary, not the bench's; tempo-app's `log_bench` counts the log path's.
 #[test]
@@ -1507,7 +1507,7 @@ fn log_query_bench() {
     use std::cell::RefCell;
     use std::time::{Duration, Instant};
     /// Whether the cut has removed the log in memory: the hold bound is asserted from then on.
-    const AFTER_THE_CUT: bool = false;
+    const AFTER_THE_CUT: bool = true;
     /// §4.11's bound on an Engine-lock hold in any log path.
     const HOLD_BOUND: Duration = Duration::from_millis(5);
     lock_watch::keep_sqlite_statistics();
