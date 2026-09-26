@@ -378,6 +378,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   import, the "confirmed on this band" filter and the NEW PARK marks now change straight away,
   where they used to wait for the next logged contact.
 
+- **With a big logbook, nothing the logbook does holds up the radio for more than 5 ms.** Each of
+  the logbook's actions that take the lock the radio needs every 20 ms now lets go of it within
+  0.8 ms on a log of 150,000 contacts and within 1.6 ms on one of 500,000: logging a contact, a
+  QSL card or QSL-sent mark, a satellite tag, an edit or a delete, an upload stamp, an import, a
+  LoTW, QRZ or POTA sync, "already uploaded", the first launch's fill of countries and states,
+  and clearing the whole logbook (0.2 ms and 0.1 ms). A call's history and the band map's worked
+  calls hold it for under 0.1 ms. The log itself takes 42.8 MiB of memory at 150,000 contacts
+  and 89.7 MiB at 500,000, plus 3.9 MiB of the database's own. Measured on a quiet 32-core
+  machine, at a load of 0.61 when the run began (2.4 for a call's history and the worked calls).
+  Two limits: the 5 ms covers the logbook's own work under that lock, and settings written while
+  holding it are an app-wide pattern it does not cover; and for the snapshot the radio takes
+  after each contact it measures the logbook's side only, a median of 0.001 ms.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the
