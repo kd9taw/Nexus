@@ -152,21 +152,28 @@ fn adif_spelling(code: &str) -> &str {
 /// ⭐ **The worked station's `STATE`, from what it SENT** — the state or province in its
 /// received exchange, spelled as ADIF spells it, or `None`.
 ///
-/// **Why the merge asks this rather than [`directed_columns`].** A directed column is one
-/// tag applied to every value of a slot, and CQ WW RTTY's QTH cannot have one: `NWT`, `NF`,
-/// `LB` and `PEI` are not ADIF `STATE` values, so its rules file exports the slot under no
-/// tag (see the seed's `_provenance`), and the contest log and its own export keep the
-/// sponsor's codes. Four of the codes need MAPPING, which a tag cannot say. The general-log
-/// record is the one every upload service reads, so the merge maps them here and writes
-/// `QsoRecord::state`.
+/// **Where CQ WW RTTY's QTH is written, and why the rules file was left alone.**
+/// * **The rules seed's QTH slot deliberately writes no ADIF column.** Its `_provenance`
+///   says why: `NWT`, `NF`, `LB` and `PEI` are not ADIF `STATE` values. That stays true for
+///   the ruleset's own tags ([`directed_columns`] emits nothing for the slot) and for the
+///   contest log's own ADIF export ([`FieldDayLog::adif`](crate::fieldday::FieldDayLog::adif)),
+///   which keep the sponsor's codes.
+/// * **The general-log merge maps it to `STATE` for the United States and Canada:** `NF` and
+///   `LB` become `NL`, `NWT` becomes `NT`, `PEI` becomes `PE` ([`CALL_AREA_TO_ADIF`]); the
+///   rest are ADIF's codes already. It writes `QsoRecord::state`, the field every upload
+///   service reads. A directed column is one tag applied to every value of a slot, so it
+///   cannot map four of them, which is why this is not one.
+/// * **An invalid value writes no `STATE`.** It stays only where the exchange as sent is
+///   kept, `SRX_STRING` and the private carrier. The engine's merge-time fill may still set
+///   `state` from the callsign, as it does for any contact that carries none.
 ///
-/// A value counts only when both hold:
+/// A value is valid only when both hold:
 /// * the domain it matched IS a list of states and provinces: every code in it spells, in
 ///   ADIF, a `STATE` of one of the four entities. An ARRL section (`CT`) or a county is not
 ///   a state even where its code looks like one, and it is refused here rather than read by
 ///   its spelling;
 /// * its ADIF spelling is a `STATE` of the station's OWN entity. A VE3 that sent `MA` claims
-///   nothing, and what it sent stays in `SRX_STRING`.
+///   nothing.
 pub(crate) fn received_state(row: &LoggedQso, spec: &ExchangeSpec) -> Option<&'static str> {
     let is_adif_state = |code: &str| ADIF_STATES.iter().any(|(_, codes)| codes.contains(&code));
     let (_, own) = ADIF_STATES
