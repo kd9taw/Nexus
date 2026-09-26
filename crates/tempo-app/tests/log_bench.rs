@@ -576,6 +576,7 @@ fn bench(n: usize) -> Vec<String> {
             (base.len() >= 3).then(|| base[..2].to_string())
         },
         &|_: &str, _: Option<&str>| None::<String>,
+        &|_: &str| true,
     )
     .expect("the fill job runs");
     settle(&shared);

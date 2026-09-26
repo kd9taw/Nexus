@@ -16,8 +16,9 @@
 //!
 //! 1. Under the Engine lock: the store's read handles, and nothing else.
 //! 2. Off the lock, in ONE read transaction: `fill_ver`. The version it was asked to fill for →
-//!    done, and the launch has written nothing. Otherwise every contact lacking a country or a
-//!    state — a narrow read of four columns — resolved call by call, still off the lock.
+//!    done, and the launch has written nothing. Otherwise every contact lacking a country, or a
+//!    state where one can apply — a narrow read of four columns — resolved call by call, still
+//!    off the lock.
 //! 3. [`crate::logwrite::fill`] writes what was found, a chunk at a time: each chunk's rows read
 //!    whole from the store with the lock released, and made under it only where the field is
 //!    still empty in the row as it now stands — a change in the writer's bulk lane (a contact
@@ -32,7 +33,12 @@
 //!
 //! The resolvers are the caller's, and must be the functions the engine's own are
 //! (`Engine::set_dxcc_resolver` / `set_state_resolver`): the command layer hands both the same
-//! functions, which is what makes a filled row the row an insert would have written.
+//! functions, which is what makes a filled row the row an insert would have written. Whether a
+//! state can apply to a contact at all (a US state or a Canadian province: its call places the
+//! station there, or nowhere) is the caller's answer too, and it must be yes wherever the state
+//! resolver can answer. A contact it rules out is one that resolver never fills, so the job
+//! writes what it always wrote and counts only what could take a field. Counting every contact
+//! without a state had a log of DX contacts report 0 of thousands filled whenever the job ran.
 
 use std::ops::ControlFlow;
 use std::sync::Mutex;
@@ -58,14 +64,16 @@ const FILLS: Narrow = Narrow {
 pub struct FillOutcome {
     /// The store was already filled for this version: nothing read, nothing written.
     pub current: bool,
-    /// Contacts lacking a country or a state when the job read them.
+    /// Contacts lacking a country, or a state where one can apply, when the job read them: the
+    /// contacts that could take a field.
     pub lacking: usize,
     /// Contacts that gained a field.
     pub filled: usize,
 }
 
-/// Run the fill job once for resolver data `version` (see the module header). `Ok` with nothing
-/// done on the 1.13 path, which fills at the launch.
+/// Run the fill job once for resolver data `version` (see the module header), with `country` and
+/// `state` the engine's resolvers and `state_applies` whether a state can apply to a call at all.
+/// `Ok` with nothing done on the 1.13 path, which fills at the launch.
 ///
 /// ⚠️ It reads the store and takes the Engine lock twice, briefly: call it on a thread of its
 /// own, with no lock held — never from the radio loop.
@@ -74,6 +82,7 @@ pub fn fill_log_store(
     version: i64,
     country: &dyn Fn(&str) -> Option<String>,
     state: &dyn Fn(&str, Option<&str>) -> Option<String>,
+    state_applies: &dyn Fn(&str) -> bool,
 ) -> Result<FillOutcome, String> {
     let rows = {
         let eng = engine_lock(engine);
@@ -110,6 +119,15 @@ pub fn fill_log_store(
             ..FillOutcome::default()
         });
     }
+    // A missing country always counts; a missing state only where one can apply. The rest are
+    // never resolved: the state resolver answers nothing for them.
+    let lacking: Vec<_> = lacking
+        .into_iter()
+        .filter_map(|(id, call, grid, no_country, no_state)| {
+            let no_state = no_state && state_applies(&call);
+            (no_country || no_state).then_some((id, call, grid, no_country, no_state))
+        })
+        .collect();
     let found = lacking.len();
     let fills: Vec<LogFill> = lacking
         .into_iter()

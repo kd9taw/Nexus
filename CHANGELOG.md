@@ -391,6 +391,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holding it are an app-wide pattern it does not cover; and for the snapshot the radio takes
   after each contact it measures the logbook's side only, a median of 0.001 ms.
 
+- **Filling in the logbook's countries and states no longer reports a failure that did not
+  happen.** After an update Nexus saves the country and the US state or Canadian province of
+  contacts that lack one, and the diagnostic log said how many it saved. It counted every contact
+  outside the US and Canada as lacking a state, which none of them can have, so a log of mostly
+  DX contacts read "country and state saved into the logbook for 0 of the 4847 contacts that
+  lacked one". It now counts only the contacts that could take one, and says the logbook is up to
+  date when none lacks one. What it saves is unchanged.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the

@@ -2150,7 +2150,7 @@ pub(crate) mod tests {
 
     /// One run of the fill job, with the same resolvers.
     fn fill(e: &Mutex<Engine>, version: i64) -> crate::logfill::FillOutcome {
-        crate::logfill::fill_log_store(e, version, &test_country, &test_state)
+        crate::logfill::fill_log_store(e, version, &test_country, &test_state, &|_| true)
             .expect("the fill job runs")
     }
 
@@ -2254,6 +2254,128 @@ pub(crate) mod tests {
             std::fs::read(legacy.log()).unwrap(),
             before,
             "control: the 1.13 launch DOES rewrite log.adi when the backfill fills"
+        );
+    }
+
+    /// ★ THE FILL JOB COUNTS ONLY THE CONTACTS THAT COULD TAKE WHAT THEY LACK (1.15.0-test1:
+    /// "country and state saved into the logbook for 0 of the 4847 contacts that lacked one"). A
+    /// state or province applies where the call places the station in the US group or Canada, or
+    /// nowhere at all; a DX contact without one is not lacking it, and counting it made the job
+    /// report 0 of thousands whenever it ran. On a log shaped like the operator's — mostly DX
+    /// contacts without a state, a few US and Canadian ones without one, some without a country —
+    /// the job writes exactly what it always wrote, and counts only what could take a field.
+    #[test]
+    fn the_fill_job_counts_only_the_contacts_that_could_take_what_they_lack() {
+        // Resolvers shaped like the shell's: a `Q` call resolves nowhere, `VE` is Canada, `K` the
+        // United States and anything else an entity with no subdivision. A state for a US call,
+        // and off its grid for a call that resolves nowhere; a province for VE3 and none for VE0
+        // (a ship at sea). A subdivision applies to the US, Canada and a call that resolves
+        // nowhere.
+        fn country(call: &str) -> Option<String> {
+            if call.starts_with('Q') {
+                None
+            } else if call.starts_with('K') {
+                Some("United States".into())
+            } else if call.starts_with("VE") {
+                Some("Canada".into())
+            } else {
+                Some(format!("Entity of {}", &call[..2]))
+            }
+        }
+        fn state(call: &str, grid: Option<&str>) -> Option<String> {
+            if call.starts_with('K') || (call.starts_with('Q') && grid.is_some()) {
+                Some("WI".into())
+            } else if call.starts_with("VE3") {
+                Some("ON".into())
+            } else {
+                None
+            }
+        }
+        fn applies(call: &str) -> bool {
+            country(call).is_none_or(|c| c == "United States" || c == "Canada")
+        }
+        let field = |tag: &str, v: Option<&str>| {
+            v.map_or(String::new(), |v| format!("<{tag}:{}>{v}", v.len()))
+        };
+        let mut log = adif_header();
+        let mut add =
+            |call: &str, country: Option<&str>, state: Option<&str>, grid: Option<&str>| {
+                let i = log.matches("<EOR>").count();
+                log.push_str(&format!(
+                    "<CALL:{}>{call}<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260101\
+                 <TIME_ON:6>{:02}{:02}{:02}{}{}{}<EOR>\n",
+                    call.len(),
+                    i / 3600 % 24,
+                    i / 60 % 60,
+                    i % 60,
+                    field("COUNTRY", country),
+                    field("STATE", state),
+                    field("GRIDSQUARE", grid),
+                ));
+            };
+        // Mostly DX: a country, and no state, which it cannot take.
+        for prefix in ["DL", "EA", "JA", "VK", "PY", "SM"] {
+            for n in 0..5 {
+                let entity = format!("Entity of {prefix}");
+                add(&format!("{prefix}{n}DX"), Some(&entity), None, None);
+            }
+        }
+        // A few US and Canadian contacts with a country and no state.
+        for call in ["K1US", "K2US", "K3US", "K4US"] {
+            add(call, Some("United States"), None, None);
+        }
+        add("VE3CA", Some("Canada"), None, None);
+        add("VE0CA", Some("Canada"), None, None);
+        // Some with no country (and so no state): a DX call, a US call, and a call that resolves
+        // nowhere but has a grid.
+        add("DL9NC", None, None, None);
+        add("K9NC", None, None, None);
+        add("Q1NC", None, None, Some("EN52"));
+        // And one that lacks nothing.
+        add("K5OK", Some("United States"), Some("TX"), None);
+
+        let d = Dir::new("fill-count");
+        std::fs::write(d.log(), &log).unwrap();
+        flush(&engine_on_store(&d)); // converted by a launch with no resolvers
+        let before = stored(&d);
+        assert_eq!(before.len(), 40, "premise: the log");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(country);
+        e.set_state_resolver(state);
+        e.attach_log_store(open_fast(&d));
+        let e = Mutex::new(e);
+        let done = crate::logfill::fill_log_store(&e, 7, &country, &state, &applies)
+            .expect("the fill job runs");
+        flush(&e.lock().unwrap());
+
+        // What it writes: what the job always wrote — each field a contact lacked, as the
+        // resolvers place it — and nothing else.
+        let after = stored(&d);
+        assert_eq!(after.len(), before.len());
+        for (was, now) in before.iter().zip(&after) {
+            assert_eq!(now.call, was.call, "the same contacts, in the same order");
+            let written = (
+                was.country.clone().or_else(|| country(&was.call)),
+                was.state
+                    .clone()
+                    .or_else(|| state(&was.call, was.grid.as_deref())),
+            );
+            assert_eq!(
+                (now.country.clone(), now.state.clone()),
+                written,
+                "{}: what the job has always written",
+                was.call
+            );
+        }
+        assert_eq!(
+            done.filled, 8,
+            "the four US contacts, VE3CA, and the three with no country gained a field"
+        );
+        // What it counts: the contacts that could take what they lack — the three with no
+        // country, and the six US and Canadian ones with no state — never the thirty DX ones.
+        assert_eq!(
+            done.lacking, 9,
+            "only the contacts that could take a field count as lacking one"
         );
     }
 
