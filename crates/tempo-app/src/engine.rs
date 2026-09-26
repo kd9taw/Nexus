@@ -2560,6 +2560,11 @@ pub struct Engine {
     /// request simply replaces an unconsumed one — the newest ask wins, as everywhere else
     /// in the one-shot family.
     pending_voice_mem: Option<VoiceMemCmd>,
+    /// One-shot: a halt (Stop TX, a logger's HaltTx, the SWR cutoff; see [`Self::halt_tx`]) asks
+    /// the radio loop to also tell the rig in hand to stop a voice memory it may be playing, after
+    /// the unkey and the aborts. Nexus never keyed that transmission, so nothing else in the halt
+    /// reaches it. A context halt neither sets nor clears it ([`Self::halt_tx_for_context_change`]).
+    voice_mem_halt: bool,
     /// The TX frequency Nexus COMMANDED and the rig ACKNOWLEDGED — the ONLY transmit frequency
     /// the privilege gate is allowed to judge.
     ///
@@ -4782,6 +4787,7 @@ impl Engine {
             observed_split: None,
             split_dirty: false,
             pending_voice_mem: None,
+            voice_mem_halt: false,
             rit_hz: 0,
             xit_hz: 0,
             active_vfo_b: false,
@@ -5905,6 +5911,14 @@ impl Engine {
         // routing, satellite routing, the coverage fallback, the operator's own radio button —
         // arrives here, so this one line covers all of them.
         self.halt_tx_for_context_change("radio handoff");
+        // …and the two keying presses `halt_tx` leaves queued, both pressed for the radio being
+        // LEFT. The loop drains them later, against whichever radio it then holds: the ATU press
+        // at the incoming radio's first heavy poll (still inside `ATU_REQUEST_MAX_AGE_SECS`, and
+        // Phone is re-armed just above), the voice-memory command on the next tick. The latter
+        // goes whole, a STOP too, since the radio that may be playing is the one being left and
+        // the loop would send the STOP to the incoming one.
+        self.pending_atu_tune = None;
+        self.pending_voice_mem = None;
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -7679,6 +7693,12 @@ impl Engine {
     /// One-shot consume for the radio loop — `take_split_request`'s shape.
     pub fn take_voice_mem(&mut self) -> Option<VoiceMemCmd> {
         self.pending_voice_mem.take()
+    }
+
+    /// Did a halt ask for a voice-memory stop since the loop last looked? One-shot; see
+    /// [`Self::halt_tx`] and the `voice_mem_halt` field.
+    pub fn take_voice_mem_halt(&mut self) -> bool {
+        std::mem::take(&mut self.voice_mem_halt)
     }
 
     /// The rig REJECTED the split command at `tx_mhz` — drop the desired state
@@ -13303,6 +13323,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.sstv_abort = true;
         self.sstv_tx_mode = None;
         self.sstv_tx_progress = None;
+        // …and a voice memory the RIG may be playing on its own: Nexus never keyed it, so only
+        // a stop of its own reaches it. The loop sends that after the unkey and the aborts.
+        self.voice_mem_halt = true;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         // JS8: outbox, pending autoreply and HB schedule go too — halt is total (spec
@@ -13389,7 +13412,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     | OperatingMode::Rtty
                     | OperatingMode::Keyboard
             );
-        let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        // A context halt is not a Stop TX: it neither asks the loop for a voice-memory stop nor
+        // drops one the operator's own halt asked for a moment ago (see `voice_mem_halt`).
+        let (retune, watchdog_start, voice_mem_halt) = (
+            self.immediate_retune,
+            self.tx_watchdog_start,
+            self.voice_mem_halt,
+        );
         // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
         // before the `if restore` below, so a context change still printed TWO lines — the
         // collapsed one and then `transmit ARMED by …:8798` from the restore's own
@@ -13397,6 +13426,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // second time this same pair has been logged as its steps.
         self.quiet_tx_log = true;
         self.halt_tx();
+        self.voice_mem_halt = voice_mem_halt;
         tempo_core::applog::info(
             "tx",
             &match (was, restore) {
@@ -27433,6 +27463,90 @@ mod tests {
             e.pending_atu_tune.is_none(),
             "…and it is consumed, not left to key on the next poll"
         );
+    }
+
+    /// ★ A tune-up pressed for the radio being LEFT never fires on the one switched to. The press
+    /// waits for the loop's heavy poll, and the incoming radio's first poll comes a moment after
+    /// the switch, well inside `ATU_REQUEST_MAX_AGE_SECS`, with every gate passing again: Phone
+    /// is re-armed by the switch and the new radio reports a tuner of its own.
+    #[test]
+    fn a_switch_drops_a_tune_up_pressed_for_the_radio_being_left() {
+        let mut e = phone_armed_engine();
+        let other = e.add_radio(); // add_radio makes the new rig active…
+        e.set_active_radio(0); // …so start on radio 0
+        e.set_frequency(14.290, "20m", "USB");
+        e.observe_rig_tuner(Some(true), true);
+        e.atu_tune()
+            .expect("scene guard: radio 0 may run its tuner");
+        e.set_active_radio(other);
+        assert!(
+            e.pending_atu_tune.is_none(),
+            "radio 0's press goes with the switch"
+        );
+        // The incoming radio, on a phone dial, reports a tuner: nothing but the drop stands
+        // between radio 0's press and a tune-up here.
+        e.set_frequency(14.290, "20m", "USB");
+        e.observe_rig_tuner(Some(true), true);
+        assert!(
+            e.atu_tune_gate().is_ok(),
+            "scene guard: the new radio could run a tune-up"
+        );
+        assert!(!e.take_atu_tune(), "radio 0's press never tunes radio 1");
+        // A press made after the switch is the new radio's own, and fires.
+        e.atu_tune().unwrap();
+        assert!(
+            e.take_atu_tune(),
+            "a press after the switch belongs to the new radio"
+        );
+    }
+
+    /// ★ A halt asks the loop for a voice-memory stop, once. A context halt neither asks for one
+    /// nor drops the one the operator's own Stop TX asked for a moment before it.
+    #[test]
+    fn a_halt_asks_for_a_voice_memory_stop_and_a_context_halt_does_not() {
+        let mut e = phone_armed_engine();
+        e.halt_tx();
+        assert!(
+            e.take_voice_mem_halt(),
+            "Stop TX asks the loop for the voice-memory stop"
+        );
+        assert!(!e.take_voice_mem_halt(), "…once");
+        e.halt_tx_for_context_change("band change");
+        assert!(!e.take_voice_mem_halt(), "a context halt does not ask");
+        e.halt_tx();
+        e.halt_tx_for_context_change("radio handoff");
+        assert!(
+            e.take_voice_mem_halt(),
+            "…nor does it drop the one Stop TX asked for"
+        );
+    }
+
+    /// ★ …and a voice-memory command pending at a switch goes with it, PLAY or STOP. The loop
+    /// would send either to the radio switched TO: the PLAY was meant for the radio being left,
+    /// and the STOP is not for the radio that may be playing, which is the one being left.
+    #[test]
+    fn a_switch_drops_a_pending_voice_memory_command() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let other = e.add_radio();
+        e.set_active_radio(0);
+        let play: fn(&mut Engine) = |e| e.request_voice_mem(1);
+        let stop: fn(&mut Engine) = Engine::request_voice_mem_stop;
+        for (queue, cmd) in [(play, VoiceMemCmd::Play(1)), (stop, VoiceMemCmd::Stop)] {
+            let from = e.settings().active_radio;
+            queue(&mut e);
+            // Choosing the radio already active is no switch, and drops nothing.
+            e.set_active_radio(from);
+            assert_eq!(e.pending_voice_mem, Some(cmd), "no switch, nothing dropped");
+            e.set_active_radio(if from == 0 { other } else { 0 });
+            assert_eq!(
+                e.take_voice_mem(),
+                None,
+                "{cmd:?}, pending at the switch, goes with it"
+            );
+        }
+        // A PLAY asked for after the switch is the new radio's, and stays.
+        e.request_voice_mem(2);
+        assert_eq!(e.take_voice_mem(), Some(VoiceMemCmd::Play(2)));
     }
 
     #[test]

@@ -2413,6 +2413,11 @@ fn handoff_if_switched(
         );
         let _ = rig.ptt(false);
         let _ = rig.stop_morse();
+        // …and a voice memory the rig may be playing on its own (a logger's PLAY through the
+        // broker, or the front panel). After the switch every stop Nexus has reaches the NEW
+        // radio, so this is the only one the radio being left gets. It comes after the unkey
+        // and the CW stop, which it never delays; a rig without the verb just refuses it.
+        let _ = rig.stop_voice_mem();
         state.tx_until_ms = None;
         state.tuning_keyed = false;
         state.manual_ptt_applied = false;
@@ -10981,6 +10986,18 @@ impl RadioLoop {
         }
         drop(eng); // release before the PSK flush re-locks the engine
 
+        // ⚠️ A HALT ALSO STOPS A VOICE MEMORY the rig may be playing on its own: a logger's PLAY
+        // through the broker, or the front panel. Nexus never keyed that transmission, so no
+        // unkey above reaches it, and a PTT-off may not end one anyway (the IC-7300's manual
+        // lists no PTT among the ways to cancel a Voice TX). Last in the tick, so after every
+        // unkey and abort above (a logger's HaltTx included), and outside the engine lock; best
+        // effort, since a rig without the verb refuses it. Only `halt_tx` asks for this, never a
+        // context halt; a switch stops the radio being left in the handoff instead.
+        let stop_voice_mem = engine_lock(engine).take_voice_mem_halt();
+        if stop_voice_mem {
+            let _ = rig.stop_voice_mem();
+        }
+
         // PSK Reporter: flush accumulated spots periodically (outside the lock).
         if let Some(reporter) = sinks.psk {
             if !station.psk_spots.is_empty()
@@ -19014,6 +19031,317 @@ mod tests {
             engine.lock().unwrap().take_scope_span_request(),
             Some(25_000),
             "…and the request waits for the radio the handoff installs"
+        );
+    }
+
+    /// Where `cmd` first appears in `sent`.
+    fn sent_at(sent: &[String], cmd: &str) -> Option<usize> {
+        sent.iter().position(|l| l == cmd)
+    }
+
+    /// ★ A switch stops a voice memory the radio being left may be playing. After the switch
+    /// every stop Nexus has reaches the new radio, so the handoff's outgoing unkey sends
+    /// `\stop_voice_mem` itself, right after `T 0` and `\stop_morse`, which it never delays.
+    #[test]
+    fn a_switch_stops_the_outgoing_radios_voice_memory_after_its_unkey() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let before = yaesu_log.lock().unwrap().len();
+        engine.lock().unwrap().set_active_radio(icom);
+        let mut last_active = 0u32;
+        let mut backend = MockBackend::new();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            40.0,
+        );
+        assert_eq!(last_active, icom, "premise: the handoff adopted the Icom");
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        let (unkey, morse) = (sent_at(&sent, "T 0"), sent_at(&sent, "\\stop_morse"));
+        assert!(
+            unkey.is_some() && morse.is_some(),
+            "premise: the unkey and the CW stop: {sent:?}"
+        );
+        let voice = sent_at(&sent, "\\stop_voice_mem");
+        assert!(
+            voice.is_some(),
+            "the radio being left is told to stop its voice memory: {sent:?}"
+        );
+        assert!(
+            unkey < voice && morse < voice,
+            "…after its unkey and its CW stop: {sent:?}"
+        );
+    }
+
+    /// ★ …and on a switch the handoff has not seen (W0) the stop comes with the handoff a tick
+    /// later: the W0 tick unkeys at once and writes nothing else, and the handoff's outgoing
+    /// unkey then sends `T 0`, `\stop_morse` and `\stop_voice_mem` to the same radio, in order.
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_stops_the_voice_memory_at_the_handoff() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        let before = yaesu_log.lock().unwrap().len();
+        w0_tick_with(&engine, &mut rig, &mut state, icom, |_| {});
+        let w0 = yaesu_log.lock().unwrap().len();
+        assert!(
+            sent_at(&yaesu_log.lock().unwrap()[before..w0], "T 0").is_some(),
+            "premise: the W0 tick unkeys at once"
+        );
+        let mut backend = MockBackend::new();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            2000.0,
+        );
+        assert_eq!(last_active, icom, "premise: the handoff adopted the Icom");
+        let sent = yaesu_log.lock().unwrap()[w0..].to_vec();
+        let voice = sent_at(&sent, "\\stop_voice_mem");
+        assert!(
+            voice.is_some(),
+            "the handoff stops the voice memory of the radio being left: {sent:?}"
+        );
+        let (unkey, morse) = (sent_at(&sent, "T 0"), sent_at(&sent, "\\stop_morse"));
+        assert!(
+            unkey.is_some() && morse.is_some() && unkey < voice && morse < voice,
+            "…after its unkey and its CW stop: {sent:?}"
+        );
+    }
+
+    /// ★ …and on a native CI-V Icom that stop is `28 00 00` on the wire, after the unkey
+    /// (`1C 00 00`) and the CW stop (`17 FF`). The radio's connection goes back to the pool still
+    /// up: the first read on it answers.
+    #[test]
+    fn a_switch_stops_a_native_icoms_voice_memory_with_28_00_00_after_its_unkey() {
+        let (daemon, _, regs) = civ_daemon_rig(false);
+        let yaesu_port = daemon.local_addr().port();
+        let yaesu_addr = format!("127.0.0.1:{yaesu_port}");
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        state.rigctld_proc = Some(CatDaemon::Native(daemon));
+        let before = regs.lock().unwrap().log.len();
+        engine.lock().unwrap().set_active_radio(icom);
+        let mut last_active = 0u32;
+        let mut backend = MockBackend::new();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            40.0,
+        );
+        assert_eq!(last_active, icom, "premise: the handoff adopted the Icom");
+        let frames = regs.lock().unwrap().log[before..].to_vec();
+        let at = |cmd: u8, data: &[u8]| frames.iter().position(|(c, d)| *c == cmd && d == data);
+        let (unkey, morse) = (at(0x1C, &[0x00, 0x00]), at(0x17, &[0xFF]));
+        assert!(
+            unkey.is_some() && morse.is_some(),
+            "premise: the unkey and the CW stop on the wire: {frames:02x?}"
+        );
+        let voice = at(0x28, &[0x00, 0x00]);
+        assert!(
+            voice.is_some(),
+            "the voice memory stop on the wire: {frames:02x?}"
+        );
+        assert!(unkey < voice && morse < voice, "…after both: {frames:02x?}");
+        let mut monitors = pool.lock().unwrap();
+        let native = monitors
+            .iter_mut()
+            .find(|c| c.id == 0)
+            .expect("the radio being left is monitored");
+        assert!(
+            native.rig.read_freq().is_ok(),
+            "its connection is still up: the first read answers"
+        );
+    }
+
+    /// ★ STOP TX ALSO STOPS A VOICE MEMORY, after everything it already sends. Here the operator
+    /// is on the air on the mic (manual PTT) when they hit Stop TX: the unkey (`T 0`) and the CW
+    /// abort (`\stop_morse`) go out as before, and `\stop_voice_mem` follows them.
+    #[test]
+    fn stop_tx_stops_a_voice_memory_after_its_unkey_and_aborts() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, _icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), true);
+        let before = yaesu_log.lock().unwrap().len();
+        engine.lock().unwrap().halt_tx(); // the operator hits Stop TX
+        let (mut last_active, mut backend) = (0u32, MockBackend::new());
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            40.0,
+        );
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        let (unkey, morse) = (sent_at(&sent, "T 0"), sent_at(&sent, "\\stop_morse"));
+        assert!(
+            unkey.is_some() && morse.is_some(),
+            "premise: the unkey and the CW abort: {sent:?}"
+        );
+        let voice = sent_at(&sent, "\\stop_voice_mem");
+        assert!(
+            voice.is_some(),
+            "Stop TX tells the rig to stop its voice memory: {sent:?}"
+        );
+        assert!(
+            unkey < voice && morse < voice,
+            "…after the unkey and the aborts, never ahead of them: {sent:?}"
+        );
+    }
+
+    /// ★ …and it is the stop a voice memory a LOGGER started needs. Nexus relayed the PLAY but
+    /// never keyed that transmission, so nothing else in Stop TX reaches it: no unkey goes out
+    /// for it, and a PTT-off may not end one anyway.
+    #[test]
+    fn stop_tx_stops_a_voice_memory_a_logger_started() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, _icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let (mut last_active, mut backend) = (0u32, MockBackend::new());
+        engine.lock().unwrap().request_voice_mem(1); // the logger's PLAY, through the broker
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            40.0,
+        );
+        assert!(
+            sent_at(&yaesu_log.lock().unwrap(), "\\send_voice_mem 1").is_some(),
+            "premise: the rig is playing memory 1"
+        );
+        let before = yaesu_log.lock().unwrap().len();
+        engine.lock().unwrap().halt_tx();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            60.0,
+        );
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        let (morse, voice) = (
+            sent_at(&sent, "\\stop_morse"),
+            sent_at(&sent, "\\stop_voice_mem"),
+        );
+        assert!(
+            voice.is_some(),
+            "Stop TX reaches the logger's playback: {sent:?}"
+        );
+        assert!(
+            morse.is_some() && morse < voice,
+            "…after the aborts: {sent:?}"
+        );
+    }
+
+    /// ★ An idle Stop TX sends it too, and harmlessly: once, to a rig that refuses the verb, with
+    /// nothing keyed and the loop carrying on.
+    #[test]
+    fn an_idle_stop_tx_sends_the_voice_memory_stop_once_and_harmlessly() {
+        let refusing = crate::rig::remote_tests::retuning_peer(14_250_000, "USB", |_, _| None);
+        let port: u16 = refusing
+            .address
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, _icom) =
+            w0_scene((&refusing.address, port), (&icom_addr, icom_port), false);
+        let before = refusing.lines.lock().unwrap().len();
+        engine.lock().unwrap().halt_tx();
+        let (mut last_active, mut backend) = (0u32, MockBackend::new());
+        for now in [40.0, 60.0, 80.0] {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                now,
+            );
+        }
+        let sent = refusing.lines.lock().unwrap()[before..].to_vec();
+        assert_eq!(
+            sent.iter().filter(|l| *l == "\\stop_voice_mem").count(),
+            1,
+            "one Stop TX, one voice-memory stop (this rig answers RPRT -1): {sent:?}"
+        );
+        assert!(
+            !rig.keyed && !sent.iter().any(|l| l == "T 1"),
+            "nothing keyed: {sent:?}"
+        );
+    }
+
+    /// …but a CONTEXT halt (a QSY, a switch, a CAT rebuild) does not send it. It stops Nexus's
+    /// own transmission for the new context and leaves the operator's intent armed; a switch
+    /// stops the radio being left in the handoff instead.
+    #[test]
+    fn a_context_halt_sends_no_voice_memory_stop() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, _icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let before = yaesu_log.lock().unwrap().len();
+        engine
+            .lock()
+            .unwrap()
+            .halt_tx_for_context_change("band change");
+        let (mut last_active, mut backend) = (0u32, MockBackend::new());
+        for now in [40.0, 60.0] {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                now,
+            );
+        }
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            sent_at(&sent, "\\stop_morse").is_some(),
+            "premise: the context halt's CW abort went out: {sent:?}"
+        );
+        assert!(
+            sent_at(&sent, "\\stop_voice_mem").is_none(),
+            "a context halt sends no voice-memory stop: {sent:?}"
         );
     }
 

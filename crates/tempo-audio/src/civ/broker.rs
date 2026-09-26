@@ -768,6 +768,17 @@ impl RigBackend for CivBackend {
         Some(self.ack(commands::stop_morse(self.addr)))
     }
 
+    // `28 00 00`, the Voice TX memory STOP of each model's own reference (see
+    // `commands::voice_tx_stop_defined`). A radio switch sends `\stop_voice_mem` to the radio it
+    // leaves, and a logger can send it through the broker; on a model with no such stop this
+    // stays not-implemented (`RPRT -11`), as it was for every model before.
+    fn stop_voice_mem(&self) -> Option<bool> {
+        if !self.model.is_some_and(commands::voice_tx_stop_defined) {
+            return None;
+        }
+        Some(self.ack(commands::stop_voice_tx(self.addr)))
+    }
+
     fn set_split(&self, on: bool, tx_vfo: &str) -> Option<bool> {
         let mut g = self.band();
         // TX on the SUB BAND = the rig's satellite mode, not `0F` (same-band
@@ -2137,5 +2148,86 @@ mod tests {
         for (line, reply) in XIT_LINES.iter().zip(&replies) {
             assert_ne!(reply, "RPRT -11\n", "{line:?} must stay implemented");
         }
+    }
+
+    /// Every model the native daemon runs for: `rigmodels::icom_scope_model` maps Hamlib's
+    /// 3073/3078/3081/3085/3090 onto exactly these.
+    const NATIVE_MODELS: [IcomModel; 5] = [
+        IcomModel::Ic7300,
+        IcomModel::Ic7610,
+        IcomModel::Ic9700,
+        IcomModel::Ic705,
+        IcomModel::Ic905,
+    ];
+
+    /// ★ A VOICE-MEMORY STOP REACHES THE RADIO AS `28 00 00`, on every model the daemon runs.
+    /// Each model's Icom reference defines `28 00` as the Voice TX memory with `00` = Stop. The
+    /// daemon used to answer `RPRT -11`, so a radio switch's stop, and a logger's through the
+    /// broker, never reached a native Icom.
+    #[test]
+    fn a_voice_memory_stop_reaches_every_native_model_as_28_00_00() {
+        for model in NATIVE_MODELS {
+            let addr = model.default_civ_addr();
+            let (radio, _push) = FakeRadio::new(addr);
+            let regs = radio.regs();
+            let daemon =
+                CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+            let (mut c, mut rd) = client(daemon.local_addr().port());
+            assert_eq!(
+                roundtrip(&mut c, &mut rd, "\\stop_voice_mem\n"),
+                "RPRT 0\n",
+                "{model:?}"
+            );
+            let on_28: Vec<Vec<u8>> = regs
+                .lock()
+                .unwrap()
+                .log
+                .iter()
+                .filter(|(cmd, _)| *cmd == 0x28)
+                .map(|(_, d)| d.clone())
+                .collect();
+            assert_eq!(
+                on_28,
+                vec![vec![0x00, 0x00]],
+                "{model:?}: exactly `28 00 00` on the wire"
+            );
+        }
+    }
+
+    /// ★ A RADIO SWITCH NEVER PUSHES A NATIVE CONNECTION TOWARD HANG-UP. The server drops a peer
+    /// after `MAX_CONSECUTIVE_UNKNOWN` (3) not-implemented replies in a row. A switch sends the
+    /// radio being left `T 0`, `\stop_morse` and `\stop_voice_mem`, and none of them may answer
+    /// `RPRT -11`, so switches back to back leave the loop's connection up.
+    #[test]
+    fn back_to_back_switches_leave_the_native_connection_up() {
+        let (_d, port, _regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        for _ in 0..3 {
+            for line in ["T 0\n", "\\stop_morse\n", "\\stop_voice_mem\n"] {
+                let reply = roundtrip(&mut c, &mut rd, line);
+                assert_ne!(reply, "RPRT -11\n", "{line:?} fed the hang-up counter");
+            }
+        }
+        assert!(
+            roundtrip(&mut c, &mut rd, "f\n")
+                .trim()
+                .parse::<u64>()
+                .is_ok(),
+            "the connection is still up and answering"
+        );
+        // The control, on a fresh connection: three not-implemented verbs in a row DO hang up,
+        // so the check above would see one. (No reply to the third; the server closes first.)
+        let (mut c, mut rd) = client(port);
+        for _ in 0..2 {
+            assert_eq!(
+                roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
+                "RPRT -11\n"
+            );
+        }
+        assert_eq!(
+            roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
+            "",
+            "the third not-implemented reply in a row hangs up"
+        );
     }
 }

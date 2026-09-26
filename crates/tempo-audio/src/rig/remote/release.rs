@@ -17,6 +17,17 @@ impl Rig {
             .map(|_| ())
     }
 
+    /// The same best-effort stop for a voice memory the rig may be playing on its own, with the
+    /// same original permit. A rig without the verb refuses it, and that is not an error here.
+    #[cfg(feature = "device")]
+    pub(crate) fn remote_stop_voice_mem(
+        &mut self,
+        permission: &WritePermission,
+    ) -> std::io::Result<()> {
+        self.command_permitted("\\stop_voice_mem\n", None, Some(permission))
+            .map(|_| ())
+    }
+
     /// Preserve unkey-on-adopt through the profile's real PTT method. The caller
     /// must set that method before calling; a monitor normally carries Vox.
     /// Separate keyer queues still require their existing native abort paths.

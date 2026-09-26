@@ -160,6 +160,10 @@ impl RadioLoop {
             backend.flush_output();
             rig.remote_unkey_idle(outgoing.clone(), request.permission())?;
             self.selection_clear_keyers(rig, request.permission())?;
+            // A selection is a switch: after it every stop Nexus has reaches the incoming radio,
+            // so the radio being left is told to stop a voice memory it may be playing. After
+            // its unkey and its CW flush, best-effort, like that flush.
+            let _ = rig.remote_stop_voice_mem(request.permission());
             // Unkeyed, and it keys nothing more here: the outgoing radio lets go of its keying
             // port BEFORE the incoming radio's unkey opens one. They can be the same port (SO2R:
             // RTS for one radio, DTR for the other), and a port opens exclusively. If this
