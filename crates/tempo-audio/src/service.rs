@@ -17535,19 +17535,17 @@ mod tests {
         use crate::civ::engine::tests_support::FakeRadio;
         let (engine, pool, mut state, r1, _r1_port) = switch_scene();
         // A real native daemon over an in-memory radio whose I/O fails hard → engine exits.
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.dead = true;
         let daemon = crate::civ::broker::CivDaemon::start_with_io(
             Box::new(radio),
             0xA2,
-            port,
+            0,
             1,
             Some(crate::civ::commands::IcomModel::Ic9700),
         )
         .expect("daemon starts (TCP binds) even though the radio I/O is dead");
+        let port = daemon.local_addr().port();
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let mut cat = CatDaemon::Native(daemon);
         while cat.is_alive() {
@@ -25521,21 +25519,19 @@ mod tests {
     /// fails `has_control()`, which skips the `rig_split_applied` re-lock —
     /// exactly the shape that let the deadlock ship untested.
     fn civ_daemon_rig(mute: bool) -> (CivDaemon, Rig, Arc<Mutex<Regs>>) {
-        // Race-free enough for tests: bind :0 to learn a free port, drop, rebind.
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
+        // Port 0, read back from the daemon: never probe `:0` and let go (see `local_addr`).
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.mute = mute;
         let regs = radio.regs();
         let d = CivDaemon::start_with_io(
             Box::new(radio),
             0xA2,
-            port,
+            0,
             1,
             Some(crate::civ::commands::IcomModel::Ic9700),
         )
         .unwrap();
+        let port = d.local_addr().port();
         (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
     }
 
