@@ -2360,6 +2360,7 @@ fn handoff_if_switched(
         pending.store(false, Ordering::Relaxed);
         // …and so does any port claim a switch left behind.
         state.settle_port_claims(&pool.claims);
+        state.handed_over = Some(active);
         return;
     }
     // Switch in flight: pause the monitor thread's pool work so this handoff isn't
@@ -2461,6 +2462,10 @@ fn handoff_if_switched(
     // ONLY a conn whose CAT config matches what we now want — a stale conn is dropped + reopened).
     let mut want_cat = want_active.clone();
     want_cat.broker_self_port = None;
+    // …and the keying port: a monitor's transport never carries one (`Transport::from_profile`)
+    // and its rig never opens one. The adopted rig keys from `want_active` (`ptt_mode_for`), and
+    // `install_handoff_connection` carries the port into `applied`.
+    want_cat.ptt_serial_port = String::new();
     // Adopt ONLY a LIVE conn: a monitor whose rigctld failed to bind / whose CAT probe never connected
     // is parked in the pool as a `Rig::vox()` (no control channel — see `open_monitor`). Adopting that
     // dead conn would install a control-less rig as the active radio, and because `state.applied` is
@@ -2470,6 +2475,11 @@ fn handoff_if_switched(
     // `open_cat` (no is_alive gate, self-healing) — exactly how the startup radio stays healthy.
     if let Some(idx) = p.iter_mut().position(|c| {
         c.id == active
+            // A radio that keys on its CAT port (RTS/DTR on the port its daemon holds) keys
+            // through a daemon TOLD to (`-P`, `open_serial_ptt`). The monitor's daemon was not:
+            // it would key by the model's default PTT type instead of the configured line. So
+            // such a radio is never adopted; the fallback opens it fresh, keying line and all.
+            && !keys_on_the_cat_port(&want_active)
             && c.rig.has_control()
             // Mirror reconcile's keep-gate: a live TCP cache over a DEAD daemon is a zombie —
             // adopting it installs dead CAT as the active radio with `applied` matching, so
@@ -2520,6 +2530,7 @@ fn handoff_if_switched(
         state.force_audio_rebuild = true;
         *last_active = active;
     }
+    state.handed_over = Some(*last_active);
     pending.store(false, Ordering::Relaxed);
 }
 
@@ -2931,6 +2942,18 @@ struct RadioLoop {
     /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
     handoff_deferred: bool,
+    /// The radio the last hand-over resolved: `handoff_if_switched` (the active radio it found
+    /// no switch to, or the one it switched to) or a Remote selection's commit. `step()` reads
+    /// the settings again after them, and a radio different from this one there is a switch no
+    /// hand-over has seen yet (see [`Self::switch_unhanded`]).
+    handed_over: Option<u32>,
+    /// This tick's `step()` found the settings on a radio the handoff has not handed over: the
+    /// engine flipped `active_radio` between the two reads (W0). `rig` is still the OUTGOING
+    /// radio while the engine's dial, mode and TX intent are the incoming one's — a deferred
+    /// handoff's window, reached without the handoff. So the tick unkeys at once, exactly as a
+    /// rebuild would, and then touches nothing else: no teardown, no reopen, no retune, no key,
+    /// no `applied` stamp. The next tick's handoff takes the switch, keyed hold and all.
+    switch_unhanded: bool,
     rigctld_proc: Option<CatDaemon>,
     /// Test CAT's baud-ladder probe is holding the CAT serial port (`Engine::cat_port_hold`):
     /// our daemon + control channel are dropped for the duration; the falling edge forces a
@@ -3731,6 +3754,8 @@ impl RadioLoop {
             rx_ranges: None,
             rx_ranges_probed: false,
             handoff_deferred: false,
+            handed_over: None,
+            switch_unhanded: false,
             smeter_supported: None,
             smeter_misses: 0,
             smeter_retry_at: 0,
@@ -4865,7 +4890,36 @@ impl RadioLoop {
     }
 
     fn may_key(&self) -> bool {
-        !self.handoff_deferred && !self.cat_hold_active
+        !self.handoff_deferred && !self.cat_hold_active && !self.switch_unhanded
+    }
+
+    /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the
+    /// STILL-ALIVE old rig and daemon, clear this loop's TX state, then halt TX for a CONTEXT
+    /// change. Order matters: dropping the daemon or swapping the rig first would send the
+    /// key-up to a dead channel and strand a keyed transmitter (or a tune carrier).
+    /// UNCONDITIONAL: the flags can desync from a keyed radio (a failed unkey), and this is the
+    /// last chance to key up through a live channel. Idempotent when idle. `note` goes to the
+    /// CI-V diagnostic log and `why` to the TX line of the application log.
+    fn unkey_before_letting_go<B: AudioBackend>(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut B,
+        rig: &mut Rig,
+        note: &str,
+        why: &str,
+    ) {
+        crate::civ::diag::note(note);
+        backend.flush_output();
+        let _ = rig.ptt(false);
+        self.tx_until_ms = None;
+        self.tuning_keyed = false;
+        self.manual_ptt_applied = false;
+        self.tune_started_ms = None;
+        let mut eng = engine_lock(engine);
+        // CONTEXT halt — the loop reacting to a radio switch or a CAT-config save, never an
+        // operator Stop TX. A plain `halt_tx` here silently undid the engine-side re-arm a
+        // switch had just made, and the operator's next PTT press went nowhere.
+        eng.halt_tx_for_context_change(why);
     }
 
     /// After a dial push that CROSSED a band boundary, make the app the last word on the
@@ -5118,6 +5172,10 @@ impl RadioLoop {
         // method without reopening either connection.
         rig.set_ptt_mode(ptt_mode_for(want_active));
         old_rig.set_ptt_mode(PttMode::Vox);
+        // The outgoing rig was unkeyed before this (the handoff holds a still-keyed rig back;
+        // a Remote selection confirms it idle), and a monitor never keys: its keying port goes
+        // now, so the pool never holds one — another radio may key on that same port.
+        old_rig.release_ptt_port();
         let old_proc = self.rigctld_proc.take();
         // The background radio must stop its scope stream so it does not crowd
         // out the slow monitor reads. This updates the native daemon's demand.
@@ -5127,9 +5185,13 @@ impl RadioLoop {
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // Monitor comparison strips the broker port. The active side retains
         // it so ordinary reconciliation does not tear down either connection.
+        // The keying port likewise: a monitor never carries one, and the active
+        // side keys with the one the operator configured.
         old_transport.broker_self_port = None;
+        old_transport.ptt_serial_port = String::new();
         self.rigctld_proc = conn.rigctld_proc;
         self.applied.broker_self_port = want_active.broker_self_port;
+        self.applied.ptt_serial_port = want_active.ptt_serial_port.clone();
         self.reset_for_handoff();
         self.remote_radio_id = Some(conn.id);
         MonitorConn {
@@ -5465,6 +5527,13 @@ impl RadioLoop {
             let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
                 let mut eng = engine_lock(engine);
                 remote_want_radio = eng.settings().active_radio;
+                // ⚠️ W0: the engine flipped `active_radio` after this tick's handoff read it, so
+                // this read belongs to a radio the handoff has not handed over (see
+                // `switch_unhanded`). Decided from THIS read, the one `want` comes from. A
+                // deferred handoff is its own case: the handoff has already unkeyed for it.
+                self.switch_unhanded = !self.handoff_deferred
+                    && self.handed_over.is_some_and(|h| h != remote_want_radio);
+                let can_retune = can_retune && !self.switch_unhanded;
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
@@ -5520,6 +5589,8 @@ impl RadioLoop {
                     eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
+            // No retune toward a radio the handoff has not handed over — `rig` is the old one.
+            let can_retune = can_retune && !self.switch_unhanded;
             // …and not while the CAT link is DOWN: pushing a dial at a dead link is the retry
             // storm the give-ups were invented to stop, and it fed a give-up that outlived the
             // outage. The breaker owns recovery — its re-probe reads the rig, and the loop then
@@ -5583,6 +5654,20 @@ impl RadioLoop {
                 // lock this tick — do NOT rebuild toward the new transport here, or we
                 // spawn a fresh daemon racing the monitor conn that still owns the port.
                 // The handoff retries next tick and clears this flag.
+            } else if self.switch_unhanded {
+                // W0: a switch the handoff has not seen yet. The unkey cannot wait for it — the
+                // same statements a rebuild runs, now, through the outgoing radio's live
+                // channel. Nothing is torn down or opened: the next tick's handoff takes the
+                // switch, and it holds a radio that is still keyed rather than demote it. A
+                // rebuild here tore the outgoing daemon down even when this unkey had failed,
+                // and carried `keyed` onto the INCOMING rig: a Hamlib radio left transmitting.
+                self.unkey_before_letting_go(
+                    engine,
+                    backend,
+                    rig,
+                    "radio switch ahead of its handoff → unkey now; the handoff tears down",
+                    "radio switch",
+                );
             } else if cat_hold {
                 // Test CAT's baud-ladder probe needs to open the CAT serial port ITSELF
                 // (serial ports are exclusive-open, and our daemon holds the port even when
@@ -5633,32 +5718,14 @@ impl RadioLoop {
                 // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX.
                 let was_keyed = rig.keyed;
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
-                // down. Dropping rigctld_proc and swapping *rig first would strand
-                // a keyed transmitter (or a tune carrier): the un-key command
-                // would go to a dead daemon. Order matters — flush, unkey, clear
-                // TX state, THEN drop the daemon.
-                {
-                    // UNCONDITIONAL: the flags can desync from a keyed radio (failed
-                    // unkey); this teardown is the last chance to key-up through a
-                    // LIVE channel before the daemon dies. Idempotent when idle.
-                    crate::civ::diag::note(
-                        "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
-                    );
-                    backend.flush_output();
-                    let _ = rig.ptt(false);
-                    self.tx_until_ms = None;
-                    self.tuning_keyed = false;
-                    self.manual_ptt_applied = false;
-                    self.tune_started_ms = None;
-                    {
-                        let mut eng = engine_lock(engine);
-                        // CONTEXT halt — this teardown is the loop reacting to a radio switch
-                        // or a CAT-config save, never an operator Stop TX. A plain `halt_tx`
-                        // here silently undid the engine-side re-arm a switch had just made,
-                        // and the operator's next PTT press went nowhere.
-                        eng.halt_tx_for_context_change("CAT daemon rebuild");
-                    }
-                }
+                // down — flush, unkey, clear TX state, THEN drop the daemon.
+                self.unkey_before_letting_go(
+                    engine,
+                    backend,
+                    rig,
+                    "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
+                    "CAT daemon rebuild",
+                );
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
                 // port (see `allow_coexist_on_swap`). We must NOT coexist onto our OWN daemon that
                 // we're about to kill — its corpse would keep commanding the OLD radio (the dual-radio
@@ -5884,6 +5951,7 @@ impl RadioLoop {
                 self.force_audio_rebuild = true;
             }
             if !self.handoff_deferred
+                && !self.switch_unhanded
                 && (std::mem::take(&mut self.force_audio_rebuild)
                     || want.audio_differs(&self.applied))
             {
@@ -6130,10 +6198,11 @@ impl RadioLoop {
                     }
                 }
             }
-            if !self.handoff_deferred && want != self.applied {
-                // NEVER on a deferred tick: `rig` is still the OLD radio's connection, and
-                // claiming the NEW transport here poisons `rig_differs` — the handoff's
-                // fallback branch relies on it to open the new radio fresh.
+            if !self.handoff_deferred && !self.switch_unhanded && want != self.applied {
+                // NEVER on a deferred tick, nor on a switch the handoff has not seen: `rig` is
+                // still the OLD radio's connection, and claiming the NEW transport here poisons
+                // `rig_differs` — the handoff's fallback branch relies on it to open the new
+                // radio fresh.
                 // Record the transport as it is ACTUALLY open — with any port alias applied —
                 // so the next tick's aliased `want` compares equal and does not rebuild again.
                 self.applied = {
@@ -18149,6 +18218,772 @@ mod tests {
             *opened.borrow(),
             vec![radio0.rigctld_port],
             "radio 0 came back to the monitor once its daemon was dropped"
+        );
+    }
+
+    /// [`mock_logging_rigctld`], answering `T 0` with `RPRT -1` while `refuse` is set: a keyed
+    /// rig whose unkey fails (a wedged link), until the test lets it land.
+    fn mock_logging_rigctld_refusing_unkey(
+        refuse: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (String, u16, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("127.0.0.1:{port}");
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = if l == "f" {
+                        "14250000\n"
+                    } else if l == "T 0" && refuse.load(std::sync::atomic::Ordering::SeqCst) {
+                        "RPRT -1\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, port, log)
+    }
+
+    /// The W0 scene: the Yaesu (radio 0) active in Phone on the rigctld at `yaesu` — KEYED by
+    /// the operator's PTT when `keyed` — and the Icom (radio 1, the rigctld at `icom`) live in
+    /// the monitor pool. Returns the engine, the pool, the loop's rig and state, and the Icom's
+    /// id.
+    fn w0_scene(
+        yaesu: (&str, u16),
+        icom: (&str, u16),
+        keyed: bool,
+    ) -> (Arc<Mutex<Engine>>, MonitorPool, Rig, RadioLoop, u32) {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (icom_id, icom_profile, yaesu_transport) = {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 1042; // FTDX10
+            s.serial_port = "/dev/tempo-test-cat-a".to_string();
+            s.rigctld_port = yaesu.1;
+            s.audio_in = "FTDX10 codec".to_string();
+            s.audio_out = "FTDX10 codec".to_string();
+            e.apply_settings(s);
+            let icom_id = e.add_radio();
+            e.set_active_radio(icom_id);
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 3081; // IC-9700
+            s.serial_port = "/dev/tempo-test-cat-b".to_string();
+            s.rigctld_port = icom.1;
+            s.audio_in = "IC-9700 codec".to_string();
+            s.audio_out = "IC-9700 codec".to_string();
+            e.apply_settings(s);
+            let icom_profile = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == icom_id)
+                .unwrap()
+                .clone();
+            e.set_active_radio(0);
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            (
+                icom_id,
+                icom_profile,
+                Transport::from_settings(e.settings()),
+            )
+        };
+        let mut state = loop_state();
+        state.applied = yaesu_transport;
+        state.remote_radio_id = Some(0);
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
+            id: icom_id,
+            transport: Transport::from_profile(&icom_profile),
+            rig: Rig::with_control(Some(icom.0.to_string()), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }]));
+        let mut rig = Rig::with_control(Some(yaesu.0.to_string()), PttMode::Cat);
+        // The operator keys the Yaesu (or not), through an ordinary tick.
+        engine.lock().unwrap().set_ptt(keyed);
+        let mut last_active = 0u32;
+        let mut backend = MockBackend::new();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            20.0,
+        );
+        assert_eq!(
+            rig.keyed, keyed,
+            "scene guard: the Yaesu is on the air, or not"
+        );
+        (engine, pool, rig, state, icom_id)
+    }
+
+    /// The switch lands AFTER this tick's handoff read the settings and before `step()` reads
+    /// them (W0), with the operator's thumb still on PTT and the Icom on another dial.
+    fn switch_behind_the_handoffs_back(engine: &Arc<Mutex<Engine>>, to: u32) {
+        let mut e = engine.lock().unwrap();
+        e.set_active_radio(to);
+        e.set_frequency(14.200, "20m", "USB");
+        e.set_ptt(true);
+    }
+
+    /// ★ W0 — A SWITCH THE HANDOFF HAS NOT SEEN. The engine flips `active_radio` between this
+    /// tick's handoff read and `step()`'s. The unkey must not wait for the handoff: the outgoing
+    /// radio is keyed up in THAT tick, through its own live channel. Nothing else of the
+    /// incoming radio's may reach the old rig in that tick — no rebuild, no retune, no key, no
+    /// `applied` stamp — and the next tick's handoff takes the switch, adopting the incoming
+    /// radio and handing the outgoing one to the pool as ITSELF.
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_unkeys_at_once_and_leaves_the_teardown_to_it() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_logging_rigctld();
+        let (icom_addr, icom_port, icom_log) = mock_logging_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), true);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let reopened = std::cell::Cell::new(0);
+        let mut rr = |_: &Transport, _: bool| {
+            reopened.set(reopened.get() + 1);
+            (Rig::vox(), None, CatProbe::status(None, ""))
+        };
+
+        // This tick's handoff finds no switch; the switch then lands before step() reads.
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        switch_behind_the_handoffs_back(&engine, icom);
+        let before = yaesu_log.lock().unwrap().len();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                40.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            sent.iter().any(|l| l == "T 0"),
+            "the outgoing radio is keyed up in this very tick: {sent:?}"
+        );
+        assert!(!rig.keyed, "…and the loop knows it is down");
+        assert_eq!(
+            reopened.get(),
+            0,
+            "no rebuild before the handoff has the switch"
+        );
+        assert_eq!(
+            state.applied.rigctld_port, yaesu_port,
+            "`applied` is still the Yaesu's"
+        );
+        assert!(
+            !sent.iter().any(|l| l == "T 1"),
+            "the operator's PTT does not re-key the outgoing radio: {sent:?}"
+        );
+        assert!(
+            !state.may_key(),
+            "nothing may key the outgoing radio for the rest of the tick"
+        );
+
+        // The next tick's handoff takes the switch, and the Yaesu goes to the pool as itself.
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            60.0,
+        );
+        assert_eq!(last_active, icom, "the handoff adopted the Icom");
+        {
+            let p = pool.lock().unwrap();
+            let outgoing = p
+                .iter()
+                .find(|c| c.id == 0)
+                .expect("the Yaesu is the pool's");
+            assert_eq!(
+                outgoing.transport.rigctld_port, yaesu_port,
+                "the pool's radio 0 carries the Yaesu's own transport"
+            );
+        }
+        // A hold, not a kill: the operator presses again and it goes out — on the Icom.
+        engine.lock().unwrap().set_ptt(true);
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            80.0,
+        );
+        assert!(
+            icom_log.lock().unwrap().iter().any(|l| l == "T 1"),
+            "the held PTT keys the Icom once the loop owns it: {:?}",
+            icom_log.lock().unwrap()
+        );
+        assert!(
+            !yaesu_log.lock().unwrap()[before..]
+                .iter()
+                .any(|l| l == "T 1"),
+            "and never the Yaesu again: {:?}",
+            yaesu_log.lock().unwrap()
+        );
+    }
+
+    /// ★ …and when that unkey FAILS (a wedged link), the outgoing radio is never torn down: the
+    /// loop keeps its rig and daemon, the handoff HOLDS the switch while it is keyed, and the
+    /// swap lands on the first tick the radio is genuinely down. A rebuild here used to drop
+    /// the keyed radio's daemon and carry `keyed` onto the incoming rig, leaving a Hamlib
+    /// radio transmitting with nothing able to unkey it (the 1.10.2 stuck-TX class).
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_never_strands_a_radio_whose_unkey_fails() {
+        let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (yaesu_addr, yaesu_port, yaesu_log) =
+            mock_logging_rigctld_refusing_unkey(refuse.clone());
+        let (icom_addr, icom_port, _icom_log) = mock_logging_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), true);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let reopened = std::cell::Cell::new(0);
+        let mut rr = |_: &Transport, _: bool| {
+            reopened.set(reopened.get() + 1);
+            (Rig::vox(), None, CatProbe::status(None, ""))
+        };
+
+        refuse.store(true, std::sync::atomic::Ordering::SeqCst);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        switch_behind_the_handoffs_back(&engine, icom);
+        let before = yaesu_log.lock().unwrap().len();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                40.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            yaesu_log.lock().unwrap()[before..]
+                .iter()
+                .any(|l| l == "T 0"),
+            "the unkey was tried at once"
+        );
+        assert_eq!(reopened.get(), 0, "a radio still keyed is never torn down");
+        assert!(rig.keyed, "the loop still holds the keyed Yaesu");
+        assert_eq!(state.applied.rigctld_port, yaesu_port);
+
+        // The handoff holds the switch while the Yaesu is keyed…
+        for tick in 3..=5 {
+            loop_tick(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &mut backend,
+                f64::from(tick) * 20.0,
+            );
+            assert_eq!(last_active, 0, "tick {tick}: the switch is held");
+            assert!(rig.keyed, "tick {tick}: the Yaesu is still keyed");
+            assert!(pool.lock().unwrap().iter().any(|c| c.id == icom));
+        }
+        // …and lands on the first tick the Yaesu is down.
+        refuse.store(false, std::sync::atomic::Ordering::SeqCst);
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            120.0,
+        );
+        assert_eq!(
+            last_active, icom,
+            "the switch landed once the Yaesu unkeyed"
+        );
+        assert!(!rig.keyed);
+    }
+
+    /// ★ …and an IDLE outgoing radio is not retuned to the incoming radio's dial in that tick
+    /// (the 2026-07-11 "pill says Icom, CAT still controls the Yaesu" class): the dial is the
+    /// Icom's, the rig is still the Yaesu's. It is the Icom that gets it, once handed over.
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_never_retunes_the_outgoing_radio() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_logging_rigctld();
+        let (icom_addr, icom_port, icom_log) = mock_logging_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let mut rr = mock_reopen_rig();
+
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        switch_behind_the_handoffs_back(&engine, icom);
+        engine.lock().unwrap().set_ptt(false);
+        let before = yaesu_log.lock().unwrap().len();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                40.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            !sent.iter().any(|l| l.starts_with("F ")),
+            "the Icom's dial never reaches the Yaesu: {sent:?}"
+        );
+        assert_eq!(
+            state.applied.rigctld_port, yaesu_port,
+            "no rebuild before the handoff: `applied` is still the Yaesu's"
+        );
+
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            60.0,
+        );
+        assert_eq!(last_active, icom);
+        assert!(
+            icom_log.lock().unwrap().iter().any(|l| l == "F 14200000"),
+            "the Icom is tuned once it is the loop's: {:?}",
+            icom_log.lock().unwrap()
+        );
+    }
+
+    /// Two radios, each configured through the flat settings form (which edits whatever is
+    /// active), radio 0 active. Returns the engine, radio 1's id, both radios' MONITOR
+    /// transports (`Transport::from_profile`), and radio 0's transport as the loop applies it.
+    fn two_radio_engine(
+        radio0: impl FnOnce(&mut tempo_app::settings::Settings),
+        radio1: impl FnOnce(&mut tempo_app::settings::Settings),
+    ) -> (Arc<Mutex<Engine>>, u32, Transport, Transport, Transport) {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let (r1, monitor0, monitor1, applied0) = {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            let mut s = e.settings().clone();
+            radio0(&mut s);
+            e.apply_settings(s);
+            let r1 = e.add_radio();
+            e.set_active_radio(r1);
+            let mut s = e.settings().clone();
+            radio1(&mut s);
+            e.apply_settings(s);
+            e.set_active_radio(0);
+            let monitor = |id: u32| {
+                Transport::from_profile(e.settings().radios.iter().find(|p| p.id == id).unwrap())
+            };
+            (
+                r1,
+                monitor(0),
+                monitor(r1),
+                Transport::from_settings(e.settings()),
+            )
+        };
+        (engine, r1, monitor0, monitor1, applied0)
+    }
+
+    /// A live monitor connection for radio `id`, as the monitor thread opens one: read-only.
+    fn live_monitor(id: u32, transport: Transport, cat: &str) -> MonitorConn {
+        MonitorConn {
+            id,
+            transport,
+            rig: Rig::with_control(Some(cat.to_string()), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }
+    }
+
+    /// ★ A radio with a keying port of its own (RTS on one port, CAT on another) is ADOPTED at
+    /// a switch, from its monitor connection, instantly, and keys on the port the operator
+    /// configured. The monitor connection never carried that port (a monitor never keys), so
+    /// the match leaves it out and the handoff carries it into `applied`: nothing is torn down
+    /// or reopened, that tick or the next.
+    #[test]
+    fn a_radio_with_its_own_keying_port_is_adopted_and_keys_on_that_port() {
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, _, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "cat".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1035;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.ptt_serial_port = "tempo-test-key-b".into();
+                s.rigctld_port = port1;
+            },
+        );
+        assert!(
+            monitor1.ptt_serial_port.is_empty(),
+            "premise: a monitor transport carries no keying port"
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        let mut rig = Rig::with_control(Some(cat0), PttMode::Cat);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let reopened = std::cell::Cell::new(0);
+        let mut rr = |_: &Transport, _: bool| {
+            reopened.set(reopened.get() + 1);
+            (Rig::vox(), None, CatProbe::status(None, ""))
+        };
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(last_active, r1);
+        for tick in 1..=2 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(tick) * 20.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            reopened.get(),
+            0,
+            "adopted from its monitor connection: nothing reopened"
+        );
+        assert_eq!(
+            state.applied.ptt_serial_port, "tempo-test-key-b",
+            "the configured keying port is the active side's"
+        );
+        assert_eq!(
+            rig.ptt_mode(),
+            &PttMode::Serial {
+                port: "tempo-test-key-b".into(),
+                line: SerialLine::Rts
+            },
+            "it keys on that port, on its line"
+        );
+    }
+
+    /// ★ …and the radio switched AWAY from goes to the monitor pool WITHOUT its keying port. Its
+    /// connection is kept (the monitor's own transport never carried the port, so nothing
+    /// differs), and nothing in the pool holds the port it keyed on: a monitor never keys, and
+    /// another radio may key on that port.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn the_radio_switched_away_from_is_monitored_and_lets_go_of_its_keying_port() {
+        use crate::control_line::fake_ports;
+        fake_ports::install("tempo-test-key-a");
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, monitor0, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.ptt_serial_port = "tempo-test-key-a".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "cat".into();
+                s.rig_model = 3081;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.rigctld_port = port1;
+            },
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        let mut rig = Rig::with_control(Some(cat0), ptt_mode_for(&applied0));
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        // The active radio has keyed on its port, so its rig holds it.
+        rig.ptt(false).unwrap();
+        assert!(
+            fake_ports::state("tempo-test-key-a").held,
+            "premise: the active rig holds its keying port"
+        );
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(last_active, r1);
+        assert!(
+            !fake_ports::state("tempo-test-key-a").held,
+            "nothing in the pool holds the keying port"
+        );
+        let opens = std::cell::Cell::new(0);
+        reconcile_pool_with_open(&pool, &[(0, monitor0)], r1, &engine, 0.0, |_| {
+            opens.set(opens.get() + 1);
+            (Rig::vox(), None, Some(false))
+        });
+        assert_eq!(
+            opens.get(),
+            0,
+            "the handed-back connection is kept, not recycled"
+        );
+        assert!(pool.lock().unwrap().iter().any(|c| c.id == 0));
+    }
+
+    /// ★ SO2R: two radios key through ONE controller port, RTS for one and DTR for the other. A
+    /// switch hands the port from the radio the operator left to the radio they chose, both
+    /// ways: the new radio keys on its own line, and the old one's line stays low.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn two_radios_sharing_one_keying_port_each_key_after_a_switch() {
+        use crate::control_line::fake_ports::{self, State};
+        fake_ports::install("tempo-test-so2r");
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, _, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.ptt_serial_port = "tempo-test-so2r".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "dtr".into();
+                s.rig_model = 1035;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.ptt_serial_port = "tempo-test-so2r".into();
+                s.rigctld_port = port1;
+            },
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        let mut rig = Rig::with_control(Some(cat0), ptt_mode_for(&applied0));
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        rig.ptt(false).unwrap();
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+
+        for (to, keyed) in [
+            (
+                r1,
+                State {
+                    held: true,
+                    rts: false,
+                    dtr: true,
+                },
+            ),
+            (
+                0,
+                State {
+                    held: true,
+                    rts: true,
+                    dtr: false,
+                },
+            ),
+        ] {
+            engine.lock().unwrap().set_active_radio(to);
+            handoff_if_switched(
+                &engine,
+                &pool,
+                &mut rig,
+                &mut state,
+                &mut last_active,
+                &pending,
+            );
+            assert_eq!(last_active, to, "premise: switched to radio {to}");
+            if let Err(e) = rig.ptt(true) {
+                panic!("radio {to} keys on the shared port: {e}");
+            }
+            assert_eq!(
+                fake_ports::state("tempo-test-so2r"),
+                keyed,
+                "radio {to} keys on its own line, and only on it"
+            );
+            rig.ptt(false).unwrap();
+        }
+    }
+
+    /// ★ A radio that keys on its CAT port (RTS on the port its daemon holds) is never adopted
+    /// from its monitor connection, whose daemon was not told to key (no `-P`) and would key by
+    /// the model's default PTT type instead. The switch falls back and opens it fresh, through
+    /// the keying-line path.
+    #[test]
+    fn a_radio_that_keys_on_its_cat_port_is_reopened_not_adopted() {
+        let (cat0, port0, _) = mock_logging_rigctld();
+        let (cat1, port1, _) = mock_logging_rigctld();
+        let (engine, r1, _, monitor1, applied0) = two_radio_engine(
+            |s| {
+                s.ptt_method = "cat".into();
+                s.rig_model = 1042;
+                s.serial_port = "/dev/tempo-test-cat-a".into();
+                s.rigctld_port = port0;
+            },
+            |s| {
+                s.ptt_method = "rts".into();
+                s.rig_model = 1035;
+                s.serial_port = "/dev/tempo-test-cat-b".into();
+                s.ptt_serial_port = String::new();
+                s.rigctld_port = port1;
+            },
+        );
+        assert!(
+            keys_on_the_cat_port(&monitor1),
+            "premise: radio 1 keys on its CAT port"
+        );
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![live_monitor(
+            r1, monitor1, &cat1,
+        )]));
+        let mut state = loop_state();
+        state.applied = applied0;
+        state.remote_radio_id = Some(0);
+        let mut rig = Rig::with_control(Some(cat0), PttMode::Cat);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        let mut backend = MockBackend::new();
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let opened = std::cell::RefCell::new(Vec::new());
+        let mut rr = |t: &Transport, _: bool| {
+            opened.borrow_mut().push(t.clone());
+            (Rig::vox(), None, CatProbe::status(None, ""))
+        };
+
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                20.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let opened = opened.into_inner();
+        assert_eq!(opened.len(), 1, "opened fresh, not adopted");
+        assert!(
+            keys_on_the_cat_port(&opened[0]),
+            "through the keying-line path, whose daemon keys on the line"
         );
     }
 

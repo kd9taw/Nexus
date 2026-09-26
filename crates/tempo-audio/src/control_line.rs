@@ -129,7 +129,191 @@ fn open_first_working_baud_checked<T, E: std::fmt::Display>(
 /// [`idle_both_lines`] for why that is the opener's job and not the caller's.
 #[cfg(feature = "serial")]
 pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport::SerialPort>> {
+    // TESTS ONLY: a port [`fake_ports`] made. Not compiled outside the test harness.
+    #[cfg(test)]
+    if let Some(opened) = fake_ports::open(port) {
+        return opened;
+    }
     open_control_line_port_checked(port, || Ok(()))
+}
+
+/// TESTS ONLY: control-line ports that exist only in memory, for tests that need a keying port
+/// without hardware. A port opens EXCLUSIVELY, as a real one does: while a handle to it lives,
+/// another open fails, the way Windows answers "Access is denied." And it comes back with both
+/// lines deasserted, as [`idle_both_lines`] leaves a real one. Per thread, like the other test
+/// doubles: a test's ports are its own.
+#[cfg(all(test, feature = "serial"))]
+pub(crate) mod fake_ports {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    /// Whether a handle holds the port, and the level of its two control lines.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub(crate) struct State {
+        pub(crate) held: bool,
+        pub(crate) rts: bool,
+        pub(crate) dtr: bool,
+    }
+
+    thread_local! {
+        static PORTS: RefCell<HashMap<String, State>> = RefCell::new(HashMap::new());
+    }
+
+    /// Make `name` a fake port: nobody holding it, both lines low.
+    pub(crate) fn install(name: &str) {
+        PORTS.with(|p| p.borrow_mut().insert(name.to_string(), State::default()));
+    }
+
+    pub(crate) fn state(name: &str) -> State {
+        PORTS.with(|p| p.borrow()[name])
+    }
+
+    /// The opener's door: `None` for a name that is no fake port.
+    pub(super) fn open(name: &str) -> Option<std::io::Result<Box<dyn serialport::SerialPort>>> {
+        PORTS.with(|p| {
+            let mut ports = p.borrow_mut();
+            let state = ports.get_mut(name)?;
+            if state.held {
+                return Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Access is denied.",
+                )));
+            }
+            *state = State {
+                held: true,
+                rts: false,
+                dtr: false,
+            };
+            let port: Box<dyn serialport::SerialPort> = Box::new(FakePort {
+                name: name.to_string(),
+            });
+            Some(Ok(port))
+        })
+    }
+
+    struct FakePort {
+        name: String,
+    }
+
+    impl FakePort {
+        fn set(&self, line: impl FnOnce(&mut State)) {
+            PORTS.with(|p| {
+                if let Some(state) = p.borrow_mut().get_mut(&self.name) {
+                    line(state);
+                }
+            });
+        }
+    }
+
+    impl Drop for FakePort {
+        fn drop(&mut self) {
+            // `try_with`: a handle outliving the thread's registry must not panic on the way out.
+            let _ = PORTS.try_with(|p| {
+                if let Some(state) = p.borrow_mut().get_mut(&self.name) {
+                    state.held = false;
+                }
+            });
+        }
+    }
+
+    impl std::io::Read for FakePort {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    impl std::io::Write for FakePort {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl serialport::SerialPort for FakePort {
+        fn name(&self) -> Option<String> {
+            Some(self.name.clone())
+        }
+        fn baud_rate(&self) -> serialport::Result<u32> {
+            Ok(super::BAUD_LADDER[0])
+        }
+        fn data_bits(&self) -> serialport::Result<serialport::DataBits> {
+            Ok(serialport::DataBits::Eight)
+        }
+        fn flow_control(&self) -> serialport::Result<serialport::FlowControl> {
+            Ok(serialport::FlowControl::None)
+        }
+        fn parity(&self) -> serialport::Result<serialport::Parity> {
+            Ok(serialport::Parity::None)
+        }
+        fn stop_bits(&self) -> serialport::Result<serialport::StopBits> {
+            Ok(serialport::StopBits::One)
+        }
+        fn timeout(&self) -> Duration {
+            Duration::from_millis(super::OPEN_TIMEOUT_MS)
+        }
+        fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn write_request_to_send(&mut self, level: bool) -> serialport::Result<()> {
+            self.set(|state| state.rts = level);
+            Ok(())
+        }
+        fn write_data_terminal_ready(&mut self, level: bool) -> serialport::Result<()> {
+            self.set(|state| state.dtr = level);
+            Ok(())
+        }
+        fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
+            Ok(false)
+        }
+        fn read_data_set_ready(&mut self) -> serialport::Result<bool> {
+            Ok(false)
+        }
+        fn read_ring_indicator(&mut self) -> serialport::Result<bool> {
+            Ok(false)
+        }
+        fn read_carrier_detect(&mut self) -> serialport::Result<bool> {
+            Ok(false)
+        }
+        fn bytes_to_read(&self) -> serialport::Result<u32> {
+            Ok(0)
+        }
+        fn bytes_to_write(&self) -> serialport::Result<u32> {
+            Ok(0)
+        }
+        fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn try_clone(&self) -> serialport::Result<Box<dyn serialport::SerialPort>> {
+            Err(serialport::Error::new(
+                serialport::ErrorKind::Unknown,
+                "a fake port has one handle",
+            ))
+        }
+        fn set_break(&self) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn clear_break(&self) -> serialport::Result<()> {
+            Ok(())
+        }
+    }
 }
 
 /// Remote selection may need the incoming radio's serial PTT handle. Opening
