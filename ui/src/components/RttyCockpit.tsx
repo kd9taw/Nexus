@@ -108,6 +108,13 @@ const RTTY = 'RTTY'
 const DEFAULT_TONES = '45.45 · 170 Hz'
 const RX_PLATE = 'RX ▼'
 const TX_PLATE = 'TX ▲'
+/** The TX line's plate before anything has gone out this session — the direction token
+ *  without the on-air arrow. */
+const TX_IDLE = 'TX'
+/** How the TX line draws an on-air line break: RTTY's CR LF take air time (an F-key message
+ *  opens with them), so a one-line field has to show where they are. LF is drawn as this
+ *  glyph and the CR that travels with it as nothing. */
+const LINE_BREAK = '↵'
 const CQ = 'CQ'
 
 /** Display labels for the RTTY removable panels (the ⊞ Panels menu). Resolved when the
@@ -180,6 +187,84 @@ function seqLabel(s: string): string {
     default:
       return t('rtty.seq.idle')
   }
+}
+
+/** One keyed character as the TX line draws it — see `LINE_BREAK`. */
+const txGlyph = (c: string) => (c === '\n' ? LINE_BREAK : c === '\r' ? '' : c)
+
+/** How many already-keyed characters the TX line keeps in front of the keying point: the recent
+ *  past of the over, enough to read the call and exchange just sent. The transcript holds all
+ *  of it. */
+const TX_LINE_KEYED_TAIL = 32
+
+/**
+ * THE TX LINE (#379) — "the field that shows what I'm transmitting", at the bottom of the
+ * cockpit: the over going out now, or the last one, and how much of it has gone. The report
+ * came from a CQ WW RTTY weekend: F-key overs keyed with nothing on screen saying what they
+ * said, which is the uncertainty an unanswered call leaves.
+ *
+ * WHAT IT SHOWS, all of it the engine's (`txText` / `txKeyed` / `txCut`, advanced by the radio
+ * loop as each stop bit goes out): the keyed part underlined, whatever is still to go after it
+ * — the rest of the over, then continuous TX's type-ahead or queued overs — and, when an over
+ * was stopped, what never went out struck through. Underline and strike carry the fact; colour
+ * only repeats it. The keyed part is its recent tail (`TX_LINE_KEYED_TAIL`); the rest ellipsizes
+ * at the end of the line.
+ *
+ * ⚠️ NOT A CONTROL. It starts nothing and stops nothing, has no ⊞ id, and sits in the compose
+ * row beside the field — sharing a row that is already there, so the dock is no taller.
+ * Continuous-TX typing still goes through the compose field alone.
+ */
+function RttyTxLine({ rtty }: { rtty: RttyState | null }) {
+  const chars = Array.from(rtty?.txText ?? '')
+  const keyed = Math.min(Math.max(rtty?.txKeyed ?? 0, 0), chars.length)
+  const live = rtty?.sending === true || rtty?.latched === true
+  const state = live ? 'live' : rtty?.txCut === true ? 'cut' : chars.length > 0 ? 'sent' : 'idle'
+  const gone = chars.slice(0, keyed)
+  const shown = gone.slice(-TX_LINE_KEYED_TAIL)
+  const rest = chars.slice(keyed)
+  // Sending → Sent, or Stopped. The header's TX ▲ pill stays THE on-air plate; this one names
+  // the line's state, in the on-air red while it is live.
+  const plate =
+    state === 'live'
+      ? t('rtty.txline.sending')
+      : state === 'cut'
+        ? t('rtty.txline.stopped')
+        : state === 'sent'
+          ? t('rtty.txline.sent')
+          : TX_IDLE
+  return (
+    <div
+      className={`rtty-txline ${state}`}
+      role="group"
+      aria-label={t('rtty.txline.aria')}
+      title={t('rtty.txline.title')}
+    >
+      <span className="rtty-txline-plate">{plate}</span>
+      <span className="rtty-txline-text">
+        {state === 'idle' ? (
+          <span className="rtty-txline-empty">{t('rtty.txline.empty')}</span>
+        ) : (
+          <>
+            {gone.length > 0 && (
+              <span className="rtty-txline-keyed">
+                <span className="sr-only">{t('rtty.txline.keyed.sr')} </span>
+                {gone.length > shown.length ? '…' : ''}
+                {shown.map(txGlyph).join('')}
+              </span>
+            )}
+            {rest.length > 0 && (
+              <span className={state === 'cut' ? 'rtty-txline-unsent' : 'rtty-txline-pending'}>
+                <span className="sr-only">
+                  {state === 'cut' ? t('rtty.txline.unsent.sr') : t('rtty.txline.pending.sr')}{' '}
+                </span>
+                {rest.map(txGlyph).join('')}
+              </span>
+            )}
+          </>
+        )}
+      </span>
+    </div>
+  )
 }
 
 /**
@@ -1228,6 +1313,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       )}
 
       <div className="cw-send">
+        {/* THE TX LINE (#379): what this station is sending, at the bottom of the cockpit —
+            in the compose row, so the dock gains no height. Display only; see RttyTxLine. */}
+        <RttyTxLine rtty={rtty} />
         <input
           disabled={!control}
           ref={composeRef}

@@ -28,7 +28,10 @@ export async function applicationFixture() {
       candidates: [{ call: 'W1AW', best: true }], rst: null, name: null, state: 'cq', headline: '', prompt: '', recommended: null, workedCall: null },
     get_rtty_state: { armed: true, text: 'CQ W1AW', charConf: [30, 100, 100, 100, 100, 100, 100],
       afcHz: -12.5, afcLocked: true, markHz: 915, spaceHz: 1085, baud: 45.45, shiftHz: 170, backend: 'afsk',
-      sending: false, latched: false, keyerError: null, auto: true, seqState: 'idle', peer: null, peerExchange: [], heardCq: 'W1AW' },
+      sending: false, latched: false, keyerError: null, auto: true, seqState: 'idle', peer: null, peerExchange: [], heardCq: 'W1AW',
+      // The dock's TX line (#379): the station's last over, all of it gone, so every viewport
+      // below lays the line out with text in it.
+      txText: '\r\nW1AW 599 4 WI 4 WI ', txKeyed: 20, txCut: false },
     get_psk_state: { armed: true, text: 'CQ W1AW', charConf: [30, 100, 100, 100, 100, 100, 100],
       afcHz: 7.5, signal: true, centerHz: 1000, mode: 'qpsk31', reverse: true,
       sending: false, latched: false, keyerError: null },

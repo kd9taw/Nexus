@@ -14233,6 +14233,13 @@ struct RttyStateDto {
     /// A CQ surfaced from the transcript for the operator to click-to-answer (only
     /// while Auto is on), else null. Surfacing only — clicking it is the human gate.
     heard_cq: Option<String>,
+    /// THE TX LINE (#379): the over going out now — or the last one — then anything still
+    /// waiting behind it. Empty before the first over of the session.
+    tx_text: String,
+    /// How many characters at the start of `tx_text` have gone to the air.
+    tx_keyed: usize,
+    /// The over was stopped before its end: the rest of `tx_text` was never keyed.
+    tx_cut: bool,
 }
 
 fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
@@ -14257,6 +14264,9 @@ fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
         peer: s.peer,
         peer_exchange: s.peer_exchange,
         heard_cq: s.heard_cq,
+        tx_text: s.tx_text,
+        tx_keyed: s.tx_keyed,
+        tx_cut: s.tx_cut,
     }
 }
 

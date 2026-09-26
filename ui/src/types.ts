@@ -1566,6 +1566,16 @@ export interface RttyState {
   /** A CQ surfaced from the transcript for the operator to click-to-answer (only
    * while Auto is on), else null. Surfacing only — clicking it is the human gate. */
   heardCq: string | null
+  /** THE TX LINE (#379): the over going out now — or the last one — then anything still
+   * waiting behind it (latched type-ahead, queued overs). Empty before the first over.
+   * Optional, like `charTx`: a station older than the field sends none, and the dock's TX
+   * line then stays empty rather than throwing. */
+  txText?: string
+  /** How many characters at the start of `txText` have gone to the air (code points —
+   * every RTTY character is ASCII, so they are also UTF-16 units). */
+  txKeyed?: number
+  /** The over was stopped before its end: `txText` past `txKeyed` was never keyed. */
+  txCut?: boolean
 }
 
 /** Live PSK state (the `get_psk_state` poll): the RX decoder + transcript,

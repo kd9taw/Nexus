@@ -8041,6 +8041,17 @@ export const EN = {
   'rtty.compose.placeholder': 'Type RTTY to send… (Enter)',
   'rtty.compose.placeholder.latched': 'Typing on the air…',
   'rtty.compose.send.label': 'Send',
+  // ── RTTY ▸ the TX line (#379): what this station is sending, beside the compose field ──
+  'rtty.txline.aria': 'What this station is sending',
+  'rtty.txline.title':
+    'What this station is sending: the over going out now, or the last one. Underlined characters have gone out; the rest has not gone yet. When an over is stopped, what never went out is struck through. Decoded text keeps the whole record.',
+  'rtty.txline.sending': 'Sending',
+  'rtty.txline.sent': 'Sent',
+  'rtty.txline.stopped': 'Stopped',
+  'rtty.txline.empty': 'Nothing sent yet',
+  'rtty.txline.keyed.sr': 'Gone out:',
+  'rtty.txline.pending.sr': 'Still to send:',
+  'rtty.txline.unsent.sr': 'Never sent:',
   'rtty.send.noCallsign': 'Set your callsign in Settings before transmitting',
   'rtty.send.noTheirCall': 'Enter their call first (the {CALL} field)',
   'rtty.send.txLocked': 'TX locked — this frequency is outside your license privileges',

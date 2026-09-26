@@ -8255,6 +8255,11 @@ impl RadioLoop {
                 // purpose. A latched stream keeps this true anyway, without help,
                 // because the look-ahead keeps `rtty_busy_until` in the future.
                 eng.set_rtty_sending(now < self.rtty_busy_until);
+                // #379: a one-shot over's characters reach the transcript and the dock's TX
+                // line as their stop bits go out, on THIS clock — the one `rtty_busy_until`
+                // was computed on. Display bookkeeping only: it reads no gate and changes
+                // nothing this block keys, holds or unkeys.
+                eng.rtty_over_advance(now);
                 // Service the RTTY auto-sequencer BEFORE poll_rtty_one, so any over it
                 // produces this tick (on_tx_complete → the next reply, or a silence
                 // timeout → AGN/CQ) is picked up by the poll below. on_tx_complete
@@ -8360,6 +8365,9 @@ impl RadioLoop {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_rtty_sending(false);
+                    // #379: the over ends where the air was cut — what keyed before this
+                    // flush stays in the transcript, the rest never reaches it.
+                    eng.rtty_over_cut(now);
                 }
             }
             // --- Continuous TX: render and key this tick's chunk. ---
@@ -8663,6 +8671,12 @@ impl RadioLoop {
                         {
                             let mut eng = engine_lock(engine);
                             eng.set_rtty_sending(!open_err);
+                            // #379: the keyline has the over — the transcript echo and the TX
+                            // line start from here. A port that would not open keyed nothing,
+                            // so nothing is echoed and the TX line does not claim it.
+                            if !open_err {
+                                eng.rtty_over_keyed(&text, baud, now);
+                            }
                             eng.set_rtty_keyer_error(if open_err {
                                 open_err_msg
                             } else if ptt_err {
@@ -8707,6 +8721,8 @@ impl RadioLoop {
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.set_rtty_sending(true);
+                                // #379: the audio ring has the over — the echo starts here.
+                                eng.rtty_over_keyed(&text, baud, now);
                                 eng.set_rtty_keyer_error(ptt_err.then(|| {
                                     "AFSK keyer: the rig didn't accept PTT. Check your PTT \
                                      method + that Nexus's audio output is routed to the rig \
@@ -21771,6 +21787,178 @@ mod tests {
         assert!(!rig.keyed, "TX Off aborts the RTTY over in flight");
         assert!(state.tx_until_ms.is_none(), "TX hold cleared");
         assert!(backend.flush_calls > 0, "queued AFSK audio was flushed");
+    }
+
+    /// Our own keyed characters in the engine's RTTY transcript, in order.
+    fn rtty_sent(engine: &Arc<Mutex<Engine>>) -> String {
+        let st = engine.lock().unwrap().rtty_state();
+        st.text
+            .chars()
+            .zip(st.tx.iter())
+            .filter(|(_, &ours)| ours)
+            .map(|(c, _)| c)
+            .collect()
+    }
+
+    #[test]
+    fn a_one_shot_rtty_over_is_echoed_as_the_loop_keys_it_and_a_stop_cuts_the_echo_with_the_air() {
+        // ⭐ #379, AT THE LAYER THAT KEYS. An F-key macro (and Enter, and every auto-sequencer
+        // over) is a one-shot over the loop takes whole from the queue. The transcript echo
+        // and the dock's TX line learn about it only from the loop — that it started keying,
+        // how far the air has got, and where Stop cut it — so this drives the real loop and
+        // reads the engine: the echo must follow the stop bits, and a Stop must end it in the
+        // same tick that flushes the audio and drops PTT.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("rtty", false); // arms TX, as a manual mode does
+            e.rtty_send_text("CQ TEST DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let char_ms = 7.5 * (1000.0 / 45.45);
+        let mut t = 100.0;
+        let mut step_until = |state: &mut RadioLoop,
+                              backend: &mut MockBackend,
+                              rig: &mut Rig,
+                              t: &mut f64,
+                              until: f64| {
+            while *t <= until {
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+                *t += 20.0;
+            }
+        };
+
+        step_until(&mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(
+            rig.keyed && !backend.played.is_empty(),
+            "precondition: the over is keying"
+        );
+        let st = engine.lock().unwrap().rtty_state();
+        assert_eq!(
+            st.tx_text, "CQ TEST DE W9XYZ",
+            "the TX line holds the over from its first tick"
+        );
+        assert_eq!(st.tx_keyed, 0);
+
+        // Three stop bits out (C, Q, space end at 3 × 165 ms): exactly those three are ours.
+        step_until(
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            100.0 + 3.0 * char_ms + 5.0,
+        );
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ ",
+            "the echo follows the loop's own clock"
+        );
+        assert_eq!(engine.lock().unwrap().rtty_state().tx_keyed, 3);
+
+        // Stop TX before the fourth stop bit. The next tick flushes, unkeys — and cuts.
+        engine.lock().unwrap().rtty_stop();
+        let flushes = backend.flush_calls;
+        let next_tick = t;
+        step_until(&mut state, &mut backend, &mut rig, &mut t, next_tick);
+        assert!(
+            !rig.keyed && backend.flush_calls > flushes,
+            "precondition: the loop cut the air"
+        );
+        let st = engine.lock().unwrap().rtty_state();
+        assert_eq!(
+            (st.tx_keyed, st.tx_cut),
+            (3, true),
+            "the TX line marks the cut where the air was cut"
+        );
+        // ⛔ …and the rest of the over — still sitting in the schedule the loop computed —
+        // never reaches the transcript, however long the loop keeps ticking.
+        step_until(&mut state, &mut backend, &mut rig, &mut t, 5_000.0);
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ ",
+            "text that never radiated reached the transcript"
+        );
+
+        // An over that runs to its end is echoed whole, and the TX line keeps it.
+        engine.lock().unwrap().rtty_send_text("TEST").unwrap();
+        step_until(
+            &mut state,
+            &mut backend,
+            &mut rig,
+            &mut t,
+            5_000.0 + 5.0 * char_ms,
+        );
+        assert_eq!(rtty_sent(&engine), "CQ TEST");
+        let st = engine.lock().unwrap().rtty_state();
+        assert_eq!(
+            (st.tx_text.as_str(), st.tx_keyed, st.tx_cut),
+            ("TEST", 4, false)
+        );
+    }
+
+    #[cfg(feature = "serial")]
+    #[test]
+    fn an_rtty_over_whose_fsk_keyline_never_opens_is_never_echoed() {
+        // The other half of "only what radiated" (#379): the loop reports an over as keying
+        // only once the keyline or the audio ring has actually been handed it. A true-FSK
+        // port that will not open keys nothing — it surfaces a keyer error instead — so the
+        // transcript and the TX line must not claim the over went out.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rtty_backend = "fsk".to_string();
+            s.rtty_fsk_port = "/dev/nexus-379-no-such-port".to_string();
+            e.apply_settings(s);
+            e.set_operating_mode("rtty", false);
+            e.rtty_send_text("CQ TEST").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 100.0;
+        while t <= 3_000.0 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            t += 20.0;
+        }
+        let st = engine.lock().unwrap().rtty_state();
+        assert!(
+            st.keyer_error
+                .as_deref()
+                .is_some_and(|e| e.contains("FSK keyline")),
+            "precondition: the keyline refused to open — got {:?}",
+            st.keyer_error
+        );
+        assert_eq!(
+            rtty_sent(&engine),
+            "",
+            "an over that never keyed was echoed"
+        );
+        assert_eq!(st.tx_text, "", "an over that never keyed is on the TX line");
     }
 
     /// A radio loop with continuous RTTY TX latched and keying, plus the clock it

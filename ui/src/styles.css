@@ -7058,22 +7058,32 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 /* RTTY's stream carries no `panel` class, so `.pane-body > .panel`'s card-flatten misses
    it and it renders as a bordered box inside a bordered frame. */
-.pane-body > /* OUR OWN KEYED TEXT in the RTTY transcript. The sent over rides in the SAME stream as the
+.pane-body > .rtty-stream {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+/* OUR OWN KEYED TEXT in the RTTY transcript. The sent over rides in the SAME stream as the
    received copy, in the order it happened — the interleaving is the whole feature — so it
    needs to be tellable apart at a glance without being louder than the copy it sits beside.
    A left border plus the accent colour, not colour alone: the project's rule is that colour
    never carries a fact by itself, and the span also carries a title saying it was sent.
-   Both themes define --accent, checked before use. */
+   Both themes define --accent, checked before use.
+   ⚠️ #379: this rule and its comment once landed INSIDE the selector above. A comment is
+   whitespace to a selector, so the sheet read `.pane-body > .rtty-sent` — which no sent span
+   matches, three levels below `.pane-body` — and left the flatten unscoped, winning only on
+   source order. Sent text rendered exactly like received copy.
+   RttyCockpit.sentstyle.test.tsx resolves both against the rendered cockpit. */
 .rtty-sent {
   color: var(--accent);
   border-left: 2px solid var(--accent);
   padding-left: 2px;
   opacity: 0.95;
-}
-.rtty-stream {
-  padding: 0;
-  border: 0;
-  background: transparent;
+  /* An F-key over opens with its own line break, so a sent run usually spans lines. Without
+     `clone` the rule is drawn once, on the run's FIRST line box — the line break, beside no
+     text at all; with it, every line of our over carries its own rule. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 /* …and that same flatten DOES catch CW's SENT echo (it is a `.panel`), taking its accent
    stripe with it. The stripe is what makes "these are YOUR transmissions" readable at a
@@ -21718,6 +21728,75 @@ button.sat-chip:disabled {
   /* `.cw-macro-key` sets its own color explicitly (see the note by `.cw-macro-label`),
      so the on-state has to reach the spans or only the border would change. */
   color: var(--tx);
+}
+
+/* THE TX LINE (#379) — what this station is sending, at the left of the compose row. It
+   SHARES that row with the compose field (both `flex: 1 1 0`) instead of adding one: the dock
+   is already two rows at the 1024×768 floor, where a CQ WW RTTY log strip has no height to
+   spare. Its content is one line of the input's own type, so the row stays the input's
+   height. Nothing here is interactive — the compose field is still the only thing that
+   takes typing.
+   `position: relative` is load-bearing, not tidiness: the line's screen-reader labels are
+   `.sr-only` (absolutely positioned), and a Remote observer's dock is `position: static`. With no
+   positioned ancestor their containing block was the page, so they escaped the cockpit's own
+   scroller and stretched the DOCUMENT to where the dock sits in it — 1240 px tall in an 844 px
+   window at 390 wide (the compiled browser sweep's "rtty is bounded"). */
+.rtty-txline {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  overflow: hidden;
+}
+.rtty-txline-plate {
+  flex: 0 0 auto;
+  font-size: var(--fs-label);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+/* On the air: the plate reads in the on-air red, as `.rtty-tx-pill` does. */
+.rtty-txline.live .rtty-txline-plate {
+  color: var(--tx);
+}
+.rtty-txline-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+/* Gone out: UNDERLINED. The underline is the fact, not the colour — the tooltip says so, and a
+   screen reader hears the part's name first. */
+.rtty-txline-keyed {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+/* Still to go: faint, and while the transmitter is up a bar marks the keying point. */
+.rtty-txline-pending {
+  color: var(--text-faint);
+}
+.rtty-txline.live .rtty-txline-pending {
+  border-left: 2px solid var(--tx);
+}
+/* Stopped: what never went out is struck through. */
+.rtty-txline-unsent {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.rtty-txline-empty {
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 /* Their-call field in the dock's fixed row — feeds the {CALL} macro token. */
