@@ -394,8 +394,11 @@ fn bench(n: usize) -> Vec<String> {
         ));
     }
     // C13's bench's last case: a snapshot while a QSO is under way with a partner who sent no
-    // grid, which asks the log for the grid it last logged for them.
+    // grid, which asks the log for the grid it last logged for them. Starting the QSO is a path
+    // of its own, timed first: its hold is not the snapshot's, and the watcher reads locks taken
+    // back to back as one hold.
     engine_lock(&shared).call_station("QQ9NOGRID");
+    hold("starting a QSO (working a station)", &watcher);
     for _ in 0..5 {
         let _ = engine_lock(&shared).snapshot();
     }
