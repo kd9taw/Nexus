@@ -289,6 +289,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lets go of the port once its PTT is released, so the radio you choose can use it, and a
   selection that fails hands the port back.
 
+- **A radio switch no longer sends the new radio's requests to the radio you leave.** If the
+  switch landed at one particular moment in Nexus's radio cycle, requests meant for the radio
+  you chose could reach the radio you were leaving instead. That covered a noise-blanker or other
+  DSP switch, a filter width, RIT/XIT, a scope span or scope mode, and a voice-memory playback
+  asked for by a logger over Nexus's CAT link, which that radio would then transmit. Those
+  requests now wait for the radio you chose. The voice-memory playback is the exception: it is
+  dropped, not played later on the other radio, so press it again. A playback asked for while a
+  switch waits for a still-transmitting radio to stop, or while Test CAT holds the radio's port,
+  is dropped the same way. Earlier releases could send that one to the radio being left too.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.

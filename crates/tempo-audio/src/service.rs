@@ -6246,8 +6246,13 @@ impl RadioLoop {
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
             // FORK-LOCAL: the FT-710's own spectrum over its internal FT4222 bridge. No-op on every
-            // other radio, and on this one too until the operator opts in.
-            self.reconcile_yaesu_waterfall(engine, rig, now);
+            // other radio, and on this one too until the operator opts in. Not on a switch the
+            // handoff has not seen (W0): `rig` is the radio being left, and the span and scope-mode
+            // requests it would drain, like the dial it would fit a span to, are the incoming
+            // radio's. They wait a tick.
+            if !self.switch_unhanded {
+                self.reconcile_yaesu_waterfall(engine, rig, now);
+            }
             // Native CI-V scope: THE ACTIVE radio's daemon streams the rig's real panadapter.
             // Enable is per-tick idempotent (an atomic store); monitors never enable it, so a
             // backgrounded radio's serial link stays free for its slow poll. Rows land in the
@@ -6289,7 +6294,9 @@ impl RadioLoop {
                 // Native-scope CONTROL one-shots from the UI (span/ref/mode). These are short 27
                 // CAT frames (NOT the waveform stream), so no 115200 requirement — but they share
                 // the half-duplex bus, so hold them until unkey (same reason the stream pauses).
-                if !keyed_now {
+                // Held, too, on a switch the handoff has not seen (W0): this daemon is the radio
+                // being left, and the requests are the incoming radio's.
+                if !keyed_now && !self.switch_unhanded {
                     let (span, refl, fixed) = {
                         let mut e = engine_lock(engine);
                         (
@@ -6809,6 +6816,11 @@ impl RadioLoop {
                 // implemented as a permanent latch it left a recovered link dead for the session.
                 && (self.cat_ok != Some(false) || now >= self.cat_retry_at)
                 && now - self.last_rig_poll >= RIG_POLL_MS
+                // …and NOT on a switch the handoff has not seen (W0): `rig` is still the radio
+                // being left, and every request this block drains (DSP switches, filter width,
+                // RIT/XIT/VFO, the ATU press) is the incoming radio's. Skipped, they stay queued
+                // for the radio the handoff installs next tick.
+                && !self.switch_unhanded
             {
                 // The tick's read budget starts HERE, before the dial probe, because the dial is
                 // the read that proves the link and the one whose timeout is most likely to eat
@@ -7775,8 +7787,22 @@ impl RadioLoop {
             // TX). The broker already answered RPRT 0 at the accepted-by-Nexus seam (its
             // whole write surface does), so a rig refusal is surfaced to the OPERATOR, the
             // send_morse precedent.
+            //
+            // ⚠️ A PLAY KEYS THE RADIO, so it passes the loop's door, `may_key()`: while a switch
+            // is held or not yet handed over, `rig` is the radio being LEFT, and under the Test
+            // CAT hold it is a stand-in with no CAT at all. Drained first and only then tested,
+            // as the ATU press is: a PLAY that cannot go now is DROPPED, never queued behind a
+            // handoff to key the incoming radio when it lands. A STOP is never gated: it goes to
+            // the rig in hand, which is the radio that may be playing one.
             if let Some(cmd) = { engine_lock(engine).take_voice_mem() } {
                 let r = match cmd {
+                    tempo_app::engine::VoiceMemCmd::Play(_) if !self.may_key() => {
+                        crate::civ::diag::note(
+                            "voice memory NOT played: a radio switch or a Test CAT hold owns the \
+                             rig this tick, and a PLAY is never held to key the next radio",
+                        );
+                        Ok(())
+                    }
                     tempo_app::engine::VoiceMemCmd::Play(ch) => rig.send_voice_mem(ch),
                     tempo_app::engine::VoiceMemCmd::Stop => rig.stop_voice_mem(),
                 };
@@ -9343,6 +9369,12 @@ impl RadioLoop {
                 self.report_ptt(engine, ptt && ptt_failed);
                 self.manual_ptt_applied = ptt;
             }
+            // ⚠️ THE LEVEL PUSHES FROM HERE ON (power, mic gain, the receive levels, NR, notch,
+            // AGC) ARE NOT held on a switch the handoff has not seen (W0). That is an open
+            // decision (2026-09-26), not an oversight: on that tick `rig` is the radio being left,
+            // so a level changed INSIDE the switch's window is written to it. The switch itself
+            // changes no commanded level, and `reset_for_handoff` has every level pushed to the
+            // incoming radio on the tick after.
             if let Some((p, force)) = power {
                 // Command on change OR when the cap must be re-asserted (`force`): a manual
                 // knob-up past the ceiling is pulled back down even though our target is unchanged.
@@ -18640,6 +18672,332 @@ mod tests {
             icom_log.lock().unwrap().iter().any(|l| l == "F 14200000"),
             "the Icom is tuned once it is the loop's: {:?}",
             icom_log.lock().unwrap()
+        );
+    }
+
+    /// [`mock_logging_rigctld`] that also answers `m` (USB, 2400 Hz), so a whole heavy poll runs
+    /// against it: the dial read, the mode read, and every request drained behind them.
+    fn mock_polled_rigctld() -> (String, u16, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("127.0.0.1:{port}");
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = match l.as_str() {
+                        "f" => "14250000\n",
+                        "m" => "USB\n2400\n",
+                        _ => "RPRT 0\n",
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, port, log)
+    }
+
+    /// The W0 tick of [`w0_scene`], with the heavy poll due and its mode read on this poll (every
+    /// 4th): the switch to `icom` lands behind the handoff's back with `queue`'s requests, then
+    /// `step()` runs. The caller runs this tick's handoff first.
+    fn w0_tick_with(
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        state: &mut RadioLoop,
+        icom: u32,
+        queue: impl FnOnce(&mut Engine),
+    ) {
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_active_radio(icom);
+            queue(&mut e);
+        }
+        state.last_rig_poll = 0.0;
+        state.rig_poll_ticks = 3;
+        // The connection's capability probes are done (a `\dump_state` read runs to its
+        // deadline), so this poll stays inside its read budget and reaches the mode read.
+        state.rx_ranges_probed = true;
+        state.tuner_probed = true;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let (mut backend, mut station) = (MockBackend::new(), StationSinks::new());
+        state
+            .step(
+                engine,
+                &mut backend,
+                rig,
+                &sinks,
+                1000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            state.switch_unhanded,
+            "premise: a switch the handoff has not seen"
+        );
+    }
+
+    /// ★ …and the W0 tick WRITES nothing but the unkey to the outgoing radio. The heavy poll and
+    /// the voice-memory relay ran there against the old rig: a DSP switch, a filter width and a
+    /// voice-memory PLAY queued with the switch all went to the radio being left, and the PLAY
+    /// keyed it. The requests now wait for the radio the handoff installs. The PLAY is dropped,
+    /// never queued behind the handoff to key when it lands (the ATU's rule).
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_writes_nothing_but_the_unkey() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        let before = yaesu_log.lock().unwrap().len();
+        w0_tick_with(&engine, &mut rig, &mut state, icom, |e| {
+            e.request_rig_func("nb", true);
+            e.request_filter_width(1800);
+            e.request_voice_mem(1);
+        });
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            sent.iter().any(|l| l == "T 0"),
+            "the unkey still goes out at once: {sent:?}"
+        );
+        assert!(
+            sent.iter().any(|l| l == "\\stop_morse"),
+            "…and the CW abort: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("\\send_voice_mem")),
+            "no voice memory is played on the radio being left: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("U NB")),
+            "no DSP switch meant for the Icom reaches the Yaesu: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("M ")),
+            "…nor its filter width: {sent:?}"
+        );
+
+        // The handoff takes the switch, and its tick retunes the Icom. The Icom's first heavy
+        // poll, a period later, gets what was queued for it (its capability probes marked done,
+        // as on the W0 tick, so that poll stays inside its read budget).
+        let mut backend = MockBackend::new();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            2000.0,
+        );
+        assert_eq!(last_active, icom, "the handoff adopted the Icom");
+        state.rx_ranges_probed = true;
+        state.tuner_probed = true;
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            3000.0,
+        );
+        let got = icom_log.lock().unwrap().clone();
+        assert!(
+            got.iter().any(|l| l == "U NB 1"),
+            "the NB switch reaches the Icom: {got:?}"
+        );
+        assert!(
+            got.iter().any(|l| l == "M USB 1800"),
+            "…and the filter width: {got:?}"
+        );
+        let everything = [yaesu_log.lock().unwrap().clone(), got].concat();
+        assert!(
+            !everything.iter().any(|l| l.starts_with("\\send_voice_mem")),
+            "the PLAY was dropped, not queued behind the handoff: {everything:?}"
+        );
+    }
+
+    /// …but a voice-memory STOP is never held: it goes to the rig in hand, and on a W0 tick that
+    /// is the radio that may be playing one.
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_still_stops_a_voice_memory() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        let before = yaesu_log.lock().unwrap().len();
+        w0_tick_with(&engine, &mut rig, &mut state, icom, |e| {
+            e.request_voice_mem_stop()
+        });
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            sent.iter().any(|l| l == "\\stop_voice_mem"),
+            "the STOP reaches the radio being left: {sent:?}"
+        );
+    }
+
+    /// ★ The PLAY is dropped on a HELD switch too, whose `rig` is the outgoing radio kept because
+    /// it is still keyed (its unkey failed). The relay used to send it to that radio.
+    #[test]
+    fn a_held_switch_drops_a_voice_memory_play_rather_than_send_it_to_the_keyed_radio() {
+        let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (yaesu_addr, yaesu_port, yaesu_log) =
+            mock_logging_rigctld_refusing_unkey(refuse.clone());
+        let (icom_addr, icom_port, _icom_log) = mock_logging_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), true);
+        refuse.store(true, std::sync::atomic::Ordering::SeqCst);
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_active_radio(icom);
+            e.request_voice_mem(1);
+        }
+        let mut last_active = 0u32;
+        let mut backend = MockBackend::new();
+        let before = yaesu_log.lock().unwrap().len();
+        loop_tick(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &mut backend,
+            40.0,
+        );
+        assert!(
+            state.handoff_deferred,
+            "premise: the switch is held while the Yaesu is keyed"
+        );
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            !sent.iter().any(|l| l.starts_with("\\send_voice_mem")),
+            "no voice memory is played on the held radio: {sent:?}"
+        );
+    }
+
+    /// ★ The W0 tick leaves the outgoing radio's SCOPE alone. On native CI-V the scope's control
+    /// one-shots (span, reference, Center/Fixed) were drained on that tick into the old radio's
+    /// daemon. They now wait for the radio the handoff installs.
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_leaves_the_outgoing_scope_alone() {
+        let (daemon, _, regs) = civ_daemon_rig(false);
+        let yaesu_port = daemon.local_addr().port();
+        let yaesu_addr = format!("127.0.0.1:{yaesu_port}");
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        state.rigctld_proc = Some(CatDaemon::Native(daemon));
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        w0_tick_with(&engine, &mut rig, &mut state, icom, |e| {
+            e.request_scope_fixed(true)
+        });
+        assert!(
+            !regs.lock().unwrap().scope_fixed,
+            "the outgoing radio's scope stays in Center"
+        );
+        assert_eq!(
+            engine.lock().unwrap().take_scope_fixed_request(),
+            Some(true),
+            "…and the request waits for the radio the handoff installs"
+        );
+    }
+
+    /// ★ …and the same for an FT-710's own scope (the FT4222 bridge): its span request was set
+    /// on the old radio on that tick. It now waits for the radio the handoff installs.
+    #[test]
+    fn a_switch_the_handoff_has_not_seen_sets_no_scope_span_on_the_outgoing_ft710() {
+        let (yaesu_addr, yaesu_port, yaesu_log) = mock_polled_rigctld();
+        let (icom_addr, icom_port, _icom_log) = mock_polled_rigctld();
+        let (engine, pool, mut rig, mut state, icom) =
+            w0_scene((&yaesu_addr, yaesu_port), (&icom_addr, icom_port), false);
+        // The Yaesu becomes an FT-710 with its scope opted in and its reader running.
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rig_model = 1049;
+            s.yaesu_rf_scope = true;
+            e.apply_settings(s);
+        }
+        state.applied.rig_model = 1049;
+        state.yaesu_wf_key = Some((1049, state.applied.serial_port.clone()));
+        state.yaesu_wf = Some(crate::yaesu_wf::YaesuWaterfall::start(
+            Box::new(crate::yaesu_wf::MockWaterfall::ramp()),
+            state.spectrum_feed.clone(),
+            state.yaesu_wf_meta.clone(),
+            Duration::from_millis(50),
+        ));
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        let before = yaesu_log.lock().unwrap().len();
+        w0_tick_with(&engine, &mut rig, &mut state, icom, |e| {
+            e.request_scope_span(25_000)
+        });
+        let sent = yaesu_log.lock().unwrap()[before..].to_vec();
+        assert!(
+            !sent
+                .iter()
+                .any(|l| l.starts_with("w SS05") && l != "w SS05;"),
+            "no scope span is set on the radio being left: {sent:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().take_scope_span_request(),
+            Some(25_000),
+            "…and the request waits for the radio the handoff installs"
         );
     }
 
