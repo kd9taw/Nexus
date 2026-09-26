@@ -1309,6 +1309,7 @@ mod tests {
                     (step % 4) as i64,
                     &test_country,
                     &test_state,
+                    &|_: &str| true,
                 );
             }
         }

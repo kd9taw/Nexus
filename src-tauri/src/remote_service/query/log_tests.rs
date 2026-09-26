@@ -412,6 +412,7 @@ pub(in crate::remote_service) fn random_change(e: &crate::SharedEngine, g: &mut 
                 (step % 4) as i64,
                 &test_country,
                 &test_state,
+                &|_: &str| true,
             );
         }
     }

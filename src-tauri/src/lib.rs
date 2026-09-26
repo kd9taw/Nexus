@@ -3153,7 +3153,7 @@ mod logbook_startup_tests {
                 "the attach fills nothing: every row is what the database holds"
             );
             let e = Mutex::new(e);
-            let done = tempo_app::logfill::fill_log_store(&e, 1, &places, &no_state)
+            let done = tempo_app::logfill::fill_log_store(&e, 1, &places, &no_state, &|_| true)
                 .expect("the fill job runs");
             let e = e.into_inner().unwrap_or_else(|p| p.into_inner());
             assert!(
@@ -7244,6 +7244,23 @@ fn subdivision_hint(call: &str, grid: Option<&str>) -> Option<String> {
     us_state_hint(call, grid)
 }
 
+/// Whether a state or province can apply to a contact at all: yes where [`subdivision_hint`]
+/// can answer, which is where the call names a Canadian province, places the station in the
+/// United States / Alaska / Hawaii group or in Canada, or places it nowhere (the hint then falls
+/// back to the FCC index and the grid). No for every other entity, where the hint answers
+/// nothing: a DX contact without a state is not missing one. From the call, never from a stored
+/// country, which an imported log may hold in another spelling.
+///
+/// The fill job counts a contact without a state as lacking one only where this says yes
+/// ([`spawn_log_fill`]). It must say yes wherever the hint can answer, or the job would leave a
+/// state unfilled that it used to fill:
+/// `the_fill_job_asks_for_a_state_wherever_the_hint_can_give_one`.
+fn subdivision_applies(call: &str) -> bool {
+    propagation::province_for_call(call).is_some()
+        || propagation::dxcc::resolve(call)
+            .is_none_or(|d| propagation::dxcc::is_us_state_entity(d.entity) || d.entity == "Canada")
+}
+
 /// The country a contact's call places it in: cty.dat's entity name. THE country resolver — the
 /// engine fills a contact's country with it (`Engine::set_dxcc_resolver`), and so does the fill
 /// job that writes what an older build left unfilled ([`spawn_log_fill`]), which is what makes
@@ -7265,7 +7282,9 @@ fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
 /// what `fill_ver` in the store records (SPEC-2 v3 D2-A). It changes with anything that can
 /// change what [`country_of`] or [`subdivision_hint`] answers: this build (their rules, the
 /// embedded cty.dat, the grid and province tables), the cty.dat active this session, and the
-/// FCC index the resolver holds. Bump `FILL_RULES` if the fill rule itself ever changes.
+/// FCC index the resolver holds. Bump `FILL_RULES` if the fill rule itself ever changes. Which
+/// contacts the job counts is not the fill rule: [`subdivision_applies`] leaves out only contacts
+/// the hint never answers for, so what is written does not change with it.
 fn log_fill_version() -> i64 {
     const FILL_RULES: u32 = 1;
     let fcc = FCC_LOADED.read().map(|g| g.clone()).unwrap_or_default();
@@ -7285,7 +7304,8 @@ fn log_fill_version() -> i64 {
 /// Write the country and state the logbook store lacks — once per resolver-data version
 /// ([`log_fill_version`]), after the window is up, on a thread of its own and never the radio
 /// loop's — with the resolvers the engine fills every insert with ([`country_of`],
-/// [`subdivision_hint`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
+/// [`subdivision_hint`]), counting a contact without a state only where one can apply
+/// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
 fn spawn_log_fill(engine: SharedEngine) {
     let spawned = std::thread::Builder::new()
         .name("nexus-log-fill".into())
@@ -7295,16 +7315,13 @@ fn spawn_log_fill(engine: SharedEngine) {
                 log_fill_version(),
                 &country_of,
                 &subdivision_hint,
+                &subdivision_applies,
             ) {
-                Ok(done) if done.current => {}
-                Ok(done) => tempo_core::applog::info(
-                    "logbook",
-                    &format!(
-                        "country and state saved into the logbook for {} of the {} contacts \
-                         that lacked one",
-                        done.filled, done.lacking
-                    ),
-                ),
+                Ok(done) => {
+                    if let Some(note) = log_fill_note(&done) {
+                        tempo_core::applog::info("logbook", &note);
+                    }
+                }
                 Err(e) => tempo_core::applog::warn(
                     "logbook",
                     &format!(
@@ -7319,6 +7336,23 @@ fn spawn_log_fill(engine: SharedEngine) {
             "logbook",
             &format!("the logbook's country and state fill did not start: {e}"),
         );
+    }
+}
+
+/// What a run of the fill job says in the log: nothing when the store was already filled for
+/// this version, that the countries and states are up to date when no contact lacked one it
+/// could take, and otherwise how many of the contacts that could take one gained it.
+fn log_fill_note(done: &tempo_app::logfill::FillOutcome) -> Option<String> {
+    if done.current {
+        None
+    } else if done.lacking == 0 {
+        Some("the logbook's countries and states are up to date".into())
+    } else {
+        Some(format!(
+            "country and state saved into the logbook for {} of the {} contacts that could \
+             take one",
+            done.filled, done.lacking
+        ))
     }
 }
 
@@ -31340,6 +31374,110 @@ mod tests {
             "US stations keep the state hint they already had"
         );
         assert_eq!(super::subdivision_hint("G0ABC", Some("IO91")), None);
+    }
+
+    /// ★ THE FILL JOB ASKS FOR A STATE WHEREVER THE HINT CAN GIVE ONE. The fill job counts a
+    /// contact without a state as lacking one only where [`super::subdivision_applies`] says a
+    /// state can apply, and never asks the hint about the rest. So wherever it says no, the hint
+    /// must answer nothing, or the job would leave a state unfilled that it used to fill. Across
+    /// calls of many entities, portables among them, and grids in the US, on the border, in
+    /// Canada and far away: wherever it says no, the hint says nothing. The control: it says yes
+    /// for the US, Alaska, Hawaii, Canada and a call that resolves nowhere, and there the hint
+    /// answers as it always has — with nothing for VE0, a ship at sea, which is in no province.
+    #[test]
+    fn the_fill_job_asks_for_a_state_wherever_the_hint_can_give_one() {
+        let grids = [
+            None,
+            Some("EN52"),
+            Some("EN82"),
+            Some("CM87"),
+            Some("FN31"),
+            Some("JO62"),
+            Some("QF56"),
+        ];
+        let dx = [
+            "DL1ABC",
+            "G0ABC",
+            "JA1ABC",
+            "VK2ABC",
+            "ZL1ABC",
+            "PY2ABC",
+            "XE2ABC",
+            "KP4ABC",
+            "KH2ABC",
+            "KP2ABC",
+            "W1ABC/KP4",
+            "DL1ABC/P",
+            "4X1ABC",
+        ];
+        for call in dx {
+            assert!(
+                !super::subdivision_applies(call),
+                "{call}: no state can apply"
+            );
+            for grid in grids {
+                assert_eq!(
+                    super::subdivision_hint(call, grid),
+                    None,
+                    "{call} {grid:?}: the hint answers nothing where no state can apply"
+                );
+            }
+        }
+        // The control: where a state or province can apply, the predicate says so, and the hint
+        // answers — from the entity, the province, the grid.
+        assert!(
+            propagation::dxcc::resolve("").is_none(),
+            "premise: a call that resolves nowhere"
+        );
+        for (call, grid, hint) in [
+            ("W9XYZ", Some("EN52"), Some("WI")),
+            ("WL7E", Some("CM87"), Some("AK")),
+            ("KH6ABC", None, Some("HI")),
+            ("VE3ABC", Some("EN82"), Some("ON")),
+            ("W1ABC/VE3", None, Some("ON")),
+            ("VE0ABC", None, None),
+            ("", Some("EN52"), Some("WI")),
+        ] {
+            assert!(
+                super::subdivision_applies(call),
+                "{call:?}: a state can apply"
+            );
+            assert_eq!(
+                super::subdivision_hint(call, grid).as_deref(),
+                hint,
+                "{call:?} {grid:?}"
+            );
+        }
+    }
+
+    /// The fill job's line in the log says what happened, and does not alarm when nothing that
+    /// could take a country or a state lacks one. 1.15.0-test1 read "country and state saved into
+    /// the logbook for 0 of the 4847 contacts that lacked one" on a log whose DX contacts can take
+    /// no state.
+    #[test]
+    fn the_fill_jobs_line_says_what_it_did_and_does_not_alarm() {
+        use tempo_app::logfill::FillOutcome;
+        let note = |current, lacking, filled| {
+            super::log_fill_note(&FillOutcome {
+                current,
+                lacking,
+                filled,
+            })
+        };
+        assert_eq!(
+            note(true, 0, 0),
+            None,
+            "a store already filled says nothing"
+        );
+        assert_eq!(
+            note(false, 0, 0).as_deref(),
+            Some("the logbook's countries and states are up to date"),
+            "nothing that could take one lacked one"
+        );
+        assert_eq!(
+            note(false, 5, 3).as_deref(),
+            Some("country and state saved into the logbook for 3 of the 5 contacts that could take one"),
+        );
     }
 
     /// #75: 4 m shipped in ONE of the two band dropdowns. The FT/digital cockpit reads
