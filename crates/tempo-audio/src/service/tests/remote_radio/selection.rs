@@ -146,15 +146,17 @@ fn wait_for_free_modem() {
 /// The second attempt starts where the refusal left the station, which is where an operator's
 /// second gesture starts: nothing committed and the active radio unchanged; the incoming
 /// connection back in the pool, its claim and keying port released (`SelectionConnection`'s
-/// drop); the outgoing radio unkeyed, with its keying port released for its next key to reopen.
-/// The refusal came AFTER the incoming radio's handoff writes, so the mock incoming radio already
-/// sits on the target; the next attempt reads that and writes the same target again, which a
-/// radio accepts. `gesture` runs before EVERY attempt, so a case that counts something per
-/// selection (cold opens, say) resets its count there.
+/// drop), so a cold-opened one is reused warm unless the radio keys on its CAT port, which is
+/// always opened fresh; the outgoing radio unkeyed, with its keying port released for its next
+/// key to reopen. The refusal came AFTER the incoming radio's handoff writes, so the mock
+/// incoming radio already sits on the target: the next attempt reads that and writes no second
+/// dial, but it does write the configured levels again and unkey the outgoing radio again.
+/// `gesture` runs before EVERY attempt, so a case that counts something per selection resets it
+/// there.
 fn apply_gesture(
     s: &mut Station,
     pool: &MonitorPool,
-    mut gesture: impl FnMut(&Station) -> Completion,
+    mut gesture: impl FnMut(&mut Station) -> Completion,
     mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
 ) -> Completion {
     for attempt in 0..GESTURE_ATTEMPTS {
@@ -195,15 +197,25 @@ fn selection_worker_adopts_warm_and_cold_connections_and_does_not_replay_the_ret
             &AtomicBool::new(false),
         );
         let monitor_view = connection(&s, &incoming).transport;
-        let receipt = queue(&s, 1);
         let opens = std::cell::Cell::new(0);
         let engine = s.engine.clone();
-        apply(&mut s, &pool, |_| {
-            assert!(engine.try_lock().is_ok(), "cold opens must not hold Engine");
-            assert!(pool.try_lock().is_ok(), "cold opens must not hold pool");
-            opens.set(opens.get() + 1);
-            (Rig::rigctld(&incoming.address), None, Some(true))
-        });
+        let receipt = apply_gesture(
+            &mut s,
+            &pool,
+            |s| {
+                // Only an unkey reaches the outgoing radio, once per selection. A refused
+                // attempt unkeyed it too. `opens` is NOT reset: a refused cold open returns its
+                // connection to the pool, and the next attempt reuses it warm.
+                outgoing.lines.lock().unwrap().clear();
+                queue(s, 1)
+            },
+            |_| {
+                assert!(engine.try_lock().is_ok(), "cold opens must not hold Engine");
+                assert!(pool.try_lock().is_ok(), "cold opens must not hold pool");
+                opens.set(opens.get() + 1);
+                (Rig::rigctld(&incoming.address), None, Some(true))
+            },
+        );
         assert_eq!(
             receipt.outcome(),
             Outcome::Applied {
@@ -346,10 +358,14 @@ fn selection_worker_failed_save_keeps_actual_adoption_and_never_replays_configur
     std::fs::write(&s.path, b"fixture save blocker").unwrap();
     engine_lock(&s.engine).configure_remote_settings_store(s.path.join("settings.json"));
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
-    let receipt = queue(&s, 1);
     // The shared apply helper also verifies host notification after adoption,
     // with both Engine and pool unlocked, even when persistence is unconfirmed.
-    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    let receipt = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 1),
+        |_| panic!("warm radio must be reused"),
+    );
     assert_eq!(
         receipt.outcome(),
         Outcome::Unknown {
@@ -408,8 +424,12 @@ fn selection_worker_confirms_fm_repeater_settings_and_does_not_replay_them() {
     });
     s.state.remote_retune_uncertain = true;
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
-    let receipt = queue(&s, 1);
-    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    let receipt = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 1),
+        |_| panic!("warm radio must be reused"),
+    );
     assert_eq!(
         receipt.outcome(),
         Outcome::Applied {
@@ -491,8 +511,16 @@ fn selection_worker_adopts_desired_levels_and_actual_readback_without_replaying_
         e.observe_rig_mic_gain(0.95);
     }
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
-    let receipt = queue(&s, 1);
-    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    let receipt = apply_gesture(
+        &mut s,
+        &pool,
+        |s| {
+            // Six level writes per selection; a refused attempt wrote its six too.
+            incoming.lines.lock().unwrap().clear();
+            queue(s, 1)
+        },
+        |_| panic!("warm radio must be reused"),
+    );
     assert_eq!(
         receipt.outcome(),
         Outcome::Applied {
@@ -647,11 +675,16 @@ fn routed_frequency_uses_one_confirmed_handoff_and_never_queues_the_incoming_pro
             } else {
                 vec![]
             }));
-            let receipt = s.queue_dial(145.225, "2m");
-            assert_eq!(engine_lock(&s.engine).settings(), &original);
-            apply(&mut s, &pool, |_| {
-                (Rig::rigctld(&incoming.address), None, Some(true))
-            });
+            let receipt = apply_gesture(
+                &mut s,
+                &pool,
+                |s| {
+                    let receipt = s.queue_dial(145.225, "2m");
+                    assert_eq!(engine_lock(&s.engine).settings(), &original);
+                    receipt
+                },
+                |_| (Rig::rigctld(&incoming.address), None, Some(true)),
+            );
             assert_eq!(
                 matches!(
                     receipt.outcome(),
@@ -785,11 +818,16 @@ fn routed_mode_handoff_preserves_confirmed_power_and_never_replays_later() {
                 } else {
                     vec![]
                 }));
-                let receipt = s.queue_mode("digital", true);
-                assert_eq!(engine_lock(&s.engine).settings(), &original);
-                apply(&mut s, &pool, |_| {
-                    (Rig::rigctld(&incoming.address), None, Some(true))
-                });
+                let receipt = apply_gesture(
+                    &mut s,
+                    &pool,
+                    |s| {
+                        let receipt = s.queue_mode("digital", true);
+                        assert_eq!(engine_lock(&s.engine).settings(), &original);
+                        receipt
+                    },
+                    |_| (Rig::rigctld(&incoming.address), None, Some(true)),
+                );
                 assert_eq!(
                     matches!(
                         receipt.outcome(),
@@ -1039,30 +1077,35 @@ fn routed_spot_commits_exact_contact_context_only_after_confirmed_incoming_tunin
                     vec![]
                 }));
                 let tick = engine_lock(&s.engine).snapshot().work_tick;
-                let receipt = {
-                    let mut engine = engine_lock(&s.engine);
-                    let connection = engine
-                        .remote_monitor_observation()
-                        .radio
-                        .readings
-                        .cat
-                        .unwrap()
-                        .connection_generation;
-                    engine
-                        .queue_remote_spot(
-                            mode,
-                            7.03145,
-                            "40m",
-                            "N2SPOT/P",
-                            connection,
-                            s.authority.permit(unexpired_deadline()).unwrap(),
-                        )
-                        .unwrap()
-                };
-                assert_eq!(engine_lock(&s.engine).settings(), &original);
-                apply(&mut s, &pool, |_| {
-                    (Rig::rigctld(&incoming.address), None, Some(true))
-                });
+                let receipt = apply_gesture(
+                    &mut s,
+                    &pool,
+                    |s| {
+                        let receipt = {
+                            let mut engine = engine_lock(&s.engine);
+                            let connection = engine
+                                .remote_monitor_observation()
+                                .radio
+                                .readings
+                                .cat
+                                .unwrap()
+                                .connection_generation;
+                            engine
+                                .queue_remote_spot(
+                                    mode,
+                                    7.03145,
+                                    "40m",
+                                    "N2SPOT/P",
+                                    connection,
+                                    s.authority.permit(unexpired_deadline()).unwrap(),
+                                )
+                                .unwrap()
+                        };
+                        assert_eq!(engine_lock(&s.engine).settings(), &original);
+                        receipt
+                    },
+                    |_| (Rig::rigctld(&incoming.address), None, Some(true)),
+                );
                 assert_eq!(
                     matches!(
                         receipt.outcome(),
@@ -1185,11 +1228,16 @@ fn routed_tier_installs_the_native_decoder_only_after_confirmed_channel_handoff(
             } else {
                 vec![]
             }));
-            let receipt = s.queue_tier(tempo_app::dto::Tier::Msk144);
-            assert_eq!(engine_lock(&s.engine).settings(), &original);
-            apply(&mut s, &pool, |_| {
-                (Rig::rigctld(&incoming.address), None, Some(true))
-            });
+            let receipt = apply_gesture(
+                &mut s,
+                &pool,
+                |s| {
+                    let receipt = s.queue_tier(tempo_app::dto::Tier::Msk144);
+                    assert_eq!(engine_lock(&s.engine).settings(), &original);
+                    receipt
+                },
+                |_| (Rig::rigctld(&incoming.address), None, Some(true)),
+            );
             assert_eq!(
                 matches!(
                     receipt.outcome(),
@@ -1343,26 +1391,31 @@ fn routed_workspace_enters_js8_only_after_confirmed_channel_handoff() {
             } else {
                 vec![]
             }));
-            let receipt = {
-                let mut e = engine_lock(&s.engine);
-                let generation = e
-                    .remote_monitor_observation()
-                    .radio
-                    .readings
-                    .cat
-                    .unwrap()
-                    .connection_generation;
-                e.queue_remote_workspace(
-                    tempo_app::engine::remote_radio::Workspace::Js8,
-                    generation,
-                    s.authority.permit(unexpired_deadline()).unwrap(),
-                )
-                .unwrap()
-            };
-            assert_eq!(engine_lock(&s.engine).settings(), &original);
-            apply(&mut s, &pool, |_| {
-                (Rig::rigctld(&incoming.address), None, Some(true))
-            });
+            let receipt = apply_gesture(
+                &mut s,
+                &pool,
+                |s| {
+                    let receipt = {
+                        let mut e = engine_lock(&s.engine);
+                        let generation = e
+                            .remote_monitor_observation()
+                            .radio
+                            .readings
+                            .cat
+                            .unwrap()
+                            .connection_generation;
+                        e.queue_remote_workspace(
+                            tempo_app::engine::remote_radio::Workspace::Js8,
+                            generation,
+                            s.authority.permit(unexpired_deadline()).unwrap(),
+                        )
+                        .unwrap()
+                    };
+                    assert_eq!(engine_lock(&s.engine).settings(), &original);
+                    receipt
+                },
+                |_| (Rig::rigctld(&incoming.address), None, Some(true)),
+            );
             assert_eq!(
                 matches!(
                     receipt.outcome(),
@@ -1488,11 +1541,15 @@ fn selection_worker_refuses_a_held_modem_and_an_explicit_later_gesture_can_succe
     assert!(super::fm::writes(&incoming).contains(&"F 145225000".into()));
     drop(guard);
     // A separate, explicit request after releasing that same guard succeeds.
-    // The first uncertain request is never retried by the owner.
-    let next = s.queue_dial(145.225, "2m");
-    apply(&mut s, &pool, |_| {
-        panic!("returned connection must be reusable")
-    });
+    // The first uncertain request is never retried by the owner. Some other
+    // holder can take the mutex once this guard is released, so this gesture
+    // goes through `apply_gesture` like any other success.
+    let next = apply_gesture(
+        &mut s,
+        &pool,
+        |s| s.queue_dial(145.225, "2m"),
+        |_| panic!("returned connection must be reusable"),
+    );
     assert!(matches!(
         next.outcome(),
         Outcome::Applied {
