@@ -7,6 +7,21 @@ use tempo_app::engine::remote_radio::RadioLevel;
 use tempo_app::engine::remote_selection::{Configuration, Readback, Request};
 use tempo_app::remote_control::{Reason, WritePermission};
 
+// How many selections THIS thread's worker has refused because the FT8 a7 guard was held
+// elsewhere. Tests only. The guard is the process-wide modem mutex, shared with every decode,
+// encode and `a7_reset` in the process: 81 other tests in the tempo-audio test binary take it
+// (traced 2026-09-17), and so does the `nexus-decode` worker thread, which no test-side lock
+// can gate. So a case that means to exercise a SUCCESS cannot assume it wins that race. It
+// reads this to tell that refusal from a real one and issues its gesture again, which is what
+// an operator does. Per thread because the tests run the worker on their own thread: another
+// test's refusal cannot be mistaken for this one's. The refusal itself is the subject of
+// `selection_worker_refuses_a_held_modem_and_an_explicit_later_gesture_can_succeed`.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MODEM_BUSY_REFUSALS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 struct MonitorPause<'a> {
     flag: &'a std::sync::atomic::AtomicBool,
     prior: bool,
@@ -184,7 +199,7 @@ impl RadioLoop {
         let Some(decoder) = tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire()
         else {
             #[cfg(test)]
-            eprintln!("selection modem busy: {:?}", std::thread::current().name());
+            MODEM_BUSY_REFUSALS.with(|n| n.set(n.get() + 1));
             request.refuse(Reason::StationBusy);
             return;
         };

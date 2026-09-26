@@ -113,6 +113,64 @@ fn apply(
     assert_eq!(active, engine_lock(&s.engine).settings().active_radio);
 }
 
+/// Ten attempts. A full run of this binary refused about one selection in three runs over a held
+/// modem (measured 2026-09-17, 28 guard acquisitions a run). Each attempt after the first waits
+/// for the mutex to be momentarily free, so a decode that holds it for the length of its work is
+/// waited out rather than retried straight through.
+const GESTURE_ATTEMPTS: usize = 10;
+
+/// How many selections this thread's worker has refused over a modem held elsewhere.
+fn modem_busy_refusals() -> usize {
+    crate::service::remote_selection::MODEM_BUSY_REFUSALS.with(std::cell::Cell::get)
+}
+
+fn wait_for_free_modem() {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while tempo_app::engine::remote_selection::Ft8A7ResetGuard::try_acquire().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the process-wide modem mutex was never free"
+        );
+        std::thread::yield_now();
+    }
+}
+
+/// Issue a selection gesture and run the worker, issuing it AGAIN when, and only when, the worker
+/// refused it because the process-wide modem mutex was held elsewhere at its commit. That refusal
+/// is real product behaviour with a case of its own
+/// (`selection_worker_refuses_a_held_modem_and_an_explicit_later_gesture_can_succeed`); it is not
+/// the subject of a case that calls this, and winning that race on the first try is a fact about
+/// the schedule, not about the worker. A refusal for any other reason is returned unchanged and
+/// still fails the case.
+///
+/// The second attempt starts where the refusal left the station, which is where an operator's
+/// second gesture starts: nothing committed and the active radio unchanged; the incoming
+/// connection back in the pool, its claim and keying port released (`SelectionConnection`'s
+/// drop); the outgoing radio unkeyed, with its keying port released for its next key to reopen.
+/// The refusal came AFTER the incoming radio's handoff writes, so the mock incoming radio already
+/// sits on the target; the next attempt reads that and writes the same target again, which a
+/// radio accepts. `gesture` runs before EVERY attempt, so a case that counts something per
+/// selection (cold opens, say) resets its count there.
+fn apply_gesture(
+    s: &mut Station,
+    pool: &MonitorPool,
+    mut gesture: impl FnMut(&Station) -> Completion,
+    mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
+) -> Completion {
+    for attempt in 0..GESTURE_ATTEMPTS {
+        if attempt > 0 {
+            wait_for_free_modem();
+        }
+        let refusals = modem_busy_refusals();
+        let receipt = gesture(s);
+        apply(s, pool, &mut open);
+        if modem_busy_refusals() == refusals {
+            return receipt;
+        }
+    }
+    panic!("the modem mutex was held elsewhere on all {GESTURE_ATTEMPTS} attempts");
+}
+
 #[test]
 fn selection_worker_adopts_warm_and_cold_connections_and_does_not_replay_the_retune() {
     let _station = selection_test_lock();
@@ -501,8 +559,12 @@ fn selection_worker_switches_back_using_the_original_connection_and_retires_old_
     let mut s = station(&outgoing);
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
     let old_read = s.state.remote_read(&s.engine).unwrap();
-    let first = queue(&s, 1);
-    apply(&mut s, &pool, |_| panic!("warm selection cannot reopen"));
+    let first = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 1),
+        |_| panic!("warm selection cannot reopen"),
+    );
     assert_eq!(
         first.outcome(),
         Outcome::Applied {
@@ -545,10 +607,12 @@ fn selection_worker_switches_back_using_the_original_connection_and_retires_old_
         assert!(!connections[0].transport.rig_differs(&want));
         assert!(connections[0].rig.has_control());
     }
-    let second = queue(&s, 0);
-    apply(&mut s, &pool, |_| {
-        panic!("original connection must remain reusable")
-    });
+    let second = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 0),
+        |_| panic!("original connection must remain reusable"),
+    );
     assert_eq!(
         second.outcome(),
         Outcome::Applied {
@@ -1741,12 +1805,20 @@ fn a_radio_that_keys_on_its_cat_port_is_opened_fresh_not_taken_from_its_monitor(
         settings.radios[1].ptt_serial_port = String::new();
     });
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
-    let receipt = queue(&s, 1);
     let opened = std::cell::RefCell::new(Vec::new());
-    apply(&mut s, &pool, |t| {
-        opened.borrow_mut().push(t.clone());
-        (Rig::rigctld(&incoming.address), None, Some(true))
-    });
+    let receipt = apply_gesture(
+        &mut s,
+        &pool,
+        |s| {
+            // Counted per selection: a refused attempt opened the radio fresh as well.
+            opened.borrow_mut().clear();
+            queue(s, 1)
+        },
+        |t| {
+            opened.borrow_mut().push(t.clone());
+            (Rig::rigctld(&incoming.address), None, Some(true))
+        },
+    );
     assert_eq!(
         receipt.outcome(),
         Outcome::Applied {
@@ -1820,8 +1892,12 @@ fn two_radios_sharing_one_keying_port_are_each_selected_and_key_on_their_own_lin
     let mut s = so2r_station(&outgoing, PORT);
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
 
-    let first = queue(&s, 1);
-    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    let first = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 1),
+        |_| panic!("warm radio must be reused"),
+    );
     assert_eq!(
         first.outcome(),
         Outcome::Applied {
@@ -1853,10 +1929,12 @@ fn two_radios_sharing_one_keying_port_are_each_selected_and_key_on_their_own_lin
         e.remote_observe_mode(Some(&read), Some(&mode));
         e.remote_observe_ptt(Some(&read), Some(keyed));
     }
-    let second = queue(&s, 0);
-    apply(&mut s, &pool, |_| {
-        (Rig::rigctld(&outgoing.address), None, Some(true))
-    });
+    let second = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 0),
+        |_| (Rig::rigctld(&outgoing.address), None, Some(true)),
+    );
     assert_eq!(
         second.outcome(),
         Outcome::Applied {
