@@ -17,6 +17,8 @@
 //! 3. **No Engine-lock hold over 5 ms in any log path**: timed by a watcher thread that spins
 //!    `try_lock` on the shared engine and times each run of "held". It can only overestimate a
 //!    hold: two holds with a gap shorter than one of its spins read as one.
+//! 4. **The snapshot after a logged contact under 1 ms**, the median of 41: C13's acceptance
+//!    (SPEC-2), carried here when C13's own bench was retired.
 //!
 //! Its own binary: the counting allocator counts the whole process, so nothing else runs beside
 //! it. A bench, never a gate: it is `#[ignore]`d, and it prints everything it saw before it
@@ -50,6 +52,10 @@ const AFTER_THE_CUT: bool = false;
 
 /// §4.11's bound on an Engine-lock hold in any log path.
 const HOLD_BOUND: Duration = Duration::from_millis(5);
+
+/// C13's bound on the snapshot the radio loop takes after a contact is logged: the median of 41,
+/// as C13's bench took it.
+const SNAPSHOT_BOUND: Duration = Duration::from_millis(1);
 
 // ── the counting allocator ──────────────────────────────────────────────────────────────────
 
@@ -355,6 +361,38 @@ fn bench(n: usize) -> Vec<String> {
         let _ = engine_lock(&shared).snapshot();
     }
     hold("a snapshot", &watcher);
+    // C13's acceptance: a contact logged, then the snapshot the radio loop takes next, timed
+    // whole, 41 times. The band carries no decodes here (the decode path is not reachable from a
+    // test outside the crate), so this is the log's side of the snapshot, the side C13 moved off
+    // the log in memory.
+    let mut after_contact = Vec::new();
+    for k in 0..41 {
+        engine_lock(&shared).log_qso(fresh(1_000 + k));
+        let started = Instant::now();
+        let _ = engine_lock(&shared).snapshot();
+        after_contact.push(started.elapsed());
+    }
+    hold("a logged contact and the snapshot after it", &watcher);
+    after_contact.sort_unstable();
+    let median = after_contact[after_contact.len() / 2];
+    println!(
+        "  the snapshot after a logged contact: median {:.3} ms, longest {:.3} ms (the bound, {:.0} \
+         ms on the median, {})",
+        ms(median),
+        ms(after_contact[after_contact.len() - 1]),
+        ms(SNAPSHOT_BOUND),
+        if AFTER_THE_CUT {
+            "asserted"
+        } else {
+            "asserted after the cut"
+        }
+    );
+    if AFTER_THE_CUT && median > SNAPSHOT_BOUND {
+        broken.push(format!(
+            "{n} rows: the snapshot after a logged contact took {:.3} ms (the median of 41)",
+            ms(median)
+        ));
+    }
     // C13's bench's last case: a snapshot while a QSO is under way with a partner who sent no
     // grid, which asks the log for the grid it last logged for them.
     engine_lock(&shared).call_station("QQ9NOGRID");
@@ -548,12 +586,22 @@ fn bench(n: usize) -> Vec<String> {
         &watcher,
     );
 
-    // Last, since it ends the log: the purge.
-    let removed = engine_lock(&shared).clear_logbook();
+    // Last, since it ends the log: the purge, through the command's own entry point — made
+    // under the lock with its changes' tickets collected, and waited for with the lock released —
+    // and what the engine's log holds once it is done.
+    let started = Instant::now();
+    let (removed, d) = engine_lock(&shared).with_log_tickets(|e| e.clear_logbook());
+    wait(d);
     settle(&shared);
+    let purged = started.elapsed();
     hold("the purge", &watcher);
     drop(watcher);
-    println!("  purged {removed} contacts");
+    println!(
+        "  purged {removed} contacts in {:.1} s, until on disk; the engine's log then holds {:.1} \
+         MiB of Rust heap",
+        purged.as_secs_f64(),
+        mib(LIVE.load(Ordering::SeqCst) - base)
+    );
 
     println!(
         "  longest Engine-lock hold, by path (the bound is {:.0} ms), with how many holds the \
