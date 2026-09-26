@@ -23351,14 +23351,13 @@ contact yourself."
 
     /// The hot index's worked-before (B4) call keys that hold a character outside ASCII: the
     /// calls whose ASCII fold is not the UI's Unicode one, which the UI's log questions (C17a)
-    /// must look at row by row. A pass over the index's distinct calls — kept by the caller
+    /// must look at row by row. The index counts them apart from the rest, so this copies those
+    /// few keys and passes over no other call — it runs under the Engine lock, and a pass over
+    /// every distinct call held the lock for milliseconds on a big log. Kept by the caller
     /// against [`Self::log_key_rev`].
     pub fn log_odd_call_keys(&self) -> Vec<String> {
         let hot = self.station.hot();
-        hot.worked_call_keys()
-            .filter(|k| !k.is_ascii())
-            .map(str::to_string)
-            .collect()
+        hot.odd_call_keys().map(str::to_string).collect()
     }
 
     /// Whether the log only grew since it stood at `revision`. See
