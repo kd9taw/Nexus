@@ -39,7 +39,9 @@ export async function chrome() {
     const deadline = performance.now() + 30_000
     while (performance.now() < deadline) {
       if (exited) throw new Error('Chrome could not start')
-      try { const [port,path] = (await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n'); endpoint=`ws://127.0.0.1:${port}${path}`; break } catch {}
+      // Chrome creates this file before it writes it: a read in between finds it empty or half
+      // written, and an endpoint built from that is `ws://127.0.0.1:undefined`. Wait for both lines.
+      try { const [port,path] = (await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n'); if (/^\d+$/.test(port) && path?.startsWith('/')) { endpoint=`ws://127.0.0.1:${port}${path}`; break } } catch {}
       await sleep(50)
     }
     assert.ok(endpoint, 'Chrome debugging endpoint must start within 30 seconds')
