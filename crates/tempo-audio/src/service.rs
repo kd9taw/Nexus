@@ -148,6 +148,18 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
         && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
 }
 
+/// The line a radio that keys on its CAT port ([`keys_on_the_cat_port`]) keys with, which the
+/// daemon holding that port must be told (`-P`); `None` for every other radio.
+fn cat_port_ptt_line(t: &Transport) -> Option<SerialLine> {
+    if !keys_on_the_cat_port(t) {
+        return None;
+    }
+    Some(match t.ptt_method.as_str() {
+        "dtr" => SerialLine::Dtr,
+        _ => SerialLine::Rts,
+    })
+}
+
 /// Start the CAT daemon for `t` on its rigctld port: the native CI-V daemon when opted
 /// in (falling back to rigctld if the port/serial open fails), else Hamlib's rigctld.
 /// The second field of the `Ok` tuple is the native daemon's start error when it fell
@@ -1755,7 +1767,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             &mut backend,
             &mut last_active,
             &switch_pending,
-            open_monitor,
+            open_selection,
             || {
                 if let Some(notify) = &cfg.on_active_profile_change {
                     notify();
@@ -2010,6 +2022,27 @@ impl Transport {
 /// already on the port) and probe by reading the dial — but NEVER set freq/mode/PTT (a monitor must
 /// not disturb the radio the operator isn't focused on). Returns the Rig + daemon handle + cat_ok.
 fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
+    // `None`: a monitor is READ-ONLY and must never be able to key. Even for a shared-port
+    // keying transport, the background rig's daemon comes up WITHOUT --ptt-type, so a stray
+    // keying command cannot reach a radio the operator is not focused on.
+    open_read_only(t, None)
+}
+
+/// The Remote selection's opener: [`open_monitor`]'s read-only open, except that a radio keying
+/// RTS/DTR on its CAT port gets a daemon told to key that line (`-P`), as the loop's own open
+/// gives it (`open_serial_ptt`). The selection is about to make that radio the active one, and
+/// a daemon without `-P` keys by the model's default PTT type instead of the configured line.
+/// The rig stays read-only (`PttMode::Vox`) until the selection sets its keying.
+fn open_selection(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
+    open_read_only(t, cat_port_ptt_line(t))
+}
+
+/// [`open_monitor`]'s open, with the keying line the daemon is told to key: `None` for a
+/// monitor, the CAT-port line for a radio a Remote selection opens ([`open_selection`]).
+fn open_read_only(
+    t: &Transport,
+    ptt_line: Option<SerialLine>,
+) -> (Rig, Option<CatDaemon>, Option<bool>) {
     if !t.cat_available() {
         return (Rig::vox(), None, None);
     }
@@ -2027,10 +2060,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
     } else {
         (t.serial_port.as_str(), false)
     };
-    // `None`: a monitor is READ-ONLY and must never be able to key. Even for a shared-port
-    // keying transport, the background rig's daemon comes up WITHOUT --ptt-type, so a stray
-    // keying command cannot reach a radio the operator is not focused on.
-    match spawn_cat_daemon(t, target, network, None) {
+    match spawn_cat_daemon(t, target, network, ptt_line) {
         Ok((mut proc, _native_fallback)) => {
             std::thread::sleep(Duration::from_millis(700));
             if !proc.is_alive() {
@@ -19391,6 +19421,34 @@ mod tests {
         assert!(!keys_on_the_cat_port(&t));
         t.ptt_method = "vox".into();
         assert!(!keys_on_the_cat_port(&t));
+    }
+
+    /// The Remote selection's opener tells a radio's daemon to key exactly when that radio keys
+    /// on its CAT port, and on the line the operator chose: the decision `open_serial_ptt`
+    /// makes for the loop's own open. Every other radio's daemon comes up as a monitor's does.
+    #[test]
+    fn the_selection_opener_keys_a_cat_port_line_and_nothing_else() {
+        let mut t = cat_transport(4532, None);
+        t.rig_model = 3073;
+        t.serial_port = "COM5".into();
+        t.ptt_method = "rts".into();
+        assert_eq!(cat_port_ptt_line(&t), Some(SerialLine::Rts));
+        t.ptt_method = "dtr".into();
+        assert_eq!(cat_port_ptt_line(&t), Some(SerialLine::Dtr));
+
+        // A keying port of its own (SO2R): the loop keys that port itself.
+        t.ptt_serial_port = "COM9".into();
+        assert_eq!(cat_port_ptt_line(&t), None);
+        t.ptt_serial_port = String::new();
+        // CAT and VOX keying, and a network rig, have no line for the daemon to key.
+        t.ptt_method = "cat".into();
+        assert_eq!(cat_port_ptt_line(&t), None);
+        t.ptt_method = "vox".into();
+        assert_eq!(cat_port_ptt_line(&t), None);
+        t.ptt_method = "rts".into();
+        t.rig_conn = "network".into();
+        t.rig_addr = "192.168.1.50:4992".into();
+        assert_eq!(cat_port_ptt_line(&t), None);
     }
 
     #[test]

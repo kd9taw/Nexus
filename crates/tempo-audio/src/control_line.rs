@@ -129,11 +129,6 @@ fn open_first_working_baud_checked<T, E: std::fmt::Display>(
 /// [`idle_both_lines`] for why that is the opener's job and not the caller's.
 #[cfg(feature = "serial")]
 pub fn open_control_line_port(port: &str) -> std::io::Result<Box<dyn serialport::SerialPort>> {
-    // TESTS ONLY: a port [`fake_ports`] made. Not compiled outside the test harness.
-    #[cfg(test)]
-    if let Some(opened) = fake_ports::open(port) {
-        return opened;
-    }
     open_control_line_port_checked(port, || Ok(()))
 }
 
@@ -169,11 +164,18 @@ pub(crate) mod fake_ports {
         PORTS.with(|p| p.borrow()[name])
     }
 
-    /// The opener's door: `None` for a name that is no fake port.
-    pub(super) fn open(name: &str) -> Option<std::io::Result<Box<dyn serialport::SerialPort>>> {
+    /// The opener's door: `None` for a name that is no fake port. `before_open` is the real
+    /// opener's own check (a Remote selection's permission), made before the port is touched.
+    pub(super) fn open(
+        name: &str,
+        before_open: impl FnOnce() -> Result<(), String>,
+    ) -> Option<std::io::Result<Box<dyn serialport::SerialPort>>> {
         PORTS.with(|p| {
             let mut ports = p.borrow_mut();
             let state = ports.get_mut(name)?;
+            if let Err(reason) = before_open() {
+                return Some(Err(std::io::Error::other(reason)));
+            }
             if state.held {
                 return Some(Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -336,6 +338,16 @@ fn open_control_line_port_checked(
     port: &str,
     before_open: impl FnMut() -> Result<(), String>,
 ) -> std::io::Result<Box<dyn serialport::SerialPort>> {
+    // TESTS ONLY: a port [`fake_ports`] made, for both openers. Not compiled outside the test
+    // harness.
+    #[cfg(test)]
+    let before_open = {
+        let mut before_open = before_open;
+        if let Some(opened) = fake_ports::open(port, &mut before_open) {
+            return opened;
+        }
+        before_open
+    };
     let (mut sp, baud) = open_first_working_baud_checked(port, before_open, |baud| {
         serialport::new(port, baud)
             .timeout(std::time::Duration::from_millis(OPEN_TIMEOUT_MS))

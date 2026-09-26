@@ -1725,3 +1725,195 @@ fn a_selection_whose_command_window_ends_mid_handoff_is_never_adopted() {
     assert!(!s.path.exists());
     assert_eq!(pool.lock().unwrap()[0].id, 1);
 }
+
+/// ★ A radio that keys RTS/DTR on its CAT port is never selected through its monitor's
+/// connection. Its keying rides the daemon (`ptt_mode_for` → Cat), and the monitor started that
+/// daemon without `-P`, so it would key by the model's default PTT type instead of the line the
+/// operator chose. The selection opens it fresh, through the selection opener, which starts the
+/// daemon keying that line (`open_selection`).
+#[test]
+fn a_radio_that_keys_on_its_cat_port_is_opened_fresh_not_taken_from_its_monitor() {
+    let _station = selection_test_lock();
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
+    let mut s = configured_station(&outgoing, |settings| {
+        settings.radios[1].ptt_method = "rts".into();
+        settings.radios[1].ptt_serial_port = String::new();
+    });
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = queue(&s, 1);
+    let opened = std::cell::RefCell::new(Vec::new());
+    apply(&mut s, &pool, |t| {
+        opened.borrow_mut().push(t.clone());
+        (Rig::rigctld(&incoming.address), None, Some(true))
+    });
+    assert_eq!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    );
+    let opened = opened.into_inner();
+    assert_eq!(
+        opened.len(),
+        1,
+        "opened fresh, not taken from its monitor connection"
+    );
+    assert!(
+        keys_on_the_cat_port(&opened[0]),
+        "…as the radio that keys on its CAT port"
+    );
+    assert_eq!(
+        s.rig.ptt_mode(),
+        &PttMode::Cat,
+        "it keys through the daemon it was opened with"
+    );
+}
+
+/// Two radios keying through ONE controller port, RTS for radio 0 and DTR for radio 1 (SO2R).
+/// Radio 0 is the loop's, keyed as the loop opened it.
+#[cfg(feature = "serial")]
+fn so2r_station(peer: &Peer, port: &str) -> Station {
+    let mut s = configured_station(peer, |settings| {
+        for (radio, line) in [(0, "rts"), (1, "dtr")] {
+            settings.radios[radio].ptt_method = line.into();
+            settings.radios[radio].ptt_serial_port = port.into();
+        }
+    });
+    s.rig.set_ptt_mode(ptt_mode_for(&s.state.applied));
+    s
+}
+
+/// Key the loop's radio and read the shared port: `keyed` is what its lines must show.
+#[cfg(feature = "serial")]
+fn key_on_the_shared_port(
+    s: &mut Station,
+    port: &str,
+    radio: u32,
+    keyed: crate::control_line::fake_ports::State,
+) {
+    if let Err(e) = s.rig.ptt(true) {
+        panic!("radio {radio} keys on the shared port: {e}");
+    }
+    assert_eq!(
+        crate::control_line::fake_ports::state(port),
+        keyed,
+        "radio {radio} keys on its own line, and only on it"
+    );
+    s.rig.ptt(false).unwrap();
+}
+
+/// ★ SO2R from a Remote browser: a selection hands the shared keying port over, both ways. The
+/// outgoing radio is unkeyed and only then lets go of the port; the incoming radio's unkey then
+/// opens it, and each radio keys on its own line. A port opens exclusively, as a real one does:
+/// while the outgoing radio held it, the incoming radio's unkey got "Access is denied." and
+/// every such selection was refused.
+#[cfg(feature = "serial")]
+#[test]
+fn two_radios_sharing_one_keying_port_are_each_selected_and_key_on_their_own_line() {
+    use crate::control_line::fake_ports::{self, State};
+    const PORT: &str = "tempo-test-remote-so2r";
+    let _station = selection_test_lock();
+    fake_ports::install(PORT);
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
+    let mut s = so2r_station(&outgoing, PORT);
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+
+    let first = queue(&s, 1);
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    assert_eq!(
+        first.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        },
+        "radio 1 is selected"
+    );
+    key_on_the_shared_port(
+        &mut s,
+        PORT,
+        1,
+        State {
+            held: true,
+            rts: false,
+            dtr: true,
+        },
+    );
+
+    // Back to radio 0, from the browser again, once the loop has read the radio it now owns.
+    s.step();
+    let read = s.state.remote_read(&s.engine).unwrap();
+    let hz = s.rig.read_freq().unwrap();
+    let mode = s.rig.read_mode().unwrap();
+    let keyed = s.rig.read_ptt().unwrap();
+    {
+        let mut e = engine_lock(&s.engine);
+        e.remote_observe_cat(Some(&read), Some(true));
+        e.remote_observe_dial(Some(&read), Some(hz));
+        e.remote_observe_mode(Some(&read), Some(&mode));
+        e.remote_observe_ptt(Some(&read), Some(keyed));
+    }
+    let second = queue(&s, 0);
+    apply(&mut s, &pool, |_| {
+        (Rig::rigctld(&outgoing.address), None, Some(true))
+    });
+    assert_eq!(
+        second.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        },
+        "radio 0 is selected back"
+    );
+    key_on_the_shared_port(
+        &mut s,
+        PORT,
+        0,
+        State {
+            held: true,
+            rts: true,
+            dtr: false,
+        },
+    );
+}
+
+/// ★ …and a selection REFUSED after the incoming radio's unkey opened the shared port gives the
+/// port back with that radio: the radio still active keys on its own line. A refused radio that
+/// kept the port in the pool would leave the active radio unable to key at all.
+#[cfg(feature = "serial")]
+#[test]
+fn a_refused_selection_gives_the_shared_keying_port_back() {
+    use crate::control_line::fake_ports::{self, State};
+    const PORT: &str = "tempo-test-remote-so2r-refused";
+    let _station = selection_test_lock();
+    fake_ports::install(PORT);
+    let outgoing = retuning_peer(14_074_000, "PKTUSB", |_, _| None);
+    // The incoming radio refuses its retune, which comes after its unkey.
+    let incoming = retuning_peer(7_100_000, "LSB", |line, _| {
+        line.starts_with("F ").then(|| "RPRT -1\n".into())
+    });
+    let mut s = so2r_station(&outgoing, PORT);
+    let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
+    let receipt = queue(&s, 1);
+    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    assert!(
+        !matches!(receipt.outcome(), Outcome::Applied { .. }),
+        "premise: refused, {:?}",
+        receipt.outcome()
+    );
+    assert_eq!(engine_lock(&s.engine).settings().active_radio, 0);
+    assert!(
+        writes(&incoming).iter().any(|line| line.starts_with("F ")),
+        "premise: refused at the incoming radio's retune, after its unkey: {:?}",
+        writes(&incoming)
+    );
+    key_on_the_shared_port(
+        &mut s,
+        PORT,
+        0,
+        State {
+            held: true,
+            rts: true,
+            dtr: false,
+        },
+    );
+}

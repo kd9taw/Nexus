@@ -291,6 +291,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line. The connection that keeps your other radios live in the background never opens a PTT
   port.
 
+- **Choosing a radio from a Remote browser keeps its keying line, and two radios sharing one PTT
+  port can both be chosen.** A radio keyed by RTS or DTR on its CAT port, chosen from a Remote
+  browser, could key by another method than the one you chose (usually the radio's own CAT
+  command). It is now reconnected for the selection, keying on its line. Choosing between two
+  radios keyed through one controller port (SO2R) was always refused. The radio you leave now
+  lets go of the port once its PTT is released, so the radio you choose can use it, and a
+  selection that fails hands the port back.
+
 - **Awards' upload and push buttons always act on exactly the contact they list.** If a contact was
   deleted in another window while Awards was open, the Upload to LoTW and Push to QRZ, ClubLog or
   eQSL buttons could upload or push the neighbouring contact instead.
