@@ -145,6 +145,11 @@ impl RadioLoop {
             backend.flush_output();
             rig.remote_unkey_idle(outgoing.clone(), request.permission())?;
             self.selection_clear_keyers(rig, request.permission())?;
+            // Unkeyed, and it keys nothing more here: the outgoing radio lets go of its keying
+            // port BEFORE the incoming radio's unkey opens one. They can be the same port (SO2R:
+            // RTS for one radio, DTR for the other), and a port opens exclusively. If this
+            // selection is refused, the outgoing radio's next key reopens its port.
+            rig.release_ptt_port();
             incoming.rig().set_ptt_mode(ptt_mode_for(&want));
             incoming
                 .rig()

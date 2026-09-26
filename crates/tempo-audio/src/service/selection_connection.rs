@@ -15,7 +15,8 @@ pub(super) struct SelectionConnection {
 impl SelectionConnection {
     /// Called by the active owner, with its native context already checked.
     /// No Engine or pool mutex is held while opening a cold connection. The
-    /// opener must be the same station-resolved read-only opener as monitoring.
+    /// opener must be the same station-resolved read-only opener as monitoring,
+    /// save for the keying line a CAT-port radio's daemon is told (`open_selection`).
     pub(super) fn acquire(
         pool: &MonitorPool,
         id: u32,
@@ -44,7 +45,11 @@ impl SelectionConnection {
         };
         permission.check(Instant::now())?;
         let reusable = lease.connection.as_mut().is_some_and(|connection| {
-            !connection.transport.rig_differs(&transport)
+            // A radio that keys RTS/DTR on its CAT port keys through a daemon TOLD to (`-P`),
+            // and a monitor's daemon was not. Such a radio is opened fresh, never taken over:
+            // the selection opener starts its daemon keying that line (`open_selection`).
+            !super::keys_on_the_cat_port(&transport)
+                && !connection.transport.rig_differs(&transport)
                 && connection.rig.has_control()
                 && connection
                     .rigctld_proc
@@ -110,6 +115,10 @@ impl Drop for SelectionConnection {
     fn drop(&mut self) {
         if let Some(mut connection) = self.connection.take() {
             connection.rig.set_ptt_mode(PttMode::Vox);
+            // A selection only unkeys this rig, and that unkey may have opened its keying port.
+            // A monitor never keys, so the port goes with it: the radio still active may key on
+            // that same port (SO2R), and could not while the pool held it.
+            connection.rig.release_ptt_port();
             let mut connections = self.pool.lock().unwrap_or_else(|error| error.into_inner());
             // The held claim excludes reconciliation and local adoption. Keep
             // the existing entry if a future caller violates that ownership.
