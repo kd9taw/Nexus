@@ -1742,6 +1742,44 @@ mod tests {
         index.verify(&log, &Keys);
     }
 
+    /// ★ A PURGE TAKES THE CALLS OUTSIDE ASCII WITH IT (SPEC-2 v3 §4.11: the purge swaps the index
+    /// out whole, and the count of those calls is a part of it). The emptied index counts none,
+    /// as a recount of the emptied log agrees; the index handed back still counts them, as a
+    /// recount of the log it held agrees.
+    #[test]
+    fn a_purge_takes_the_calls_outside_ascii_with_it() {
+        let odd = |index: &HotIndex| {
+            index
+                .odd_call_keys()
+                .map(str::to_string)
+                .collect::<HashSet<_>>()
+        };
+        let mut log = Logbook::new();
+        log.add(row("W1AW", "20m", Some("FN31"), 0));
+        log.add(row("ſ1ABC", "20m", None, 60));
+        let mut index = HotIndex::build(&log, &Keys);
+        let only = HashSet::from(["ſ1ABC".to_string()]);
+        assert_eq!(
+            odd(&index),
+            only,
+            "premise: the index counts the call outside ASCII"
+        );
+
+        let held = log.clone();
+        let from = log.revision();
+        log.clear();
+        let taken = index
+            .purge_taking(from, log.revision())
+            .expect("the purge is followed");
+        assert_eq!(odd(&index), HashSet::new(), "the emptied index counts none");
+        assert_eq!(odd(&taken), only, "the index handed back still counts it");
+        #[cfg(debug_assertions)]
+        {
+            index.verify(&log, &Keys);
+            taken.verify(&held, &Keys);
+        }
+    }
+
     fn row(call: &str, band: &str, grid: Option<&str>, dt: i64) -> QsoRecord {
         contact(&Fields {
             call: CALLS
