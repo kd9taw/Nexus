@@ -14,6 +14,7 @@
 //! | the grid we logged for a partner | the NEWEST row, in log order, whose call is the partner's (`same_call`), then its grid if not blank — no fall-back to an older row |
 //! | when a station was last worked | the latest `when_unix` among its rows (a non-empty base call) |
 //! | worked before (B4), call scope | [`Logbook::worked_call_set`] |
+//! | the B4 calls with a character outside ASCII | [`Logbook::worked_call_set`]'s keys that are not ASCII |
 //! | B4, band and band·mode scope | [`Logbook::worked_band_set`], both folds |
 //! | the contest session's sweep | [`Logbook::worked_keys_since`] |
 //! | NEW GRID / DXCC / BAND, confirmed, NEW PARK badges | a full rebuild of the station's worked index |
@@ -350,6 +351,9 @@ pub struct HotIndex {
     entities: Names,
     /// B4: `call.to_ascii_uppercase()`, untrimmed — [`Logbook::worked_call_set`]'s key.
     calls: Counted<String>,
+    /// The `calls` keys with a character outside ASCII, counted beside them: the few calls whose
+    /// ASCII fold is not the UI's Unicode one ([`Self::odd_call_keys`]).
+    odd_calls: Counted<String>,
     /// B4 by band: `(CALL, BAND)`.
     call_band: Counted<(String, String)>,
     /// B4 by band and mode: `(CALL, BAND\u{1}MODE)`. Both kept, so the fold is a lookup.
@@ -542,6 +546,7 @@ impl HotIndex {
         self.rows == other.rows
             && stations(self) == stations(other)
             && self.calls == other.calls
+            && self.odd_calls == other.odd_calls
             && self.call_band == other.call_band
             && self.call_band_mode == other.call_band_mode
             && self.grids == other.grids
@@ -707,6 +712,9 @@ impl HotIndex {
             &mut self.call_band_mode,
             (call.clone(), Logbook::band_key(p.band, p.mode, true)),
         );
+        if !call.is_ascii() {
+            d.apply(&mut self.odd_calls, call.clone());
+        }
         d.apply(&mut self.calls, call);
         // The badges — exactly the station's worked index.
         let band = keys.band_key(p.band);
@@ -794,10 +802,12 @@ impl HotIndex {
         self.calls.contains(call_upper)
     }
 
-    /// Every B4 call key: each distinct call in the log, ASCII upper-cased and untrimmed. A read
-    /// of the set, for a caller that must see the keys themselves (SPEC-2 v3 C17a).
-    pub fn worked_call_keys(&self) -> impl Iterator<Item = &str> {
-        self.calls.0.keys().map(String::as_str)
+    /// Every B4 call key with a character outside ASCII: each such distinct call in the log,
+    /// ASCII upper-cased and untrimmed — for a caller that must see those keys themselves (SPEC-2
+    /// v3 C17a). Counted as the rows come and go, so this is a read of those few keys, not a pass
+    /// over every call in the log.
+    pub fn odd_call_keys(&self) -> impl Iterator<Item = &str> {
+        self.odd_calls.0.keys().map(String::as_str)
     }
 
     /// B4, band scope: `(call_upper, band_key)` is in the log, where `band_key` is
@@ -957,6 +967,10 @@ impl HotIndex {
             "hot index: the station lists"
         );
         assert_eq!(recount.calls, self.calls, "hot index: B4 calls");
+        assert_eq!(
+            recount.odd_calls, self.odd_calls,
+            "hot index: B4 calls outside ASCII"
+        );
         assert_eq!(recount.call_band, self.call_band, "hot index: B4 by band");
         assert_eq!(
             recount.call_band_mode, self.call_band_mode,
@@ -1153,6 +1167,8 @@ mod tests {
         "",
         "K1",
         "N0OLD",
+        // A character outside ASCII: the ASCII fold keeps `ſ`, the UI's Unicode one makes `S`.
+        "ſ1ABC",
     ];
     const BANDS: &[&str] = &["20m", "20M", "40m", "", "2m", " 6m "];
     const MODES: &[&str] = &["FT8", "ft8", "FT4", "CW", "SSB"];
@@ -1424,8 +1440,16 @@ mod tests {
                 call
             );
         }
-        // B4, all three sets, whole.
+        // B4, all three sets, whole — and the calls outside ASCII, counted apart.
         prop_assert_eq!(keys(&index.calls), log.worked_call_set(), "B4 calls");
+        prop_assert_eq!(
+            keys(&index.odd_calls),
+            log.worked_call_set()
+                .into_iter()
+                .filter(|k| !k.is_ascii())
+                .collect::<HashSet<_>>(),
+            "B4 calls outside ASCII"
+        );
         prop_assert_eq!(
             keys(&index.call_band),
             log.worked_band_set(false),
@@ -1640,6 +1664,56 @@ mod tests {
             !index.answers_as(&HotIndex::build(&reversed, &Keys)),
             "the same rows in the other order"
         );
+    }
+
+    /// The calls outside ASCII are counted apart from the rest and follow every change as the B4
+    /// calls do: a second row with the call keeps the key when one is deleted, the last row
+    /// edited to another call takes it out, and an edit to such a call puts it in.
+    #[test]
+    fn the_calls_outside_ascii_are_counted_apart_through_every_change() {
+        let odd = |index: &HotIndex| {
+            index
+                .odd_call_keys()
+                .map(str::to_string)
+                .collect::<HashSet<_>>()
+        };
+        let oracle = |log: &Logbook| {
+            log.worked_call_set()
+                .into_iter()
+                .filter(|k| !k.is_ascii())
+                .collect::<HashSet<_>>()
+        };
+        let step = |log: &mut Logbook, index: &mut HotIndex, change: &dyn Fn(&mut Logbook)| {
+            let before = (log.revision(), log.records().to_vec());
+            change(log);
+            let pairs = pairs_between(&before.1, log.records());
+            index.follow(&pairs, before.0, log.revision(), &Keys);
+        };
+        let mut log = Logbook::new();
+        log.add(row("W1AW", "20m", Some("FN31"), 0));
+        log.add(row("ſ1ABC", "20m", None, 60));
+        log.add(row("ſ1ABC", "40m", None, 120));
+        let mut index = HotIndex::build(&log, &Keys);
+        let only = HashSet::from(["ſ1ABC".to_string()]);
+        assert_eq!(odd(&index), only, "built");
+        assert_eq!(odd(&index), oracle(&log));
+
+        step(&mut log, &mut index, &|log| {
+            log.delete(2);
+        });
+        assert_eq!(odd(&index), only, "one row of two deleted: the key stays");
+        step(&mut log, &mut index, &|log| {
+            log.update_record(1, row("K1ABC", "20m", None, 60));
+        });
+        assert_eq!(odd(&index), HashSet::new(), "the last row edited away");
+        assert_eq!(odd(&index), oracle(&log));
+        step(&mut log, &mut index, &|log| {
+            log.update_record(0, row("ſ1ABC", "20m", Some("FN31"), 0));
+        });
+        assert_eq!(odd(&index), only, "a row edited to the call puts it in");
+        assert_eq!(odd(&index), oracle(&log));
+        #[cfg(debug_assertions)]
+        index.verify(&log, &Keys);
     }
 
     fn row(call: &str, band: &str, grid: Option<&str>, dt: i64) -> QsoRecord {
