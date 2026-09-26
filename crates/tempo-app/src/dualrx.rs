@@ -16,8 +16,8 @@
 //!
 //! So the table below is transcribed from vendor documentation, one citation per model, and a
 //! model nobody has read a manual for is [`DualRx::Unknown`] — never "no". This is the same
-//! discipline `civ::commands::attenuator_steps_db` already keeps for pad ladders, and the same
-//! reason: a made-up capability is acted on at the radio, not merely displayed.
+//! discipline `tempo_audio::civ::commands::attenuator_steps_db` already keeps for pad ladders,
+//! and the same reason: a made-up capability is acted on at the radio, not merely displayed.
 //!
 //! ## Three-state, like the cockpit's
 //! [`CapState`] mirrors `rigControls.ts`'s `CapState` deliberately — PRESENT / ABSENT /
@@ -30,7 +30,7 @@
 //!   may not exist puts a dead meter on the screen.
 //! - **"May the Sub be tuned here?"** Unknown ⇒ **[`Pairing::Unknown`], which the caller must
 //!   treat as permission to try** — command it and let the rig answer. This is
-//!   [`crate::rig::Rig::read_rx_ranges`]'s rule ("Unknown must always FAIL OPEN … a capability
+//!   `tempo_audio::rig::Rig::read_rx_ranges`'s rule ("Unknown must always FAIL OPEN … a capability
 //!   probe that guessed 'not covered' would block legitimate QSYs") and it holds here for the
 //!   same reason.
 //!
@@ -47,8 +47,12 @@
 //!
 //! Nothing in this module performs I/O or reaches a radio; it is a lookup table and a
 //! predicate over it.
+//!
+//! It lives in `tempo-app` so the engine can consult it: the engine cannot depend on
+//! `tempo-audio`, whose native CI-V broker reaches this module as `tempo_audio::dualrx` through
+//! a re-export.
 
-use tempo_app::bandplan::band_for_dial;
+use crate::bandplan::band_for_dial;
 
 /// What a radio's SECOND RECEIVER actually is — the three architectures a Main/Sub VFO list
 /// cannot tell apart, plus the honest fourth state.
@@ -172,7 +176,7 @@ pub enum Pairing {
 /// ⭐ THE VENDOR TABLE. One row per model a manual has actually been read for; everything else
 /// falls through to [`DualRx::Unknown`].
 ///
-/// The `model` key is the Hamlib model number, matching [`crate::rigmodels::rig_models`].
+/// The `model` key is the Hamlib model number, matching `tempo_audio::rigmodels::rig_models`.
 /// Each arm carries the manufacturer's own words in a comment, because the next person to
 /// touch a row needs to know whether they are correcting a transcription or overriding a
 /// vendor.
@@ -348,7 +352,8 @@ pub fn may_pair(model: u32, main_mhz: f64, sub_mhz: f64) -> Pairing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiverId {
     /// The receiver CAT describes by default — the one `\dump_state` reports and the one
-    /// `civ::broker`'s `ensure_main` re-asserts the selection to before any unqualified read.
+    /// `tempo_audio::civ::broker`'s `ensure_main` re-asserts the selection to before any
+    /// unqualified read.
     Main,
     /// The second receiver, when [`sub_receiver_offered`] says this build offers one.
     Sub,

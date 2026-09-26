@@ -19,6 +19,7 @@ mod by_id_tests;
 mod field_day_display;
 mod mode_entry;
 pub mod radio_selection;
+pub mod receivers;
 pub mod remote_logging;
 pub mod remote_radio;
 pub mod remote_selection;
@@ -27,6 +28,9 @@ pub mod remote_transmit;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
+pub mod sub_controls;
+#[cfg(test)]
+mod tx_gate_table;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -2572,7 +2576,7 @@ pub struct Engine {
     /// DESIRED state: it is `Some` for the entire round-trip gap before anything has reached the
     /// radio. This one is set at exactly one site — the radio loop's success branch, where both
     /// `set_split` and `set_split_freq` returned Ok on a rig we hold control of
-    /// (`Engine::rig_split_applied`) — and is revoked by any contradiction.
+    /// (`Engine::rig_split_applied_on`) — and is revoked by any contradiction.
     ///
     /// ⚠️ AND IT IS NEVER SET FROM A READ. A rig's own report of split cannot grant permission:
     /// 124 of Hamlib's 320 backends do not implement `get_split_vfo` and return a zero-filled
@@ -2583,6 +2587,17 @@ pub struct Engine {
     /// user changes split on rig". A gate that believed those reads would manufacture the very
     /// out-of-band transmission it exists to prevent. Reads may only REVOKE.
     tx_split_confirmed_hz: Option<u64>,
+    /// WHICH RECEIVER the acknowledged split above rides: Main (its VFO B) for every terrestrial
+    /// split, the Sub for a satellite cross-band pair the native CI-V daemon wrote into the Sub
+    /// band. The radio loop knows which VFO it sent and says so in the same call that grants
+    /// the confirmation ([`Engine::rig_split_applied_on`]), so the two are written together at
+    /// that one site.
+    ///
+    /// ⚠️ MEANINGFUL ONLY WHILE `tx_split_confirmed_hz` IS `Some`. The revocations clear that
+    /// field alone and leave this one stale on purpose — nothing may read it without the
+    /// confirmation beside it ([`Engine::tx_source`] does not). The gate reads it only through
+    /// [`Engine::tx_source`] (D1).
+    tx_split_confirmed_rx: crate::dualrx::ReceiverId,
     /// The acknowledged split, when it was the SATELLITE's own uplink: the "this split IS my
     /// uplink" identity [`Engine::sat_tx_mode_for_split`] asks, answered at the moment the rig
     /// acknowledged it ([`Engine::rig_split_applied`]) and kept, because the next Doppler tick
@@ -2803,6 +2818,9 @@ pub struct Engine {
     rig_rf_gain: Option<f32>,
     squelch: Option<f32>,
     rig_squelch: Option<f32>,
+    /// The SUB receiver's levels — what the operator asked of it and what the radio accepted,
+    /// keyed to the radio in play. See [`sub_controls`].
+    sub_controls: sub_controls::SubControls,
     /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
@@ -4783,6 +4801,7 @@ impl Engine {
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
+            tx_split_confirmed_rx: crate::dualrx::ReceiverId::Main,
             sat_uplink_acked_hz: None,
             observed_split: None,
             split_dirty: false,
@@ -4839,6 +4858,7 @@ impl Engine {
             rig_rf_gain: None,
             squelch: None,
             rig_squelch: None,
+            sub_controls: Default::default(),
             nr_level: None,
             rig_nr_level: None,
             comp_level: None,
@@ -14534,11 +14554,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// [`Self::rig_split_applied_on`] for a split on MAIN — its VFO B, which is every terrestrial
+    /// split and every satellite pair not riding the Sub band.
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
+        self.rig_split_applied_on(tx_hz, crate::dualrx::ReceiverId::Main);
+    }
+
+    /// The radio loop's report that the rig ACKNOWLEDGED a split TX dial of `tx_hz`, written to
+    /// receiver `rx` — the Sub when the split rode the Sub band (`sat_split_tx_vfo` answered
+    /// `"Sub"`), Main otherwise.
+    ///
+    /// `rx` is the receiver the licence gate judges from here on (D1, [`Self::tx_source`],
+    /// [`Self::tx_source_verdict`]), and where the receiver model puts the Sub's dial. The
+    /// frequency judged is `tx_hz` either way.
+    pub fn rig_split_applied_on(&mut self, tx_hz: u64, rx: crate::dualrx::ReceiverId) {
         // THE ONE PLACE PERMISSION IS GRANTED. The caller has already proved both writes
         // succeeded on a rig we hold control of; that acknowledgement is what the privilege
         // gate judges from here until something contradicts it.
         self.tx_split_confirmed_hz = Some(tx_hz);
+        self.tx_split_confirmed_rx = rx;
         // Whether it is the satellite's own uplink, recorded now: the next Doppler tick moves the
         // identity `sat_tx_mode_for_split` checks on to an uplink the loop has not written yet,
         // while the rig still transmits on this one ([`Self::sat_uplink_word`]).
@@ -14553,6 +14587,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
             {
                 b.uplink_mhz = b.pending_uplink_mhz.take();
             }
+        }
+    }
+
+    /// D1 — WHICH RECEIVER TRANSMITS: Main, unless an acknowledged split rides the Sub band.
+    ///
+    /// The ruling (2026-09-22) is that the transmit gate judges the TX SOURCE, "Main normally,
+    /// the uplink on a satellite cross-band pair". The one path in this engine that puts a
+    /// transmission on the Sub is that pair as the native CI-V daemon drives it
+    /// ([`Self::sat_split_tx_vfo`] answering `"Sub"`): satellite mode transmits out of the Sub
+    /// band (IC-9700 Basic Manual pp. 3-2, 7-1), and the radio loop reports that it wrote the
+    /// uplink there. Everything else is Main: simplex, a split on VFO B, and a split the rig
+    /// reports that nothing here wrote (a report carries no receiver to name).
+    ///
+    /// ⚠️ This names the band the RIG transmits from, not a receiver Nexus offers. An IC-905 on
+    /// a pass transmits out of its Sub band although the capability table has no vendor
+    /// statement of a second receiver for it.
+    ///
+    /// ⛔ THE LICENCE GATE JUDGES THIS RECEIVER: [`Self::tx_allowed`] reads
+    /// [`Self::tx_source_verdict`] (operator sign-off, 2026-09-23).
+    pub fn tx_source(&self) -> crate::dualrx::ReceiverId {
+        match self.tx_split_confirmed_hz {
+            Some(_) => self.tx_split_confirmed_rx,
+            None => crate::dualrx::ReceiverId::Main,
         }
     }
 
@@ -18796,7 +18853,21 @@ contact yourself."
     /// cockpit's pick and a satellite uplink's own word included
     /// ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the snapshot exposes it
     /// so the cockpit can show a lockout indicator. See `privileges.rs`.
+    ///
+    /// ⭐ JUDGED AGAINST THE RECEIVER THAT TRANSMITS (D1; operator sign-off, 2026-09-23): this
+    /// is [`Self::tx_source_verdict`]'s answer. Main transmits in every state but an
+    /// acknowledged split riding the Sub band, and there the answer is exactly
+    /// [`Self::tx_frequency_allowed`], the gate as it stood before the switch. While the Sub
+    /// transmits it is that same judgement of the uplink, plus both sides of the carrier when
+    /// Nexus commands the uplink no mode word, so the switch can only ever refuse more.
     pub fn tx_allowed(&self) -> bool {
+        self.tx_source_verdict().tx_allowed
+    }
+
+    /// THE KEY-TIME JUDGEMENT OF THE FREQUENCY THE NEXT OVER IS EMITTED ON: the whole licence
+    /// gate before the D1 switch, unchanged, and still the whole of it whenever Main transmits
+    /// ([`Self::tx_allowed`], [`Self::tx_source_verdict`]).
+    fn tx_frequency_allowed(&self) -> bool {
         self.tx_allowed_as(self.settings.operating_mode)
     }
 
@@ -19929,11 +20000,15 @@ contact yourself."
             .unwrap_or(100);
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
-        // Phone sub-band the operator may legally use on the CURRENT band + class — the band-strip
-        // shades it. None for no-phone-privilege / Open / off-plan bands (then the strip shows none).
-        let (plo, phi) =
-            crate::privileges::phone_segment(self.settings.license_class, &self.settings.band)
-                .map_or((None, None), |(lo, hi)| (Some(lo), Some(hi)));
+        // Phone sub-band the operator may legally use, for the class, on the band the radio
+        // TRANSMITS from — the band-strip shades it. That is the current band, except while an
+        // acknowledged split rides the Sub band, where it is the uplink's (D1: the verdict the
+        // lock above reads, `Engine::tx_source_verdict`). None for no-phone-privilege / Open /
+        // off-plan bands (then the strip shows none).
+        let (plo, phi) = self
+            .tx_source_verdict()
+            .phone_seg
+            .map_or((None, None), |(lo, hi)| (Some(lo), Some(hi)));
         s.radio.phone_seg_lo = plo;
         s.radio.phone_seg_hi = phi;
         // Rig DSP-func states [nb, nr, notch, comp, vox]; None = unsupported → the toggle hides.
@@ -19968,6 +20043,9 @@ contact yourself."
         }
         .to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
+        // ⭐ THE RECEIVERS, beside the flat fields above — built from the engine's one receiver
+        // model, never a second copy (dual-receiver programme, the DTO stage; ADDITIVE).
+        s.radio.receivers = Some(self.receivers_dto());
         // The clock chip's whole story, not just the number: what we steer by,
         // how old that measurement is, how many servers stood behind it, and any
         // offset guard 3 refused. `now` once, so age and freshness agree.

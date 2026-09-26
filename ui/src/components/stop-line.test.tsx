@@ -594,7 +594,41 @@ const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv]
+/** The same station with a SECOND RECEIVER Nexus can command (an IC-7610 on its own CI-V
+ *  daemon): Phone and CW then draw a SUB row and a MAIN plate. Neither carries an id or a stop
+ *  control, and these two cases hold that to the same sweep — hiding every id, singly and all
+ *  at once, with the SUB row on screen, leaves every stop control where it was. */
+const dualSnap = {
+  mycall: 'KD9TAW',
+  radio: {
+    ...radio,
+    receivers: {
+      main: { id: 'main', stages: { frontEnd: 'own', dsp: 'own', audio: 'own' } },
+      sub: { id: 'sub', stages: { frontEnd: 'own', dsp: 'unknown', audio: 'own' } },
+      subCapability: 'present',
+      subCommandable: true,
+    },
+  },
+} as unknown as AppSnapshot
+
+const phoneDual: Case<(typeof PHONE_PANEL_IDS)[number]> = {
+  ...phone,
+  cockpit: 'Phone with a Sub receiver',
+  render: (panels) =>
+    render(
+      <PhoneCockpit snap={dualSnap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} fieldDay={fdStatus} />,
+    ),
+}
+const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
+  ...cw,
+  cockpit: 'CW with a Sub receiver',
+  render: (panels) =>
+    render(
+      <CwCockpit snap={dualSnap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} fieldDay={fdStatus} />,
+    ),
+}
+
+const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual]
 
 async function settle() {
   await act(async () => {
@@ -655,6 +689,15 @@ describe('the stop line, computed against the real cockpits', () => {
       }
     },
   )
+
+  it('the two Sub-receiver cases really draw a SUB row — else they would sweep a copy of their twin', async () => {
+    for (const c of [phoneDual, cwDual] as Array<Case<any>>) {
+      c.render(panelsWith<string>([]))
+      await settle()
+      expect(document.querySelector('[data-receiver="sub"]'), `${c.cockpit}: no SUB row`).not.toBeNull()
+      cleanup()
+    }
+  })
 
   it('EVERY vocabulary in the app is swept — here, or in a file named here', () => {
     // A sweep is worth only what it covers, and the failure this whole batch came from was

@@ -465,6 +465,10 @@ const MIGRATED = [
   // a named constant exactly as this file's sibling `TxMeters.tsx` holds its four.
   'components/SMeter.tsx',
   'components/TxMeters.tsx',
+  // The Phone cockpit's Sub receiver strip (dual-receiver radios). Migrated from birth: its
+  // only bare literals are the rig's own plate `SUB` and the em dash for a value not known,
+  // both held as named constants.
+  'components/SubReceiverStrip.tsx',
   'components/RotorStrip.tsx',
   'components/prop/RotorPane.tsx',
   'components/prop/AmpPane.tsx',

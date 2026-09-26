@@ -28,6 +28,8 @@ it('preserves the original advertisement while explicitly negotiating expanded o
   expect(controlVersion({ action: 'radio.function', mode: 'phone', func: 'manualNotch', expectedOn: false, on: true })).toBe(3)
   expect(controlVersion({ action: 'radio.agc', mode: 'cw', expectedSpeed: 'fast', speed: 'fast' })).toBe(3)
   expect(controlVersion({ action: 'radio.level', mode: 'phone', level: 'power', expected: 0.5, value: 0.3 })).toBe(3)
+  // The Sub receiver's levels arrived after v3 froze and ride it, like the rig-scope settings.
+  expect(controlVersion({ action: 'radio.subLevel', level: 'afGain', value: 0.5 })).toBe(3)
   expect(controlVersion({ action: 'radio.phoneMode', expectedMode: 'auto', mode: 'USB' })).toBe(3)
   expect(controlVersion({ action: 'radio.band', band: '40m', mode: 'phone' })).toBe(3)
   expect(controlVersion({ action: 'radio.tier', tier: 'FT4' })).toBe(3)
