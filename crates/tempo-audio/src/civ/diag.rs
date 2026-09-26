@@ -190,6 +190,22 @@ fn describe_frame(f: &Frame) -> String {
         },
         (0x1C, Some(0x01)) => "send/other".into(),
         (0x27, _) => "scope waveform".into(),
+        // A band-directed command (`29 <band> <cmd…>`, IC-7610): name the receiver, then the
+        // command it carries — the line a bench reader needs to see which band a verb hit.
+        (0x29, Some(band)) if f.data.len() >= 2 => {
+            let inner = Frame {
+                to: f.to,
+                from: f.from,
+                cmd: f.data[1],
+                data: f.data[2..].to_vec(),
+            };
+            let who = match band {
+                0x00 => "MAIN",
+                0x01 => "SUB",
+                _ => "band ?",
+            };
+            format!("{who}: {}", describe_frame(&inner))
+        }
         (0xFB, _) => "ACK".into(),
         (0xFA, _) => "NAK".into(),
         (c, _) => format!("cmd {c:#04X}"),
@@ -210,6 +226,15 @@ mod tests {
         // A scope-waveform frame — the flood hypothesis.
         let scope = Frame::command(0xE0, 0x27, &[0x00, 0x11, 0x22]);
         assert_eq!(describe(&scope.to_bytes()), "scope waveform");
+    }
+
+    /// A band-directed frame says which receiver it named — the bench question for the IC-7610.
+    #[test]
+    fn labels_a_band_directed_frame_by_its_receiver() {
+        let main_af = Frame::command(0x98, 0x29, &[0x00, 0x14, 0x01]);
+        assert_eq!(describe(&main_af.to_bytes()), "MAIN: set level");
+        let sub_smeter = Frame::command(0x98, 0x29, &[0x01, 0x15, 0x02]);
+        assert_eq!(describe(&sub_smeter.to_bytes()), "SUB: read meter");
     }
 
     #[test]

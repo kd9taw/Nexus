@@ -17,6 +17,8 @@ export const SAT_VFO_MAPS = ['off', 'downlink-only', 'uplink-only', 'a-down-b-up
   'main-down-sub-up', 'main-up-sub-down'] as const
 export type SatVfoMap = (typeof SAT_VFO_MAPS)[number]
 export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch', 'afGain', 'rfGain', 'squelch'] as const
+/** The levels a dual-receiver radio's SECOND receiver takes from Nexus — the Sub row's three. */
+export const SUB_RECEIVER_LEVELS = ['rfGain', 'afGain', 'squelch'] as const
 export type RadioLevel = (typeof RADIO_LEVELS)[number]
 export type FtCallSelection = { call: string; grid: string | null; message: string | null; snr: number | null; freq: number | null }
 export type FtExchangeContext = { dxcall: string | null; state: string; txNow: string | null; cqRunning: boolean }
@@ -38,6 +40,9 @@ export type StationAction =
   | { action: 'ft.cq'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; direction: string | null }
   | { action: 'ft.txEnabled'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; on: boolean }
   | { action: 'radio.level'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; level: RadioLevel; expected: number; value: number }
+  // A level on a dual-receiver radio's SECOND receiver: a receive-side one-shot in the rig-scope
+  // settings' shape — no expected value (nothing reads the Sub back) and no mode.
+  | { action: 'radio.subLevel'; level: (typeof SUB_RECEIVER_LEVELS)[number]; value: number }
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
   // RTTY Work names itself, for the same reason: an older desktop parses workSpot's mode against
   // cw/phone exactly, so a third word there would be refused rather than understood.
@@ -139,6 +144,10 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   // map. It rides this list because it is given under the same station-control grant, and
   // because a station that does not name it must never be offered the control.
   'audioListen',
+  // The Sub receiver's levels (dual-receiver radios). Same rule as the parity batches: a station
+  // advertises it only with `radio.subLevel`, so an older station never names it and this page
+  // never sends the action to it.
+  'subReceiverLevels',
   // Operation v5: the station pushes a control's outcome and fresh state the moment it settles
   // (`operationEvent`). Names no action either. A station says it only when the relay agreed v5
   // for the request, so a v5 page on an older station never sees it and keeps re-reading after
@@ -146,7 +155,7 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   'outcomePush'] as const
 /** The hints added after operation v3 froze — batch 1 and the parity leftovers after it. An older
  * page does not know these names and drops them as hints. */
-export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery', 'satellite'] as const satisfies readonly ControlCapability[]
+export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery', 'satellite', 'subReceiverLevels'] as const satisfies readonly ControlCapability[]
 /** Batch-1 controls that move the transmit frequency, start a retune or feed the FT sequencer.
  * They stay disabled while this browser's transmission is armed; the station refuses them too. */
 export const TX_IDLE_CAPABILITIES = ['redecode', 'workDigitalSpot', 'workRttySpot', 'splitTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning'] as const satisfies readonly ControlCapability[]
@@ -160,6 +169,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'ft.exchange': 'ftExchange',
   'ft.call': 'ftCall', 'ft.cq': 'ftOperate', 'ft.txEnabled': 'ftOperate',
   'radio.level': 'radioLevels',
+  'radio.subLevel': 'subReceiverLevels',
   'radio.disarm': 'radio', 'radio.select': 'radioSelection', 'radio.frequency': 'frequency',
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
@@ -326,6 +336,10 @@ export function stationAction(raw: unknown): StationAction {
       if (!oneOf(a.mode, ['digital', 'phone', 'cw', 'rtty', 'keyboard']) || !oneOf(a.level, RADIO_LEVELS) ||
         !finite(a.expected) || !finite(a.value) || a.expected < 0 ||
         (a.level === 'notch' ? a.value < 300 || a.value > 3400 : a.expected > 1 || a.value < 0 || a.value > 1)) invalid()
+      break
+    case 'radio.subLevel':
+      object(a, ['action', 'level', 'value'])
+      if (!oneOf(a.level, SUB_RECEIVER_LEVELS) || !finite(a.value) || a.value < 0 || a.value > 1) invalid()
       break
     case 'radio.filterWidth':
       object(a, ['action', 'mode', 'expectedHz', 'hz'])

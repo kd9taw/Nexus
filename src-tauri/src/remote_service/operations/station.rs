@@ -227,6 +227,11 @@ pub enum Action {
         expected: f32,
         value: f32,
     },
+    /// A level on a dual-receiver radio's SECOND receiver — `rfGain`, `afGain` or `squelch` as a
+    /// 0..1 fraction. A receive-side one-shot, the rig-scope settings' shape: no expected value
+    /// (the Sub is not read back, so there is nothing to compare against) and no mode.
+    #[serde(rename = "radio.subLevel")]
+    SubLevel { level: String, value: f32 },
     #[serde(rename = "decoder.arm")]
     ReceiverArm { receiver: Receiver, on: bool },
     #[serde(rename = "decoder.clear")]
@@ -611,6 +616,26 @@ pub fn execute(
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
+        }
+        // The Sub receiver's levels: the desktop Sub row's own engine verb, with every refusal it
+        // makes, behind the receive-display admission. `stationState`: the station took it, and
+        // what the radio accepted arrives in the snapshot — there is no read-back to claim.
+        #[cfg(feature = "radio")]
+        Action::SubLevel { level, value } => {
+            use tempo_app::engine::sub_controls::SubLevel;
+            let level = match level.as_str() {
+                "rfGain" => SubLevel::Rf,
+                "afGain" => SubLevel::Af,
+                "squelch" => SubLevel::Sql,
+                _ => return Err(Reason::InvalidAction),
+            };
+            engine.queue_remote_sub_level(
+                level,
+                *value,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
         }
         #[cfg(feature = "radio")]
         Action::WorkSpot {
@@ -1460,7 +1485,8 @@ impl Action {
             | Self::Rit { .. }
             | Self::Xit { .. }
             | Self::Vfo { .. }
-            | Self::Scope { .. } => 3,
+            | Self::Scope { .. }
+            | Self::SubLevel { .. } => 3,
             _ => 2,
         }
     }
@@ -1511,6 +1537,9 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 // operator act: a transponder pick tunes the radio, an arm steers it for the pass,
                 // and the Stop that ends both has to be live wherever they are.
                 "satellite",
+                // The Sub receiver's levels (dual-receiver radios). Ships with `radio.subLevel`,
+                // so a station that predates the action never names it and a page never sends it.
+                "subReceiverLevels",
             ]
         }
     }
@@ -1759,6 +1788,7 @@ mod tests {
             Action::AmpOperate { .. } => (56, "AmpOperate"),
             Action::AmpBand { .. } => (57, "AmpBand"),
             Action::AmpFollowBand { .. } => (58, "AmpFollowBand"),
+            Action::SubLevel { .. } => (59, "SubLevel"),
         }
     }
 
@@ -2041,6 +2071,10 @@ mod tests {
                 expected_settings_revision: "x".into(),
                 expected_follow: false,
                 follow: false,
+            },
+            Action::SubLevel {
+                level: "x".into(),
+                value: 0.0,
             },
         ]
     }

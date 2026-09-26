@@ -1,0 +1,1251 @@
+//! ⛔ TODAY'S TRANSMIT-GATE DECISIONS, PINNED OVER A TABLE OF STATION STATES.
+//!
+//! The dual-receiver programme put a second receiver into the engine, and its first ruling
+//! (D1) says the licence gate judges whichever receiver actually TRANSMITS. The table was
+//! pinned before the receiver model existed, because adding the model had to move no
+//! decision, and "it doesn't touch `tx_allowed`" is a claim about a diff, not about
+//! behaviour. The switch to D1 then moved exactly the rows in [`D1_DIFFERS`], which carry the
+//! answers the operator approved (2026-09-23). This table is the behaviour.
+//!
+//! Every row builds a station state through the verbs the product itself uses (a band pick, a
+//! section change, a split the radio loop acknowledged, a satellite pass) and records what
+//! three consumers read:
+//!
+//! - `tx_allowed` — the key-time licence gate every transmit path ANDs in, read both through
+//!   the verb and through the snapshot the cockpit's lock indicator renders;
+//! - `tx_emission_mhz` — the frequency the lock names;
+//! - `phone_seg_lo/hi` — the band strip's "where you may talk" shade.
+//!
+//! The expected values were measured on the tree BEFORE the receiver model existed, and each
+//! one was checked against the privilege tables by hand. The rows cover single-receiver radios,
+//! dual-receiver radios in ordinary operation, and satellite cross-band pairs, because those
+//! are the three places a second receiver could plausibly leak into the answer.
+//!
+//! The gate is D1 ([`Engine::tx_source_verdict`], judged against the receiver that transmits),
+//! and [`D1_DIFFERS`] pins every row where it parts from the gate as it stood before the
+//! switch — the difference the operator ruled on.
+
+use super::*;
+use crate::dualrx::ReceiverId;
+use crate::settings::{CwKeyerBackend, SatVfoMap};
+use tempo_core::doppler::{DownlinkClass, Transponder};
+
+/// RS-44 as the satellite tests elsewhere in the engine carry it: an INVERTING linear
+/// transponder, 2 m up and 70 cm down. On an IC-9700 that pair is Main = downlink, Sub = uplink.
+pub(super) const RS44: Transponder = Transponder {
+    uplink_centre_hz: 145_965_000,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// A CONSTRUCTED inverting pair whose uplink sits 1 kHz above the 2 m CW-only edge (144.100).
+/// No real bird uplinks there; it exists to put a sideband-sensitive emission next to a
+/// segment edge, which is the only place the uplink's sideband can change a licence answer.
+pub(super) const EDGE_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 144_101_000,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// A V/V transponder (2 m in, 2 m out): the pass a Main/Sub Icom works on its A/B split,
+/// because Main and Sub cannot share a band.
+pub(super) const VV_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 145_990_000,
+    downlink_centre_hz: 145_950_000,
+    invert: false,
+    half_width_hz: 15_000,
+};
+
+/// CONSTRUCTED inverting pairs, 70 cm down (so the uplink rides the Sub), whose uplink sits
+/// within one soundcard offset of a 2 m edge — one for each section D1X extends. PSK31's 1 kHz
+/// centre below 144.1005 is 144.0995, in the CW-only segment.
+const PSK_EDGE_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 144_100_500,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// RTTY-AFSK's mark/space span above 147.9985 reaches past the top of 2 m.
+const RTTY_TOP_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 147_998_500,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// A 600 Hz soundcard CW tone below 144.0003 is 143.9997, below 2 m.
+const CW_FLOOR_BIRD: Transponder = Transponder {
+    uplink_centre_hz: 144_000_300,
+    downlink_centre_hz: 435_640_000,
+    invert: true,
+    half_width_hz: 30_000,
+};
+
+/// A station on `model` with `class` privileges, in `section`, tuned to `mhz` on `band`.
+pub(super) fn station(
+    model: u32,
+    class: &str,
+    section: &str,
+    mhz: f64,
+    band: &str,
+    sideband: &str,
+) -> Engine {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    e.settings.ensure_radio_profiles();
+    e.settings.rig_model = model;
+    e.settings.sync_active_from_flat();
+    e.set_license_class(class);
+    e.set_operating_mode(section, false);
+    e.set_frequency(mhz, band, sideband);
+    e
+}
+
+/// A satellite pass on `model`, the way the Satellites view and the radio loop build one:
+/// Main = downlink / Sub = uplink confirmed for every radio, the native CI-V daemon serving,
+/// the transponder picked, the nominal legs queued. The section is set FIRST because a section
+/// change releases a satellite's hold on the rig mode.
+pub(super) fn sat_pass(model: u32, class: &str, section: &str, tp: Transponder) -> Engine {
+    sat_pass_with(
+        model,
+        class,
+        section,
+        tp,
+        DownlinkClass::Usb,
+        CwKeyerBackend::Cat,
+        "afsk",
+    )
+}
+
+/// [`sat_pass`] with the downlink the record names (USB, LSB or an FM channel), the CW keyer and
+/// the RTTY backend (`"afsk"` or `"fsk"`), whose choices decide the CW and RTTY mode words, so
+/// they are set before the section.
+fn sat_pass_with(
+    model: u32,
+    class: &str,
+    section: &str,
+    tp: Transponder,
+    down: DownlinkClass,
+    keyer: CwKeyerBackend,
+    rtty: &str,
+) -> Engine {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    e.settings.ensure_radio_profiles();
+    e.settings.rig_model = model;
+    e.settings.rig_conn = "serial".to_string();
+    e.settings.rig_addr = String::new();
+    e.settings.icom_native_cat = true;
+    e.settings.cw_keyer = keyer;
+    e.settings.rtty_backend = rtty.to_string();
+    e.settings.sync_active_from_flat();
+    let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
+    for id in ids {
+        e.settings.confirm_sat_uplink(id, SatVfoMap::MainDownSubUp);
+    }
+    e.set_license_class(class);
+    e.set_operating_mode(section, false);
+    e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
+    e.sat_tune_nominal(down, 1_000_000);
+    e
+}
+
+/// The uplink the pass queued on the split, in Hz.
+fn queued_uplink_hz(e: &Engine) -> u64 {
+    e.split_tx_mhz()
+        .map(|m| (m * 1e6).round() as u64)
+        .expect("the pick put the uplink on the split")
+}
+
+/// What the radio loop does with a queued satellite split when `cat` is serving, reduced to
+/// the engine calls it makes: ask which VFO the split rides, then either report the rig's
+/// acknowledgement — naming the receiver it wrote, as the loop does — or report the refusal.
+/// Returns the VFO the split rode, if it was sent.
+pub(super) fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Option<&'static str> {
+    let up = queued_uplink_hz(e);
+    e.rig_dial_applied(e.settings.dial_hz());
+    match e.sat_split_tx_vfo(up, cat) {
+        Ok(vfo) => {
+            let rx = if vfo == "Sub" {
+                ReceiverId::Sub
+            } else {
+                ReceiverId::Main
+            };
+            e.rig_split_applied_on(up, rx);
+            Some(vfo)
+        }
+        Err(_) => {
+            e.split_rejected(up as f64 / 1e6);
+            None
+        }
+    }
+}
+
+/// An IC-9700 pass, General, whose uplink rides the Sub and whose mode the operator then took
+/// back mid-pass: the one state in which Nexus commands the uplink no word, in `section` with the
+/// given CW keyer and RTTY backend.
+fn released_on_the_sub(
+    section: &str,
+    keyer: CwKeyerBackend,
+    rtty: &str,
+    tp: Transponder,
+) -> Engine {
+    let mut e = sat_pass_with(
+        3081,
+        "general",
+        section,
+        tp,
+        DownlinkClass::Usb,
+        keyer,
+        rtty,
+    );
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub")
+    );
+    e.request_sideband_override(Some("USB"));
+    e
+}
+
+/// One station state and the decisions the gate makes for it.
+struct Row {
+    name: &'static str,
+    build: fn() -> Engine,
+    tx_allowed: bool,
+    emission_mhz: f64,
+    phone_seg: Option<(f64, f64)>,
+}
+
+/// The table. Grouped as the brief for this stage asks: single-receiver radios, dual-receiver
+/// radios in normal operation, satellite cross-band pairs.
+fn rows() -> Vec<Row> {
+    vec![
+        // ── Single-receiver radios ─────────────────────────────────────────────────────
+        Row {
+            name: "IC-7300 FT8 on 20 m, General",
+            build: || station(3073, "general", "digital", 14.074, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.074,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "FTDX3000 phone at 14.200, below the General phone floor",
+            build: || station(1037, "general", "phone", 14.200, "20m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 14.200,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-7300 digital 3.601 LSB — the offset lands back in the 80 m data segment",
+            build: || station(3073, "general", "digital", 3.601, "80m", "LSB"),
+            tx_allowed: true,
+            emission_mhz: 3.601,
+            phone_seg: Some((3.800, 4.000)),
+        },
+        Row {
+            name: "IC-7300 digital 3.601 USB — the offset lands above the data ceiling",
+            build: || station(3073, "general", "digital", 3.601, "80m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 3.601,
+            phone_seg: Some((3.800, 4.000)),
+        },
+        Row {
+            name: "FTDX10 split: RX 14.015 (Extra CW), TX 14.026 acknowledged, General",
+            build: || {
+                let mut e = station(1042, "general", "cw", 14.015, "20m", "USB");
+                e.rig_split_applied(14_026_000);
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 14.026,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "FTDX10 split reversed: RX 14.030 legal, TX 14.015 acknowledged, General",
+            build: || {
+                let mut e = station(1042, "general", "cw", 14.030, "20m", "USB");
+                e.rig_split_applied(14_015_000);
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 14.015,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-7300 phone 14.345 with +3 kHz XIT — the clarifier carries it over the top",
+            build: || {
+                let mut e = station(3073, "general", "phone", 14.345, "20m", "USB");
+                e.request_xit(3_000);
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 14.348,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-7300 reports split, operator never opted in — unverified, refused",
+            build: || {
+                let mut e = station(3073, "general", "digital", 14.074, "20m", "USB");
+                e.observe_rig_split(true, Some(14_030_000));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 14.074,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-7300 reports split, opted in and fresh — judged at the reported TX",
+            build: || {
+                let mut e = station(3073, "general", "digital", 14.074, "20m", "USB");
+                e.settings.split_detect_enabled = true;
+                e.observe_rig_split(true, Some(14_160_000));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 14.160,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-7300, Open class (no US privilege model), phone at 14.200",
+            build: || station(3073, "open", "phone", 14.200, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.200,
+            phone_seg: None,
+        },
+        // ── Dual-receiver radios, normal operation ─────────────────────────────────────
+        Row {
+            name: "IC-7610 phone 14.250, General",
+            build: || station(3078, "general", "phone", 14.250, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.250,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-7610 phone 14.200, General",
+            build: || station(3078, "general", "phone", 14.200, "20m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 14.200,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "FTDX101D CW pile-up split: RX 14.020 (Extra), TX 14.025 acknowledged, General",
+            build: || {
+                let mut e = station(1040, "general", "cw", 14.020, "20m", "USB");
+                e.rig_split_applied(14_025_000);
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 14.025,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "IC-9700 SSB 144.200 on 2 m, Technician",
+            build: || station(3081, "technician", "phone", 144.200, "2m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 144.200,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "TS-990S FT8 7.074, Technician (no 40 m data privilege)",
+            build: || station(2039, "technician", "digital", 7.074, "40m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 7.074,
+            phone_seg: None,
+        },
+        // ── Satellite cross-band pairs ─────────────────────────────────────────────────
+        // Since the D1 switch (operator sign-off, 2026-09-23) the gate judges the receiver that
+        // transmits, and the five rows in `D1_DIFFERS` carry its answers: the uplink band's phone
+        // segment on every cross-band pass, and the mode-released uplink refused.
+        Row {
+            name: "IC-9700 RS-44 phone, native CI-V: uplink rides Sub, General",
+            build: || {
+                let mut e = sat_pass(3081, "general", "phone", RS44);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 digital, native CI-V: uplink rides Sub, General",
+            build: || {
+                let mut e = sat_pass(3081, "general", "digital", RS44);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        // `true` when pinned. `2a9f28b4` (the Digital licence gate) now judges the data carrier
+        // on the side the uplink VFO is commanded, PKTLSB here since `2d4300ad`: 1500 Hz below
+        // 144.101 is 2 m's CW-only segment.
+        Row {
+            name: "IC-9700 constructed edge bird (up 144.101, inverting) digital, General",
+            build: || {
+                let mut e = sat_pass(3081, "general", "digital", EDGE_BIRD);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 144.101,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        // Added with the D1 comparison below, and measured the same way: the gate code these
+        // rows exercise is unchanged from the base. The one state in which the uplink's
+        // sideband is unknown — the operator took the mode back mid-pass, so Nexus stops
+        // commanding one (`sat_mode_released`). Every shipped caller of the override sets it for
+        // PHONE (the mode picker, a memory recall into Phone, Remote's phone mode), so in the
+        // Digital section it is reachable only through the bare `set_sideband_override` command.
+        Row {
+            name: "IC-9700 edge bird digital, uplink mode released mid-pass",
+            build: || {
+                let mut e = sat_pass(3081, "general", "digital", EDGE_BIRD);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e.request_sideband_override(Some("USB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 144.101,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44, Open class",
+            build: || {
+                let mut e = sat_pass(3081, "open", "phone", RS44);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-9700 V/V pass: same band, so the uplink rides VFO B on Main",
+            build: || {
+                let mut e = sat_pass(3081, "general", "phone", VV_BIRD);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("VFOB")
+                );
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 145.990,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 served by Hamlib: the Sub split is refused, nothing confirmed",
+            build: || {
+                let mut e = sat_pass(3081, "general", "phone", RS44);
+                assert_eq!(loop_applies_sat_split(&mut e, SatCatBackend::Hamlib), None);
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 435.640,
+            phone_seg: Some((420.0, 450.0)),
+        },
+        Row {
+            name: "IC-905 (second receiver unread) RS-44, native CI-V: uplink rides Sub",
+            build: || {
+                let mut e = sat_pass(3090, "general", "phone", RS44);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        // ── D1X (operator, 2026-09-24): the unknown-side rule in PSK31, RTTY-AFSK and soundcard
+        // CW. With the mode taken back Nexus commands the uplink no word, the gate before D1X
+        // judged the dial's word alone, and each edge bird's other side leaves the privileges.
+        // RS-44 in each section is the control: legal on both sides, and keyable.
+        Row {
+            name: "IC-9700 PSK31 edge bird (up 144.1005), uplink mode released mid-pass",
+            build: || released_on_the_sub("keyboard", CwKeyerBackend::Cat, "afsk", PSK_EDGE_BIRD),
+            tx_allowed: false,
+            emission_mhz: 144.1005,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RTTY-AFSK edge bird (up 147.9985), uplink mode released mid-pass",
+            build: || released_on_the_sub("rtty", CwKeyerBackend::Cat, "afsk", RTTY_TOP_BIRD),
+            tx_allowed: false,
+            emission_mhz: 147.9985,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 soundcard CW edge bird (up 144.0003), uplink mode released mid-pass",
+            build: || released_on_the_sub("cw", CwKeyerBackend::Soundcard, "afsk", CW_FLOOR_BIRD),
+            tx_allowed: false,
+            emission_mhz: 144.0003,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 PSK31, uplink mode released mid-pass",
+            build: || released_on_the_sub("keyboard", CwKeyerBackend::Cat, "afsk", RS44),
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 RTTY-AFSK, uplink mode released mid-pass",
+            build: || released_on_the_sub("rtty", CwKeyerBackend::Cat, "afsk", RS44),
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+        Row {
+            name: "IC-9700 RS-44 soundcard CW, uplink mode released mid-pass",
+            build: || released_on_the_sub("cw", CwKeyerBackend::Soundcard, "afsk", RS44),
+            tx_allowed: true,
+            emission_mhz: 145.965,
+            phone_seg: Some((144.1, 148.0)),
+        },
+    ]
+}
+
+/// What the three consumers read for `e`: the gate verb, and the snapshot fields the cockpit
+/// renders. The verb and the snapshot must agree, or the lock indicator is lying.
+fn decisions(e: &Engine) -> (bool, f64, Option<(f64, f64)>) {
+    let s = e.snapshot();
+    assert_eq!(
+        s.radio.tx_allowed,
+        e.tx_allowed(),
+        "the snapshot's lock and the key-time gate disagree"
+    );
+    (
+        e.tx_allowed(),
+        s.radio
+            .tx_emission_mhz
+            .expect("the snapshot always names the judged frequency"),
+        s.radio.phone_seg_lo.zip(s.radio.phone_seg_hi),
+    )
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
+}
+
+fn same_seg(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some((al, ah)), Some((bl, bh))) => close(al, bl) && close(ah, bh),
+        _ => false,
+    }
+}
+
+/// ⛔ THE GATE'S DECISIONS, ROW FOR ROW: as they were before the receiver model, except the
+/// rows the D1 switch moved ([`D1_DIFFERS`]), which carry the answers the operator approved.
+///
+/// All rows are checked before anything is reported, so a regression names every state it
+/// moved rather than the first.
+#[test]
+fn the_transmit_gate_decides_every_row_exactly_as_it_did_before_the_receiver_model() {
+    let mut moved = Vec::new();
+    for row in rows() {
+        let e = (row.build)();
+        let (allowed, emission, seg) = decisions(&e);
+        if allowed != row.tx_allowed
+            || !close(emission, row.emission_mhz)
+            || !same_seg(seg, row.phone_seg)
+        {
+            moved.push(format!(
+                "{}: now ({allowed}, {emission}, {seg:?}), was ({}, {}, {:?})",
+                row.name, row.tx_allowed, row.emission_mhz, row.phone_seg
+            ));
+        }
+    }
+    assert!(moved.is_empty(), "the gate moved:\n{}", moved.join("\n"));
+}
+
+/// ⚠️ THE CONTROL FOR THE TABLE ABOVE: the rows must disagree with EACH OTHER, or the table
+/// could pass on a gate that answers the same thing everywhere. Both answers of the gate, and
+/// more than one segment and emission, must appear.
+#[test]
+fn the_gate_table_is_not_uniform() {
+    let rows = rows();
+    assert!(rows.iter().any(|r| r.tx_allowed) && rows.iter().any(|r| !r.tx_allowed));
+    assert!(rows.iter().any(|r| r.phone_seg.is_none()));
+    assert!(rows
+        .iter()
+        .any(|r| r.phone_seg.is_some_and(|(lo, _)| close(lo, 420.0))));
+    assert!(rows
+        .iter()
+        .any(|r| r.phone_seg.is_some_and(|(lo, _)| close(lo, 14.225))));
+}
+
+// ── D1's input: which receiver transmits ─────────────────────────────────────────────────
+
+/// ⛔ THE RECEIVER A SPLIT RIDES REACHES THE GATE ONLY WHERE D1 SAYS, AND CAN ONLY REFUSE MORE.
+///
+/// The radio loop names the receiver in the very call that grants a split confirmation, and
+/// since the D1 switch the gate judges that receiver. Every row holding a confirmed split is
+/// rebuilt with the record flipped (Main ↔ Sub). The flip must visibly move
+/// [`Engine::tx_source`] (or this would be a mutation that changed nothing), must never move
+/// the judged frequency, must never allow the Sub-sourced one of the pair where the
+/// Main-sourced one is refused, and may move the decision on the [`D1_DIFFERS`] and
+/// [`D1X_DIFFERS`] rows alone.
+#[test]
+fn the_receiver_a_split_rides_reaches_the_gate_only_where_d1_says() {
+    let mut flipped = Vec::new();
+    let mut moved = Vec::new();
+    for row in rows() {
+        let e = (row.build)();
+        let Some(hz) = e.tx_split_confirmed_hz else {
+            continue;
+        };
+        let mut twin = (row.build)();
+        let other = match twin.tx_split_confirmed_rx {
+            ReceiverId::Main => ReceiverId::Sub,
+            ReceiverId::Sub => ReceiverId::Main,
+        };
+        twin.rig_split_applied_on(hz, other);
+        assert_ne!(
+            twin.tx_source(),
+            e.tx_source(),
+            "{}: the flip must move the transmit source",
+            row.name
+        );
+        let (mine, flip) = (decisions(&e), decisions(&twin));
+        assert!(
+            close(mine.1, flip.1),
+            "{}: the judged frequency moved",
+            row.name
+        );
+        let (on_sub, on_main) = if e.tx_source() == ReceiverId::Sub {
+            (mine, flip)
+        } else {
+            (flip, mine)
+        };
+        assert!(
+            on_main.0 || !on_sub.0,
+            "{}: the Sub is allowed where Main is refused",
+            row.name
+        );
+        if mine != flip {
+            moved.push(row.name);
+        }
+        flipped.push(e.tx_source());
+    }
+    assert!(
+        flipped.contains(&ReceiverId::Main) && flipped.contains(&ReceiverId::Sub),
+        "the table must carry confirmed splits on both receivers: {flipped:?}"
+    );
+    let mut listed: Vec<&str> = differs().map(|d| d.row).collect();
+    listed.sort_unstable();
+    moved.sort_unstable();
+    assert_eq!(
+        moved, listed,
+        "the flip moves the decision on exactly the D1 rows"
+    );
+}
+
+/// ⛔ ON THE SUB THE GATE KEEPS ITS PHONE CHECK: D1 judges the uplink by the gate's own model,
+/// which judges Phone's passband in the word the uplink VFO is commanded (`a7cbffff`).
+///
+/// A PHONE uplink on the edge bird is commanded LSB, so its passband reaches below 144.100,
+/// where 2 m is CW-only, and every class is refused — as before the switch. Judging the Sub by
+/// the band convention alone (USB, above the carrier) would allow it. RS-44 is the control: the
+/// same pass shape, its LSB passband inside the all-mode segment, keys for every class.
+#[test]
+fn on_the_sub_the_gate_keeps_its_phone_check() {
+    for class in ["technician", "general", "extra"] {
+        let mut e = sat_pass(3081, class, "phone", EDGE_BIRD);
+        assert_eq!(
+            loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+            Some("Sub")
+        );
+        assert_eq!(e.tx_source(), ReceiverId::Sub, "{class}: precondition");
+        assert_eq!(
+            e.tx_mode_effective(),
+            "LSB",
+            "{class}: precondition: the uplink is commanded LSB"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "{class}: an LSB uplink at 144.101 reaches the CW-only segment"
+        );
+        let mut control = sat_pass(3081, class, "phone", RS44);
+        loop_applies_sat_split(&mut control, SatCatBackend::NativeCiv);
+        assert_eq!(control.tx_source(), ReceiverId::Sub, "{class}: control");
+        assert!(control.tx_allowed(), "{class}: RS-44's LSB uplink keys");
+    }
+}
+
+/// One Doppler tick of a pass, as the satellite tracker drives it, and NOT the radio loop's
+/// apply of the uplink it sends: a LEO's range rate five seconds after the nominal tune, so the
+/// uplink moves. The rig still transmits on the uplink it acknowledged. Returns the one sent.
+fn tick_without_the_apply(e: &mut Engine) -> u64 {
+    let acked = e
+        .tx_split_confirmed_hz
+        .expect("precondition: an acknowledged uplink");
+    let sent = e
+        .sat_doppler_tick(7.0, 1_005_000, false)
+        .and_then(|c| c.uplink_hz)
+        .expect("precondition: the tick moves the uplink");
+    assert_ne!(sent, acked, "precondition: a new uplink");
+    assert_eq!(
+        e.tx_split_confirmed_hz,
+        Some(acked),
+        "precondition: the loop has not applied it"
+    );
+    sent
+}
+
+/// ⛔ ON THE SUB THE GATE KEEPS THE UPLINK'S WORD THROUGH A DOPPLER TICK (`6a2d9aac` on the D1
+/// path).
+///
+/// Between a tick and the radio loop's apply of the uplink it sends, the rig still transmits on
+/// the uplink it acknowledged, in the uplink's own word, while `tx_mode_effective` already
+/// answers the dial's. The gate judges the uplink's word as well, from the acknowledgement the
+/// split grant recorded. On this line the grant is [`Engine::rig_split_applied_on`], which the
+/// radio loop calls directly when the uplink rides the Sub, so the recording must happen there
+/// and not only on the Main wrapper, `rig_split_applied`, the path main's own tick tests take.
+///
+/// On the constructed edge bird (uplink 144.101, inverting) the uplink goes out in PKTLSB or
+/// LSB, below 144.100: refused once acknowledged, and it must stay refused through the tick, in
+/// Digital and in Phone. RS-44's uplink, well inside 2 m, is the control: keyable before the
+/// tick, through it and after its apply on the Sub.
+#[test]
+fn on_the_sub_the_gate_keeps_the_uplinks_word_through_a_doppler_tick() {
+    for (section, dial_word, uplink_word) in
+        [("digital", "PKTUSB", "PKTLSB"), ("phone", "USB", "LSB")]
+    {
+        let mut e = sat_pass(3081, "general", section, EDGE_BIRD);
+        assert_eq!(
+            loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+            Some("Sub"),
+            "{section}: precondition: the uplink rides the Sub"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "{section}: precondition: acknowledged, the uplink is refused"
+        );
+        tick_without_the_apply(&mut e);
+        assert_eq!(
+            e.tx_source(),
+            ReceiverId::Sub,
+            "{section}: the Sub still transmits"
+        );
+        assert_eq!(
+            e.tx_mode_effective(),
+            dial_word,
+            "{section}: precondition: between the two, the dial's word"
+        );
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some(uplink_word),
+            "{section}: precondition: the uplink's own word"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "{section}: until the loop moves it, the {uplink_word} uplink at 144.101 MHz on the \
+             Sub still reaches below 144.100 (the uplink's word as the gate sees it: {:?})",
+            e.sat_uplink_word()
+        );
+        assert!(
+            !e.snapshot().radio.tx_allowed,
+            "{section}: the lock indicator reads the same verdict"
+        );
+    }
+    // CONTROL: a legal uplink on the Sub keys through the same tick and after its apply.
+    let mut e = sat_pass(3081, "general", "digital", RS44);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub"),
+        "control: precondition: the uplink rides the Sub"
+    );
+    assert!(e.tx_allowed(), "control: RS-44's uplink keys");
+    let sent = tick_without_the_apply(&mut e);
+    assert!(
+        e.tx_allowed(),
+        "control: RS-44 keys between the tick and its apply"
+    );
+    e.rig_split_applied_on(sent, ReceiverId::Sub);
+    assert_eq!(
+        e.tx_source(),
+        ReceiverId::Sub,
+        "control: the apply rides the Sub"
+    );
+    assert!(e.tx_allowed(), "control: RS-44 keys after the apply");
+}
+
+/// D1 — THE TRANSMIT SOURCE: Main, except while an acknowledged split rides the Sub band.
+#[test]
+fn the_transmit_source_is_main_until_an_acknowledged_split_rides_the_sub() {
+    // Simplex on a two-receiver radio: Main transmits.
+    let e = station(3078, "general", "phone", 14.250, "20m", "USB");
+    assert_eq!(e.tx_source(), ReceiverId::Main, "simplex");
+
+    // A pile-up split rides Main's VFO B.
+    let mut e = station(1040, "general", "cw", 14.020, "20m", "USB");
+    e.rig_split_applied(14_025_000);
+    assert_eq!(e.tx_source(), ReceiverId::Main, "a VFO B split is Main's");
+
+    // A rig-reported split names no receiver, and nothing here wrote it: Main.
+    let mut e = station(3081, "general", "digital", 144.174, "2m", "USB");
+    e.settings.split_detect_enabled = true;
+    e.observe_rig_split(true, Some(144_180_000));
+    assert_eq!(e.tx_source(), ReceiverId::Main, "a split the rig reported");
+
+    // RS-44 on the native daemon: satellite mode transmits out of the Sub band.
+    let mut e = sat_pass(3081, "general", "phone", RS44);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub")
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Sub, "the uplink rides the Sub");
+
+    // A later split on VFO B is Main's: the record is rewritten with every grant, never left
+    // over from the one before.
+    e.rig_split_applied(145_965_000);
+    assert_eq!(
+        e.tx_source(),
+        ReceiverId::Main,
+        "rewritten by the next grant"
+    );
+
+    // A QSY voids the confirmation, and with it the Sub as the source.
+    let mut e = sat_pass(3081, "general", "phone", RS44);
+    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv);
+    assert_eq!(e.tx_source(), ReceiverId::Sub);
+    e.set_frequency(435.700, "70cm", "USB");
+    assert_eq!(e.tx_source(), ReceiverId::Main, "the radio moved");
+
+    // Same rig, a V/V bird: Main and Sub cannot share 2 m, so the pass rides VFO B on Main.
+    let mut e = sat_pass(3081, "general", "phone", VV_BIRD);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("VFOB")
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Main, "V/V rides VFO B");
+
+    // Served by Hamlib the Sub split is refused and nothing is confirmed: Main.
+    let mut e = sat_pass(3081, "general", "phone", RS44);
+    assert_eq!(loop_applies_sat_split(&mut e, SatCatBackend::Hamlib), None);
+    assert_eq!(e.tx_source(), ReceiverId::Main, "a refused Sub split");
+
+    // ⚠️ THE RIG DECIDES WHERE IT TRANSMITS, NOT THE CAPABILITY TABLE: an IC-905 on a pass
+    // transmits out of its Sub band although no manual has been read for a second receiver.
+    let mut e = sat_pass(3090, "general", "phone", RS44);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub")
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Sub, "IC-905 uplink");
+}
+
+// ── D1: the gate, judged against the transmit source ───────────────────────────────────
+
+/// What D1 answers for one row of the table.
+struct D1Answer {
+    row: &'static str,
+    tx_allowed: bool,
+    emission_mhz: f64,
+    phone_seg: Option<(f64, f64)>,
+}
+
+/// ⭐ THE DIFF TABLE — every row where the D1 switch changed the gate's answer
+/// ([`Engine::tx_source_verdict`] against the gate as it stood before, [`pre_switch`]), with the
+/// answer it gives now. The two agree on every row not listed, by assertion.
+///
+/// Read it as: the switch moved the band strip's phone shade on every cross-band pass (Main's
+/// 70 cm segment became the uplink's 2 m one), never moved the judged frequency, and changed a
+/// licence answer in exactly one state — the uplink's sideband unknown (the mode taken back
+/// mid-pass, so Nexus commands none) and a sideband-sensitive emission within an offset of a
+/// segment edge: D1 judges both sides of the carrier, where the gate before judged the dial's
+/// word.
+///
+/// The edge bird with its sideband KNOWN refuses on both sides since `2a9f28b4`. Its data uplink
+/// is commanded PKTLSB (`2d4300ad`), and the gate now judges the data carrier on the side that
+/// word names, as D1 does, so the two agree there and it is listed for its shade alone.
+const D1_DIFFERS: &[D1Answer] = &[
+    D1Answer {
+        row: "IC-9700 RS-44 phone, native CI-V: uplink rides Sub, General",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 digital, native CI-V: uplink rides Sub, General",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    // `true` until `2d4300ad` was merged: the uplink is now commanded PKTLSB, so D1 judges the
+    // data carrier 1.5 kHz below 144.101. The gate refuses it too since `2a9f28b4`.
+    D1Answer {
+        row: "IC-9700 constructed edge bird (up 144.101, inverting) digital, General",
+        tx_allowed: false,
+        emission_mhz: 144.101,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 edge bird digital, uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 144.101,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-905 (second receiver unread) RS-44, native CI-V: uplink rides Sub",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+];
+
+/// ⭐ THE D1X EXTENSION (operator, 2026-09-24): "Extend it". D1's rule — no uplink word
+/// commanded, so both sides of the carrier must be legal — reaches PSK31, RTTY-AFSK and soundcard
+/// CW, whose signal also sits on the side the word names. These are the rows it added, with the
+/// answer the gate gives each, against the gate as it stood before the switch
+/// ([`pre_switch`]); [`D1_DIFFERS`] above, the approved diff, is not edited. Each edge bird is
+/// refused where the gate before D1X allowed it; each RS-44 control keys, as before, and every one
+/// of the six moves the shade to the uplink's band, as every cross-band pass does.
+const D1X_DIFFERS: &[D1Answer] = &[
+    D1Answer {
+        row: "IC-9700 PSK31 edge bird (up 144.1005), uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 144.1005,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RTTY-AFSK edge bird (up 147.9985), uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 147.9985,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 soundcard CW edge bird (up 144.0003), uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 144.0003,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 PSK31, uplink mode released mid-pass",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 RTTY-AFSK, uplink mode released mid-pass",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 soundcard CW, uplink mode released mid-pass",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+];
+
+/// Every row the switch changed: the approved D1 diff, then the D1X extension.
+fn differs() -> impl Iterator<Item = &'static D1Answer> {
+    D1_DIFFERS.iter().chain(D1X_DIFFERS)
+}
+
+/// The gate as it stood before the D1 switch: the emitted frequency judged by the key-time
+/// model ([`Engine::tx_frequency_allowed`]), with the band strip shaded for Main's band.
+fn pre_switch(e: &Engine) -> (bool, f64, Option<(f64, f64)>) {
+    (
+        e.tx_frequency_allowed(),
+        e.tx_emission_mhz(),
+        crate::privileges::phone_segment(e.settings.license_class, &e.settings.band),
+    )
+}
+
+/// ⛔ THE GATE IS D1: the key-time verb, the snapshot's lock and the band strip's shade all read
+/// [`Engine::tx_source_verdict`], and it parts from the gate as it stood before the switch
+/// exactly on the [`D1_DIFFERS`] and [`D1X_DIFFERS`] rows, with exactly those answers.
+///
+/// A Main-sourced verdict IS the gate as it stood (it judges the same receiver), so every
+/// difference must come from a Sub-sourced row; and a Sub-sourced row may still agree (the Open
+/// class has no segments to differ over), which is why the Sub-sourced count is asserted
+/// separately.
+#[test]
+fn the_gate_is_d1_and_parts_from_the_old_gate_only_where_the_sub_transmits() {
+    let rows = rows();
+    for d in differs() {
+        assert!(
+            rows.iter().any(|r| r.name == d.row),
+            "the diff table names a row the table does not have: {}",
+            d.row
+        );
+    }
+    let mut sub_sourced = Vec::new();
+    for row in &rows {
+        let e = (row.build)();
+        let v = e.tx_source_verdict();
+        assert_eq!(v.source, e.tx_source(), "{}", row.name);
+        if v.source == ReceiverId::Sub {
+            sub_sourced.push(row.name);
+        }
+        let d1 = (v.tx_allowed, v.emission_mhz, v.phone_seg);
+        let read = decisions(&e);
+        assert!(
+            read.0 == d1.0 && close(read.1, d1.1) && same_seg(read.2, d1.2),
+            "{}: the gate reads {read:?}, D1 answers {d1:?}",
+            row.name
+        );
+        let before = pre_switch(&e);
+        match differs().find(|d| d.row == row.name) {
+            Some(d) => {
+                assert_eq!(v.source, ReceiverId::Sub, "{}", row.name);
+                assert!(
+                    d1.0 == d.tx_allowed
+                        && close(d1.1, d.emission_mhz)
+                        && same_seg(d1.2, d.phone_seg),
+                    "{}: D1 now answers {d1:?}",
+                    row.name
+                );
+                assert_ne!(d1, before, "{}: listed as differing, but agrees", row.name);
+            }
+            None => assert_eq!(
+                d1, before,
+                "{}: D1 must agree with the old gate here",
+                row.name
+            ),
+        }
+    }
+    assert_eq!(
+        sub_sourced.len(),
+        12,
+        "the Sub transmits on twelve rows, listed or not: {sub_sourced:?}"
+    );
+}
+
+// ── D1, swept beyond the table ─────────────────────────────────────────────────────────
+
+/// The (uplink, downlink) pairs [`the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded`]
+/// works, each inverting and not. CONSTRUCTED: no real bird uplinks within an audio offset of a
+/// segment edge, and that is exactly where the side of a carrier can change a licence answer.
+const SWEEP_PAIRS: [(u64, u64); 11] = [
+    (144_101_000, 435_640_000), // just above 2 m's CW-only floor, 70 cm down (cross-band)
+    (144_100_500, 435_640_000), // closer: a PSK31 signal 1 kHz below crosses into it
+    (144_099_000, 435_640_000), // just below it
+    (144_000_300, 435_640_000), // 0.3 kHz above the bottom of 2 m: a CW tone below leaves the band
+    (147_999_000, 435_640_000), // just below the top of 2 m
+    (145_965_000, 435_640_000), // RS-44's uplink, well inside
+    (420_001_000, 145_900_000), // just above the bottom of 70 cm, 2 m down (cross-band)
+    (449_999_000, 145_900_000), // just below the top of 70 cm
+    (435_300_000, 145_900_000), // well inside
+    (144_101_000, 145_950_000), // same band (V/V), so it rides Main's VFO B
+    (147_999_000, 145_950_000), // same band, at the top of 2 m
+];
+
+/// Each section the sweep works, with the CW keyer and the RTTY backend it keys with. CW and
+/// RTTY twice each: the rig's own CW keyer keys the carrier at the dial and the soundcard keyer a
+/// tone a pitch from it on the side the mode word names; AFSK keys its tones on the side the word
+/// names and FSK keys the rig's own RTTY mode. D1X extends the unknown-side rule to the soundcard
+/// keyers only, and the models it reuses add nothing for the other two.
+const SWEEP_SECTIONS: [(&str, CwKeyerBackend, &str); 7] = [
+    ("phone", CwKeyerBackend::Cat, "afsk"),
+    ("digital", CwKeyerBackend::Cat, "afsk"),
+    ("cw", CwKeyerBackend::Cat, "afsk"),
+    ("cw", CwKeyerBackend::Soundcard, "afsk"),
+    ("rtty", CwKeyerBackend::Cat, "afsk"),
+    ("rtty", CwKeyerBackend::Cat, "fsk"),
+    ("keyboard", CwKeyerBackend::Cat, "afsk"),
+];
+
+/// The sweep's labels for the sections whose unknown-side refusals the switch makes: Digital
+/// (D1), and PSK31, RTTY-AFSK and soundcard CW (D1X, operator 2026-09-24).
+const UNKNOWN_SIDE_SECTIONS: [&str; 4] = [
+    "digital Cat afsk",
+    "keyboard Cat afsk",
+    "rtty Cat afsk",
+    "cw Soundcard afsk",
+];
+
+/// ⛔ THE SWITCH ONLY EVER REFUSES MORE, AND ONLY WHERE NEXUS COMMANDS THE UPLINK NO WORD.
+///
+/// The table pins the D1 and D1X rows. This sweeps the pass shapes around them: the two radios
+/// the native daemon carries a cross-band pass on (IC-9700, IC-905), every US class and Open,
+/// every section ([`SWEEP_SECTIONS`], CW and RTTY on both of their keyers), the [`SWEEP_PAIRS`]
+/// with a USB, LSB or FM downlink, the mode taken back mid-pass or not, and XIT off and on —
+/// 14,784 states, in well under a second.
+///
+/// In every one the gate after the switch never allows what the gate before it
+/// ([`Engine::tx_frequency_allowed`]) refused, never moves the judged frequency, and is what the
+/// snapshot's lock and shade read, the shade being the band the radio transmits from. Every
+/// answer the switch DID change is Sub-sourced, with the mode taken back and so no uplink word
+/// commanded, in one of the [`UNKNOWN_SIDE_SECTIONS`] — and each of those four has at least one
+/// such refusal, so the sweep reaches every section the rule covers. Phone, RTTY on FSK and CW on
+/// the rig's keyer never have one.
+///
+/// ⚠️ A GUARD THAT NEVER REACHES A CHECK PROVES NOTHING ABOUT IT. The gate judges the transmit
+/// VFO's commanded word in Phone, Digital, Keyboard, RTTY and soundcard CW (`a7cbffff`,
+/// `2a9f28b4`, `35ea98fb`, `c82b54ec`), and on the Sub the switched gate must refuse wherever
+/// those terms do. So the sweep also counts, per section, the Sub-transmitting states only those
+/// terms refuse (the section model at the stored side allows them), and requires at least one
+/// for each — and none for CW on the rig's keyer or RTTY on FSK, whose terms add nothing. The
+/// other counts are the controls that every pass shape was built, both receivers were reached,
+/// and the switch visibly acted on the shade and on the lock.
+#[test]
+fn the_switch_only_ever_refuses_more_and_only_where_no_uplink_word_is_commanded() {
+    use std::collections::BTreeMap;
+    let (mut states, mut unbuilt, mut on_sub, mut on_main, mut shaded) = (0, 0, 0, 0, 0);
+    let mut by_the_word: BTreeMap<String, u32> = BTreeMap::new();
+    let mut refused_by: BTreeMap<String, u32> = BTreeMap::new();
+    for model in [3081u32, 3090] {
+        for class in ["technician", "general", "extra", "open"] {
+            for (section, keyer, rtty) in SWEEP_SECTIONS {
+                let label = format!("{section} {keyer:?} {rtty}");
+                by_the_word.entry(label.clone()).or_insert(0);
+                refused_by.entry(label.clone()).or_insert(0);
+                for (up, down_hz) in SWEEP_PAIRS {
+                    for invert in [true, false] {
+                        let tp = Transponder {
+                            uplink_centre_hz: up,
+                            downlink_centre_hz: down_hz,
+                            invert,
+                            half_width_hz: 15_000,
+                        };
+                        for down in [DownlinkClass::Usb, DownlinkClass::Lsb, DownlinkClass::Fm] {
+                            for released in [false, true] {
+                                for xit in [0, 3_000] {
+                                    let mut e =
+                                        sat_pass_with(model, class, section, tp, down, keyer, rtty);
+                                    if e.split_tx_mhz().is_none()
+                                        || loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv)
+                                            .is_none()
+                                    {
+                                        unbuilt += 1;
+                                        continue;
+                                    }
+                                    if xit != 0 {
+                                        e.request_xit(xit);
+                                    }
+                                    if released {
+                                        e.request_sideband_override(Some("USB"));
+                                    }
+                                    states += 1;
+                                    let what = format!(
+                                        "{model} {class} {label} up {up} invert {invert} \
+                                         {down:?} released {released} xit {xit}"
+                                    );
+                                    let before = e.tx_frequency_allowed();
+                                    let v = e.tx_source_verdict();
+                                    let s = e.snapshot();
+                                    assert_eq!(e.tx_allowed(), v.tx_allowed, "{what}: the verb");
+                                    assert_eq!(
+                                        s.radio.tx_allowed, v.tx_allowed,
+                                        "{what}: the lock"
+                                    );
+                                    assert!(
+                                        close(v.emission_mhz, e.tx_emission_mhz()),
+                                        "{what}: the judged frequency moved"
+                                    );
+                                    assert!(!v.tx_allowed || before, "{what}: THE SWITCH UNLOCKED");
+                                    if v.tx_allowed != before {
+                                        *refused_by.entry(label.clone()).or_insert(0) += 1;
+                                        assert_eq!(v.source, ReceiverId::Sub, "{what}");
+                                        assert!(
+                                            UNKNOWN_SIDE_SECTIONS.contains(&label.as_str()),
+                                            "{what}: a refusal in a section the rule does not cover"
+                                        );
+                                        assert!(
+                                            released && e.sat_tx_mode().is_none(),
+                                            "{what}: a refusal with the uplink's word commanded"
+                                        );
+                                    }
+                                    let lic = e.settings.license_class;
+                                    let main_seg =
+                                        crate::privileges::phone_segment(lic, &e.settings.band);
+                                    let shade = s.radio.phone_seg_lo.zip(s.radio.phone_seg_hi);
+                                    assert!(same_seg(shade, v.phone_seg), "{what}: the shade");
+                                    match v.source {
+                                        ReceiverId::Main => {
+                                            on_main += 1;
+                                            assert!(same_seg(v.phone_seg, main_seg), "{what}");
+                                        }
+                                        ReceiverId::Sub => {
+                                            on_sub += 1;
+                                            let up_mhz = up as f64 / 1e6;
+                                            let sub_seg = crate::bandplan::band_for_dial(up_mhz)
+                                                .and_then(|b| {
+                                                    crate::privileges::phone_segment(lic, b)
+                                                });
+                                            assert!(same_seg(v.phone_seg, sub_seg), "{what}");
+                                            if !same_seg(sub_seg, main_seg) {
+                                                shaded += 1;
+                                            }
+                                            // Refused by the commanded-word terms alone: the
+                                            // section model, at the stored side, allows it.
+                                            let om = e.settings.operating_mode;
+                                            let stored = e.settings.sideband.clone();
+                                            let f = e.tx_emission_mhz();
+                                            if xit == 0
+                                                && e.emission_allowed(om, f, &stored)
+                                                && !before
+                                            {
+                                                *by_the_word.entry(label.clone()).or_insert(0) += 1;
+                                                assert!(!v.tx_allowed, "{what}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        unbuilt, 0,
+        "pass shapes the sweep could not build: re-check SWEEP_PAIRS"
+    );
+    assert_eq!(states, 14_784);
+    assert!(
+        on_sub > 0 && on_main > 0,
+        "both receivers: {on_sub} Sub, {on_main} Main"
+    );
+    assert!(shaded > 0, "the switch moved no shade");
+    for (label, n) in &refused_by {
+        if UNKNOWN_SIDE_SECTIONS.contains(&label.as_str()) {
+            assert!(
+                *n > 0,
+                "{label}: the switch refused nothing there, so the sweep proves nothing about \
+                 the rule in it: {refused_by:?}"
+            );
+        } else {
+            assert_eq!(*n, 0, "{label}: {refused_by:?}");
+        }
+    }
+    for (label, n) in &by_the_word {
+        if label == "cw Cat afsk" || label == "rtty Cat fsk" {
+            assert_eq!(
+                *n, 0,
+                "{label}: this keyer has no commanded-word term: {by_the_word:?}"
+            );
+        } else {
+            assert!(
+                *n > 0,
+                "{label}: no Sub state reaches its commanded-word term: {by_the_word:?}"
+            );
+        }
+    }
+}

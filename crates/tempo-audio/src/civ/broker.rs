@@ -10,6 +10,38 @@
 //!
 //! Everything here is I/O-generic and unit-tested against the in-memory fake radio; only
 //! [`CivDaemon::start`] (opening the real COM port) needs the `serial` feature.
+//!
+//! ## Which receiver a command is for
+//!
+//! On a radio with two receivers — of the models this daemon drives, the capability table in
+//! [`crate::dualrx`] offers a Sub for the IC-7610 and the IC-9700 — a plain CI-V command acts
+//! on whichever band is SELECTED, and the selection is front-panel state the operator can
+//! move. So every verb that belongs to ONE receiver names it (Main, unless a caller names
+//! Sub), and the naming has to survive the whole command. There are three ways it does:
+//!
+//! - **By name, on the wire (IC-7610).** Icom's band-directed command `29` performs a command
+//!   on the named band "regardless of active/inactive" band (IC-7610 CI-V Reference Guide
+//!   A7380-7EX-4, p. 9), for every command its table marks
+//!   ([`commands::band_directed_supported`]). Nothing is selected, so nothing on the front
+//!   panel flickers, and no lock is needed: the command is atomic on the wire. The dial and
+//!   the mode, which `29` does not carry, are read AND written on Main the same way, through
+//!   `25 00` / `26 00` ([`commands::dial_by_band_name`]). The split verbs keep their own bytes.
+//! - **By holding the selection (the IC-9700, and the IC-7610's unmarked commands).** The
+//!   IC-9700's reference (A7508-3EX-4) has no command `29`. The broker keeps the selection on
+//!   Main and holds it there under the band lock for the length of the command, repairing a
+//!   selection a failed restore stranded on Sub first ([`CivBackend::ensure_main`]); a
+//!   Sub-named command selects Sub and ALWAYS hands the selection back — the
+//!   `set_split_freq` pattern. ⚠️ What it cannot see is the operator selecting Sub at the
+//!   front panel — see [`RxAddressing::HeldSelection`] for why it does not look.
+//! - **Not at all (every other radio).** One receiver, or no vendor statement of a second:
+//!   every command goes out exactly as it did before this existed, byte for byte.
+//!
+//! ⛔ THE KEYING PATH NAMES NO RECEIVER AND TAKES NO LOCK — PTT (`T`/`t`), CAT CW (`b`) and
+//! its stop. The RIG decides which receiver transmits (Main; the uplink, Sub, in satellite
+//! mode — IC-9700 Basic Manual pp. 3-2, 7-1), a selection round trip between the go and PTT-on
+//! would move key-on timing, and an unkey must never wait behind a selection sequence. The
+//! transmit-side CONFIGURATION verbs (XIT, repeater shift and offset, CTCSS) do name the
+//! transmitting receiver, Main by default, and the radio loop withholds them from a keyed rig.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +53,71 @@ use super::commands::{self, IcomModel, Mode};
 use super::engine::{CivEngine, CivError, CivHandle, Expect};
 use super::frame::Frame;
 use super::scope::ScopeSweep;
+use crate::dualrx::ReceiverId;
 use crate::rigctld_server::{serve_connection, RigBackend};
+
+/// How THIS radio lets a command name the receiver it is for — decided once, from the model,
+/// never from the bus. See the module note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RxAddressing {
+    /// No Sub is offered for this radio ([`crate::dualrx::sub_receiver_offered`] is false:
+    /// one receiver, or one nobody has read a vendor statement of a second for — UNKNOWN,
+    /// which is not "no", and is not an offer either). Every command goes out exactly as it
+    /// always has: no lock, no select, no prefix. A test holds the bytes.
+    Single,
+    /// Two receivers, and Icom's reference gives this model the band-directed form (`29`) —
+    /// the IC-7610. A command the table marks names its receiver on the wire; an unmarked
+    /// one falls back to [`Self::HeldSelection`]'s discipline.
+    BandDirected(IcomModel),
+    /// Two receivers and no band-directed form — the IC-9700. The selection is HELD: the band
+    /// lock for the whole command, Main re-asserted where a failed restore stranded it
+    /// ([`CivBackend::ensure_main`]), Sub selected and handed back for a Sub-named command.
+    ///
+    /// ⚠️ WHAT IT CANNOT SEE: the operator selecting Sub at the front panel ("To select the
+    /// Main band or Sub band, touch the grayed frequency readout", IC-9700 Basic Manual p. 3-2).
+    /// The broker holds the selection IT set and does not re-read it — neither did the dial
+    /// verbs before this, so the whole daemon stays consistent: with Sub selected by hand,
+    /// every verb follows the panel, exactly as before. Closing it needs a `07 D2` read ahead
+    /// of every command and, when the answer is Sub, a select of Main and a select back —
+    /// which at the radio loop's poll rates (the dial every 180 ms, the S-meter every 360 ms)
+    /// flips the operator's selection over and back several times a second while they are
+    /// using it, and lands MAIN DIAL turns on the wrong band in the gaps. That trade is the
+    /// operator's to make, not this code's.
+    HeldSelection,
+}
+
+impl RxAddressing {
+    fn for_model(model: Option<IcomModel>) -> Self {
+        match model {
+            Some(m) if crate::dualrx::sub_receiver_offered(m.hamlib_model()) => {
+                if commands::band_directed_form(m) {
+                    RxAddressing::BandDirected(m)
+                } else {
+                    RxAddressing::HeldSelection
+                }
+            }
+            _ => RxAddressing::Single,
+        }
+    }
+}
+
+/// Does this `l`/`L` level belong to ONE receiver? The receive chain does — the S-meter and
+/// the front end, DSP and audio stages ([`crate::dualrx::RxStage`]); the rest (power, mic
+/// gain, keyer speed, compressor depth, monitor gain, the transmit meters) belongs to the
+/// radio's one transmitter and names no receiver.
+fn level_names_a_receiver(name: &str) -> bool {
+    matches!(
+        name,
+        "STRENGTH" | "ATT" | "PREAMP" | "RF" | "AGC" | "NR" | "NB" | "AF" | "SQL"
+    )
+}
+
+/// Does this `u`/`U` function belong to ONE receiver? NB, NR and the two notches are the DSP
+/// stage; RIT is a receive offset and ΔTX (`XIT`) the transmitting receiver's offset, both in
+/// a per-band register. Compressor, monitor, VOX and satellite mode are the radio's.
+fn func_names_a_receiver(token: &str) -> bool {
+    matches!(token, "NB" | "NR" | "ANF" | "MN" | "RIT" | "XIT")
+}
 
 /// Cross-band split state: on a dual-band Icom (IC-9700/910H) a cross-band
 /// pair is NOT `0F` split — `0F` is same-band A/B, and `25 01` writes the
@@ -61,12 +157,19 @@ pub struct CivBackend {
     /// ⚠️ NOT derivable from [`Self::addr`], and that is the reason it is carried. The
     /// CI-V address is user-changeable on the radio's own menu, so two operators can run
     /// different rigs at the same address; a model inferred from the bus would eventually
-    /// hand an IC-7300 the 7610's 6/12/18 dB pads. `None` = an Icom this build has no step
+    /// hand an IC-7300 the 7610's fifteen 3 dB pads. `None` = an Icom this build has no step
     /// list for, and then neither control is offered at all rather than guessed at.
     model: Option<IcomModel>,
     /// When the dial was last READ from the radio (not merely cached). Bounds how long a
     /// timed-out `f` may serve the cache — see [`cache_fresh`].
     last_freq_ok: Mutex<Option<std::time::Instant>>,
+    /// Main's dial and mode as the last BY-NAME read returned them (`25 00` / `26 00`,
+    /// [`Self::main_dial_by_name`]): what a failed read on that path stands in with, in place
+    /// of the engine's state cache. The cache also folds the radio's transceive pushes, and a
+    /// push reports the SELECTED band — serving one would put the selection back into the
+    /// reading at exactly the moment the bus is busy. Never written on any other radio.
+    main_hz: Mutex<Option<u64>>,
+    main_mode: Mutex<Option<(Mode, Option<u8>)>>,
     /// Which Icom DATA mode to select for digital operating (1..=3, default 1 = today's
     /// behaviour). Atomic because a settings save must move it under a RUNNING daemon: the
     /// alternative is a CI-V restart to change a menu choice, which drops CAT mid-session.
@@ -95,6 +198,9 @@ pub struct CivBackend {
     /// mutex while an engine-holder blocks on a CAT verb queued behind this
     /// lock — the cross-thread cousin of the 0.24.3 sat-pick hang.
     band: Mutex<SatSplit>,
+    /// How a per-receiver command names its receiver on this radio — see [`RxAddressing`]
+    /// and [`Self::on_receiver`].
+    rx_addressing: RxAddressing,
 }
 
 /// How long a timed-out dial read may still serve the last real reading.
@@ -118,6 +224,8 @@ impl CivBackend {
             addr,
             model,
             last_freq_ok: Mutex::new(None),
+            main_hz: Mutex::new(None),
+            main_mode: Mutex::new(None),
             data_mode: std::sync::atomic::AtomicU8::new(data_mode.clamp(1, 3)),
             split: AtomicBool::new(false),
             tx_intent,
@@ -127,6 +235,7 @@ impl CivBackend {
                 sel_stray: false,
                 op_satmode_off: false,
             }),
+            rx_addressing: RxAddressing::for_model(model),
         }
     }
 
@@ -142,6 +251,60 @@ impl CivBackend {
     /// model keeps the behaviour it always had.
     fn has_delta_tx(&self) -> bool {
         self.model.is_none_or(commands::has_delta_tx)
+    }
+
+    /// Does this radio read and write Main's dial and mode BY NAME
+    /// ([`commands::dial_by_band_name`] — the IC-7610)? Only a radio offered a Sub has a
+    /// selection to escape: a [`RxAddressing::Single`] radio reads and writes with exactly the
+    /// bytes it always did.
+    fn main_dial_by_name(&self) -> bool {
+        self.rx_addressing != RxAddressing::Single
+            && self.model.is_some_and(commands::dial_by_band_name)
+    }
+
+    /// Main's dial by name (`25 00`), for [`RigBackend::freq_hz`] on a radio that
+    /// [`Self::main_dial_by_name`]. The `03` path's answers exactly, with one difference: what
+    /// stands in for a read that fails is Main's own last reading ([`Self::main_hz`]), never
+    /// the engine's cache. Callers hold the band lock.
+    fn main_freq_by_name(&self) -> u64 {
+        let f = commands::read_band_freq(self.addr, commands::BAND_MAIN);
+        match self.read(f, 0x25, Some(commands::BAND_MAIN)) {
+            Ok(f) => {
+                *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(std::time::Instant::now());
+                let mut last = self.main_hz.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(hz) = commands::parse_band_freq(&f, commands::BAND_MAIN) {
+                    *last = Some(hz);
+                }
+                last.unwrap_or(0)
+            }
+            // One crowded moment, bounded by the same grace as the `03` path's cache.
+            Err(CivError::Timeout) => {
+                let t = *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner());
+                if cache_fresh(t, std::time::Instant::now()) {
+                    self.main_hz
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
+        }
+    }
+
+    /// Main's mode by name (`26 00`) — `None` when the read fails, and then [`RigBackend::mode`]
+    /// serves Main's last reading ([`Self::main_mode`]) rather than the engine's cache.
+    /// Callers hold the band lock.
+    fn main_mode_by_name(&self) -> Option<(Mode, Option<u8>)> {
+        let f = commands::read_band_mode(self.addr, commands::BAND_MAIN);
+        let m = self
+            .read(f, 0x26, Some(commands::BAND_MAIN))
+            .ok()
+            .and_then(|f| commands::parse_band_mode(&f, commands::BAND_MAIN))?;
+        *self.main_mode.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
+        Some(m)
     }
 
     /// Select a band/VFO by token (`Main`/`Sub`), acked. Callers hold the band lock.
@@ -375,202 +538,171 @@ impl CivBackend {
         Some(format!("{:.*}", decimals, cal(raw)))
     }
 
-    /// Read a `14 <sub>` DSP level as a 0..1 fraction string (the rigctld level convention).
-    fn dsp_level(&self, sub: u8) -> Option<String> {
-        let f = self
-            .read(commands::read_dsp_level(self.addr, sub), 0x14, Some(sub))
-            .ok()?;
+    /// Read a `14 <sub>` DSP level as a 0..1 fraction string (the rigctld level convention),
+    /// from receiver `who` — or from the radio itself, `None` ([`Self::read_from`]).
+    fn dsp_level(&self, who: Option<ReceiverId>, sub: u8) -> Option<String> {
+        let f = self.read_from(
+            who,
+            commands::read_dsp_level(self.addr, sub),
+            0x14,
+            Some(sub),
+        )?;
         let raw = commands::parse_dsp_level_raw(&f, sub)?;
         Some(format!("{:.2}", f64::from(raw) / 255.0))
     }
-    /// Set a `14 <sub>` DSP level from a 0..1 fraction string.
-    fn set_dsp_level_pct(&self, sub: u8, value: &str) -> Option<bool> {
+    /// Set a `14 <sub>` DSP level from a 0..1 fraction string, on `who` ([`Self::ack_on`]).
+    fn set_dsp_level_pct(&self, who: Option<ReceiverId>, sub: u8, value: &str) -> Option<bool> {
         let frac: f64 = value.parse().ok()?;
         let percent = (frac.clamp(0.0, 1.0) * 100.0).round() as u8;
-        Some(self.ack(commands::set_dsp_level(self.addr, sub, percent)))
-    }
-}
-
-impl RigBackend for CivBackend {
-    fn owner_transmitting(&self) -> bool {
-        self.tx_intent.load(Ordering::Relaxed)
+        Some(self.ack_on(who, commands::set_dsp_level(self.addr, sub, percent)))
     }
 
-    fn freq_hz(&self) -> u64 {
-        let mut g = self.band(); // never read the dial mid Main/Sub sequence
-        if !self.ensure_main(&mut g) {
-            // The selection may be stranded on Sub (a failed restore): a read
-            // now would serve the UPLINK as the dial — and the state cache
-            // may hold it too. 0 = no honest reading, same as a dead engine.
-            return 0;
-        }
-        match self.read(commands::read_freq(self.addr), 0x03, None) {
-            Ok(f) => {
-                *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(std::time::Instant::now());
-                commands::parse_freq(&f)
-                    .or(self.h.state().freq_hz)
-                    .unwrap_or(0)
+    // ---- which receiver a command is for (the module note) ----
+
+    /// Send `frames` to receiver `rx`, in order, each the way this radio lets a command name
+    /// its receiver — THE one place a per-receiver verb reaches the wire. Every frame is sent
+    /// whatever the one before it answered (a rig that refuses a tone's switch must still get
+    /// the tone), and each result comes back in order.
+    ///
+    /// `None` = the receiver could not be reached at all: a Sub named on a radio this build
+    /// offers none for, or a selection the rig would not move — the refusal `set_freq` makes
+    /// over a stranded selection, for the same reason: a command that lands on the wrong
+    /// receiver is worse than one that does not land.
+    ///
+    /// ⛔ Never call this from the keying path. It may take the band lock and put a selection
+    /// round trip on the wire, and neither may ever sit between the go and PTT-on, or in
+    /// front of an unkey.
+    fn on_receiver(
+        &self,
+        rx: ReceiverId,
+        frames: Vec<(Frame, Expect)>,
+    ) -> Option<Vec<Result<Frame, CivError>>> {
+        let named_model = match self.rx_addressing {
+            // One receiver: exactly the bytes this always sent. There is no Sub to name.
+            RxAddressing::Single => {
+                return (rx == ReceiverId::Main).then(|| {
+                    frames
+                        .into_iter()
+                        .map(|(f, e)| self.h.transact(f, e))
+                        .collect()
+                });
             }
-            // Radio busy (a timeout can be one crowded moment): the last transceive/
-            // reply is honest recent truth — FOR A MOMENT. ⚠️ Unbounded, this cache was a
-            // lie that never expired (the overnight-radio review, 2026-09-02): a rig switched
-            // OFF with its port still present times out on every `03`, and `f` kept serving
-            // the last dial — a plausible nonzero number — so the loop's breaker never
-            // tripped and the pill stayed green over a dead radio while every write failed.
-            // Past [`CIV_CACHE_GRACE`] the honest answer is 0, exactly as for a dead engine.
-            Err(CivError::Timeout) => {
-                let last = *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner());
-                if cache_fresh(last, std::time::Instant::now()) {
-                    self.h.state().freq_hz.unwrap_or(0)
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        }
-    }
-
-    fn mode(&self) -> (String, u32) {
-        let mut g = self.band(); // the `04` read hits the SELECTED band
-        let reply = if self.ensure_main(&mut g) {
-            self.read(commands::read_mode(self.addr), 0x04, None)
-                .ok()
-                .and_then(|f| commands::parse_mode(&f))
-        } else {
-            // Selection possibly stranded on Sub: the read would serve the
-            // uplink's mode. Fall to the state cache like any failed read.
-            None
+            RxAddressing::BandDirected(m) => Some(m),
+            RxAddressing::HeldSelection => None,
         };
-        let st = self.h.state();
-        let (mode, _filter) = match reply {
-            Some(m) => m,
-            None => (st.mode.unwrap_or(Mode::Usb), st.filter),
+        let band = match rx {
+            ReceiverId::Main => commands::BAND_MAIN,
+            ReceiverId::Sub => commands::BAND_SUB,
         };
-        // Report soundcard-digital as PKTUSB/PKTLSB/PKTFM, the names the rest of Nexus
-        // speaks. FM-D belongs here for the same reason the other two do — the app compares
-        // this read-back against the mode it commanded, and a rig answering a bare "FM" to a
-        // commanded PKTFM reads as a mode mismatch.
-        //
-        // ⚠️ All three arms need `data_mode`, which the state cache only ever learns from a
-        // RECEIVED `1A 06` frame (a transceive push): nothing here solicits one, so in
-        // practice this reports the plain mode today. Adding FM keeps the three consistent
-        // rather than leaving one to answer differently the day something does read it.
-        let name = match (mode, st.data_mode.unwrap_or(false)) {
-            (Mode::Usb, true) => "PKTUSB".to_string(),
-            (Mode::Lsb, true) => "PKTLSB".to_string(),
-            (Mode::Fm, true) => "PKTFM".to_string(),
-            (m, _) => m.name().to_string(),
+        let by_name =
+            |f: &Frame| named_model.is_some_and(|m| commands::band_directed_supported(m, f));
+        let send_all = |frames: Vec<(Frame, Expect)>| -> Vec<Result<Frame, CivError>> {
+            frames
+                .into_iter()
+                .map(|(f, e)| {
+                    if by_name(&f) {
+                        self.transact_on_band(band, f, e)
+                    } else {
+                        self.h.transact(f, e)
+                    }
+                })
+                .collect()
         };
-        (name, 0) // passband unreported (0 = unknown to Hamlib clients)
-    }
-
-    fn ptt(&self) -> bool {
-        self.read(commands::read_ptt(self.addr), 0x1C, Some(0x00))
-            .ok()
-            .and_then(|f| commands::parse_ptt(&f))
-            .or(self.h.state().ptt)
-            .unwrap_or(false)
-    }
-
-    fn split(&self) -> bool {
-        if self.band().engaged {
-            // Report what the rig IS, not what we last commanded: the operator
-            // can leave satellite mode from the front panel, and the `s` verb
-            // must say so. Read failures (one busy moment) keep the last state.
-            return self.read_satmode().ok().flatten().unwrap_or(true);
+        // Every frame names its receiver on the wire: nothing to select, nothing to hold.
+        if frames.iter().all(|(f, _)| by_name(f)) {
+            return Some(send_all(frames));
         }
-        self.split.load(Ordering::Relaxed)
-    }
-
-    fn vfo(&self) -> String {
-        // In satellite mode every sequence hands the selection back to Main —
-        // that is the printed truth beside the split state.
-        if self.band().engaged {
-            "Main".to_string()
-        } else {
-            "VFOA".to_string()
-        }
-    }
-
-    fn set_freq(&self, hz: u64) -> bool {
-        let mut g = self.band(); // the `05` write hits the SELECTED band
-                                 // A write with the selection stranded on Sub would land the downlink
-                                 // in the uplink's band — re-assert Main first, refuse otherwise.
-        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
-    }
-
-    fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
-        let mut g = self.band(); // the `06` write hits the SELECTED band
+        // Otherwise HOLD the selection for the whole exchange, so no other client's
+        // select-and-restore can move it mid-command (the daemon serves a thread per client).
+        let mut g = self.band();
         if !self.ensure_main(&mut g) {
-            return false; // same stray-selection refusal as `set_freq`
+            return None; // stranded on Sub and the rig will not move it: refuse, never guess
         }
-        // PKT*/DATA-* = base mode + DATA mode on; every plain mode turns DATA off.
-        let up = mode.to_ascii_uppercase();
-        let (base, data) = match up.as_str() {
-            "PKTUSB" | "DATA-U" | "PKT-U" => (Mode::Usb, true),
-            "PKTLSB" | "DATA-L" | "PKT-L" => (Mode::Lsb, true),
-            // FM-D, and it is the whole IC-9700 half of the SSTV-on-FM fix: the `1A 06`
-            // DATA verb below has always been wired, it had simply never been paired with
-            // `Mode::Fm` — so the only FM this daemon could command was one with DATA
-            // actively turned OFF, i.e. the modulator handed back to the mic. An SSTV
-            // picture sent that way radiates nothing.
-            //
-            // ⚠️ PLAIN "FM" IS DELIBERATELY NOT IN THIS ARM. It falls through to
-            // `Mode::from_name` → `(Mode::Fm, false)`, so APRS, repeater voice and every
-            // other FM user still gets DATA explicitly OFF, exactly as before. That
-            // guarantee is pinned by the test below; do not "simplify" the two into one.
-            "PKTFM" | "FM-D" | "PKT-FM" => (Mode::Fm, true),
-            _ => match Mode::from_name(&up) {
-                Some(m) => (m, false),
-                None => return false,
-            },
+        match rx {
+            ReceiverId::Main => Some(send_all(frames)),
+            ReceiverId::Sub => {
+                let out = self.select("Sub").then(|| send_all(frames));
+                // ALWAYS hand the selection back, even when the Sub select itself failed: a
+                // select that timed out may still have landed.
+                let restored = self.restore_main(&mut g);
+                out.filter(|_| restored)
+            }
+        }
+    }
+
+    /// Hand the selection back to Main after a Sub-named sequence, and say whether it went —
+    /// the tail `set_split_freq` and `set_split_mode` each spell out inline. A refused restore
+    /// is REMEMBERED as [`SatSplit::sel_stray`], never shrugged off; a good one re-reads the
+    /// dial so the engine's state cache holds Main's frequency again, in case a transceive
+    /// push during the Sub window folded the Sub's in. Callers hold the band lock.
+    fn restore_main(&self, g: &mut SatSplit) -> bool {
+        let restored = self.select("Main");
+        g.sel_stray = !restored;
+        if restored {
+            let _ = self.read(commands::read_freq(self.addr), 0x03, None);
+        }
+        restored
+    }
+
+    /// One command in band-directed form ([`commands::band_directed`]), its reply unwrapped so
+    /// the ordinary decoders read it. An ack stays an ack: Icom drops the prefix from those.
+    fn transact_on_band(&self, band: u8, f: Frame, expect: Expect) -> Result<Frame, CivError> {
+        let expect = match expect {
+            Expect::Reply { cmd, sub } => Expect::ReplyOnBand { band, cmd, sub },
+            other => other,
         };
-        let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
-        // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
-        // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
-        // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n`. Turning
-        // data OFF is still just off.
-        let data_ok = if data {
-            let n = self.data_mode.load(std::sync::atomic::Ordering::Relaxed);
-            self.ack(commands::set_data_mode_n(self.addr, n, None))
+        self.h
+            .transact(commands::band_directed(band, &f), expect)
+            .map(commands::band_directed_reply)
+    }
+
+    /// One read from receiver `who` — or, `None`, from the radio itself (a transmitter level
+    /// or meter), sent exactly as it always was.
+    fn read_from(
+        &self,
+        who: Option<ReceiverId>,
+        f: Frame,
+        cmd: u8,
+        sub: Option<u8>,
+    ) -> Option<Frame> {
+        match who {
+            None => self.read(f, cmd, sub).ok(),
+            Some(rx) => self
+                .on_receiver(rx, vec![(f, Expect::Reply { cmd, sub })])?
+                .pop()?
+                .ok(),
+        }
+    }
+
+    /// One acked set on receiver `who` — or, `None`, on the radio itself.
+    fn ack_on(&self, who: Option<ReceiverId>, f: Frame) -> bool {
+        match who {
+            None => self.ack(f),
+            Some(rx) => self
+                .on_receiver(rx, vec![(f, Expect::Ack)])
+                .is_some_and(|r| r.iter().all(Result::is_ok)),
+        }
+    }
+
+    /// WHO a level command is for, when `rx` asked: the receiver, for a receive-chain level;
+    /// the radio (`Some(None)`), for a transmitter level asked of Main; nobody (`None`) for a
+    /// transmitter level asked of the Sub, which has no transmitter of its own to report.
+    fn level_target(rx: ReceiverId, names_a_receiver: bool) -> Option<Option<ReceiverId>> {
+        if names_a_receiver {
+            Some(Some(rx))
         } else {
-            self.ack(commands::set_data_mode(self.addr, false, None))
-        };
-        mode_ok && (data_ok || !data)
-    }
-
-    fn set_ptt(&self, on: bool) -> bool {
-        self.ack(commands::set_ptt(self.addr, on))
-    }
-
-    fn set_vfo(&self, vfo: &str) -> bool {
-        match commands::select_vfo(self.addr, vfo) {
-            Some(f) => self.ack(f),
-            None => false,
+            (rx == ReceiverId::Main).then_some(None)
         }
     }
 
-    /// The rig's own pads and preamps, so a client reading `\dump_state` learns which
-    /// values exist instead of trying them. Empty for a model this build has no list for —
-    /// see [`CivBackend::model`].
-    fn preamp_steps_db(&self) -> Vec<u8> {
-        self.model
-            .map(|m| commands::preamp_steps_db(m).to_vec())
-            .unwrap_or_default()
-    }
-    fn attenuator_steps_db(&self) -> Vec<u8> {
-        self.model
-            .map(|m| commands::attenuator_steps_db(m).to_vec())
-            .unwrap_or_default()
-    }
+    // ---- the per-receiver verbs, for a named receiver. `RigBackend` passes Main. ----
 
-    fn level(&self, name: &str) -> Option<String> {
+    /// [`RigBackend::level`] for receiver `rx`.
+    fn level_on(&self, rx: ReceiverId, name: &str) -> Option<String> {
+        let who = Self::level_target(rx, level_names_a_receiver(name))?;
         match name {
             "STRENGTH" => {
-                let f = self
-                    .read(commands::read_smeter(self.addr), 0x15, Some(0x02))
-                    .ok()?;
+                let f = self.read_from(who, commands::read_smeter(self.addr), 0x15, Some(0x02))?;
                 let raw = commands::parse_smeter_raw(&f)?;
                 Some(format!(
                     "{}",
@@ -612,13 +744,12 @@ impl RigBackend for CivBackend {
                 if commands::attenuator_steps_db(model).is_empty() {
                     return None;
                 }
-                let f = self
-                    .read(
-                        commands::read_attenuator(self.addr),
-                        commands::ATT_CMD,
-                        None,
-                    )
-                    .ok()?;
+                let f = self.read_from(
+                    who,
+                    commands::read_attenuator(self.addr),
+                    commands::ATT_CMD,
+                    None,
+                )?;
                 Some(commands::parse_attenuator_db(&f)?.to_string())
             }
             // The rig answers with a POSITION; the operator is shown the LABEL that position
@@ -629,22 +760,19 @@ impl RigBackend for CivBackend {
                 if commands::preamp_steps_db(model).is_empty() {
                     return None;
                 }
-                let f = self
-                    .read(
-                        commands::read_preamp(self.addr),
-                        0x16,
-                        Some(commands::FUNC_PREAMP),
-                    )
-                    .ok()?;
+                let f = self.read_from(
+                    who,
+                    commands::read_preamp(self.addr),
+                    0x16,
+                    Some(commands::FUNC_PREAMP),
+                )?;
                 let idx = commands::parse_preamp_index(&f)?;
                 Some(commands::preamp_db_for_index(model, idx)?.to_string())
             }
             // AGC as the Hamlib enum int (OFF=0/FAST=2/SLOW=3/MEDIUM=5), translated from the rig's
             // Icom byte so the rigctld side stays Hamlib-native.
             "AGC" => {
-                let f = self
-                    .read(commands::read_agc(self.addr), 0x16, Some(0x12))
-                    .ok()?;
+                let f = self.read_from(who, commands::read_agc(self.addr), 0x16, Some(0x12))?;
                 let civ = commands::parse_agc_civ(&f)?;
                 Some(format!("{}", commands::agc_hamlib_from_civ(civ)))
             }
@@ -654,11 +782,13 @@ impl RigBackend for CivBackend {
             // above is the TX meter, and they are answered by name before this arm.
             // One token table (`commands::level_sub`) serves this and the setter below, so
             // the two cannot drift apart or transpose a pair.
-            _ => commands::level_sub(name).and_then(|sub| self.dsp_level(sub)),
+            _ => commands::level_sub(name).and_then(|sub| self.dsp_level(who, sub)),
         }
     }
 
-    fn set_level(&self, name: &str, value: &str) -> Option<bool> {
+    /// [`RigBackend::set_level`] for receiver `rx`.
+    fn set_level_on(&self, rx: ReceiverId, name: &str, value: &str) -> Option<bool> {
+        let who = Self::level_target(rx, level_names_a_receiver(name))?;
         match name {
             "RFPOWER" => {
                 let frac: f64 = value.parse().ok()?;
@@ -673,10 +803,10 @@ impl RigBackend for CivBackend {
             "AGC" => {
                 // Value is the Hamlib AGC enum int; translate to the rig's Icom byte.
                 let hamlib: u8 = value.parse().ok()?;
-                Some(self.ack(commands::set_agc(
-                    self.addr,
-                    commands::agc_civ_from_hamlib(hamlib),
-                )))
+                Some(self.ack_on(
+                    who,
+                    commands::set_agc(self.addr, commands::agc_civ_from_hamlib(hamlib)),
+                ))
             }
             "KEYSPD" => {
                 let wpm: u32 = value.parse().ok()?;
@@ -705,7 +835,7 @@ impl RigBackend for CivBackend {
                 if db != 0 && !steps.contains(&db) {
                     return Some(false);
                 }
-                Some(self.ack(commands::set_attenuator_db(self.addr, db)))
+                Some(self.ack_on(who, commands::set_attenuator_db(self.addr, db)))
             }
             "PREAMP" => {
                 let model = self.model?;
@@ -719,38 +849,332 @@ impl RigBackend for CivBackend {
                 let Some(idx) = commands::preamp_index_for_db(model, db) else {
                     return Some(false);
                 };
-                Some(self.ack(commands::set_preamp_index(self.addr, idx)))
+                Some(self.ack_on(who, commands::set_preamp_index(self.addr, idx)))
             }
             // The same `0x14 <sub>` family as the getter, off the same table.
-            _ => commands::level_sub(name).and_then(|sub| self.set_dsp_level_pct(sub, value)),
+            _ => commands::level_sub(name).and_then(|sub| self.set_dsp_level_pct(who, sub, value)),
         }
     }
 
-    fn func(&self, token: &str) -> Option<bool> {
+    /// [`RigBackend::func`] for receiver `rx`.
+    fn func_on(&self, rx: ReceiverId, token: &str) -> Option<bool> {
         // DSP / audio funcs share CI-V command 0x16; the token → sub-command map lives in
         // commands::func_sub. RIT/XIT are separate registers with no simple read here.
         let sub = commands::func_sub(token)?;
-        let f = self
-            .read(commands::read_dsp_func(self.addr, sub), 0x16, Some(sub))
-            .ok()?;
+        let who = Self::level_target(rx, func_names_a_receiver(token))?;
+        let f = self.read_from(
+            who,
+            commands::read_dsp_func(self.addr, sub),
+            0x16,
+            Some(sub),
+        )?;
         commands::parse_dsp_func(&f, sub)
     }
 
-    fn set_func(&self, token: &str, on: bool) -> Option<bool> {
-        // No ΔTX, no ΔTX switch: `21 02` is not a command this radio has, so it is not sent.
-        // `None` is `RPRT -11`, the answer Hamlib gives for the same radio.
+    /// [`RigBackend::set_func`] for receiver `rx`.
+    fn set_func_on(&self, rx: ReceiverId, token: &str, on: bool) -> Option<bool> {
+        // No ΔTX, no ΔTX switch: `21 02` is not a command this radio has, so it is not sent,
+        // whichever receiver is named. `None` is `RPRT -11`, the answer Hamlib gives for the
+        // same radio.
         if token == "XIT" && !self.has_delta_tx() {
             return None;
         }
-        match token {
-            "RIT" => Some(self.ack(commands::set_rit_on(self.addr, on))),
-            "XIT" => Some(self.ack(commands::set_dtx_on(self.addr, on))),
+        let f = match token {
+            "RIT" => commands::set_rit_on(self.addr, on),
+            "XIT" => commands::set_dtx_on(self.addr, on),
             // NB / NR / ANF / MN / COMP / MON / VOX → the 0x16 DSP-function table.
-            _ => commands::func_sub(token)
-                .map(|sub| self.ack(commands::set_dsp_func(self.addr, sub, on))),
+            _ => commands::set_dsp_func(self.addr, commands::func_sub(token)?, on),
+        };
+        let who = Self::level_target(rx, func_names_a_receiver(token))?;
+        Some(self.ack_on(who, f))
+    }
+
+    /// [`RigBackend::set_vfo`] for receiver `rx`. `VFOA`/`VFOB` pick a VFO OF A RECEIVER —
+    /// each band carries its own pair (IC-9700 CI-V Reference Guide, `07 00`/`07 01`) — so
+    /// they name `rx`. `Main`/`Sub` ARE the selection, whoever asks: a client moving it, sent
+    /// exactly as asked — under the band lock on a two-receiver radio, so it can never land
+    /// inside another client's select-and-restore and be undone by that sequence's restore.
+    fn set_vfo_on(&self, rx: ReceiverId, vfo: &str) -> bool {
+        let Some(f) = commands::select_vfo(self.addr, vfo) else {
+            return false;
+        };
+        if !matches!(vfo.to_ascii_uppercase().as_str(), "MAIN" | "SUB") {
+            return self.ack_on(Some(rx), f);
+        }
+        if self.rx_addressing == RxAddressing::Single {
+            return self.ack(f);
+        }
+        let _held = self.band();
+        self.ack(f)
+    }
+
+    /// The CTCSS tone on receiver `rx` — the transmitting one, Main by default: `1B 00` sets
+    /// the tone, `16 42` switches it on (both attempted whatever the first answered); tone
+    /// `0` only switches it off.
+    fn set_ctcss_on(&self, rx: ReceiverId, tenths: u32) -> Option<bool> {
+        let frames = if tenths == 0 {
+            vec![(commands::set_tone_func(self.addr, false), Expect::Ack)]
+        } else {
+            vec![
+                (commands::set_repeater_tone(self.addr, tenths), Expect::Ack),
+                (commands::set_tone_func(self.addr, true), Expect::Ack),
+            ]
+        };
+        Some(
+            self.on_receiver(rx, frames)
+                .is_some_and(|r| r.iter().all(Result::is_ok)),
+        )
+    }
+}
+
+impl RigBackend for CivBackend {
+    fn owner_transmitting(&self) -> bool {
+        self.tx_intent.load(Ordering::Relaxed)
+    }
+
+    fn freq_hz(&self) -> u64 {
+        let mut g = self.band(); // never read the dial mid Main/Sub sequence
+        if !self.ensure_main(&mut g) {
+            // The selection may be stranded on Sub (a failed restore): a read
+            // now would serve the UPLINK as the dial — and the state cache
+            // may hold it too. 0 = no honest reading, same as a dead engine.
+            return 0;
+        }
+        if self.main_dial_by_name() {
+            // IC-7610: MAIN's dial by name, whichever band the operator has selected.
+            return self.main_freq_by_name();
+        }
+        match self.read(commands::read_freq(self.addr), 0x03, None) {
+            Ok(f) => {
+                *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(std::time::Instant::now());
+                commands::parse_freq(&f)
+                    .or(self.h.state().freq_hz)
+                    .unwrap_or(0)
+            }
+            // Radio busy (a timeout can be one crowded moment): the last transceive/
+            // reply is honest recent truth — FOR A MOMENT. ⚠️ Unbounded, this cache was a
+            // lie that never expired (the overnight-radio review, 2026-09-02): a rig switched
+            // OFF with its port still present times out on every `03`, and `f` kept serving
+            // the last dial — a plausible nonzero number — so the loop's breaker never
+            // tripped and the pill stayed green over a dead radio while every write failed.
+            // Past [`CIV_CACHE_GRACE`] the honest answer is 0, exactly as for a dead engine.
+            Err(CivError::Timeout) => {
+                let last = *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner());
+                if cache_fresh(last, std::time::Instant::now()) {
+                    self.h.state().freq_hz.unwrap_or(0)
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         }
     }
 
+    fn mode(&self) -> (String, u32) {
+        let mut g = self.band(); // the `04` read hits the SELECTED band
+        let by_name = self.main_dial_by_name(); // …the IC-7610's `26 00` names Main
+        let reply = if !self.ensure_main(&mut g) {
+            // Selection possibly stranded on Sub: the read would serve the
+            // uplink's mode. Fall back like any failed read (below).
+            None
+        } else if by_name {
+            self.main_mode_by_name()
+        } else {
+            self.read(commands::read_mode(self.addr), 0x04, None)
+                .ok()
+                .and_then(|f| commands::parse_mode(&f))
+        };
+        let st = self.h.state();
+        let (mode, _filter) = match reply {
+            Some(m) => m,
+            // By name, a failed read serves Main's last by-name reading — never the cache,
+            // whose transceive pushes report the SELECTED band (see `main_hz`).
+            None if by_name => self
+                .main_mode
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or((Mode::Usb, None)),
+            None => (st.mode.unwrap_or(Mode::Usb), st.filter),
+        };
+        // Report soundcard-digital as PKTUSB/PKTLSB/PKTFM, the names the rest of Nexus
+        // speaks. FM-D belongs here for the same reason the other two do — the app compares
+        // this read-back against the mode it commanded, and a rig answering a bare "FM" to a
+        // commanded PKTFM reads as a mode mismatch.
+        //
+        // ⚠️ All three arms need `data_mode`, which the state cache only ever learns from a
+        // RECEIVED `1A 06` frame (a transceive push): nothing here solicits one, so in
+        // practice this reports the plain mode today. Adding FM keeps the three consistent
+        // rather than leaving one to answer differently the day something does read it.
+        let name = match (mode, st.data_mode.unwrap_or(false)) {
+            (Mode::Usb, true) => "PKTUSB".to_string(),
+            (Mode::Lsb, true) => "PKTLSB".to_string(),
+            (Mode::Fm, true) => "PKTFM".to_string(),
+            (m, _) => m.name().to_string(),
+        };
+        (name, 0) // passband unreported (0 = unknown to Hamlib clients)
+    }
+
+    /// Is the transmitter keyed, by anyone? The radio has ONE transmitter, so this names no
+    /// receiver and takes no lock — `1C 00` carries no band-directed mark on the IC-7610
+    /// (A7380-7EX-4 p. 9) and the IC-9700 has no such form. Exactly the bytes it always sent.
+    fn ptt(&self) -> bool {
+        self.read(commands::read_ptt(self.addr), 0x1C, Some(0x00))
+            .ok()
+            .and_then(|f| commands::parse_ptt(&f))
+            .or(self.h.state().ptt)
+            .unwrap_or(false)
+    }
+
+    fn split(&self) -> bool {
+        if self.band().engaged {
+            // Report what the rig IS, not what we last commanded: the operator
+            // can leave satellite mode from the front panel, and the `s` verb
+            // must say so. Read failures (one busy moment) keep the last state.
+            return self.read_satmode().ok().flatten().unwrap_or(true);
+        }
+        self.split.load(Ordering::Relaxed)
+    }
+
+    fn vfo(&self) -> String {
+        // In satellite mode every sequence hands the selection back to Main —
+        // that is the printed truth beside the split state.
+        if self.band().engaged {
+            "Main".to_string()
+        } else {
+            "VFOA".to_string()
+        }
+    }
+
+    fn set_freq(&self, hz: u64) -> bool {
+        let mut g = self.band(); // the `05` write hits the SELECTED band
+                                 // A write with the selection stranded on Sub would land the downlink
+                                 // in the uplink's band — re-assert Main first, refuse otherwise.
+        if self.main_dial_by_name() {
+            // IC-7610: MAIN's dial by name (`25 00`), whichever band the operator has selected —
+            // the receiver `f` reads. Same refusal over a selection Nexus stranded.
+            return self.ensure_main(&mut g)
+                && self.ack(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
+        }
+        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
+    }
+
+    fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
+        let mut g = self.band(); // the `06` write hits the SELECTED band
+        if !self.ensure_main(&mut g) {
+            return false; // same stray-selection refusal as `set_freq`
+        }
+        // PKT*/DATA-* = base mode + DATA mode on; every plain mode turns DATA off.
+        let up = mode.to_ascii_uppercase();
+        let (base, data) = match up.as_str() {
+            "PKTUSB" | "DATA-U" | "PKT-U" => (Mode::Usb, true),
+            "PKTLSB" | "DATA-L" | "PKT-L" => (Mode::Lsb, true),
+            // FM-D, and it is the whole IC-9700 half of the SSTV-on-FM fix: the `1A 06`
+            // DATA verb below has always been wired, it had simply never been paired with
+            // `Mode::Fm` — so the only FM this daemon could command was one with DATA
+            // actively turned OFF, i.e. the modulator handed back to the mic. An SSTV
+            // picture sent that way radiates nothing.
+            //
+            // ⚠️ PLAIN "FM" IS DELIBERATELY NOT IN THIS ARM. It falls through to
+            // `Mode::from_name` → `(Mode::Fm, false)`, so APRS, repeater voice and every
+            // other FM user still gets DATA explicitly OFF, exactly as before. That
+            // guarantee is pinned by the test below; do not "simplify" the two into one.
+            "PKTFM" | "FM-D" | "PKT-FM" => (Mode::Fm, true),
+            _ => match Mode::from_name(&up) {
+                Some(m) => (m, false),
+                None => return false,
+            },
+        };
+        if self.main_dial_by_name() {
+            // IC-7610: MAIN's mode by name — ONE `26 00` frame that leaves the radio where the
+            // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
+            // off and its default filter, a DATA mode with the operator's D1–D3 and FIL1.
+            let n = data.then(|| self.data_mode.load(std::sync::atomic::Ordering::Relaxed));
+            return self.ack(commands::set_band_mode(
+                self.addr,
+                commands::BAND_MAIN,
+                base,
+                n,
+            ));
+        }
+        let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
+        // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
+        // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
+        // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n`. Turning
+        // data OFF is still just off.
+        let data_ok = if data {
+            let n = self.data_mode.load(std::sync::atomic::Ordering::Relaxed);
+            self.ack(commands::set_data_mode_n(self.addr, n, None))
+        } else {
+            self.ack(commands::set_data_mode(self.addr, false, None))
+        };
+        mode_ok && (data_ok || !data)
+    }
+
+    /// ⛔ KEY AND UNKEY — ONE FRAME, NO RECEIVER, NO LOCK, and that is deliberate on a
+    /// two-receiver radio too. The RIG decides which receiver transmits (Main; the uplink, Sub,
+    /// in satellite mode), so there is nothing to name; and anything added here would sit
+    /// between the go and PTT-on (moving key-on timing) or in front of an unkey (a carrier the
+    /// operator cannot drop while a selection sequence finishes). Pinned by
+    /// `nothing_new_rides_between_the_go_and_ptt_on` and
+    /// `an_unkey_never_waits_on_the_band_lock`.
+    fn set_ptt(&self, on: bool) -> bool {
+        self.ack(commands::set_ptt(self.addr, on))
+    }
+
+    fn set_vfo(&self, vfo: &str) -> bool {
+        self.set_vfo_on(ReceiverId::Main, vfo)
+    }
+
+    /// The rig's own pads and preamps, so a client reading `\dump_state` learns which
+    /// values exist instead of trying them. Empty for a model this build has no list for —
+    /// see [`CivBackend::model`].
+    ///
+    /// These describe MAIN's front end — the receiver `\dump_state` reports (D7: Main owns
+    /// the radio's stages). No wire traffic, so nothing to hold. Whether a Sub's pads match is
+    /// the capability model's question, not this list's.
+    fn preamp_steps_db(&self) -> Vec<u8> {
+        self.model
+            .map(|m| commands::preamp_steps_db(m).to_vec())
+            .unwrap_or_default()
+    }
+    fn attenuator_steps_db(&self) -> Vec<u8> {
+        self.model
+            .map(|m| commands::attenuator_steps_db(m).to_vec())
+            .unwrap_or_default()
+    }
+
+    // ⭐ THE RECEIVE-SIDE VERBS NAME A RECEIVER — Main, the one this single-receiver surface
+    // describes ([`crate::dualrx::ReceiverId::Main`]). Each body lives in its `_on` twin, which a
+    // caller naming the Sub will use; see the module note for how the naming is carried.
+
+    fn level(&self, name: &str) -> Option<String> {
+        self.level_on(ReceiverId::Main, name)
+    }
+
+    fn set_level(&self, name: &str, value: &str) -> Option<bool> {
+        self.set_level_on(ReceiverId::Main, name, value)
+    }
+
+    /// A level for a NAMED receiver (`L Sub AF 0.50`) — the door the cockpit's Sub controls come
+    /// in by. The work is the same per-receiver verb the plain `set_level` above routes Main
+    /// through; on a radio this build offers no Sub for it refuses, sending nothing.
+    fn set_receiver_level(&self, rx: ReceiverId, name: &str, value: &str) -> Option<bool> {
+        CivBackend::set_level_on(self, rx, name, value)
+    }
+
+    fn func(&self, token: &str) -> Option<bool> {
+        self.func_on(ReceiverId::Main, token)
+    }
+
+    fn set_func(&self, token: &str, on: bool) -> Option<bool> {
+        self.set_func_on(ReceiverId::Main, token, on)
+    }
+
+    /// CAT CW KEYS THE TRANSMITTER, so it is the keying path and names no receiver: `17` carries
+    /// no band-directed mark (A7380-7EX-4 p. 4), the rig sends the CW on whichever receiver
+    /// transmits, and a selection round trip in front of the first chunk would delay key-on.
+    /// Exactly the bytes it always sent — as is `stop_morse`, an unkey that must never wait.
     fn send_morse(&self, text: &str) -> Option<bool> {
         // Chunk to the rig's per-frame CW text limit; all chunks must ack.
         let bytes: Vec<u8> = text.bytes().filter(u8::is_ascii).collect();
@@ -887,9 +1311,25 @@ impl RigBackend for CivBackend {
         Some(ok && restored)
     }
 
+    /// RIT — a RECEIVE offset, so Main's. `21` has no band-directed mark on the IC-7610
+    /// (A7380-7EX-4 p. 9), so it rides the held selection on both two-receiver radios.
     fn set_rit(&self, hz: i32) -> Option<bool> {
-        Some(self.ack(commands::set_rit_offset(self.addr, hz)))
+        Some(self.ack_on(
+            Some(ReceiverId::Main),
+            commands::set_rit_offset(self.addr, hz),
+        ))
     }
+
+    // ⭐ THE TRANSMIT-SIDE CONFIGURATION VERBS name the TRANSMITTING receiver — Main by default
+    // (D1: the transmit gate judges the TX source; outside satellite mode that is Main, "you
+    // can transmit on only the Main band", IC-9700 Basic Manual p. 3-2). They are settings, not
+    // keying: the radio loop withholds XIT and the repeater push from a keyed rig, so the band
+    // lock they may take can never sit between the go and PTT-on, nor in front of an unkey.
+    //
+    // ⚠️ In a satellite pass the transmitting receiver is the SUB (the uplink). Where the
+    // IC-9700 keeps its ΔTX, duplex and tone registers in satellite mode is not stated in its
+    // manuals, so these stay on Main — where they have always landed — rather than on a guess;
+    // `Engine::fm_repeater_config` records the uplink-tone half of that as NEEDS-BENCH.
 
     fn set_xit(&self, hz: i32) -> Option<bool> {
         // ⛔ Icom's ΔTX shares the RIT offset register, which is exactly why a radio with no
@@ -898,26 +1338,30 @@ impl RigBackend for CivBackend {
         if !self.has_delta_tx() {
             return None;
         }
-        Some(self.ack(commands::set_rit_offset(self.addr, hz)))
+        Some(self.ack_on(
+            Some(ReceiverId::Main),
+            commands::set_rit_offset(self.addr, hz),
+        ))
     }
 
     fn set_rptr_shift(&self, shift: &str) -> Option<bool> {
-        Some(self.ack(commands::set_duplex(self.addr, shift)))
+        Some(self.ack_on(
+            Some(ReceiverId::Main),
+            commands::set_duplex(self.addr, shift),
+        ))
     }
 
     fn set_rptr_offset(&self, hz: i64) -> Option<bool> {
         // Cmd 0D, 3-byte BCD in 100 Hz units (confirmed IC-9700 ref: 600 kHz → 00 60 00).
         // The offset magnitude is unsigned; direction comes from the duplex shift (`R`).
-        Some(self.ack(commands::set_rptr_offset(self.addr, hz.unsigned_abs())))
+        Some(self.ack_on(
+            Some(ReceiverId::Main),
+            commands::set_rptr_offset(self.addr, hz.unsigned_abs()),
+        ))
     }
 
     fn set_ctcss(&self, tenths: u32) -> Option<bool> {
-        if tenths == 0 {
-            return Some(self.ack(commands::set_tone_func(self.addr, false)));
-        }
-        let tone = self.ack(commands::set_repeater_tone(self.addr, tenths));
-        let func = self.ack(commands::set_tone_func(self.addr, true));
-        Some(tone && func)
+        self.set_ctcss_on(ReceiverId::Main, tenths)
     }
 }
 
@@ -933,6 +1377,9 @@ pub struct CivDaemon {
     /// Shared with the broker backend: set true while Nexus is transmitting so the disconnect
     /// fail-safe unkey doesn't fire on Nexus's own Rig reconnect (the CI-V PTT-flicker fix).
     tx_intent: Arc<AtomicBool>,
+    /// Can a command sent through this daemon name the SUB receiver — see
+    /// [`Self::names_receivers`].
+    names_receivers: bool,
 }
 
 impl CivDaemon {
@@ -1004,6 +1451,7 @@ impl CivDaemon {
             tcp_stop,
             tcp_thread: Some(tcp_thread),
             tx_intent,
+            names_receivers: RxAddressing::for_model(model) != RxAddressing::Single,
         })
     }
 
@@ -1051,6 +1499,16 @@ impl CivDaemon {
     /// False once the serial engine died (port unplugged / denied).
     pub fn is_alive(&self) -> bool {
         self.engine.is_alive()
+    }
+
+    /// Can a command sent through this daemon NAME THE SUB (`L Sub …`) — i.e. is this a radio
+    /// the capability table offers a Sub for, which the daemon then addresses per receiver
+    /// (band-directed on an IC-7610, a held selection on an IC-9700). The radio loop reports it
+    /// to the engine, which offers the cockpit's Sub controls only where it is true: a control
+    /// that cannot reach its receiver is worse than one that is not drawn. Fixed for the
+    /// daemon's life — it is the model's addressing, not a reading.
+    pub fn names_receivers(&self) -> bool {
+        self.names_receivers
     }
 
     /// Newest completed scope sweep (latest-wins; `None` until the next arrives).
@@ -1957,10 +2415,29 @@ mod tests {
             assert_eq!(sent, Some(raw), "MONITOR_GAIN {frac}");
         }
 
-        // ATTENUATOR — the operator's dB in, BCD dB on the bus, the same dB back out.
-        // The IC-7610's three pads are what make this a real test: 6 dB encodes identically
-        // under BCD and raw hex, 12 and 18 do not.
-        for (db, wire) in [(6u8, 0x06u8), (12, 0x12), (18, 0x18), (0, 0x00)] {
+        // ATTENUATOR — the operator's dB in, BCD dB on the bus, the same dB back out, for
+        // every one of the IC-7610's fifteen pads (A7380-7EX-4 p. 3) and then OFF. 3, 6 and 9
+        // encode identically under BCD and raw hex; every pad from 12 up does not. Each goes
+        // out as ONE band-directed frame naming Main, as the three pads offered before did.
+        for (db, wire) in [
+            (3u8, 0x03u8),
+            (6, 0x06),
+            (9, 0x09),
+            (12, 0x12),
+            (15, 0x15),
+            (18, 0x18),
+            (21, 0x21),
+            (24, 0x24),
+            (27, 0x27),
+            (30, 0x30),
+            (33, 0x33),
+            (36, 0x36),
+            (39, 0x39),
+            (42, 0x42),
+            (45, 0x45),
+            (0, 0x00),
+        ] {
+            let n = regs.lock().unwrap().wire.len();
             assert_eq!(
                 backend.set_level("ATT", &db.to_string()),
                 Some(true),
@@ -1968,23 +2445,38 @@ mod tests {
             );
             assert_eq!(regs.lock().unwrap().att_raw, wire, "ATT {db} dB on the bus");
             assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [format!("FE FE 98 E0 29 00 11 {wire:02X} FD")],
+                "ATT {db}: the frame on the wire"
+            );
+            assert_eq!(
                 backend.level("ATT").as_deref(),
                 Some(db.to_string().as_str()),
                 "read ATT {db} back"
             );
         }
-        // A pad this rig does not have is REFUSED, not rounded to a neighbour. 10 dB is the
-        // IC-9700's pad, not the 7610's — quietly substituting 12 would attenuate by an
-        // amount the operator did not choose.
+        // A pad this rig does not have is REFUSED, not rounded to a neighbour: 10 dB is the
+        // IC-9700's pad, 4 falls between two of the 7610's, and 48 is one 3 dB step past its
+        // last. Substituting a neighbour would attenuate by an amount the operator did not
+        // choose.
+        for db in ["10", "4", "48"] {
+            let n = regs.lock().unwrap().wire.len();
+            assert_eq!(
+                backend.set_level("ATT", db),
+                Some(false),
+                "{db} dB is not a 7610 pad"
+            );
+            assert_eq!(
+                regs.lock().unwrap().wire.len(),
+                n,
+                "a refused pad ({db} dB) never reaches the bus"
+            );
+        }
+        assert_eq!(regs.lock().unwrap().att_raw, 0x00);
+        // …and the ladder `\dump_state` declares for this rig is that same one.
         assert_eq!(
-            backend.set_level("ATT", "10"),
-            Some(false),
-            "10 dB is not a 7610 pad"
-        );
-        assert_eq!(
-            regs.lock().unwrap().att_raw,
-            0x00,
-            "a refused pad never reaches the bus"
+            backend.attenuator_steps_db(),
+            vec![3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45]
         );
 
         // PREAMP — the LABEL goes in, the POSITION goes on the bus, the LABEL comes back.
@@ -2066,6 +2558,1408 @@ mod tests {
         assert_eq!(backend.set_func("MON", true), Some(true));
         assert_eq!(backend.func("MON"), Some(true));
         assert_eq!(backend.set_level("MONITOR_GAIN", "0.50"), Some(true));
+    }
+
+    // ===== THE 17 VERBS THAT NAME A RECEIVER (the dual-receiver programme's CAT step) =====
+    //
+    // The vendor ground truth these pin — the citations are in the module header:
+    // - IC-7610: Icom's command `29` names Main or Sub "regardless of active/inactive" band
+    //   (CI-V Reference Guide A7380-7EX-4, p. 9 and p. 15; per-command marks pp. 3–4, 8).
+    // - IC-9700: NO command `29` (A7508-3EX-4's table ends at `28`), so the selection is
+    //   HELD under the band lock — the `set_split_freq` pattern.
+    // - Every radio the capability table does not offer a Sub: byte-identical to before.
+
+    /// A backend driven directly (no TCP) over a fake radio at `addr`, and that radio's
+    /// register file. The engine rides along because dropping it stops the serial thread.
+    fn backend_on(
+        addr: u8,
+        model: Option<IcomModel>,
+    ) -> (CivEngine, Arc<CivBackend>, Arc<Mutex<Regs>>) {
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), addr);
+        let b = Arc::new(CivBackend::new(
+            engine.handle(),
+            addr,
+            Arc::new(AtomicBool::new(false)),
+            1,
+            model,
+        ));
+        // The engine's own first frame is scope-off housekeeping (`27 11 00`), sent
+        // asynchronously on its first loop pass. Wait it out, so a test that snapshots the
+        // log to see what ONE verb sent never counts the engine's frame as the verb's.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while regs.lock().unwrap().log.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "engine housekeeping never ran"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        (engine, b, regs)
+    }
+
+    /// Plant DISAGREEING values in the two bands' receive registers — every one different
+    /// between Main and Sub — so a reading taken from the wrong receiver shows up by its
+    /// number, not by luck.
+    ///
+    /// | | Main | Sub |
+    /// |---|---|---|
+    /// | AF / RF / SQL / NR / NB level (`14 01/02/03/06/12`) | 200 / 180 / 20 / 150 / 90 | 50 / 30 / 240 / 10 / 220 |
+    /// | AGC (`16 12`) | FAST (01) | SLOW (03) |
+    /// | preamp position (`16 02`) | 1 | 2 |
+    /// | NB / NR / ANF / MN on (`16 22/40/41/48`) | on / off / on / off | off / on / off / on |
+    /// | attenuator (`11`) | 12 dB | 18 dB |
+    /// | S-meter (`15 02`) | raw 120 (S9) | raw 60 |
+    fn plant_two_receivers(regs: &Arc<Mutex<Regs>>) {
+        let mut r = regs.lock().unwrap();
+        for (sub, main, other) in [
+            (0x01u8, 200u16, 50u16),
+            (0x02, 180, 30),
+            (0x03, 20, 240),
+            (0x06, 150, 10),
+            (0x12, 90, 220),
+        ] {
+            r.levels.insert(sub, main);
+            r.sub_levels.insert(sub, other);
+        }
+        for (sub, main, other) in [
+            (0x12u8, 0x01u8, 0x03u8),
+            (commands::FUNC_PREAMP, 1, 2),
+            (0x22, 1, 0),
+            (0x40, 0, 1),
+            (0x41, 1, 0),
+            (0x48, 0, 1),
+        ] {
+            r.funcs.insert(sub, main);
+            r.sub_funcs.insert(sub, other);
+        }
+        r.att_raw = 0x12;
+        r.sub_att_raw = 0x18;
+        assert_ne!(
+            r.smeter_raw, r.sub_smeter_raw,
+            "the fixture's S-meters disagree"
+        );
+    }
+
+    /// Where did the LAST `cmd` (whose first data byte is `first`, when given) act — `true`
+    /// = on the Sub band. Panics if it never reached the radio at all, which is its own
+    /// failure and must not read as "on Main".
+    fn last_acted_on_sub(regs: &Arc<Mutex<Regs>>, cmd: u8, first: Option<u8>) -> bool {
+        regs.lock()
+            .unwrap()
+            .acted
+            .iter()
+            .rev()
+            .find(|(_, c, d)| *c == cmd && first.is_none_or(|f| d.first() == Some(&f)))
+            .map(|(on_sub, _, _)| *on_sub)
+            .unwrap_or_else(|| panic!("{cmd:02x} {first:02x?} never reached the radio"))
+    }
+
+    /// Put the IC-9700 fake into a satellite pass and STRAND its selection on Sub the way
+    /// the field saw it: an uplink write whose Main restore the rig refused.
+    fn strand_on_sub(b: &CivBackend, regs: &Arc<Mutex<Regs>>) {
+        regs.lock().unwrap().nak_main_select = 1;
+        assert_eq!(
+            b.set_split_freq(145_965_000),
+            Some(false),
+            "scene: the Main restore after the uplink write is refused"
+        );
+        assert!(
+            regs.lock().unwrap().sel_sub,
+            "scene: the selection really is stranded on Sub"
+        );
+    }
+
+    /// ⭐ IC-7610 — THE RECEIVE VERBS NAME MAIN, whatever the front panel has selected.
+    ///
+    /// The operator has touched the SUB band. Before this step every one of these went out
+    /// unqualified, so the radio applied it to the SELECTED band — Sub — and the single-
+    /// receiver cockpit showed the Sub's S-meter, AF, NB… as "the radio's". Command `29`
+    /// names Main without touching the selection ("Regardless of active/inactive the Main
+    /// or Sub band, you can directly specify the Main or Sub band", A7380-7EX-4 p. 9), so
+    /// the panel never flickers and the operator's choice of band is left exactly as it was.
+    #[test]
+    fn an_ic7610_names_main_while_the_panel_has_the_sub_band_selected() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        plant_two_receivers(&regs);
+        regs.lock().unwrap().sel_sub = true; // the operator selected the Sub band
+
+        // READS — Main's number every time; the Sub's is the other column.
+        for (name, main, sub) in [
+            ("STRENGTH", "0", "-27"),
+            ("AF", "0.78", "0.20"),
+            ("RF", "0.71", "0.12"),
+            ("SQL", "0.08", "0.94"),
+            ("NR", "0.59", "0.04"),
+            ("NB", "0.35", "0.86"),
+            ("AGC", "2", "3"),
+            ("ATT", "12", "18"),
+            ("PREAMP", "12", "20"),
+        ] {
+            assert_eq!(
+                b.level(name).as_deref(),
+                Some(main),
+                "l {name}: Main's reading (the Sub's would be {sub})"
+            );
+        }
+        for (token, main) in [("NB", true), ("NR", false), ("ANF", true), ("MN", false)] {
+            assert_eq!(b.func(token), Some(main), "u {token}: Main's state");
+        }
+
+        // WRITES — into Main's register, with the Sub's left at its planted value.
+        for (name, value, sub, raw) in [
+            ("AF", "0.50", 0x01u8, 127u16),
+            ("RF", "0.25", 0x02, 63),
+            ("SQL", "0.75", 0x03, 191),
+            ("NR", "1.00", 0x06, 255),
+            ("NB", "0.00", 0x12, 0),
+        ] {
+            assert_eq!(b.set_level(name, value), Some(true), "L {name}");
+            let r = regs.lock().unwrap();
+            assert_eq!(r.levels.get(&sub), Some(&raw), "L {name} landed on Main");
+            assert_ne!(
+                r.sub_levels.get(&sub),
+                Some(&raw),
+                "L {name} left the Sub alone"
+            );
+        }
+        assert_eq!(b.set_level("AGC", "3"), Some(true)); // SLOW
+        assert_eq!(b.set_level("ATT", "6"), Some(true));
+        assert_eq!(b.set_level("PREAMP", "20"), Some(true)); // position 2
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.funcs.get(&0x12), Some(&0x03), "AGC on Main");
+            assert_eq!(
+                r.sub_funcs.get(&0x12),
+                Some(&0x03),
+                "Sub's AGC was already SLOW"
+            );
+            assert_eq!(r.att_raw, 0x06, "ATT on Main");
+            assert_eq!(r.sub_att_raw, 0x18, "the Sub's pad untouched");
+            assert_eq!(
+                r.funcs.get(&commands::FUNC_PREAMP),
+                Some(&2),
+                "preamp on Main"
+            );
+        }
+        for (token, on, sub) in [
+            ("NB", false, 0x22u8),
+            ("NR", true, 0x40),
+            ("ANF", false, 0x41),
+            ("MN", true, 0x48),
+        ] {
+            assert_eq!(b.set_func(token, on), Some(true), "U {token}");
+            assert!(
+                !last_acted_on_sub(&regs, 0x16, Some(sub)),
+                "U {token} landed on Main"
+            );
+            assert_eq!(regs.lock().unwrap().funcs.get(&sub), Some(&u8::from(on)));
+        }
+        // The CTCSS tone is per band on this radio too (`1B 00` and `16 42` both carry the
+        // mark, A7380-7EX-4 pp. 4, 8) — and on the radio's Main band by default.
+        assert_eq!(b.set_ctcss(885), Some(true));
+        assert!(
+            !last_acted_on_sub(&regs, 0x1B, Some(0x00)),
+            "the tone frequency on Main"
+        );
+        assert!(
+            !last_acted_on_sub(&regs, 0x16, Some(0x42)),
+            "the tone switch on Main"
+        );
+
+        // ⭐ AND THE SELECTION NEVER MOVED: not one select on the wire, Sub still selected.
+        let r = regs.lock().unwrap();
+        assert!(
+            r.sel_sub,
+            "the operator's Sub selection is exactly where they left it"
+        );
+        assert!(
+            !r.log.iter().any(|(c, _)| *c == 0x07),
+            "a band-directed command needs no select at all: {:02x?}",
+            r.log
+        );
+        let on_sub: Vec<_> = r
+            .acted
+            .iter()
+            .filter(|(s, c, _)| *s && matches!(c, 0x11 | 0x14 | 0x15 | 0x16 | 0x1B))
+            .collect();
+        assert!(
+            on_sub.is_empty(),
+            "every receive command acted on Main: {on_sub:02x?}"
+        );
+    }
+
+    /// ⭐ IC-7610 — THE DIAL AND THE MODE ARE MAIN'S, READ BY NAME, whatever the panel selects.
+    ///
+    /// The receive verbs above name Main with command `29`; the dial and the mode could not,
+    /// because `03`/`04` carry no band-directed mark (A7380-7EX-4 p. 9). So with the operator on
+    /// the Sub band, "the radio's" frequency and mode were the SUB's — and a turn of the Sub's
+    /// dial read as a QSY of Main. `25 00` / `26 00` name Main in their own first byte ("00:
+    /// MAIN 01: SUB", p. 13): the reading no longer depends on the selection, and nothing is
+    /// selected to take it. The writes follow in the next test.
+    #[test]
+    fn an_ic7610_reads_mains_dial_and_mode_by_name_whichever_band_the_panel_selects() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        {
+            let mut r = regs.lock().unwrap();
+            r.main_hz = 14_074_000;
+            r.sub_hz = 7_074_000;
+            r.main_mode = 0x01; // USB
+            r.sub_mode = 0x00; // LSB
+        }
+        // The Sub selected first: that is where the old reads went wrong.
+        for sel_sub in [true, false] {
+            regs.lock().unwrap().sel_sub = sel_sub;
+            let n = regs.lock().unwrap().wire.len();
+            assert_eq!(
+                b.freq_hz(),
+                14_074_000,
+                "f, Sub selected = {sel_sub}: Main's dial (the Sub's is 7.074)"
+            );
+            assert_eq!(
+                b.mode().0,
+                "USB",
+                "m, Sub selected = {sel_sub}: Main's mode (the Sub's is LSB)"
+            );
+            let r = regs.lock().unwrap();
+            assert_eq!(
+                hex_frames(&r.wire[n..]),
+                ["FE FE 98 E0 25 00 FD", "FE FE 98 E0 26 00 FD"],
+                "Sub selected = {sel_sub}: each read names MAIN, and nothing else goes out"
+            );
+            assert_eq!(r.sel_sub, sel_sub, "the operator's selection never moved");
+        }
+    }
+
+    /// ⭐ IC-7610 — A QSY OR A MODE CHANGE FROM NEXUS MOVES MAIN, BY NAME, whatever the panel
+    /// selects (operator ruling 2026-09-24, "Write Main by name").
+    ///
+    /// The dial Nexus reads is Main's (above); the dial it MOVES was the selected band's, because
+    /// `05` and `06` act on the selection. With the Sub selected, a QSY moved the Sub while the
+    /// reading stayed on Main. `25 00 <freq>` and `26 00 <mode>…` name Main in their own first
+    /// byte (A7380-7EX-4 p. 13), so Nexus reads, moves and judges one receiver.
+    ///
+    /// The mode frame carries what the `06` + `1A 06` pair left on the radio. A plain mode skips
+    /// the DATA and filter bytes, which the radio takes as "DATA OFF and the default filter of
+    /// the operating mode" (p. 13) — what `06 <mode>` (default filter, p. 10) followed by
+    /// `1A 06 00 00` left. A DATA mode carries the operator's D1–D3 and FIL1, the two bytes the
+    /// `1A 06` sent.
+    #[test]
+    fn an_ic7610_writes_mains_dial_and_mode_by_name_whichever_band_the_panel_selects() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        {
+            let mut r = regs.lock().unwrap();
+            r.main_hz = 14_074_000;
+            r.sub_hz = 7_074_000;
+            r.main_mode = 0x01; // USB
+            r.sub_mode = 0x00; // LSB
+        }
+        // The Sub selected first: that is where the old writes went wrong.
+        for (sel_sub, hz, frame) in [
+            (true, 14_080_000u64, "FE FE 98 E0 25 00 00 00 08 14 00 FD"),
+            (false, 14_085_000, "FE FE 98 E0 25 00 00 50 08 14 00 FD"),
+        ] {
+            regs.lock().unwrap().sel_sub = sel_sub;
+            let n = regs.lock().unwrap().wire.len();
+            assert!(b.set_freq(hz), "F, Sub selected = {sel_sub}");
+            {
+                let r = regs.lock().unwrap();
+                assert_eq!(
+                    (r.main_hz, r.sub_hz),
+                    (hz, 7_074_000),
+                    "F, Sub selected = {sel_sub}: MAIN moved, the Sub did not"
+                );
+                assert_eq!(hex_frames(&r.wire[n..]), [frame], "F on the wire");
+                assert_eq!(r.sel_sub, sel_sub, "the operator's selection never moved");
+            }
+            assert_eq!(b.freq_hz(), hz, "the dial Nexus reads follows its own QSY");
+
+            // Mode: each one MAIN's, each one ONE frame, the Sub's LSB untouched.
+            for (mode, main_mode, data_on, frame) in [
+                ("CW", 0x03u8, false, "FE FE 98 E0 26 00 03 FD"),
+                ("PKTUSB", 0x01, true, "FE FE 98 E0 26 00 01 01 01 FD"),
+                ("FM", 0x05, false, "FE FE 98 E0 26 00 05 FD"),
+                ("PKTFM", 0x05, true, "FE FE 98 E0 26 00 05 01 01 FD"),
+                ("USB", 0x01, false, "FE FE 98 E0 26 00 01 FD"),
+            ] {
+                let n = regs.lock().unwrap().wire.len();
+                assert!(b.set_mode(mode, 0), "M {mode}, Sub selected = {sel_sub}");
+                let r = regs.lock().unwrap();
+                assert_eq!(hex_frames(&r.wire[n..]), [frame], "M {mode} on the wire");
+                assert_eq!(
+                    (r.main_mode, r.sub_mode, r.data_mode),
+                    (main_mode, 0x00, data_on),
+                    "M {mode}, Sub selected = {sel_sub}: MAIN's mode and DATA, the Sub's LSB kept"
+                );
+                assert_eq!(r.sel_sub, sel_sub, "the operator's selection never moved");
+            }
+        }
+        assert!(
+            !regs.lock().unwrap().log.iter().any(|(c, _)| *c == 0x07),
+            "a by-name write selects nothing"
+        );
+
+        // The operator's DATA mode rides the frame: D2 here, as `1A 06 02 01` carried it.
+        let (radio, _push) = FakeRadio::new(0x98);
+        let regs2 = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let b2 = CivBackend::new(
+            engine.handle(),
+            0x98,
+            Arc::new(AtomicBool::new(false)),
+            2,
+            Some(IcomModel::Ic7610),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while regs2.lock().unwrap().log.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "engine housekeeping never ran"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let n = regs2.lock().unwrap().wire.len();
+        assert!(b2.set_mode("PKTUSB", 0));
+        assert_eq!(
+            hex_frames(&regs2.lock().unwrap().wire[n..]),
+            ["FE FE 98 E0 26 00 01 02 01 FD"],
+            "D2 on the wire"
+        );
+    }
+
+    /// ⛔ THE IC-7610'S SPLIT IS LEFT EXACTLY AS IT WAS. The by-name writes stop at the dial and
+    /// the mode. Icom's guide names `25 01` / `26 01` the SUB band (A7380-7EX-4 p. 13) and gives
+    /// `0F` split on/off (p. 3), but nowhere says which band a split transmits on — so the split
+    /// verbs keep their bytes, including the `25 01` / `26 01` they already send, which on this
+    /// radio name the Sub. NEEDS-BENCH.
+    #[test]
+    fn an_ic7610_split_is_left_exactly_as_it_was() {
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        regs.lock().unwrap().sel_sub = true;
+        let n = regs.lock().unwrap().wire.len();
+        assert_eq!(b.set_split(true, "VFOB"), Some(true));
+        assert_eq!(b.set_split_freq(14_090_000), Some(true));
+        assert_eq!(b.set_split_mode("USB", 0), Some(true));
+        assert_eq!(b.set_split(false, "VFOA"), Some(true));
+        assert_eq!(
+            hex_frames(&regs.lock().unwrap().wire[n..]),
+            [
+                "FE FE 98 E0 16 5A FD",
+                "FE FE 98 E0 0F 01 FD",
+                "FE FE 98 E0 25 01 00 00 09 14 00 FD",
+                "FE FE 98 E0 26 01 01 00 FD",
+                "FE FE 98 E0 0F 00 FD",
+            ],
+            "the IC-7610's split bytes moved"
+        );
+    }
+
+    /// ⛔ EVERY OTHER RADIO WRITES ITS DIAL AND MODE WITH `05`, `06` AND `1A 06`, BYTE FOR BYTE —
+    /// the one-receiver Icoms, a build that does not know its model, and the IC-9700, whose
+    /// `25 00` would name its SELECTED VFO (A7508-3EX-4 p. 24). The frames are the ones the tree
+    /// before the by-name write (`456fdfdf`) sent, at each radio's own address.
+    #[test]
+    fn every_other_radio_writes_its_dial_and_mode_exactly_as_before() {
+        for (addr, model) in [
+            (0x94u8, Some(IcomModel::Ic7300)),
+            (0xA4, Some(IcomModel::Ic705)),
+            (0xAC, Some(IcomModel::Ic905)),
+            (0x94, None),
+            (0xA2, Some(IcomModel::Ic9700)),
+        ] {
+            let (_e, b, regs) = backend_on(addr, model);
+            let n = regs.lock().unwrap().wire.len();
+            let _ = b.set_freq(14_080_000);
+            let _ = b.set_mode("USB", 0);
+            let _ = b.set_mode("PKTUSB", 0);
+            let _ = b.set_mode("FM", 0);
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [
+                    format!("FE FE {addr:02X} E0 05 00 00 08 14 00 FD"),
+                    format!("FE FE {addr:02X} E0 06 01 FD"),
+                    format!("FE FE {addr:02X} E0 1A 06 00 00 FD"),
+                    format!("FE FE {addr:02X} E0 06 01 FD"),
+                    format!("FE FE {addr:02X} E0 1A 06 01 01 FD"),
+                    format!("FE FE {addr:02X} E0 06 05 FD"),
+                    format!("FE FE {addr:02X} E0 1A 06 00 00 FD"),
+                ],
+                "{model:?}: the dial and mode writes moved"
+            );
+        }
+    }
+
+    /// ⭐ A DIAL READ THAT TIMES OUT SERVES MAIN'S LAST READING — never the engine's cache,
+    /// which also folds what the radio pushes, and a push reports the SELECTED band.
+    ///
+    /// A timeout is one crowded moment, and for [`CIV_CACHE_GRACE`] the last honest reading
+    /// stands in for it. On every other radio that reading is the engine's cache: each `03`
+    /// reply refreshes it and a transceive push lands in it too, both from the selected band,
+    /// so they agree. A `25 00` reply does not fold into it, so on the by-name path the cache
+    /// holds only what the radio pushed — with the Sub selected, the Sub's dial. Serving it
+    /// would put the selection-following reading back for exactly the moment the bus is busy.
+    #[test]
+    fn an_ic7610_dial_read_that_times_out_serves_mains_last_reading_not_a_pushed_sub_dial() {
+        let (radio, push) = FakeRadio::new(0x98);
+        let regs = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let b = CivBackend::new(
+            engine.handle(),
+            0x98,
+            Arc::new(AtomicBool::new(false)),
+            1,
+            Some(IcomModel::Ic7610),
+        );
+        {
+            let mut r = regs.lock().unwrap();
+            r.main_hz = 14_074_000;
+            r.sub_hz = 7_074_000;
+            r.main_mode = 0x01; // USB
+            r.sub_mode = 0x00; // LSB
+            r.sel_sub = true; // the operator is on the Sub band
+        }
+        assert_eq!(b.freq_hz(), 14_074_000);
+        assert_eq!(b.mode().0, "USB");
+
+        // The operator turns the Sub's dial and changes its mode: the radio PUSHES both
+        // (transceive `00` / `01`), and the engine folds them into its cache.
+        let pushed = |cmd: u8, data: Vec<u8>| {
+            crate::civ::frame::Frame {
+                to: 0xE0,
+                from: 0x98,
+                cmd,
+                data,
+            }
+            .to_bytes()
+        };
+        push.lock().unwrap().extend(pushed(
+            0x00,
+            crate::civ::frame::freq_to_bcd(7_075_000).to_vec(),
+        ));
+        push.lock().unwrap().extend(pushed(0x01, vec![0x00, 0x01]));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let st = engine.handle().state();
+            // ⭐ THE CONTROL: the cache really holds the Sub's reading — this is what a
+            // fallback to it would serve below.
+            if st.freq_hz == Some(7_075_000) && st.mode == Some(Mode::Lsb) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pushes never reached the engine's cache: {st:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // The next dial read and mode read are both lost on the wire.
+        regs.lock().unwrap().drop_dial_reads = 2;
+        assert_eq!(
+            b.freq_hz(),
+            14_074_000,
+            "a timed-out f serves Main's last reading, not the Sub's pushed 7.075"
+        );
+        assert_eq!(
+            b.mode().0,
+            "USB",
+            "a lost m serves Main's last mode, not the Sub's pushed LSB"
+        );
+        assert_eq!(
+            regs.lock().unwrap().drop_dial_reads,
+            0,
+            "both reads were lost"
+        );
+    }
+
+    /// ⛔ EVERY OTHER RADIO READS ITS DIAL AND MODE WITH `03` AND `04`, BYTE FOR BYTE.
+    ///
+    /// The one-receiver Icoms, a build that does not know its model, and the IC-9700 — whose
+    /// `25 00` names the SELECTED VFO (A7508-3EX-4 p. 24) and so would fix nothing. The frames
+    /// are the ones the tree before the by-name read (`bd585821`) sent: the same two at each
+    /// radio's own address.
+    #[test]
+    fn every_other_radio_reads_its_dial_and_mode_with_03_and_04_exactly_as_before() {
+        for (addr, model) in [
+            (0x94u8, Some(IcomModel::Ic7300)),
+            (0xA4, Some(IcomModel::Ic705)),
+            (0xAC, Some(IcomModel::Ic905)),
+            (0x94, None),
+            (0xA2, Some(IcomModel::Ic9700)),
+        ] {
+            let (_e, b, regs) = backend_on(addr, model);
+            let n = regs.lock().unwrap().wire.len();
+            let _ = b.freq_hz();
+            let _ = b.mode();
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [
+                    format!("FE FE {addr:02X} E0 03 FD"),
+                    format!("FE FE {addr:02X} E0 04 FD")
+                ],
+                "{model:?}: the dial and mode reads moved"
+            );
+        }
+    }
+
+    /// ⭐ IC-9700 — A SELECTION STRANDED ON SUB IS PUT BACK ON MAIN BEFORE ANY OF THE 17.
+    ///
+    /// The IC-9700 has no band-directed form (its reference, A7508-3EX-4, has no command
+    /// `29`), so the broker HOLDS the selection, exactly as the dial verbs already did: the
+    /// band lock, and `ensure_main` repairing a Main restore the rig refused. Before this
+    /// step only the dial verbs did — after a refused restore mid-pass, an S-meter poll, an
+    /// NB toggle, a RIT change or a CTCSS tone all acted on the SUB band (the uplink) and
+    /// the reading was reported as the downlink's.
+    #[test]
+    fn an_ic9700_repairs_a_stranded_selection_before_every_receiver_verb() {
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        plant_two_receivers(&regs);
+        assert!(b.set_freq(435_640_000));
+        assert_eq!(
+            b.set_split(true, "Sub"),
+            Some(true),
+            "scene: a satellite pass"
+        );
+
+        for (name, main) in [
+            ("STRENGTH", "0"),
+            ("AF", "0.78"),
+            ("RF", "0.71"),
+            ("SQL", "0.08"),
+            ("NR", "0.59"),
+            ("NB", "0.35"),
+            ("AGC", "2"),
+            ("ATT", "12"),
+            ("PREAMP", "1"),
+        ] {
+            strand_on_sub(&b, &regs);
+            assert_eq!(
+                b.level(name).as_deref(),
+                Some(main),
+                "l {name}: Main's reading"
+            );
+            assert!(
+                !regs.lock().unwrap().sel_sub,
+                "l {name}: selection back on Main"
+            );
+        }
+        for (token, main) in [("NB", true), ("NR", false), ("ANF", true), ("MN", false)] {
+            strand_on_sub(&b, &regs);
+            assert_eq!(b.func(token), Some(main), "u {token}: Main's state");
+            assert!(
+                !regs.lock().unwrap().sel_sub,
+                "u {token}: selection back on Main"
+            );
+        }
+
+        // WRITES, the TX-side configuration verbs included: each lands on Main — the
+        // receiver that transmits outside a satellite pass (IC-9700 Basic Manual, "you can
+        // transmit on only the Main band"). The witness is where the fake saw it LAND.
+        type Verb = fn(&CivBackend);
+        let writes: [(&str, Verb, u8, Option<u8>); 18] = [
+            (
+                "L AF",
+                |b| {
+                    let _ = b.set_level("AF", "0.50");
+                },
+                0x14,
+                Some(0x01),
+            ),
+            (
+                "L RF",
+                |b| {
+                    let _ = b.set_level("RF", "0.50");
+                },
+                0x14,
+                Some(0x02),
+            ),
+            (
+                "L SQL",
+                |b| {
+                    let _ = b.set_level("SQL", "0.50");
+                },
+                0x14,
+                Some(0x03),
+            ),
+            (
+                "L NR",
+                |b| {
+                    let _ = b.set_level("NR", "0.50");
+                },
+                0x14,
+                Some(0x06),
+            ),
+            (
+                "L NB",
+                |b| {
+                    let _ = b.set_level("NB", "0.50");
+                },
+                0x14,
+                Some(0x12),
+            ),
+            (
+                "L AGC",
+                |b| {
+                    let _ = b.set_level("AGC", "3");
+                },
+                0x16,
+                Some(0x12),
+            ),
+            (
+                "L ATT",
+                |b| {
+                    let _ = b.set_level("ATT", "10");
+                },
+                0x11,
+                None,
+            ),
+            (
+                "L PREAMP",
+                |b| {
+                    let _ = b.set_level("PREAMP", "2");
+                },
+                0x16,
+                Some(0x02),
+            ),
+            (
+                "U NB",
+                |b| {
+                    let _ = b.set_func("NB", false);
+                },
+                0x16,
+                Some(0x22),
+            ),
+            (
+                "U NR",
+                |b| {
+                    let _ = b.set_func("NR", true);
+                },
+                0x16,
+                Some(0x40),
+            ),
+            (
+                "U ANF",
+                |b| {
+                    let _ = b.set_func("ANF", false);
+                },
+                0x16,
+                Some(0x41),
+            ),
+            (
+                "U MN",
+                |b| {
+                    let _ = b.set_func("MN", true);
+                },
+                0x16,
+                Some(0x48),
+            ),
+            (
+                "U RIT",
+                |b| {
+                    let _ = b.set_func("RIT", true);
+                },
+                0x21,
+                Some(0x01),
+            ),
+            (
+                "J",
+                |b| {
+                    let _ = b.set_rit(120);
+                },
+                0x21,
+                Some(0x00),
+            ),
+            (
+                "V VFOB",
+                |b| {
+                    let _ = b.set_vfo("VFOB");
+                },
+                0x07,
+                Some(0x01),
+            ),
+            (
+                "R",
+                |b| {
+                    let _ = b.set_rptr_shift("-");
+                },
+                0x0F,
+                Some(0x11),
+            ),
+            (
+                "O",
+                |b| {
+                    let _ = b.set_rptr_offset(600_000);
+                },
+                0x0D,
+                None,
+            ),
+            (
+                "C",
+                |b| {
+                    let _ = b.set_ctcss(885);
+                },
+                0x1B,
+                Some(0x00),
+            ),
+        ];
+        for (what, verb, cmd, first) in writes {
+            strand_on_sub(&b, &regs);
+            verb(&b);
+            assert!(
+                !last_acted_on_sub(&regs, cmd, first),
+                "{what} landed on Main"
+            );
+            assert!(
+                !regs.lock().unwrap().sel_sub,
+                "{what}: selection back on Main"
+            );
+        }
+        assert!(
+            !last_acted_on_sub(&regs, 0x16, Some(0x42)),
+            "C: the tone switch landed on Main too"
+        );
+
+        // ⛔ AND NO XIT AT ALL. The IC-9700 has no ΔTX (A7508-3EX-4 lists `21 00` and `21 01`,
+        // no `21 02`), so `Z` and `U XIT` are refused before anything reaches the bus — no
+        // select, no repair, no `21` frame — whichever receiver is named and wherever the
+        // selection sits. `Z` used to ride the held selection onto Main's `21 00`, which on
+        // this radio is the RIT offset.
+        strand_on_sub(&b, &regs);
+        let n = regs.lock().unwrap().log.len();
+        assert_eq!(b.set_xit(250), None, "Z: refused, RPRT -11");
+        assert_eq!(b.set_func("XIT", true), None, "U XIT: refused, RPRT -11");
+        assert_eq!(
+            b.set_func_on(ReceiverId::Sub, "XIT", true),
+            None,
+            "U XIT named on the Sub: refused"
+        );
+        assert_eq!(
+            regs.lock().unwrap().log.len(),
+            n,
+            "an XIT put a frame on an IC-9700's bus"
+        );
+        // POSITIVE CONTROL: RIT rides the same register and still reaches the radio, on Main,
+        // after the stranded selection is repaired — so the log above could see a frame.
+        assert_eq!(b.set_rit(120), Some(true), "J still works");
+        assert!(regs.lock().unwrap().log.len() > n, "J reached the bus");
+        assert!(
+            !last_acted_on_sub(&regs, 0x21, Some(0x00)),
+            "J landed on Main"
+        );
+    }
+
+    /// ⭐ THE BAND LOCK HOLDS FOR THE RECEIVE VERBS, not just the dial.
+    ///
+    /// The daemon serves one backend to a thread per client. During a pass the uplink is
+    /// written select-Sub → write → verify → select-Main; a receive read that lands inside
+    /// that window reads the SUB band and reports it as Main's. Before this step only the
+    /// dial was held off by the lock — the other 17 verbs walked straight in.
+    #[test]
+    fn a_receive_read_never_lands_inside_another_threads_sub_window() {
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        plant_two_receivers(&regs);
+        assert!(b.set_freq(435_640_000));
+        assert_eq!(b.set_split(true, "Sub"), Some(true));
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (b, stop) = (b.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let (mut reads, mut wrong) = (0u32, Vec::new());
+                while !stop.load(Ordering::Relaxed) {
+                    match b.level("AF") {
+                        Some(v) if v != "0.78" => wrong.push(v),
+                        Some(_) => reads += 1,
+                        None => {}
+                    }
+                }
+                (reads, wrong)
+            })
+        };
+        for _ in 0..25 {
+            assert_eq!(b.set_split_freq(145_965_000), Some(true));
+            // A breath between uplink writes, as a Doppler steer has: `std`'s mutex is not
+            // fair, and a writer re-taking the lock back-to-back starves the reader — which
+            // would make "no wrong read" true of a reader that barely read.
+            std::thread::sleep(Duration::from_millis(3));
+        }
+        stop.store(true, Ordering::Relaxed);
+        let (reads, wrong) = reader.join().unwrap();
+        assert!(
+            wrong.is_empty(),
+            "a Main AF read served the SUB's value {} times: {wrong:?}",
+            wrong.len()
+        );
+        // CONTROL: the reader really did read, over and over — an idle reader would pass.
+        assert!(reads >= 10, "only {reads} reads raced the uplink writes");
+        let landed_on_sub = regs
+            .lock()
+            .unwrap()
+            .acted
+            .iter()
+            .filter(|(s, c, d)| *s && *c == 0x14 && d.first() == Some(&0x01))
+            .count();
+        assert_eq!(
+            landed_on_sub, 0,
+            "no AF read ever arrived while Sub was selected"
+        );
+    }
+
+    /// ⛔ AN UNKEY NEVER WAITS ON THE BAND LOCK. PTT-off and CW-stop are what a stuck
+    /// transmitter's release rests on: they name no receiver and take no lock, so a selection
+    /// sequence that is slow, wedged or merely in progress cannot hold the carrier up.
+    #[test]
+    fn an_unkey_never_waits_on_the_band_lock() {
+        for (addr, model) in [(0xA2, IcomModel::Ic9700), (0x98, IcomModel::Ic7610)] {
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            let held = b.band(); // a selection sequence in progress, frozen in place
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            {
+                let b = b.clone();
+                std::thread::spawn(move || {
+                    let t0 = std::time::Instant::now();
+                    let _ = b.set_ptt(false);
+                    let _ = b.stop_morse();
+                    let _ = tx.send(t0.elapsed());
+                });
+            }
+            let took = rx
+                .recv_timeout(Duration::from_millis(500))
+                .unwrap_or_else(|_| {
+                    panic!("{model:?}: PTT-off + CW-stop blocked behind the band lock")
+                });
+
+            // POSITIVE CONTROL: the same held guard DOES stop a verb that takes the lock, or
+            // this test could not have seen a blocked unkey at all.
+            let (ctx, crx) = std::sync::mpsc::channel();
+            {
+                let b = b.clone();
+                std::thread::spawn(move || {
+                    let _ = b.freq_hz();
+                    let _ = ctx.send(());
+                });
+            }
+            assert!(
+                crx.recv_timeout(Duration::from_millis(500)).is_err(),
+                "{model:?} control: the dial read waits on the held band lock"
+            );
+            drop(held);
+            crx.recv_timeout(Duration::from_secs(3))
+                .expect("…and proceeds the moment it is released");
+
+            let r = regs.lock().unwrap();
+            assert!(
+                r.log.contains(&(0x1C, vec![0x00, 0x00])),
+                "{model:?}: PTT-off on the wire"
+            );
+            assert!(
+                r.log.contains(&(0x17, vec![0xFF])),
+                "{model:?}: CW-stop on the wire"
+            );
+            assert!(took < Duration::from_millis(500), "{model:?}: {took:?}");
+        }
+    }
+
+    /// ⛔ KEY-ON TIMING IS UNCHANGED — nothing new rides between the go and PTT-on.
+    ///
+    /// The tempting "receiver fix" re-asserts Main before keying, so the carrier leaves on the
+    /// right band. It would put a selection round trip — and, with the selection stranded, a
+    /// dial re-read — between the slot boundary and the carrier. PTT names no receiver: the
+    /// RIG decides which one transmits (Main; the uplink, Sub, in satellite mode).
+    #[test]
+    fn nothing_new_rides_between_the_go_and_ptt_on() {
+        // IC-9700 with the selection STRANDED on Sub: the one state in which a receiver-
+        // correcting PTT would have had something to "repair" first.
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        assert!(b.set_freq(435_640_000));
+        assert_eq!(b.set_split(true, "Sub"), Some(true));
+        strand_on_sub(&b, &regs);
+        let sent_by = |f: &dyn Fn()| {
+            let n = regs.lock().unwrap().log.len();
+            f();
+            regs.lock().unwrap().log[n..].to_vec()
+        };
+        assert_eq!(
+            sent_by(&|| {
+                let _ = b.set_ptt(true);
+            }),
+            vec![(0x1C, vec![0x00, 0x01])],
+            "PTT-on is ONE frame"
+        );
+        assert_eq!(
+            sent_by(&|| {
+                let _ = b.send_morse("CQ");
+            }),
+            vec![(0x17, b"CQ".to_vec())],
+            "CAT CW keys with ONE frame"
+        );
+        assert_eq!(
+            sent_by(&|| {
+                let _ = b.set_ptt(false);
+            }),
+            vec![(0x1C, vec![0x00, 0x00])]
+        );
+        assert!(
+            regs.lock().unwrap().sel_sub,
+            "none of them touched the selection"
+        );
+
+        // IC-7610 — `1C` and `17` carry no band-directed mark (A7380-7EX-4 pp. 4, 9): bare.
+        let (_e2, b2, regs2) = backend_on(0x98, Some(IcomModel::Ic7610));
+        regs2.lock().unwrap().sel_sub = true;
+        let n = regs2.lock().unwrap().log.len();
+        let _ = b2.set_ptt(true);
+        let _ = b2.send_morse("CQ");
+        let _ = b2.stop_morse();
+        let _ = b2.set_ptt(false);
+        assert_eq!(
+            regs2.lock().unwrap().log[n..].to_vec(),
+            vec![
+                (0x1C, vec![0x00, 0x01]),
+                (0x17, b"CQ".to_vec()),
+                (0x17, vec![0xFF]),
+                (0x1C, vec![0x00, 0x00]),
+            ]
+        );
+    }
+
+    /// The script that drives EVERY verb this step touched, in a fixed order with fixed
+    /// arguments — the input to the byte-identity test below. The attenuator and preamp are
+    /// driven at the rig's own first step, so the script is legal on every model.
+    fn drive_every_touched_verb(b: &CivBackend) {
+        for name in [
+            "STRENGTH",
+            "AF",
+            "RF",
+            "SQL",
+            "NR",
+            "NB",
+            "AGC",
+            "ATT",
+            "PREAMP",
+            "RFPOWER",
+            "MICGAIN",
+            "COMP",
+            "MONITOR_GAIN",
+            "SWR",
+            "ALC",
+            "RFPOWER_METER_WATTS",
+            "COMP_METER",
+        ] {
+            let _ = b.level(name);
+        }
+        let first = |v: Vec<u8>| v.first().map_or_else(|| "0".to_string(), u8::to_string);
+        let (att, pre) = (first(b.attenuator_steps_db()), first(b.preamp_steps_db()));
+        for (name, value) in [
+            ("AF", "0.25"),
+            ("RF", "0.50"),
+            ("SQL", "0.10"),
+            ("NR", "0.60"),
+            ("NB", "0.40"),
+            ("AGC", "2"),
+            ("ATT", att.as_str()),
+            ("PREAMP", pre.as_str()),
+            ("RFPOWER", "0.75"),
+            ("MICGAIN", "0.30"),
+            ("KEYSPD", "25"),
+            ("COMP", "0.20"),
+            ("MONITOR_GAIN", "0.50"),
+        ] {
+            let _ = b.set_level(name, value);
+        }
+        for token in ["NB", "NR", "ANF", "MN", "COMP", "MON", "VOX", "SATMODE"] {
+            let _ = b.func(token);
+        }
+        for (token, on) in [
+            ("NB", true),
+            ("NR", false),
+            ("ANF", true),
+            ("MN", false),
+            ("COMP", true),
+            ("MON", false),
+            ("VOX", true),
+            ("RIT", true),
+            ("XIT", false),
+        ] {
+            let _ = b.set_func(token, on);
+        }
+        let _ = b.set_rit(120);
+        let _ = b.set_rit(-50);
+        // Transmit side.
+        let _ = b.owner_transmitting();
+        let _ = b.ptt();
+        let _ = b.set_ptt(true);
+        let _ = b.send_morse("CQ TEST CQ TEST THIS MESSAGE IS LONGER THAN ONE CHUNK");
+        let _ = b.stop_morse();
+        let _ = b.set_ptt(false);
+        let _ = b.set_xit(250);
+        let _ = b.set_xit(0);
+        for shift in ["+", "-", "None"] {
+            let _ = b.set_rptr_shift(shift);
+        }
+        let _ = b.set_rptr_offset(600_000);
+        let _ = b.set_ctcss(885);
+        let _ = b.set_ctcss(0);
+        // The selection itself, last — it moves the fake's band.
+        for vfo in ["VFOA", "VFOB", "Sub", "Main"] {
+            let _ = b.set_vfo(vfo);
+        }
+    }
+
+    fn hex_frames(wire: &[Vec<u8>]) -> Vec<String> {
+        wire.iter()
+            .map(|f| {
+                f.iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    /// ⭐ THE BYTES AN IC-7300 PUT ON THE WIRE BEFORE THIS STEP, for every verb it touched.
+    ///
+    /// Captured by running [`drive_every_touched_verb`] against the tree this step started
+    /// from (`046d493d`), and pasted here verbatim. The first frame is the engine's own
+    /// scope-off housekeeping (`27 11 00`), sent before any verb.
+    const IC7300_WIRE_BEFORE: &[&str] = &[
+        "FE FE 94 E0 27 11 00 FD",
+        "FE FE 94 E0 15 02 FD",
+        "FE FE 94 E0 14 01 FD",
+        "FE FE 94 E0 14 02 FD",
+        "FE FE 94 E0 14 03 FD",
+        "FE FE 94 E0 14 06 FD",
+        "FE FE 94 E0 14 12 FD",
+        "FE FE 94 E0 16 12 FD",
+        "FE FE 94 E0 11 FD",
+        "FE FE 94 E0 16 02 FD",
+        "FE FE 94 E0 14 0A FD",
+        "FE FE 94 E0 14 0B FD",
+        "FE FE 94 E0 14 0E FD",
+        "FE FE 94 E0 14 15 FD",
+        "FE FE 94 E0 15 12 FD",
+        "FE FE 94 E0 15 13 FD",
+        "FE FE 94 E0 15 11 FD",
+        "FE FE 94 E0 15 14 FD",
+        "FE FE 94 E0 14 01 00 63 FD",
+        "FE FE 94 E0 14 02 01 27 FD",
+        "FE FE 94 E0 14 03 00 25 FD",
+        "FE FE 94 E0 14 06 01 53 FD",
+        "FE FE 94 E0 14 12 01 02 FD",
+        "FE FE 94 E0 16 12 01 FD",
+        "FE FE 94 E0 11 20 FD",
+        "FE FE 94 E0 16 02 01 FD",
+        "FE FE 94 E0 14 0A 01 91 FD",
+        "FE FE 94 E0 14 0B 00 76 FD",
+        "FE FE 94 E0 14 0C 01 15 FD",
+        "FE FE 94 E0 14 0E 00 51 FD",
+        "FE FE 94 E0 14 15 01 27 FD",
+        "FE FE 94 E0 16 22 FD",
+        "FE FE 94 E0 16 40 FD",
+        "FE FE 94 E0 16 41 FD",
+        "FE FE 94 E0 16 48 FD",
+        "FE FE 94 E0 16 44 FD",
+        "FE FE 94 E0 16 45 FD",
+        "FE FE 94 E0 16 46 FD",
+        "FE FE 94 E0 16 5A FD",
+        "FE FE 94 E0 16 22 01 FD",
+        "FE FE 94 E0 16 40 00 FD",
+        "FE FE 94 E0 16 41 01 FD",
+        "FE FE 94 E0 16 48 00 FD",
+        "FE FE 94 E0 16 44 01 FD",
+        "FE FE 94 E0 16 45 00 FD",
+        "FE FE 94 E0 16 46 01 FD",
+        "FE FE 94 E0 21 01 01 FD",
+        "FE FE 94 E0 21 02 00 FD",
+        "FE FE 94 E0 21 00 20 01 00 FD",
+        "FE FE 94 E0 21 00 50 00 01 FD",
+        "FE FE 94 E0 1C 00 FD",
+        "FE FE 94 E0 1C 00 01 FD",
+        "FE FE 94 E0 17 43 51 20 54 45 53 54 20 43 51 20 54 45 53 54 20 54 48 49 53 20 4D 45 53 53 41 47 45 20 49 FD",
+        "FE FE 94 E0 17 53 20 4C 4F 4E 47 45 52 20 54 48 41 4E 20 4F 4E 45 20 43 48 55 4E 4B FD",
+        "FE FE 94 E0 17 FF FD",
+        "FE FE 94 E0 1C 00 00 FD",
+        "FE FE 94 E0 21 00 50 02 00 FD",
+        "FE FE 94 E0 21 00 00 00 00 FD",
+        "FE FE 94 E0 0F 12 FD",
+        "FE FE 94 E0 0F 11 FD",
+        "FE FE 94 E0 0F 10 FD",
+        "FE FE 94 E0 0D 00 60 00 FD",
+        "FE FE 94 E0 1B 00 08 85 FD",
+        "FE FE 94 E0 16 42 01 FD",
+        "FE FE 94 E0 16 42 00 FD",
+        "FE FE 94 E0 07 00 FD",
+        "FE FE 94 E0 07 01 FD",
+        "FE FE 94 E0 07 D1 FD",
+        "FE FE 94 E0 07 D0 FD",
+    ];
+
+    /// ⛔ SINGLE-RECEIVER RIGS SEE BYTE-IDENTICAL CI-V. The IC-7300 and IC-705 have one
+    /// receiver; the IC-905 and a build with no model are not offered a Sub either (the
+    /// capability table has no vendor statement for them — UNKNOWN, which is not a "no",
+    /// and not an offer). None of them may see one new, moved or re-worded byte.
+    #[test]
+    fn single_receiver_rigs_see_byte_identical_ci_v_across_every_touched_verb() {
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        regs.lock().unwrap().no_satmode = true; // a real 7300 NAKs `16 5A`
+        drive_every_touched_verb(&b);
+        let got = hex_frames(&regs.lock().unwrap().wire);
+        assert_eq!(got, IC7300_WIRE_BEFORE, "IC-7300 bytes moved");
+        assert_eq!(b.attenuator_steps_db(), vec![20]);
+        assert_eq!(b.preamp_steps_db(), vec![1, 2]);
+
+        // IC-705: the same rig family and step lists — the same frames at its own address.
+        let at = |addr: u8, frames: &[&str]| -> Vec<String> {
+            frames
+                .iter()
+                .map(|f| {
+                    let mut bytes: Vec<String> = f.split(' ').map(str::to_string).collect();
+                    bytes[2] = format!("{addr:02X}");
+                    bytes.join(" ")
+                })
+                .collect()
+        };
+        let (_e, b, regs) = backend_on(0xA4, Some(IcomModel::Ic705));
+        regs.lock().unwrap().no_satmode = true;
+        drive_every_touched_verb(&b);
+        assert_eq!(
+            hex_frames(&regs.lock().unwrap().wire),
+            at(0xA4, IC7300_WIRE_BEFORE),
+            "IC-705 bytes moved"
+        );
+
+        // IC-905 and an unknown model: no step list, so no attenuator/preamp frame at all
+        // (see `an_unknown_model_offers_no_attenuator_or_preamp_at_all`) — every other
+        // frame exactly as the 7300's.
+        let no_pads: Vec<&str> = IC7300_WIRE_BEFORE
+            .iter()
+            .copied()
+            .filter(|f| {
+                let b: Vec<&str> = f.split(' ').collect();
+                !(b[4] == "11" || (b[4] == "16" && b[5] == "02"))
+            })
+            .collect();
+        for (addr, model) in [(0xACu8, Some(IcomModel::Ic905)), (0x94, None)] {
+            let (_e, b, regs) = backend_on(addr, model);
+            regs.lock().unwrap().no_satmode = true;
+            drive_every_touched_verb(&b);
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire),
+                at(addr, no_pads.as_slice()),
+                "{model:?} bytes moved"
+            );
+        }
+
+        // ⚠️ POSITIVE CONTROL — the capture can SEE a routing change. The same script on the
+        // IC-7610, whose receive verbs now name Main by command `29`, must put band-directed
+        // frames on the wire. Were this to find none, a byte comparison that "passed" above
+        // would prove nothing about routing at all.
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        drive_every_touched_verb(&b);
+        let directed = regs
+            .lock()
+            .unwrap()
+            .log
+            .iter()
+            .filter(|(c, d)| *c == 0x29 && d.first() == Some(&0x00))
+            .count();
+        assert!(
+            directed > 0,
+            "the IC-7610 run carried no `29 00` frame at all"
+        );
+    }
+
+    /// ⭐ A CALLER CAN NAME THE SUB — and the selection comes back where it was.
+    ///
+    /// No rigctld client can name a receiver yet (the daemon answers `\chk_vfo` with 0, so no
+    /// verb carries a VFO argument); the engine step of this programme is the first caller.
+    /// This pins what that caller will get: on the IC-7610 `29 01` and no select at all; on
+    /// the IC-9700 select Sub → command → select Main, under the band lock.
+    #[test]
+    fn a_sub_named_command_reaches_the_sub_and_hands_the_selection_back() {
+        // IC-7610, Main selected at the panel: the Sub is named on the wire.
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        plant_two_receivers(&regs);
+        assert_eq!(b.level_on(ReceiverId::Sub, "AF").as_deref(), Some("0.20"));
+        assert_eq!(
+            b.level_on(ReceiverId::Sub, "STRENGTH").as_deref(),
+            Some("-27")
+        );
+        assert_eq!(b.func_on(ReceiverId::Sub, "NR"), Some(true));
+        assert_eq!(b.set_level_on(ReceiverId::Sub, "AF", "0.50"), Some(true));
+        assert_eq!(b.set_ctcss_on(ReceiverId::Sub, 885), Some(true));
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_levels.get(&0x01), Some(&127), "Sub's AF moved");
+            assert_eq!(r.levels.get(&0x01), Some(&200), "Main's AF did not");
+            assert!(
+                r.log.contains(&(0x29, vec![0x01, 0x14, 0x01])),
+                "`29 01 14 01` on the wire"
+            );
+            assert!(
+                !r.log.iter().any(|(c, _)| *c == 0x07),
+                "no select at all: {:02x?}",
+                r.log
+            );
+            assert!(!r.sel_sub, "Main still selected");
+        }
+        assert!(
+            last_acted_on_sub(&regs, 0x1B, Some(0x00)),
+            "the tone went to the Sub"
+        );
+
+        // IC-9700: no band-directed form, so the Sub is SELECTED for the command — and the
+        // selection handed back to Main, where the broker keeps it.
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        plant_two_receivers(&regs);
+        let n = regs.lock().unwrap().log.len();
+        assert_eq!(b.level_on(ReceiverId::Sub, "AF").as_deref(), Some("0.20"));
+        {
+            let r = regs.lock().unwrap();
+            assert!(!r.sel_sub, "the selection was handed back to Main");
+            let sent: Vec<_> = r.log[n..].iter().map(|(c, d)| (*c, d.clone())).collect();
+            assert_eq!(
+                sent,
+                vec![
+                    (0x07, vec![0xD1]),
+                    (0x14, vec![0x01]),
+                    (0x07, vec![0xD0]),
+                    (0x03, vec![]), // the dial re-read after the restore
+                ],
+                "select Sub, the read, select Main — in that order"
+            );
+        }
+        assert!(
+            last_acted_on_sub(&regs, 0x14, Some(0x01)),
+            "the AF read happened on Sub"
+        );
+
+        // ⚠️ A REFUSED RESTORE is a failed exchange, and it is REMEMBERED: the next Main
+        // command re-asserts Main first instead of reading the Sub as Main's.
+        regs.lock().unwrap().nak_main_select = 1;
+        assert_eq!(
+            b.level_on(ReceiverId::Sub, "AF"),
+            None,
+            "restore refused → no reading"
+        );
+        assert!(regs.lock().unwrap().sel_sub, "scene: stranded on Sub");
+        assert_eq!(
+            b.level("AF").as_deref(),
+            Some("0.78"),
+            "the next Main read is Main's"
+        );
+        assert!(
+            !regs.lock().unwrap().sel_sub,
+            "…because it put the selection back first"
+        );
+    }
+
+    /// ⭐ THE PROTOCOL DOOR: `L Sub <level> <value>` through the daemon's own dispatcher reaches
+    /// the Sub and only the Sub. This is the path the cockpit's Sub controls ride (Nexus's own
+    /// `Rig` client speaks it), so it is pinned end to end here: text in, bytes on the wire,
+    /// which band's register moved.
+    #[test]
+    fn a_sub_level_by_protocol_lands_on_the_sub_and_nowhere_else() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let send = |b: &CivBackend, line: &str| match handle_command(line, b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("{line}: closed"),
+        };
+        // IC-7610: `29 01` names the Sub on the wire; nothing is selected.
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        plant_two_receivers(&regs);
+        assert_eq!(send(&b, "L Sub RF 0.500"), "RPRT 0\n");
+        assert_eq!(send(&b, "L Sub AF 0.250"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_levels.get(&0x02), Some(&127), "the Sub's RF moved");
+            assert_eq!(r.sub_levels.get(&0x01), Some(&63), "the Sub's AF moved");
+            assert_eq!(r.levels.get(&0x02), Some(&180), "Main's RF did not");
+            assert_eq!(r.levels.get(&0x01), Some(&200), "Main's AF did not");
+            assert!(!r.log.iter().any(|(c, _)| *c == 0x07), "no select at all");
+            assert!(!r.sel_sub);
+        }
+        // IC-9700: no band-directed form — the Sub is selected for the write and handed back.
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        plant_two_receivers(&regs);
+        assert_eq!(send(&b, "L Sub RF 0.500"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_levels.get(&0x02), Some(&127), "the Sub's RF moved");
+            assert_eq!(r.levels.get(&0x02), Some(&180), "Main's RF did not");
+            assert!(!r.sel_sub, "the selection was handed back to Main");
+        }
+        assert!(
+            last_acted_on_sub(&regs, 0x14, Some(0x02)),
+            "the RF write acted on Sub"
+        );
+        // CONTROL: the unqualified verb on the same radio is Main's, as it always was.
+        assert_eq!(send(&b, "L RF 0.250"), "RPRT 0\n");
+        assert_eq!(
+            regs.lock().unwrap().levels.get(&0x02),
+            Some(&63),
+            "Main's RF"
+        );
+        assert_eq!(
+            regs.lock().unwrap().sub_levels.get(&0x02),
+            Some(&127),
+            "Sub untouched"
+        );
+
+        // One receiver: there is no Sub to name. Refused, and nothing reaches the radio.
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        let n = regs.lock().unwrap().log.len();
+        assert_eq!(send(&b, "L Sub AF 0.500"), "RPRT -1\n");
+        assert_eq!(regs.lock().unwrap().log.len(), n, "IC-7300: nothing sent");
+    }
+
+    /// The daemon says whether it can name the Sub, from the model's addressing — true exactly
+    /// where the capability table offers one and the daemon serves the radio.
+    #[test]
+    fn the_daemon_says_whether_it_can_name_the_sub() {
+        for (addr, model, names) in [
+            (0x98u8, IcomModel::Ic7610, true),
+            (0xA2, IcomModel::Ic9700, true),
+            (0x94, IcomModel::Ic7300, false),
+        ] {
+            let (radio, _push) = FakeRadio::new(addr);
+            let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+            assert_eq!(d.names_receivers(), names, "{model:?}");
+        }
+    }
+
+    /// The transmitter's levels are the RADIO's: a Sub has none of its own to report or to
+    /// set, and asking puts nothing on the wire. A single-receiver radio has no Sub at all.
+    #[test]
+    fn a_sub_named_command_with_nothing_to_name_sends_nothing() {
+        for (addr, model) in [
+            (0x98, Some(IcomModel::Ic7610)),
+            (0xA2, Some(IcomModel::Ic9700)),
+        ] {
+            let (_e, b, regs) = backend_on(addr, model);
+            let n = regs.lock().unwrap().log.len();
+            assert_eq!(b.level_on(ReceiverId::Sub, "RFPOWER"), None);
+            assert_eq!(b.level_on(ReceiverId::Sub, "SWR"), None);
+            assert_eq!(b.set_level_on(ReceiverId::Sub, "MICGAIN", "0.5"), None);
+            assert_eq!(b.func_on(ReceiverId::Sub, "VOX"), None);
+            assert_eq!(b.set_func_on(ReceiverId::Sub, "COMP", true), None);
+            assert_eq!(regs.lock().unwrap().log.len(), n, "{model:?}: nothing sent");
+            // CONTROL: the same verbs asked of Main do reach the radio.
+            let _ = b.level_on(ReceiverId::Main, "RFPOWER");
+            assert!(
+                regs.lock().unwrap().log.len() > n,
+                "{model:?}: Main's power was asked"
+            );
+        }
+        // One receiver: there is no Sub to name, whatever the verb.
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        let n = regs.lock().unwrap().log.len();
+        assert_eq!(b.level_on(ReceiverId::Sub, "AF"), None);
+        assert_eq!(b.set_level_on(ReceiverId::Sub, "AF", "0.5"), Some(false));
+        assert_eq!(b.set_ctcss_on(ReceiverId::Sub, 885), Some(false));
+        assert!(!b.set_vfo_on(ReceiverId::Sub, "VFOB"));
+        assert_eq!(regs.lock().unwrap().log.len(), n, "IC-7300: nothing sent");
     }
 
     /// The lines Nexus's own `Rig::set_xit` sends (`U XIT n`, then `Z <hz>`): both signs, and

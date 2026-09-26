@@ -33,6 +33,19 @@ impl IcomModel {
         }
     }
 
+    /// This model's Hamlib model number — the key the dual-receiver capability table
+    /// ([`crate::dualrx`]) and the rest of the curated catalogue are indexed by. The inverse
+    /// of `rigmodels::icom_scope_model`; a test holds the two in step.
+    pub fn hamlib_model(self) -> u32 {
+        match self {
+            IcomModel::Ic7300 => 3073,
+            IcomModel::Ic7610 => 3078,
+            IcomModel::Ic9700 => 3081,
+            IcomModel::Ic705 => 3085,
+            IcomModel::Ic905 => 3090,
+        }
+    }
+
     /// Recognize a model from a human/rig model name (e.g. "Icom IC-9700"). Case- and
     /// separator-insensitive on the `ic####` token.
     pub fn from_name(name: &str) -> Option<Self> {
@@ -462,7 +475,7 @@ pub fn parse_dsp_level_raw(f: &Frame, sub: u8) -> Option<u16> {
 /// `0x12` reads as twelve. A raw-hex encoder would send `11 0c` and pad the receiver by
 /// some other amount; a 0..1 fraction (the shape every other level here has) would send
 /// nothing meaningful at all. Captured from Hamlib 4.5.5's own Icom backend against a pty
-/// at the IC-7610's address, whose three-step pad is what tells the two encodings apart:
+/// at the IC-7610's address, whose three pads there are what tell the two encodings apart:
 /// `L ATT 6` -> `11 06`, `L ATT 12` -> `11 12`, `L ATT 18` -> `11 18`, `L ATT 0` -> `11 00`.
 pub const ATT_CMD: u8 = 0x11;
 /// PREAMP — on the `0x16` family but **deliberately not a [`func_sub`] entry**: that table
@@ -479,6 +492,12 @@ pub const FUNC_PREAMP: u8 = 0x02;
 /// not transcribed from a manual. An attenuator is a LIST, not a slider: offering a rig a
 /// value it does not own gets the command NAKed or silently rounded to a neighbour.
 ///
+/// ⭐ THE IC-7610 IS THE EXCEPTION, and its list is Icom's own: the CI-V Reference Guide
+/// (A7380-7EX-4, Sep. 2025, p. 3) gives command `11` fifteen pads, 3 to 45 dB in 3 dB steps.
+/// Hamlib's backend declares only 6, 12 and 18 of them — which is what Nexus offered before
+/// — and leaves an operator who wants 3 dB, or more than 18, without it. NEEDS-BENCH
+/// (IC-7610): each new pad against the radio's own ATT readout.
+///
 /// ⛔ The IC-905 is empty because Hamlib 4.5.5 has no IC-905 backend to read it from
 /// (`-m 3095` returns no caps at all). An empty list renders no control, which degrades
 /// honestly; a guessed one would move the operator's front end by the wrong amount.
@@ -487,7 +506,7 @@ pub fn attenuator_steps_db(model: IcomModel) -> &'static [u8] {
     match model {
         IcomModel::Ic7300 | IcomModel::Ic705 => &[20],
         IcomModel::Ic9700 => &[10],
-        IcomModel::Ic7610 => &[6, 12, 18],
+        IcomModel::Ic7610 => &[3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
         IcomModel::Ic905 => &[],
     }
 }
@@ -642,6 +661,183 @@ pub fn parse_data_mode(f: &Frame) -> Option<bool> {
     }
 }
 
+// ---- BAND-DIRECTED commands (`29`) — name the Main or Sub receiver without selecting it ----
+
+/// Icom's BAND-DIRECTED command: `29 <band> <command…>` performs `<command…>` on the named
+/// receiver — "Regardless of active/inactive the Main or Sub band, you can directly specify
+/// the Main or Sub band, and send/read the supported command settings" (IC-7610 CI-V Reference
+/// Guide, Icom A7380-7EX-4, Sep. 2025, p. 9). The selection never moves, so the front panel
+/// never flickers and the operator's choice of band is left exactly where they put it.
+///
+/// Format (same guide, p. 15, "Setting after directly specify the Main/Sub band"): the band
+/// byte, then the supported command as it would otherwise be sent. "When you receive the OK
+/// code (FB), or the NG code (FA), the Command 29 and Main/Sub specify (00 or 01) is
+/// omitted" — an ack comes back bare; a data reply carries the prefix.
+///
+/// ⛔ PER MODEL, FROM THE VENDOR ONLY — see [`band_directed_form`]. The IC-9700 does NOT have
+/// this command, whatever a wrapper's VFO list suggests: its own CI-V Reference Guide
+/// (A7508-3EX-4, Mar. 2023) lists commands through `28` and stops.
+pub const BAND_DIRECTED: u8 = 0x29;
+/// The band byte of a [`BAND_DIRECTED`] command: `00` = MAIN, `01` = SUB (A7380-7EX-4 p. 9).
+pub const BAND_MAIN: u8 = 0x00;
+pub const BAND_SUB: u8 = 0x01;
+
+/// Does Icom's own CI-V reference give `model` the band-directed form ([`BAND_DIRECTED`])?
+///
+/// | Model | Answer | Source |
+/// |---|---|---|
+/// | IC-7610 | yes | CI-V Reference Guide A7380-7EX-4 (Sep. 2025), p. 9 table row `29`, p. 15 format |
+/// | IC-9700 | **no** | CI-V Reference Guide A7508-3EX-4 (Mar. 2023): the table ends at `28` (p. 12) |
+/// | IC-7300 / IC-705 / IC-905 | no | not offered a Sub receiver at all ([`crate::dualrx`]); nothing to name |
+///
+/// For the record, since the programme's radio list names them: the IC-910H (Instruction
+/// Manual, "CONTROL COMMAND", pp. 78–79: commands `00`–`1C`) and the IC-9100 (Instruction
+/// Manual, ch. 18 "Command table", pp. 184–190: `00`–`20`) have no `29` either — and neither
+/// is driven by this native daemon (`rigmodels::icom_scope_model`); both run on Hamlib.
+pub fn band_directed_form(model: IcomModel) -> bool {
+    matches!(model, IcomModel::Ic7610)
+}
+
+/// The IC-7610 commands Icom marks "Command 29 supported" (A7380-7EX-4 pp. 3–4 and 8), as
+/// `(command, sub-command)`; `None` = a command with no sub-command, whose data byte is the
+/// value itself (the attenuator `11`).
+///
+/// ⚠️ THE WHOLE MARKED SET, not only what the broker sends today, so the next verb routed
+/// through here is checked against the vendor's table rather than against a subset of it. One
+/// marked row is left out on purpose: the bare `07` ("Select the VFO mode", VFO as opposed to
+/// memory) — none of `07`'s sub-command rows (`B0`, `D0`, `D1`…) carries the mark, and the
+/// broker never sends the bare form.
+///
+/// NOT marked, so ALWAYS sent bare: PTT `1C`, CW `17`, RIT/ΔTX `21`, split `0F`, the
+/// transmit-side levels `14 09/0A/0B/0C/0E/0F/14/15/16/17/19`, the transmit meters
+/// `15 11`–`16`, and `16 44/45/46/47/50/58/5E/66/67` (compressor, monitor, VOX, break-in,
+/// dial lock, TX bandwidth, Main/Sub tracking, TX inhibit, DPD). Every one of those is the
+/// one transmitter's or the one radio's — the table agrees with the architecture.
+const IC7610_BAND_DIRECTED: &[(u8, Option<u8>)] = &[
+    (ATT_CMD, None), // attenuator
+    (0x12, Some(0x00)),
+    (0x12, Some(0x01)), // RX antenna ANT1/ANT2
+    (0x14, Some(LVL_AF)),
+    (0x14, Some(LVL_RF)),
+    (0x14, Some(LVL_SQL)),
+    (0x14, Some(0x05)), // APF position
+    (0x14, Some(LVL_NR)),
+    (0x14, Some(0x07)),
+    (0x14, Some(0x08)), // twin PBT inner/outer
+    (0x14, Some(0x0D)), // manual-notch position
+    (0x14, Some(LVL_NB)),
+    (0x14, Some(0x13)), // DIGI-SEL shift
+    (0x15, Some(0x01)), // noise / S-meter squelch status
+    (0x15, Some(0x02)), // S-meter
+    (0x15, Some(0x05)), // tone-squelch status
+    (0x15, Some(0x07)), // overflow
+    (0x16, Some(FUNC_PREAMP)),
+    (0x16, Some(0x12)), // AGC
+    (0x16, Some(0x22)), // NB
+    (0x16, Some(0x32)), // APF
+    (0x16, Some(0x40)), // NR
+    (0x16, Some(0x41)), // auto notch
+    (0x16, Some(0x42)), // repeater tone
+    (0x16, Some(0x43)), // tone squelch
+    (0x16, Some(0x48)), // manual notch
+    (0x16, Some(0x4E)), // DIGI-SEL
+    (0x16, Some(0x4F)), // twin peak filter
+    (0x16, Some(0x53)), // ANT-RX I/O
+    (0x16, Some(0x56)), // DSP IF filter type
+    (0x16, Some(0x57)), // manual-notch width
+    (0x16, Some(0x65)), // IP+
+    (0x1A, Some(0x03)), // IF filter width
+    (0x1A, Some(0x04)), // AGC time constant
+    (0x1A, Some(0x09)), // AF mute
+    (0x1A, Some(0x0A)), // OVF indicator
+    (0x1B, Some(0x00)), // repeater tone frequency
+    (0x1B, Some(0x01)), // TSQL tone frequency
+];
+
+/// May `f` (a plain command for this radio) be sent in band-directed form on `model`? True
+/// only where the model has the form ([`band_directed_form`]) AND Icom marks this command.
+pub fn band_directed_supported(model: IcomModel, f: &Frame) -> bool {
+    band_directed_form(model)
+        && IC7610_BAND_DIRECTED
+            .iter()
+            .any(|&(cmd, sub)| f.cmd == cmd && (sub.is_none() || f.data.first().copied() == sub))
+}
+
+/// `f`, performed on `band` ([`BAND_MAIN`] / [`BAND_SUB`]): `29 <band> <cmd> <data…>`, to the
+/// same radio. The caller has already checked [`band_directed_supported`].
+pub fn band_directed(band: u8, f: &Frame) -> Frame {
+    let mut data = Vec::with_capacity(2 + f.data.len());
+    data.push(band);
+    data.push(f.cmd);
+    data.extend_from_slice(&f.data);
+    Frame::command(f.to, BAND_DIRECTED, &data)
+}
+
+/// The reply to a band-directed READ with its `29 <band>` prefix taken off, so the ordinary
+/// decoders read it unchanged. A reply that came back without the prefix is returned as it
+/// arrived — see `engine::Expect::ReplyOnBand` for why both shapes are taken.
+pub fn band_directed_reply(f: Frame) -> Frame {
+    if f.cmd == BAND_DIRECTED && f.data.len() >= 2 {
+        Frame {
+            to: f.to,
+            from: f.from,
+            cmd: f.data[1],
+            data: f.data[2..].to_vec(),
+        }
+    } else {
+        f
+    }
+}
+
+/// Does `model` read and write a band's DIAL and MODE by name — `25 <band>` / `26 <band>`,
+/// where the band byte is `00` = MAIN and `01` = SUB whichever band the operator has selected?
+///
+/// | Model | Answer | Source |
+/// |---|---|---|
+/// | IC-7610 | yes | A7380-7EX-4 p. 13: "Main or Sub band's frequency settings" (`25`) and "Main or Sub band's operating mode and filter settings" (`26`), each `00: MAIN`, `01: SUB`; both "Send/read" (p. 9) |
+/// | IC-9700 | **no** | A7508-3EX-4 p. 24: its `25`/`26` name the SELECTED or UNSELECTED VFO, so `25 00` follows the selection — the very thing this form exists to escape |
+/// | IC-7300 / IC-705 / IC-905 | no | not offered a Sub receiver at all ([`crate::dualrx`]); nothing to name |
+///
+/// Neither command carries the band-directed mark (A7380-7EX-4 p. 9): the band is their OWN
+/// first data byte. That is why this is a table of its own rather than a row of
+/// [`band_directed_supported`] — `29 00 03` is not a command the radio lists.
+pub fn dial_by_band_name(model: IcomModel) -> bool {
+    matches!(model, IcomModel::Ic7610)
+}
+
+/// Read `band`'s dial by name (`25 <band>`, [`BAND_MAIN`] / [`BAND_SUB`]). The reply is
+/// `25 <band>` and the 5-byte BCD frequency — see [`parse_band_freq`]. Only where
+/// [`dial_by_band_name`]: on an IC-9700 the same bytes read the SELECTED VFO.
+pub fn read_band_freq(radio: u8, band: u8) -> Frame {
+    Frame::command(radio, 0x25, &[band])
+}
+/// Read `band`'s mode by name (`26 <band>`). The reply is `26 <band> <mode> <data> <filter>`
+/// — see [`parse_band_mode`]. Same model rule as [`read_band_freq`].
+pub fn read_band_mode(radio: u8, band: u8) -> Frame {
+    Frame::command(radio, 0x26, &[band])
+}
+/// Set `band`'s dial by name: `25 <band>` and the 5-byte BCD frequency ([`set_freq`]'s
+/// payload). Same model rule as [`read_band_freq`].
+pub fn set_band_freq(radio: u8, band: u8, hz: u64) -> Frame {
+    let mut data = vec![band];
+    data.extend_from_slice(&freq_to_bcd(hz));
+    Frame::command(radio, 0x25, &data)
+}
+/// Set `band`'s mode by name, in ONE frame that leaves the radio where [`set_mode`] followed by
+/// the `1A 06` DATA write left it (A7380-7EX-4 pp. 10, 12, 13):
+///
+/// - `data` `None` → `26 <band> <mode>`. The DATA and filter bytes are skipped, which the
+///   radio takes as "DATA OFF and the default filter setting of the operating mode" — what
+///   `06 <mode>` (the mode's default filter) and then `1A 06 00 00` (DATA off) left.
+/// - `data` `Some(n)` → `26 <band> <mode> <n> 01`: DATA mode `n` (clamped to D1–D3, as
+///   [`set_data_mode_n`] clamps it) with FIL1, the two bytes `1A 06 <n> 01` sent.
+pub fn set_band_mode(radio: u8, band: u8, mode: Mode, data: Option<u8>) -> Frame {
+    match data {
+        Some(n) => Frame::command(radio, 0x26, &[band, mode.to_byte(), n.clamp(1, 3), 0x01]),
+        None => Frame::command(radio, 0x26, &[band, mode.to_byte()]),
+    }
+}
+
 // ---- scope CONTROL (command 0x27 sub 14/15/19) — set the RIG's panadapter, not the stream ----
 // Byte layouts verified against Hamlib (rigs/icom/icom.c). On dual-receiver rigs (IC-9700/7610)
 // each of these takes a leading Main/Sub selector byte (`main_sub` = Some(0x00) for Main); single-
@@ -717,6 +913,28 @@ pub fn parse_mode(f: &Frame) -> Option<(Mode, Option<u8>)> {
     if (f.cmd == 0x04 || f.cmd == 0x01) && !f.data.is_empty() {
         let mode = Mode::from_byte(f.data[0])?;
         Some((mode, f.data.get(1).copied()))
+    } else {
+        None
+    }
+}
+/// The frequency (Hz) from a [`read_band_freq`] reply: `25 <band>` + 5-byte BCD. `None` for a
+/// reply naming the OTHER band — the Sub's dial must never be read as Main's.
+pub fn parse_band_freq(f: &Frame, band: u8) -> Option<u64> {
+    (f.cmd == 0x25 && f.data.first() == Some(&band) && f.data.len() >= 6)
+        .then(|| bcd_to_freq(&f.data[1..6]))
+}
+/// `(mode, filter)` from a [`read_band_mode`] reply: `26 <band> <mode> <data> <filter>`
+/// (A7380-7EX-4 p. 13). `None` for a reply naming the other band.
+///
+/// ⚠️ THE DATA BYTE (`00` off, `01`–`03` = D1–D3) IS READ PAST, ON PURPOSE. The mode name the
+/// broker reports is built exactly as it was from a `04` read — the plain mode, PKT only from a
+/// received `1A 06` — and the cockpit compares that name against the mode Nexus commanded to
+/// flag a mismatch. Starting to read the flag here would change that name in every data mode,
+/// which is a different change from reading it off the right receiver.
+pub fn parse_band_mode(f: &Frame, band: u8) -> Option<(Mode, Option<u8>)> {
+    if f.cmd == 0x26 && f.data.first() == Some(&band) && f.data.len() >= 2 {
+        let mode = Mode::from_byte(f.data[1])?;
+        Some((mode, f.data.get(3).copied()))
     } else {
         None
     }
@@ -922,6 +1140,119 @@ mod tests {
         );
         assert_eq!(IcomModel::from_name("ic7300"), Some(IcomModel::Ic7300));
         assert_eq!(IcomModel::from_name("Yaesu FTDX10"), None);
+    }
+
+    /// The Hamlib number is how this daemon asks the capability table whether a model has a
+    /// Sub; a drift from the catalogue's own mapping would silently route an IC-7610 as a
+    /// single-receiver rig, or an IC-7300 as a dual one.
+    #[test]
+    fn the_hamlib_model_number_round_trips_the_catalogue_mapping() {
+        for m in [
+            IcomModel::Ic7300,
+            IcomModel::Ic7610,
+            IcomModel::Ic9700,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+        ] {
+            assert_eq!(
+                crate::rigmodels::icom_scope_model(m.hamlib_model()),
+                Some(m),
+                "{m:?}"
+            );
+        }
+    }
+
+    /// ⭐ COMMAND `29`, AS ICOM PRINTS IT — and only where Icom prints it.
+    ///
+    /// IC-7610 CI-V Reference Guide A7380-7EX-4: p. 9 (the row), p. 15 (the format), and the
+    /// "Command 29 supported" marks on pp. 3–4 and 8. IC-9700 CI-V Reference Guide
+    /// A7508-3EX-4: no command `29` at all.
+    #[test]
+    fn the_band_directed_form_is_the_7610s_and_only_for_the_commands_icom_marks() {
+        // The frame: `29 <band> <cmd> <data…>`, to the same radio.
+        let af_set = set_dsp_level(0x98, LVL_AF, 50);
+        let wrapped = band_directed(BAND_SUB, &af_set);
+        assert_eq!(wrapped.to, 0x98);
+        assert_eq!(wrapped.cmd, 0x29);
+        assert_eq!(wrapped.data, vec![0x01, 0x14, 0x01, 0x01, 0x27]);
+        assert_eq!(
+            wrapped.to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x29, 0x01, 0x14, 0x01, 0x01, 0x27, 0xFD]
+        );
+        // A prefixed reply unwraps to the frame the ordinary decoders read; a bare one is
+        // passed through as it arrived.
+        let reply = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x29, 0x00, 0x15, 0x02, 0x01, 0x20, 0xFD,
+        ])
+        .unwrap();
+        let inner = band_directed_reply(reply);
+        assert_eq!(
+            (inner.cmd, inner.data.clone()),
+            (0x15, vec![0x02, 0x01, 0x20])
+        );
+        assert_eq!(parse_smeter_raw(&inner), Some(120));
+        let bare = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x15, 0x02, 0x01, 0x20, 0xFD]).unwrap();
+        assert_eq!(band_directed_reply(bare.clone()), bare);
+
+        // Marked on the IC-7610: the receive chain and the CTCSS tone.
+        let marked = [
+            read_smeter(0x98),
+            read_dsp_level(0x98, LVL_AF),
+            set_dsp_level(0x98, LVL_NB, 10),
+            read_attenuator(0x98),
+            set_attenuator_db(0x98, 12),
+            read_preamp(0x98),
+            read_agc(0x98),
+            set_dsp_func(0x98, 0x22, true), // NB
+            set_dsp_func(0x98, 0x48, true), // MN
+            set_repeater_tone(0x98, 885),
+            set_tone_func(0x98, true),
+        ];
+        for f in &marked {
+            assert!(
+                band_directed_supported(IcomModel::Ic7610, f),
+                "{:02x} {:02x?} is marked on the 7610",
+                f.cmd,
+                f.data
+            );
+        }
+        // NOT marked: the transmitter's and the radio's — and the keying path above all.
+        let unmarked = [
+            set_ptt(0x98, true),
+            read_ptt(0x98),
+            send_morse(0x98, "CQ"),
+            stop_morse(0x98),
+            set_rit_offset(0x98, 100),
+            set_dtx_on(0x98, true),
+            set_rf_power(0x98, 50),
+            set_mic_gain(0x98, 50),
+            set_dsp_func(0x98, 0x44, true), // speech compressor
+            set_dsp_func(0x98, 0x46, true), // VOX
+            read_meter(0x98, METER_SWR),
+            set_split(0x98, true),
+            select_vfo(0x98, "SUB").unwrap(),
+            set_freq(0x98, 14_074_000),
+        ];
+        for f in &unmarked {
+            assert!(
+                !band_directed_supported(IcomModel::Ic7610, f),
+                "{:02x} {:02x?} is not marked on the 7610",
+                f.cmd,
+                f.data
+            );
+        }
+        // ⛔ THE IC-9700 HAS NO `29` — not for anything, whatever a wrapper suggests. And the
+        // single-receiver rigs have nothing to name.
+        for m in [
+            IcomModel::Ic9700,
+            IcomModel::Ic7300,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+        ] {
+            assert!(!band_directed_form(m), "{m:?}");
+            assert!(!band_directed_supported(m, &read_smeter(0xA2)), "{m:?}");
+        }
+        assert!(band_directed_form(IcomModel::Ic7610));
     }
 
     #[test]
@@ -1350,7 +1681,7 @@ mod tests {
     /// it cannot go through [`set_dsp_level`]'s percent path at all.
     #[test]
     fn the_attenuator_is_bcd_decibels_on_its_own_command() {
-        // The three steps the IC-7610 actually has, and the byte each one produces.
+        // The three IC-7610 pads Hamlib's backend declares, and the byte each one produces.
         for (db, wire) in [(0u8, 0x00u8), (6, 0x06), (12, 0x12), (18, 0x18)] {
             let f = set_attenuator_db(0x98, db);
             assert_eq!(f.cmd, 0x11, "the attenuator has its own CI-V command");
@@ -1428,6 +1759,132 @@ mod tests {
         assert_eq!(level_sub("PREAMP"), None);
     }
 
+    /// ⭐ THE BY-NAME DIAL AND MODE READ THEIR OWN BAND AND NOTHING ELSE (A7380-7EX-4 p. 13).
+    ///
+    /// `25 <band>` / `26 <band>` carry the band in their first data byte and the reply names it
+    /// back, so a reply naming the Sub must never read as Main's — that is the selection-
+    /// following this read exists to remove, arriving by another door.
+    #[test]
+    fn the_by_name_dial_and_mode_read_their_own_band_and_nothing_else() {
+        // Only the IC-7610 names MAIN/SUB this way; the IC-9700's same bytes name the SELECTED
+        // VFO (A7508-3EX-4 p. 24), and the one-receiver rigs have nothing to name.
+        assert!(dial_by_band_name(IcomModel::Ic7610));
+        for m in [
+            IcomModel::Ic9700,
+            IcomModel::Ic7300,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+        ] {
+            assert!(!dial_by_band_name(m), "{m:?}");
+        }
+        assert_eq!(
+            read_band_freq(0x98, BAND_MAIN).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x25, 0x00, 0xFD]
+        );
+        assert_eq!(
+            read_band_mode(0x98, BAND_MAIN).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x26, 0x00, 0xFD]
+        );
+
+        // Frequency: `25 00` + 5-byte BCD, least significant pair first (p. 10).
+        let main = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x25, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD,
+        ])
+        .unwrap();
+        assert_eq!(parse_band_freq(&main, BAND_MAIN), Some(14_074_000));
+        let sub = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x25, 0x01, 0x00, 0x40, 0x07, 0x07, 0x00, 0xFD,
+        ])
+        .unwrap();
+        assert_eq!(
+            parse_band_freq(&sub, BAND_MAIN),
+            None,
+            "the Sub's dial is not Main's"
+        );
+        assert_eq!(parse_band_freq(&sub, BAND_SUB), Some(7_074_000));
+        let plain = Frame::parse(&[
+            0xFE, 0xFE, 0xE0, 0x98, 0x03, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD,
+        ])
+        .unwrap();
+        assert_eq!(
+            parse_band_freq(&plain, BAND_MAIN),
+            None,
+            "a `03` reply names no band"
+        );
+        let short = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x25, 0x00, 0x00, 0x40, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_freq(&short, BAND_MAIN),
+            None,
+            "a truncated reply is no reading"
+        );
+
+        // Mode: `26 00 <mode> <data> <filter>`. The filter comes back; the DATA byte does not
+        // change the answer (see `parse_band_mode`).
+        let usb_d1 =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x00, 0x01, 0x01, 0x02, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_mode(&usb_d1, BAND_MAIN),
+            Some((Mode::Usb, Some(0x02)))
+        );
+        let usb =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x00, 0x01, 0x00, 0x02, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_mode(&usb, BAND_MAIN),
+            parse_band_mode(&usb_d1, BAND_MAIN)
+        );
+        let sub_lsb =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x01, 0x00, 0x00, 0x01, 0xFD]).unwrap();
+        assert_eq!(
+            parse_band_mode(&sub_lsb, BAND_MAIN),
+            None,
+            "the Sub's mode is not Main's"
+        );
+        assert_eq!(
+            parse_band_mode(&sub_lsb, BAND_SUB),
+            Some((Mode::Lsb, Some(0x01)))
+        );
+        // PSK (`12`) is a mode this table has no name for — no reading, exactly as from `04`.
+        let psk =
+            Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x26, 0x00, 0x12, 0x00, 0x01, 0xFD]).unwrap();
+        assert_eq!(parse_band_mode(&psk, BAND_MAIN), None);
+        assert_eq!(
+            parse_mode(&Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x04, 0x12, 0x01, 0xFD]).unwrap()),
+            None
+        );
+    }
+
+    /// ⭐ THE BY-NAME WRITES CARRY WHAT `05`, `06` AND `1A 06` CARRIED (A7380-7EX-4 pp. 10, 12,
+    /// 13) — the band byte is the only new thing on the wire.
+    #[test]
+    fn the_by_name_writes_carry_what_05_06_and_1a06_carried() {
+        // The dial: `25 00` and the same five BCD bytes `05` carries.
+        assert_eq!(
+            set_band_freq(0x98, BAND_MAIN, 14_074_000).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x25, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD]
+        );
+        assert_eq!(
+            set_band_freq(0x98, BAND_MAIN, 14_074_000).data[1..],
+            set_freq(0x98, 14_074_000).data[..]
+        );
+        assert_eq!(set_band_freq(0x98, BAND_SUB, 7_074_000).data[0], 0x01);
+        // A plain mode: the mode byte alone after the band, which the radio takes as DATA OFF
+        // and the mode's default filter — the state `06 <mode>` + `1A 06 00 00` left.
+        assert_eq!(
+            set_band_mode(0x98, BAND_MAIN, Mode::Lsb, None).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x26, 0x00, 0x00, 0xFD]
+        );
+        // A DATA mode: D<n> and FIL1, the two bytes `1A 06 <n> 01` carried, clamped the same way.
+        for (n, d) in [(1u8, 0x01u8), (2, 0x02), (3, 0x03), (0, 0x01), (9, 0x03)] {
+            let f = set_band_mode(0x98, BAND_MAIN, Mode::Usb, Some(n));
+            assert_eq!(f.data, vec![0x00, 0x01, d, 0x01], "D{n}");
+            assert_eq!(
+                f.data[2..],
+                set_data_mode_n(0x98, n, None).data[1..],
+                "D{n}: the bytes `1A 06` carried"
+            );
+        }
+    }
+
     /// THE STEP LISTS, AND WHERE EVERY NUMBER CAME FROM. An attenuator is not a slider: it
     /// is the handful of pads a particular radio actually has, and offering a value the rig
     /// does not own gets it NAKed or silently rounded.
@@ -1443,6 +1900,9 @@ mod tests {
     /// IC-7610  m=3078   Attenuator: 6dB 12dB 18dB   Preamp: 12dB 20dB
     /// ```
     ///
+    /// ⭐ Except the IC-7610's ATTENUATOR, which is Icom's fifteen pads rather than Hamlib's
+    /// three — `the_ic7610_attenuator_is_icoms_fifteen_three_db_pads` below pins it.
+    ///
     /// ⚠️ The 7300-family "preamps" are `1` and `2` because they are Icom's P.AMP1/P.AMP2
     /// SELECTORS, which Hamlib carries in the same dB-labelled array; they are labels, not
     /// twelve-decibel-style gains, and [`preamp_index_for_db`] treats every entry as a label
@@ -1457,7 +1917,6 @@ mod tests {
         assert_eq!(attenuator_steps_db(IcomModel::Ic7300), &[20]);
         assert_eq!(attenuator_steps_db(IcomModel::Ic9700), &[10]);
         assert_eq!(attenuator_steps_db(IcomModel::Ic705), &[20]);
-        assert_eq!(attenuator_steps_db(IcomModel::Ic7610), &[6, 12, 18]);
         assert_eq!(preamp_steps_db(IcomModel::Ic7300), &[1, 2]);
         assert_eq!(preamp_steps_db(IcomModel::Ic9700), &[1, 2]);
         assert_eq!(preamp_steps_db(IcomModel::Ic705), &[1, 2]);
@@ -1489,5 +1948,68 @@ mod tests {
             assert!(!attenuator_steps_db(m).contains(&0), "{m:?} attenuator");
             assert!(!preamp_steps_db(m).contains(&0), "{m:?} preamp");
         }
+    }
+
+    /// ⭐ THE IC-7610'S ATTENUATOR IS ICOM'S LADDER: FIFTEEN 3 dB PADS, 3 TO 45 dB.
+    ///
+    /// Icom's CI-V Reference Guide for the IC-7610 (A7380-7EX-4, Sep. 2025, p. 3) gives command
+    /// `11` sixteen data values — `00` (OFF), then `03`, `06`, `09` … `42`, `45`, each "Send/read
+    /// the <n> dB attenuator setting" — and marks it band-directed. Hamlib's IC-7610 backend
+    /// declares only 6, 12 and 18 (4.5.5, and its current source still does), which is where
+    /// the old list came from: an operator who wanted 3 dB, or more than 18, could not get it
+    /// from Nexus although the radio has it.
+    ///
+    /// The bytes below are typed from Icom's table, not computed. The data byte is the
+    /// decibels in BCD, so 3, 6 and 9 read the same under BCD and raw hex, and every pad from
+    /// 12 up does not — 45 dB is `0x45`, where raw hex would send `0x2D`, a value the table
+    /// does not have.
+    #[test]
+    fn the_ic7610_attenuator_is_icoms_fifteen_three_db_pads() {
+        let icom: [(u8, u8); 15] = [
+            (3, 0x03),
+            (6, 0x06),
+            (9, 0x09),
+            (12, 0x12),
+            (15, 0x15),
+            (18, 0x18),
+            (21, 0x21),
+            (24, 0x24),
+            (27, 0x27),
+            (30, 0x30),
+            (33, 0x33),
+            (36, 0x36),
+            (39, 0x39),
+            (42, 0x42),
+            (45, 0x45),
+        ];
+        let pads: Vec<u8> = icom.iter().map(|&(db, _)| db).collect();
+        assert_eq!(attenuator_steps_db(IcomModel::Ic7610), pads.as_slice());
+        for (db, byte) in icom {
+            assert_eq!(
+                set_attenuator_db(0x98, db).to_bytes(),
+                vec![0xFE, 0xFE, 0x98, 0xE0, 0x11, byte, 0xFD],
+                "{db} dB on the wire"
+            );
+            let reply = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x11, byte, 0xFD]).unwrap();
+            assert_eq!(
+                parse_attenuator_db(&reply),
+                Some(db),
+                "{byte:02X} read back"
+            );
+        }
+        // OFF is Icom's `00`, and stays the implicit first position, never in the list.
+        assert_eq!(
+            set_attenuator_db(0x98, 0).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x11, 0x00, 0xFD]
+        );
+
+        // ⛔ EVERY OTHER RADIO'S LIST IS UNCHANGED — pinned beside the one that moved, so a
+        // table edit that reached a neighbour's row fails here by name.
+        assert_eq!(attenuator_steps_db(IcomModel::Ic7300), &[20]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic705), &[20]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic9700), &[10]);
+        assert!(attenuator_steps_db(IcomModel::Ic905).is_empty());
+        // The IC-7610's preamp is a different control and did not move either.
+        assert_eq!(preamp_steps_db(IcomModel::Ic7610), &[12, 20]);
     }
 }

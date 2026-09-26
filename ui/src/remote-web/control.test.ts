@@ -1426,3 +1426,68 @@ it('refuses a rig scope change on older stations, without its hint, or with unre
   expect(invoke).toHaveBeenCalledWith('set_scope_fixed', { fixed: true })
   h.client.disconnected()
 })
+
+// ── The Sub receiver's levels (dual-receiver radios) ─────────────────────────────────────────
+// The desktop Sub row calls `set_sub_level`; on the hosted page the same call becomes one typed
+// `radio.subLevel` intent. The station answers `stationState` (it took the request; nothing reads
+// the Sub back), and the page returns the later station sample, as for the rig-scope settings.
+const SUB_LEVELS = [
+  ['rf', 'rfGain'],
+  ['af', 'afGain'],
+  ['sql', 'squelch'],
+] as const
+
+it.each(SUB_LEVELS)('maps a Sub %s level to one radio.subLevel intent and returns a later station sample', async (level, name) => {
+  const h = setup(storage(), ['subReceiverLevels'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { dialMhz: 14.2 } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_sub_level', { level, value: 0.4 })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.subLevel', level: name, value: 0.4 })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('a Sub level answered with any evidence but stationState is unknown, and is not sent again', async () => {
+  const h = setup(storage(), ['subReceiverLevels'], 3)
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => ({ radio: {} })) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const settled = transport.invoke('set_sub_level', { level: 'af', value: 0.4 }).catch(error => error)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  // A read-back is exactly what this path does NOT have: claiming one is a station bug.
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(((await settled) as Error).message).toBe('operationUnknown')
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses a Sub level on older stations, without its hint, or with unreviewed arguments — sending nothing', async () => {
+  for (const [capabilities, version, message] of [[['subReceiverLevels'], 2, 'stationUnsupported'], [['radioLevels', 'receiverDsp'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => ({ radio: {} })) } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    for (const [level] of SUB_LEVELS) await expect(transport.invoke('set_sub_level', { level, value: 0.4 })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['subReceiverLevels'], 3)
+  const invoke = vi.fn(async () => null), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const bad of [{ level: 'AF', value: 0.4 }, { level: 'afGain', value: 0.4 }, { level: 'af', value: 1.5 }, { level: 'af', value: '0.4' },
+    { level: 'af' }, { level: 'af', value: 0.4, expected: 0.2 }, {}, undefined] as (Record<string, unknown> | undefined)[]) {
+    await expect(transport.invoke('set_sub_level', bad)).rejects.toThrow()
+  }
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  expect(invoke, 'a Sub write never falls through to the read allowlist').not.toHaveBeenCalled()
+  h.client.disconnected()
+})

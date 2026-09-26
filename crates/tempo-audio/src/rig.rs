@@ -192,6 +192,14 @@ pub fn xit_line(hz: i32) -> String {
 pub fn level_line(name: &str, value: &str) -> String {
     format!("L {name} {value}\n")
 }
+/// rigctld `L` for a NAMED receiver — `L Sub AF 0.500`, Hamlib's VFO-mode spelling. Main is the
+/// plain [`level_line`], byte for byte, so nothing sent to a single-receiver radio can change.
+pub fn receiver_level_line(rx: crate::dualrx::ReceiverId, name: &str, value: &str) -> String {
+    match rx {
+        crate::dualrx::ReceiverId::Main => level_line(name, value),
+        crate::dualrx::ReceiverId::Sub => format!("L Sub {name} {value}\n"),
+    }
+}
 /// rigctld `b` — send_morse: the rig keys CW from this text (rest of the line).
 ///
 /// ⚠️ A SINGLE-CHARACTER WORD IS PADDED TO TWO (issue #86, VE3FMQ, FT-991A: "CQ does not
@@ -1534,6 +1542,21 @@ impl Rig {
     pub fn set_rx_level(&mut self, name: &str, frac: f32) -> std::io::Result<()> {
         self.cat(&level_line(name, &format!("{:.3}", frac.clamp(0.0, 1.0))))
     }
+    /// Set a receive level (0.0–1.0) on a NAMED receiver — [`receiver_level_line`]. Main is
+    /// exactly [`Rig::set_rx_level`]. The Sub is accepted only by a backend that can address it
+    /// (Nexus's own CI-V daemon on a dual-receiver Icom); the radio loop sends it nowhere else.
+    pub fn set_rx_level_on(
+        &mut self,
+        rx: crate::dualrx::ReceiverId,
+        name: &str,
+        frac: f32,
+    ) -> std::io::Result<()> {
+        self.cat(&receiver_level_line(
+            rx,
+            name,
+            &format!("{:.3}", frac.clamp(0.0, 1.0)),
+        ))
+    }
     /// Set the MANUAL-NOTCH FREQUENCY in Hz (Hamlib `NOTCHF`). Not a 0.0–1.0 level: this one
     /// is an absolute frequency in the audio passband, which is why it does not go through
     /// [`Rig::set_rx_level`] — that clamps to a fraction and would command a notch at 1 Hz.
@@ -1853,6 +1876,16 @@ mod tests {
         assert_eq!(xit_line(500), "Z 500\n");
         assert_eq!(level_line("RFPOWER", "0.500"), "L RFPOWER 0.500\n");
         assert_eq!(level_line("KEYSPD", "25"), "L KEYSPD 25\n");
+        // A receive level for a NAMED receiver: the Sub by Hamlib's VFO-mode spelling, and Main
+        // byte for byte the plain verb — so nothing a single-receiver radio is sent can change.
+        assert_eq!(
+            receiver_level_line(crate::dualrx::ReceiverId::Sub, "AF", "0.500"),
+            "L Sub AF 0.500\n"
+        );
+        assert_eq!(
+            receiver_level_line(crate::dualrx::ReceiverId::Main, "AF", "0.500"),
+            level_line("AF", "0.500")
+        );
         // send_morse takes the rest of the line as the CW text (spaces preserved).
         assert_eq!(morse_line("CQ CQ DE W9XYZ"), "b CQ CQ DE W9XYZ\n");
     }

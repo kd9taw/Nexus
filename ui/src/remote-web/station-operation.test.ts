@@ -3,6 +3,17 @@ import { actionCapability, controlContext, controlOutcome, stationAction } from 
 import { APRS_FREQS } from '../aprsBeacon'
 
 describe('closed station operating requests', () => {
+  it('admits a Sub receiver level: three names, a 0..1 fraction, nothing else, and its own capability', () => {
+    for (const level of ['rfGain', 'afGain', 'squelch']) for (const value of [0, 0.25, 1]) {
+      const action = { action: 'radio.subLevel', level, value }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('subReceiverLevels')
+      for (const bad of [NaN, Infinity, -0.001, 1.001, '0.5', null, undefined]) expect(() => stationAction({ ...action, value: bad })).toThrow()
+      // No expected value (nothing reads the Sub back), no mode, no receiver, no Main level.
+      for (const extra of ['expected', 'mode', 'receiver', 'command', 'settings', 'txEnabled', 'radioId']) expect(() => stationAction({ ...action, [extra]: 0 })).toThrow()
+    }
+    for (const level of ['power', 'micGain', 'nr', 'AF', 'af', 'rf', 'sql', 'afGain\nT 1', '', null]) expect(() => stationAction({ action: 'radio.subLevel', level, value: 0.5 })).toThrow()
+  })
   it('accepts bounded native levels with exact prior readings and their own capability', () => {
     for (const mode of ['digital', 'phone', 'cw', 'rtty', 'keyboard']) for (const level of ['power', 'micGain', 'nr', 'compression', 'notch']) {
       const action = { action: 'radio.level', mode, level, expected: level === 'notch' ? 0 : 0.5, value: level === 'notch' ? 300 : 0.35 }

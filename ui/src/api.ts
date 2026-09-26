@@ -1901,6 +1901,18 @@ export async function setRfGain(gain: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rf_gain', { gain })
 }
 
+/** Set a level on the SUB receiver of a dual-receiver radio — RF gain, AF gain or squelch, as
+ * a 0.0–1.0 fraction. The radio loop sends it at receive time to the Sub alone (`L Sub …`),
+ * never to Main.
+ *
+ * REJECTS, with the reason, where the Sub cannot be reached: no Sub offered for this radio, a
+ * stage no vendor statement credits to it, or a connection that cannot name it. On the Remote
+ * page this same call becomes one `radio.subLevel` station intent (capability
+ * `subReceiverLevels`), refused for the same reasons by the same engine verb. */
+export async function setSubLevel(level: 'rf' | 'af' | 'sql', value: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_sub_level', { level, value })
+}
+
 /** Set the TRANSMIT-MONITOR gain (0.0–1.0) — how loud the rig plays your own audio back
  * while you are talking. Its on/off half is `setRigFunc('monitor', …)`.
  *

@@ -454,6 +454,25 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
     expect(cwGroup('rxdsp')).not.toBeNull()
   })
 
+  it('CW, a rig with no NR/AGC but a commandable Sub: RX DSP Levels carries NO reason — the SUB row is behind it', async () => {
+    // The Sub's levels ride the RX DSP box (a dual-receiver IC-7610 on Nexus's own CI-V
+    // control), so on this rig that box is NOT empty, and an entry saying "these appear on a rig
+    // that does" would be false about what is on the screen.
+    await openCw({
+      ...BARE_RIG,
+      receivers: {
+        main: { id: 'main', stages: { frontEnd: 'own', dsp: 'own', audio: 'own' } },
+        sub: { id: 'sub', stages: { frontEnd: 'own', dsp: 'unknown', audio: 'own' } },
+        subCapability: 'present',
+        subCommandable: true,
+      },
+    })
+    expectUnexplained('RX DSP Levels')
+    expect(document.querySelector('[data-receiver="sub"]'), 'the SUB row it vouches for').not.toBeNull()
+    // …and the DSP Toggles entry, with nothing behind it, still says so.
+    expectExplained('DSP Toggles', NO_DSP_FUNCS_REASON)
+  })
+
   it('Phone: the CONTROLS are marked independently, one each way in one render', async () => {
     // The case this replaces proved the two Phone ENTRIES were gated independently — that a
     // future "any DSP at all" shortcut could not apologise for a pane the operator can see.
