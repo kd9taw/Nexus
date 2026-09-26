@@ -163,6 +163,7 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
     // QSO parties do. Neither Field Day event does, and those stay `None`. Inventing 599
     // would be a claim about the air that nobody made.
     let (rst_sent, rst_rcvd) = (rst_of(&sent, spec), rst_of(&q.rx, spec));
+    let (stx, srx) = (serial_of(&sent, spec), serial_of(&q.rx, spec));
     let contest = ContestFields {
         session: log.session.id.clone(),
         // A mode-split contest has a distinct id per mode, and a general-log record
@@ -174,9 +175,9 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
             .session
             .contest_id_for(&[q.mode.as_str()])
             .unwrap_or_else(|_| log.session.contest_id.clone()),
-        stx: serial_of(&sent, spec),
+        stx,
         stx_string: joined(sent.iter().map(|v| v.raw.as_str())),
-        srx: serial_of(&q.rx, spec),
+        srx,
         srx_string: joined(q.rx.iter().map(|v| v.raw.as_str())),
         sent: pairs(&sent),
         rcvd: pairs(&q.rx),
@@ -184,13 +185,16 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         // place the exchange spec is in hand (§2.1.1). Downstream sees `(tag, value)`
         // and never has to decide which way round a slot exports.
         //
-        // Minus a report the record carries itself: kept here AND in `rst_sent`, the
-        // file would write `RST_SENT` twice.
+        // Minus a column the record carries in a field of its own: the reports in
+        // `rst_sent`/`rst_rcvd` and the serials in `stx`/`srx`. Kept here as well, the
+        // file would write `RST_SENT` or `STX` twice.
         adif: super::adif::directed_columns(q, spec)
             .into_iter()
             .filter(|(tag, _)| match tag.as_str() {
                 "RST_SENT" => rst_sent.is_none(),
                 "RST_RCVD" => rst_rcvd.is_none(),
+                "STX" => stx.is_none(),
+                "SRX" => srx.is_none(),
                 _ => true,
             })
             .collect(),

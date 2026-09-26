@@ -51,7 +51,8 @@
 //!   every POTA/SOTA/IOTA tag, and the merge identity.
 //! - **`qso_contest_adif` is absent from §v3.11 entirely**, and without it a Field Day or
 //!   QSO-party contact loses its section, class and state on every export after a restart —
-//!   for a QSO party totally, the merge leaving `state: None` so the contacted station's
+//!   for a QSO party totally wherever the merge leaves `state` empty (it writes only a STATE
+//!   of the station's own entity, `contest::adif::received_state`), so the contacted station's
 //!   state exists ONLY as the directed column. See the table for why it is not `qso_extra`.
 //! - **`id` is `NOT NULL`.** SQLite lets a non-INTEGER `PRIMARY KEY` hold NULLs.
 //!
@@ -3362,8 +3363,9 @@ mod tests {
     ///
     /// Without them a Field Day or QSO-party contact loses its section, class and state
     /// from every ADIF export made after a restart — and for a QSO party the loss is
-    /// total, because `record_for` leaves `state: None` and the contacted station's state
-    /// exists ONLY as the directed column.
+    /// total wherever `record_for` leaves `state` empty (it writes only a STATE of the
+    /// station's own entity), because the contacted station's state then exists ONLY as
+    /// the directed column.
     #[test]
     fn a_merged_contest_row_keeps_its_directed_columns_through_the_store() {
         let rec = merged_fd_row();

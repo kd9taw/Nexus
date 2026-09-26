@@ -22,9 +22,10 @@
 //!
 //! ⚠️ Integration tests, so they see only the public API — which is the point: if an
 //! operator cannot reach Sweepstakes through it, neither can this file.
-use tempo_core::contest::{ContestSession, StationData};
+use tempo_core::contest::{merge_into_general, ContestSession, StationData};
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
 use tempo_core::fieldday::FieldDayLog;
+use tempo_core::logbook::{adif_record, Logbook};
 
 /// "Pick ARRL November Sweepstakes (CW)" — the operator action, as the two calls the
 /// engine makes.
@@ -520,4 +521,37 @@ fn the_section_domain_is_the_sponsors_current_85_with_ter_not_nt() {
     )
     .expect_err("NT is not a section this contest accepts");
     assert!(err.contains("NT"), "{err}");
+}
+
+/// ⭐ **A merged contact writes `STX` and `SRX` once each.** The general-log record carries
+/// the serials in its own `stx`/`srx` fields, and the exchange's directed columns name the
+/// same two tags (the `NR` slot exports as `STX`/`SRX`), so both writers wrote them: every
+/// merged Sweepstakes, CQ WPX and CQP row held two `<STX>` and two `<SRX>`, in the file the
+/// LoTW batch and every export read.
+#[test]
+fn a_merged_serial_contact_writes_stx_and_srx_once() {
+    let mut log = FieldDayLog::new("W9XYZ", select("arrlss_cw", &w9xyz()), "20m");
+    assert_eq!(log.session.compose_for("K2DEF", SAT).tx[0].raw, "1");
+    assert!(log.log_fields_at(
+        "K2DEF",
+        &fields(&[
+            ("NR", "12"),
+            ("PREC", "A"),
+            ("CALL", "K2DEF"),
+            ("CK", "71"),
+            ("SEC", "CT"),
+        ]),
+        "CW",
+        "",
+        0,
+        SAT + 60
+    ));
+    let mut lb = Logbook::new();
+    let report = merge_into_general(&log, "a1b2c3d4", &mut lb);
+    assert_eq!(report.added(), 1);
+    let adi = adif_record(&report.written[0]);
+    assert_eq!(adi.matches("<STX:").count(), 1, "{adi}");
+    assert_eq!(adi.matches("<SRX:").count(), 1, "{adi}");
+    assert!(adi.contains("<STX:1>1"), "the serial I sent: {adi}");
+    assert!(adi.contains("<SRX:2>12"), "the serial they sent: {adi}");
 }
