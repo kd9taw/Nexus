@@ -655,11 +655,42 @@ fn bench(n: usize) -> Vec<String> {
     made.expect("the report merges");
     wait(d);
     hold("LoTW's own-QSO report (100 contacts)", &watcher);
+    let started = Instant::now();
     let (made, d) = logwrite::mark_lotw_uploaded_all(&shared, 1_900_000_300);
-    made.expect("the declaration is made");
+    let declared = made.expect("the declaration is made");
     wait(d);
+    println!(
+        "  \"already uploaded\" declared {declared} contacts in {:.1} s, until the last is on disk",
+        started.elapsed().as_secs_f64()
+    );
     hold(
         "\"already uploaded\" (every contact owed to LoTW)",
+        &watcher,
+    );
+    // The fill job over the whole log, as the first launch after an update runs it while every
+    // screen is loading: every contact the resolver places and the log holds without a country.
+    // A new version, since the fill path above stamped version 1.
+    let started = Instant::now();
+    let run = tempo_app::logfill::fill_log_store(
+        &shared,
+        2,
+        &|call: &str| {
+            let base = tempo_core::message::base_call(call);
+            (base.len() >= 3).then(|| base[..2].to_string())
+        },
+        &|_: &str, _: Option<&str>| None::<String>,
+    )
+    .expect("the fill job runs");
+    settle(&shared);
+    println!(
+        "  the fill job over the whole log filled {} of {} contacts lacking a field in {:.1} s, \
+         until the last is on disk",
+        run.filled,
+        run.lacking,
+        started.elapsed().as_secs_f64()
+    );
+    hold(
+        "the fill job over the whole log (the first launch after an update)",
         &watcher,
     );
 
