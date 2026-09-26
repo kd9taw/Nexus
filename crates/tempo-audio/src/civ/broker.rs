@@ -11,7 +11,7 @@
 //! Everything here is I/O-generic and unit-tested against the in-memory fake radio; only
 //! [`CivDaemon::start`] (opening the real COM port) needs the `serial` feature.
 
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -915,6 +915,8 @@ pub struct CivDaemon {
     engine: CivEngine,
     /// The radio's CI-V address — kept for the Drop-time safety key-up.
     civ_addr: u8,
+    /// Where the rigctld listener is bound: `tcp_port`, or the port the OS chose for 0.
+    local_addr: SocketAddr,
     tcp_stop: Arc<AtomicBool>,
     tcp_thread: Option<JoinHandle<()>>,
     /// Shared with the broker backend: set true while Nexus is transmitting so the disconnect
@@ -935,6 +937,7 @@ impl CivDaemon {
     ) -> std::io::Result<CivDaemon> {
         let engine = CivEngine::start(io, civ_addr);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
+        let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let tx_intent = Arc::new(AtomicBool::new(false));
         let backend: Arc<dyn RigBackend> = Arc::new(CivBackend::new(
@@ -986,6 +989,7 @@ impl CivDaemon {
         Ok(CivDaemon {
             engine,
             civ_addr,
+            local_addr,
             tcp_stop,
             tcp_thread: Some(tcp_thread),
             tx_intent,
@@ -1024,6 +1028,13 @@ impl CivDaemon {
     /// The CI-V address to drive `model_name` at, when it's a native-capable Icom.
     pub fn civ_addr_for(model_name: &str) -> Option<u8> {
         IcomModel::from_name(model_name).map(IcomModel::default_civ_addr)
+    }
+
+    /// The address the rigctld listener is bound to. A test starts on port 0 and reads the
+    /// port here: learning it by binding `:0` and letting go first leaves it free for anything
+    /// on the box to take before the daemon binds it.
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
     /// False once the serial engine died (port unplugged / denied).
@@ -1179,13 +1190,11 @@ mod tests {
     use std::net::TcpStream;
 
     fn daemon() -> (CivDaemon, u16) {
-        // Race-free enough for tests: bind :0 to learn a free port, drop, rebind.
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
+        // Port 0, read back from the daemon: never probe `:0` and let go (see `local_addr`).
         let (radio, _push) = FakeRadio::new(0xA2);
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1, Some(IcomModel::Ic9700))
-            .unwrap();
+        let d =
+            CivDaemon::start_with_io(Box::new(radio), 0xA2, 0, 1, Some(IcomModel::Ic9700)).unwrap();
+        let port = d.local_addr().port();
         (d, port)
     }
 
@@ -1311,12 +1320,9 @@ mod tests {
     /// change that can silently stop feeding the waterfall.
     #[test]
     fn a_waveform_burst_reaches_the_assembler_and_a_reply_does_not() {
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
         let (radio, push) = FakeRadio::new(0xA2);
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1, Some(IcomModel::Ic9700))
-            .unwrap();
+        let d =
+            CivDaemon::start_with_io(Box::new(radio), 0xA2, 0, 1, Some(IcomModel::Ic9700)).unwrap();
 
         // A single-frame burst: 27 00 <main> <seq=1> <total=1>, then the header the assembler
         // requires — mode 00 (Center), centre frequency, ± half-width, out-of-range flag — then
@@ -1352,13 +1358,11 @@ mod tests {
     }
 
     fn daemon_with_regs() -> (CivDaemon, u16, Arc<std::sync::Mutex<Regs>>) {
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1, Some(IcomModel::Ic9700))
-            .unwrap();
+        let d =
+            CivDaemon::start_with_io(Box::new(radio), 0xA2, 0, 1, Some(IcomModel::Ic9700)).unwrap();
+        let port = d.local_addr().port();
         (d, port, regs)
     }
 
@@ -1638,15 +1642,12 @@ mod tests {
         // An IC-7300 has no Sub band: `16 5A` NAKs. The answer must be an
         // honest RPRT -1 — never a silent fall-back to same-band 0F split,
         // which would transmit the "uplink" into the downlink's own band.
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
         let (radio, _push) = FakeRadio::new(0x94);
         let regs = radio.regs();
         regs.lock().unwrap().no_satmode = true;
-        let _d = CivDaemon::start_with_io(Box::new(radio), 0x94, port, 1, Some(IcomModel::Ic7300))
-            .unwrap();
-        let (mut c, mut rd) = client(port);
+        let d =
+            CivDaemon::start_with_io(Box::new(radio), 0x94, 0, 1, Some(IcomModel::Ic7300)).unwrap();
+        let (mut c, mut rd) = client(d.local_addr().port());
 
         assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT -1\n");
         let r = regs.lock().unwrap();
@@ -2069,12 +2070,10 @@ mod tests {
     /// in a row (`MAX_CONSECUTIVE_UNKNOWN`, its defence against a web page posting to the
     /// port). Nexus's own `Rig::set_xit` stops at the first refusal, so it never sends more.
     fn xit_then_rit(addr: u8, model: IcomModel) -> (Vec<String>, Vec<Vec<u8>>) {
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
         let (radio, _push) = FakeRadio::new(addr);
         let regs = radio.regs();
-        let _d = CivDaemon::start_with_io(Box::new(radio), addr, port, 1, Some(model)).unwrap();
+        let daemon = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+        let port = daemon.local_addr().port();
         let send = |line: &str| {
             let (mut c, mut rd) = client(port);
             roundtrip(&mut c, &mut rd, line)

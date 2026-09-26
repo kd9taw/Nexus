@@ -439,6 +439,32 @@ impl HotIndex {
         self.at = Some(to);
     }
 
+    /// [`Self::purge`], handing back the index as it stood instead of dropping it: the reset is a
+    /// swap, so a caller holding a lock that no work the size of the log may run under (the
+    /// Engine lock, SPEC-2 v3 §4.11) frees the rows somewhere else, and can still say which rows
+    /// the purge took out. `None` when there is nothing to hand back: the purge was already
+    /// followed, or the index could not follow it.
+    pub fn purge_taking(&mut self, from: u64, to: u64) -> Option<HotIndex> {
+        match self.at {
+            Some(at) if at == to => return None,
+            Some(at) if at == from => {}
+            _ => {
+                self.at = None;
+                return None;
+            }
+        }
+        let emptied = Self {
+            at: Some(to),
+            next_order: self.next_order,
+            session: self
+                .session
+                .as_ref()
+                .map(|s| Session::new(s.cutoff, s.rule)),
+            ..Self::default()
+        };
+        Some(std::mem::replace(self, emptied))
+    }
+
     /// The contest session the index keeps a sweep for — its start and its rule — if one was
     /// opened. What an index built again elsewhere must open again, from whole rows, to answer
     /// as this one does ([`Self::install_session`]).

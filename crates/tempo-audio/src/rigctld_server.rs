@@ -1553,10 +1553,26 @@ pub(crate) mod tests {
                 .is_ok(),
             "serve_until returns once shutdown is set"
         );
-        assert!(
-            TcpListener::bind(("127.0.0.1", port)).is_ok(),
-            "the port is released for a rebind"
-        );
+        // Released means a rebind succeeds, though not always at the first attempt. A process
+        // another test spawns while the listener is open holds a copy of its descriptor from
+        // fork until exec, and the socket stays bound until that copy goes: a child that execs
+        // late reproduces "the port is released for a rebind" with `serve_until` correct. A
+        // listener that is never let go still fails here. (Nothing else can be handed the port
+        // meanwhile: `client` is still connected, and a port with a live connection on it is
+        // never given out to a `:0` bind.)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match TcpListener::bind(("127.0.0.1", port)) {
+                Ok(_) => break,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => panic!("the port is released for a rebind: {e}"),
+            }
+        }
     }
 
     #[test]

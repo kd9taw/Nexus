@@ -1769,10 +1769,40 @@ mod tests {
         }
     }
 
+    /// A listener on a free port BELOW the kernel's ephemeral range, for a test that lets the
+    /// port go and then binds it again. In between, a `:0` bind anywhere on the box or an
+    /// outgoing connection can be handed any free port in that range, this one included, and
+    /// the rebind then fails with nothing wrong in the code under test. Below the range only a
+    /// bind that names the port can land (`freePortOutsideEphemeralRange` in
+    /// `remote/test/runtime.mjs` makes the same choice).
+    fn listener_below_the_ephemeral_range() -> TcpListener {
+        use std::hash::BuildHasher;
+        let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+            .ok()
+            .and_then(|range| range.split_whitespace().next()?.parse().ok())
+            .unwrap_or(32_768u16);
+        let (floor, ceiling) = (20_000u16, low.min(32_768));
+        assert!(ceiling > floor, "the ephemeral range starts at {low}");
+        (0..64u8)
+            .map(|attempt| {
+                let r = std::hash::RandomState::new().hash_one(attempt);
+                floor + (r % u64::from(ceiling - floor)) as u16
+            })
+            .find_map(|port| TcpListener::bind(("127.0.0.1", port)).ok())
+            .expect("a free port below the ephemeral range")
+    }
+
     #[test]
     fn serve_until_stops_and_frees_the_port_on_shutdown() {
-        let club = Arc::new(FakeClub::default());
-        let (addr, sd) = start_host(club);
+        // Not `start_host`: its `:0` port is free to be handed to another bind during the
+        // wait below (a scratch `:0` bind limited to that port was handed it, and the rebind
+        // failed).
+        let listener = listener_below_the_ephemeral_range();
+        let addr = listener.local_addr().unwrap();
+        let sd = Arc::new(AtomicBool::new(false));
+        let sd2 = sd.clone();
+        let club: Arc<dyn ClubBackend> = Arc::new(FakeClub::default());
+        std::thread::spawn(move || serve_until(listener, club, sd2));
         assert!(TcpStream::connect(addr).is_ok(), "serving before shutdown");
         sd.store(true, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(500));
