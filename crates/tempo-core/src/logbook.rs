@@ -960,75 +960,6 @@ impl Logbook {
         self.minter.set_posid(posid);
     }
 
-    /// Hand the minter of this log's ids to the owner that mints them from now on: the station,
-    /// which keeps minting when the in-memory log is gone (SPEC-2 v3 C19). The log keeps a copy
-    /// under a nonce of its own, as a copied log's is, for the rows it still adds itself (an
-    /// import, a merge), so the two never hand out one id.
-    ///
-    /// The minter handed over is the one the load drew, clear of every nonce the rows it read
-    /// already carry.
-    pub fn hand_over_minter(&mut self) -> Minter {
-        let own = self.minter.clone();
-        std::mem::replace(&mut self.minter, own)
-    }
-
-    /// ★ Follow a change the station made (SPEC-2 v3 C19, Part B): `pairs` — the rows it took
-    /// out and put in, in log order, as the hot index is told them ([`hot::RowPair`]) — laid over
-    /// the rows this log holds, and `marks`, the watermarks the station moved to, taken as this
-    /// log's own. Until the cut the log in memory is a FOLLOWER: the station plans each change
-    /// on the store's rows and tells it here, so the tests and the parity oracle still read a
-    /// whole log, at the station's revision.
-    ///
-    /// A row changed in place is found by its id and replaced where it stands; a row taken out is
-    /// removed; a row put in goes on the end, in order. A purge (`clear`) empties the log first,
-    /// so its pairs need not be walked.
-    pub fn follow(&mut self, pairs: &[hot::RowPair], clear: bool, marks: Watermarks) {
-        let rows = self.records.write_following(marks);
-        if clear {
-            rows.clear();
-        }
-        // Found by id: a change names its rows, never their places. One map for a change of
-        // many rows; a scan for the one-contact changes that are nearly all of them.
-        let changed: Vec<(&Arc<QsoRecord>, &Arc<QsoRecord>)> = pairs
-            .iter()
-            .filter_map(|(b, a)| Some((b.as_ref()?, a.as_ref()?)))
-            .collect();
-        let removed: std::collections::HashSet<RecordId> = pairs
-            .iter()
-            .filter(|(_, a)| a.is_none())
-            .filter_map(|(b, _)| b.as_ref()?.id)
-            .collect();
-        if !clear && !changed.is_empty() {
-            if changed.len() <= 8 {
-                for (b, a) in changed {
-                    if let Some(i) = rows.iter().position(|r| r.id == b.id) {
-                        rows[i] = Arc::clone(a);
-                    }
-                }
-            } else {
-                let at: std::collections::HashMap<RecordId, usize> = rows
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, r)| Some((r.id?, i)))
-                    .collect();
-                for (b, a) in changed {
-                    if let Some(&i) = b.id.as_ref().and_then(|id| at.get(id)) {
-                        rows[i] = Arc::clone(a);
-                    }
-                }
-            }
-        }
-        if !clear && !removed.is_empty() {
-            rows.retain(|r| r.id.is_none_or(|id| !removed.contains(&id)));
-        }
-        rows.extend(
-            pairs
-                .iter()
-                .filter(|(b, _)| b.is_none())
-                .filter_map(|(_, a)| a.clone()),
-        );
-    }
-
     /// Replace the human-entered fields of the record at `index` with an edit's — [`edited`] on
     /// the row there: a test's handle on the one implementation, which the log itself reaches by
     /// id through [`Logbook::apply`]. Returns false if `index` is out of range.
@@ -2907,7 +2838,7 @@ pub(crate) fn stamped(rec: &mut QsoRecord, service: UploadService, status: Uploa
 /// Whether `r` is, by the key a connector stamp matches on, the contact `pushed` describes:
 /// the same call and band (ASCII case aside), the same mode class, the same UTC day. One
 /// predicate for the named push and the unnamed one, so the two cannot drift apart — and one
-/// for the log in memory and the station's plan on the store's rows (SPEC-2 v3 C19).
+/// for a `Logbook` and the station's plan on the store's rows (SPEC-2 v3 C19).
 pub fn same_push_key(r: &QsoRecord, pushed: &QsoRecord) -> bool {
     r.call.eq_ignore_ascii_case(&pushed.call)
         && r.band.eq_ignore_ascii_case(&pushed.band)

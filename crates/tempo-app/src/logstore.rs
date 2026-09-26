@@ -114,27 +114,28 @@ impl std::fmt::Debug for LogStore {
     }
 }
 
-/// What [`open`] hands the station: the store, the records to hold, and — when `log.adi`
-/// held something the store did not account for — that file's take-in, planned.
+/// What [`open`] hands the station: the store, the log's hot index built from it, and — when
+/// `log.adi` held something the store did not account for — that file's take-in, planned. No
+/// copy of the log's rows (SPEC-2 v3 C19): the store holds the log.
 pub struct Opened {
     pub(crate) store: LogStore,
-    pub(crate) records: Vec<QsoRecord>,
     /// A `log.adi` the store cannot account for, planned as an import on the store's rows off
     /// the lock, here, and made at the attach, first thing (SPEC-2 v3 C19).
     pub(crate) take_in: Option<crate::station::AttachTakeIn>,
-    /// The hot index of those records, built off the lock, when the caller asked for it
-    /// ([`HotBuild`]).
-    pub(crate) hot: Option<Prebuilt>,
+    /// The hot index of the store's rows and the session's rows, built off the lock in one
+    /// picture of the store ([`HotBuild`]).
+    pub(crate) hot: Prebuilt,
     /// What the conversion did.
     pub outcome: migrate::Outcome,
 }
 
-/// How the launch has the open build the hot index ([`tempo_core::logbook::hot`]) from the rows
-/// it loads, before the engine is locked (SPEC-2 v3 C19): with the DXCC resolver the station
-/// will hold. The SAME resolver — the same `Arc` — is how the station knows the index is keyed
-/// as it keys its own; handed any other, it builds its own from the log instead
+/// How the launch has the open key the hot index ([`tempo_core::logbook::hot`]) it builds from the
+/// store, before the engine is locked (SPEC-2 v3 C19): with the DXCC resolver the station will
+/// hold. The SAME resolver — the same `Arc` — is how the station knows the index is keyed as it
+/// keys its own; handed any other, it keys its own again from the store
 /// ([`crate::station::StationCore::attach_store`]). The open also sets aside the rows a contest
-/// session restored at launch is swept from ([`SessionRows`]).
+/// session restored at launch is swept from ([`SessionRows`]). An open asked for nothing keys the
+/// index by no resolver.
 #[derive(Clone)]
 pub struct HotBuild {
     entity: Option<Arc<DxccResolve>>,
@@ -147,8 +148,9 @@ impl HotBuild {
     }
 }
 
-/// A hot index the open built, the resolver it was keyed by, and the rows a contest session
-/// can be swept from: every loaded row from `bound` on.
+/// A hot index the open built from the store, the resolver it was keyed by, and the rows a contest
+/// session can be swept from — every row from `bound` on, whole — read in the same picture of
+/// the store.
 pub(crate) struct Prebuilt {
     pub(crate) index: HotIndex,
     pub(crate) entity: Option<Arc<DxccResolve>>,
@@ -430,24 +432,24 @@ fn open_reporting_with(
     let outcome = migrate::migrate_log_reporting(log_path, &db_path, |r| resolve(r), progress)
         .map_err(OpenError::Conversion)?;
     let db = LogDb::open(&db_path).map_err(OpenError::Store)?;
-    let records = db.load_all().map_err(OpenError::Store)?;
-    // The hot index of exactly those rows, and the rows a session restored at launch is swept
-    // from, made here where the rows already are. (Once the log in memory goes, SPEC-2 v3 C19,
-    // the index comes from the store itself: `HotIndex::from_store`.)
-    let hot = hot.map(|HotBuild { entity }| {
-        let bound =
-            crate::engine::now_unix_secs().saturating_sub(crate::engine::SESSION_READ_WINDOW);
-        Prebuilt {
-            index: HotIndex::from_rows(&records, &StationKeys(entity.as_deref())),
-            entity,
-            recent: records
-                .iter()
-                .filter(|r| r.when_unix >= bound)
-                .cloned()
-                .collect(),
-            bound,
-        }
-    });
+    // ★ The attach's whole picture, in ONE read of the store (SPEC-2 v3 C19): the hot index of
+    // every row, and the rows a session restored at launch is swept from — whole, for the contest
+    // exchange the index does not read — so the two are one picture of the log. The ids the index
+    // holds are what the station's minter draws clear of ([`crate::station::StationCore`]).
+    let HotBuild { entity } = hot.unwrap_or(HotBuild { entity: None });
+    let bound = crate::engine::now_unix_secs().saturating_sub(crate::engine::SESSION_READ_WINDOW);
+    let (index, recent) = db
+        .in_one_snapshot(|db| {
+            let index = HotIndex::from_store(db, &StationKeys(entity.as_deref()))?;
+            Ok((index, rows_since(db, bound)?))
+        })
+        .map_err(OpenError::Store)?;
+    let hot = Prebuilt {
+        index,
+        entity,
+        recent,
+        bound,
+    };
 
     // Does `log.adi` hold anything the store does not? A pristine mirror (some Nexus mirror's
     // own picture, unchanged since) cannot, and neither can the file this very open just
@@ -511,7 +513,6 @@ fn open_reporting_with(
     let take_in = foreign.map(|f| crate::station::AttachTakeIn::plan(&store, f));
     Ok(Opened {
         store,
-        records,
         take_in,
         hot,
         outcome,
@@ -1211,7 +1212,7 @@ impl Durability {
 /// latest change this process had submitted when it was taken. A read through it first waits for
 /// every change up to that revision to be committed, then reads the store in ONE read
 /// transaction — so it sees every change made before the question was asked, the way a read of
-/// the log in memory always has (memory is written first), and one consistent picture of them.
+/// the log in memory did before the store held the log, and one consistent picture of them.
 ///
 /// **It never waits under a lock and never reads under one**: the wait and the read are fenced
 /// off the Engine lock ([`tempo_core::logbook::io_fence`]), and a debug build panics if either
@@ -1256,8 +1257,8 @@ impl StoreReads {
     }
 
     /// Every record the store holds, in log order, each as [`LogDb::load_all`] decodes it —
-    /// the log as a reader of the store sees it. What tests read in place of the copy held in
-    /// memory as that copy goes away (SPEC-2 v3, C19).
+    /// the log as a reader of the store sees it. What tests read in place of the copy the log
+    /// once kept in memory (SPEC-2 v3 C19).
     pub fn rows(&self, wait_up_to: Duration) -> Result<(Vec<QsoRecord>, Freshness), sqlite::Error> {
         self.read(wait_up_to, |db| db.load_all())
     }
@@ -1270,30 +1271,22 @@ impl StoreReads {
 pub const READ_WAIT: Duration = Duration::from_secs(2);
 
 /// The log's rows, for a pass over them — SPEC-2 v3's **C14**. Taken under the Engine lock
-/// ([`crate::engine::Engine::log_rows`]: handles, or a copy of pointers) and read after it is
-/// released.
+/// ([`crate::engine::Engine::log_rows`]: handles) and read after it is released.
 ///
-/// ONE way for every fold, lookup and sweep to reach the log, whichever holds it this session,
-/// so each of them is written once.
+/// ONE way for every fold, lookup and sweep to reach the log: the store, which holds it on either
+/// path (SPEC-2 v3 C19 — the database, or on the 1.13 path a store in memory).
 #[derive(Debug, Clone)]
 pub enum LogRows {
     /// The logbook store, which owns the log. A pass first waits for every change made before
     /// this was taken to be committed (P4: a question asked straight after a contact is logged
     /// sees it), then reads in ONE read transaction.
     Store(StoreReads),
-    /// The 1.13 path, when the store was refused and the session runs on `log.adi`: the log in
-    /// memory, as a copy of its pointers. SPEC-2 v3 D1 moves that path onto an in-memory
-    /// database of the store's own shape (C19), and this arm goes with it.
-    Memory(Vec<Arc<QsoRecord>>),
 }
 
 impl LogRows {
     /// Hand `each` every row `scope` names, in `order`, with (at least) `narrow`'s fields
     /// filled; `each` answering [`std::ops::ControlFlow::Break`] ends the pass. Whether it saw
     /// every change made before the rows were taken is the answer.
-    ///
-    /// On the 1.13 path the rows are whole records, and `scope` is applied to them by the
-    /// store's own definition of it — the same rows the store would name.
     ///
     /// ⚠️ **Never call it holding the Engine lock** — it reads the disk, or passes over the
     /// whole log; a debug build panics ([`tempo_core::logbook::io_fence`]).
@@ -1305,33 +1298,15 @@ impl LogRows {
         each: &mut dyn FnMut(&QsoRecord) -> std::ops::ControlFlow<()>,
     ) -> Result<Freshness, sqlite::Error> {
         tempo_core::logbook::io_fence::whole_log_off_engine_lock("a pass over the log's rows");
-        match self {
-            LogRows::Store(reads) => reads
-                .read(READ_WAIT, |db| db.each_narrow(narrow, scope, order, each))
-                .map(|((), fresh)| fresh),
-            LogRows::Memory(rows) => {
-                let named = |r: &QsoRecord| match scope {
-                    sqlite::Scope::All => true,
-                    sqlite::Scope::Since(t) => r.when_unix >= t,
-                    sqlite::Scope::CallNorm(call) => sqlite::call_norm_of(&r.call) == call,
-                };
-                let mut visit = |r: &Arc<QsoRecord>| named(r) && each(r).is_break();
-                match order {
-                    sqlite::Order::Log => {
-                        let _ = rows.iter().any(&mut visit);
-                    }
-                    sqlite::Order::NewestFirst => {
-                        let _ = rows.iter().rev().any(&mut visit);
-                    }
-                }
-                Ok(Freshness::Current)
-            }
-        }
+        let LogRows::Store(reads) = self;
+        reads
+            .read(READ_WAIT, |db| db.each_narrow(narrow, scope, order, each))
+            .map(|((), fresh)| fresh)
     }
 
     /// Hand `each` every record of the log, WHOLE, in log order — the store streamed a chunk at a
     /// time ([`LogDb::each_record`]), so a pass holds one chunk of the log and never the whole of
-    /// it; on the 1.13 path, the log in memory. `each` answering
+    /// it. `each` answering
     /// [`std::ops::ControlFlow::Break`] ends the pass. What the exports read (SPEC-2 v3 C15).
     ///
     /// The store's pass first waits up to `wait` for every change made before the rows were
@@ -1344,17 +1319,12 @@ impl LogRows {
         each: &mut dyn FnMut(&QsoRecord) -> std::ops::ControlFlow<()>,
     ) -> Result<Freshness, sqlite::Error> {
         tempo_core::logbook::io_fence::whole_log_off_engine_lock("a pass over the log's rows");
-        match self {
-            LogRows::Store(reads) => reads
-                .read(wait, |db| {
-                    db.each_record(sqlite::RECORD_CHUNK, &mut |r| each(&r))
-                })
-                .map(|((), fresh)| fresh),
-            LogRows::Memory(rows) => {
-                let _ = rows.iter().any(|r| each(r).is_break());
-                Ok(Freshness::Current)
-            }
-        }
+        let LogRows::Store(reads) = self;
+        reads
+            .read(wait, |db| {
+                db.each_record(sqlite::RECORD_CHUNK, &mut |r| each(&r))
+            })
+            .map(|((), fresh)| fresh)
     }
 
     /// The whole records these ids name, in log order — [`LogDb::rows_by_ids`] on the store.
@@ -1365,31 +1335,16 @@ impl LogRows {
         &self,
         ids: &[tempo_core::logbook::RecordId],
     ) -> Result<(Vec<QsoRecord>, Freshness), sqlite::Error> {
-        match self {
-            LogRows::Store(reads) => reads.read(READ_WAIT, |db| db.rows_by_ids(ids)),
-            LogRows::Memory(rows) => {
-                tempo_core::logbook::io_fence::whole_log_off_engine_lock(
-                    "a pass over the log's rows",
-                );
-                let wanted: std::collections::HashSet<_> = ids.iter().collect();
-                let found = rows
-                    .iter()
-                    .filter(|r| r.id.as_ref().is_some_and(|id| wanted.contains(id)))
-                    .map(|r| QsoRecord::clone(r))
-                    .collect();
-                Ok((found, Freshness::Current))
-            }
-        }
+        let LogRows::Store(reads) = self;
+        reads.read(READ_WAIT, |db| db.rows_by_ids(ids))
     }
 
     /// How many contacts the log holds.
     ///
     /// ⚠️ Never under the Engine lock, as [`Self::each`].
     pub fn count(&self) -> Result<(u64, Freshness), sqlite::Error> {
-        match self {
-            LogRows::Store(reads) => reads.read(READ_WAIT, |db| db.row_count()),
-            LogRows::Memory(rows) => Ok((rows.len() as u64, Freshness::Current)),
-        }
+        let LogRows::Store(reads) = self;
+        reads.read(READ_WAIT, |db| db.row_count())
     }
 }
 
@@ -1575,8 +1530,8 @@ pub struct Standing {
     /// and sending them again from memory may put them there.
     pub retryable: usize,
     /// Changes the writer gave up on for what they are. They are not in the logbook database,
-    /// and neither waiting nor sending them again will put them there; the log in memory still
-    /// has them until the process goes.
+    /// and neither waiting nor sending them again will put them there; this process holds them
+    /// until it goes.
     pub refused: usize,
     /// Why the first change in `refused` was refused, in the writer's words — for the
     /// diagnostic log and for the operator, untranslated.
@@ -1939,7 +1894,7 @@ pub(crate) mod tests {
         let expected = tempo_core::logbook::Logbook::load(&d.log());
 
         let mut e = engine_on_store(&d);
-        assert!(e.log_store_open());
+        assert!(!e.log_on_file(), "the database owns the log");
         same_log(&e.stored_log(), expected.records(), "held after the open");
         same_log(&stored(&d), expected.records(), "stored after the open");
         // The conversion tells the mirror lane, which writes after its debounce, so
@@ -2470,9 +2425,10 @@ pub(crate) mod tests {
     /// ★ A PASS OVER THE STORE IS A PASS OVER THE LOG IN MEMORY — every row, every field a fold
     /// can ask for (all of them, the stamps included), in log order and newest first, and the
     /// same rows under each scope — after 12 seeded runs of 40 random changes of every kind the
-    /// app makes, fills included, on the database and on the 1.13 path's store in memory. The
-    /// memory side is the in-memory log's arm, which is the log as every reader saw it before
-    /// C14.
+    /// app makes, fills included, on the database and on the 1.13 path's store in memory. Each
+    /// scope names the rows the log in memory named for every reader before C14, by the rule it
+    /// named them by: `Since(t)` the rows at or after `t`, `CallNorm(c)` the rows whose call
+    /// normalizes to `c`, in log order.
     #[test]
     fn a_pass_over_the_store_is_a_pass_over_the_log_in_memory() {
         let every: Vec<&'static str> = [
@@ -2545,11 +2501,7 @@ pub(crate) mod tests {
                 random_change(&e, &mut g, step);
                 changes += 1;
             }
-            let (store, memory) = {
-                let eng = e.lock().unwrap();
-                (eng.log_rows(), LogRows::Memory(eng.stored_log()))
-            };
-            assert!(matches!(store, LogRows::Store(_)), "premise: the store's");
+            let store = e.lock().unwrap().log_rows();
             let held: Vec<QsoRecord> = e
                 .lock()
                 .unwrap()
@@ -2569,13 +2521,19 @@ pub(crate) mod tests {
                 );
             }
             let ids = |v: Vec<QsoRecord>| v.into_iter().map(|r| r.id).collect::<Vec<_>>();
+            let named = |keep: &dyn Fn(&QsoRecord) -> bool| {
+                held.iter()
+                    .filter(|r| keep(r))
+                    .map(|r| r.id)
+                    .collect::<Vec<_>>()
+            };
             let times: Vec<u64> = held.iter().map(|r| r.when_unix).collect();
             let calls: Vec<String> = held.iter().map(|r| sqlite::call_norm_of(&r.call)).collect();
             for t in times.iter().copied().take(6).chain([0, u64::MAX]) {
                 let scope = sqlite::Scope::Since(t);
                 assert_eq!(
                     ids(pass(&store, whole, scope, sqlite::Order::Log)),
-                    ids(pass(&memory, whole, scope, sqlite::Order::Log)),
+                    named(&|r| r.when_unix >= t),
                     "seed {seed}: since {t}"
                 );
             }
@@ -2583,7 +2541,7 @@ pub(crate) mod tests {
                 let scope = sqlite::Scope::CallNorm(c);
                 assert_eq!(
                     ids(pass(&store, whole, scope, sqlite::Order::Log)),
-                    ids(pass(&memory, whole, scope, sqlite::Order::Log)),
+                    named(&|r| sqlite::call_norm_of(&r.call) == *c),
                     "seed {seed}: call {c}"
                 );
             }
@@ -2606,10 +2564,9 @@ pub(crate) mod tests {
         for step in 0..60 {
             random_change(&e, &mut g, step);
         }
-        let (store, memory, held) = {
+        let (store, held) = {
             let eng = e.lock().unwrap();
-            let held = eng.stored_log();
-            (eng.log_rows(), LogRows::Memory(held.clone()), held)
+            (eng.log_rows(), eng.stored_log())
         };
         let old = |legs: u8, room: usize| -> Vec<(QsoRecord, u8)> {
             held.iter()
@@ -2628,9 +2585,7 @@ pub(crate) mod tests {
         ] {
             for room in [0, 1, 5, 256] {
                 let from_store = crate::station::catch_up_records(&store, legs, room).unwrap();
-                let from_memory = crate::station::catch_up_records(&memory, legs, room).unwrap();
                 assert_eq!(from_store, old(legs, room), "legs {legs:#b}, room {room}");
-                assert_eq!(from_memory, old(legs, room), "legs {legs:#b}, room {room}");
                 assert!(from_store.len() <= room);
             }
         }
@@ -2741,15 +2696,31 @@ pub(crate) mod tests {
         bytes
     }
 
-    /// Every export and split the Logbook offers of `rows`, labelled by what was asked: ADIF and
-    /// CSV whole and bounded at contact times and a second either side, every operator in
-    /// `log` in other spellings and one nobody is, every activation it lists and some it does
-    /// not.
+    /// One ask of the Logbook's exports, as its screen makes one.
+    enum Ask<'a> {
+        Range {
+            format: &'a str,
+            from: Option<u64>,
+            to: Option<u64>,
+        },
+        Operators,
+        Operator(&'a str),
+        Activations,
+        Activation {
+            reference: &'a str,
+            day: u64,
+            call: Option<&'a str>,
+        },
+    }
+
+    /// Every export and split the Logbook offers of `log`, each asked of `answer` and labelled by
+    /// what was asked: ADIF and CSV whole and bounded at contact times and a second either side,
+    /// every operator in `log` in other spellings and one nobody is, every activation it lists
+    /// and some it does not.
     fn every_export(
-        rows: &crate::logexport::Source,
         log: &tempo_core::logbook::Logbook,
+        answer: &dyn Fn(Ask<'_>) -> String,
     ) -> Vec<(String, String)> {
-        use crate::logexport as x;
         let mut out = Vec::new();
         let mut bounds: Vec<Option<u64>> = vec![None];
         let recs = log.records();
@@ -2762,25 +2733,18 @@ pub(crate) mod tests {
         for format in ["adif", "csv", "CSV", "Adif"] {
             for &from in &bounds {
                 for &to in &bounds {
-                    let text = x::export_logbook(rows, format, from, to).expect("exports");
-                    out.push((format!("{format} {from:?}..{to:?}"), text.text));
+                    let text = answer(Ask::Range { format, from, to });
+                    out.push((format!("{format} {from:?}..{to:?}"), text));
                 }
             }
         }
         let mut ops = log.operators();
         ops.extend(["kd9taw", " w1aw", "NOBODY", ""].map(String::from));
-        out.push((
-            "operators".into(),
-            format!("{:?}", x::operators(rows).unwrap()),
-        ));
+        out.push(("operators".into(), answer(Ask::Operators)));
         for op in &ops {
-            let text = x::export_for_operator(rows, op).expect("exports");
-            out.push((format!("operator {op:?}"), text.text));
+            out.push((format!("operator {op:?}"), answer(Ask::Operator(op))));
         }
-        out.push((
-            "activations".into(),
-            format!("{:?}", x::activations(rows).unwrap()),
-        ));
+        out.push(("activations".into(), answer(Ask::Activations)));
         let mut asks: Vec<(String, u64, Option<String>)> = log
             .activations()
             .into_iter()
@@ -2796,24 +2760,59 @@ pub(crate) mod tests {
             ("US-9999".into(), day, Some("KD9TAW".into())),
         ]);
         for (reference, day, call) in &asks {
-            let text =
-                x::export_for_activation(rows, reference, *day, call.as_deref()).expect("exports");
-            out.push((
-                format!("activation {reference:?} {day} {call:?}"),
-                text.text,
-            ));
+            let text = answer(Ask::Activation {
+                reference,
+                day: *day,
+                call: call.as_deref(),
+            });
+            out.push((format!("activation {reference:?} {day} {call:?}"), text));
         }
         out
     }
 
-    /// The same asks of the log in memory through the Logbook's own exports — the Stage 1
-    /// answer, whose rules are the ones every export ran before C15 (tempo-core's
-    /// `export_rule_tests` holds them to the old code byte for byte).
-    fn every_export_in_memory(log: &tempo_core::logbook::Logbook) -> Vec<(String, String)> {
-        every_export(
-            &crate::logexport::Source::of_rows(LogRows::Memory(log.records().to_vec())),
-            log,
-        )
+    /// The store's answer to `ask`: the export [`crate::logexport`] writes from `rows`.
+    fn from_the_store(rows: &crate::logexport::Source, ask: Ask<'_>) -> String {
+        use crate::logexport as x;
+        match ask {
+            Ask::Range { format, from, to } => {
+                x::export_logbook(rows, format, from, to)
+                    .expect("exports")
+                    .text
+            }
+            Ask::Operators => format!("{:?}", x::operators(rows).unwrap()),
+            Ask::Operator(op) => x::export_for_operator(rows, op).expect("exports").text,
+            Ask::Activations => format!("{:?}", x::activations(rows).unwrap()),
+            Ask::Activation {
+                reference,
+                day,
+                call,
+            } => {
+                x::export_for_activation(rows, reference, day, call)
+                    .expect("exports")
+                    .text
+            }
+        }
+    }
+
+    /// The answer of the log in memory to `ask`: the Logbook's own export — the Stage 1 answer,
+    /// whose rules are the ones every export ran before C15 (tempo-core's `export_rule_tests`
+    /// holds them to the old code byte for byte). The Export button's format: `csv` in any case
+    /// is CSV, anything else ADIF.
+    fn in_memory(log: &tempo_core::logbook::Logbook, ask: Ask<'_>) -> String {
+        match ask {
+            Ask::Range { format, from, to } if format.eq_ignore_ascii_case("csv") => {
+                log.csv_in_range(from, to)
+            }
+            Ask::Range { from, to, .. } => log.adif_in_range(from, to),
+            Ask::Operators => format!("{:?}", log.operators()),
+            Ask::Operator(op) => log.adif_for_operator(op),
+            Ask::Activations => format!("{:?}", log.activations()),
+            Ask::Activation {
+                reference,
+                day,
+                call,
+            } => log.adif_for_activation(reference, day, call),
+        }
     }
 
     /// ★ EVERY EXPORT FROM THE STORE IS THE EXPORT OF THE LOG IN MEMORY, BYTE FOR BYTE — every
@@ -2852,18 +2851,14 @@ pub(crate) mod tests {
                 }
                 let (store, log) = {
                     let eng = e.lock().unwrap();
-                    assert!(
-                        matches!(eng.log_rows(), LogRows::Store(_)),
-                        "premise: the store's rows"
-                    );
                     let held: Vec<QsoRecord> = eng.stored_records();
                     (
                         crate::logexport::Source::of(&eng),
                         tempo_core::logbook::Logbook::from_store(held),
                     )
                 };
-                let want = every_export_in_memory(&log);
-                let got = every_export(&store, &log);
+                let want = every_export(&log, &|ask| in_memory(&log, ask));
+                let got = every_export(&log, &|ask| from_the_store(&store, ask));
                 assert_eq!(got.len(), want.len());
                 for ((label, a), (_, b)) in got.iter().zip(&want) {
                     assert!(
@@ -3183,8 +3178,8 @@ pub(crate) mod tests {
 
     /// The contacts a list of ids names, read from the store, come back in the order the ids name
     /// them — not log order — with a contact the log does not hold left out and one named twice
-    /// there twice: exactly what the log in memory answers for the same ids, on the store and on
-    /// the 1.13 path alike. What a LoTW batch chosen by id signs (`station::rows_named`).
+    /// there twice: exactly what the log in memory answered for the same ids. What a LoTW batch
+    /// chosen by id signs (`station::rows_named`).
     #[test]
     fn the_rows_a_list_of_ids_names_come_back_in_the_order_it_names_them() {
         let d = Dir::new("rows-named");
@@ -3194,7 +3189,6 @@ pub(crate) mod tests {
             let eng = e.lock().unwrap();
             (eng.log_rows(), eng.stored_log())
         };
-        assert!(matches!(rows, LogRows::Store(_)), "premise: the store's");
         let ids: Vec<tempo_core::logbook::RecordId> = held.iter().filter_map(|r| r.id).collect();
         assert_eq!(ids.len(), held.len(), "premise: every contact has an id");
         let never = tempo_core::logbook::RecordId::Minted {
@@ -3213,9 +3207,6 @@ pub(crate) mod tests {
         assert_eq!(memory.len(), 5, "premise: one left out, one twice");
         let from_store = crate::station::rows_named(&rows, &asked).expect("the store reads");
         assert!(from_store == memory, "the store answers as memory does");
-        let from_memory = crate::station::rows_named(&LogRows::Memory(held.clone()), &asked)
-            .expect("the log in memory reads");
-        assert!(from_memory == memory, "and so does the 1.13 path");
     }
 
     /// ⛔ PROPERTY 7, the launch after the conversion. Left as the file it was converted from,
@@ -3792,7 +3783,7 @@ pub(crate) mod tests {
     // ── reading the store (SPEC-2's read path) ──────────────────────────────
 
     /// ★ A READ OF THE STORE SEES EVERY CHANGE MADE BEFORE IT WAS ASKED FOR — the way a read of
-    /// the log in memory always has — and it is the log, row for row.
+    /// the log in memory did — and it is the log, row for row.
     ///
     /// The control is the write lock taken elsewhere: while the contact cannot be committed,
     /// the read says it is Stale and the contact is not in what it saw — so the Current read
@@ -3806,7 +3797,7 @@ pub(crate) mod tests {
 
         let hold = WriteHold::take(&d.db()).expect("hold the write lock");
         e.log_qso(qso("W1READ", 1_788_000_000));
-        let reads = e.log_store_reads().expect("the store owns the log");
+        let reads = e.log_store_reads();
         let (rows, fresh) = reads.rows(Duration::from_millis(300)).expect("read");
         assert!(matches!(fresh, Freshness::Stale(_)), "{fresh:?}");
         assert_eq!(rows.len(), 10, "control: the store as it stood");
@@ -3828,11 +3819,11 @@ pub(crate) mod tests {
     /// ★ A NEW STATION KEEPS ITS LOG IN A STORE (SPEC-2 v3 C19, D1-A): an empty one in this
     /// process's memory, with no file behind it and no `log.adi` beside it, until the launch
     /// gives it the operator's. A contact it logs is in that store, where every pass over the
-    /// log reads it. The control: the 1.13 path, which leaves the store for `log.adi`.
+    /// log reads it. The control: the 1.13 path, whose store in memory has `log.adi` beside it.
     #[test]
     fn a_new_station_keeps_its_log_in_an_empty_store_in_memory() {
         let sc = crate::station::StationCore::new();
-        let store = sc.store.as_ref().expect("a new station holds a store");
+        let store = &sc.store;
         let name = store.db_path().to_string_lossy().into_owned();
         assert!(
             name.starts_with("file:/nexus-log-") && name.ends_with("?vfs=memdb"),
@@ -3843,7 +3834,11 @@ pub(crate) mod tests {
         assert!(store.mirror_status().is_none(), "so nothing to mirror");
 
         let mut e = Engine::new("K2DEF", "FN31", 0);
-        assert!(e.log_store_open(), "an engine's station too");
+        let in_memory = |e: &Engine| {
+            let name = e.station().store.db_path().to_string_lossy().into_owned();
+            name.starts_with("file:/nexus-log-") && name.ends_with("?vfs=memdb")
+        };
+        assert!(in_memory(&e), "an engine's station too");
         e.log_qso(qso("W1NEW", 1_788_200_000));
         let mut calls = Vec::new();
         let fresh = e
@@ -3860,8 +3855,36 @@ pub(crate) mod tests {
         let d = Dir::new("new-station");
         e.set_log_path(d.log());
         assert!(
-            e.log_on_file() && e.log_store_open(),
+            e.log_on_file() && in_memory(&e),
             "control: the 1.13 path keeps log.adi, its rows in a store in memory"
+        );
+    }
+
+    /// ⛔ THE LAUNCH'S PRE-CHECK (C19L, the operator's "stop with a clear message"). A machine that
+    /// can open the empty store in memory every station starts with can keep a log. One where
+    /// SQLite cannot open even that is told so, in words the launch shows before it exits — and a
+    /// station built there anyway stops on the invariant, naming the same reason. The fault is this
+    /// thread's alone; lifting it is the control.
+    #[test]
+    fn a_machine_that_cannot_open_a_store_in_memory_is_told_why() {
+        use crate::station::{can_keep_a_log, fail_empty_stores_on_this_thread, StationCore};
+        assert_eq!(can_keep_a_log(), Ok(()), "premise: this machine can");
+        fail_empty_stores_on_this_thread(true);
+        let told = can_keep_a_log();
+        let built = std::panic::catch_unwind(StationCore::new);
+        fail_empty_stores_on_this_thread(false);
+        let why = told.expect_err("the fault fails the open");
+        assert!(why.contains("Nexus cannot keep a log"), "{why}");
+        let stopped = built.err().expect("no station without a store");
+        assert_eq!(
+            stopped.downcast_ref::<String>().map(String::as_str),
+            Some(why.as_str()),
+            "the invariant names the same reason"
+        );
+        assert_eq!(
+            can_keep_a_log(),
+            Ok(()),
+            "control: lifted, the open succeeds"
         );
     }
 
@@ -3871,45 +3894,37 @@ pub(crate) mod tests {
     /// memory with nowhere to write, now an empty store in memory, and either is replaced the
     /// same way, whatever was written into it. So the launch must write nothing before the
     /// attach, and nothing can: src-tauri's
-    /// `nothing_can_write_the_log_before_the_launch_attaches_it` pins why. The two stations
-    /// here differ in that alone: one built as a station is now, one with its store taken away,
-    /// as a station was built before.
+    /// `nothing_can_write_the_log_before_the_launch_attaches_it` pins why.
     #[test]
     fn a_contact_written_before_the_attach_is_not_carried_into_the_operator_s_log_as_before() {
-        for built_before_c19 in [false, true] {
-            for fallback in [false, true] {
-                let d = Dir::new(&format!("pre-attach-{built_before_c19}-{fallback}"));
-                std::fs::write(d.log(), legacy_log(3)).unwrap();
-                let mut sc = crate::station::StationCore::new();
-                if built_before_c19 {
-                    sc.store = None;
-                }
-                // The write the FT auto-log makes: the station's append.
-                let _ = sc.append(vec![qso("W9EARLY", 1_788_300_000)], false);
-                if fallback {
-                    sc.set_log_path(d.log());
-                } else {
-                    sc.attach_store(open_fast(&d));
-                }
-                let what = format!("built before C19: {built_before_c19}, fallback: {fallback}");
-                let log = sc.stored_log();
-                let calls: Vec<&str> = log.iter().map(|r| &*r.call).collect();
-                assert_eq!(
-                    calls.len(),
-                    3,
-                    "the operator's log, whole ({what}): {calls:?}"
-                );
-                assert!(!calls.contains(&"W9EARLY"), "and nothing else ({what})");
-                if !fallback {
-                    let store = sc.store.as_ref().expect("the operator's store");
-                    store.flush(DURABLE_WAIT).expect("written");
-                    let rows = stored(&d);
-                    assert_eq!(rows.len(), 3, "the store holds its own rows ({what})");
-                    assert!(rows.iter().all(|r| r.call != "W9EARLY"), "only ({what})");
-                }
-                let file = String::from_utf8_lossy(&std::fs::read(d.log()).unwrap()).into_owned();
-                assert!(!file.contains("W9EARLY"), "nor is it in log.adi ({what})");
+        for fallback in [false, true] {
+            let d = Dir::new(&format!("pre-attach-{fallback}"));
+            std::fs::write(d.log(), legacy_log(3)).unwrap();
+            let mut sc = crate::station::StationCore::new();
+            // The write the FT auto-log makes: the station's append.
+            let _ = sc.append(vec![qso("W9EARLY", 1_788_300_000)], false);
+            if fallback {
+                sc.set_log_path(d.log());
+            } else {
+                sc.attach_store(open_fast(&d));
             }
+            let what = format!("fallback: {fallback}");
+            let log = sc.stored_log();
+            let calls: Vec<&str> = log.iter().map(|r| &*r.call).collect();
+            assert_eq!(
+                calls.len(),
+                3,
+                "the operator's log, whole ({what}): {calls:?}"
+            );
+            assert!(!calls.contains(&"W9EARLY"), "and nothing else ({what})");
+            if !fallback {
+                sc.store.flush(DURABLE_WAIT).expect("written");
+                let rows = stored(&d);
+                assert_eq!(rows.len(), 3, "the store holds its own rows ({what})");
+                assert!(rows.iter().all(|r| r.call != "W9EARLY"), "only ({what})");
+            }
+            let file = String::from_utf8_lossy(&std::fs::read(d.log()).unwrap()).into_owned();
+            assert!(!file.contains("W9EARLY"), "nor is it in log.adi ({what})");
         }
     }
 
@@ -3962,7 +3977,7 @@ pub(crate) mod tests {
         std::fs::write(d.log(), legacy_log(3)).unwrap();
         let engine = Mutex::new(engine_on_store(&d));
         let e = engine_lock(&engine);
-        let reads = e.log_store_reads().expect("the store owns the log");
+        let reads = e.log_store_reads();
         let _ = reads.rows(Duration::ZERO);
     }
 
@@ -4376,12 +4391,13 @@ pub(crate) mod tests {
 
     /// The log as the store holds it, as a `Logbook` of its own — what a test submits changes
     /// against the way the station does.
-    fn log_of(opened: &mut Opened) -> tempo_core::logbook::Logbook {
-        let mut log = tempo_core::logbook::Logbook::new();
-        for r in std::mem::take(&mut opened.records) {
-            log.add(r);
-        }
-        log
+    fn log_of(opened: &Opened) -> tempo_core::logbook::Logbook {
+        let (rows, _) = opened
+            .store
+            .reads()
+            .rows(DURABLE_WAIT)
+            .expect("the store reads");
+        tempo_core::logbook::Logbook::from_store(rows)
     }
 
     /// Make `op` in memory and hand what it did to the store, as the station does.
@@ -4416,7 +4432,7 @@ pub(crate) mod tests {
     fn a_change_refused_for_what_it_is_is_held_and_never_sent_again() {
         let d = Dir::new("resend-lasting");
         let mut opened = open_fast(&d);
-        let log = log_of(&mut opened);
+        let log = log_of(&opened);
         let store = &mut opened.store;
         assert_eq!(store.save_trouble(), None, "control: nothing held yet");
 
@@ -4465,7 +4481,7 @@ pub(crate) mod tests {
     fn an_export_counts_a_change_refused_for_good_apart_from_the_changes_still_saving() {
         let d = Dir::new("export-held");
         let mut opened = open_fast(&d);
-        let log = log_of(&mut opened);
+        let log = log_of(&opened);
         let store = &mut opened.store;
         let adif = || tempo_core::logbook::ExportKind::Adif {
             from: None,
@@ -4520,7 +4536,7 @@ pub(crate) mod tests {
         let d = Dir::new("resend-due");
         std::fs::write(d.log(), legacy_log(10)).unwrap();
         let mut opened = open_fast(&d);
-        let mut log = log_of(&mut opened);
+        let mut log = log_of(&opened);
         let store = &mut opened.store;
         let id = log.records()[3].id.expect("an id");
         let rows_before = stored(&d).len();
@@ -4705,8 +4721,8 @@ pub(crate) mod tests {
         std::fs::write(d.log(), legacy_log(6)).unwrap();
         let mut a = open_fast(&d);
         let mut b = open_fast(&d);
-        let mut log_a = log_of(&mut a);
-        let mut log_b = log_of(&mut b);
+        let mut log_a = log_of(&a);
+        let mut log_b = log_of(&b);
         let id = log_a.records()[2].id.expect("an id");
 
         // Window A's change to the row, dropped by its writer: in A's memory only.
@@ -5049,8 +5065,8 @@ pub(crate) mod tests {
         assert_eq!(unfilled(), Vec::<String>::new(), "premise: A filled them");
 
         // The early window marks a card on a contact it loaded unfilled — once its writer has
-        // seen A's commits, as the debug build's oracle (the log in memory, which no longer
-        // follows another window's commits) needs to know to stand aside.
+        // seen A's commits, which the change takes in before it plans, so its index holds the
+        // rows the plan reads.
         assert!(eventually(|| early
             .lock()
             .unwrap()
@@ -5674,12 +5690,7 @@ pub(crate) mod tests {
     }
 
     fn lane_of(sc: &crate::station::StationCore) -> Arc<LogFileWriter> {
-        Arc::clone(
-            sc.store
-                .as_ref()
-                .and_then(LogStore::lane)
-                .expect("the 1.13 path's lane"),
-        )
+        Arc::clone(sc.store.lane().expect("the 1.13 path's lane"))
     }
 
     /// Hold the lane's rewrites for a moment, as a slow network drive does: the folder refuses
@@ -5811,7 +5822,7 @@ pub(crate) mod tests {
         Logbook::append(&d.log(), &qso("W7OTHER", 1_788_400_000)).unwrap();
         folder_refuses_new_files(&d, false);
         assert!(eventually(|| lane.status().foreign_write), "premise: held");
-        let unsaved = sc.store.as_ref().unwrap().unsaved();
+        let unsaved = sc.store.unsaved();
         assert!(!unsaved.is_empty(), "the quit has something to save");
         let s = unsaved.wait(Duration::from_millis(300));
         assert_eq!(s.pending, 1, "the change is still on its way: {s:?}");
@@ -6044,28 +6055,65 @@ pub(crate) mod tests {
     /// ★ THE NAS TRADES ARE 1.13'S (the operator's D1 choice, pinned). Two machines on one
     /// `log.adi`: an edit made on the other machine arrives here as a second contact beside the
     /// one it edited, and a contact deleted there comes back with this machine's next rewrite —
-    /// on the 1.13 path exactly as with no store at all, 1.13's own code. A file with no
-    /// tombstones, which other loggers also read, cannot say "deleted" or "was this row".
+    /// on the 1.13 path exactly as with 1.13's own code, run here beside it: a `Logbook` loaded
+    /// from the file, taking it in with `reconcile_disk` and writing each change with a whole
+    /// `save`. A file with no tombstones, which other loggers also read, cannot say "deleted" or
+    /// "was this row".
     #[test]
     fn the_nas_trades_are_1_13_s_on_the_1_13_path() {
         use tempo_core::logbook::LogOp;
-        for last_resort in [false, true] {
-            let how = if last_resort {
-                "no store"
-            } else {
-                "the 1.13 path"
-            };
-            let d = Dir::new(&format!("nas-trades-{last_resort}"));
-            let mut sc = on_log_file(&d, 4);
-            if last_resort {
-                sc.store = None;
-            }
-            let written = |sc: &crate::station::StationCore| {
-                if let Some(store) = &sc.store {
-                    store.flush(DURABLE_WAIT).expect("written");
+        /// This machine: a station on the 1.13 path, or 1.13's own code over the file.
+        enum Here {
+            Station(Box<crate::station::StationCore>),
+            Code(Logbook),
+        }
+        impl Here {
+            /// The file taken in; whether anything was.
+            fn take_in(&mut self, d: &Dir) -> bool {
+                match self {
+                    Here::Station(sc) => sc.take_in_shared_log(),
+                    // 1.13's `recover_external_appends`: the file read lossily, and merged in.
+                    Here::Code(log) => {
+                        let disk = std::fs::read(d.log()).unwrap();
+                        log.reconcile_disk(&String::from_utf8_lossy(&disk));
+                        true
+                    }
                 }
+            }
+            fn held(&self) -> Vec<String> {
+                match self {
+                    Here::Station(sc) => calls_held(sc),
+                    Here::Code(log) => log.records().iter().map(|r| r.call.clone()).collect(),
+                }
+            }
+            /// A QSL card marked on the first contact, and written.
+            fn card_the_first(&mut self, d: &Dir) {
+                match self {
+                    Here::Station(sc) => {
+                        let first = id_at(&**sc, 0);
+                        assert!(sc.mark_qsl_card(first, true));
+                        sc.store.flush(DURABLE_WAIT).expect("written");
+                    }
+                    // The change, then 1.13's `save_log`: the file rewritten whole.
+                    Here::Code(log) => {
+                        let id = log.records()[0].id.expect("an id");
+                        let op = LogOp::MarkQslCard { id, received: true };
+                        assert!(!log.apply(op).is_empty());
+                        log.save(&d.log()).expect("saved");
+                    }
+                }
+            }
+        }
+        for code in [false, true] {
+            let how = if code { "1.13's code" } else { "the 1.13 path" };
+            let d = Dir::new(&format!("nas-trades-{code}"));
+            let mut here = if code {
+                std::fs::write(d.log(), legacy_log(4)).unwrap();
+                Here::Code(Logbook::load(&d.log()))
+            } else {
+                Here::Station(Box::new(on_log_file(&d, 4)))
             };
-            let theirs = sc.stored_log();
+            let theirs = here.held();
 
             // The other machine corrects a call, and saves.
             let mut other = Logbook::load(&d.log());
@@ -6076,10 +6124,10 @@ pub(crate) mod tests {
                 rec: Box::new(fixed),
             });
             other.save(&d.log()).unwrap();
-            assert!(sc.take_in_shared_log(), "{how}: the file is taken in");
-            let held = calls_held(&sc);
+            assert!(here.take_in(&d), "{how}: the file is taken in");
+            let held = here.held();
             assert!(
-                held.contains(&theirs[1].call) && held.contains(&"K1FIX".to_string()),
+                held.contains(&theirs[1]) && held.contains(&"K1FIX".to_string()),
                 "{how}: the edit arrives beside the contact it edited: {held:?}"
             );
             assert_eq!(held.len(), 5, "{how}: {held:?}");
@@ -6093,14 +6141,12 @@ pub(crate) mod tests {
                 !calls_in_file(&d).contains(&gone.call),
                 "premise: gone from the file"
             );
-            assert!(sc.take_in_shared_log(), "{how}: the file is taken in");
+            assert!(here.take_in(&d), "{how}: the file is taken in");
             assert!(
-                calls_held(&sc).contains(&gone.call),
+                here.held().contains(&gone.call),
                 "{how}: this machine still holds it"
             );
-            let first = id_at(&sc, 0);
-            assert!(sc.mark_qsl_card(first, true));
-            written(&sc);
+            here.card_the_first(&d);
             assert!(
                 calls_in_file(&d).contains(&gone.call),
                 "{how}: and this machine's next rewrite puts it back"
@@ -6134,28 +6180,25 @@ pub(crate) mod tests {
         out
     }
 
-    /// ★ THE 1.13 PATH WRITES `log.adi` AS 1.13 WROTE IT (SPEC-2 v3 C19, D1-A). Two sessions on
-    /// one starting `log.adi`: one on the 1.13 path, its log in a store in memory and the file
-    /// kept by the lane; one with its store taken away, the file written by 1.13's own code, the
-    /// last resort that still has it. Each makes the same 40 random changes of every kind the app
-    /// makes, 8 seeds. After every change the two files are the same bytes, and each change was
-    /// written the same way — appended to the file, or the file replaced (a hard link to the
-    /// file before the change tells: an append grows the linked file, a rewrite leaves it
-    /// behind). And after every run the store every reader of the log reads holds exactly the log.
+    /// ★ THE 1.13 PATH WRITES `log.adi` AS 1.13 WROTE IT (SPEC-2 v3 C19, D1-A). A session on the
+    /// 1.13 path — its log in a store in memory, the file kept by the lane — makes 40 random
+    /// changes of every kind the app makes, 8 seeds; beside it, 1.13's own code writes the same
+    /// log to a file of its own, from the same starting `log.adi`, by 1.13's rule: rows only
+    /// appended are appended (`Logbook::append`), any other change rewrites the file whole
+    /// (`Logbook::save`), and a change that moves no row writes nothing. After every change the
+    /// two files are the same bytes, and each change was written the same way — appended to the
+    /// file, or the file replaced (a hard link to the file before the change tells: an append
+    /// grows the linked file, a rewrite leaves it behind). And after every run `log.adi` loads
+    /// back as the log every reader reads.
     ///
-    /// No resolvers: what a change FILLS is the store's rule on both of its homes (SPEC-2 v3
-    /// D2-A — an import fills its own rows, and 1.13's code also fills older ones after it),
-    /// held to the store path by `the_store_path_answers_exactly_as_the_adif_path`. This test
-    /// holds the WRITING to 1.13's.
+    /// What each change leaves in the log is the store's, which the Stage-1 lockstep holds to
+    /// the write path before C19 (`stage1_tests.rs`, and logwrite's
+    /// `every_write_path_leaves_the_store_as_stage_1_would_and_the_index_follows`). No resolvers:
+    /// what a change FILLS is the store's rule on both of its homes (SPEC-2 v3 D2-A), held to the
+    /// store path by `the_store_path_answers_exactly_as_the_adif_path`. This test holds the
+    /// WRITING to 1.13's.
     #[test]
     fn the_1_13_path_writes_log_adi_as_1_13_wrote_it() {
-        fn start(d: &Dir) -> Mutex<Engine> {
-            std::fs::write(d.log(), log_to_fill(12)).unwrap();
-            let mut e = Engine::new("K2DEF", "FN31", 0);
-            e.set_log_path(d.log());
-            flush(&e);
-            Mutex::new(e)
-        }
         // A hard link to the file as it stands: it follows an append, and not a rewrite.
         fn pin(d: &Dir) -> PathBuf {
             let at = d.0.join("before-the-change");
@@ -6172,25 +6215,43 @@ pub(crate) mod tests {
                 Dir::new(&format!("d1a-lane-{seed}")),
                 Dir::new(&format!("d1a-113-{seed}")),
             );
-            let lane = start(&a);
-            let old = start(&b);
-            old.lock().unwrap().without_log_store();
+            std::fs::write(a.log(), log_to_fill(12)).unwrap();
+            std::fs::write(b.log(), log_to_fill(12)).unwrap();
+            let lane = {
+                let mut e = Engine::new("K2DEF", "FN31", 0);
+                e.set_log_path(a.log());
+                flush(&e);
+                Mutex::new(e)
+            };
             assert!(lane.lock().unwrap().log_on_file(), "premise: the 1.13 path");
-            assert!(!old.lock().unwrap().log_store_open(), "premise: no store");
-            let key = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-            let (mut ga, mut gb) = (Gen(key), Gen(key));
+            let mut before = lane.stored_log();
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             for step in 0..40 {
                 let (pa, pb) = (pin(&a), pin(&b));
-                random_change(&lane, &mut ga, step);
-                random_change(&old, &mut gb, step);
+                random_change(&lane, &mut g, step);
                 flush(&lane.lock().unwrap());
+                let after = lane.stored_log();
+                // 1.13's rule, over the change the log made.
+                let appended = after.len() > before.len()
+                    && after.iter().zip(&before).all(|(now, was)| now == was);
+                if appended {
+                    for r in &after[before.len()..] {
+                        Logbook::append(&b.log(), r).unwrap();
+                    }
+                } else if after != before {
+                    let log =
+                        Logbook::from_store(after.iter().map(|r| QsoRecord::clone(r)).collect());
+                    log.save(&b.log()).unwrap();
+                }
                 let (fa, fb) = (
-                    nonces_aside(&std::fs::read(a.log()).unwrap()),
-                    nonces_aside(&std::fs::read(b.log()).unwrap()),
+                    std::fs::read(a.log()).unwrap(),
+                    std::fs::read(b.log()).unwrap(),
                 );
                 assert!(
                     fa == fb,
-                    "seed {seed}, step {step}: log.adi differs from 1.13's\n--- 1.13 path\n{fa}\n--- 1.13\n{fb}"
+                    "seed {seed}, step {step}: log.adi differs from 1.13's\n--- 1.13 path\n{}\n--- 1.13\n{}",
+                    String::from_utf8_lossy(&fa),
+                    String::from_utf8_lossy(&fb)
                 );
                 let (kept_a, kept_b) = (same_file(&a, &pa), same_file(&b, &pb));
                 assert_eq!(
@@ -6203,21 +6264,12 @@ pub(crate) mod tests {
                     rewrites += 1;
                 }
                 steps += 1;
+                before = after;
             }
-            let eng = lane.lock().unwrap();
-            let mut stored = Vec::new();
-            let fresh = eng
-                .log_rows()
-                .each_record(DURABLE_WAIT, &mut |r| {
-                    stored.push(r.clone());
-                    std::ops::ControlFlow::Continue(())
-                })
-                .expect("the store reads");
-            assert_eq!(fresh, Freshness::Current, "seed {seed}");
-            assert_eq!(
-                stored.len(),
-                old.lock().unwrap().stored_log().len(),
-                "seed {seed}: the store holds as many contacts as 1.13's log"
+            same_log(
+                Logbook::load(&a.log()).records(),
+                &lane.stored_log(),
+                &format!("seed {seed}: log.adi loads back as the log"),
             );
         }
         assert_eq!(steps, 8 * 40);
@@ -6230,15 +6282,19 @@ pub(crate) mod tests {
     /// ★ THE FT AUTO-LOG ON THE 1.13 PATH LOGS WHAT 1.13 LOGGED (the FT gate's parity, SPEC-2 v3
     /// C19 D1-A). The funnel every logged contact passes through — the sequencer's `log_qso` and
     /// the synced `log_qso_for_sync` — driven with repeats inside and outside the duplicate
-    /// window, in lockstep on two sessions over the same `log.adi`: one on the 1.13 path (its log
-    /// in a store in memory, the file kept by the lane) and one with no store at all, the file
-    /// written by 1.13's own code. At every step: the same answer to the caller (refused as a
-    /// duplicate, or logged with one receipt); the contact in the log the moment the call
-    /// returns, as the same record under the next id the station mints; once the receipt is
-    /// redeemed, the contact in `log.adi`; and the two files the same bytes, written the same way.
+    /// window on a session on the 1.13 path (its log in a store in memory, the file kept by the
+    /// lane), in lockstep with 1.13's own code over a file of its own: the guard's scan
+    /// (`dedup::scan_for_duplicate`, which the hot index replaced), then the contact added to its
+    /// `Logbook` under the next id that log mints and appended to its file (`Logbook::append`,
+    /// or `append_for_sync` and the receipt redeemed). At every step: the same answer to the
+    /// caller (refused as a duplicate, or logged with one receipt); the contact in the log the
+    /// moment the call returns, as the same record under the next id the station mints; once
+    /// the receipt is redeemed, the contact in `log.adi`; and the two files the same bytes, each
+    /// log's nonce aside.
     #[test]
     fn the_ft_auto_log_on_the_1_13_path_logs_what_1_13_logged() {
         use crate::engine::LogWriteOutcome;
+        use tempo_core::logbook::dedup::scan_for_duplicate;
         const CALLS: [&str; 3] = ["W1AW", "JA1AA", "DL1AB"];
         const BANDS: [(&str, f64); 2] = [("20m", 14.074), ("40m", 7.074)];
         const MODES: [&str; 2] = ["FT8", "FT4"];
@@ -6250,10 +6306,9 @@ pub(crate) mod tests {
             );
             let mut lane = Engine::new("K2DEF", "FN31", 0);
             lane.set_log_path(a.log());
-            let mut old = Engine::new("K2DEF", "FN31", 0);
-            old.set_log_path(b.log());
-            old.without_log_store();
-            assert!(lane.log_on_file() && !old.log_store_open(), "premise");
+            assert!(lane.log_on_file(), "premise: the 1.13 path");
+            // 1.13's log, loaded as its session loaded it.
+            let mut old = Logbook::load(&b.log());
             let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let mut when = 1_788_000_000u64;
             let mut last: Option<QsoRecord> = None;
@@ -6283,48 +6338,52 @@ pub(crate) mod tests {
                     rec.call, rec.band, rec.mode
                 );
                 let synced = step % 2 == 1;
-                let (held_a, held_b) = (lane.stored_log().len(), old.stored_log().len());
-                let outcomes = [&mut lane, &mut old].map(|e| {
-                    if synced {
-                        Some(e.log_qso_for_sync(rec.clone()))
-                    } else {
-                        e.log_qso(rec.clone());
-                        None
-                    }
-                });
-                let [oa, ob] = outcomes;
-                let refused_here = lane.stored_log().len() == held_a;
+                let held = lane.stored_log().len();
+                let outcome = if synced {
+                    Some(lane.log_qso_for_sync(rec.clone()))
+                } else {
+                    lane.log_qso(rec.clone());
+                    None
+                };
+                let refused_here = lane.stored_log().len() == held;
+                // 1.13's guard, and 1.13's append.
+                let duplicate = scan_for_duplicate(&old, &rec);
                 assert_eq!(
-                    refused_here,
-                    old.stored_log().len() == held_b,
-                    "{at}: refused by both, or logged by both"
+                    refused_here, duplicate,
+                    "{at}: refused as 1.13 refused it, or logged as it logged it"
                 );
-                match (oa, ob) {
-                    (Some(LogWriteOutcome::Duplicate), Some(LogWriteOutcome::Duplicate)) => {}
-                    (
-                        Some(LogWriteOutcome::PendingSync(ra)),
-                        Some(LogWriteOutcome::PendingSync(rb)),
-                    ) => {
-                        assert_eq!((ra.len(), rb.len()), (1, 1), "{at}: one receipt each");
-                        for r in ra.into_iter().chain(rb) {
+                if !duplicate {
+                    old.add(rec.clone());
+                    let row = old.records().last().cloned().expect("added");
+                    if synced {
+                        Logbook::append_for_sync(&b.log(), &row)
+                            .and_then(|r| r.sync())
+                            .unwrap_or_else(|e| panic!("{at}: 1.13's append: {e}"));
+                    } else {
+                        Logbook::append(&b.log(), &row)
+                            .unwrap_or_else(|e| panic!("{at}: 1.13's append: {e}"));
+                    }
+                }
+                match outcome {
+                    Some(LogWriteOutcome::Duplicate) => assert!(duplicate, "{at}: refused alike"),
+                    Some(LogWriteOutcome::PendingSync(receipts)) => {
+                        assert!(!duplicate, "{at}: logged alike");
+                        assert_eq!(receipts.len(), 1, "{at}: one receipt");
+                        for r in receipts {
                             r.sync().unwrap_or_else(|e| panic!("{at}: redeemed: {e}"));
                         }
                         // Redeemed: the contact is in log.adi, before any flush.
-                        for (d, what) in [(&a, "the 1.13 path"), (&b, "1.13")] {
-                            let last = Logbook::load(&d.log()).records().last().cloned();
-                            assert_eq!(
-                                last.map(|r| (r.call.clone(), r.when_unix)),
-                                Some((rec.call.clone(), rec.when_unix)),
-                                "{at}: {what}: the redeemed contact is in log.adi"
-                            );
-                        }
+                        let last = Logbook::load(&a.log()).records().last().cloned();
+                        assert_eq!(
+                            last.map(|r| (r.call.clone(), r.when_unix)),
+                            Some((rec.call.clone(), rec.when_unix)),
+                            "{at}: the redeemed contact is in log.adi"
+                        );
                     }
-                    (None, None) => {}
-                    (oa, ob) => panic!(
-                        "{at}: the caller heard different answers: {:?} / {:?}",
-                        oa.map(|o| matches!(o, LogWriteOutcome::Duplicate)),
-                        ob.map(|o| matches!(o, LogWriteOutcome::Duplicate))
-                    ),
+                    Some(LogWriteOutcome::Unconfirmed) => {
+                        panic!("{at}: neither refused nor logged with a receipt")
+                    }
+                    None => {}
                 }
                 if refused_here {
                     refused += 1;
@@ -6332,7 +6391,7 @@ pub(crate) mod tests {
                 }
                 logged += 1;
                 let held = lane.stored_log();
-                same_log_across(&held, &old.stored_log(), &at);
+                same_log_across(&held, old.records(), &at);
                 let row = held.last().cloned().expect("logged");
                 let mut expected = rec;
                 expected.id = row.id;
@@ -6454,8 +6513,12 @@ pub(crate) mod tests {
         )
         .expect("the store opens");
         assert!(
-            opened.hot.is_some(),
-            "the store built the index as it opened"
+            opened
+                .hot
+                .entity
+                .as_ref()
+                .is_some_and(|keyed| Arc::ptr_eq(keyed, &resolver)),
+            "the store built the index as it opened, keyed by the station's resolver"
         );
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_dxcc_resolver_shared(Arc::clone(&resolver));
@@ -6491,9 +6554,71 @@ pub(crate) mod tests {
         assert!(e.station().hot().worked_call("W9NEW"));
     }
 
+    /// ★ THE LAUNCH'S MINTER STEERS CLEAR OF EVERY ID THE LOG HOLDS (SPEC-2 v3 C19, the attach from
+    /// one picture of the store). A log many sessions logged into carries ids minted under many
+    /// nonces. The index the launch installs is read in the same pass as the rest of the open's
+    /// picture and names every id the store holds — the ids the station's minter is drawn clear
+    /// of (`Minter::clear_of`) — and the contact logged next carries an id no row of the log
+    /// carries. On the database and on the 1.13 path.
+    #[test]
+    fn the_launchs_minter_steers_clear_of_every_id_the_log_holds() {
+        use std::collections::HashSet;
+        // 60 contacts, each logged in a session of its own: 60 nonces.
+        let mut text = adif_header();
+        for i in 0..60u64 {
+            let mut r = qso(&format!("K{}AB", i % 10), 1_788_000_000 + i * 60);
+            r.id = Some(RecordId::Minted {
+                posid: 0,
+                nonce: 1_000 + i,
+                seq: 1,
+            });
+            text.push_str(&adif_record_own_log(&r));
+        }
+        for on_file in [false, true] {
+            let how = home(on_file);
+            let d = Dir::new(&format!("minter-{on_file}"));
+            std::fs::write(d.log(), &text).unwrap();
+            let mut e = if on_file {
+                let mut e = Engine::new("K2DEF", "FN31", 0);
+                e.set_log_path(d.log());
+                e
+            } else {
+                engine_on_store(&d)
+            };
+            flush(&e);
+            let held: Vec<RecordId> = e.stored_log().iter().filter_map(|r| r.id).collect();
+            let nonces: HashSet<u64> = held
+                .iter()
+                .filter_map(|id| match id {
+                    RecordId::Minted { nonce, .. } => Some(*nonce),
+                    RecordId::Provisional { .. } => None,
+                })
+                .collect();
+            assert_eq!(
+                nonces.len(),
+                60,
+                "{how}: premise: every row keeps its own id"
+            );
+            let indexed = e.station().hot().ids();
+            assert_eq!(indexed.len(), held.len(), "{how}: one id for each row");
+            assert_eq!(
+                indexed.into_iter().collect::<HashSet<_>>(),
+                held.iter().copied().collect::<HashSet<_>>(),
+                "{how}: the index the launch installed names every id the store holds"
+            );
+            e.log_qso(qso("W9NEW", 1_788_100_000));
+            let logged = e.stored_log().last().and_then(|r| r.id).expect("minted");
+            assert!(!held.contains(&logged), "{how}: an id no row carries");
+            assert!(
+                matches!(logged, RecordId::Minted { nonce, .. } if !nonces.contains(&nonce)),
+                "{how}: under a nonce no row carries: {logged:?}"
+            );
+        }
+    }
+
     /// The CONTROL: an index the store keyed by any other resolver — even the same function in
     /// another `Arc`, since two closures cannot be compared — is not installed. The attach builds
-    /// the station's own from the rows the open loaded, and the answers are the same.
+    /// the station's own again, from the store, and the answers are the same.
     #[test]
     #[cfg(debug_assertions)] // reads the debug build's rebuild counter
     fn an_index_keyed_by_another_resolver_is_built_again_not_installed() {
@@ -6517,7 +6642,7 @@ pub(crate) mod tests {
         assert_eq!(
             HOT_REBUILDS.with(|c| c.get()),
             1,
-            "built from the rows it loaded, as they are handed on"
+            "built again, from the store"
         );
         let keys = crate::station::StationKeys(Some(&*resolver));
         assert!(e

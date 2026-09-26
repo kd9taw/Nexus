@@ -145,13 +145,7 @@ mod tests {
             // The oracle: the store's rows as a connection of its own loads them — a read apart
             // from the one under test, once the writer has taken the contact (the read above
             // waited for it).
-            let path = e
-                .station()
-                .store
-                .as_ref()
-                .expect("a store")
-                .db_path()
-                .to_path_buf();
+            let path = e.station().store.db_path().to_path_buf();
             let held: Vec<Arc<QsoRecord>> = tempo_core::logbook::sqlite::LogDb::open_reader(&path)
                 .expect("the store opens")
                 .load_all()

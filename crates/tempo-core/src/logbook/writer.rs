@@ -511,8 +511,8 @@ pub enum WaitError {
         /// What the writer was doing when it gave up.
         status: Status,
     },
-    /// The write failed and will not be retried. The log in memory is still correct; the
-    /// store is not.
+    /// The write failed and will not be retried. The station made the change; the store does
+    /// not hold it.
     Failed(String),
 }
 

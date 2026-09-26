@@ -7,8 +7,8 @@
 //!
 //! # Four properties, and each one is load-bearing
 //!
-//! **Write-only.** The mirror is never read back. `recover_external_appends` and the union
-//! merge exist because two instances could both write `log.adi`; once the database is the
+//! **Write-only.** The mirror is never read back. The 1.13 path's take-in of `log.adi` and the
+//! union merge exist because two instances could both write `log.adi`; once the database is the
 //! truth there is nothing to recover FROM, and reading the mirror back would be a second
 //! source of record.
 //!

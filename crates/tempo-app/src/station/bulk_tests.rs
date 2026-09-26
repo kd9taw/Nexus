@@ -233,17 +233,20 @@ impl Op {
     }
 }
 
-/// A plan over the 1.13 path's log in memory, `rows`, with nothing on its way.
-fn memory_plan(rows: &[Arc<QsoRecord>]) -> LogPlan {
-    LogPlan {
-        rows: crate::logstore::LogRows::Memory(rows.to_vec()),
-        pending: crate::logstore::Pending::default(),
-        rev: 0,
-        foreign: None,
-    }
+/// A station whose log is `rows`, every one written, in a store in this process's memory as the
+/// 1.13 path's is (SPEC-2 v3 C19, D1-A) — and its plan, with nothing on its way. The plan reads
+/// the station's store, so the station comes with it.
+fn memory_plan(rows: &[Arc<QsoRecord>]) -> (StationCore, LogPlan) {
+    let mut sc = StationCore::new();
+    let _ = sc.append(rows.iter().map(|r| QsoRecord::clone(r)).collect(), false);
+    sc.store
+        .flush(std::time::Duration::from_secs(60))
+        .expect("written");
+    let plan = sc.log_view();
+    (sc, plan)
 }
 
-/// ★ ON THE LOG IN MEMORY: every bulk change planned on the candidate sub-log answers and changes
+/// ★ ON A STORE IN MEMORY: every bulk change planned on the candidate sub-log answers and changes
 /// exactly what it does over the whole log — 64 seeds of each, each change taking effect (a row
 /// upgraded or appended) in most of them.
 #[test]
@@ -253,9 +256,11 @@ fn every_bulk_change_plans_on_its_candidates_as_on_the_whole_log() {
         for (k, op) in Op::ALL.iter().enumerate() {
             let mut g = Rng(seed * 31 + k as u64);
             let n = 10 + g.below(40);
-            let rows = log_of(&mut g, n);
+            let (sc, plan) = memory_plan(&log_of(&mut g, n));
+            // The rows as the store holds them, which the whole-log run is asked of.
+            let rows = crate::test_util::StoredLog::stored_log(&sc);
             let text = report_of(&mut g, &rows, op.news());
-            let (planned, whole) = op.both(&memory_plan(&rows), &rows, &text);
+            let (planned, whole) = op.both(&plan, &rows, &text);
             assert_eq!(
                 planned,
                 whole,
@@ -360,7 +365,8 @@ fn a_sub_log_short_of_one_matching_row_plans_differently() {
         .iter()
         .map(|r| tempo_core::logbook::sqlite::call_norm_of(&r.call))
         .collect();
-    assert!(memory_plan(&rows)
+    let (_held, plan) = memory_plan(&rows);
+    assert!(plan
         .candidates(&calls)
         .expect("reads")
         .iter()

@@ -29,18 +29,11 @@
 //! needs to know where in the log its row sits, and a pair whose row changed nothing the index
 //! reads costs one comparison.
 //!
-//! Two other ways in, and neither is a change:
-//!
-//! - **A build** — a log loaded or attached, a resolver changed, another window's changes taken
-//!   in: a pass over the whole log — from the store ([`HotIndex::from_store`]) or from rows in
-//!   hand ([`HotIndex::from_rows`]) — counted, in debug builds, by [`HOT_REBUILDS`], so a test
-//!   can pin where it may and may not happen.
-//! - **A catch-up** ([`HotIndex::catch_up`]) — for a write that reached a [`Logbook`] without
-//!   being followed: a write no index reads moves the index on, appends are put in as a change's
-//!   are, and anything else is a build. The station never takes one (SPEC-2 v3 C19): its index
-//!   holds the log as it holds it, and a debug build names a write that went around it. Kept for
-//!   the model's own tests until the log in memory goes; debug builds count it
-//!   ([`HOT_CATCH_UPS`]).
+//! One other way in, and it is not a change: **a build** — a log loaded or attached, a resolver
+//! changed, another window's changes taken in — a pass over the whole log, from the store
+//! ([`HotIndex::from_store`]) or from rows in hand ([`HotIndex::from_rows`]), counted in debug
+//! builds by [`HOT_REBUILDS`] so a test can pin where it may and may not happen. There is no
+//! catch-up from a log (SPEC-2 v3 C19): an index is followed, or built whole.
 //!
 //! # Order
 //!
@@ -87,13 +80,9 @@ use std::sync::Arc;
 // over the whole log; the tests that pin "a contact, a stamp or an edit costs none", and "the
 // attach installs the index the open built instead of building one", read this.
 //
-// `HOT_CATCH_UPS`: writes the index had to find out about from the log instead of being told —
-// see `HotIndex::catch_up`. The tests that pin "every write the station makes is followed" read
-// this.
 #[cfg(debug_assertions)]
 thread_local! {
     pub static HOT_REBUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    pub static HOT_CATCH_UPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Up to this many rows, a debug build checks the whole index after every change it applies:
@@ -382,11 +371,11 @@ pub struct HotIndex {
 }
 
 impl HotIndex {
-    /// An index of `log`, built in one pass — the launch's build, and the tests' reference.
+    /// An index of `log` — a [`Logbook`] model's rows, built in one pass, and holding it: the
+    /// tests' reference, and the model's own.
     pub fn build(log: &Logbook, keys: &dyn HotKeys) -> Self {
-        let mut index = Self::default();
-        index.rebuild(log, keys);
-        index
+        super::note_log_sweep();
+        Self::from_rows(log.records().iter().map(|r| &**r), keys).holding(log.revision())
     }
 
     /// Forget the log: the index is built again whole — for the station, from the store, by
@@ -519,7 +508,7 @@ impl HotIndex {
     /// Whether `other` gives every answer this index gives: the same rows under each station, in
     /// the same order, and the same keys counted the same number of times — whatever order keys
     /// and name numbers each happened to hand out. What shows an index built one way is the one
-    /// built another (SPEC-2 v3 C19: from the store, and from the log in memory).
+    /// built another (SPEC-2 v3 C19: from the store, and from rows handed to it).
     pub fn answers_as(&self, other: &HotIndex) -> bool {
         type Station<'a> = Vec<(
             Option<RecordId>,
@@ -631,63 +620,10 @@ impl HotIndex {
         true
     }
 
-    /// Bring the index up to `log` as it stands, after a write that reached the log without being
-    /// followed — see the module header. A write no index reads moves the index on; appends are
-    /// put in as a change's are; anything else is a rebuild, as is a log swapped for an older
-    /// copy of itself. SPEC-2 v3 C19: this goes with the in-memory log.
-    ///
-    /// ⚠️ A write that changes only ids moves no index watermark ([`super::OpClass::IdOnly`]), so
-    /// it is moved past here as a stamp is, though the index finds rows by id: an id change must
-    /// be followed.
-    pub fn catch_up(&mut self, log: &Logbook, keys: &dyn HotKeys) {
-        let rev = log.revision();
-        if self.at == Some(rev) {
-            return;
-        }
-        #[cfg(debug_assertions)]
-        HOT_CATCH_UPS.with(|c| c.set(c.get() + 1));
-        let Some(at) = self.at else {
-            return self.rebuild(log, keys);
-        };
-        let rows = log.records();
-        // A log only moves forward: a revision below the index's is a different log (an
-        // older copy swapped in), and nothing the index holds can be trusted against it.
-        let forward = at <= rev;
-        if forward && log.index_rev() <= at && rows.len() == self.rows {
-            // Only writes no index reads since — stamps, QSL-sent marks.
-            self.at = Some(rev);
-        } else if forward && log.appended_only_since(at) && self.rows <= rows.len() {
-            for r in &rows[self.rows..] {
-                self.apply(None, Some(r), keys);
-            }
-            self.at = Some(rev);
-        } else {
-            return self.rebuild(log, keys);
-        }
-        #[cfg(debug_assertions)]
-        if rows.len() <= VERIFY_ROWS {
-            self.verify(log, keys);
-        }
-    }
-
     fn next_key(&mut self) -> u64 {
         let k = self.next_order;
         self.next_order += 1;
         k
-    }
-
-    /// Every row, from scratch, each keyed by its place in the log.
-    fn rebuild(&mut self, log: &Logbook, keys: &dyn HotKeys) {
-        super::note_log_sweep();
-        #[cfg(debug_assertions)]
-        HOT_REBUILDS.with(|c| c.set(c.get() + 1));
-        let session = self.session.take().map(|s| Session::new(s.cutoff, s.rule));
-        *self = Self {
-            session,
-            ..Self::default()
-        };
-        self.put_all(log.records().iter().map(|r| &**r), keys);
-        self.at = Some(log.revision());
     }
 
     /// Put in `rows`, in log order, each keyed past every key so far.
@@ -934,9 +870,10 @@ impl HotIndex {
 
     /// The contest session's sweep of `log` — [`Logbook::worked_keys_since`]'s answer. Built
     /// from `log` once, when a session opens or its start or rule changes, and followed row by
-    /// row from then on. `log` must be the log the index holds (a caller catches up first).
-    /// SPEC-2 v3 C19: the station asks [`Self::session`], which sweeps nothing; this goes with
-    /// the log in memory.
+    /// row from then on. `log` must be the log the index holds. The station opens its session
+    /// from the store's rows instead ([`Self::install_session`]) and asks [`Self::session`],
+    /// which sweeps nothing (SPEC-2 v3 C19); this sweep of a whole log is what the index's own
+    /// tests hold that one to.
     pub fn worked_since(&mut self, log: &Logbook, cutoff: u64, rule: &DupeRule) -> WorkedSince {
         debug_assert_eq!(
             self.at,
@@ -1533,12 +1470,11 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
 
-        /// ★ THE PARITY PROPERTY. Two indexes follow a random sequence of every kind of change:
-        /// one handed each change as the rows it took out and put in — its pairs, found by id,
-        /// the ONLY way it hears of a change (SPEC-2 v3 C19) — and one handed nothing, so it
-        /// catches up only through the paths that need no pairs and rebuilds otherwise. After
-        /// every change, every answer each gives is its oracle's — the scans the code asked
-        /// before C13 — and the first never let go of the log, so it never had to be rebuilt.
+        /// ★ THE PARITY PROPERTY. An index follows a random sequence of every kind of change,
+        /// handed each as the rows it took out and put in — its pairs, found by id, the ONLY way
+        /// it hears of a change (SPEC-2 v3 C19) — beside an index built afresh from the log after
+        /// each. After every change, every answer each gives is its oracle's — the scans the code
+        /// asked before C13 — and the one that followed never let go of the log.
         #[test]
         fn every_answer_is_the_old_scans_after_every_kind_of_change(
             steps in prop::collection::vec(arb_step(), 1..40),
@@ -1549,7 +1485,6 @@ mod tests {
             let rule = if party { QSO_PARTY } else { FD };
             let mut log = Logbook::new();
             let mut followed = HotIndex::build(&log, &Keys);
-            let mut caught_up = HotIndex::build(&log, &Keys);
             for step in steps {
                 let before = (log.revision(), log.records().to_vec());
                 run(&mut log, step);
@@ -1560,11 +1495,11 @@ mod tests {
                     Some(log.revision()),
                     "the index handed each change's pairs followed it, and never let go"
                 );
-                caught_up.catch_up(&log, &Keys);
+                let mut built = HotIndex::build(&log, &Keys);
                 assert_parity(&mut followed, &log, &probes, (cutoff, &rule))?;
-                assert_parity(&mut caught_up, &log, &probes, (cutoff, &rule))?;
+                assert_parity(&mut built, &log, &probes, (cutoff, &rule))?;
                 followed.verify(&log, &Keys);
-                caught_up.verify(&log, &Keys);
+                built.verify(&log, &Keys);
             }
         }
     }
@@ -1774,69 +1709,10 @@ mod tests {
         assert_eq!(index.newest_grid("W1AW"), None, "no W1AW rows left");
     }
 
-    /// Which way each kind of change reaches the index: a stamp nobody followed costs nothing, an
-    /// append nobody followed adds its rows, a change handed its pairs is followed, and one
-    /// without them rebuilds — as does a log swapped for an older copy of itself, which no pairs
-    /// describe.
-    #[test]
-    fn each_kind_of_change_takes_its_own_catch_up() {
-        let mut log = Logbook::new();
-        log.add(row("W1AW", "20m", Some("FN31"), 0));
-        let mut index = HotIndex::build(&log, &Keys);
-        HOT_REBUILDS.with(|c| c.set(0));
-        crate::logbook::LOG_SWEEPS.with(|c| c.set(0));
-
-        // A stamp: nothing an index reads.
-        let id = log.records()[0].id.expect("id");
-        log.apply(LogOp::Stamp {
-            id,
-            service: UploadService::Eqsl,
-            status: crate::logbook::UploadStatus {
-                outcome: crate::logbook::UploadOutcome::Accepted,
-                when_unix: 1,
-                detail: None,
-            },
-        });
-        index.catch_up(&log, &Keys);
-        assert_eq!(index.at, Some(log.revision()));
-        // An append, after the stamp: the new row alone.
-        log.add(row("K1ABC", "40m", Some("EM12"), 60));
-        index.catch_up(&log, &Keys);
-        assert!(index.worked_call("K1ABC"));
-        // An edit, handed its pairs: followed.
-        let before = (log.revision(), log.records().to_vec());
-        log.update_record(0, row("AA9A", "20m", Some("FN31"), 0));
-        let pairs = pairs_between(&before.1, log.records());
-        assert_eq!(pairs.len(), 1, "one row changed, one pair");
-        index.follow(&pairs, before.0, log.revision(), &Keys);
-        assert!(index.worked_call("AA9A") && !index.worked_call("W1AW"));
-        assert_eq!(
-            (
-                HOT_REBUILDS.with(|c| c.get()),
-                crate::logbook::LOG_SWEEPS.with(|c| c.get())
-            ),
-            (0, 0),
-            "a stamp, an append and an edit handed its pairs: no pass over the log"
-        );
-
-        // An edit WITHOUT its pairs: rebuilt, and right.
-        let older = log.clone();
-        log.update_record(1, row("N0OLD", "20m", None, 0));
-        index.catch_up(&log, &Keys);
-        assert_eq!(HOT_REBUILDS.with(|c| c.get()), 1, "no pairs: rebuilt");
-        assert!(index.worked_call("N0OLD") && !index.worked_call("K1ABC"));
-        // A log swapped for an older copy of itself: its revision is behind the index's, so
-        // nothing the index holds is trusted.
-        log = older;
-        index.catch_up(&log, &Keys);
-        assert_eq!(HOT_REBUILDS.with(|c| c.get()), 2, "an older log: rebuilt");
-        assert!(index.worked_call("K1ABC") && !index.worked_call("N0OLD"));
-    }
-
     /// A change's pairs are applied only to the log they describe. Handed pairs from a state it
-    /// does not hold — a change it never heard of came first — the index lets go of the log and
-    /// is rebuilt at its next catch-up, rather than apply pairs that do not fit what it holds;
-    /// and an index a catch-up already brought past a change does not count its pairs again.
+    /// does not hold — a change it never heard of came first — the index lets go of the log,
+    /// rather than apply pairs that do not fit what it holds, and a build is the index of the log
+    /// again; and an index already past a change does not count its pairs again.
     #[test]
     fn a_change_is_followed_only_from_the_log_it_describes() {
         let mut log = Logbook::new();
@@ -1854,21 +1730,15 @@ mod tests {
             index.at, None,
             "pairs from a log it does not hold: let go, not applied"
         );
-        HOT_REBUILDS.with(|c| c.set(0));
-        index.catch_up(&log, &Keys);
-        assert_eq!(
-            HOT_REBUILDS.with(|c| c.get()),
-            1,
-            "rebuilt at the next catch-up"
-        );
+        let mut index = HotIndex::build(&log, &Keys);
         assert!(index.worked_call("AA9A") && index.worked_call("N0OLD"));
         assert!(!index.worked_call("W1AW") && !index.worked_call("K1ABC"));
 
-        // A change a catch-up already took in: its pairs change nothing.
+        // A change the index is already past: its pairs change nothing.
         let before = (log.revision(), log.records().to_vec());
         log.add(row("W1AW", "40m", None, 120));
-        index.catch_up(&log, &Keys);
         let pairs = pairs_between(&before.1, log.records());
+        index.follow(&pairs, before.0, log.revision(), &Keys);
         index.follow(&pairs, before.0, log.revision(), &Keys);
         index.verify(&log, &Keys);
     }
@@ -1925,8 +1795,10 @@ mod tests {
             "built once"
         );
 
+        let before = (log.revision(), log.records().to_vec());
         log.add(row("K1ABC", "40m", None, 60));
-        index.catch_up(&log, &Keys);
+        let pairs = pairs_between(&before.1, log.records());
+        index.follow(&pairs, before.0, log.revision(), &Keys);
         let w = index.worked_since(&log, T0 - 1_000, &FD);
         assert!(w.worked_this_session.contains("K1ABC"));
         assert_eq!(w, log.worked_keys_since(T0 - 1_000, &FD));

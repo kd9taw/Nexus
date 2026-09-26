@@ -486,10 +486,7 @@ fn import(
         engine,
         "import_adif",
         |plan| station::plan_import(plan, text),
-        |e, counts| {
-            e.station_mut().backfill_after_bulk();
-            counts
-        },
+        |_, counts| counts,
     )
 }
 
@@ -575,7 +572,6 @@ pub fn merge_qrz_report(
         |plan| station::plan_download(plan, text),
         |e, (added, summary)| {
             e.station_mut().last_qrz_reconcile = Some(summary.clone());
-            e.station_mut().backfill_after_bulk();
             (added, summary)
         },
     )
