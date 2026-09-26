@@ -191,3 +191,59 @@ fn the_snapshot_carries_the_location_warning_and_only_when_it_applies() {
         .expect("a section is warned");
     assert_eq!((w.typed.as_str(), w.hints), ("EMA", vec!["MA".to_string()]));
 }
+
+/// ⭐ **The state a station SENT wins over the one its call suggests, all the way to the
+/// World Radio League body.** The merge fills a contact's state from the callsign resolver
+/// (the FCC licensee's mailing address, or the province a call area names) only where the
+/// contact carries none. The QTH in the exchange is where the station says it is operating,
+/// so the merge writes it first.
+///
+/// The record checked is the one the upload queue holds, put through the same DTO round
+/// trip the upload worker makes before the WRL leg builds its body.
+#[test]
+fn a_merged_contact_keeps_the_state_it_sent_over_the_resolvers_guess() {
+    let mut e = cqww_rtty_engine();
+    // The resolver answers NY for every US call: a mailing address, not a location.
+    e.set_state_resolver(|call, _grid| call.starts_with('W').then(|| "NY".to_string()));
+    e.set_frequency(14.0842, "20m", "USB");
+    let ma = fields(&[("RST", "579"), ("ZN", "5"), ("QTH", "MA")]);
+    assert!(e
+        .contest_log_manual("W1ABC", &ma, "DIG", Some("RTTY"))
+        .unwrap());
+    // POSITIVE CONTROL: a US station logged without its QTH. The resolver's answer fills it,
+    // so the resolver does run on merged rows and the MA above had to beat it.
+    let no_qth = fields(&[("RST", "599"), ("ZN", "5")]);
+    assert!(e
+        .contest_log_manual("W2DEF", &no_qth, "DIG", Some("RTTY"))
+        .unwrap());
+    e.fd_set_upload(true, vec!["wrl".into()]).unwrap();
+    e.fd_merge_to_general().expect("in the contest");
+
+    let queued = e.take_pending_uploads();
+    let rec = |call: &str| {
+        queued
+            .iter()
+            .find(|p| p.rec.call == call)
+            .map(|p| p.rec.clone())
+            .unwrap_or_else(|| panic!("{call} was queued for WRL"))
+    };
+    assert_eq!(
+        rec("W1ABC").state.as_deref(),
+        Some("MA"),
+        "the exchange wins"
+    );
+    assert_eq!(
+        rec("W2DEF").state.as_deref(),
+        Some("NY"),
+        "the resolver fills a gap"
+    );
+
+    // The body the WRL leg sends, built from the record as the upload worker hands it over.
+    let pushed: tempo_core::logbook::QsoRecord =
+        tempo_app::dto::LoggedQso::from(rec("W1ABC")).into();
+    let body = tempo_core::wrl::build_contact_json(&pushed, "W9XYZ", None);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["state"], "MA", "{body}");
+    assert_eq!(v["rstSent"], "599", "{body}");
+    assert_eq!(v["rstRcvd"], "579", "{body}");
+}

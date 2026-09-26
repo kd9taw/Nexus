@@ -14,10 +14,12 @@
 //! resolver lives in a crate that depends on this one. src-tauri pins the real entity
 //! spellings. Every callsign is an example call.
 use tempo_core::contest::{
-    install_call_resolver, CabrilloEntrant, CallLocation, ContestSession, StationData,
+    install_call_resolver, merge_into_general, CabrilloEntrant, CallLocation, ContestSession,
+    StationData,
 };
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
-use tempo_core::fieldday::FieldDayLog;
+use tempo_core::fieldday::{FdEvent, FieldDayLog};
+use tempo_core::logbook::{adif_record, Logbook, QsoRecord};
 
 /// The stub country file: prefix → (entity, continent), longest prefix wins. Entity
 /// spellings are cty.dat's own; Sicily is a WAE entity (`*IT9`) and a country of its own.
@@ -700,5 +702,177 @@ fn the_dial_survives_the_journal() {
     assert_eq!(
         qso_lines(&cab),
         vec!["QSO: 14083 RY 2026-09-26 0001 W9XYZ 599 04 IL VE3XYZ 599 04 ON 0"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The general-log merge: what the upload services are handed
+// ---------------------------------------------------------------------------
+
+/// The rows one merge writes into a fresh general log, in log order.
+fn merged(log: &FieldDayLog) -> Vec<QsoRecord> {
+    let mut lb = Logbook::new();
+    let report = merge_into_general(log, "a1b2c3d4", &mut lb);
+    assert_eq!(report.refused, 0, "every row carries a sequence");
+    report.written
+}
+
+/// ⭐ **A W station's QTH is the merged contact's `STATE`, and each side's report is its
+/// RST** — the fields an upload service reads. World Radio League's contest log reads
+/// `state`, and the report of 2026-09-26 was exactly this: the contacts arrived "but it did
+/// not populate the Zone or State fields as required by the contest". The merge wrote
+/// `state: None` and no report, so the QTH lived only in `SRX_STRING` and the private
+/// carrier, which no service reads.
+///
+/// The received report differs from the sent one on purpose, so a swap cannot pass.
+#[test]
+fn a_merged_w_contact_carries_the_state_it_sent_and_both_reports() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    assert!(work(
+        &mut log,
+        "20m",
+        "W1ABC",
+        &[("RST", "579"), ("ZN", "5"), ("QTH", "MA")],
+        1
+    ));
+    // IV.C.3 "The District of Columbia = DC", which ADIF also lists as a STATE of 291.
+    assert!(work(
+        &mut log,
+        "20m",
+        "W3ABC",
+        &[("RST", "599"), ("ZN", "5"), ("QTH", "DC")],
+        2
+    ));
+    let rows = merged(&log);
+    assert_eq!(rows[0].state.as_deref(), Some("MA"));
+    assert_eq!(rows[0].rst_sent.as_deref(), Some("599"), "what I sent");
+    assert_eq!(rows[0].rst_rcvd.as_deref(), Some("579"), "what they sent");
+    assert_eq!(rows[1].state.as_deref(), Some("DC"));
+
+    // Each tag once. A report kept in the contest block as well as on the record would
+    // write `RST_SENT` twice, a duplicate importers reject.
+    let adi = adif_record(&rows[0]);
+    for (tag, field) in [
+        ("<STATE:", "<STATE:2>MA"),
+        ("<RST_SENT:", "<RST_SENT:3>599"),
+        ("<RST_RCVD:", "<RST_RCVD:3>579"),
+    ] {
+        assert_eq!(adi.matches(tag).count(), 1, "{tag} {adi}");
+        assert!(adi.contains(field), "{field} {adi}");
+    }
+    // The zone stays in the local log, and what was said on the air is still there.
+    assert!(adi.contains("<CQZ:1>5"), "{adi}");
+    assert!(adi.contains("<SRX_STRING:8>579 5 MA"), "{adi}");
+}
+
+/// ⭐ **A Canadian call area merges as ADIF's province.** IV.C.3 spells four of the fourteen
+/// its own way — "NWT (VE8), NF (VO1), LB (VO2) … PEI (VY2)" — and ADIF 3.1.7's `STATE`
+/// for Canada (entity 1) has NT, NL and PE, with one NL for both of Newfoundland's call
+/// areas. The sponsor's code stays in `SRX_STRING`, where the log checker reads it.
+#[test]
+fn a_canadian_call_area_merges_as_the_adif_province() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    let areas = [
+        ("VO1ABC", "NF"),
+        ("VO2ABC", "LB"),
+        ("VE8ABC", "NWT"),
+        ("VY2ABC", "PEI"),
+        ("VE3ABC", "ON"),
+    ];
+    for (i, (call, qth)) in areas.iter().enumerate() {
+        let ex = [("RST", "599"), ("ZN", "5"), ("QTH", *qth)];
+        assert!(work(&mut log, "20m", call, &ex, i as u64 + 1), "{call}");
+    }
+    let rows = merged(&log);
+    let states: Vec<Option<&str>> = rows.iter().map(|r| r.state.as_deref()).collect();
+    assert_eq!(
+        states,
+        vec![Some("NL"), Some("NL"), Some("NT"), Some("PE"), Some("ON")]
+    );
+    assert_eq!(
+        rows[0]
+            .contest
+            .as_deref()
+            .and_then(|c| c.srx_string.as_deref()),
+        Some("599 5 NF")
+    );
+}
+
+/// A DX station sends no QTH (III), so its merged contact claims no state. Its report is
+/// still copied: the exchange declares one.
+#[test]
+fn a_merged_dx_contact_claims_no_state() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    assert!(work(
+        &mut log,
+        "20m",
+        "DL1ABC",
+        &[("RST", "599"), ("ZN", "14")],
+        1
+    ));
+    let rows = merged(&log);
+    assert_eq!(rows[0].state, None);
+    assert_eq!(rows[0].rst_rcvd.as_deref(), Some("599"));
+    assert!(!adif_record(&rows[0]).contains("<STATE:"));
+}
+
+/// Only a `STATE` of the worked station's own entity is claimed. A Canadian call that sent a
+/// US state, or a US call that sent a province, is a typo or a station signing the wrong
+/// call; what it sent stays in `SRX_STRING` and the merge claims nothing.
+#[test]
+fn a_qth_that_is_not_a_state_of_the_stations_entity_is_not_claimed() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    assert!(work(
+        &mut log,
+        "20m",
+        "VE3ABC",
+        &[("RST", "599"), ("ZN", "4"), ("QTH", "MA")],
+        1
+    ));
+    assert!(work(
+        &mut log,
+        "20m",
+        "W1ABC",
+        &[("RST", "599"), ("ZN", "5"), ("QTH", "ON")],
+        2
+    ));
+    let rows = merged(&log);
+    assert_eq!(
+        (rows[0].state.as_deref(), rows[1].state.as_deref()),
+        (None, None)
+    );
+    assert_eq!(
+        rows[0]
+            .contest
+            .as_deref()
+            .and_then(|c| c.srx_string.as_deref()),
+        Some("599 4 MA")
+    );
+}
+
+/// ⭐ **A section is not a state, even where the codes agree, and Field Day invents no
+/// report.** Field Day's `CT` is the Connecticut ARRL section, exported as `ARRL_SECT`. The
+/// merge claims a state only from a domain that is a list of states and provinces, and its
+/// exchange has no RST slot, so neither field is filled.
+///
+/// The country file here places W1AW in the United States, so the entity check passes and
+/// it is the domain check that refuses. Without a resolver this test would pass for the
+/// wrong reason.
+#[test]
+fn a_field_day_merge_claims_no_state_and_invents_no_report() {
+    resolver();
+    let mut log = FieldDayLog::new(
+        "W9XYZ",
+        ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+        "20m",
+    );
+    assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, START));
+    let rows = merged(&log);
+    assert_eq!(rows[0].country.as_deref(), Some("United States"));
+    assert_eq!(rows[0].state, None, "a section is not a state");
+    assert_eq!(
+        (rows[0].rst_sent.as_deref(), rows[0].rst_rcvd.as_deref()),
+        (None, None),
+        "Field Day's exchange has no report to copy"
     );
 }

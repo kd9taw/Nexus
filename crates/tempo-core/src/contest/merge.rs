@@ -159,6 +159,11 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
     // The SENT side comes from the one renderer, which takes a ROW — never from the
     // session, which holds only what is being sent right now.
     let sent = sent_exchange(q, spec);
+    // The report each way, when the exchange declares one: CQ WW, CQ WPX and the state
+    // QSO parties do. Neither Field Day event does, and those stay `None`. Inventing 599
+    // would be a claim about the air that nobody made.
+    let (rst_sent, rst_rcvd) = (rst_of(&sent, spec), rst_of(&q.rx, spec));
+    let (stx, srx) = (serial_of(&sent, spec), serial_of(&q.rx, spec));
     let contest = ContestFields {
         session: log.session.id.clone(),
         // A mode-split contest has a distinct id per mode, and a general-log record
@@ -170,16 +175,29 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
             .session
             .contest_id_for(&[q.mode.as_str()])
             .unwrap_or_else(|_| log.session.contest_id.clone()),
-        stx: serial_of(&sent, spec),
+        stx,
         stx_string: joined(sent.iter().map(|v| v.raw.as_str())),
-        srx: serial_of(&q.rx, spec),
+        srx,
         srx_string: joined(q.rx.iter().map(|v| v.raw.as_str())),
         sent: pairs(&sent),
         rcvd: pairs(&q.rx),
         // ⭐ The DIRECTED standard columns, resolved here because this is the only
         // place the exchange spec is in hand (§2.1.1). Downstream sees `(tag, value)`
         // and never has to decide which way round a slot exports.
-        adif: super::adif::directed_columns(q, spec),
+        //
+        // Minus a column the record carries in a field of its own: the reports in
+        // `rst_sent`/`rst_rcvd` and the serials in `stx`/`srx`. Kept here as well, the
+        // file would write `RST_SENT` or `STX` twice.
+        adif: super::adif::directed_columns(q, spec)
+            .into_iter()
+            .filter(|(tag, _)| match tag.as_str() {
+                "RST_SENT" => rst_sent.is_none(),
+                "RST_RCVD" => rst_rcvd.is_none(),
+                "STX" => stx.is_none(),
+                "SRX" => srx.is_none(),
+                _ => true,
+            })
+            .collect(),
         qid,
     };
     QsoRecord {
@@ -187,7 +205,13 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         call: q.call.clone(),
         grid: None,
         country: q.entity.clone(),
-        state: None,
+        // ⭐ THE STATE THEY SENT, where the exchange carries one (see `received_state` for
+        // what counts). Written before the engine's merge-time fill, which resolves only
+        // an empty state, so the exchange wins over the callsign resolver: the FCC index
+        // answers with a licensee's mailing address, the exchange with where the station
+        // is. This is the field every upload service reads (World Radio League's contest
+        // log among them); `SRX_STRING` and the private carrier reach none of them.
+        state: super::adif::received_state(q, spec).map(str::to_string),
         band: q.band.clone(),
         // ⭐ **THE DIAL THE CONTACT WAS WORKED ON.** This was `0.0` under a comment saying
         // a contest row records the band — which is wrong about the artifact:
@@ -227,11 +251,8 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         },
         freq_rx_mhz: q.freq_rx_hz.filter(|hz| *hz > 0).map(|hz| hz as f64 / 1e6),
         mode: q.recorded_mode().to_string(),
-        // A contest exchange carries no signal report unless its own spec declares one,
-        // and neither Field Day event's does. Inventing 599 would be a claim about the
-        // air that nobody made.
-        rst_sent: None,
-        rst_rcvd: None,
+        rst_sent,
+        rst_rcvd,
         name: None,
         qth: None,
         comment: None,
@@ -290,6 +311,21 @@ fn serial_of(vals: &[super::spec::FieldValue], spec: &super::spec::ExchangeSpec)
             )
         })
         .and_then(|v| v.raw.trim().parse().ok())
+}
+
+/// The signal report in a field vector, when the exchange declares an RST slot — what
+/// ADIF's `RST_SENT`/`RST_RCVD` hold. `None` for an exchange with no report, and for an
+/// empty one.
+fn rst_of(vals: &[super::spec::FieldValue], spec: &super::spec::ExchangeSpec) -> Option<String> {
+    vals.iter()
+        .find(|v| {
+            matches!(
+                spec.field(v.key).map(|f| &f.kind),
+                Some(FieldKind::Rst { .. })
+            )
+        })
+        .map(|v| v.raw.trim().to_string())
+        .filter(|r| !r.is_empty())
 }
 
 /// An exchange as `STX_STRING`/`SRX_STRING`: the raw values, space separated, empties
