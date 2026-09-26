@@ -156,6 +156,12 @@ pub struct Change {
     /// [`Self::is_empty`]. ⚠️ A change sent again after the writer refused it carries its rows,
     /// never these: the job that set them runs again, and finds its rows already written.
     pub meta: Vec<(&'static str, i64)>,
+    /// The change is a stamp on held rows and nothing else ([`super::OpClass::Stamp`]): no field
+    /// a hot index reads changed. Every other change moves the store's shared `index_seq` with
+    /// its last chunk ([`super::sqlite::INDEX_SEQ`]), which is how another window sharing the
+    /// store tells a change it must build its hot index again for from one that costs it
+    /// nothing (SPEC-2 v3 C19, D4-A). `false` — the change moves it — unless the maker knows.
+    pub stamp_only: bool,
 }
 
 impl Change {
@@ -223,6 +229,7 @@ impl Change {
             upsert,
             marks: Watermarks::of(log),
             meta: Vec::new(),
+            stamp_only: false,
         }
     }
 
@@ -380,8 +387,8 @@ impl Change {
     }
 }
 
-/// Which rows a change submitted by THIS process touched — what a reload of the store must not
-/// lose while the change is still on its way to disk. See [`merge_reloaded`].
+/// Which rows a change submitted by THIS process touched — what a later change to the same rows
+/// takes over from it while it is still on its way to disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Touched {
     /// Every row (a purge).
@@ -400,125 +407,6 @@ impl Touched {
         ids.extend(change.upsert.iter().filter_map(|w| w.rec.id));
         Touched::Rows(ids)
     }
-}
-
-/// The log after ANOTHER process changed the store: `stored` — every row as the store holds it
-/// now, in its order — with this process's own changes that the store may not hold yet laid
-/// over it. `held` is this process's log as it stands (memory is written first, so it already
-/// has every one of its own changes), and `pending` names the rows those changes touched.
-///
-/// - A row this process has a change in flight for is taken from `held`, or left out if `held`
-///   no longer has it (a delete on its way to disk). The store's copy may predate the change.
-/// - A row this process added that the store does not hold yet is kept, after the stored rows.
-/// - Every other row is the store's: the other process's edits, stamps and deletes win, and
-///   its new contacts appear.
-///
-/// A pending purge keeps `held` whole: nothing the store holds survives it.
-///
-/// The window this leaves is the one every shared-file scheme has: another process changing a
-/// row in the moment between this process's own change to that row and its commit loses to
-/// this one. It does not lose a contact.
-pub fn merge_reloaded(
-    stored: Vec<QsoRecord>,
-    held: &[Arc<QsoRecord>],
-    pending: &[Touched],
-) -> Vec<Arc<QsoRecord>> {
-    if pending.contains(&Touched::All) {
-        return held.to_vec();
-    }
-    let ours: HashSet<RecordId> = pending
-        .iter()
-        .filter_map(|t| match t {
-            Touched::Rows(ids) => Some(ids),
-            Touched::All => None,
-        })
-        .flatten()
-        .copied()
-        .collect();
-    let mine: HashMap<RecordId, &Arc<QsoRecord>> = held
-        .iter()
-        .filter_map(|r| r.id.filter(|id| ours.contains(id)).map(|id| (id, r)))
-        .collect();
-    let mut out: Vec<Arc<QsoRecord>> = Vec::with_capacity(stored.len() + mine.len());
-    let mut placed: HashSet<RecordId> = HashSet::with_capacity(mine.len());
-    for r in stored {
-        match r.id {
-            Some(id) if ours.contains(&id) => {
-                if let Some(m) = mine.get(&id) {
-                    out.push(Arc::clone(m));
-                }
-                placed.insert(id);
-            }
-            _ => out.push(Arc::new(r)),
-        }
-    }
-    for r in held {
-        if let Some(id) = r.id {
-            if ours.contains(&id) && placed.insert(id) {
-                out.push(Arc::clone(r));
-            }
-        }
-    }
-    out
-}
-
-/// [`merge_reloaded`] WITHOUT MOVING A ROW — for the re-read a change makes just before it
-/// changes existing rows, when the caller is holding positions into the log.
-///
-/// Every row `held` has keeps its position: it takes the store's copy when the store has one
-/// and this process has no change of its own in flight for it, and stays as it is otherwise.
-/// The store's rows `held` lacks are appended, in the store's order. A row the store no longer
-/// holds and this process has nothing in flight for — another process deleted it — is KEPT,
-/// because removing it would shift the rows after it under the caller; the second value says
-/// so, and the caller finishes the job with a full [`merge_reloaded`] when positions are not
-/// being held (the freshness poll).
-pub fn merge_reloaded_in_place(
-    stored: Vec<QsoRecord>,
-    held: &[Arc<QsoRecord>],
-    pending: &[Touched],
-) -> (Vec<Arc<QsoRecord>>, bool) {
-    if pending.contains(&Touched::All) {
-        return (held.to_vec(), false);
-    }
-    let ours: HashSet<RecordId> = pending
-        .iter()
-        .filter_map(|t| match t {
-            Touched::Rows(ids) => Some(ids),
-            Touched::All => None,
-        })
-        .flatten()
-        .copied()
-        .collect();
-    let held_ids: HashSet<RecordId> = held.iter().filter_map(|r| r.id).collect();
-    let mut theirs: HashMap<RecordId, QsoRecord> = HashMap::with_capacity(stored.len());
-    let mut added: Vec<QsoRecord> = Vec::new();
-    for r in stored {
-        match r.id {
-            Some(id) if held_ids.contains(&id) => {
-                theirs.insert(id, r);
-            }
-            Some(id) if ours.contains(&id) => {} // our delete, on its way to disk
-            _ => added.push(r),
-        }
-    }
-    let mut lingering = false;
-    let mut out: Vec<Arc<QsoRecord>> = Vec::with_capacity(held.len() + added.len());
-    for h in held {
-        match h.id {
-            Some(id) if ours.contains(&id) => out.push(Arc::clone(h)),
-            Some(id) => match theirs.remove(&id) {
-                Some(r) if r == **h => out.push(Arc::clone(h)),
-                Some(r) => out.push(Arc::new(r)),
-                None => {
-                    lingering = true;
-                    out.push(Arc::clone(h));
-                }
-            },
-            None => out.push(Arc::clone(h)),
-        }
-    }
-    out.extend(added.into_iter().map(Arc::new));
-    (out, lingering)
 }
 
 /// A claim on one change's durability. Hold it, drop every lock, then
@@ -705,6 +593,9 @@ struct Shared {
     /// How many times the writer has seen ANOTHER connection commit — another Nexus process
     /// sharing this data folder. See [`LogWriter::foreign_commits`].
     foreign: std::sync::atomic::AtomicU64,
+    /// How many of those commits moved the store's `index_seq`. See
+    /// [`LogWriter::foreign_index_moves`].
+    foreign_index: std::sync::atomic::AtomicU64,
     /// The revision of the latest change submitted. See [`LogWriter::submitted_rev`].
     submitted: std::sync::atomic::AtomicU64,
 }
@@ -947,6 +838,20 @@ impl LogWriter {
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// How many changes ANOTHER process has made to this store since the writer started that a
+    /// hot index must be built again for — every change but a stamp, as the store's shared
+    /// `index_seq` counts them ([`Change::stamp_only`]). Only ever grows, and moves with
+    /// [`Self::foreign_commits`], at the same looks: a foreign commit that leaves this where it
+    /// was is a stamp, which costs another window's index nothing (SPEC-2 v3 C19, D4-A).
+    ///
+    /// Counted as `index_seq` less this writer's own moves of it: every move is one `+ 1` in some
+    /// process's write transaction, so what this writer did not add, another process did.
+    pub fn foreign_index_moves(&self) -> u64 {
+        self.shared
+            .foreign_index
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// [`Self::foreign_commits`], counted NOW: the writer looks once it has written what it holds,
     /// and answers. `None` when it cannot answer within `wait`.
     ///
@@ -1025,6 +930,8 @@ struct Job {
     upsert: Vec<RowWrite>,
     marks: Watermarks,
     meta: Vec<(&'static str, i64)>,
+    /// It moves the store's `index_seq` with its last chunk (see [`Change::stamp_only`]).
+    index_move: bool,
     slot: Arc<Slot>,
     /// Every row this job writes or drops — what decides whether another job may overtake
     /// it. Built once, here, rather than per comparison: a bulk job is compared against on
@@ -1055,6 +962,7 @@ impl Job {
             upsert: c.upsert,
             marks: c.marks,
             meta: c.meta,
+            index_move: !c.stamp_only,
             slot,
             touched,
             cursor: Cursor::default(),
@@ -1094,6 +1002,7 @@ fn plan(job: &Job) -> Chunk<'_> {
             upsert: &job.upsert[up_from..upserted],
             marks: finishes.then_some(job.marks),
             meta: if finishes { &job.meta } else { &[] },
+            index_move: finishes && job.index_move,
         },
         removed,
         upserted,
@@ -1152,8 +1061,18 @@ fn transient(e: &sqlite::Error) -> bool {
     )
 }
 
-/// Look for another connection's commits and count them. See [`LogWriter::foreign_commits`].
-fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, shared: &Shared) {
+/// The store's shared `index_seq` as this writer accounts for it: where it stood when the writer
+/// started, and how many times this writer has moved it since. Whatever else it has moved by is
+/// another process's ([`LogWriter::foreign_index_moves`]).
+#[derive(Debug, Default)]
+struct IndexSeq {
+    base: u64,
+    own: u64,
+}
+
+/// Look for another connection's commits and count them — and, when there are some, how many
+/// moved the store's `index_seq`. See [`LogWriter::foreign_commits`].
+fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, seq: &IndexSeq, shared: &Shared) {
     let Ok(now) = db.data_version() else {
         return;
     };
@@ -1161,6 +1080,12 @@ fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, shared: &Shared) {
         shared
             .foreign
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if let Ok(stored) = db.index_seq() {
+            let foreign = stored.saturating_sub(seq.base).saturating_sub(seq.own);
+            shared
+                .foreign_index
+                .fetch_max(foreign, std::sync::atomic::Ordering::AcqRel);
+        }
     }
     *seen = Some(now);
 }
@@ -1174,7 +1099,13 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     // Callers waiting for a look at other processes' commits ([`LogWriter::foreign_commits_now`]).
     let mut looks: Vec<std::sync::mpsc::SyncSender<u64>> = Vec::new();
     let mut seen_version: Option<i64> = None;
-    watch_foreign(&db, &mut seen_version, shared);
+    // Where the shared `index_seq` stands before this writer moves it (unreadable: from nought,
+    // which a store that never had one also holds).
+    let mut seq = IndexSeq {
+        base: db.index_seq().unwrap_or(0),
+        own: 0,
+    };
+    watch_foreign(&db, &mut seen_version, &seq, shared);
     // Revisions submitted and not yet resolved — the low end of this set is the durability
     // watermark.
     let mut unresolved: BTreeSet<u64> = BTreeSet::new();
@@ -1203,7 +1134,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
             }
         }
         if queue.is_empty() {
-            watch_foreign(&db, &mut seen_version, shared);
+            watch_foreign(&db, &mut seen_version, &seq, shared);
             // Asked after this writer's own changes ahead of them, answered with the look just
             // made.
             for reply in looks.drain(..) {
@@ -1266,6 +1197,10 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                 let job = queue
                     .remove(i)
                     .expect("the job pick() chose is in the queue");
+                // Its last chunk moved the shared `index_seq`, in the transaction that wrote it.
+                if job.index_move {
+                    seq.own += 1;
+                }
                 unresolved.remove(&job.rev);
                 highest_ok = highest_ok.max(job.rev);
                 lost.remove(&job.rev);
@@ -2423,6 +2358,7 @@ mod tests {
             upsert: &c.upsert,
             marks: Some(c.marks),
             meta: &c.meta,
+            index_move: !c.stamp_only,
         })
         .expect("the store accepts the change");
     }
@@ -2723,105 +2659,6 @@ mod tests {
             300,
             "every change submitted before the copy"
         );
-    }
-
-    // ── reloading after another process wrote ──────────────────────────────
-
-    fn with_comment(r: &Arc<QsoRecord>, c: &str) -> Arc<QsoRecord> {
-        let mut r = QsoRecord::clone(r);
-        r.comment = Some(c.into());
-        Arc::new(r)
-    }
-
-    /// ★ Another process's changes arrive — its new contact, its edit, its stamp and its delete
-    /// — and none of THIS process's own changes still on their way to disk is lost: an edit, a
-    /// delete and a new contact the store does not hold yet.
-    #[test]
-    fn a_reload_takes_the_other_process_changes_and_keeps_our_own_in_flight() {
-        let base: Vec<Arc<QsoRecord>> = (0..6).map(|n| rec("W1AW", n)).collect();
-        let id = |n: usize| base[n].id.expect("id");
-
-        // What WE hold: row 1 edited, row 2 deleted, a new row 9 — none of it stored yet.
-        let mut held = base.clone();
-        held[1] = with_comment(&base[1], "our edit");
-        held.remove(2);
-        held.push(rec("K5NEW", 9));
-
-        // What the STORE holds after the other process: row 3 edited, row 4 deleted, a new
-        // row 7 — and the store still has OUR rows 1 and 2 as they were.
-        let mut stored: Vec<QsoRecord> = base.iter().map(|r| QsoRecord::clone(r)).collect();
-        stored[3].comment = Some("their edit".into());
-        stored.remove(4);
-        stored.push(QsoRecord::clone(&rec("DL1NEW", 7)));
-
-        let pending = [
-            Touched::Rows(vec![id(1)]),
-            Touched::Rows(vec![id(2)]),
-            Touched::Rows(vec![rec("K5NEW", 9).id.unwrap()]),
-        ];
-        let merged = merge_reloaded(stored, &held, &pending);
-        let comments: Vec<String> = merged
-            .iter()
-            .map(|r| r.comment.clone().unwrap_or_default())
-            .collect();
-        assert_eq!(
-            comments,
-            ["0", "our edit", "their edit", "5", "7", "9"],
-            "ours kept, theirs taken, the store's order, our unstored add last"
-        );
-    }
-
-    /// The control: with NOTHING in flight, a reload is exactly the store — so the test above
-    /// is about the pending set, not a merge that always prefers memory.
-    #[test]
-    fn a_reload_with_nothing_in_flight_is_exactly_the_store() {
-        let held: Vec<Arc<QsoRecord>> = (0..4).map(|n| rec("W1AW", n)).collect();
-        let mut stored: Vec<QsoRecord> = held.iter().map(|r| QsoRecord::clone(r)).collect();
-        stored[1].comment = Some("theirs".into());
-        stored.remove(3);
-        let merged = merge_reloaded(stored.clone(), &held, &[]);
-        let back: Vec<QsoRecord> = merged.iter().map(|r| QsoRecord::clone(r)).collect();
-        assert_eq!(back, stored);
-    }
-
-    /// A purge on its way to disk keeps memory empty: nothing the store still holds survives it.
-    #[test]
-    fn a_pending_purge_keeps_memory_as_it_is() {
-        let stored: Vec<QsoRecord> = (0..4).map(|n| QsoRecord::clone(&rec("W1AW", n))).collect();
-        let merged = merge_reloaded(stored, &[], &[Touched::All]);
-        assert!(merged.is_empty());
-    }
-
-    /// The in-place re-read keeps every position: the other process's edit arrives in place,
-    /// its new contact is appended, ours in flight are kept — and the row it DELETED stays
-    /// where it was, reported, because removing it would move the rows after it under a caller
-    /// that is holding their positions.
-    #[test]
-    fn an_in_place_reload_moves_no_row_and_reports_what_it_could_not_remove() {
-        let base: Vec<Arc<QsoRecord>> = (0..5).map(|n| rec("W1AW", n)).collect();
-        let mut held = base.clone();
-        held[1] = with_comment(&base[1], "our edit");
-        let mut stored: Vec<QsoRecord> = base.iter().map(|r| QsoRecord::clone(r)).collect();
-        stored[3].comment = Some("their edit".into());
-        stored[1].comment = Some("their older edit".into());
-        stored.remove(2); // their delete
-        stored.push(QsoRecord::clone(&rec("DL1NEW", 7)));
-
-        let pending = [Touched::Rows(vec![base[1].id.unwrap()])];
-        let (merged, lingering) = merge_reloaded_in_place(stored, &held, &pending);
-        let comments: Vec<String> = merged
-            .iter()
-            .map(|r| r.comment.clone().unwrap_or_default())
-            .collect();
-        assert_eq!(
-            comments,
-            ["0", "our edit", "2", "their edit", "4", "7"],
-            "positions kept: ours in flight wins, theirs arrives in place, the deleted row stays"
-        );
-        assert!(lingering, "and the delete it could not apply is reported");
-        for (i, r) in held.iter().enumerate() {
-            assert_eq!(merged[i].id, r.id, "row {i} did not move");
-        }
     }
 
     /// The `log_meta` value `k` as a second connection reads it.

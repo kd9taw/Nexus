@@ -5514,12 +5514,19 @@ impl Engine {
     /// through `set_mode`) refuses its own blank or out-of-domain exchange by name —
     /// before the mode changes, so a refused restore is the same no-op.
     pub fn restore_field_day_if_enabled(&mut self) {
+        if self.restore_opens_session() {
+            let _ = self.set_mode("fieldday-sp");
+        }
+    }
+
+    /// Whether [`Self::restore_field_day_if_enabled`] would enter Field Day now, opening a
+    /// contest session — the question a launch restoring the session hands
+    /// [`with_session_rows_at_launch`] as `opens`, so the session's rows are read first.
+    pub fn restore_opens_session(&self) -> bool {
         let exchange_set = !self.contest_is_field_day()
             || (!self.settings.fd_class.trim().is_empty()
                 && !self.settings.fd_section.trim().is_empty());
-        if self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. }) {
-            let _ = self.set_mode("fieldday-sp");
-        }
+        self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. })
     }
 
     /// Is the contest the picker names one of the two Field Day events (or the blank
@@ -10366,7 +10373,7 @@ impl Engine {
             if !self.in_field_day() {
                 return Err("Field Day mode is not active".into());
             }
-            let plan = self.station.log_plan();
+            let plan = self.station.plan_in_breath();
             let seen = plan.merge_identities()?;
             if let Some(report) = self.fd_merge_planned(&plan, seen)? {
                 return Ok(report);
@@ -19433,11 +19440,23 @@ contact yourself."
             return None;
         }
         let rule = station.log.dupe_rule();
-        // The general log's half, from the hot index — swept once when the session opened and
-        // followed since; the sets below are bounded by the session, not by the log.
+        // The general log's half, from the hot index — opened from the store's rows when the
+        // session opened and followed since; the sets below are bounded by the session, not by
+        // the log. A session open without it is one a command opened without reading its rows,
+        // which none may (SPEC-2 v3 C19: retry briefly, then refuse — `with_session_rows`). A
+        // release build answers with the contest log's half alone: that can under-report a
+        // dupe, the direction a session's own window errs in, and never invents one.
         let since = self
             .station
-            .worked_since(station.log.session.start_unix, &rule);
+            .worked_since(station.log.session.start_unix, &rule)
+            .unwrap_or_else(|| {
+                debug_assert!(
+                    false,
+                    "a contest session is open without its sweep of the general log: it was \
+                     opened without the log's rows (see engine::with_session_rows)"
+                );
+                tempo_core::logbook::WorkedSince::default()
+            });
         let mut exact = since.exact;
         exact.extend(station.log.worked_keys().iter().cloned());
         let mut calls = since.worked_this_session;
@@ -22841,14 +22860,6 @@ contact yourself."
         }
     }
 
-    /// On the 1.13 path, take in a `log.adi` another program or computer changed since the lane
-    /// last wrote it, so the lane can write the changes it is holding — the quit's and the exit's
-    /// last chance, as the freshness poll is the session's. Reads the file under the lock, as
-    /// 1.13's recovery did, and only when the file has changed. Nothing on the store path.
-    pub fn log_take_in_log_file(&mut self) -> bool {
-        self.station.take_in_log_file_if_changed()
-    }
-
     /// Send again the logbook changes the database refused for a reason that can pass, each
     /// once its wait is up, with the rows each holds — the automatic retry, which the snapshot
     /// poll drives. How many went out. No I/O: a channel send each, like any change. See
@@ -23480,19 +23491,6 @@ contact yourself."
             .collect()
     }
 
-    /// The ids of the contacts at `positions` in the log as it stands — the LEGACY input of a
-    /// LoTW upload chosen by hand, which a view still addresses by position (the Awards view's
-    /// diagnosis buckets). Taken in the same hold of the engine lock as the batch it becomes,
-    /// exactly as the positions always were; a position past the end names nothing.
-    #[allow(deprecated)] // SPEC-2 C17a: diagnosis ids retire the positions the Awards view sends
-    pub fn ids_at_positions(&self, positions: &[usize]) -> Vec<tempo_core::logbook::RecordId> {
-        let records = self.station.logbook.records();
-        positions
-            .iter()
-            .filter_map(|&i| records.get(i).and_then(|r| r.id))
-            .collect()
-    }
-
     /// See [`StationCore::stamp_lotw_batch`].
     pub fn stamp_lotw_batch(
         &mut self,
@@ -23580,12 +23578,23 @@ contact yourself."
         self.station.take_all_txt_pending()
     }
 
-    /// Two-instance freshness: re-read + reconcile the shared log iff another instance touched
-    /// it (mtime-gated, so a no-op stat when unchanged). Call on the Needed-board poll so a
-    /// monitoring radio's needs never go stale relative to the other radio. Returns true if it
-    /// actually re-read. See [`StationCore::sync_shared_log_if_changed`].
+    /// [`sync_shared_log`] in one breath, for an owner holding the engine with no Engine guard
+    /// (a test's own engine): another window's commits, and a `log.adi` something other than
+    /// Nexus wrote, taken in — read, planned and made here. Whether anything was taken in. See
+    /// [`StationCore::take_in_shared_log`].
+    ///
+    /// ⚠️ It READS THE STORE when something changed: never under the Engine lock (a debug build
+    /// panics). A command takes [`sync_shared_log`], which releases the lock to read.
+    pub fn take_in_shared_log(&mut self) -> bool {
+        self.station.take_in_shared_log()
+    }
+
+    /// The freshness poll's old name, for the callers not yet moved to [`sync_shared_log`] —
+    /// which reads with the Engine lock released. This one is [`Self::take_in_shared_log`], in
+    /// one breath: under the Engine lock a debug build panics at its first read of the store.
+    #[deprecated(note = "SPEC-2 C19: take engine::sync_shared_log before the Engine lock")]
     pub fn sync_shared_log_if_changed(&mut self) -> bool {
-        self.station.sync_shared_log_if_changed()
+        self.take_in_shared_log()
     }
 }
 
@@ -23606,53 +23615,156 @@ fn report_in(msg: Option<Msg>) -> Option<i32> {
 /// A test pins the journal's window to this one.
 pub const SESSION_READ_WINDOW: u64 = 4 * 86_400 + 3_600;
 
-/// Run `then` under the Engine lock with the rows a contest session's dupe sweep is built from,
+/// What a command that opens a contest session answers when the session's rows could not be read
+/// in time — the logbook busy with a big write, or changing under every try (SPEC-2 v3 C19: the
+/// operator's "retry briefly, then refuse"). Nothing was switched.
+pub const SESSION_BUSY: &str = "The logbook was too busy to read the contest's contacts, so the \
+                                contest session was not opened. Try again in a moment.";
+
+/// What the launch says when it could not read a restored contest session's rows within its
+/// tries ([`with_session_rows_at_launch`]): it started without the session.
+pub const SESSION_NOT_RESUMED: &str = "The logbook was too busy at start-up to read the \
+                                       contest's contacts, so Field Day was not resumed. Turn it \
+                                       on again when you are ready.";
+
+/// ★ Run `then` under the Engine lock with the rows a contest session's dupe sweep is built from,
 /// read BEFORE the lock is taken when `opens` says `then` opens a session (SPEC-2 v3 C19). The
 /// operator's pick: the command waits until the sweep is ready, so no snapshot ever sees the
-/// session without it, and the sweep is never made under the lock.
+/// session without it, and the sweep is never made under the lock — nor, with no log in memory to
+/// sweep, anywhere else: a session is opened with its rows or not at all.
 ///
 /// The rows are read off the lock ([`crate::logstore::SessionRead::read`]), the lock is taken,
 /// the rows are checked to be still the log's, and `then` runs in that same hold — `then` opens
 /// the session and hands the rows to [`Engine::open_session_from`]. A log that changed in
-/// between is read again, another window's commits taken in first, up to three times. After
-/// that, or at once when the store does not answer in time, `then` runs without rows, and the
-/// session's first snapshot sweeps the log itself, as it always has.
+/// between is read again, another window's commits taken in first, and a store that did not
+/// answer in time is asked again — three times in all. After that the command is refused with
+/// [`SESSION_BUSY`], and `then` does not run: nothing was switched.
 ///
 /// A command that opens no session reads nothing: `then` runs at once, in the first hold.
 pub fn with_session_rows<T>(
     engine: &std::sync::Mutex<Engine>,
     opens: impl Fn(&Engine) -> bool,
     then: impl FnOnce(&mut Engine, Option<crate::logstore::SessionRows>) -> T,
-) -> T {
-    const TRIES: usize = 3;
-    for _ in 0..TRIES {
+) -> Result<T, String> {
+    session_rows_within(engine, opens, then, 3, crate::logstore::SESSION_READ_WAIT)
+        .map_err(|()| SESSION_BUSY.to_string())
+}
+
+/// [`with_session_rows`] for the launch's restore of the contest session the operator left
+/// running (Q1 of the C19 cut, the coordinator's (a), and its bound): the same tries as the
+/// switch command — three reads, each waiting up to [`crate::logstore::SESSION_READ_WAIT`] for
+/// the store and again for the writer's look at other windows, about three seconds at worst —
+/// so a busy log never holds the radio loop's start for longer than a moment. When they cannot
+/// read the rows, `then` does not run and the answer is [`SESSION_NOT_RESUMED`], for the launch
+/// to start without the session and say so.
+pub fn with_session_rows_at_launch<T>(
+    engine: &std::sync::Mutex<Engine>,
+    opens: impl Fn(&Engine) -> bool,
+    then: impl FnOnce(&mut Engine, Option<crate::logstore::SessionRows>) -> T,
+) -> Result<T, String> {
+    session_rows_within(engine, opens, then, 3, crate::logstore::SESSION_READ_WAIT)
+        .map_err(|()| SESSION_NOT_RESUMED.to_string())
+}
+
+/// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.
+/// `Err` when none could be used, and then `then` has not run.
+fn session_rows_within<T>(
+    engine: &std::sync::Mutex<Engine>,
+    opens: impl Fn(&Engine) -> bool,
+    then: impl FnOnce(&mut Engine, Option<crate::logstore::SessionRows>) -> T,
+    tries: usize,
+    wait: std::time::Duration,
+) -> Result<T, ()> {
+    for _ in 0..tries {
         let read = {
             let mut eng = engine_lock(engine);
             if !opens(&eng) {
-                return then(&mut eng, None);
+                return Ok(then(&mut eng, None));
             }
-            match eng.session_read() {
-                Some(read) => read,
-                None => return then(&mut eng, None),
-            }
+            eng.session_read()
         };
-        let rows = read.read();
-        let mut eng = engine_lock(engine);
-        if !opens(&eng) {
-            return then(&mut eng, None);
-        }
-        if eng.session_rows_current(&rows) {
-            return then(&mut eng, Some(rows));
-        }
-        // A store too busy to answer in time is not asked again.
-        if !rows.ready {
-            return then(&mut eng, None);
+        // No read to make: a store missing a change this window holds (one it refused) cannot
+        // hand back the log's rows until it takes it. Asked again, after a pause.
+        let Some(read) = read else {
+            std::thread::sleep(wait.min(std::time::Duration::from_millis(250)));
+            continue;
+        };
+        let rows = read.read_within(wait);
+        {
+            let mut eng = engine_lock(engine);
+            if !opens(&eng) {
+                return Ok(then(&mut eng, None));
+            }
+            if eng.session_rows_current(&rows) {
+                return Ok(then(&mut eng, Some(rows)));
+            }
         }
         // What changed may be another window's commits the read saw: taken in before the next.
-        eng.sync_shared_log_if_changed();
+        sync_shared_log(engine);
     }
-    let mut eng = engine_lock(engine);
-    then(&mut eng, None)
+    Err(())
+}
+
+/// ★ The freshness poll (SPEC-2 v3 C19, D4-A): what another window committed to the store, and a
+/// `log.adi` something other than Nexus wrote, taken in with the Engine lock RELEASED for every
+/// read — the store's rows, the file — and taken only for the moment each result is made. Call it
+/// BEFORE taking the lock, wherever the log's freshness matters: the Needed board's and the
+/// satellite boards' polls, the pounce detector, a quit's and an exit's last look at `log.adi`
+/// on the 1.13 path, and [`with_session_rows`] between its tries. Whether anything was taken in.
+///
+/// - **Another window's stamps** cost nothing: they move nothing the hot index reads, and only
+///   the station's watermarks move, so every view keyed on them reads the store again.
+/// - **Another window's other changes** — a contact logged, an edit, a delete, an upgrade — and
+///   an index that has let go of the log (a panic while it was held): the hot index is built
+///   again from the store, the contest session's sweep opened again from whole rows, and it is
+///   installed only while the station has made no change since the read began; otherwise it is
+///   read again. 0.40 s at 150,000 contacts, 1.2–1.5 s at 500,000 (release), all of it off the
+///   lock.
+/// - **A `log.adi` something else wrote** — on the database path, the file the mirror refused to
+///   replace; on the 1.13 path, one another machine sharing the folder appended to or rewrote —
+///   is read and planned on the store's rows off the lock (an import; on the 1.13 path, 1.13's
+///   merge), and made under it, while the rows it read are still the log's.
+///
+/// When nothing changed it costs two atomic reads under the lock and, on the 1.13 path, one
+/// `stat`. The store-less last resort re-reads `log.adi` under the lock, as 1.13 did.
+pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
+    use crate::station::Taken;
+    let mut took = false;
+    let mut files = true;
+    for _ in 0..crate::station::PLANS {
+        let job = {
+            let mut eng = engine_lock(engine);
+            if eng.station.store.is_none() {
+                return eng.station.recover_external_appends() || took;
+            }
+            took |= eng.station.take_in_foreign_stamps();
+            match eng.station.shared_log_job(files) {
+                Some(job) => job,
+                None => return took,
+            }
+        };
+        // A file is taken in once a poll: after that, only the index is asked about.
+        let file = matches!(job, crate::station::SharedLogJob::TakeIn(_));
+        files &= !file;
+        let ready = job.run();
+        let mut eng = engine_lock(engine);
+        match eng.station.take_shared_log(ready) {
+            Taken::Made => took = true,
+            Taken::Again => {}
+            Taken::Nothing if file => {}
+            Taken::Nothing | Taken::Later => return took,
+        }
+    }
+    took
+}
+
+/// The plan a change to rows the log holds starts from ([`StationCore::log_plan`] — handles,
+/// taken under the lock), with another window's commits and a `log.adi` something else wrote
+/// taken in first, off it ([`sync_shared_log`]): as every such change has always started from
+/// them, now without a re-read under the lock (SPEC-2 v3 C19, D4-A).
+pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
+    sync_shared_log(engine);
+    engine_lock(engine).station_mut().log_plan()
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
@@ -29043,10 +29155,7 @@ mod tests {
         // this one's changes, as 1.13's did before each command returned.
         written(&e);
         Logbook::append(&path, &qrec("W4DDD", "20m")).unwrap();
-        assert!(
-            e.sync_shared_log_if_changed(),
-            "fixture: the disk change was seen"
-        );
+        assert!(e.take_in_shared_log(), "fixture: the disk change was seen");
         assert_eq!(
             marks(&e, "W4DDD"),
             (true, true),
@@ -29115,7 +29224,7 @@ mod tests {
         // once (a load records no fingerprint, so an unaccountable file is never trusted) —
         // once the file holds the two contacts, as 1.13's appends did before they returned.
         written(&e);
-        e.sync_shared_log_if_changed();
+        e.take_in_shared_log();
 
         let mut wsjtx = qrec("DL1ABC", "20m");
         wsjtx.when_unix = 60;
@@ -34848,10 +34957,7 @@ mod tests {
         );
         moved(&e, "a log loaded from disk");
         Logbook::append(&path, &qrec("N0EXT", "20m")).unwrap();
-        assert!(
-            e.sync_shared_log_if_changed(),
-            "fixture: the disk change was seen"
-        );
+        assert!(e.take_in_shared_log(), "fixture: the disk change was seen");
         moved(&e, "another instance's append, picked up from disk");
 
         // Refused changes are not changes: nothing moved, so the view has nothing to reload.
@@ -36647,14 +36753,11 @@ mod tests {
             let base = tempo_core::message::base_call(call);
             (base.len() >= 3).then(|| base[..2].to_string())
         });
-        // Through `add`, so every row carries an id the way a held log's rows do.
-        let mut log = tempo_core::logbook::Logbook::new();
-        for r in rows {
-            log.add(r);
-        }
-        e.station.logbook = log;
+        // Appended through the station, as every contact is: each row minted an id, followed into
+        // the hot index, and handed to the store in memory (SPEC-2 v3 C19 — the index is never
+        // built from a log in memory it did not follow).
         let t = Instant::now();
-        e.station.sync_hot();
+        e.station.append(rows, false);
         let build = t.elapsed();
         let decodes: Vec<modes::Decode> = (0..40)
             .map(|i| dec_snr(&format!("CQ K{}AB FN3{}", i % 10, i % 10), -8))

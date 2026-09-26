@@ -6,7 +6,9 @@
 //! radio loop takes that lock every 20 ms, and `io_fence` stops a debug build that tries). So a
 //! command here holds the lock twice, briefly, and never across the read:
 //!
-//! 1. under the lock: the plan's handles ([`StationCore::log_plan`] — pointers, no I/O);
+//! 1. another window's commits and a `log.adi` something else wrote taken in with the lock
+//!    released ([`crate::engine::sync_shared_log`]), then under the lock the plan's handles
+//!    ([`StationCore::log_plan`] — pointers, no I/O): [`crate::engine::log_plan`];
 //! 2. with it released: the rows, read from the store;
 //! 3. under the lock again: the change, made only while the rows it read are still the rows the
 //!    log holds ([`StationCore::unchanged_since`]) — otherwise planned again, and after
@@ -51,7 +53,7 @@ pub fn change_row<T>(
     mut then: impl FnMut(&mut Engine, MadeRow) -> T,
 ) -> (RowOutcome<T>, Durability) {
     for _ in 0..PLANS {
-        let plan = engine_lock(engine).station_mut().log_plan();
+        let plan = crate::engine::log_plan(engine);
         let before = match plan.row(id) {
             Ok(Some(row)) => row,
             Ok(None) => return (Ok(Err(RowRefusal::Gone)), Durability::default()),
@@ -220,7 +222,7 @@ pub fn stamp_push(
     status: UploadStatus,
 ) -> (bool, Durability) {
     for _ in 0..PLANS {
-        let plan = engine_lock(engine).station_mut().log_plan();
+        let plan = crate::engine::log_plan(engine);
         let target = match station::push_target(&plan, pushed) {
             Ok(Some(row)) => row,
             Ok(None) => return (false, Durability::default()),
@@ -271,7 +273,7 @@ pub fn stamp_lotw_batch(
         ..LotwStamped::default()
     };
     for _ in 0..PLANS {
-        let plan = engine_lock(engine).station_mut().log_plan_moving();
+        let plan = crate::engine::log_plan(engine);
         let (report, pairs) = match station::stamp_lotw_batch_plan(&plan, batch, status) {
             Ok(planned) => planned,
             Err(e) => {
@@ -354,7 +356,7 @@ fn mark_lotw_uploaded_in_chunks(
     for part in ids.chunks(chunk) {
         let mut made = None;
         for _ in 0..PLANS {
-            let plan = engine_lock(engine).station_mut().log_plan();
+            let plan = crate::engine::log_plan(engine);
             let found = match plan.rows(part) {
                 Ok(found) => found,
                 Err(e) => return (Err(stopped(stamped, ids.len(), Some(e))), durability),
@@ -443,7 +445,7 @@ fn bulk<R, T>(
 ) -> (Result<T, String>, Durability) {
     let mut then = Some(then);
     for _ in 0..PLANS {
-        let plan = engine_lock(engine).station_mut().log_plan();
+        let plan = crate::engine::log_plan(engine);
         let (out, planned) = match plan_it(&plan) {
             Ok(planned) => planned,
             Err(e) => return (Err(e), Durability::default()),
@@ -616,6 +618,7 @@ pub fn fd_merge_to_general(
     engine: &Mutex<Engine>,
 ) -> (Result<tempo_core::contest::MergeReport, String>, Durability) {
     for _ in 0..PLANS {
+        crate::engine::sync_shared_log(engine);
         let plan = {
             let mut e = engine_lock(engine);
             if !e.in_field_day() {
@@ -688,7 +691,7 @@ fn fill_in_chunks(
         let ids: Vec<RecordId> = chunk.iter().map(|f| f.id).collect();
         let mut made = None;
         for _ in 0..PLANS {
-            let plan = engine_lock(engine).station_mut().log_plan();
+            let plan = crate::engine::log_plan(engine);
             let rows = plan.rows(&ids)?;
             #[cfg(test)]
             tests::race();

@@ -31,14 +31,16 @@
 //!
 //! Two other ways in, and neither is a change:
 //!
-//! - **A build** — a log loaded or replaced, a resolver changed: a pass over the whole log,
-//!   counted by `LOG_SWEEPS` and, in debug builds, by [`HOT_REBUILDS`], so a test can pin where it
-//!   may and may not happen.
-//! - **A catch-up** ([`HotIndex::catch_up`]) — for a write that reached the in-memory log without
-//!   being followed (a test's, made around the station): a write no index reads moves the index
-//!   on, appends are put in as a change's are, and anything else is a build. It goes with the
-//!   in-memory log (SPEC-2 v3 C19). Debug builds count it ([`HOT_CATCH_UPS`]), so a test can pin
-//!   that no write the station makes needs it.
+//! - **A build** — a log loaded or attached, a resolver changed, another window's changes taken
+//!   in: a pass over the whole log — from the store ([`HotIndex::from_store`]) or from rows in
+//!   hand ([`HotIndex::from_rows`]) — counted, in debug builds, by [`HOT_REBUILDS`], so a test
+//!   can pin where it may and may not happen.
+//! - **A catch-up** ([`HotIndex::catch_up`]) — for a write that reached a [`Logbook`] without
+//!   being followed: a write no index reads moves the index on, appends are put in as a change's
+//!   are, and anything else is a build. The station never takes one (SPEC-2 v3 C19): its index
+//!   holds the log as it holds it, and a debug build names a write that went around it. Kept for
+//!   the model's own tests until the log in memory goes; debug builds count it
+//!   ([`HOT_CATCH_UPS`]).
 //!
 //! # Order
 //!
@@ -81,8 +83,9 @@ use std::sync::Arc;
 // DEBUG BUILDS ONLY — per thread, like `LOG_SWEEPS`, because the test harness runs tests in
 // parallel. (Plain comments: doc comments cannot attach through `thread_local!`.)
 //
-// `HOT_REBUILDS`: whole-index rebuilds. A rebuild is a pass over the whole log; the tests that
-// pin "a contact, a stamp or an edit costs none" read this.
+// `HOT_REBUILDS`: whole-index builds — from a log, from rows, from the store. A build is a pass
+// over the whole log; the tests that pin "a contact, a stamp or an edit costs none", and "the
+// attach installs the index the open built instead of building one", read this.
 //
 // `HOT_CATCH_UPS`: writes the index had to find out about from the log instead of being told —
 // see `HotIndex::catch_up`. The tests that pin "every write the station makes is followed" read
@@ -239,6 +242,31 @@ struct Row {
     when: u64,
     grid: Option<Box<str>>,
     entity: Option<u32>,
+    /// The row's fields as it was counted, as one number ([`digest`]) — what tells whether the
+    /// index holds a row as a change read it ([`HotIndex::holds`]).
+    digest: u64,
+}
+
+/// A row's projection as one number, the contest exchange left out — what tells whether the
+/// index holds a row exactly as it was counted ([`HotIndex::holds`]). The exchange is left out
+/// because a build from the store reads none ([`STORE_COLUMNS`]); the session's rows are opened
+/// from whole records ([`HotIndex::install_session`]).
+fn digest(p: &Project<'_>) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        p.call,
+        p.band,
+        p.mode,
+        p.when,
+        p.grid,
+        p.prop_mode,
+        p.their_ref,
+        p.my_ref,
+        p.award_confirmed,
+    )
+        .hash(&mut h);
+    h.finish()
 }
 
 /// The open contest session's half of the dupe index: the rows since `cutoff`, keyed by `rule`.
@@ -315,42 +343,11 @@ pub const STORE_COLUMNS: &[&str] = &[
 /// order, handed to [`HotIndex::follow`].
 pub type RowPair = (Option<Arc<QsoRecord>>, Option<Arc<QsoRecord>>);
 
-/// The pairs of a change nobody described row by row: `before`, the log's rows as they stood just
-/// before it, walked beside `after` as [`super::writer::Change::between`] walks them. A row that
-/// is the same pointer is unchanged and makes no pair; a row matched by id is a row changed in
-/// place; a row of `before` not where the walk expects it was taken out; and every row past the
-/// end of `before` was put in, in order. A row inserted mid-log makes the rows after it come out
-/// and go back in behind every other row — where the log now holds them.
-///
-/// SPEC-2 v3 C19: the bridge until each change hands over its own pairs (Part B).
-pub fn pairs_between(before: &[Arc<QsoRecord>], after: &[Arc<QsoRecord>]) -> Vec<RowPair> {
-    let mut pairs = Vec::new();
-    let (mut i, mut j) = (0, 0);
-    // An emptied log took every row out: nothing is walked, and every row of `before` goes.
-    while !after.is_empty() && i < before.len() && j < after.len() {
-        let (b, a) = (&before[i], &after[j]);
-        if b.id == a.id {
-            if !Arc::ptr_eq(b, a) {
-                pairs.push((Some(Arc::clone(b)), Some(Arc::clone(a))));
-            }
-            i += 1;
-            j += 1;
-        } else {
-            pairs.push((Some(Arc::clone(b)), None));
-            i += 1;
-        }
-    }
-    pairs.extend(before[i..].iter().map(|b| (Some(Arc::clone(b)), None)));
-    pairs.extend(after[j..].iter().map(|a| (None, Some(Arc::clone(a)))));
-    pairs
-}
-
 /// The hot index set. See the module header.
 #[derive(Debug, Default)]
 pub struct HotIndex {
     /// The revision of the log the index holds; `None` until it is built, after
-    /// [`Self::invalidate`], and after a change it could not follow — the next catch-up builds
-    /// it.
+    /// [`Self::invalidate`], and after a change it could not follow — until it is built again.
     at: Option<u64>,
     /// How many rows it holds.
     rows: usize,
@@ -392,8 +389,9 @@ impl HotIndex {
         index
     }
 
-    /// Forget the log: the next catch-up rebuilds. For a change the index cannot follow row by
-    /// row — a new DXCC resolver re-keys every row's entity.
+    /// Forget the log: the index is built again whole — for the station, from the store, by
+    /// its freshness poll (SPEC-2 v3 C19). For an index a panic may have left half-changed, or
+    /// one that could not follow a change row by row.
     pub fn invalidate(&mut self) {
         self.at = None;
     }
@@ -401,6 +399,62 @@ impl HotIndex {
     /// The revision of the log the index holds; `None` while it holds none.
     pub fn at(&self) -> Option<u64> {
         self.at
+    }
+
+    /// How many rows the index holds: every row of the log it holds, which is how the purge
+    /// counts what it takes (SPEC-2 v3 C19).
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// The id of every row the index holds, in no particular order — what the purge names as
+    /// the rows it takes out (SPEC-2 v3 C19), so a purge the store refused and sends again takes
+    /// out those rows and never one logged after it.
+    pub fn ids(&self) -> Vec<RecordId> {
+        self.by_base
+            .values()
+            .flatten()
+            .filter_map(|row| row.id)
+            .collect()
+    }
+
+    /// Whether the index holds `r` as it counted it: a row with `r`'s id, under `r`'s station,
+    /// counted from the same fields ([`digest`]). What a change is checked by before it is
+    /// followed (SPEC-2 v3 C19): its pairs can be followed only from rows the index holds as the
+    /// change read them, and a row another window changed since the index took it in is not one.
+    pub fn holds(&self, r: &QsoRecord) -> bool {
+        let p = project(r);
+        let d = digest(&p);
+        r.id.is_some()
+            && self
+                .by_base
+                .get(&base_call(p.call))
+                .is_some_and(|rows| rows.iter().any(|row| row.id == r.id && row.digest == d))
+    }
+
+    /// ★ The purge, followed as ONE change: every row taken out at once, which took the log from
+    /// revision `from` to revision `to` — told with no row pairs, so the purge of a 500,000-row
+    /// log costs the index one reset and not a removal per row. The index empties and keeps its
+    /// order keys and the contest session's rule, as [`Self::follow`] empties it for a change
+    /// that takes out every row. Applied only to the log it describes, as `follow` is.
+    pub fn purge(&mut self, from: u64, to: u64) {
+        match self.at {
+            Some(at) if at == to => return,
+            Some(at) if at == from => {}
+            _ => {
+                self.at = None;
+                return;
+            }
+        }
+        self.empty();
+        self.at = Some(to);
+    }
+
+    /// The contest session the index keeps a sweep for — its start and its rule — if one was
+    /// opened. What an index built again elsewhere must open again, from whole rows, to answer
+    /// as this one does ([`Self::install_session`]).
+    pub fn session_key(&self) -> Option<(u64, DupeRule)> {
+        self.session.as_ref().map(|s| (s.cutoff, s.rule))
     }
 
     /// The index of the log the store holds, built from its rows in one pass — the launch's
@@ -412,6 +466,8 @@ impl HotIndex {
     /// transaction ([`LogDb::in_one_snapshot`]) to build it from one picture of the store. The
     /// index names no log until it is installed as one ([`Self::holding`]).
     pub fn from_store(db: &LogDb, keys: &dyn HotKeys) -> sqlite::Result<HotIndex> {
+        #[cfg(debug_assertions)]
+        HOT_REBUILDS.with(|c| c.set(c.get() + 1));
         let mut index = Self::default();
         let mut last = 0;
         db.each_narrow_after(STORE_COLUMNS, 0, &mut |rowid, r| {
@@ -430,6 +486,8 @@ impl HotIndex {
         rows: impl IntoIterator<Item = &'a QsoRecord>,
         keys: &dyn HotKeys,
     ) -> Self {
+        #[cfg(debug_assertions)]
+        HOT_REBUILDS.with(|c| c.set(c.get() + 1));
         let mut index = Self::default();
         index.put_all(rows, keys);
         index
@@ -510,10 +568,10 @@ impl HotIndex {
     /// rows it took out and put in, in log order ([`RowPair`]), and it took the log from revision
     /// `from` to revision `to`.
     ///
-    /// Applied only to the log they describe. An index already at `to` has the change (a
-    /// catch-up took it in first). One at neither `from` nor `to` holds some other state of the
-    /// log, which these pairs cannot bring up to date: it lets go of the log and is built again
-    /// at its next catch-up — as is one handed a row to take out that it does not hold.
+    /// Applied only to the log they describe. An index already at `to` has the change. One at
+    /// neither `from` nor `to` holds some other state of the log, which these pairs cannot bring
+    /// up to date: it lets go of the log, to be built again whole — as does one handed a row to
+    /// take out that it does not hold.
     pub fn follow(&mut self, pairs: &[RowPair], from: u64, to: u64, keys: &dyn HotKeys) {
         match self.at {
             Some(at) if at == to => return,
@@ -663,6 +721,7 @@ impl HotIndex {
             when: p.when,
             grid: p.grid.map(Into::into),
             entity: entity.as_deref().map(|e| self.entities.id(e)),
+            digest: digest(&p),
         };
         let rows = self.by_base.entry(base_call(p.call)).or_default();
         let at = rows.partition_point(|r| r.order < order);
@@ -848,9 +907,36 @@ impl HotIndex {
         self.activations.count(reference) as usize
     }
 
+    /// ★ The contest session's sweep — [`Logbook::worked_keys_since`]'s answer — as it was
+    /// opened from whole rows read elsewhere ([`Self::install_session`]) and followed row by row
+    /// since. It sweeps nothing (SPEC-2 v3 C19): `None` when no session is open for `cutoff` and
+    /// `rule` and the log holds a row from `cutoff` on — the caller opens one from the store's
+    /// rows, or refuses. A log with no row from `cutoff` on needs no rows read: its sweep is
+    /// empty, whatever the rule keys, and it is opened here — a Field Day entered before its
+    /// first contact.
+    pub fn session(&mut self, cutoff: u64, rule: &DupeRule) -> Option<WorkedSince> {
+        let open = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.cutoff == cutoff && s.rule == *rule);
+        if !open {
+            if self.by_base.values().flatten().any(|r| r.when >= cutoff) {
+                return None;
+            }
+            self.session = Some(Session::new(cutoff, *rule));
+        }
+        let s = self.session.as_ref().expect("open above");
+        Some(WorkedSince {
+            exact: s.exact.0.keys().cloned().collect(),
+            worked_this_session: s.calls.0.keys().cloned().collect(),
+        })
+    }
+
     /// The contest session's sweep of `log` — [`Logbook::worked_keys_since`]'s answer. Built
     /// from `log` once, when a session opens or its start or rule changes, and followed row by
     /// row from then on. `log` must be the log the index holds (a caller catches up first).
+    /// SPEC-2 v3 C19: the station asks [`Self::session`], which sweeps nothing; this goes with
+    /// the log in memory.
     pub fn worked_since(&mut self, log: &Logbook, cutoff: u64, rule: &DupeRule) -> WorkedSince {
         debug_assert_eq!(
             self.at,
@@ -925,6 +1011,7 @@ impl HotIndex {
                     when: p.when,
                     grid: p.grid.map(Into::into),
                     entity: entity.as_deref().map(|e| recount.entities.id(e)),
+                    digest: digest(&p),
                 });
             recount.count(&p, entity.as_deref(), keys, Delta::Add);
         }
@@ -980,6 +1067,37 @@ fn session_keys(p: &Project<'_>, rule: &DupeRule) -> (String, Option<Vec<String>
 mod tests {
     use super::*;
     use crate::logbook::dedup::scan_for_duplicate;
+
+    /// The pairs of a change nobody described row by row: `before`, the log's rows as they stood
+    /// just before it, walked beside `after` as `writer::Change::between` walks them. A row that
+    /// is the same pointer is unchanged and makes no pair; a row matched by id is a row changed
+    /// in place; a row of `before` not where the walk expects it was taken out; and every row
+    /// past the end of `before` was put in, in order. A row inserted mid-log makes the rows after
+    /// it come out and go back in behind every other row — where the log now holds them.
+    ///
+    /// SPEC-2 v3 C19: every change the station makes hands over its own pairs; these tests drive
+    /// the index from the log model's changes, which do not.
+    fn pairs_between(before: &[Arc<QsoRecord>], after: &[Arc<QsoRecord>]) -> Vec<RowPair> {
+        let mut pairs = Vec::new();
+        let (mut i, mut j) = (0, 0);
+        // An emptied log took every row out: nothing is walked, and every row of `before` goes.
+        while !after.is_empty() && i < before.len() && j < after.len() {
+            let (b, a) = (&before[i], &after[j]);
+            if b.id == a.id {
+                if !Arc::ptr_eq(b, a) {
+                    pairs.push((Some(Arc::clone(b)), Some(Arc::clone(a))));
+                }
+                i += 1;
+                j += 1;
+            } else {
+                pairs.push((Some(Arc::clone(b)), None));
+                i += 1;
+            }
+        }
+        pairs.extend(before[i..].iter().map(|b| (Some(Arc::clone(b)), None)));
+        pairs.extend(after[j..].iter().map(|a| (None, Some(Arc::clone(a)))));
+        pairs
+    }
     use crate::logbook::{parse_adif, ContestFields, LogOp, OpClass, QslVia, UploadService};
     use crate::message::same_call;
     use proptest::prelude::*;

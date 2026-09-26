@@ -99,9 +99,14 @@ fn snapshot_needs(
     engine: &Arc<Mutex<Engine>>,
     kept: &crate::NeedsKept,
 ) -> Option<Arc<propagation::LogNeeds>> {
+    // Another window's contacts taken in first, with the Engine lock released for every read —
+    // not on a poisoned engine, which the capture below skips as it always has.
+    if engine.is_poisoned() {
+        return None;
+    }
+    tempo_app::engine::sync_shared_log(engine);
     let capture = {
-        let mut eng = tempo_app::engine::engine_lock_result(engine).ok()?;
-        eng.sync_shared_log_if_changed();
+        let eng = tempo_app::engine::engine_lock_result(engine).ok()?;
         crate::needs_capture(&eng, kept)
     };
     match crate::needs_finish(capture, kept) {

@@ -727,9 +727,9 @@ pub(super) fn prepare_change(
 /// A log change to the contact `row` names — the version the writer saw — planned with the Engine
 /// lock released and made under it only while the contact is still that version (SPEC-2 v3 C19;
 /// the check C16's `locate` made under the lock, made where the change is): what the file must
-/// then hold (`expected`, `count` copies of it) for the 1.13 path's proof, taken in the hold of the
-/// lock that made it.
-#[allow(deprecated)] // SPEC-2 C19: the 1.13 path's proof counts copies in the whole log
+/// then hold (`expected`, `count` copies of it) for the store-less last resort's proof, taken in
+/// the hold of the lock that made it. Wherever a store owns the log, the change's own Durability is
+/// the proof instead.
 pub(super) fn change_found(
     engine: &crate::SharedEngine,
     change: &Change,
@@ -738,23 +738,19 @@ pub(super) fn change_found(
     let id: RecordId = row.id.parse().map_err(|_| ChangeReason::ContextChanged)?;
     let key = row.edit_key.as_str();
     // What the file must hold now: the contact as the change left it (as it was, for a delete), and
-    // how many copies of it the log holds.
+    // how many copies of it the log holds. Counted only on the store-less last resort, whose log is
+    // the log in memory: wherever a store owns the log — the database, or on the 1.13 path one in
+    // memory — the change's Durability is the proof, and nothing is counted.
     let proof = |e: &mut Engine, (before, after): &tempo_app::station::MadeRow| {
         let of = after.as_deref().unwrap_or(before);
         let text = adif_record_own_log(of);
-        let count = e
-            .log_records()
-            .iter()
-            .filter(|r| {
-                r.call == of.call && r.when_unix == of.when_unix && adif_record_own_log(r) == text
-            })
-            .count();
-        (
-            text,
-            count,
-            e.log_path().map(Path::to_path_buf),
-            e.log_store_open(),
-        )
+        let store = e.log_store_open();
+        let count = if store {
+            0
+        } else {
+            copies_in_memory(e, of, &text)
+        };
+        (text, count, e.log_path().map(Path::to_path_buf), store)
     };
     let ops = |ops: Vec<LogOp>, context: &str| {
         tempo_app::logwrite::change_row(
@@ -812,6 +808,17 @@ pub(super) fn change_found(
         count,
         durable: store.then_some(durable),
     })
+}
+
+/// How many copies of `of` — written as `text` — the store-less last resort's log holds.
+#[allow(deprecated)] // SPEC-2 C19 (C19L): the store-less last resort's log is the log in memory
+fn copies_in_memory(e: &Engine, of: &QsoRecord, text: &str) -> usize {
+    e.log_records()
+        .iter()
+        .filter(|r| {
+            r.call == of.call && r.when_unix == of.when_unix && adif_record_own_log(r) == text
+        })
+        .count()
 }
 
 fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {

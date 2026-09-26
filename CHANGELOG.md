@@ -165,6 +165,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QSOs it had marked stay marked, and when the logbook was busy Nexus says how many of how many it
   reached. Marking again finishes the rest and marks none of them twice.
 
+- **A change made in another window on the same logbook no longer makes the radio wait.** Two
+  Nexus windows can share one logbook, and each used to read the whole log again, while the radio
+  waited, whenever the other one changed it: about a second on a log of 150,000 contacts, nearly
+  four at 500,000. A contact marked uploaded or QSL sent in the other window now costs this one
+  nothing, and any other change is read in while the radio carries on.
+
+- **Turning Field Day on no longer stops the radio to read a busy logbook.** Starting a contest
+  session reads the contacts it checks for duplicates. When the logbook is too busy to answer —
+  a big import, another window, a sync — Nexus tries again for a few seconds at most, then leaves
+  Field Day as it was and says the logbook was busy, so trying again in a moment works. At
+  start-up, a Field Day session the logbook is too busy to resume within a few seconds is left
+  off, and Nexus says to turn it on again when you are ready.
+
 - **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
   Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
   confirmation, every edit — and on a big log that rewrite was long enough to make the radio and

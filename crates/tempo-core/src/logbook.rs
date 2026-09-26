@@ -3766,6 +3766,16 @@ pub fn parse_adif(text: &str) -> Vec<QsoRecord> {
         .collect()
 }
 
+/// The calls of the records a `log.adi`'s text holds, and each record's id as a load of the file
+/// gives it — its own, or a provisional one from its text ([`Logbook::reconcile_disk_except`]'s
+/// ids): what a take-in of the file is planned by, on the rows of those calls (SPEC-2 v3 C19).
+pub fn file_calls_and_ids(text: &str) -> (Vec<String>, Vec<RecordId>) {
+    let mut rows = parse_adif_spans(text);
+    id::settle_file_ids(rows.iter_mut().map(|(r, span)| (&mut r.id, *span)));
+    let ids = rows.iter().filter_map(|(r, _)| r.id).collect();
+    (rows.into_iter().map(|(r, _)| r.call).collect(), ids)
+}
+
 /// [`parse_adif`], with each record's own text beside it: after the previous `<EOR>` (or the
 /// header) through this record's `<EOR>`. A provisional id hashes that span (see `id`).
 fn parse_adif_spans(text: &str) -> Vec<(QsoRecord, &str)> {

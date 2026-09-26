@@ -62,10 +62,6 @@
 //! **Not fenced, each for a reason recorded where it happens** — every one of these runs under
 //! the Engine lock today, so a fence there would stop a debug build rather than prove anything:
 //!
-//! - the re-read of the store after ANOTHER process committed (`LogStore::reload`) and the
-//!   read of a `log.adi` the mirror refused (`take_in_refused_log_file`): only when a second
-//!   Nexus shares the data folder, at the points the 1.13 path re-read `log.adi` under the
-//!   same lock;
 //! - the exit's flush of the writer and the mirror (`flush_logbook`), under the lock
 //!   deliberately so no change lands after it — once the radio loop has stopped;
 //! - the held-QSO journal (`persist_pending_qso`), still written under the lock: Remote
