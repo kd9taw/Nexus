@@ -22,6 +22,7 @@ mod scope;
 pub use scope::{RemoteScope, ScopeFamily, ICOM_SCOPE_SPANS_HZ, YAESU_SCOPE_HALF_SPANS_HZ};
 mod split;
 mod spot;
+mod sub_level;
 mod workspace;
 pub use dsp::{AgcSpeed, ReceiverDsp, ReceiverFunction};
 

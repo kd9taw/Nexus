@@ -202,6 +202,23 @@ describe('Band Activity: the filter chips wrap instead of clipping in the rail',
   })
 })
 
+describe('Phone Receiver: the attenuator chips wrap instead of clipping in the column', () => {
+  // The same nowrap-atom mechanism as `.od-filters` above. `.ph-steps` draws the pads the
+  // radio PUBLISHES, one chip each, and the IC-7610 publishes fifteen (3–45 dB) plus Off. In
+  // the 3-column Phone layout the Receiver pane's column is narrower than sixteen chips, and
+  // `.cockpit-col` clips overflow-x: measured in Chrome at 1920×1080, the 33–45 dB chips sat
+  // past the clip edge, reachable by no pointer. jsdom cannot see that; what this pins is that
+  // the escape hatch exists and wins.
+  it('.ph-steps wraps', () => {
+    const v = winner('.ph-steps', 'flex-wrap')
+    expect(
+      v,
+      '.ph-steps has no flex-wrap: a long pad list runs past the column edge, which clips ' +
+        'overflow-x, and its last chips are on screen nowhere.',
+    ).toBe('wrap')
+  })
+})
+
 describe('SSTV: the band view re-arms its own floor', () => {
   // gap-closure/verified.md V14 — `.sstv-band { min-height: 220px }` inside
   // `.sstv-canvas { flex: 1.1 1 0; min-height: 0; align-items: center }`, whose own comment

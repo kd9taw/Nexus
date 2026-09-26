@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Page Down, and Home and End move through your contacts; Enter edits the one you are on, and Delete
   asks before deleting it. A Remote browser without the station's edit rights can move through the
   list but not edit or delete.
+- **The Sub receiver of an IC-7610 or IC-9700 now has its own row on the Phone and CW screens.**
+  In Phone's Receiver pane and in CW's rig controls, a **SUB** row shows the second receiver: its
+  frequency where Nexus knows it (the uplink during a satellite pass), and sliders for its RF gain
+  and, on an IC-7610, its AF gain and squelch. The main receiver's controls are labelled **MAIN**
+  while the SUB row is there. It appears when the radio runs through Nexus's own CI-V control,
+  and the sliders change only the Sub — the main receiver's controls are untouched. The Remote
+  page shows the same row, and its sliders work while you hold control of the station; a station
+  still on an older version of Nexus shows no SUB row there. Nexus does not read the Sub's levels
+  back from the radio yet, so each slider shows the last value the radio accepted from Nexus, and
+  a knob turned on the radio itself is not reflected. An IC-9700 gets RF gain only: Icom's
+  documentation does not say its Sub has an audio stage of its own. In CW the SUB row hides with
+  the RX DSP controls. Other dual-receiver radios (FTDX101, TS-990S, IC-9100, IC-910H, FTDX5000),
+  an Icom run through Hamlib, and every radio with one receiver look exactly as before. Needs
+  checking on a real IC-7610 and IC-9700.
 
 - **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
   The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for
@@ -237,6 +251,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sending again cannot fix, is kept for the session instead, and the quit asks about it. At the
   quit, **Keep trying** now really sends those changes again, so freeing some disk space and
   pressing it saves them.
+- **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
+  notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
+  with the Sub band selected on the radio. The frequency and mode Nexus shows are now Main's too,
+  so selecting the Sub band on the radio, or tuning it, no longer moves them, and a frequency or
+  mode change made from Nexus goes to Main as well. Split works exactly as before. Needs checking
+  on a real IC-7610.
+- **IC-7610 on native CI-V: the attenuator offers all fifteen of the radio's steps, 3 to 45 dB in
+  3 dB steps**, where Nexus offered 6, 12 and 18. The list is the one Icom documents for the
+  radio. Where the Receiver pane is too narrow for every step in one row, the steps wrap onto a
+  second row rather than running off the edge. Every other radio offers the same steps as before.
+  Needs checking on a real IC-7610.
+- **On a cross-band satellite pass, the licence check and the band strip follow the band you
+  transmit on.** On an IC-9700 or IC-905 using native CI-V the uplink goes out on the Sub band,
+  so the band strip now shades the phone segment of the uplink's band rather than the
+  downlink's. The transmit lock judges the same frequency it always did. The new refusals are an
+  uplink whose mode Nexus no longer sets because you changed it mid-pass, in FT and the other
+  data modes, PSK31, RTTY sent as audio tones, or CW sent from the sound card, near a segment
+  edge: it now stays locked unless both sides of the carrier are inside your privileges.
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
