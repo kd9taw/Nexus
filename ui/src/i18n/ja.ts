@@ -4912,7 +4912,7 @@ export const JA: PartialCatalog = {
   "rtty.clear.label": "クリア",
   "rtty.clear.title": "デコードした文章をクリアします",
   "rtty.stream.listening": "ワッチ中…",
-  "rtty.stream.sent.title": "Sent by this station",
+  "rtty.stream.sent.title": "この局が送信",
   "rtty.stream.idle": "受信音声から RTTY をデコードするには RX アームを押してください",
   "rtty.seq.aria": "RTTY 自動シーケンサー",
   "rtty.seq.callingCq": "CQ 送出中",

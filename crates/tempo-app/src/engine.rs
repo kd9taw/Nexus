@@ -3077,6 +3077,14 @@ pub struct Engine {
     /// True while the radio loop is keying an RTTY over (stamped by the loop each
     /// tick; the cockpit's sending indicator).
     rtty_sending: bool,
+    /// THE ONE-SHOT OVER THE TRANSCRIPT ECHO FOLLOWS (#379) — the one keying now, or the last
+    /// one that did. See [`RttyTxOver`].
+    ///
+    /// ⛔ DISPLAY BOOKKEEPING, NOTHING ELSE. Written only by what the radio loop reports
+    /// ([`Engine::rtty_over_keyed`] / [`Engine::rtty_over_advance`] /
+    /// [`Engine::rtty_over_cut`]) and by the latched stream's echo. No TX gate, queue or abort
+    /// reads it, so nothing here can key, hold or unkey anything.
+    rtty_tx_over: Option<RttyTxOver>,
     /// An RTTY keyer failure to surface (FSK port wouldn't open / PTT refused).
     rtty_keyer_error: Option<String>,
     /// The RTTY auto-sequencer, present ONLY while the operator has flipped Auto
@@ -4020,6 +4028,22 @@ pub struct RttyRxState {
     pub heard_cq: Option<String>,
 }
 
+/// One RTTY one-shot over as the transcript echo follows it (#379) — an F-key macro, a line
+/// sent with Enter, or an auto-sequencer over. It carries the air time at which each of its
+/// characters finishes — computed from the same Baudot encoding the radio loop keys, shift
+/// codes included — so the loop's clock alone decides how much of it has gone out.
+#[derive(Debug, Clone, PartialEq)]
+struct RttyTxOver {
+    /// The over's characters, exactly as keyed (ITA2-filtered, upper case).
+    chars: Vec<char>,
+    /// Parallel to `chars`: the loop-clock ms at which each character's last stop bit ends.
+    ends_ms: Vec<f64>,
+    /// How many of `chars` have gone to the air — and into the transcript, marked ours.
+    keyed: usize,
+    /// Stopped before its end: `chars[keyed..]` never went out.
+    cut: bool,
+}
+
 /// Compact PSK31 state for the `get_psk_state` poll: armed flag, AFC, signal
 /// presence, the netted audio center, the decoded-text ring with per-character
 /// confidence (0–100, parallel to `text`'s chars — render low values faint),
@@ -4860,6 +4884,7 @@ impl Engine {
             rtty_type_buf: VecDeque::new(),
             rtty_latch_start_ms: None,
             rtty_sending: false,
+            rtty_tx_over: None,
             rtty_keyer_error: None,
             rtty_seq: None,
             rtty_auto_over: false,
@@ -16396,14 +16421,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Auto-sequencer surface: the live state, the peer + their copied exchange,
         // and — only while Auto is on — a heard CQ the operator can click to answer.
         // `find_cq` SURFACES only; it never drives the machine (the human gate).
+        //
+        // ⚠️ It reads what came OFF THE AIR, never the whole transcript. The transcript echoes
+        // our own overs, and `find_cq` surfaces the NEWEST CQ in what it is given — so after
+        // we called CQ, the Answer button offered to answer our own call. What was received,
+        // in order, is exactly the text this read before there was an echo at all.
         let (auto, seq_state, peer, peer_exchange, heard_cq) = match &self.rtty_seq {
-            Some(seq) => (
-                true,
-                seq_state_label(seq.state()).to_string(),
-                seq.peer().map(|s| s.to_string()),
-                seq.peer_exchange().to_vec(),
-                tempo_core::rtty::seq::find_cq(&text),
-            ),
+            Some(seq) => {
+                let received: String = self
+                    .rtty_chars
+                    .iter()
+                    .filter(|(_, ours)| !ours)
+                    .map(|(c, _)| c.ch)
+                    .collect();
+                (
+                    true,
+                    seq_state_label(seq.state()).to_string(),
+                    seq.peer().map(|s| s.to_string()),
+                    seq.peer_exchange().to_vec(),
+                    tempo_core::rtty::seq::find_cq(&received),
+                )
+            }
             None => (false, "idle".to_string(), None, Vec::new(), None),
         };
         // Mark/space tones the demod is netted on (waterfall cursor positions) —
@@ -17141,6 +17179,117 @@ Pick the one you operate from on the Contesting tab in Settings.",
         std::mem::take(&mut self.rtty_abort)
     }
 
+    // ----- THE ONE-SHOT ECHO (#379) — display bookkeeping only. -----
+    //
+    // A one-shot over (an F-key macro, a line sent with Enter, every auto-sequencer over)
+    // is handed to the radio loop whole by `poll_rtty_one`, so nothing here can see it go
+    // out unless the loop says so. It says three things: that the over STARTED keying
+    // ([`Self::rtty_over_keyed`] — called only once the keyline or the audio ring has
+    // actually been handed it, so an over whose FSK port would not open is never echoed),
+    // how far the air has got ([`Self::rtty_over_advance`], every tick), and that it was
+    // CUT ([`Self::rtty_over_cut`], when the loop consumes an abort and flushes). All three
+    // are measured on the LOOP's clock — the one its `rtty_busy_until` and `tx_until_ms`
+    // are computed on — so the echo keeps pace with the keying it describes rather than
+    // with a second clock.
+    //
+    // ⛔ A PURE SIDE EFFECT. These write `rtty_tx_over` and the transcript ring and
+    // nothing else: no TX gate, queue or abort flag is read or written, and none returns
+    // anything the loop could act on.
+
+    /// A one-shot over started keying at loop time `now_ms`: record it for the transcript
+    /// echo.
+    ///
+    /// Each character's end time comes from the SAME Baudot encoding the loop keys — a
+    /// carried encoder, so a shift code costs its character the air time it really takes —
+    /// at 7.5 bit times a code, which is the whole of `fsk_schedule`'s arithmetic. A
+    /// character therefore reaches the transcript when its last stop bit has gone out.
+    pub fn rtty_over_keyed(&mut self, text: &str, baud: f64, now_ms: f64) {
+        // Whatever the last over was, the air has moved on to this one: settle it first.
+        self.rtty_over_advance(now_ms);
+        let char_ms = crate::keyboard::RTTY.char_ms(baud);
+        let mut enc = tempo_core::rtty::BaudotEncoder::new(true);
+        let mut codes = Vec::new();
+        let (mut chars, mut ends_ms) = (Vec::new(), Vec::new());
+        for c in text.chars() {
+            let before = codes.len();
+            enc.push_char(c, &mut codes);
+            if codes.len() > before {
+                chars.push(c);
+                ends_ms.push(now_ms + codes.len() as f64 * char_ms);
+            }
+        }
+        self.rtty_tx_over = Some(RttyTxOver {
+            chars,
+            ends_ms,
+            keyed: 0,
+            cut: false,
+        });
+    }
+
+    /// The air has reached loop time `now_ms`: every character of the one-shot over whose
+    /// last stop bit has ended goes into the transcript, marked ours. The loop calls this
+    /// on every tick; it is idle when no one-shot over is going out.
+    pub fn rtty_over_advance(&mut self, now_ms: f64) {
+        let Some(over) = self.rtty_tx_over.as_mut() else {
+            return;
+        };
+        if over.cut {
+            return;
+        }
+        let done = over.ends_ms.partition_point(|&end| end <= now_ms);
+        if done <= over.keyed {
+            return;
+        }
+        let keyed: Vec<char> = over.chars[over.keyed..done].to_vec();
+        over.keyed = done;
+        self.rtty_echo_sent(&keyed);
+    }
+
+    /// The loop consumed an abort at loop time `now_ms` and flushed the transmitter: what
+    /// had keyed by then stays in the transcript, and the rest of the over never went out.
+    pub fn rtty_over_cut(&mut self, now_ms: f64) {
+        self.rtty_over_advance(now_ms);
+        if let Some(over) = self.rtty_tx_over.as_mut() {
+            if over.keyed < over.chars.len() {
+                over.cut = true;
+            }
+        }
+    }
+
+    /// Our own keyed characters into the transcript ring, marked as sent, capped exactly as
+    /// the RX feed is. Confidence 1.0: our own text is not a guess about a signal, and the
+    /// faint low-confidence rendering must not dim the one thing on screen we are sure of.
+    fn rtty_echo_sent(&mut self, chars: &[char]) {
+        self.rtty_chars.extend(chars.iter().map(|&ch| {
+            (
+                tempo_core::rtty::DecodedChar {
+                    ch,
+                    confidence: 1.0,
+                },
+                true,
+            )
+        }));
+        while self.rtty_chars.len() > RTTY_TEXT_CAP {
+            self.rtty_chars.pop_front();
+        }
+    }
+
+    /// The latched stream handed these characters to the loop to key: echo them into the
+    /// transcript.
+    fn rtty_stream_keyed(&mut self, sent: &str) {
+        // A one-shot over still finishing ahead of the stream's first chunk is already in the
+        // audio ring in front of it: its tail goes into the transcript first, in air order.
+        if let Some(over) = self.rtty_tx_over.as_mut() {
+            if !over.cut && over.keyed < over.chars.len() {
+                let tail: Vec<char> = over.chars[over.keyed..].to_vec();
+                over.keyed = over.chars.len();
+                self.rtty_echo_sent(&tail);
+            }
+        }
+        let chars: Vec<char> = sent.chars().collect();
+        self.rtty_echo_sent(&chars);
+    }
+
     // ----- RTTY continuous TX (the MMTTY "TX" latch) — stay keyed and type into
     // a live transmission, instead of one keyed over per Enter. -----
     //
@@ -17384,27 +17533,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // AFTER this returns and before the loop keys. That window is one tick, and it is
         // bounded by the look-ahead rather than by the whole over. Closing it would mean
         // moving the echo into the audio loop, which does not own the transcript.
+        //
+        // #379: through the helper the one-shot echo shares, which lands a one-shot over still
+        // finishing ahead of this chunk first, so the transcript keeps air order.
         if res.drop.is_none() && !self.rtty_abort {
             if let RttyStreamTick::Text(sent) = &res.tick {
-                let keyed: Vec<(tempo_core::rtty::DecodedChar, bool)> = sent
-                    .chars()
-                    // Confidence 1.0: our own text is not a guess about a signal. The
-                    // faint low-confidence rendering is about copy quality, and it must not
-                    // dim the one thing on screen we are certain of.
-                    .map(|ch| {
-                        (
-                            tempo_core::rtty::DecodedChar {
-                                ch,
-                                confidence: 1.0,
-                            },
-                            true,
-                        )
-                    })
-                    .collect();
-                self.rtty_chars.extend(keyed);
-                while self.rtty_chars.len() > RTTY_TEXT_CAP {
-                    self.rtty_chars.pop_front();
-                }
+                self.rtty_stream_keyed(sent);
             }
         }
         match res.drop {
@@ -24376,6 +24510,144 @@ mod tests {
         // test. The guard stays — it is correct, it is cheap, and the failure it prevents is
         // a false record of your own transmission — but it is reasoned, not covered.
         // Closing it wants either a clock seam or a bench check with a short watchdog.
+    }
+
+    /// Our own keyed characters in the transcript, in order — the echo's observable.
+    fn rtty_sent(e: &Engine) -> String {
+        let st = e.rtty_state();
+        st.text
+            .chars()
+            .zip(st.tx.iter())
+            .filter(|(_, &ours)| ours)
+            .map(|(c, _)| c)
+            .collect()
+    }
+
+    /// ⭐ **#379: A MACRO OVER IS ECHOED AS IT KEYS — AND A STOP CUTS THE ECHO WHERE THE AIR
+    /// WAS CUT.**
+    ///
+    /// The transcript echo shipped for continuous TX alone. An F-key macro, a line sent with
+    /// Enter and every auto-sequencer over are ONE-SHOT overs that the loop takes whole from
+    /// the queue, and not one of them appeared — which is the CQ WW RTTY report exactly: an
+    /// operator running the contest on F-keys could not see what had gone out. The loop now
+    /// reports the over starting, the air advancing and the cut; this pins what the engine
+    /// makes of those reports.
+    #[test]
+    fn a_macro_over_is_echoed_as_it_keys_and_a_stop_cuts_it_where_the_air_was_cut() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        // An F-key macro, framed for the air the way the cockpit frames it (a line of its
+        // own, ending in a space).
+        e.rtty_send_text("\r\nCQ TEST W9XYZ ").unwrap();
+        let over = e.poll_rtty_one().expect("the loop takes the over");
+        let char_ms = crate::keyboard::RTTY.char_ms(45.45);
+        let t0 = 10_000.0;
+        e.rtty_over_keyed(&over, 45.45, t0);
+        assert_eq!(
+            rtty_sent(&e),
+            "",
+            "nothing has finished keying the instant it starts"
+        );
+
+        // Five character times later — CR, LF, C, Q, space — exactly those five are ours in
+        // the transcript.
+        e.rtty_over_advance(t0 + 5.0 * char_ms + 1.0);
+        assert_eq!(rtty_sent(&e), "\r\nCQ ");
+        // …and not a character early: a millisecond short of the sixth stop bit, still five.
+        e.rtty_over_advance(t0 + 6.0 * char_ms - 1.0);
+        assert_eq!(rtty_sent(&e), "\r\nCQ ");
+
+        // Stop TX mid-over: the loop consumes the abort and flushes at the cut.
+        e.rtty_stop();
+        assert!(e.take_rtty_abort());
+        e.rtty_over_cut(t0 + 7.0 * char_ms + 1.0);
+        assert_eq!(
+            rtty_sent(&e),
+            "\r\nCQ TE",
+            "what went out before the cut stays"
+        );
+        // ⛔ Nothing after the cut ever appears, however long the loop keeps ticking. A
+        // transcript claiming you sent what you did not is a false record of your own
+        // transmission — worse than no echo at all.
+        e.rtty_over_advance(t0 + 60_000.0);
+        assert_eq!(
+            rtty_sent(&e),
+            "\r\nCQ TE",
+            "text that never radiated reached the transcript"
+        );
+    }
+
+    /// The echo keeps the AIR's time, not the text's. "K1 5" is seven codes for four
+    /// characters: K is one, `1` is FIGS+1, the space leaves figures with LTRS+SPACE (USOS),
+    /// and `5` is FIGS+5. A per-character clock would show the `5` after four character
+    /// times, while it is still going out.
+    #[test]
+    fn the_echo_keeps_the_air_time_of_every_shift_code() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let char_ms = crate::keyboard::RTTY.char_ms(45.45);
+        e.rtty_over_keyed("K1 5", 45.45, 0.0);
+        for (codes, want) in [
+            (1.0, "K"),
+            (2.0, "K"),
+            (3.0, "K1"),
+            (4.0, "K1"),
+            (5.0, "K1 "),
+            (6.0, "K1 "),
+            (7.0, "K1 5"),
+        ] {
+            e.rtty_over_advance(codes * char_ms + 0.5);
+            assert_eq!(rtty_sent(&e), want, "after {codes} code times");
+        }
+    }
+
+    /// Every one-shot over is echoed, whichever door it came through — Enter, an F-key, the
+    /// auto-sequencer — because they share one queue and one loop path. An over that runs to
+    /// its end is echoed whole.
+    #[test]
+    fn every_one_shot_over_is_echoed_whole() {
+        let mut e = rtty_auto_engine();
+        e.rtty_auto_cq().unwrap();
+        let cq = e.poll_rtty_one().expect("the auto CQ is a queued over");
+        assert!(
+            cq.contains("CQ"),
+            "precondition: the sequencer's over is a CQ: {cq:?}"
+        );
+        e.rtty_over_keyed(&cq, 45.45, 0.0);
+        e.rtty_over_advance(1.0e9);
+        assert_eq!(rtty_sent(&e), cq, "the auto-sequencer's over, whole");
+    }
+
+    /// ⭐ **OUR OWN CQ IS NEVER OFFERED AS A CQ TO ANSWER.** `find_cq` surfaces the NEWEST
+    /// `CQ … DE <call>` in the transcript for the Answer button, and the echo puts our own
+    /// CQ there — so with Auto on, the newest CQ was ours and the button offered to answer
+    /// our own call. The CQ surfaced must come off the air.
+    #[test]
+    fn our_own_cq_in_the_transcript_is_never_offered_as_a_cq_to_answer() {
+        let mut e = rtty_auto_engine();
+        e.push_rtty_decode(&rtty_decoded("CQ CQ DE W1AW W1AW K "), 0.0, true);
+        assert_eq!(
+            e.rtty_state().heard_cq.as_deref(),
+            Some("W1AW"),
+            "precondition: a CQ off the air is surfaced"
+        );
+        // Our CQ, typed into a latched stream — newer than theirs in the transcript.
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_type("CQ CQ DE W9XYZ W9XYZ K ").unwrap();
+        while let RttyStreamTick::Text(_) = e.poll_rtty_stream(64) {}
+        assert!(
+            rtty_sent(&e).contains("DE W9XYZ"),
+            "precondition: our CQ is in the transcript"
+        );
+        assert_eq!(
+            e.rtty_state().heard_cq.as_deref(),
+            Some("W1AW"),
+            "our own CQ was offered as a station to answer"
+        );
+        // …and the same for a CQ sent as a one-shot over (an F-key).
+        e.rtty_stop();
+        e.rtty_over_keyed("\r\nCQ TEST W9XYZ W9XYZ ", 45.45, 0.0);
+        e.rtty_over_advance(1.0e9);
+        assert_eq!(e.rtty_state().heard_cq.as_deref(), Some("W1AW"));
     }
 
     #[test]

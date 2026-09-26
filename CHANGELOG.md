@@ -107,8 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The RTTY decoded-text window now shows what you sent, alongside what you received.** Your own
   keyed text went to the air and nowhere else, so the one window that is supposed to be the
   record of the contact held only half of it — you could read their side of an exchange but not
-  your own, and there was no way to check what actually went out. Sent text now appears in the
-  same window as it keys, marked as yours so the two are never confused.
+  your own, and there was no way to check what actually went out. Every over you send now
+  appears in that window a character at a time as it goes out — an F-key macro, a line sent with
+  Enter, an Auto call, or text typed with continuous TX — in the accent colour with a rule down
+  its left edge, so your side and theirs are never confused. Stop TX ends it where the
+  transmission was cut: nothing that stayed off the air appears.
 - **A satellite tag can be corrected or taken off a contact without leaving Nexus.** A contact
   carrying the wrong satellite — or carrying one when it was never on a bird at all, which is
   what the 0.24–0.27 tagging bug left behind — could only be repaired by closing Nexus and
