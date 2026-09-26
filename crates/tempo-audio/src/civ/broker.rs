@@ -3912,11 +3912,8 @@ mod tests {
             (0xA2, IcomModel::Ic9700, true),
             (0x94, IcomModel::Ic7300, false),
         ] {
-            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let port = probe.local_addr().unwrap().port();
-            drop(probe);
             let (radio, _push) = FakeRadio::new(addr);
-            let d = CivDaemon::start_with_io(Box::new(radio), addr, port, 1, Some(model)).unwrap();
+            let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
             assert_eq!(d.names_receivers(), names, "{model:?}");
         }
     }

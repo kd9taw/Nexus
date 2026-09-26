@@ -25692,12 +25692,10 @@ mod tests {
         addr: u8,
         model: crate::civ::commands::IcomModel,
     ) -> (CivDaemon, Rig, Arc<Mutex<Regs>>) {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
         let (radio, _push) = FakeRadio::new(addr);
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), addr, port, 1, Some(model)).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+        let port = d.local_addr().port();
         (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
     }
 
