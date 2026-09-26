@@ -1318,6 +1318,10 @@ mod tests {
         Edit(usize, QsoRecord),
         Delete(usize),
         Clear,
+        /// The purge as the app tells the index: the same clear of the log, but no row pairs —
+        /// [`HotIndex::purge`], or with `true` [`HotIndex::purge_taking`], which hands back the
+        /// index as it stood.
+        Purge(bool),
         Stamp(usize),
         QslSent(usize),
         QslCard(usize),
@@ -1337,6 +1341,7 @@ mod tests {
             3 => (any::<usize>(), arb_contact()).prop_map(|(i, r)| Step::Edit(i, r)),
             2 => any::<usize>().prop_map(Step::Delete),
             1 => Just(Step::Clear),
+            1 => any::<bool>().prop_map(Step::Purge),
             2 => any::<usize>().prop_map(Step::Stamp),
             1 => any::<usize>().prop_map(Step::QslSent),
             1 => any::<usize>().prop_map(Step::QslCard),
@@ -1374,7 +1379,7 @@ mod tests {
             Step::Delete(i) if n > 0 => {
                 log.delete(i % n);
             }
-            Step::Clear => {
+            Step::Clear | Step::Purge(_) => {
                 log.clear();
             }
             Step::Stamp(i) if n > 0 => {
@@ -1522,9 +1527,11 @@ mod tests {
 
         /// ★ THE PARITY PROPERTY. An index follows a random sequence of every kind of change,
         /// handed each as the rows it took out and put in — its pairs, found by id, the ONLY way
-        /// it hears of a change (SPEC-2 v3 C19) — beside an index built afresh from the log after
-        /// each. After every change, every answer each gives is its oracle's — the scans the code
-        /// asked before C13 — and the one that followed never let go of the log.
+        /// it hears of a change (SPEC-2 v3 C19), except a purge, which is told with none — beside
+        /// an index built afresh from the log after each. After every change, every answer each
+        /// gives is its oracle's — the scans the code asked before C13 — and the one that
+        /// followed never let go of the log. The index a purge hands back
+        /// ([`HotIndex::purge_taking`]) still answers as the log did before it.
         #[test]
         fn every_answer_is_the_old_scans_after_every_kind_of_change(
             steps in prop::collection::vec(arb_step(), 1..40),
@@ -1537,13 +1544,34 @@ mod tests {
             let mut followed = HotIndex::build(&log, &Keys);
             for step in steps {
                 let before = (log.revision(), log.records().to_vec());
+                let purge = match &step {
+                    Step::Purge(taking) => Some((*taking, log.clone())),
+                    _ => None,
+                };
                 run(&mut log, step);
-                let pairs = pairs_between(&before.1, log.records());
-                followed.follow(&pairs, before.0, log.revision(), &Keys);
+                match purge {
+                    None => {
+                        let pairs = pairs_between(&before.1, log.records());
+                        followed.follow(&pairs, before.0, log.revision(), &Keys);
+                    }
+                    Some((false, _)) => followed.purge(before.0, log.revision()),
+                    Some((true, held)) => {
+                        let taken = followed.purge_taking(before.0, log.revision());
+                        prop_assert_eq!(
+                            taken.is_some(),
+                            before.0 != log.revision(),
+                            "an index is handed back exactly when the purge moved the log"
+                        );
+                        if let Some(mut taken) = taken {
+                            assert_parity(&mut taken, &held, &probes, (cutoff, &rule))?;
+                            taken.verify(&held, &Keys);
+                        }
+                    }
+                }
                 prop_assert_eq!(
                     followed.at,
                     Some(log.revision()),
-                    "the index handed each change's pairs followed it, and never let go"
+                    "the index followed each change, and never let go"
                 );
                 let mut built = HotIndex::build(&log, &Keys);
                 assert_parity(&mut followed, &log, &probes, (cutoff, &rule))?;
