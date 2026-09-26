@@ -21730,6 +21730,75 @@ button.sat-chip:disabled {
   color: var(--tx);
 }
 
+/* THE TX LINE (#379) — what this station is sending, at the left of the compose row. It
+   SHARES that row with the compose field (both `flex: 1 1 0`) instead of adding one: the dock
+   is already two rows at the 1024×768 floor, where a CQ WW RTTY log strip has no height to
+   spare. Its content is one line of the input's own type, so the row stays the input's
+   height. Nothing here is interactive — the compose field is still the only thing that
+   takes typing.
+   `position: relative` is load-bearing, not tidiness: the line's screen-reader labels are
+   `.sr-only` (absolutely positioned), and a Remote observer's dock is `position: static`. With no
+   positioned ancestor their containing block was the page, so they escaped the cockpit's own
+   scroller and stretched the DOCUMENT to where the dock sits in it — 1240 px tall in an 844 px
+   window at 390 wide (the compiled browser sweep's "rtty is bounded"). */
+.rtty-txline {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  overflow: hidden;
+}
+.rtty-txline-plate {
+  flex: 0 0 auto;
+  font-size: var(--fs-label);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+/* On the air: the plate reads in the on-air red, as `.rtty-tx-pill` does. */
+.rtty-txline.live .rtty-txline-plate {
+  color: var(--tx);
+}
+.rtty-txline-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+/* Gone out: UNDERLINED. The underline is the fact, not the colour — the tooltip says so, and a
+   screen reader hears the part's name first. */
+.rtty-txline-keyed {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+/* Still to go: faint, and while the transmitter is up a bar marks the keying point. */
+.rtty-txline-pending {
+  color: var(--text-faint);
+}
+.rtty-txline.live .rtty-txline-pending {
+  border-left: 2px solid var(--tx);
+}
+/* Stopped: what never went out is struck through. */
+.rtty-txline-unsent {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.rtty-txline-empty {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 /* Their-call field in the dock's fixed row — feeds the {CALL} macro token. */
 .rtty-hiscall {
   width: 9em;

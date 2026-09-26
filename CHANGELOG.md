@@ -112,6 +112,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Enter, an Auto call, or text typed with continuous TX — in the accent colour with a rule down
   its left edge, so your side and theirs are never confused. Stop TX ends it where the
   transmission was cut: nothing that stayed off the air appears.
+- **The RTTY cockpit shows what you are sending, at the bottom beside the typing field.** Working a
+  contest on the F-keys, nothing on screen said what an over said or whether it had finished —
+  which is exactly the doubt a call that goes unanswered leaves. The line to the left of the
+  typing field shows the over going out, or the last one: the part already sent is underlined,
+  the rest follows it, and an over you stopped shows what never went out struck through. It
+  covers F-key macros, Enter, Auto calls and continuous TX, needs no setting, and takes no room
+  from the log strip. (#379)
 - **A satellite tag can be corrected or taken off a contact without leaving Nexus.** A contact
   carrying the wrong satellite — or carrying one when it was never on a bird at all, which is
   what the 0.24–0.27 tagging bug left behind — could only be repaired by closing Nexus and

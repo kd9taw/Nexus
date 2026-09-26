@@ -21564,8 +21564,8 @@ mod tests {
     fn a_one_shot_rtty_over_is_echoed_as_the_loop_keys_it_and_a_stop_cuts_the_echo_with_the_air() {
         // ⭐ #379, AT THE LAYER THAT KEYS. An F-key macro (and Enter, and every auto-sequencer
         // over) is a one-shot over the loop takes whole from the queue. The transcript echo
-        // learns about it only from the loop — that it started keying, how far the air has
-        // got, and where Stop cut it — so this drives the real loop and
+        // and the dock's TX line learn about it only from the loop — that it started keying,
+        // how far the air has got, and where Stop cut it — so this drives the real loop and
         // reads the engine: the echo must follow the stop bits, and a Stop must end it in the
         // same tick that flushes the audio and drops PTT.
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
@@ -21606,7 +21606,12 @@ mod tests {
             rig.keyed && !backend.played.is_empty(),
             "precondition: the over is keying"
         );
-        assert_eq!(rtty_sent(&engine), "", "nothing has finished keying yet");
+        let st = engine.lock().unwrap().rtty_state();
+        assert_eq!(
+            st.tx_text, "CQ TEST DE W9XYZ",
+            "the TX line holds the over from its first tick"
+        );
+        assert_eq!(st.tx_keyed, 0);
 
         // Three stop bits out (C, Q, space end at 3 × 165 ms): exactly those three are ours.
         step_until(
@@ -21621,6 +21626,7 @@ mod tests {
             "CQ ",
             "the echo follows the loop's own clock"
         );
+        assert_eq!(engine.lock().unwrap().rtty_state().tx_keyed, 3);
 
         // Stop TX before the fourth stop bit. The next tick flushes, unkeys — and cuts.
         engine.lock().unwrap().rtty_stop();
@@ -21631,6 +21637,12 @@ mod tests {
             !rig.keyed && backend.flush_calls > flushes,
             "precondition: the loop cut the air"
         );
+        let st = engine.lock().unwrap().rtty_state();
+        assert_eq!(
+            (st.tx_keyed, st.tx_cut),
+            (3, true),
+            "the TX line marks the cut where the air was cut"
+        );
         // ⛔ …and the rest of the over — still sitting in the schedule the loop computed —
         // never reaches the transcript, however long the loop keeps ticking.
         step_until(&mut state, &mut backend, &mut rig, &mut t, 5_000.0);
@@ -21640,7 +21652,7 @@ mod tests {
             "text that never radiated reached the transcript"
         );
 
-        // An over that runs to its end is echoed whole.
+        // An over that runs to its end is echoed whole, and the TX line keeps it.
         engine.lock().unwrap().rtty_send_text("TEST").unwrap();
         step_until(
             &mut state,
@@ -21650,6 +21662,11 @@ mod tests {
             5_000.0 + 5.0 * char_ms,
         );
         assert_eq!(rtty_sent(&engine), "CQ TEST");
+        let st = engine.lock().unwrap().rtty_state();
+        assert_eq!(
+            (st.tx_text.as_str(), st.tx_keyed, st.tx_cut),
+            ("TEST", 4, false)
+        );
     }
 
     #[cfg(feature = "serial")]
@@ -21658,7 +21675,7 @@ mod tests {
         // The other half of "only what radiated" (#379): the loop reports an over as keying
         // only once the keyline or the audio ring has actually been handed it. A true-FSK
         // port that will not open keys nothing — it surfaces a keyer error instead — so the
-        // transcript must not claim the over went out.
+        // transcript and the TX line must not claim the over went out.
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         {
             let mut e = engine.lock().unwrap();
@@ -21701,6 +21718,7 @@ mod tests {
             "",
             "an over that never keyed was echoed"
         );
+        assert_eq!(st.tx_text, "", "an over that never keyed is on the TX line");
     }
 
     /// A radio loop with continuous RTTY TX latched and keying, plus the clock it
