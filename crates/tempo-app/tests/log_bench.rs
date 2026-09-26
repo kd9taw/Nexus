@@ -10,7 +10,7 @@
 //! 1. **The engine's steady-state log memory**: the live Rust heap the attached log holds above
 //!    the engine before it — at most 60 MiB at 150k contacts and 200 MiB at 500k. SQLite's page
 //!    cache is its own allocator's and outside the count, as in tempo-core's `mirror_memory`.
-//!    Reported now; asserted once the cut removes the log in memory ([`AFTER_THE_CUT`]).
+//!    Asserted since the cut removed the log in memory ([`AFTER_THE_CUT`]).
 //! 2. **No whole-log allocation per logged contact**: the largest single allocation one contact's
 //!    log call makes on the calling thread, against a whole-log one (a pointer per contact), and
 //!    the bytes it allocates, at each size.
@@ -45,10 +45,10 @@ use tempo_core::logbook::{
 mod lock_watch;
 use lock_watch::{keep_sqlite_statistics, load_line, sqlite_heap, Holds, Watcher};
 
-/// Whether the cut has removed the log in memory: the memory bounds are asserted from then on.
-/// Until then the attached log still holds every contact in memory beside the store, and the
-/// number is reported, not held to the bound.
-const AFTER_THE_CUT: bool = false;
+/// The cut has removed the log in memory (SPEC-2 v3 C19), so every bound is asserted. Before
+/// it, the attached log held every contact in memory beside the store, and the numbers were
+/// reported, not held to their bounds.
+const AFTER_THE_CUT: bool = true;
 
 /// §4.11's bound on an Engine-lock hold in any log path.
 const HOLD_BOUND: Duration = Duration::from_millis(5);
