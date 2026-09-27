@@ -274,7 +274,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const needsRead = useRemoteCollection('needs')
   const spotsRead = useRemoteCollection('spots')
   const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
-  const [theme, setTheme] = useTheme()
+  const [theme, setTheme, themeChoice] = useTheme()
   // The contrast axis: field mode (outdoor/POTA) and the standing high-contrast preference
   // (#215). Both set data-contrast on <html>; only field mode is handed to useScale, because
   // only it carries the larger auto-fit. Global — facts about the station, like the theme.
@@ -3009,7 +3009,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onResetLayout={resetWidths}
             features={features}
             onRerunWizard={() => setShowWizard(true)}
-            theme={theme}
+            theme={themeChoice}
             onThemeChange={setTheme}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}

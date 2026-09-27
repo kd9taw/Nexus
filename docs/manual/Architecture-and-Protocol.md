@@ -15,7 +15,7 @@ Nexus is a stack: a web UI on top, a Rust core in the middle, and a Fortran/C mo
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Tauri v2 desktop shell + web UI (React + TypeScript)          │
-│   chat-first three-zone layout · Light/Dark/Amber themes       │
+│   chat-first three-zone layout · Light/Dark/System themes      │
 ├──────────────────────────────────────────────────────────────┤
 │ Rust core (crates/)                                            │
 │   tempo-app   UI logic + serde DTOs + live TX/RX Engine        │

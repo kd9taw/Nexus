@@ -492,6 +492,7 @@ export const EN = {
   'monitor.off': 'Off',
   'monitor.light': 'Use light theme',
   'monitor.dark': 'Use dark theme',
+  'monitor.system': 'Use system theme',
   'monitor.previewTools': 'Preview controls',
   'monitor.scenario': 'Example state',
   'monitor.textSize': 'Display size',
@@ -9524,6 +9525,9 @@ export const EN = {
   'theme.light.title': 'Light (sunlight)',
   'theme.dark.label': 'Dark',
   'theme.dark.title': 'Dark (shack)',
+  // System: follow the computer's own light/dark setting (useTheme.ts). Dark stays the default.
+  'theme.system.label': 'System',
+  'theme.system.title': 'System (follows your computer’s light or dark setting)',
 
   // ── The waterfall palette picker ────────────────────────────────────────────────────
   // Two wordings, and the difference is load-bearing: an UNSCOPED picker drives the master

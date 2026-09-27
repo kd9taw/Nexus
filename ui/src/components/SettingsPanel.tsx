@@ -188,6 +188,7 @@ import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
+import type { ThemeChoice } from '../useTheme'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
@@ -251,10 +252,11 @@ interface Props {
   features: FeaturesApi
   /** Re-open the first-run setup wizard. */
   onRerunWizard?: () => void
-  /** Theme (Light/Dark) — moved here from the top bar (operator, 2026-08-10);
-   * optional so hosts/tests without theme wiring render the tab unchanged. */
-  theme?: 'light' | 'dark'
-  onThemeChange?: (t: 'light' | 'dark') => void
+  /** Theme (Light/Dark/System) — moved here from the top bar (operator, 2026-08-10); the
+   * operator's CHOICE, 'system' included, not the resolved theme the page paints. Optional so
+   * hosts/tests without theme wiring render the tab unchanged. */
+  theme?: ThemeChoice
+  onThemeChange?: (t: ThemeChoice) => void
   /** #215: Field mode — maximum contrast plus larger type (`useFieldMode`). It shipped as a
    *  chip in the top bar only, which is the other half of why the operator who asked for a
    *  high-contrast, large-text setting could not find one: the two halves of the answer were

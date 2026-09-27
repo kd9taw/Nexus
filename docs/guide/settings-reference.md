@@ -1883,9 +1883,10 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 - **Language** — the language Nexus writes in. Frequencies, signal reports,
   callsigns, grid squares, and band and mode names are never translated or
   reformatted: a dial reads the same in every language.
-- **Theme** — Light or Dark. Light reads best outdoors in daylight. Either way,
-  the top bar's **Field** chip boosts contrast and size on top of the theme you
-  picked.
+- **Theme** — Light, Dark or System. Light reads best outdoors in daylight.
+  **System** follows your computer's own light or dark setting and changes when it
+  does; Dark is the default. Either way, the top bar's **Field** chip boosts
+  contrast and size on top of the theme you picked.
 - **High contrast** — Off or On. Strengthens text against its background in
   whichever theme you are using, and changes nothing else — the interface stays
   exactly the size you have set it. This is the one to reach for if the screen

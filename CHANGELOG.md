@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bigger places to tap: the larger buttons grow from 44 to 48 pixels tall, and the small chips
   (the decode filters, the Settings choices, the top bar's toggles) get a 36-pixel box.
   Comfortable spaces the decode, roster and log rows a little further apart than Standard.
+- **A System theme that follows your computer.** Settings ▸ Appearance ▸ Workspace ▸ Theme offers
+  **System** beside Light and Dark: it takes your computer's light or dark setting and changes
+  when the computer does, for example when it switches to dark in the evening. Dark stays the
+  default, and a theme you already picked is kept. The Remote station monitor's theme button
+  offers it too, as its third press.
 
 ### Changed
 

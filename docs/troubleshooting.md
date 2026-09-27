@@ -418,11 +418,13 @@ them before assuming something's broken:
 
 ## UI — themes and scaling
 
-- **Three themes** live in Settings: **Dark** (default), **Light**, and **Amber**
-  (night-vision). They apply instantly, no restart.
-- **UI scale** has four steps — 90% / 100% / 110% / 125% (default 125% for
-  high-DPI screens). If the interface feels too big or too small, adjust it here.
-- Theme and scale are stored per-machine (in the webview's own store —
+- **Three theme choices** live in Settings ▸ Appearance ▸ Workspace: **Dark**
+  (default), **Light**, and **System**, which follows your computer's light or dark
+  setting. They apply instantly, no restart.
+- **UI scale** fits the interface to the window (**Auto**) or holds a fixed size
+  from 65% to 175% (**Manual**). If only the words are too small, use **Text size**
+  (Normal, Large, Larger) instead: it leaves the rest of the screen at its size.
+- Theme, text size and scale are stored per-machine (in the webview's own store —
   WebView2 under `%LOCALAPPDATA%\com.kd9taw.tempo` on Windows, WKWebView on
   macOS, WebKitGTK on Linux), so they don't travel with a copied
   `settings.json` and reset if that store is cleared.

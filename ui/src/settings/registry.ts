@@ -546,7 +546,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // which is half of why the reporter went hunting and gave up. NOT bare 'field' — the
     // configurations section already owns that word for home/field station presets, and an
     // exact keyword outranks everything but a label.
-    keywords: ['theme', 'dark', 'light', 'ui scale', 'text size', 'font size', 'zoom',
+    keywords: ['theme', 'dark', 'light', 'system theme', 'dark mode', 'light mode',
+      'ui scale', 'text size', 'font size', 'zoom',
       'contrast', 'high contrast', 'field mode', 'accessibility', 'large text', 'readable',
       'daylight', 'sunlight', 'larger text', 'bigger text',
       'density', 'compact', 'comfortable', 'touch', 'touchscreen',

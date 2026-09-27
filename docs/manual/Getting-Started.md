@@ -164,9 +164,9 @@ The settings file is tolerant of partial content: any key not present loads its 
 
 ## Themes and UI scale
 
-Three themes are available in Settings: **Dark** (default, inferno waterfall colormap), **Amber** (amber-CRT), and **Light** (cividis). Theme changes apply instantly with no restart.
+Settings ▸ Appearance ▸ Workspace has three theme choices: **Dark** (the default), **Light**, and **System**, which follows your computer's own light or dark setting and changes when it does. Theme changes apply instantly with no restart. **High contrast** strengthens text against its background in either theme.
 
-UI scale has four steps: **90%, 100%, 110%, 125%**. The default is **125%**, chosen for high-DPI displays. Adjust in Settings if the interface feels too large or too small on your monitor.
+**Text size** (Normal, Large, Larger) makes the words bigger without zooming the rest of the screen. **UI scale** zooms the whole interface: **Auto (fit)** sizes it to the window, and **Manual** picks a fixed size from 65% to 175%.
 
 ---
 

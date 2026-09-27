@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path'
 import { fitScale, fieldFitScale, naturalFor } from './useScale'
 import { useTextSize } from './useTextSize'
 import { useDensity } from './useDensity'
+import { useTheme } from './useTheme'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -290,5 +291,66 @@ describe('index.html preseed: text size and density (#215)', () => {
     clear()
     runPreseed()
     expect(read()).toEqual({ 'data-text-size': 'larger', 'data-density': 'guided', 'data-touch': '1' })
+  })
+})
+
+describe('index.html preseed: the theme, System included', () => {
+  // System resolves through prefers-color-scheme, in the seed and in useTheme alike. A seed that
+  // disagreed would paint the first frame in one theme and snap to the other. The page's own
+  // <html data-theme="dark"> is the default when the seed writes nothing, so "what the seed
+  // leaves" is the attribute or, absent that, dark.
+  const QUERY = '(prefers-color-scheme: dark)'
+  const root = document.documentElement
+  const os = (setting: 'dark' | 'light' | 'none') => {
+    if (setting === 'none') {
+      delete (window as { matchMedia?: unknown }).matchMedia
+      return
+    }
+    window.matchMedia = ((q: string) => ({
+      matches: q === QUERY && setting === 'dark',
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+  }
+  const painted = () => root.getAttribute('data-theme') ?? 'dark'
+
+  it('seeds the theme useTheme paints, for every stored value and OS setting', () => {
+    const bad: string[] = []
+    for (const stored of [null, 'light', 'dark', 'system', 'amber', 'sepia']) {
+      for (const setting of ['dark', 'light', 'none'] as const) {
+        os(setting)
+        localStorage.clear()
+        if (stored !== null) localStorage.setItem('tempo-theme', stored)
+        root.removeAttribute('data-theme')
+        runPreseed()
+        const seeded = painted()
+        localStorage.clear()
+        if (stored !== null) localStorage.setItem('tempo-theme', stored)
+        root.removeAttribute('data-theme')
+        const hook = renderHook(() => useTheme())
+        const written = root.getAttribute('data-theme')
+        hook.unmount()
+        if (seeded !== written) bad.push(`stored=${stored} os=${setting}: seed ${seeded} ≠ hook ${written}`)
+      }
+    }
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
+    expect(bad).toEqual([])
+  })
+
+  it('System seeds the OS setting (the case parity could share a bug with), and unset stays Dark', () => {
+    os('light')
+    localStorage.setItem('tempo-theme', 'system')
+    root.removeAttribute('data-theme')
+    runPreseed()
+    expect(root.getAttribute('data-theme')).toBe('light')
+    // New installs start Dark (the operator's pick), even on a computer set to light.
+    localStorage.clear()
+    root.removeAttribute('data-theme')
+    runPreseed()
+    expect(painted()).toBe('dark')
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
   })
 })

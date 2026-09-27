@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ChevronDown, Moon, Radio, Sun } from 'lucide-react'
+import { ChevronDown, Moon, Radio, Sun, SunMoon } from 'lucide-react'
 import { AmpPane } from '../components/prop/AmpPane'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
+import { useSystemTheme, type ThemeChoice } from '../useTheme'
 import { initialState, startMonitor } from './session'
 import type { MonitorSource, MonitorState } from './session'
 import type { MonitorAmplifier, ReadAge } from './protocol'
@@ -65,7 +66,12 @@ type Props = { source: MonitorSource; previewTools?: ReactNode; navigation?: Rea
 
 function MonitorSession({ source, previewTools, navigation, scale }: Props) {
   const [state, setState] = useState<MonitorState>(initialState)
-  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
+  // Dark → Light → System → Dark: the one button names the NEXT theme, as the Sun/Moon did.
+  // System follows the computer's light/dark setting (useTheme.ts) and paints light or dark.
+  const [choice, setChoice] = useState<ThemeChoice>(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
+  const os = useSystemTheme(choice === 'system')
+  const theme = choice === 'system' ? os : choice
+  const next: ThemeChoice = choice === 'dark' ? 'light' : choice === 'light' ? 'system' : 'dark'
   useViewport(scale, true)
   useEffect(() => startMonitor(source, setState), [source])
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
@@ -82,9 +88,9 @@ function MonitorSession({ source, previewTools, navigation, scale }: Props) {
       <header className="rm-header">
         <div className="rm-brand"><Radio size={23} aria-hidden="true" /><strong>{BRAND}</strong><span>{t('monitor.title')}</span></div>
         {navigation}
-        <button className="rm-theme" aria-label={theme === 'dark' ? t('monitor.light') : t('monitor.dark')}
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-          {theme === 'dark' ? <Sun aria-hidden="true" size={22} /> : <Moon aria-hidden="true" size={22} />}
+        <button className="rm-theme" aria-label={next === 'light' ? t('monitor.light') : next === 'system' ? t('monitor.system') : t('monitor.dark')}
+          onClick={() => setChoice(next)}>
+          {next === 'light' ? <Sun aria-hidden="true" size={22} /> : next === 'system' ? <SunMoon aria-hidden="true" size={22} /> : <Moon aria-hidden="true" size={22} />}
         </button>
       </header>
       <main className="rm-scroll" aria-label={t('monitor.title')}>

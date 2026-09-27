@@ -19,6 +19,7 @@ import { render, screen, cleanup, fireEvent, within } from '@testing-library/rea
 import { SettingsPanel } from './SettingsPanel'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FeaturesApi } from '../useFeatures'
+import type { ThemeChoice } from '../useTheme'
 import { EN } from '../i18n'
 
 const api = vi.hoisted(() => {
@@ -60,8 +61,8 @@ function renderPanel(props: {
   onHighContrastChange?: (on: boolean) => void
   fieldMode?: boolean
   onFieldModeChange?: (on: boolean) => void
-  theme?: 'light' | 'dark'
-  onThemeChange?: (t: 'light' | 'dark') => void
+  theme?: ThemeChoice
+  onThemeChange?: (t: ThemeChoice) => void
 }) {
   return render(
     <SettingsPanel

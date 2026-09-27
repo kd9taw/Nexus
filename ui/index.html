@@ -9,6 +9,9 @@
         try {
           var d = document.documentElement
           var t = localStorage.getItem('tempo-theme')
+          // System follows the computer's light/dark setting (useTheme.ts systemTheme): dark
+          // when the platform cannot say. Nothing stored stays the page's own dark.
+          if (t === 'system') t = window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark'
           if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t)
           // Density and text size (#215): the first-paint copies of useDensity and useTextSize,
           // held to them by index-preseed.test.ts. Touch is Comfortable plus data-touch.

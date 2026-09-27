@@ -1,11 +1,12 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The chip WORDS come
 // from the catalog; the theme id is the persisted token and stays here.
 import { t, type MessageKey } from '../i18n'
-import type { Theme } from '../useTheme'
+import type { ThemeChoice } from '../useTheme'
 
 interface Props {
-  theme: Theme
-  onChange: (t: Theme) => void
+  /** The operator's pick, 'system' included — not the resolved theme the page paints. */
+  theme: ThemeChoice
+  onChange: (t: ThemeChoice) => void
   /** FIELD MODE (outdoor/POTA): bigger type + high contrast, one tap, obviously reversible.
    *  Optional so existing render sites without the wiring keep exactly their old chips. */
 }
@@ -13,9 +14,10 @@ interface Props {
 // The id is the VALUE (persisted, matched in CSS); the label and tooltip are prose and
 // resolve when they are read — see `features/needVisuals.ts` for why a module-level table
 // must not look its words up at import time.
-const OPTIONS: { id: Theme; labelKey: MessageKey; titleKey: MessageKey }[] = [
+const OPTIONS: { id: ThemeChoice; labelKey: MessageKey; titleKey: MessageKey }[] = [
   { id: 'light', labelKey: 'theme.light.label', titleKey: 'theme.light.title' },
   { id: 'dark', labelKey: 'theme.dark.label', titleKey: 'theme.dark.title' },
+  { id: 'system', labelKey: 'theme.system.label', titleKey: 'theme.system.title' },
 ]
 
 export function ThemeSwitcher({ theme, onChange }: Props) {
