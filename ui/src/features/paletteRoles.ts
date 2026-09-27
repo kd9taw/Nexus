@@ -312,7 +312,13 @@ const AMBER: PaletteRole = {
       dark: { '--alert-warning': '#f7c243', '--snr-marginal': '#f1ca47', '--band-marginal': '#f1ca47' },
       light: { '--alert-warning': '#a76d00', '--snr-marginal': '#a27000', '--band-marginal': '#a27000' },
     },
-    { id: 'gold', labelKey: 'palette.preset.gold', dark: amberValues('#f0cf4c'), light: amberValues('#977500') },
+    // A deeper, metallic gold (operator, 2026-09-27: "Make them distinct"). It was #f0cf4c and
+    // #977500, ΔE 0.012 from Amber in the dark theme and 0.021 from Yellow in the light one. Now at
+    // least 0.071 from both in the dark theme and 0.046 in the light one, the same hue in both.
+    // The light value could only get duller: lighter fails the page's 3:1 and the keyed Tune
+    // button's white ink on it, darker the broadcast button's dark ink and a deutan eye's distance
+    // from the TX red, which holds its lightness to Amber's and Yellow's.
+    { id: 'gold', labelKey: 'palette.preset.gold', dark: amberValues('#e0b030'), light: amberValues('#8e7640') },
     { id: 'yellow', labelKey: 'palette.preset.yellow', dark: amberValues('#f2e252'), light: amberValues('#8c7900') },
   ],
 }

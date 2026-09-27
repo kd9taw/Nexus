@@ -30,6 +30,10 @@
 //   · The accent's presets ≥ 0.06 apart from each other, and the readout's: three noticeable
 //     differences, so another pick looks like another colour (today's closest: Cyan and Blue in
 //     the light theme, 0.071, since Cyan was darkened toward Blue's lightness).
+//   · Amber's presets ≥ 0.04 apart: Gold sat 0.012 from Amber in the dark theme and 0.021 from
+//     Yellow in the light one, and looked like them (operator, 2026-09-27: "Make them distinct").
+//     The floor is just under Amber and Yellow's own 0.043 in the light theme, the closest pair
+//     nobody flagged, which the pick kept byte-identical.
 //
 // EVERY PRESET CLEARS EVERY FLOOR, THE DEFAULTS INCLUDED. Until 2026-09-27 the light theme's
 // default accent and readout, #0d8ecf (the colour they had always had), read 3.3–3.6:1 as
@@ -78,6 +82,7 @@ const LOCKED_DE_CVD = 0.06
 const PENDING_DE = 0.1
 const OK_AMBER_DE = 0.12
 const PRESET_DE = 0.06
+const AMBER_PRESET_DE = 0.04
 /** One 8-bit step in the green channel moves a mid-tone's contrast by about this much. */
 const ROUNDING = 0.05
 
@@ -375,10 +380,10 @@ describe('OK and amber stay apart for every pair of presets', () => {
 })
 
 /** Every pair of `r`'s presets, measured on what the sheet paints, in every mode and scope. Held
- *  for the accent and the readout, the roles whose default was darkened toward Blue; the signal
- *  roles have closer pairs today (Amber and Gold are 0.012 apart in the dark theme), and whether
- *  that is right is a question about those presets. */
-function apartProblems(rules: Rule[], r: PaletteRole): string[] {
+ *  for the accent and the readout, the roles whose default was darkened toward Blue, and for Amber
+ *  at its own floor (see the header). OK and Cyan are not held: their closest pairs today are
+ *  Teal and Mint in the light theme, 0.039, and Sky and Cyan there, 0.056. */
+function apartProblems(rules: Rule[], r: PaletteRole, min = PRESET_DE): string[] {
   const out: string[] = []
   for (const base of BASE_MODES) {
     for (const scope of SCOPES) {
@@ -386,7 +391,7 @@ function apartProblems(rules: Rule[], r: PaletteRole): string[] {
       paint.forEach(([a, x], i) =>
         paint.slice(i + 1).forEach(([b, y]) => {
           const d = deltaE(x, y)
-          if (d < PRESET_DE) out.push(`${r.id} ${a}/${b} ${base} ${scope}: ${hex(x)} vs ${hex(y)} ΔE ${d.toFixed(3)} < ${PRESET_DE}`)
+          if (d < min) out.push(`${r.id} ${a}/${b} ${base} ${scope}: ${hex(x)} vs ${hex(y)} ΔE ${d.toFixed(3)} < ${min}`)
         }),
       )
     }
@@ -397,6 +402,12 @@ function apartProblems(rules: Rule[], r: PaletteRole): string[] {
 describe('the accent and readout presets stay apart from each other', () => {
   it.each(['accent', 'readout'].map((id) => [id, role(id)] as const))('%s', (_n, r) => {
     expect(apartProblems(RULES, r)).toEqual([])
+  })
+})
+
+describe('Amber, Gold and Yellow stay apart from each other', () => {
+  it('in every mode, at <html> and inside a well', () => {
+    expect(apartProblems(RULES, role('amber'), AMBER_PRESET_DE)).toEqual([])
   })
 })
 
@@ -565,6 +576,17 @@ describe('the checks fire', () => {
       [data-theme='light'][data-accent='navy'] { --accent: #2a5fb8; }`)
     const found = apartProblems(rules, { ...accent, presets: [...accent.presets, navy] })
     expect(found.some((m) => m.startsWith('accent blue/navy light root:')), found.join('\n')).toBe(true)
+  })
+
+  it('the Gold that looked like Amber and Yellow is caught at Amber’s floor', () => {
+    // The values Gold shipped with until 2026-09-27, laid back over the sheet's.
+    const rules = withBlock(`
+      [data-theme='dark'][data-amber='gold'], [data-amber='gold'] .well { --alert-warning: #f0cf4c; --snr-marginal: #f0cf4c; --band-marginal: #f0cf4c; }
+      [data-theme='light'][data-amber='gold'] { --alert-warning: #977500; --snr-marginal: #977500; --band-marginal: #977500; }`)
+    const found = apartProblems(rules, role('amber'), AMBER_PRESET_DE)
+    expect(found.some((m) => m.startsWith('amber amber/gold dark root:')), found.join('\n')).toBe(true)
+    expect(found.some((m) => m.startsWith('amber amber/gold light root:')), found.join('\n')).toBe(true)
+    expect(found.some((m) => m.startsWith('amber gold/yellow light root:')), found.join('\n')).toBe(true)
   })
 
   it('a fill made worse than today is caught', () => {

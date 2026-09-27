@@ -3460,6 +3460,23 @@ body.resizing-row {
   flex-wrap: wrap;
 }
 
+/* THE BROWSER'S OWN CONTROLS FOLLOW NEXUS'S THEME, NOT THE COMPUTER'S (2026-09-27).
+   index.html declares `color-scheme: dark light`, which lets the browser pick either; with
+   nothing here it picked the COMPUTER's setting. So whatever the sheet does not paint itself —
+   a checkbox's box, a slider's track, a number field's spinner, a button's face or ink —
+   followed Windows' or macOS's light/dark rather than the theme, and a Nexus-coloured word
+   could land on a browser face of almost the same shade. A census of every view and Settings
+   tab in real Chrome found 1.02–3.09:1 lettering that way (and 1.04:1 on the amp strip's
+   Operate, fixed on its own). `data-theme` is always light or dark (System resolves it before
+   the first paint), so an operator whose computer matches the theme sees no change at all.
+   styles-color-scheme.test.ts holds it. */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 /* ---- DARK (shack) — default ----
    `.well` is a SELECTOR of this palette, not a copy of it: a display well (see DISPLAY WELLS,
    below the contrast blocks) is this theme wherever it sits, so a retuned dark ink retunes every
@@ -4036,14 +4053,14 @@ body.resizing-row {
 /* Amber */
 [data-theme='dark'][data-amber='gold'],
 [data-amber='gold'] .well {
-  --alert-warning: #f0cf4c;
-  --snr-marginal: #f0cf4c;
-  --band-marginal: #f0cf4c;
+  --alert-warning: #e0b030;
+  --snr-marginal: #e0b030;
+  --band-marginal: #e0b030;
 }
 [data-theme='light'][data-amber='gold'] {
-  --alert-warning: #977500;
-  --snr-marginal: #977500;
-  --band-marginal: #977500;
+  --alert-warning: #8e7640;
+  --snr-marginal: #8e7640;
+  --band-marginal: #8e7640;
 }
 [data-theme='dark'][data-amber='yellow'],
 [data-amber='yellow'] .well {
@@ -7891,6 +7908,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   border: 1px solid var(--border);
+  /* The key's own ink. Without it a key with bare text (SSTV's manual Start, JS8's queries and
+     inbox and queue keys) took the browser's button ink, black or white by the COMPUTER's
+     setting, and read 1.03:1 in the light theme on a dark computer. The labelled keys pin theirs
+     on `.cw-macro-label` below and are unchanged. NativeControls.contrast.test.tsx holds it. */
+  color: var(--text);
   transition: var(--transition);
 }
 .cw-macro:hover {
@@ -9133,10 +9155,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    one, so here the band name takes the theme's ink and the band's colour stays on the border, the
    glow and the dot. `!important` because the band colour arrives as an inline style — the band's
    own — and nothing else can outrank it. BandChip.contrast.test.tsx measures every band, every
-   mode, in all three hosts. */
+   mode, in all three hosts.
+   The Logbook globe's band select and the Field Day band board letter the same palette and take
+   the same fix ("Same small fix as the chip"; the dark theme and the globe's drawing unchanged):
+   the select keeps its band on its border, and the board's name, which has no border, on an
+   underline in its band's colour (its inline text-decoration-color). The board marks only a name
+   lettered in its band's colour with `data-band-ink`, so a clash keeps its alarm ink. */
 [data-theme='light'] .band-menu-trigger,
-[data-theme='light'] .freq-control.full .freq-channel {
+[data-theme='light'] .freq-control.full .freq-channel,
+[data-theme='light'] .qso-globe-band-pick,
+[data-theme='light'] [data-band-occupancy] [data-band-ink] {
   color: var(--text) !important;
+}
+[data-theme='light'] [data-band-occupancy] [data-band-ink] {
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
 }
 .band-menu-value {
   min-width: 0;
@@ -10996,7 +11030,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   pointer-events: none;
 }
 /* Band picker on the QSO globe — grids are a per-band achievement (VUCC), so a 2m
-   chaser can view 2m squares on their own. Text takes the band's colour. */
+   chaser can view 2m squares on their own. Text takes the band's colour (in the light
+   theme the theme's ink, with the band on the border: the band chip's light rule). */
 .qso-globe-band-pick {
   font-size: 0.72rem;
   font-weight: 700;
@@ -15228,17 +15263,35 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 0.72rem;
   color: var(--text-dim);
 }
+/* The theme's own buttons, never the browser's. A native button's face follows the computer's
+   light or dark setting, not Nexus's theme, so the green Operate landed on whatever grey the
+   system chose: 1.04:1 in the light theme on a dark computer (operator, 2026-09-27: "the operate
+   button is hard to read in light mode"). The Remote page's quick header already painted these
+   the same way. OperateButton.contrast.test.tsx holds every mode and OK preset. */
 .amp-strip button {
   font-size: 0.72rem;
   line-height: 1;
   padding: 3px 6px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+/* Locked while the rig is keyed, and dimmed far less than Tune (0.4): the word is the amplifier's
+   own state, which matters most during an over, so it still reads 4.5:1 (5.0:1 at worst, at
+   Night with the Mint preset). */
+.amp-strip button:disabled {
+  opacity: 0.8;
+  cursor: not-allowed;
 }
 /* Standby is the resting state and stays quiet. Operate means the amplifier is in line, which
    is worth seeing at a glance from across the shack — but it is NOT an alert, so it takes the
-   good-state token rather than a warning colour. */
+   good-state token rather than a warning colour: on the border and as a tint of the face, with
+   the word in the text colour (the band chip's light-theme fix). A status colour is held to
+   3:1, enough for a border; the OK presets' greens do not all make 4.5:1 as lettering. */
 .amp-op.on {
-  color: var(--state-good);
   border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 16%, var(--panel));
 }
 .amp-band {
   display: inline-flex;
@@ -16682,6 +16735,23 @@ button.cq-skiptx1.on {
   color: var(--text-dim);
   cursor: pointer;
   user-select: none;
+}
+/* Spot is a button among the checkbox labels, taking `.or-filter`'s ink, and nothing gave it a
+   face: the browser's grey showed through, 2.21:1 under that ink in the dark theme even on a dark
+   computer. The theme draws it now, in the box the browser's took; a disabled Spot (nothing
+   selected) dims as it did not before. */
+.or-spot {
+  padding: 2px 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.or-spot:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.or-spot:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .or-filter input {
   accent-color: var(--accent);
@@ -23343,7 +23413,12 @@ button.sat-chip:disabled {
   color: var(--state-weak);
   font-size: calc(15px * var(--text-scale));
   line-height: 1;
-  padding: 0 var(--space-1);
+  /* A face of its own: the browser's grey read 1.57:1 under this red in the dark theme even on a
+     dark computer. The same box as the browser's 2px border (1px of it moves into the padding). */
+  padding: 1px calc(var(--space-1) + 1px);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 .sstv-tx-controls {
   display: flex;
@@ -23997,6 +24072,21 @@ tr.sel .aprs-sym {
   font-size: calc(12px * var(--text-scale));
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+/* The navigable version of a health chip is a <button> (SetupHealth.tsx), and nothing gave it a
+   face: it was the browser's own, grey by the COMPUTER's light or dark setting, under the theme's
+   ink (3.09:1 in the light theme on a dark computer, 1.02:1 the other way). The theme draws it now,
+   a chip with a border, in the box the browser's took (a 2px border over 1px/6px of padding). The
+   state stays on the dot. NativeControls.contrast.test.tsx holds it. */
+.setup-health .health-item-link {
+  padding: 2px 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.setup-health .health-item-link:hover {
+  border-color: var(--accent);
 }
 .setup-health .health-dot {
   width: 8px;

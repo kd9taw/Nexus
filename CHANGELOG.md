@@ -152,6 +152,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frequency digits is a deeper shade of the same blue. Words in it, and white words on it, now
   meet the usual 4.5:1 reading contrast on the light panels, where they were about 3.5:1. The
   dark theme is unchanged, and so is a colour you picked in Settings ▸ Appearance ▸ Colours.
+- **The Gold warning colour no longer looks like Amber or Yellow.** In Settings ▸ Appearance ▸
+  Colours, Gold was almost the same colour as Amber in the dark theme, and as Yellow in the light
+  theme. It is now a deeper gold in the dark theme and a duller, brass-like gold in the light
+  theme, clearly apart from both in each, and it still passes the same readability checks as the
+  others. Amber and Yellow look exactly as before, and nothing changes unless you picked Gold.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.
@@ -221,6 +226,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   23cm are lettered in a slightly lighter violet on the chip, so each reads at least 4.5:1. Every
   other band looks exactly as before, and the map, the globes and the Field Day board keep their
   colours.
+- **Band names on the Logbook globe and the Field Day board are readable in the light theme.** The
+  band picker on the Logbook's globe and the band column of the Field Day band board spelled each
+  band in its own colour, as the band chip did, and it barely showed on a light background. In the
+  light theme the name is now in the normal text colour. The band's colour stays on the picker's
+  border, and on the board it moves to an underline beneath the band name. A clash on the board
+  keeps its red. The dark theme and the globe's dots look exactly as before.
+- **The amplifier's Operate button is readable in both themes.** The amplifier strip's buttons in
+  the cockpit header (Operate/Standby and the band ◀ ▶) were drawn as your computer's own
+  buttons, whose colour follows the computer's light or dark setting rather than Nexus's theme.
+  So the green word "Operate" could sit on a grey of almost the same shade: in the light theme on
+  a computer set to dark, it all but disappeared. The buttons now look like the rest of the
+  header in both themes. The word is in the normal text colour, and Operate shows its green on
+  the button's border and as a green tint. While a transmission locks them they dim slightly, and
+  the word stays readable: it is the amplifier's state, which matters most during an over.
+- **Checkboxes, sliders and other built-in controls follow Nexus's theme.** The parts of the
+  screen your computer draws for Nexus — checkbox boxes, slider tracks, the arrows on number
+  fields and a few plain buttons — followed your computer's light or dark setting rather than
+  the theme you picked. With Nexus in the light theme on a computer set to dark, or the other way
+  round, some of their words could not be read. They now follow Nexus's theme. Nothing changes
+  when your computer's setting matches the theme, which it always does with the System theme.
+- **Keys that could go blank now always show their words.** SSTV's manual-receive Start, the
+  SSTV picture viewer's Previous, Next and Save, JS8's station queries, inbox Read and Delete,
+  Cancel and Drop, and the Remote page's Refresh, retry and SSTV Save keys took the colour of
+  their words from your computer's light or dark setting, and could be invisible when it differed
+  from Nexus's theme. They now use the theme's text colour, like the other keys.
+- **Three more buttons are readable in both themes.** The status chips at the top of Settings ▸
+  Radio ("Rig responding", "RX audio …"), the Spot button in Operate's call roster and the ×
+  that removes an SSTV text overlay were drawn as your computer's own grey buttons. Their words
+  could be hard to read, and the roster's Spot and the overlay × were hard to read in the dark
+  theme even when your computer was set to dark too. Each now has a border and a background
+  from Nexus's theme and stays the same size. A Spot button with no station selected now dims.
 - **The SSTV picture viewer no longer misses an arrow key pressed as it opens.** On a busy
   computer, a ← or → pressed the moment the pictures appeared could be ignored, because the keys
   were connected to the pictures a moment after they were drawn. They are now connected as the
