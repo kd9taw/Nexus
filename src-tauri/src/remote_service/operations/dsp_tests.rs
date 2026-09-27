@@ -44,7 +44,10 @@ fn receiver_dsp_requires_v3_and_actual_readback_and_never_replays_a_completed_ge
             let work = f.engine.lock().unwrap().take_remote_radio().unwrap();
             assert_eq!(work.receiver_dsp().unwrap().1, after);
             sample(&f, &connection, mode);
-            assert!(work.commit_receiver_dsp_readback(&mut f.engine.lock().unwrap(), Some(after)));
+            assert!(work.commit_receiver_dsp_readback(
+                &mut tempo_app::engine::engine_lock(&f.engine),
+                Some(after)
+            ));
             let applied = run(&f, 3, &command).unwrap();
             assert_eq!(applied["outcome"], "applied");
             assert_eq!(applied["evidence"], "radioReadback");

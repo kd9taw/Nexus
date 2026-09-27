@@ -59,14 +59,14 @@ fn workspace_entry_requires_v3_and_preserves_one_receipt_through_readback_or_rev
             f.authority.permit_station(DEVICE, false).unwrap();
             assert!(work.permission().begin_write(Instant::now()).is_err());
             sample(work.target().0, work.target().1);
-            assert!(!work.commit_readback(&mut f.engine.lock().unwrap(), None));
+            assert!(!work.commit_readback(&mut tempo_app::engine::engine_lock(&f.engine), None));
             assert_eq!(f.engine.lock().unwrap().tier(), Tier::Ft8);
             assert!(!f.dir.join("settings.json").exists());
         } else {
             work.permission().begin_write(Instant::now()).unwrap();
             sample(work.target().0, work.target().1);
             let power = work.power_limit();
-            assert!(work.commit_readback(&mut f.engine.lock().unwrap(), power));
+            assert!(work.commit_readback(&mut tempo_app::engine::engine_lock(&f.engine), power));
             let applied = run(3, &result).unwrap();
             assert_eq!(applied["outcome"], "applied");
             assert_eq!(applied["evidence"], "radioReadback");

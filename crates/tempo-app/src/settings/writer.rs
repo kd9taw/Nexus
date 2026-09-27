@@ -101,6 +101,18 @@ struct Shared {
     file: Mutex<()>,
 }
 
+/// What a flush found when it returned.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Flushed {
+    /// Every snapshot handed over before the flush is on the disk.
+    Saved,
+    /// The last write before the flush failed: its callers have been told, and the file keeps
+    /// the snapshot before it. The failure, in words.
+    Failed(String),
+    /// Time ran out with a write still on its way.
+    OutOfTime,
+}
+
 /// A write of the waiting snapshot, made and not yet recorded ([`Shared::finish`]).
 struct Written {
     seq: u64,
@@ -218,12 +230,19 @@ impl SettingsWriter {
     ///
     /// ⛔ **Call it holding the Engine lock, with a snapshot taken under that same hold.** That is
     /// what numbers snapshots in the order the Engine made its changes; a snapshot handed over
-    /// after the lock was let go can be numbered after a newer one, and then it wins.
+    /// after the lock was let go can be numbered after a newer one, and then it wins. A debug
+    /// build checks the lock is held (the `EngineGuard` count the logbook fence keeps).
     pub fn queue(
         &self,
         snapshot: Settings,
         on_failure: impl FnOnce(&io::Error) + Send + 'static,
     ) -> Ticket {
+        debug_assert!(
+            tempo_core::logbook::io_fence::engine_guards_held() > 0,
+            "settings writer: queue without the Engine lock. A snapshot is numbered as it is \
+             handed over; one handed over after the lock was let go can be numbered after a \
+             newer one and win. Take the snapshot and queue it in one hold of the lock."
+        );
         let started = self
             .thread
             .get_or_init(|| {
@@ -270,8 +289,14 @@ impl SettingsWriter {
     ///
     /// ⛔ **The snapshot must be at least as new as everything handed over before it** (taken under
     /// the Engine lock, from the Engine's settings), because a successful save supersedes the
-    /// snapshot waiting: it is never written after this one.
+    /// snapshot waiting: it is never written after this one. A debug build checks the lock is held.
     pub fn save_now(&self, snapshot: &Settings) -> io::Result<()> {
+        debug_assert!(
+            tempo_core::logbook::io_fence::engine_guards_held() > 0,
+            "settings writer: save_now without the Engine lock. It supersedes the waiting \
+             snapshot on the strength of its number, so it must be taken and saved in one hold \
+             of the lock, after everything handed over before it."
+        );
         let file = lock(&self.shared.file);
         let seq = {
             let mut st = lock(&self.shared.state);
@@ -301,6 +326,11 @@ impl SettingsWriter {
     /// Read the file, let `edit` change it, and write it back when `edit` says it did: the base
     /// profile's mirrors. Whatever was handed over and not yet written is written first, so the
     /// read sees this process's last change, and nothing else writes the file in between.
+    ///
+    /// **Exempt from the Engine-lock precondition**, deliberately: it numbers nothing and
+    /// supersedes nothing, so no hand-over can be reordered by it. The base window's "use one
+    /// radio" (`use_single_radio`) calls it with no Engine lock; a per-radio window's mirrors call
+    /// it under one.
     pub fn rewrite(&self, edit: impl FnOnce(&mut Settings) -> bool) -> io::Result<()> {
         let file = lock(&self.shared.file);
         let written = self.shared.write_pending();
@@ -315,14 +345,18 @@ impl SettingsWriter {
         result
     }
 
-    /// Wait until every snapshot handed over so far has been written, for at most `within`:
-    /// `true` once they have, `false` when the time ran out first. A quit, a restart, a relaunch
-    /// and the Windows installer flush, so the last change reaches the disk before the process
-    /// goes.
+    /// Wait until every snapshot handed over so far has been written, for at most `within`, and
+    /// say what was found. A quit, a restart, a relaunch and the Windows installer flush, so the
+    /// last change reaches the disk before the process goes.
+    ///
+    /// A write that FAILS also ends the wait (it is done; its callers have been told), so the
+    /// answer says which it was: [`Flushed::Saved`] when the newest change is on the disk,
+    /// [`Flushed::Failed`] when the last write before the flush failed and the file keeps the
+    /// snapshot before it, [`Flushed::OutOfTime`] when `within` ran out first.
     ///
     /// ⚠️ **Never holding the Engine lock**: the radio loop would wait on the disk. The fence
     /// stops it in a debug build.
-    pub fn flush(&self, within: Duration) -> bool {
+    pub fn flush(&self, within: Duration) -> Flushed {
         tempo_core::logbook::io_fence::off_engine_lock("a wait for the settings writer");
         let deadline = Instant::now() + within;
         let mut st = lock(&self.shared.state);
@@ -330,7 +364,7 @@ impl SettingsWriter {
         while st.done < upto {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return false;
+                return Flushed::OutOfTime;
             }
             st = self
                 .shared
@@ -339,7 +373,14 @@ impl SettingsWriter {
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
-        true
+        // Done includes a write that failed (its callers told), so ask whether it landed.
+        if st.saved >= upto {
+            return Flushed::Saved;
+        }
+        Flushed::Failed(match &st.error {
+            Some((_, _, message)) => message.clone(),
+            None => "the settings were not saved".to_string(),
+        })
     }
 }
 

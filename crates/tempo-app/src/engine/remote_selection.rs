@@ -771,6 +771,10 @@ mod tests {
             mode: &mode,
             sampled_at: Instant::now(),
         };
+        // The radio service commits holding the Engine lock (an `EngineGuard`), which the settings
+        // writer checks before it numbers the save. This Engine is owned outright, so the test
+        // holds the count the guard would carry.
+        let _lock = tempo_core::logbook::io_fence::EngineHeld::acquired();
         request.commit_with_install(engine, readback, decoder_guard(), install)
     }
 

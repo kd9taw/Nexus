@@ -198,6 +198,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Stopped" after that. A voice, CW or RTTY over still running at the station could already read
   "Stopped", because only the FT and mic-key flags were checked. It now waits for the same reading
   as the ON AIR sign. The Stop itself works exactly as before.
+- **"Use one radio" in the launch picker stays chosen.** It turned simultaneous radios off in the
+  settings file but not in the window you went on to operate in, so the next setting you changed
+  there turned it back on, and the picker returned at the next launch. The window now keeps the
+  choice too.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,

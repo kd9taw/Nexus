@@ -5813,6 +5813,16 @@ impl Engine {
         &self.settings
     }
 
+    /// Simultaneous radios on or off, for the launch picker's "use one radio" (a Settings save writes
+    /// it through the form too). The picker decides from this value, and the base window's file is
+    /// the one it reads, so the window that declines the picker must hold the new value: its next
+    /// save of anything writes the whole settings, this flag included. Returns the settings for the
+    /// caller to persist.
+    pub fn set_simultaneous_radios(&mut self, on: bool) -> &Settings {
+        self.settings.simultaneous_radios = on;
+        &self.settings
+    }
+
     /// ⛔ **THE ONE WRITER of `remote_autostart_offer_answered`**: Remote's one-time offer to start
     /// Nexus at sign-in was answered, either way, and is never shown again.
     pub fn answer_remote_autostart_offer(&mut self) -> &Settings {
@@ -30254,8 +30264,12 @@ mod tests {
     }
 
     /// An engine whose atomic preference store is a scratch file — the store the RTTY macro verb
-    /// persists through.
-    fn rtty_macro_engine(tag: &str) -> (Engine, PathBuf) {
+    /// persists through — and the Engine lock's count, for the test to hold while it lives: the
+    /// macro editor saves holding the Engine lock (the command's `EngineGuard`), which the settings
+    /// writer checks, and this Engine is owned outright, so the count is what the guard would carry.
+    fn rtty_macro_engine(
+        tag: &str,
+    ) -> (Engine, PathBuf, tempo_core::logbook::io_fence::EngineHeld) {
         let dir =
             std::env::temp_dir().join(format!("nexus-rtty-macros-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -30263,7 +30277,11 @@ mod tests {
         let path = dir.join("settings.json");
         let mut e = Engine::new("W9XYZ", "EN52", 0);
         e.configure_remote_settings_store(path.clone());
-        (e, path)
+        (
+            e,
+            path,
+            tempo_core::logbook::io_fence::EngineHeld::acquired(),
+        )
     }
 
     fn contest_f1_edit() -> serde_json::Value {
@@ -30280,7 +30298,7 @@ mod tests {
     /// `save_rtty_macros`, and the form path keeps the live value, the `beta_updates` shape.
     #[test]
     fn a_settings_panel_save_cannot_revert_an_rtty_macro_edit() {
-        let (mut e, path) = rtty_macro_engine("form");
+        let (mut e, path, _lock) = rtty_macro_engine("form");
         let mut panel = e.settings().clone(); // read BEFORE the cockpit edit
         e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
             .expect("the cockpit edit saves");
@@ -30317,7 +30335,7 @@ mod tests {
     /// mechanism the beta-channel opt-in uses, so one test names both.
     #[test]
     fn a_factory_reset_and_a_restored_backup_both_move_the_rtty_macros() {
-        let (mut e, path) = rtty_macro_engine("restore");
+        let (mut e, path, _lock) = rtty_macro_engine("restore");
         e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
             .expect("the cockpit edit saves");
 
@@ -30364,7 +30382,7 @@ mod tests {
     /// not round-trip exactly — one LOAD would forgive — is refused and changes nothing.
     #[test]
     fn saving_rtty_macros_writes_two_fields_and_no_transmit_state() {
-        let (mut e, path) = rtty_macro_engine("atomic");
+        let (mut e, path, _lock) = rtty_macro_engine("atomic");
         let generation = e.tx_gate_gen;
         let mut expected = serde_json::to_value(e.settings()).unwrap();
         expected["macros"]["rttyProfiles"] = contest_f1_edit();
@@ -30402,8 +30420,9 @@ mod tests {
 
     /// An engine whose atomic preference store is a scratch file — the store the PSK macro verb
     /// persists through. Its own directory, never RTTY's: two suites sharing one scratch path
-    /// would read each other's file.
-    fn psk_macro_engine(tag: &str) -> (Engine, PathBuf) {
+    /// would read each other's file. With the Engine lock's count, as [`rtty_macro_engine`] hands
+    /// back.
+    fn psk_macro_engine(tag: &str) -> (Engine, PathBuf, tempo_core::logbook::io_fence::EngineHeld) {
         let dir =
             std::env::temp_dir().join(format!("nexus-psk-macros-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -30411,7 +30430,11 @@ mod tests {
         let path = dir.join("settings.json");
         let mut e = Engine::new("W9XYZ", "EN52", 0);
         e.configure_remote_settings_store(path.clone());
-        (e, path)
+        (
+            e,
+            path,
+            tempo_core::logbook::io_fence::EngineHeld::acquired(),
+        )
     }
 
     fn psk_contest_f1_edit() -> serde_json::Value {
@@ -30427,7 +30450,7 @@ mod tests {
     /// wiping the PSK editor's work on the next unrelated Save.
     #[test]
     fn a_settings_panel_save_cannot_revert_a_psk_macro_edit() {
-        let (mut e, path) = psk_macro_engine("form");
+        let (mut e, path, _lock) = psk_macro_engine("form");
         let mut panel = e.settings().clone(); // read BEFORE the cockpit edit
         e.save_psk_macros(psk_contest_f1_edit(), serde_json::json!("contest"))
             .expect("the cockpit edit saves");
@@ -30462,7 +30485,7 @@ mod tests {
     /// and the RTTY dock came back holding PSK's messages.
     #[test]
     fn saving_psk_macros_writes_psks_own_two_fields_and_no_transmit_state() {
-        let (mut e, path) = psk_macro_engine("atomic");
+        let (mut e, path, _lock) = psk_macro_engine("atomic");
         // RTTY holds a set of its own first, so "PSK wrote RTTY's field" is visible as a CHANGE
         // rather than as two empty lists that agree.
         e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))

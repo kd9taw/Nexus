@@ -58,7 +58,12 @@ fn radio_selection_uses_one_guarded_native_request_and_recovers_its_durable_rece
         }
         std::thread::yield_now();
     };
-    assert!(request.commit_with_install(&mut f.engine.lock().unwrap(), readback, decoder, |_| {}));
+    assert!(request.commit_with_install(
+        &mut tempo_app::engine::engine_lock(&f.engine),
+        readback,
+        decoder,
+        |_| {}
+    ));
     let applied = run(&f, 3, &command).unwrap();
     assert_eq!(applied["outcome"], "applied");
     assert_eq!(applied["evidence"], "radioReadback");

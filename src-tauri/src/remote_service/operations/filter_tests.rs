@@ -71,7 +71,8 @@ fn receiver_filter_requires_v3_and_later_radio_readback_without_settings_or_repl
             Some(before)
         );
         sample(&f, &connection, mode);
-        assert!(work.commit_filter_readback(&mut f.engine.lock().unwrap(), Some(after)));
+        assert!(work
+            .commit_filter_readback(&mut tempo_app::engine::engine_lock(&f.engine), Some(after)));
         let applied = run(&f, 3, &command).unwrap();
         assert_eq!(applied["outcome"], "applied");
         assert_eq!(applied["evidence"], "radioReadback");

@@ -992,3 +992,145 @@ fn the_settings_scan_names_every_bare_save_and_nothing_else() {
         ]
     );
 }
+
+/// Every synchronous settings save outside tests (a `SettingsWriter::save_now`), by file and the
+/// fn it sits in, and why each may keep its disk write under the Engine lock. A `save_now` anywhere
+/// else puts a change's write back under the lock the radio loop takes every 20 ms: queue the
+/// Engine's snapshot instead (`persist_settings` in src-tauri).
+const SYNCHRONOUS_SETTINGS_SAVES: [(&str, &str); 10] = [
+    // A restore that did not reach the disk says so, and mirrors nothing to the base config.
+    ("src-tauri/src/lib.rs", "import_settings_bundle"),
+    // Remote's save-then-publish: a failed save changes nothing, so the result must come first.
+    (
+        "crates/tempo-app/src/engine/remote_settings.rs",
+        "save_remote_decoder_setting",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_settings.rs",
+        "save_remote_amp_follow_band",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_settings.rs",
+        "save_remote_ai_cw",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_settings.rs",
+        "save_remote_preferences",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_settings/gain.rs",
+        "save_remote_rx_gain",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_transmit/settings.rs",
+        "change_remote_ft_setting",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_transmit/runtime.rs",
+        "change_remote_ft_runtime",
+    ),
+    // Remote radio commits: the save picks the outcome the request reports (Applied or Unknown),
+    // which must be decided inside the commit's hold.
+    (
+        "crates/tempo-app/src/engine/remote_radio.rs",
+        "commit_readings",
+    ),
+    (
+        "crates/tempo-app/src/engine/remote_selection.rs",
+        "commit_with_install",
+    ),
+];
+
+/// The `.save_now(` calls in `files`, outside test code, that `allowed` does not name by (path,
+/// enclosing fn), as `path:line: fn`; and the `allowed` entries no call matched, as `path: fn`.
+/// Both ways, so the list can neither miss a new site nor keep a stale one.
+fn synchronous_saves_against(
+    files: &[(String, String)],
+    allowed: &[(&str, &str)],
+) -> (Vec<String>, Vec<String>) {
+    let mut unlisted = Vec::new();
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for (path, text) in files.iter().filter(|(path, _)| !test_file(path)) {
+        let code = without_test_items(&code_only(text));
+        let items = fns(&code);
+        for (dot, _) in code.match_indices(".save_now(") {
+            let name = items
+                .iter()
+                .filter(|f| f.range.contains(&dot))
+                .min_by_key(|f| f.range.len())
+                .map_or("", |f| f.name.as_str());
+            if allowed.contains(&(path.as_str(), name)) {
+                seen.push((path.clone(), name.to_string()));
+            } else {
+                let line = text[..dot].matches('\n').count() + 1;
+                unlisted.push(format!("{path}:{line}: {name}"));
+            }
+        }
+    }
+    let missing = allowed
+        .iter()
+        .filter(|(p, n)| !seen.iter().any(|(sp, sn)| sp == p && sn == n))
+        .map(|(p, n)| format!("{p}: {n}"))
+        .collect();
+    unlisted.sort();
+    (unlisted, missing)
+}
+
+#[test]
+fn every_synchronous_settings_save_is_on_the_list() {
+    let (unlisted, missing) =
+        synchronous_saves_against(&production_sources(), &SYNCHRONOUS_SETTINGS_SAVES);
+    assert!(
+        unlisted.is_empty(),
+        "a synchronous settings save SYNCHRONOUS_SETTINGS_SAVES does not name: its write holds the \
+         Engine lock, so the radio loop waits on the disk. Queue the Engine's snapshot instead \
+         (`persist_settings`), or, if the save's result truly decides the change, add it to the \
+         list with the reason:\n{}",
+        unlisted.join("\n")
+    );
+    assert!(
+        missing.is_empty(),
+        "listed synchronous saves no longer found; take them off SYNCHRONOUS_SETTINGS_SAVES:\n{}",
+        missing.join("\n")
+    );
+}
+
+/// The list check names a `save_now` in a fn it does not list (split across lines, as rustfmt
+/// writes one) and a listed fn that has none, and nothing else: not a listed site, not a call in a
+/// comment, a string or a test item.
+#[test]
+fn the_synchronous_save_list_names_a_new_site_and_a_stale_entry_and_nothing_else() {
+    // Built from quoted lines, like the other scans', so this file's own text is never a finding.
+    let lib = [
+        "fn import_settings_bundle(state: State<'_, SharedEngine>) {",
+        "    let eng = engine_lock(&state);",
+        "    SettingsWriter::of(&settings_path()).save_now(eng.settings())?;",
+        "}",
+        "fn set_tx_level(state: State<'_, SharedEngine>, level: f32) {",
+        "    let mut eng = engine_lock(&state);",
+        "    eng.set_tx_level(level);",
+        "    let _ = SettingsWriter::of(&settings_path())",
+        "        .save_now(eng.settings());",
+        "}",
+        "fn converted(eng: &Engine) {",
+        "    persist_settings(eng.settings().clone(), |e| eprintln!(\"{e}\"));",
+        "    // writer.save_now(eng.settings()) in a comment",
+        "    let s = \"w.save_now(x)\";",
+        "}",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    fn setup(w: &SettingsWriter, s: &Settings) { w.save_now(s).unwrap(); }",
+        "}",
+    ]
+    .join("\n");
+    let files = vec![("src-tauri/src/lib.rs".to_string(), lib)];
+    let (unlisted, missing) = synchronous_saves_against(
+        &files,
+        &[
+            ("src-tauri/src/lib.rs", "import_settings_bundle"),
+            ("src-tauri/src/lib.rs", "a_site_since_removed"),
+        ],
+    );
+    assert_eq!(unlisted, ["src-tauri/src/lib.rs:9: set_tx_level"]);
+    assert_eq!(missing, ["src-tauri/src/lib.rs: a_site_since_removed"]);
+}

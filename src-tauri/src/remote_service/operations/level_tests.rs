@@ -38,7 +38,8 @@ fn remote_levels_host_requires_v3_and_physical_confirmation_with_stable_result_i
         assert_eq!(run(&f, 3, &command).unwrap()["outcome"], "pending");
         assert!(f.engine.lock().unwrap().take_remote_radio().is_none());
         sample(&f, &connection, "phone");
-        assert!(work.commit_level_readback(&mut f.engine.lock().unwrap(), Some(target)));
+        assert!(work
+            .commit_level_readback(&mut tempo_app::engine::engine_lock(&f.engine), Some(target)));
         let result = run(&f, 3, &command).unwrap();
         assert_eq!(result["outcome"], "applied");
         assert_eq!(result["evidence"], "radioReadback");
