@@ -1,0 +1,866 @@
+//! The stream's wire contract: every message the station, the relay and the page exchange for a
+//! streamed Remote session, and the bounds each holds the others to.
+//!
+//! `remote/test/fixtures/stream/README.md` defines each field in prose, and the JSON files beside it
+//! hold one case of every message. The tests at the bottom of this file hold these types to those
+//! files, and the relay and the page test against the same ones, so a side that changes the
+//! contract alone fails its own tests instead of failing a session.
+//!
+//! ## Parse, then validate
+//!
+//! serde refuses what is shaped wrong (an unknown key, a missing key, a number where a string
+//! belongs). What is shaped right but out of bounds (a pointer off the frame, a key value with a
+//! control character, an SDP too big for the relay) is refused by [`Validate`]. A receiver calls
+//! both; the `parse_*` functions here do exactly that, and nothing else in the station reads these
+//! messages any other way.
+//!
+//! ## No wall clock crosses the boundary
+//!
+//! `decodedFrameAt` is the station's own video RTP timestamp, echoed back, never the page's clock.
+//! The station maps it to its own capture clock (see the README), the same discipline the receive
+//! audio lane keeps for `firstFrameMs`.
+use serde::{Deserialize, Serialize};
+
+/// The version a station advertises with `x-nexus-stream-version`.
+pub const STREAM_VERSION: u8 = 1;
+/// The largest stamped signalling message the relay may hand a station. The station's control
+/// socket closes on any frame over 8,192 bytes, and that closes all of Remote, not just the
+/// stream, so the relay stops well short of it.
+pub const SIGNAL_BYTES: usize = 7168;
+/// The largest station → relay stream message the station will send.
+pub const STATION_SIGNAL_BYTES: usize = 8192;
+/// The largest SDP either side sends.
+pub const SDP_BYTES: usize = 6144;
+/// The largest ICE candidate string either side sends.
+pub const CANDIDATE_BYTES: usize = 512;
+/// The longest `sdpMid`.
+pub const SDP_MID_CHARS: usize = 32;
+/// The largest message the page sends on the `control` or `ptt` data channel.
+pub const CONTROL_BYTES: usize = 1024;
+/// How often the page re-asserts a held PTT.
+pub const PTT_HOLD_EVERY_MS: u64 = 100;
+/// How long the station keeps a PTT keyed with no hold arriving.
+pub const PTT_GAP_MS: u64 = 200;
+/// The oldest decoded frame that still renews transmit presence.
+pub const FRESH_FRAME_MS: u64 = 2000;
+/// The video track's RTP clock.
+pub const VIDEO_CLOCK_HZ: u64 = 90_000;
+/// The longest the station goes without sending a video frame, so that a still window never reads
+/// as a stale picture.
+pub const STILL_FRAME_MS: u64 = 500;
+/// The data-channel labels, which the page creates and the station recognises.
+pub const CONTROL_CHANNEL: &str = "control";
+pub const PTT_CHANNEL: &str = "ptt";
+pub const AUDIO_CHANNEL: &str = "audio";
+
+/// A UUID in the lowercase form every Remote identifier takes. The same rule as the station
+/// transport's own `identifier`, which this crate cannot reach.
+pub fn identifier(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit() && !b.is_ascii_uppercase()
+            }
+        })
+}
+
+/// Bounds a parsed message must also meet.
+pub trait Validate {
+    fn valid(&self) -> bool;
+}
+
+/// Why a message was refused. Deliberately without detail: the reason is only ever turned into a
+/// fixed refusal code, never shown or logged verbatim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    TooLarge,
+    Malformed,
+    OutOfBounds,
+}
+
+fn parse<T>(bytes: &[u8], limit: usize) -> Result<T, Refused>
+where
+    T: for<'de> Deserialize<'de> + Validate,
+{
+    if bytes.len() > limit {
+        return Err(Refused::TooLarge);
+    }
+    let value: T = serde_json::from_slice(bytes).map_err(|_| Refused::Malformed)?;
+    if value.valid() {
+        Ok(value)
+    } else {
+        Err(Refused::OutOfBounds)
+    }
+}
+
+/// A page's message on the `control` channel.
+pub fn parse_control(bytes: &[u8]) -> Result<ControlIn, Refused> {
+    parse(bytes, CONTROL_BYTES)
+}
+
+/// A page's message on the `ptt` channel.
+pub fn parse_ptt(bytes: &[u8]) -> Result<PttIn, Refused> {
+    parse(bytes, CONTROL_BYTES)
+}
+
+fn no_control(text: &str) -> bool {
+    !text.chars().any(char::is_control)
+}
+
+fn sdp_mid(mid: &str) -> bool {
+    !mid.is_empty()
+        && mid.len() <= SDP_MID_CHARS
+        && mid
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn candidate(line: &str) -> bool {
+    !line.is_empty() && line.len() <= CANDIDATE_BYTES && no_control(line)
+}
+
+fn sdp(text: &str) -> bool {
+    // An SDP is CRLF-separated text; nothing else in it may be a control character.
+    !text.is_empty()
+        && text.len() <= SDP_BYTES
+        && !text
+            .chars()
+            .any(|c| c.is_control() && c != '\r' && c != '\n')
+}
+
+// ---------------------------------------------------------------------------------------------
+// Signalling: over the relay sockets that already exist.
+// ---------------------------------------------------------------------------------------------
+
+/// Page → station, carried in `streamSignal.payload`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum BrowserSignal {
+    Offer {
+        sdp: String,
+    },
+    Candidate {
+        candidate: String,
+        #[serde(rename = "sdpMid")]
+        sdp_mid: String,
+    },
+    /// The page is done with the stream. Empty braces rather than a unit variant, so serde keeps
+    /// refusing unknown keys on it.
+    Close {},
+}
+
+impl Validate for BrowserSignal {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Offer { sdp: text } => sdp(text),
+            Self::Candidate {
+                candidate: line,
+                sdp_mid: mid,
+            } => candidate(line) && sdp_mid(mid),
+            Self::Close {} => true,
+        }
+    }
+}
+
+/// Station → page, carried in `streamSignal.payload`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum StationSignal {
+    Answer {
+        sdp: String,
+    },
+    Candidate {
+        candidate: String,
+        #[serde(rename = "sdpMid")]
+        sdp_mid: String,
+    },
+}
+
+impl Validate for StationSignal {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Answer { sdp: text } => sdp(text),
+            Self::Candidate {
+                candidate: line,
+                sdp_mid: mid,
+            } => candidate(line) && sdp_mid(mid),
+        }
+    }
+}
+
+/// Why a stream is not running. A closed vocabulary: the page refuses anything else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamReason {
+    /// No station-control grant, or no live lease matching this session.
+    NotController,
+    /// The operator has not turned streaming on at the station.
+    StreamDisabled,
+    /// The station cannot stream right now: not a platform it captures on, no window to capture,
+    /// the capture or the encoder failed, or it could not find a network path.
+    StreamUnavailable,
+    /// Another session is streaming this station.
+    StreamInUse,
+    /// The offer was not DTLS-SRTP, had no VP8 video to receive or no data channel, or was too big.
+    InvalidOffer,
+    /// ICE or DTLS failed or timed out.
+    ConnectionFailed,
+    /// The page closed the stream.
+    StreamClosed,
+}
+
+/// Page → relay, before the relay stamps it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum PageToRoom {
+    StreamSignal {
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        payload: BrowserSignal,
+    },
+}
+
+/// Relay → station: the relay writes `sessionId` and `deviceId` from its own admission record.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum RoomToStation {
+    StreamSignal {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        payload: BrowserSignal,
+    },
+}
+
+/// Station → relay, addressed to one session. The relay strips `sessionId` before delivery.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum StationToRoom {
+    StreamSignal {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        payload: StationSignal,
+    },
+    StreamState {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        streaming: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<StreamReason>,
+    },
+}
+
+impl StationToRoom {
+    /// The message as the station sends it, or `None` if it would break a bound the relay holds
+    /// the station to. A station never sends what the other end is bound to refuse.
+    pub fn to_wire(&self) -> Option<String> {
+        let valid = match self {
+            Self::StreamSignal { payload, .. } => payload.valid(),
+            Self::StreamState { .. } => true,
+        };
+        let text = serde_json::to_string(self).ok()?;
+        (valid && text.len() <= STATION_SIGNAL_BYTES).then_some(text)
+    }
+}
+
+/// Relay → page.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum RoomToPage {
+    StreamSignal {
+        payload: StationSignal,
+    },
+    StreamState {
+        streaming: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<StreamReason>,
+    },
+}
+
+// ---------------------------------------------------------------------------------------------
+// Data channels: `control` (reliable, ordered), `ptt` and `audio` (unordered, no retransmits).
+// ---------------------------------------------------------------------------------------------
+
+/// Page → station on `control`. The four operation requests are today's, byte for byte, except
+/// that a stream heartbeat must say how fresh the page's picture is.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ControlIn {
+    State {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    Heartbeat {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        /// The video RTP timestamp of the last frame the page showed, or null before the first.
+        /// Required: serde would otherwise read a missing key as null, and a page that forgot the
+        /// field must be refused rather than read as blind forever.
+        #[serde(rename = "decodedFrameAt", deserialize_with = "Option::deserialize")]
+        decoded_frame_at: Option<u32>,
+    },
+    Release {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
+    StopTransmit {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        #[serde(rename = "transmitEpoch")]
+        transmit_epoch: String,
+    },
+    Pointer(PointerInput),
+    Wheel(WheelInput),
+    Key(KeyInput),
+    Text(TextInput),
+}
+
+impl Validate for ControlIn {
+    fn valid(&self) -> bool {
+        match self {
+            // Identifiers and epochs are checked where they are used, by the same authority that
+            // checks them on the relay path, so that the two paths cannot disagree about them.
+            Self::State { .. }
+            | Self::Heartbeat { .. }
+            | Self::Release { .. }
+            | Self::StopTransmit { .. } => true,
+            Self::Pointer(input) => input.valid(),
+            Self::Wheel(input) => input.valid(),
+            Self::Key(input) => input.valid(),
+            Self::Text(input) => input.valid(),
+        }
+    }
+}
+
+impl ControlIn {
+    /// The input this message describes, as the station hands it to its own window.
+    pub fn input(&self) -> Option<WebviewInput> {
+        match self {
+            Self::Pointer(input) => Some(WebviewInput::Pointer(input.clone())),
+            Self::Wheel(input) => Some(WebviewInput::Wheel(input.clone())),
+            Self::Key(input) => Some(WebviewInput::Key(input.clone())),
+            Self::Text(input) => Some(WebviewInput::Text(input.clone())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PointerAction {
+    Down,
+    Move,
+    Up,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PointerType {
+    Mouse,
+    Touch,
+    Pen,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyAction {
+    Down,
+    Up,
+}
+
+/// Shift, Control, Alt, Meta.
+const MODIFIER_BITS: u8 = 0b1111;
+
+fn fraction(value: f64) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PointerInput {
+    pub action: PointerAction,
+    /// Fractions of the video frame, which is the Nexus window's client area.
+    pub x: f64,
+    pub y: f64,
+    /// The DOM `button`: -1 for none changed, 0 main, 1 auxiliary, 2 secondary, 3 back, 4 forward.
+    pub button: i8,
+    /// The DOM `buttons` bitmask.
+    pub buttons: u8,
+    pub modifiers: u8,
+    pub pointer_type: PointerType,
+    /// The DOM click count: 0 for a move, 2 on the second press of a double-click.
+    pub clicks: u8,
+}
+
+impl Validate for PointerInput {
+    fn valid(&self) -> bool {
+        fraction(self.x)
+            && fraction(self.y)
+            && (-1..=4).contains(&self.button)
+            && self.buttons <= 31
+            && self.modifiers <= MODIFIER_BITS
+            && self.clicks <= 3
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WheelInput {
+    pub x: f64,
+    pub y: f64,
+    pub delta_x: f64,
+    pub delta_y: f64,
+    /// 0 pixels, 1 lines, 2 pages.
+    pub delta_mode: u8,
+    pub modifiers: u8,
+}
+
+impl Validate for WheelInput {
+    fn valid(&self) -> bool {
+        let delta = |d: f64| d.is_finite() && d.abs() <= 10_000.0;
+        fraction(self.x)
+            && fraction(self.y)
+            && delta(self.delta_x)
+            && delta(self.delta_y)
+            && self.delta_mode <= 2
+            && self.modifiers <= MODIFIER_BITS
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KeyInput {
+    pub action: KeyAction,
+    /// The DOM `key` value: a character, or a name such as `Enter`.
+    pub key: String,
+    /// The DOM `code` value, such as `KeyA` or `Space`; empty when the page has none.
+    pub code: String,
+    pub modifiers: u8,
+    pub repeat: bool,
+}
+
+impl Validate for KeyInput {
+    fn valid(&self) -> bool {
+        let key = self.key.chars().count();
+        (1..=32).contains(&key)
+            && no_control(&self.key)
+            && self.code.len() <= 32
+            && self.code.bytes().all(|b| b.is_ascii_alphanumeric())
+            && self.modifiers <= MODIFIER_BITS
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextInput {
+    /// Committed text, for the focused field.
+    pub text: String,
+}
+
+impl Validate for TextInput {
+    fn valid(&self) -> bool {
+        (1..=256).contains(&self.text.chars().count()) && no_control(&self.text)
+    }
+}
+
+/// Station → page on `control`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ControlOut {
+    /// The answer to an operation request: today's `value` or `error`, and on a heartbeat whether
+    /// the station holds transmit presence for this session after it.
+    OperationResponse {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presence: Option<bool>,
+    },
+    PttState {
+        #[serde(rename = "holdId")]
+        hold_id: String,
+        keyed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<PttReason>,
+    },
+}
+
+/// Why a held PTT is not keyed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PttReason {
+    /// The station would not key: transmit is off, the dial is outside the licence, the mode keys
+    /// no PTT, or the session holds no transmit presence.
+    Refused,
+    /// No hold arrived for [`PTT_GAP_MS`].
+    Lapsed,
+    /// The page released it.
+    Released,
+    /// A stop at the station ended it.
+    Stopped,
+}
+
+/// Page → station on `ptt`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum PttIn {
+    PttHold {
+        #[serde(rename = "holdId")]
+        hold_id: String,
+        seq: u32,
+    },
+    PttRelease {
+        #[serde(rename = "holdId")]
+        hold_id: String,
+        seq: u32,
+    },
+}
+
+impl Validate for PttIn {
+    fn valid(&self) -> bool {
+        match self {
+            Self::PttHold { hold_id, .. } | Self::PttRelease { hold_id, .. } => identifier(hold_id),
+        }
+    }
+}
+
+/// Station → page on `audio`: the relay's receive-audio messages, unchanged, so the page's
+/// existing player takes them as they are.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum AudioOut {
+    AudioRx {
+        seq: u32,
+        epoch: String,
+        #[serde(rename = "firstFrameMs")]
+        first_frame_ms: u64,
+        #[serde(rename = "frameMs")]
+        frame_ms: u32,
+        count: u8,
+        payload: String,
+    },
+    AudioState {
+        listening: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+}
+
+/// Station → its own main window, as the Tauri event [`WEBVIEW_INPUT_EVENT`]. Never leaves the
+/// station, and never becomes OS input.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum WebviewInput {
+    Pointer(PointerInput),
+    Wheel(WheelInput),
+    Key(KeyInput),
+    Text(TextInput),
+    /// Release anything the window's input module is still holding down.
+    Reset {},
+}
+
+/// The Tauri event name the station's window listens on.
+pub const WEBVIEW_INPUT_EVENT: &str = "remote-stream-input";
+
+impl Validate for WebviewInput {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Pointer(input) => input.valid(),
+            Self::Wheel(input) => input.valid(),
+            Self::Key(input) => input.valid(),
+            Self::Text(input) => input.valid(),
+            Self::Reset {} => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! ★ THE FIXTURES ARE THE CONTRACT. Each accepted case parses into its type and serialises back
+    //! to the same JSON; each refused case is refused by the receiver's parser or its bounds. The
+    //! relay and the page read these same files, so this is where a one-sided change is caught.
+    use super::*;
+    use serde::de::DeserializeOwned;
+    use serde_json::Value;
+
+    const SIGNAL: &str = include_str!("../../../remote/test/fixtures/stream/signal.json");
+    const CHANNEL: &str = include_str!("../../../remote/test/fixtures/stream/channel.json");
+    const WEBVIEW: &str = include_str!("../../../remote/test/fixtures/stream/webview.json");
+
+    fn cases(file: &str, list: &str) -> Vec<(String, Value)> {
+        let file: Value = serde_json::from_str(file).expect("a fixture file is JSON");
+        let cases = file[list]
+            .as_array()
+            .unwrap_or_else(|| panic!("the fixture list {list} exists"));
+        assert!(!cases.is_empty(), "premise: {list} holds cases");
+        cases
+            .iter()
+            .map(|case| {
+                (
+                    case["name"].as_str().expect("a case is named").to_string(),
+                    case["message"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// JSON equality that reads `0` and `0.0` as the same number, because a page written in
+    /// JavaScript sends one and serde writes the other.
+    fn same(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+            (Value::Array(x), Value::Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y))
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+            }
+            _ => a == b,
+        }
+    }
+
+    /// Parse, validate, and serialise back to the same JSON.
+    fn round_trip<T: DeserializeOwned + Serialize + Validate>(file: &str, list: &str) -> usize {
+        let cases = cases(file, list);
+        for (name, message) in &cases {
+            let parsed: T = serde_json::from_value(message.clone())
+                .unwrap_or_else(|e| panic!("{list} / {name}: refused: {e}"));
+            assert!(parsed.valid(), "{list} / {name}: out of bounds");
+            let back = serde_json::to_value(&parsed).unwrap();
+            assert!(
+                same(&back, message),
+                "{list} / {name}: did not come back the same:\n{back}\n{message}"
+            );
+        }
+        cases.len()
+    }
+
+    /// Every case must be refused, by the parser or by the bounds.
+    fn refused<T: DeserializeOwned + Validate>(file: &str, list: &str) {
+        for (name, message) in cases(file, list) {
+            let accepted = serde_json::from_value::<T>(message).is_ok_and(|m| m.valid());
+            assert!(!accepted, "{list} / {name}: accepted, and must be refused");
+        }
+    }
+
+    impl Validate for PageToRoom {
+        fn valid(&self) -> bool {
+            let Self::StreamSignal { lease_id, payload } = self;
+            identifier(lease_id) && payload.valid()
+        }
+    }
+    impl Validate for RoomToStation {
+        fn valid(&self) -> bool {
+            let Self::StreamSignal {
+                session_id,
+                device_id,
+                lease_id,
+                payload,
+            } = self;
+            [session_id, device_id, lease_id]
+                .into_iter()
+                .all(|id| identifier(id))
+                && payload.valid()
+        }
+    }
+    impl Validate for StationToRoom {
+        fn valid(&self) -> bool {
+            self.to_wire().is_some()
+        }
+    }
+    impl Validate for RoomToPage {
+        fn valid(&self) -> bool {
+            match self {
+                Self::StreamSignal { payload } => payload.valid(),
+                Self::StreamState { .. } => true,
+            }
+        }
+    }
+    impl Validate for ControlOut {
+        fn valid(&self) -> bool {
+            true
+        }
+    }
+    impl Validate for AudioOut {
+        fn valid(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn every_signalling_case_round_trips_on_its_hop() {
+        assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 4);
+        assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 4);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 10);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 10);
+    }
+
+    #[test]
+    fn the_station_refuses_every_malformed_relay_message() {
+        refused::<RoomToStation>(SIGNAL, "roomToStationRefused");
+        refused::<RoomToPage>(SIGNAL, "pageRefused");
+    }
+
+    /// The relay stamps and strips; it never rewrites. So each hop's cases are the other hop's plus
+    /// or minus exactly the relay's own fields.
+    #[test]
+    fn the_relay_only_stamps_and_strips() {
+        let page = cases(SIGNAL, "browserToRoom");
+        let station = cases(SIGNAL, "roomToStation");
+        assert_eq!(page.len(), station.len());
+        for ((name, sent), (other, stamped)) in page.iter().zip(&station) {
+            assert_eq!(name, other);
+            let mut expected = sent.clone();
+            expected["sessionId"] = stamped["sessionId"].clone();
+            expected["deviceId"] = stamped["deviceId"].clone();
+            assert!(identifier(stamped["sessionId"].as_str().unwrap()));
+            assert!(identifier(stamped["deviceId"].as_str().unwrap()));
+            assert_eq!(&expected, stamped, "{name}");
+        }
+        let from = cases(SIGNAL, "stationToRoom");
+        let to = cases(SIGNAL, "roomToBrowser");
+        assert_eq!(from.len(), to.len());
+        for ((name, sent), (other, delivered)) in from.iter().zip(&to) {
+            assert_eq!(name, other);
+            let mut expected = sent.clone();
+            expected.as_object_mut().unwrap().remove("sessionId");
+            assert_eq!(&expected, delivered, "{name}");
+        }
+    }
+
+    /// The bounds the README states, measured on the fixtures themselves: the stamped offer fits
+    /// the relay's ceiling with room to spare, so a real page's offer has room too.
+    #[test]
+    fn every_fixture_fits_its_bound() {
+        for (name, message) in cases(SIGNAL, "roomToStation") {
+            let wire = serde_json::to_string(&message).unwrap();
+            assert!(wire.len() <= SIGNAL_BYTES, "{name}: {} bytes", wire.len());
+        }
+        for (name, message) in cases(SIGNAL, "stationToRoom") {
+            let parsed: StationToRoom = serde_json::from_value(message).unwrap();
+            assert!(parsed.to_wire().is_some(), "{name}");
+        }
+        for list in ["controlBrowserToStation", "pttBrowserToStation"] {
+            for (name, message) in cases(CHANNEL, list) {
+                let wire = serde_json::to_string(&message).unwrap();
+                assert!(wire.len() <= CONTROL_BYTES, "{list} / {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_data_channel_case_round_trips() {
+        assert_eq!(
+            round_trip::<ControlIn>(CHANNEL, "controlBrowserToStation"),
+            15
+        );
+        assert_eq!(
+            round_trip::<ControlOut>(CHANNEL, "controlStationToBrowser"),
+            10
+        );
+        assert_eq!(round_trip::<PttIn>(CHANNEL, "pttBrowserToStation"), 3);
+        assert_eq!(round_trip::<AudioOut>(CHANNEL, "audioStationToBrowser"), 3);
+    }
+
+    /// The station's own parsers, bytes in: the size bound, then serde, then the bounds.
+    #[test]
+    fn the_station_parsers_accept_the_fixtures_and_refuse_the_rest() {
+        for (name, message) in cases(CHANNEL, "controlBrowserToStation") {
+            let bytes = serde_json::to_vec(&message).unwrap();
+            assert!(parse_control(&bytes).is_ok(), "{name}");
+        }
+        for (name, message) in cases(CHANNEL, "controlRefused") {
+            let bytes = serde_json::to_vec(&message).unwrap();
+            assert!(parse_control(&bytes).is_err(), "{name}: accepted");
+        }
+        for (name, message) in cases(CHANNEL, "pttBrowserToStation") {
+            let bytes = serde_json::to_vec(&message).unwrap();
+            assert!(parse_ptt(&bytes).is_ok(), "{name}");
+        }
+        for (name, message) in cases(CHANNEL, "pttRefused") {
+            let bytes = serde_json::to_vec(&message).unwrap();
+            assert!(parse_ptt(&bytes).is_err(), "{name}: accepted");
+        }
+        // The size bound comes first: a message over it is refused unread.
+        let big = format!(
+            r#"{{"type":"text","text":"{}"}}"#,
+            "a".repeat(CONTROL_BYTES)
+        );
+        assert_eq!(parse_control(big.as_bytes()), Err(Refused::TooLarge));
+    }
+
+    #[test]
+    fn a_heartbeat_must_say_how_fresh_its_picture_is() {
+        let hb = |extra: &str| {
+            format!(
+                r#"{{"type":"heartbeat","requestId":"{id}","leaseId":"{id}"{extra}}}"#,
+                id = "10000000-0000-4000-8000-000000000001"
+            )
+        };
+        assert!(matches!(
+            parse_control(hb(r#","decodedFrameAt":null"#).as_bytes()),
+            Ok(ControlIn::Heartbeat {
+                decoded_frame_at: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_control(hb(r#","decodedFrameAt":4294967295"#).as_bytes()),
+            Ok(ControlIn::Heartbeat {
+                decoded_frame_at: Some(u32::MAX),
+                ..
+            })
+        ));
+        // Missing is not null: it is a page that does not know the field, and it is refused.
+        assert_eq!(parse_control(hb("").as_bytes()), Err(Refused::Malformed));
+    }
+
+    #[test]
+    fn the_window_receives_exactly_the_input_the_channel_carried() {
+        assert_eq!(round_trip::<WebviewInput>(WEBVIEW, "stationToWebview"), 11);
+        refused::<WebviewInput>(WEBVIEW, "refused");
+        // Every input case on the channel reaches the window unchanged, and nothing else does.
+        let channel: Vec<Value> = cases(CHANNEL, "controlBrowserToStation")
+            .into_iter()
+            .filter_map(|(_, m)| {
+                let parsed: ControlIn = serde_json::from_value(m).unwrap();
+                parsed.input().map(|i| serde_json::to_value(i).unwrap())
+            })
+            .collect();
+        let window: Vec<Value> = cases(WEBVIEW, "stationToWebview")
+            .into_iter()
+            .map(|(_, m)| m)
+            .filter(|m| m["type"] != "reset")
+            .collect();
+        assert_eq!(channel.len(), 10, "premise: ten input cases");
+        assert_eq!(channel.len(), window.len());
+        for (a, b) in channel.iter().zip(&window) {
+            assert!(same(a, b), "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn identifiers_are_lowercase_uuids() {
+        assert!(identifier("10000000-0000-4000-8000-00000000000a"));
+        // CONTROL: the same UUID in capitals, and one short, are refused.
+        assert!(!identifier("10000000-0000-4000-8000-00000000000A"));
+        assert!(!identifier("10000000-0000-4000-8000-00000000000"));
+    }
+}
