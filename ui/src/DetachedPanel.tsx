@@ -20,7 +20,7 @@ import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
 import { withErrorToast } from './toast'
 import { pollSingleFlight } from './singleFlight'
-import { WSPR_WATERFALL_WINDOW } from './waterfall'
+import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
 import type {
   AppSnapshot,
   BandChannel,
@@ -477,6 +477,12 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           paletteScope={FT_PALETTE_SCOPE}
           // #101: the torn-off copy shows WSPR's sub-band too, like the docked one.
           fixedWindow={snap?.link.tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
+          // …and the same marker width as the docked one (WSJT-X's bracket for the tier).
+          markerWidthHz={markerWidthHz(snap?.link.tier, {
+            periodS: snap?.link.periodSecs,
+            q65Submode: settings?.q65Submode,
+            jt65Submode: settings?.jt65Submode,
+          })}
           txBlanks // the torn-off FT waterfall — same surface, same 13 s over.
         />
       </DetachedShell>

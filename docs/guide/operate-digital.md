@@ -47,6 +47,13 @@ a Ctrl-click. These are the same three gestures the [quick
 start](../quick-start.md#3-a-tour-of-the-digital-cockpit-about-2-minutes) uses in
 its two-minute cockpit tour.
 
+**Each cursor is as wide as the signal.** On FT8, FT4, FST4, FST4W, Q65 and JT65 a
+cursor is two lines joined by a bar, the way WSJT-X's Wide Graph draws it. The left
+line is the frequency you set; the right line is the signal's top tone, 43.75 Hz
+higher on FT8 and 62.5 Hz on FT4. The bar runs along the top of the waterfall for TX
+and along the bottom for RX. A click still tunes to the exact spot you click, inside
+a cursor or not. WSPR, MSK144, FT2 and the Tempo modes keep a single line.
+
 ![The waterfall pane's header and the top of the waterfall below it. The header reads WATERFALL, followed by the gesture legend "left = RX · right / Shift = TX · Ctrl = both". Under it FT8 traces scroll across the passband, the frequency ruler running 500, 1000 and 1500 Hz along the bottom edge, with two cursors standing separately in the band: a green line labelled RX low in the pane, and a red line labelled TX a few hundred hertz above it.](../img/manual/operate-waterfall.webp)
 
 **Band Activity** scrolls chronologically, bottom-pinned, with a reviewing pause

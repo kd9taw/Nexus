@@ -163,6 +163,13 @@ interface Props {
    * FT8 path is byte-identical when this is undefined. A cursor that stands for a marker
    * passes its token (`var(--rx)`), which resolves the way the markers' own do. */
   cursors?: { hz: number; color: string; label: string }[]
+  /** The signal's WIDTH above each marker's frequency, Hz: `markerWidthHz(tier, …)`, the bracket
+   * WSJT-X's Wide Graph draws for the mode. Each marker is then two lines, at its frequency and at
+   * the signal's top tone, closed by a bar: TX's along the top edge and RX's along the bottom,
+   * where their labels sit, the way WSJT-X stacks its red bracket over its green one. Unset, null
+   * or 0 = the single line. PAINT ONLY: no click, gesture or hit-test reads it. Named `cursors`
+   * replace the markers, width and all. */
+  markerWidthHz?: number | null
   /** Header hint text override (default: the left/right/Shift/Ctrl legend). */
   hint?: string
   /** New-row poll cadence (ms) — and, because the producer publishes every 20 ms
@@ -253,6 +260,7 @@ export function Waterfall({
   hideNote,
   paneTitle,
   cursors,
+  markerWidthHz,
   hint,
   rowMs = 120,
   paletteScope,
@@ -321,6 +329,7 @@ export function Waterfall({
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
   const cursorsRef = useRef(cursors)
+  const markerWidthRef = useRef(markerWidthHz)
   const activeRef = useRef(active)
   const rowMsRef = useRef(rowMs)
   const gainRef = useRef(gain)
@@ -368,6 +377,7 @@ export function Waterfall({
   rxOffRef.current = rxOffsetHz
   txOffRef.current = txOffsetHz
   cursorsRef.current = cursors
+  markerWidthRef.current = markerWidthHz
   activeRef.current = active
   rowMsRef.current = rowMs
   gainRef.current = gain
@@ -931,26 +941,56 @@ export function Waterfall({
       } else {
         // --- TX marker (red) then RX marker (green), drawn last so they're on top ---
         // Markers map through the same view; skip one that's scrolled outside a zoom
-        // window (else freqToX would clamp it misleadingly to the edge).
+        // window, and never draw a line whose own frequency is outside it (else freqToX
+        // would clamp it misleadingly to the edge).
         // `--tx` / `--rx`, so the scope agrees with the ON AIR sign; the line is dimmer than its
         // label, and the TX line brightens while we transmit — by alpha, never by hue.
+        //
+        // With a width (`markerWidthHz`) a marker is WSJT-X's bracket: its line stays exactly
+        // where the single line was, a second line stands on the signal's top tone, and a bar
+        // closes the pair — TX's along the top edge, RX's along the bottom, as WSJT-X stacks its
+        // red bracket over its green one. The bar fills only the gap between the two lines, so
+        // no pixel is painted twice under the alpha; where a line is out of view it runs to the
+        // edge. A 1 px keyline of the well's ground on the bar's inner edge keeps it legible where
+        // it crosses a signal (WSJT-X's brackets sit on a plain scale; these sit on the picture).
+        // The label follows the top-tone line. Width 0 draws exactly the single line.
+        const width = markerWidthRef.current
+        const bw = width != null && width > 0 ? width : 0
+        /** Draw one marker; returns the x its label follows, with `color` left as the fill. */
+        const drawMarker = (hz: number, color: string, barY: number, keyY: number): number => {
+          const x0 = freqToX(hz, W, vlo, vhi)
+          const x1 = freqToX(hz + bw, W, vlo, vhi)
+          const lowIn = hz >= vlo
+          const topIn = hz + bw <= vhi
+          octx.fillStyle = color
+          if (lowIn) octx.fillRect(x0 - 1, 0, 2, wfH)
+          if (bw > 0) {
+            if (topIn) octx.fillRect(x1 - 1, 0, 2, wfH)
+            const a = lowIn ? x0 + 1 : x0
+            const b = topIn ? x1 - 1 : x1
+            if (b > a) {
+              octx.fillRect(a, barY, b - a, 2)
+              octx.fillStyle = ink.ground
+              octx.fillRect(a, keyY, b - a, 1)
+              octx.fillStyle = color
+            }
+          }
+          return x1
+        }
+
         const txOff = txOffRef.current
-        if (txOff >= vlo && txOff <= vhi) {
-          const txx = freqToX(txOff, W, vlo, vhi)
+        if (txOff + bw >= vlo && txOff <= vhi) {
           octx.globalAlpha = txRef.current ? 0.95 : 0.7
-          octx.fillStyle = ink.tx
-          octx.fillRect(txx - 1, 0, 2, wfH)
+          const txx = drawMarker(txOff, ink.tx, 0, 2)
           octx.globalAlpha = 1
           octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
           octx.fillText('TX', Math.min(W - 18 * textScale, txx + 3), 9 * textScale)
         }
 
         const rxOff = rxOffRef.current
-        if (rxOff >= vlo && rxOff <= vhi) {
-          const rxx = freqToX(rxOff, W, vlo, vhi)
+        if (rxOff + bw >= vlo && rxOff <= vhi) {
           octx.globalAlpha = 0.9
-          octx.fillStyle = ink.rx
-          octx.fillRect(rxx - 1, 0, 2, wfH)
+          const rxx = drawMarker(rxOff, ink.rx, wfH - 2, wfH - 3)
           octx.globalAlpha = 1
           octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
           octx.fillText('RX', Math.min(W - 18 * textScale, rxx + 3), wfH - 6 * textScale)

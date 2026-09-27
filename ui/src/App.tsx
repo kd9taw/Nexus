@@ -91,6 +91,7 @@ import { Conversation } from './components/Conversation'
 import { TempoHeader } from './components/TempoHeader'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
+import { markerWidthHz } from './waterfall'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
 import { OperateCockpit } from './components/OperateCockpit'
@@ -2618,6 +2619,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   // displayed tier is the authoritative link tier from the snapshot
   const tier = snap.link.tier
+  // How wide the FT waterfall draws its RX/TX markers on this tier: WSJT-X's bracket, or null for
+  // the single line. The submodes are settings; until they load, Q65 and JT65 keep the line.
+  const ftMarkerWidthHz = markerWidthHz(tier, {
+    periodS: snap.link.periodSecs,
+    q65Submode: settings?.q65Submode,
+    jt65Submode: settings?.jt65Submode,
+  })
 
   // First-run nudge: callsign unset / still the placeholder, and not dismissed.
   const needsOnboarding =
@@ -2732,6 +2740,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         theme={theme}
         onTune={handleTune}
         paletteScope={FT_PALETTE_SCOPE}
+        markerWidthHz={ftMarkerWidthHz}
         txBlanks // FT surface — a 13 s over may go dark; see the prop's doc.
       />
       <OperateDecodes
@@ -3458,6 +3467,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               snap={snap}
               theme={theme}
               tier={tier}
+              markerWidthHz={ftMarkerWidthHz}
               onTierChange={handleTier}
               bandPlan={bandPlan}
               onSetFrequency={handleSetFrequency}
