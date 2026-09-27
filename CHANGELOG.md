@@ -155,6 +155,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Stopped" after that. A voice, CW or RTTY over still running at the station could already read
   "Stopped", because only the FT and mic-key flags were checked. It now waits for the same reading
   as the ON AIR sign. The Stop itself works exactly as before.
+- **The band chip's band name is readable in the light theme.** The band chip (the top bar, the
+  cockpit headers, Phone's and CW's band picker, and Settings ▸ Station) spelled the band name in
+  the band's own colour, which barely shows on a light background: 20m's green read about 1.5:1.
+  In the light theme the name is now in the normal text colour, and the band's colour stays on the
+  chip's border, its glow and the dot beside it.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,
