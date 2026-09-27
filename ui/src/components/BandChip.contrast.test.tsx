@@ -114,12 +114,28 @@ function renderChips(): Chip[] {
   return out
 }
 
+/** The cascade for one chain, resolved once per rule set, mode and chain SHAPE. Every band's chip
+ *  from one host has the same tags, classes and selectable attributes; only per-render ids and
+ *  labels differ, and no rule in either sheet selects on `id`, `aria-label`, `aria-controls` or
+ *  `title`. Resolving the whole sheet for all 57 chips × 8 modes took seconds, and a guard that
+ *  only passes on an idle box is the flake class this batch removed. */
+const chainKey = (chain: El[]) =>
+  JSON.stringify(chain.map((e) => [e.tag, e.classes, Object.entries(e.attrs).filter(([k]) => !/^(id|aria-label|aria-controls|title)$/.test(k))]))
+const resolved = new WeakMap<Rule[], Map<string, { tokens: Map<string, string>; color: ReturnType<typeof winnerAt> }>>()
+function cascadeOf(rules: Rule[], mode: Mode, chain: El[]) {
+  let byKey = resolved.get(rules)
+  if (!byKey) resolved.set(rules, (byKey = new Map()))
+  const key = `${mode}|${chainKey(chain)}`
+  let hit = byKey.get(key)
+  if (!hit) byKey.set(key, (hit = { tokens: tokensAt(rules, mode, chain), color: winnerAt(rules, mode, chain, 'color') }))
+  return hit
+}
+
 /** The lettering a chip paints under `mode`: its inline ink, unless an author rule beats it. */
 function letteringOf(rules: Rule[], chip: Chip, mode: Mode): Rgb {
-  const w = winnerAt(rules, mode, chip.chain, 'color')
+  const { tokens, color: w } = cascadeOf(rules, mode, chip.chain)
   const important = !!w && w.rule.decls.some((d) => d.prop === 'color' && /!\s*important\s*$/.test(d.value))
   if (!important) return chip.ink
-  const tokens = tokensAt(rules, mode, chip.chain)
   return rgbOfStyle(expandWith(tokens, w!.value))
 }
 
@@ -128,7 +144,7 @@ function unreadable(rules: Rule[], chips: Chip[], modes: readonly Mode[] = BASE_
   const out: string[] = []
   for (const chip of chips) {
     for (const mode of modes) {
-      const tokens = tokensAt(rules, mode, chip.chain)
+      const { tokens } = cascadeOf(rules, mode, chip.chain)
       const ink = letteringOf(rules, chip, mode)
       for (const s of SURFACES) {
         const bg = rgbOfStyle(expandWith(tokens, `var(${s})`))
@@ -175,7 +191,7 @@ describe("the band chip's band name reads, in every theme", () => {
     const light = BASE_MODES.filter((m) => baseTheme(m) === 'light')
     for (const chip of chips) {
       for (const mode of light) {
-        const text = rgbOfStyle(expandWith(tokensAt(RULES, mode, chip.chain), 'var(--text)'))
+        const text = rgbOfStyle(expandWith(cascadeOf(RULES, mode, chip.chain).tokens, 'var(--text)'))
         expect(hex(letteringOf(RULES, chip, mode)), `${chip.host} ${chip.band} ${mode}`).toBe(hex(text))
       }
     }
