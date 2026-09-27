@@ -5,6 +5,7 @@
 // to go), the frame exposes no styling hook (so a pane cannot size itself back into the
 // clipping bug), and an action the caller did not supply renders no button at all — a
 // pane with no removal callback is one a bad stored layout cannot make disappear.
+import { createRef } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { CockpitPaneFrame } from './CockpitPaneFrame'
@@ -43,6 +44,26 @@ describe('CockpitPaneFrame', () => {
       'flex: var(--cockpit-pane-flex, 1 1 0); min-height: var(--cockpit-fill-min, 0);',
     )
     expect(frame.dataset.fit).toBe('fill')
+  })
+
+  it('an operator-dragged share rides as --pane-share ON the frame, so a seam can repaint it live', () => {
+    // SplitterSeam paints a custom property on the two panes it splits, mid-drag, and the
+    // record's value lands on the next render. A literal weight in the flex (the default
+    // branch above) cannot be repainted that way, so a frame that is split by a seam carries
+    // its share as a property of its own — still a PLACEMENT input, typed and numeric, never
+    // a size the pane declares. The 1-col tier's --cockpit-pane-flex still wins first.
+    const ref = createRef<HTMLElement>()
+    render(
+      <CockpitPaneFrame title="Spots" paneId="spots" share={1.3} paneRef={ref}>
+        <p>rows</p>
+      </CockpitPaneFrame>,
+    )
+    const frame = screen.getByLabelText('Spots')
+    expect(ref.current, 'the seam has no handle on the frame').toBe(frame)
+    expect(frame.style.getPropertyValue('--pane-share')).toBe('1.3')
+    expect(frame.getAttribute('style')).toContain('flex: var(--cockpit-pane-flex, var(--pane-share) 1 0)')
+    expect(frame.style.minHeight).toBe('var(--cockpit-fill-min, 0)')
+    expect(frame.className).toBe('pane-frame') // still no styling hook
   })
 
   it('renders pop-out / remove only when the cockpit supplies them', () => {

@@ -103,6 +103,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can take about a minute to give up on a session after a pulled network cable, so this backs up
   the TX watchdog rather than replacing it. The line under the switch shows what Nexus last read
   from Parsec's log.
+- **Spots and Needed on the Phone screen (#345).** ⊞ Panels on the Phone cockpit has two new
+  entries, **Spots** and **Needed**, and both start unticked, so nobody's Phone screen changes on
+  the update. Tick one and it fills space that used to sit empty: on a wide window Spots goes under
+  Band Activity and the voice keyer, and Needed under the receiver and transmitter panes; on a
+  narrower window both go at the bottom of the left-hand column, with a divider between them that
+  you drag to share the height (the split is remembered). **Spots** opens on the
+  voice spots (the ones in the phone part of the band) on the band your radio is on, and moves
+  with the radio when you change band. Its Filter chips widen it to other modes and other bands,
+  and unticking your own band's chip stops it following. **Needed** is the Needed board with its
+  usual filters. Each pane keeps its own filters, so a chip on the Phone screen never changes the
+  Spots or Needed screen, or the other way round. A click on a row does exactly what it does on
+  those screens: the radio goes to the station and the call goes into the log. A CW or digital
+  spot, once you have widened the list to it, opens its own screen as it does from Spots. Nothing
+  transmits. **Reset layout** unticks both again. On the Remote page the panes show the spots and
+  needs the station already shares, and say so when it does not.
 
 ### Changed
 

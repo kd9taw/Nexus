@@ -117,12 +117,13 @@ type SortKey = 'priority' | 'call' | 'band' | 'entity' | 'mode' | 'zone' | 'freq
 
 // Persisted filter state key. PER-SURFACE: what THIS board shows — an HF-DX board beside
 // a 2 m board wanting different filters is the whole point of a second window. (Note the
-// bare name: any cleanup written as a glob over `nexus.*` would miss it.)
+// bare name: any cleanup written as a glob over `nexus.*` would miss it.) A board hosted as a
+// PANE of another screen passes its own key (NeededPane), so it and the view never share one.
 const FILTER_KEY = 'neededFilters'
 
-function loadFilters(): NeededFilters {
+function loadFilters(key: string): NeededFilters {
   try {
-    const raw = surfaceGet(FILTER_KEY)
+    const raw = surfaceGet(key)
     if (!raw) return { ...DEFAULT_FILTERS }
     const parsed = JSON.parse(raw) as Partial<NeededFilters> & { needType?: unknown }
     // Need-type is now a multi-select array (empty = All). Accept the new `needTypes`
@@ -157,8 +158,8 @@ function loadFilters(): NeededFilters {
   }
 }
 
-function saveFilters(f: NeededFilters): void {
-  surfaceSet(FILTER_KEY, JSON.stringify(f))
+function saveFilters(key: string, f: NeededFilters): void {
+  surfaceSet(key, JSON.stringify(f))
 }
 
 // Band list shown in the filter bar: common HF + VHF bands (always present).
@@ -228,7 +229,7 @@ const MODE_OPTS: { value: ModeClass; label: string }[] = [
   { value: 'Phone', label: 'Phone' },
 ]
 
-interface Props {
+export interface NeededPanelProps {
   alerts: NeedAlert[]
   bandPlan: BandChannel[]
   selectedCall: string | null
@@ -260,6 +261,25 @@ interface Props {
   /** Open Settings at a section id (see settings/registry.ts). Omitted in the pop-out window
    * (no cross-window nav) → the phone-source line stays plain text there. */
   onOpenSettings?: (target: string) => void
+  /** Hosted as a PANE of another screen rather than as the Needed view or its pop-out — see
+   *  NeededPane. Both of those pass none and are exactly as they were. */
+  pane?: NeededPane
+}
+
+/**
+ * The board as a PANE of another screen (#345: the Phone cockpit's Needed pane), its THIRD host
+ * after the Needed view and the pop-out. It keeps the board's own default filters — nobody chose
+ * a pane-specific one — in a record of its own (`filterKey`, per surface like the view's), so a
+ * chip in the pane and a chip on the board never move each other.
+ *
+ * As a pane it also leaves out what belongs to the BOARD's window: its heading (the frame's head
+ * names the pane), "open at launch" (which launches the board's window, not this pane), and the
+ * rotator widget (a screen that hosts this pane has its own rotor strip, and a second poll of the
+ * same rotator on one screen buys nothing). Each row's ↗ stays. Its filter bar opens on the
+ * funnel only, as the Spots pane's does.
+ */
+export interface NeededPane {
+  readonly filterKey: string
 }
 
 /** Compact phone-source descriptor for the board header: [css class, short text, tooltip].
@@ -308,7 +328,8 @@ export function NeededPanel({
   onPopOut,
   phoneSource,
   onOpenSettings,
-}: Props) {
+  pane,
+}: NeededPanelProps) {
   const control = useStationControl()
   // The rotator is steerable from a browser only while the station advertises it.
   const rotatorCapability = useStationCapability('rotator')
@@ -317,7 +338,9 @@ export function NeededPanel({
     key: 'priority',
     dir: 'desc',
   })
-  const [filters, setFilters] = useState<NeededFilters>(loadFilters)
+  // Whose filter record: the board's own, or the hosting pane's (NeededPane).
+  const filterKey = pane?.filterKey ?? FILTER_KEY
+  const [filters, setFilters] = useState<NeededFilters>(() => loadFilters(filterKey))
   const [filtersOpen, setFiltersOpen] = useState(false)
   // Persisted launch behavior for the detached window (read by App's auto-pop).
   const [autopop, setAutopop] = useState<boolean>(() => {
@@ -348,8 +371,8 @@ export function NeededPanel({
 
   const updateFilters = useCallback((next: NeededFilters) => {
     setFilters(next)
-    saveFilters(next)
-  }, [])
+    saveFilters(filterKey, next)
+  }, [filterKey])
 
   const toggleNeedType = useCallback((value: NeedTypeFilter) => {
     setFilters((prev) => {
@@ -361,20 +384,20 @@ export function NeededPanel({
           : prev.needTypes.includes(value)
             ? { ...prev, needTypes: prev.needTypes.filter((t) => t !== value) }
             : { ...prev, needTypes: [...prev.needTypes, value] }
-      saveFilters(next)
+      saveFilters(filterKey, next)
       return next
     })
-  }, [])
+  }, [filterKey])
 
   const toggleBand = useCallback((band: string) => {
     setFilters((prev) => {
       const next: NeededFilters = prev.bands.includes(band)
         ? { ...prev, bands: prev.bands.filter((b) => b !== band) }
         : { ...prev, bands: [...prev.bands, band] }
-      saveFilters(next)
+      saveFilters(filterKey, next)
       return next
     })
-  }, [])
+  }, [filterKey])
 
   const toggleMode = useCallback((mode: ModeClass) => {
     setFilters((prev) => {
@@ -382,10 +405,10 @@ export function NeededPanel({
         ...prev,
         modes: { ...prev.modes, [mode]: !prev.modes[mode] },
       }
-      saveFilters(next)
+      saveFilters(filterKey, next)
       return next
     })
-  }, [])
+  }, [filterKey])
 
   const clearFilters = useCallback(() => {
     updateFilters({ ...DEFAULT_FILTERS, modes: { ...ALL_MODES_ON } })
@@ -448,6 +471,9 @@ export function NeededPanel({
     <button
       type="button"
       className={`np-th${sort.key === key ? ' active' : ''}`}
+      // Which column this heads — what lets the narrow pane layout (styles.css `.np-board`)
+      // leave one out together with its cells. Not a styling hook for the view.
+      data-col={key}
       onClick={() =>
         setSort((p) =>
           p.key === key
@@ -461,17 +487,22 @@ export function NeededPanel({
     </button>
   )
 
+  // As a pane the board is CONTENT inside a frame, not a view: no second <main>, none of the
+  // view shell's sizing (`.layout.single`), and no heading — the frame's head is its name.
+  const Root = pane ? 'div' : 'main'
   return (
-    <main className="layout single needed-panel">
+    <Root className={pane ? 'np-board' : 'layout single needed-panel'}>
       <div className="np-head">
-        <h2>{t('needed.title')}</h2>
+        {!pane && <h2>{t('needed.title')}</h2>}
         <span className="np-count">{rows.length}</span>
         {alerts.length !== rows.length && (
           <span className="np-count np-count-filtered">
             {t('needed.countFiltered', { count: alerts.length })}
           </span>
         )}
-        <span className="np-hint">{control ? t('needed.hint') : t('remote.collectionObserver')}</span>
+        {/* Not in a pane: a few inches of height, rows that say what a click does in their own
+            tooltip, and a host that shows the collection's status on Remote. */}
+        {!pane && <span className="np-hint">{control ? t('needed.hint') : t('remote.collectionObserver')}</span>}
         {/* Filter toggle button */}
         <button
           type="button"
@@ -486,7 +517,7 @@ export function NeededPanel({
           </svg>{' '}
           {hasActiveFilters ? t('needed.filter.toggle.active') : t('needed.filter.toggle.idle')}
         </button>
-        {rotatorControl && onPoint && <RotatorWidget remote={!control} />}
+        {!pane && rotatorControl && onPoint && <RotatorWidget remote={!control} />}
         {control && onPopOut && (
           <button
             type="button"
@@ -497,7 +528,7 @@ export function NeededPanel({
             {t('needed.popOut.label')}
           </button>
         )}
-        {control && <label className="np-autopop" title={t('needed.autoPop.title')}>
+        {control && !pane && <label className="np-autopop" title={t('needed.autoPop.title')}>
           <input
             type="checkbox"
             checked={autopop}
@@ -559,8 +590,9 @@ export function NeededPanel({
           </div>
         ))}
 
-      {/* Filter bar — visible when toggled open or when any filter is active */}
-      {(filtersOpen || hasActiveFilters) && (
+      {/* Filter bar — visible when toggled open or when any filter is active (as a pane, on
+          the funnel only: see NeededPane) */}
+      {(filtersOpen || (!pane && hasActiveFilters)) && (
         <div className="np-filters" role="group" aria-label={t('needed.filters.aria')}>
           {/* Need type chips */}
           <div className="np-filter-group">
@@ -800,6 +832,6 @@ export function NeededPanel({
           })
         )}
       </div>
-    </main>
+    </Root>
   )
 }

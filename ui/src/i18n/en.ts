@@ -2683,6 +2683,9 @@ export const EN = {
   'spots.filter.spotterCont.title': 'Show only spots someone in {{continent}} reported',
   'spots.filter.spotterEntity.title': 'Show only spots someone in {{country}} reported',
   'spots.filter.toggle.title': 'Filter spots by band, mode, state, or privileges',
+  // The band chip a PANE of this board follows (the Phone cockpit's Spots pane, #345).
+  'spots.filter.band.follow.title':
+    "{{band}} is your radio's band. While it is lit, the list moves with the radio when you change band; click it to stop.",
   'spots.filter.toggle.active': 'Filtered',
   'spots.filter.toggle.idle': 'Filter',
   // `{{mode}}` is a mode name and `{{state}}` a US state code — the tooltip is prose, the
@@ -8879,8 +8882,15 @@ export const EN = {
   'phone.panel.transmitter': 'Transmitter',
   'phone.panel.bandActivity': 'Band Activity',
   'phone.panel.voiceKeyer': 'Voice Keyer',
+  // #345: the Spots and Needed boards as Phone panes, named as the views they come from.
+  'phone.panel.spots': 'Spots',
+  'phone.panel.needed': 'Needed',
   'phone.pane.bandActivity.title': 'Band activity',
   'phone.pane.voiceKeyer.title': 'Voice keyer',
+  'phone.pane.spots.title': 'Spots',
+  'phone.pane.needed.title': 'Needed',
+  // The divider between those two panes (its accessible name, and the resize tooltip's).
+  'phone.seam.spotsNeeded.label': 'Spots / Needed',
   'phone.pane.rigscope.title': 'Rig scope controls',
   'phone.pane.receiver.title': 'Receiver',
   'phone.pane.transmitter.title': 'Transmitter',

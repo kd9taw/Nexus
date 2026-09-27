@@ -408,9 +408,11 @@ describe('hiding the Phone voice keyer', () => {
 
   it('⊞ Reset layout can only MOUNT the keyer — it is not a teardown path', async () => {
     // Three places said the discard notice "covers Reset layout". It cannot: reset applies
-    // `emptyPanelLayout()` and `stateOf` reads an absent state as 'docked', so the one thing
-    // reset can never do is remove a pane. Driven rather than argued, because the claim was
-    // printed in the CHANGELOG for operators to rely on.
+    // `emptyPanelLayout()`, which puts every pane at its default, and the keyer's default is
+    // 'docked', so the one thing reset can never do is remove the keyer. (It does hide Spots and
+    // Needed, which Phone ships hidden and whose hides end nothing — PhoneCockpit.boards.test.)
+    // Driven rather than argued, because the claim was printed in the CHANGELOG for operators
+    // to rely on.
     render(<LivePanels />)
     await act(async () => {})
     expect(document.querySelector('[data-pane="voiceKeyer"] .vk')).not.toBeNull()

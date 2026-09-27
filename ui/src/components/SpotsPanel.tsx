@@ -87,7 +87,7 @@ export function neededHere(alerts: NeedAlert[] | undefined, band: string, mode: 
   return alertsForSurface(alerts, band, mode).some((a) => a.tags.some((tag) => !isActivityTag(tag)))
 }
 
-interface Props {
+export interface SpotsPanelProps {
   spots: SpotRow[]
   bandPlan: BandChannel[]
   selectedCall: string | null
@@ -104,16 +104,53 @@ interface Props {
    * needed on the band and mode it is spotted on is never hidden as worked (`neededHere`).
    * Absent = no rescue, which only ever shows fewer rows, never more. */
   needAlerts?: NeedAlert[]
+  /** Hosted as a PANE of another screen rather than as the Spots view — see SpotsPane. The
+   *  Spots view passes none and is exactly as it was. */
+  pane?: SpotsPane
+}
+
+/**
+ * The board as a PANE of another screen (#345: the Phone cockpit's Spots pane). A second host of
+ * the same component, and everything it needs to be a board of its own:
+ *
+ *  - `scope` names this host's copy of every filter: the session key `nexus.spots.bands` becomes
+ *    `nexus.spots.bands.<scope>`, so neither host's chips can move the other's.
+ *  - `modes` are the modes it opens on, and they are an ALLOW-list: a mode that first appears
+ *    later stays hidden until its chip is ticked. The view's HIDDEN set does the opposite (a new
+ *    mode shows) — right for a firehose, wrong for Phone's "SSB/AM/FM spots on the band you're
+ *    on", which a digital mode turning up must not quietly widen.
+ *  - `band` is the radio's band ('' off the plan), and the band filter FOLLOWS it: that band's
+ *    chip is lit while it does, and unticking it stops following.
+ *
+ * As a pane it draws no heading of its own (the frame's head names it) and its filter bar opens
+ * on the funnel only: the bar is several lines of chips, a pane is a few inches tall, and the
+ * funnel still reads "Filtered" and the head still counts "n of m".
+ */
+export interface SpotsPane {
+  readonly scope: string
+  readonly modes: readonly string[]
+  readonly band: string
 }
 
 /** View-session state: the Spots panel unmounts on every view switch, which wiped all
  * filters mid-session (operator report 2026-07-21: "Leaving SPOT and returning resets
  * all filters"). sessionStorage survives the remount and clears on app exit — exactly
- * "retain them until application exit". Falls back to plain state if storage throws. */
-function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+ * "retain them until application exit". Falls back to plain state if storage throws.
+ *
+ * `host` picks WHOSE copy: omitted, the Spots view's own `key`; a pane's scope, that pane's copy
+ * (`key.<scope>`); `null`, a filter this host does not keep at all (plain state, nothing stored).
+ * The key stays the FIRST argument and a literal: storage-scope.test.ts classifies every one by
+ * scanning for exactly that. */
+function useSessionState<T>(
+  key: string,
+  init: T,
+  host?: string | null,
+): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const stored = host === null ? null : host ? `${key}.${host}` : key
   const [v, setV] = useState<T>(() => {
+    if (stored == null) return init
     try {
-      const raw = sessionStorage.getItem(key)
+      const raw = sessionStorage.getItem(stored)
       if (raw != null) return JSON.parse(raw) as T
     } catch {
       /* ignore */
@@ -121,37 +158,49 @@ function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetS
     return init
   })
   useEffect(() => {
+    if (stored == null) return
     try {
-      sessionStorage.setItem(key, JSON.stringify(v))
+      sessionStorage.setItem(stored, JSON.stringify(v))
     } catch {
       /* ignore */
     }
-  }, [key, v])
+  }, [stored, v])
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts }: Props) {
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane }: SpotsPanelProps) {
   const control = useStationControl()
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
   // The operator's watch list, live — the matcher the Call Roster and the Stations list ask, so
   // a watched station wears the same WATCH tile on this board.
   const watchOf = useWatchMatch()
+  // Whose copy of every filter below: the view's own keys, or this pane's (see SpotsPane). The
+  // memos below key on `isPane`, never on `pane`: the host passes a fresh object every render.
+  const host = pane?.scope
+  const isPane = pane != null
   // ONE flat mode filter: the SPECIFIC modes present (CW/Phone/FT8/FT4/RTTY/Digital…), each a
-  // show/hide toggle. Stores the HIDDEN set (empty = all shown) so a mode that first appears
-  // mid-session shows by default instead of being silently hidden.
-  const [hiddenModes, setHiddenModes] = useSessionState<string[]>('nexus.spots.hiddenModes', [])
-  const [bands, setBands] = useSessionState<string[]>('nexus.spots.bands', []) // empty = all
-  const [sort, setSort] = useSessionState<{ key: SortKey; dir: 'asc' | 'desc' }>('nexus.spots.sort', { key: 'age', dir: 'asc' })
-  const [filtersOpen, setFiltersOpen] = useSessionState('nexus.spots.filtersOpen', false)
+  // show/hide toggle. The view stores the HIDDEN set (empty = all shown) so a mode that first
+  // appears mid-session shows by default instead of being silently hidden. A pane stores the
+  // SHOWN set instead — it opens on named modes, and a new one must not widen it by arriving.
+  // One key per semantic, each kept by the host it belongs to; a chip toggles membership in
+  // whichever this host keeps, which flips that chip either way.
+  const [hiddenModes, setHiddenModes] = useSessionState<string[]>('nexus.spots.hiddenModes', [], pane ? null : host)
+  const [shownModes, setShownModes] = useSessionState<string[]>('nexus.spots.shownModes', [...(pane?.modes ?? [])], pane ? host : null)
+  const [bands, setBands] = useSessionState<string[]>('nexus.spots.bands', [], host) // empty = all
+  // A pane FOLLOWS the radio's band until that band's chip is unticked (SpotsPane). `bands` is
+  // then the operator's OTHER picks, and the filter is both. The view keeps no such switch.
+  const [followBand, setFollowBand] = useSessionState('nexus.spots.followBand', true, pane ? host : null)
+  const [sort, setSort] = useSessionState<{ key: SortKey; dir: 'asc' | 'desc' }>('nexus.spots.sort', { key: 'age', dir: 'asc' }, host)
+  const [filtersOpen, setFiltersOpen] = useSessionState('nexus.spots.filtersOpen', false, host)
   // Freeform search over the firehose: space-separated terms AND together, each term
   // matching ANY field (call/entity/spotter/mode/band/frequency) — so "w1 20m cw"
   // narrows to W1-calls spotted on 20 m CW.
-  const [query, setQuery] = useSessionState('nexus.spots.query', '')
+  const [query, setQuery] = useSessionState('nexus.spots.query', '', host)
   // Privilege filter (operator 2026-07-21): hide spots you may not transmit to. The
   // `licensed` flag is computed backend-side from the SAME tables as the TX lockout;
   // an Open-class (non-US) operator has every spot licensed, so the toggle is a no-op.
-  const [licensedOnly, setLicensedOnly] = useSessionState('nexus.spots.licensedOnly', false)
+  const [licensedOnly, setLicensedOnly] = useSessionState('nexus.spots.licensedOnly', false, host)
   // "Heard on my continent" — keep only spots at least one voice on the operator's OWN
   // CONTINENT reported. The same question the Needed board asks; the panel had no locality test
   // at all, so a US operator saw JA stations only Europe and Asia had heard, which says nothing
@@ -163,31 +212,41 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
   //
   // DEFAULT ON, and the count of what it hides is printed beside it — a filter that removes
   // rows silently is how "my spots disappeared" becomes an unanswerable report.
-  const [localOnly, setLocalOnly] = useSessionState('nexus.spots.localOnly', true)
+  const [localOnly, setLocalOnly] = useSessionState('nexus.spots.localOnly', true, host)
   // Hide worked (operator decision 2026-09-17): a station already in the log is not what an
   // operator is scanning this board for. DEFAULT ON, like the locality chip, and for the same
   // reason it prints its count: what it hides has to be visible and one click away.
-  const [hideWorked, setHideWorked] = useSessionState('nexus.spots.hideWorked', true)
+  const [hideWorked, setHideWorked] = useSessionState('nexus.spots.hideWorked', true, host)
   // How far back "worked" reaches. Session-scoped like every other filter here, and validated on
   // read — a stale or hand-edited value falls back to the UTC day rather than hiding nothing.
-  const [storedWindow, setWorkedWindow] = useSessionState<WorkedWindow>('nexus.spots.workedWindow', 'utcDay')
+  const [storedWindow, setWorkedWindow] = useSessionState<WorkedWindow>('nexus.spots.workedWindow', 'utcDay', host)
   const workedWindow = isWorkedWindow(storedWindow) ? storedWindow : 'utcDay'
   // US-state (WAS) filter, from the roster-resolved state on each spot. Empty = all.
-  const [states, setStates] = useSessionState<string[]>('nexus.spots.states', [])
+  const [states, setStates] = useSessionState<string[]>('nexus.spots.states', [], host)
   // #174 — where a spot was REPORTED from: the continents and DXCC countries of every voice for
   // it (spotter + corroborators), resolved in Rust because the UI has no cty.dat. Empty = all.
   // A spot stays when ANY voice matches — the same "one voice is enough" rule as the continent
   // chip, which asks the narrower question "heard on MY continent".
-  const [spotterConts, setSpotterConts] = useSessionState<string[]>('nexus.spots.spotterConts', [])
-  const [spotterEntities, setSpotterEntities] = useSessionState<string[]>('nexus.spots.spotterEntities', [])
+  const [spotterConts, setSpotterConts] = useSessionState<string[]>('nexus.spots.spotterConts', [], host)
+  const [spotterEntities, setSpotterEntities] = useSessionState<string[]>('nexus.spots.spotterEntities', [], host)
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
+
+  // The band a pane follows, and the band filter with it folded in. Derived at render, never
+  // copied into state: the radio changing band IS the follow, with no effect to fire late.
+  const rigBand = pane?.band ?? ''
+  const shownBands = useMemo(
+    () => (isPane && followBand && rigBand && !bands.includes(rigBand) ? [...bands, rigBand] : bands),
+    [isPane, followBand, rigBand, bands],
+  )
 
   const availableBands = useMemo(() => {
     const result = [...COMMON_BANDS]
     for (const s of spots) if (s.band && !result.includes(s.band)) result.push(s.band)
+    // The band a pane follows always has a chip — it is the one way to stop following it.
+    if (rigBand && !result.includes(rigBand)) result.push(rigBand)
     return result
-  }, [spots])
+  }, [spots, rigBand])
   // The SPECIFIC modes present in the firehose (skimmer submode, else the class label), in a
   // natural operating order (CW, Phone, then the digital submodes), unknowns trailing alpha.
   const availableModes = useMemo(() => {
@@ -207,11 +266,23 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     return [...set].sort()
   }, [spots])
 
-  // Toggle a mode's visibility: add/remove it from the hidden set (all shown by default).
+  // Is a mode's chip lit? The view keeps the HIDDEN set, a pane the SHOWN one (see above).
+  const modeShown = (m: string) => (pane ? shownModes.includes(m) : !hiddenModes.includes(m))
+  // Toggle a mode's visibility: membership in whichever set this host keeps flips its chip.
   const toggleMode = (m: string) =>
-    setHiddenModes((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]))
-  const toggleBand = (b: string) =>
+    (pane ? setShownModes : setHiddenModes)((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]))
+  const toggleBand = (b: string) => {
+    // The band a pane follows: its chip IS the follow switch. Lit, a click stops following (and
+    // drops the band from the other picks too, or the chip would stay lit); dark, it follows again.
+    if (pane && b === rigBand) {
+      if (shownBands.includes(b)) {
+        setFollowBand(false)
+        setBands((prev) => prev.filter((x) => x !== b))
+      } else setFollowBand(true)
+      return
+    }
     setBands((prev) => (prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b]))
+  }
   const toggleState = (st: string) =>
     setStates((prev) => (prev.includes(st) ? prev.filter((x) => x !== st) : [...prev, st]))
   // #174: only the continents and countries some voice in the current feed actually has, like
@@ -233,8 +304,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     setSpotterEntities((prev) => (prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e]))
 
   const hasActiveFilters =
-    bands.length > 0 ||
-    hiddenModes.length > 0 ||
+    shownBands.length > 0 ||
+    (pane ? availableModes.some((m) => !shownModes.includes(m)) : hiddenModes.length > 0) ||
     licensedOnly ||
     localOnly ||
     hideWorked ||
@@ -258,8 +329,9 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     const filtered = spots.filter((s) => {
       if (licensedOnly && !s.licensed) return false
       if (localOnly && s.spotterLocal === false) return false
-      if (hiddenModes.includes(s.submode ?? s.mode)) return false
-      if (bands.length > 0 && !bands.includes(s.band)) return false
+      const mode = s.submode ?? s.mode
+      if (isPane ? !shownModes.includes(mode) : hiddenModes.includes(mode)) return false
+      if (shownBands.length > 0 && !shownBands.includes(s.band)) return false
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
       if (states.length > 0 && (!s.state || !states.includes(s.state))) return false
       // Spotted-from (#174): ANY voice on a chosen continent / in a chosen country keeps the
@@ -316,7 +388,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
       return c * dir
     })
     return { rows: filtered, workedHidden: worked }
-  }, [spots, hiddenModes, bands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall, watchOf])
+  }, [spots, isPane, hiddenModes, shownModes, shownBands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall, watchOf])
 
   // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
   // that is on by default. Counted against everything else the operator has chosen, so it says
@@ -341,13 +413,18 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     </button>
   )
 
+  // As a pane the board is CONTENT inside a frame, not a view: no second <main>, none of the
+  // view shell's sizing (`.layout.single`), and no heading — the frame's head is its name.
+  const Root = pane ? 'div' : 'main'
   return (
-    <main className="layout single needed-panel spots-panel">
+    <Root className={pane ? 'np-board' : 'layout single needed-panel spots-panel'}>
       <div className="np-head">
-        <h2>{t('spots.title')}</h2>
+        {!pane && <h2>{t('spots.title')}</h2>}
         <span className="np-count">{rows.length}</span>
         {spots.length !== rows.length && <span className="np-count np-count-filtered">{t('spots.countFiltered', { count: spots.length })}</span>}
-        <span className="np-hint">{control ? t('spots.hint') : t('remote.collectionObserver')}</span>
+        {/* Not in a pane: "every spot on the air" is untrue of a filtered pane, and its host
+            shows the collection's own status on Remote. */}
+        {!pane && <span className="np-hint">{control ? t('spots.hint') : t('remote.collectionObserver')}</span>}
         <span className="np-search">
           <input
             type="search"
@@ -384,15 +461,18 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         )}
       </div>
 
-      {(filtersOpen || hasActiveFilters) && (
+      {/* A pane opens its bar on the funnel only (SpotsPane); the view also opens it for an
+          active filter, so what hides rows is on screen by default. */}
+      {(filtersOpen || (!pane && hasActiveFilters)) && (
         <div className="np-filters" role="group" aria-label={t('spots.filters.aria')}>
           <div className="np-filter-group np-filter-bands">
             {availableBands.map((band) => (
               <button
                 key={band}
                 type="button"
-                className={`np-chip${bands.includes(band) ? ' active' : ''}`}
+                className={`np-chip${shownBands.includes(band) ? ' active' : ''}`}
                 onClick={() => toggleBand(band)}
+                title={pane && band === rigBand ? t('spots.filter.band.follow.title', { band }) : undefined}
               >
                 {band}
               </button>
@@ -403,7 +483,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
               <div className="np-filter-sep" aria-hidden="true" />
               <div className="np-filter-group" role="group" aria-label={t('spots.filters.modes.aria')}>
                 {availableModes.map((m) => {
-                  const shown = !hiddenModes.includes(m)
+                  const shown = modeShown(m)
                   return (
                     <button
                       key={m}
@@ -541,7 +621,12 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
               className="np-chip np-chip-clear"
               onClick={() => {
                 setBands([])
-                setHiddenModes([])
+                // "Clear to see all", on a pane too: every mode on the board right now, and the
+                // band no longer followed. A mode that arrives later still waits for its chip.
+                if (pane) {
+                  setShownModes([...availableModes])
+                  setFollowBand(false)
+                } else setHiddenModes([])
                 setStates([])
                 setSpotterConts([])
                 setSpotterEntities([])
@@ -678,6 +763,6 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
           })
         )}
       </div>
-    </main>
+    </Root>
   )
 }

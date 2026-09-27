@@ -36,8 +36,10 @@
 // restores the layout as it was before the last change, and when that layout had such a pane
 // unticked, pressing it unmounts it exactly as a tick does — so it carries the same
 // consequence line, in the same words, before the press (`undoNote`). "Reset layout" does
-// not need one: it applies the empty record, and an absent state means 'docked', so reset
-// can only ever put panes back.
+// not need one: it applies the empty record, which puts every pane at its default — docked,
+// except the few a cockpit ships hidden (Phone's Spots and Needed), and a pane may ship hidden
+// only if its hide ends nothing (`defaultRemoved`, features/panelState). So reset can hide a
+// pane, but never one whose hide would need saying.
 //
 // Some panels are conditional on the station (rig-scope controls need the radio's own
 // panadapter streaming; the DSP panes need the rig to report those fields over CAT; CW's
@@ -81,6 +83,12 @@ export interface PanelsMenuItem {
    *  Not shown once the panel IS removed: by then the first kind is no longer why the
    *  screen looks as it does, and the second warns about an act already taken. */
   note?: string
+  /** This entry is UNTICKED IN THE STOCK LAYOUT (the cockpit ships the pane hidden — Phone's
+   *  Spots and Needed). While it stays unticked the button does not count it as hidden: "⊞
+   *  Panels · 2 hidden", lit, on a screen the operator never touched would be a change on update
+   *  and a false statement about what the operator did. Ticked, it is shown and there is nothing
+   *  to count. */
+  shipsHidden?: boolean
 }
 
 interface Props {
@@ -98,10 +106,11 @@ interface Props {
    *  Undefined when the undo ends nothing, which is every undo in every cockpit but Phone's
    *  keyer today.
    *
-   *  Reset needs no twin of this: it applies the empty record and an absent state means
-   *  'docked', so Reset can only ever put panes BACK. */
+   *  Reset needs no twin of this: it applies the empty record, so every pane goes to its
+   *  default, and the only panes whose default is hidden are ones whose hide ends nothing. */
   undoNote?: string
-  /** Put every panel back (stock layout). */
+  /** Back to the stock layout: every panel at its default (docked, or hidden for a pane the
+   *  cockpit ships hidden). */
   onReset: () => void
   /** A view's own controls above the entries — Connect's layout presets. The view owns their
    *  words and their effect; this menu only gives them the place the operator already looks.
@@ -130,7 +139,8 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
 
-  const hidden = items.filter((i) => i.state === 'removed').length
+  // Hidden by the OPERATOR — an entry unticked in the stock layout is not (see `shipsHidden`).
+  const hidden = items.filter((i) => i.state === 'removed' && !i.shipsHidden).length
   return (
     <div className="panels-menu" ref={rootRef}>
       <button

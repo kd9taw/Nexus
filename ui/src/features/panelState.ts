@@ -118,7 +118,9 @@
 //       keys the rig) and Operate's `txmsgs` (Tx6 = "Call CQ (Alt+6)" → startCq) plus its two
 //       decode panes and two rosters (double-click → call_station_ctx, which ENABLES TX and
 //       keys the current period). All hideable, correctly. Phone's and CW's `bandActivity` are
-//       NOT senders, though they look like it — work_spot QSYs, splits and notes the call.
+//       NOT senders, though they look like it — work_spot QSYs, splits and notes the call —
+//       and nor are Phone's `spots` and `needed`, whose rows QSY through the Spots and Needed
+//       views' own handlers.
 //     · A PANE'S HIDE MAY END SOMETHING IN FLIGHT. ONE DOES (the voice keyer). That earns a
 //       note, not a refusal — see THE PRACTICE.
 //
@@ -237,9 +239,11 @@ const PANEL_STATES = ['docked', 'popped', 'removed'] as const
 
 export interface PanelLayout<P extends string> {
   v: 1
-  /** Absent ⇒ docked. Partial is deliberate: a panel added in a later release ships
-   *  visible with no migration, and a removal is always an EXPLICIT stored value, so it
-   *  can never be confused with "new". */
+  /** Absent ⇒ the vocabulary's DEFAULT (`panelStateIn`): docked, unless the vocabulary lists
+   *  the id in `defaultRemoved`. Partial is deliberate: a panel added in a later release ships
+   *  at its default with no migration — visible, or hidden when its vocabulary says so, which
+   *  is how a pane can be added without changing anybody's screen on update — and an explicit
+   *  choice is always a STORED value, so it can never be confused with "new". */
   state: Partial<Record<P, PanelState>>
   /** Flex/fr share within its region. Nothing writes it yet (seam resize is a later
    *  step); it rides in the record from commit one so that step needs no version bump. */
@@ -254,15 +258,36 @@ export interface PanelVocabulary<P extends string> {
    *  deliberately absent — NOT "TX chrome", which is a wider and falsified claim: `voiceKeyer`
    *  transmits and `stream` hosts a stop control, and both are listed here on purpose. */
   readonly panelIds: readonly P[]
+  /** The panels this view SHIPS HIDDEN: with nothing stored for one, it reads 'removed' rather
+   *  than 'docked', so the operator adds it from ⊞ Panels and nobody's screen changes on the
+   *  update that introduces it (Phone's Spots and Needed, #345). A tick stores 'docked' like any
+   *  other choice, and ⊞ Reset — which applies the empty record — hides it again.
+   *
+   *  ⚠️ Read an absent entry ONLY through `panelStateIn`, never as `state[id] ?? 'docked'`: the
+   *  second spelling is how a default-hidden pane would appear on every screen. A default-hidden
+   *  pane must also be one whose hide ENDS nothing, because Reset hides it with no note (THE
+   *  PRACTICE, in the header). */
+  readonly defaultRemoved?: readonly P[]
 }
 
 export function isPanelState(v: unknown): v is PanelState {
   return typeof v === 'string' && (PANEL_STATES as readonly string[]).includes(v)
 }
 
-/** Stock layout: nothing stored, so every panel is docked. */
+/** Stock layout: nothing stored, so every panel is at its vocabulary's default. */
 export function emptyPanelLayout<P extends string>(): PanelLayout<P> {
   return { v: 1, state: {}, share: {} }
+}
+
+/** A panel's state in a record: what is stored for it, else its vocabulary's default — docked,
+ *  or removed for an id in `defaultRemoved`. The ONE reading of an absent entry, so the menu
+ *  tick, the pane, Undo's warning and Reset cannot disagree about a pane nobody has touched. */
+export function panelStateIn<P extends string>(
+  spec: PanelVocabulary<P>,
+  layout: PanelLayout<P>,
+  id: P,
+): PanelState {
+  return layout.state[id] ?? (spec.defaultRemoved?.includes(id) ? 'removed' : 'docked')
 }
 
 /** `nexus.panels.<view>.<instance>` — one record per SURFACE (see windowScope).
@@ -432,7 +457,8 @@ export function seamShares(fraction: number): [number, number] {
 
 export interface PanelLayoutApi<P extends string> {
   layout: PanelLayout<P>
-  /** Absent ⇒ docked. */
+  /** Absent ⇒ the vocabulary's default (`panelStateIn`): docked, or removed for a pane the
+   *  vocabulary ships hidden. */
   stateOf: (id: P) => PanelState
   setPanelState: (id: P, state: PanelState) => void
   /** Flex-grow share for a pane within its region (default 1). A sole surviving pane
@@ -453,10 +479,13 @@ export interface PanelLayoutApi<P extends string> {
    *  should say so BEFORE the act, and ⊞ Undo is a second button that reaches the same
    *  teardown as the tick (untick the keyer, tick it back, record, Undo — the take was
    *  binned with no warning). Courtesy, not safety: the operator's way to stop is in the
-   *  dock either way. ⊞ Reset needs no such list — it applies `emptyPanelLayout()` and
-   *  `stateOf` defaults to 'docked', so reset can only ever MOUNT a pane. */
+   *  dock either way. ⊞ Reset needs no such list, though it CAN hide a pane now: it applies
+   *  `emptyPanelLayout()`, so every pane goes to its default, and the only panes whose default
+   *  is 'removed' are the ones a vocabulary ships hidden — which must be panes whose hide ends
+   *  nothing (see `defaultRemoved`). So Reset can only ever MOUNT a pane that ends something. */
   undoRemoves: readonly P[]
-  /** Back to stock — every panel docked, every share reset. Undoable like any change. */
+  /** Back to stock — every panel at its default (docked, or hidden for a pane the vocabulary
+   *  ships hidden), every share reset. Undoable like any change. */
   reset: () => void
 }
 
@@ -494,7 +523,7 @@ export function usePanelLayout<P extends string>(
       }),
     [key],
   )
-  const stateOf = useCallback((id: P) => hist.cur.state[id] ?? 'docked', [hist.cur])
+  const stateOf = useCallback((id: P) => panelStateIn(spec, hist.cur, id), [spec, hist.cur])
   const setPanelState = useCallback(
     (id: P, s: PanelState) =>
       apply((cur) => {
@@ -543,14 +572,15 @@ export function usePanelLayout<P extends string>(
   )
   // Which panes the pending undo would UNMOUNT: removed in the snapshot, present now.
   // Computed from the same history the undo restores, so it cannot describe a different
-  // click than the one the button makes.
+  // click than the one the button makes — and read through the same default `stateOf` uses,
+  // or undoing the tick that docked a default-hidden pane would claim to remove nothing.
   const undoRemoves = useMemo(() => {
     const prev = hist.prev
     if (!prev) return [] as P[]
     return spec.panelIds.filter(
-      (id) => (prev.state[id] ?? 'docked') === 'removed' && (hist.cur.state[id] ?? 'docked') !== 'removed',
+      (id) => panelStateIn(spec, prev, id) === 'removed' && panelStateIn(spec, hist.cur, id) !== 'removed',
     )
-  }, [hist, spec.panelIds])
+  }, [hist, spec])
   return {
     layout: hist.cur,
     stateOf,
@@ -694,6 +724,17 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
  *  Nothing about the STOP LINE changes: both are ordinary removable panes, neither holds a
  *  stop control, and the ids are swept the moment they are listed here — `stop-line.test.tsx`
  *  drives Phone's case off `PHONE_PANEL_IDS` itself rather than a copy of it. */
+/*  ⭐ `spots` AND `needed` (#345, operator 2026-09-27) are the Spots and Needed boards as Phone
+ *  FEEDS — "much empty real estate" was the tester's report, and a phone operator's band map is
+ *  what fills it. They are the only two ids in the app that SHIP HIDDEN (`defaultRemoved`), by
+ *  the operator's pick: "Hidden, add via ⊞ Panels — nobody's Phone screen changes on update."
+ *
+ *  Under THE STOP LINE they are the plainest entries on the list. Neither holds a stop control;
+ *  neither is a sender (working a row QSYs and opens a cockpit through the boards' own handlers,
+ *  exactly as from the Spots and Needed views, and keys nothing — Band Activity's shape); and a
+ *  hide ends nothing, so their entries carry no note. That last property is ALSO what lets them
+ *  be default-hidden: ⊞ Reset hides them with no warning, which is only right for a hide that
+ *  ends nothing. */
 export const PHONE_PANEL_IDS = [
   SCOPE_PANEL_ID,
   'rigscope',
@@ -702,12 +743,15 @@ export const PHONE_PANEL_IDS = [
   'transmitter',
   'bandActivity',
   'voiceKeyer',
+  'spots',
+  'needed',
 ] as const
 export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
+  defaultRemoved: ['spots', 'needed'],
 }
 
 /** CW cockpit's removable panels (Phase 3) — the scope strip plus the panes under it. The

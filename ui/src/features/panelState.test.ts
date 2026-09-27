@@ -12,6 +12,7 @@ import {
   WATERFALL_DETACHED_KEY,
   coercePanelLayout,
   loadPanelLayout,
+  panelStateIn,
   panelStorageKey,
   redockAllStalePopouts,
   redockStalePopouts,
@@ -47,7 +48,7 @@ describe('panel storage key', () => {
 })
 
 describe('coercePanelLayout', () => {
-  it('treats an absent panel as docked (a panel added later ships visible)', () => {
+  it('treats an absent panel as docked (a panel added later ships visible, unless its vocabulary ships it hidden)', () => {
     const l = loadPanelLayout(OPERATE_PANELS)
     expect(l.state.waterfall).toBeUndefined()
     expect(l.state.bandActivity).toBeUndefined()
@@ -377,6 +378,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
       'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
+      'spots', 'needed',
     ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([
@@ -418,6 +420,108 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     // IS a stop: the unmount cleanup calls stopVoice, so the hide cannot strand you keyed.
     // The abort itself is proven at the real site in PhoneCockpit.keyerHide.test.tsx.
     expect((PHONE_PANELS.panelIds as readonly string[]).includes('voiceKeyer')).toBe(true)
+  })
+})
+
+describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () => {
+  // The operator's pick, verbatim: "Hidden, add via ⊞ Panels (Recommended)" — "Nobody's Phone
+  // screen changes on update. Operators who want them tick Spots / Needed in ⊞ Panels, then size
+  // them with the pane dividers." An absent state used to mean 'docked' for EVERY id, so a new id
+  // shipped visible, including to every operator whose Phone record is already on disk. The
+  // vocabulary's `defaultRemoved` is the answer, and each case below drives one reader of an
+  // absent state: `stateOf`, `undoRemoves`, `reset`, and a record written by today's build.
+  const PHONE_KEY = panelStorageKey('phone')
+  const HIDDEN = ['spots', 'needed'] as const
+
+  it('a FRESH record shows Spots and Needed hidden, and every other Phone pane docked', () => {
+    const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    for (const id of HIDDEN) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
+    for (const id of PHONE_PANELS.panelIds) {
+      if ((HIDDEN as readonly string[]).includes(id)) continue
+      expect(result.current.stateOf(id), `"${id}" changed its default`).toBe('docked')
+    }
+    // A READING of absence, not a migration: nothing is written to get there, so a later
+    // release can still change its mind about an id nobody ticked.
+    expect(localStorage.getItem(PHONE_KEY)).toBeNull()
+  })
+
+  it("a record stored by today's build (no entry for either) shows both hidden too", () => {
+    savePanelLayout(PHONE_KEY, {
+      v: 1,
+      state: { receiver: 'removed', voiceKeyer: 'docked' },
+      share: { receiver: 1.3 },
+    } as PanelLayout<string>)
+    const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    for (const id of HIDDEN) expect(result.current.stateOf(id), `${id} appeared on an upgrade`).toBe('removed')
+    // …and the operator's own choices in that record are exactly what they were.
+    expect(result.current.stateOf('receiver')).toBe('removed')
+    expect(result.current.stateOf('voiceKeyer')).toBe('docked')
+    expect(result.current.stateOf('bandActivity')).toBe('docked')
+    expect(result.current.shareOf('receiver')).toBe(1.3)
+  })
+
+  it('a tick docks it, and the tick is stored and survives a restart', () => {
+    const { result, unmount } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    act(() => result.current.setPanelState('spots', 'docked'))
+    expect(result.current.stateOf('spots')).toBe('docked')
+    expect(result.current.stateOf('needed')).toBe('removed')
+    expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.spots).toBe('docked')
+    unmount()
+    const again = renderHook(() => usePanelLayout(PHONE_PANELS))
+    expect(again.result.current.stateOf('spots')).toBe('docked')
+    expect(again.result.current.stateOf('needed')).toBe('removed')
+  })
+
+  it('⊞ Reset returns them to hidden, and every other pane to docked', () => {
+    const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    act(() => result.current.setPanelState('spots', 'docked'))
+    act(() => result.current.setPanelState('needed', 'docked'))
+    act(() => result.current.setPanelState('receiver', 'removed'))
+    act(() => result.current.reset())
+    expect(result.current.stateOf('spots')).toBe('removed')
+    expect(result.current.stateOf('needed')).toBe('removed')
+    expect(result.current.stateOf('receiver')).toBe('docked')
+    // Reset is undoable like any change: one Undo brings the ticks back.
+    act(() => result.current.undo())
+    expect(result.current.stateOf('spots')).toBe('docked')
+    expect(result.current.stateOf('needed')).toBe('docked')
+  })
+
+  it('Undo takes a tick back, and `undoRemoves` knows that doing so hides the pane', () => {
+    const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    act(() => result.current.setPanelState('needed', 'docked'))
+    // `undoRemoves` is what ⊞ Undo reads to warn before a hide. Read with the old default it
+    // would say this undo removes nothing, when it takes the pane off the screen.
+    expect(result.current.undoRemoves).toEqual(['needed'])
+    act(() => result.current.undo())
+    expect(result.current.stateOf('needed')).toBe('removed')
+    // The undone record is the stock one: an absent entry, not an explicit 'removed'.
+    expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.needed).toBeUndefined()
+  })
+
+  it('only Phone ships panes hidden, and each hidden id is one of its own', () => {
+    // ⚠️ `features/connectPresets.ts` reads Connect's record RAW (`state[s] === 'removed'`) and
+    // writes it the same way, i.e. it takes absent to mean docked. That stays true only while
+    // Connect lists nothing here: before a vocabulary gains a hidden pane, route every raw
+    // reader of its record through `panelStateIn`.
+    const shipsHidden = ALL_PANEL_VOCABULARIES.filter((v) => (v.defaultRemoved ?? []).length > 0)
+    expect(shipsHidden.map((v) => v.view)).toEqual(['phone'])
+    expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
+    for (const v of ALL_PANEL_VOCABULARIES) {
+      for (const id of v.defaultRemoved ?? []) {
+        expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
+      }
+    }
+  })
+
+  it('panelStateIn is the one reading of an absent entry, per vocabulary', () => {
+    const empty = { v: 1 as const, state: {}, share: {} }
+    expect(panelStateIn(PHONE_PANELS, empty, 'spots')).toBe('removed')
+    expect(panelStateIn(PHONE_PANELS, empty, 'bandActivity')).toBe('docked')
+    expect(panelStateIn(OPERATE_PANELS, empty, 'waterfall')).toBe('docked')
+    // A stored value always wins over the default, in both directions.
+    expect(panelStateIn(PHONE_PANELS, { ...empty, state: { spots: 'docked' } }, 'spots')).toBe('docked')
+    expect(panelStateIn(PHONE_PANELS, { ...empty, state: { receiver: 'removed' } }, 'receiver')).toBe('removed')
   })
 })
 
