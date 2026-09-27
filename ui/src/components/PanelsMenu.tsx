@@ -61,7 +61,7 @@
 // those move with the cockpit. What is here is the menu itself — the ⊞ button, the popover,
 // the popped-out tag, and Undo / Reset. No vocabulary ID passes through this file as prose,
 // so nothing here can rename one.
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import type { PanelState } from '../features/panelState'
 
@@ -103,9 +103,13 @@ interface Props {
   undoNote?: string
   /** Put every panel back (stock layout). */
   onReset: () => void
+  /** A view's own controls above the entries — Connect's layout presets. The view owns their
+   *  words and their effect; this menu only gives them the place the operator already looks.
+   *  No cockpit passes one, so no stop-line census changes: nothing here reaches a transmitter. */
+  lead?: ReactNode
 }
 
-export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset }: Props) {
+export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset, lead }: Props) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -160,6 +164,7 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
             }
           }}
         >
+          {lead}
           {items.map((it) => {
             // A note explains why this panel has NOTHING ON SCREEN right now. Once the
             // operator has unticked the entry, that question has a different answer —

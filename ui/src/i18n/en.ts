@@ -7099,6 +7099,20 @@ export const EN = {
   'connect.rail.left.split': 'Split between the left panels',
   'connect.rail.right.split': 'Split between the right panels',
   'connect.rail.handle.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click to reset.',
+  // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
+  // name beside the heading says which layout is on screen: Standard (the stock layout, which
+  // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
+  // anything. `replaces` quotes the Undo button by its own name (`panels.undo`).
+  'connect.layout.heading': 'Layout',
+  'connect.layout.standard': 'Standard',
+  'connect.layout.custom': 'Custom',
+  'connect.layout.mapFirst.label': 'Map first',
+  'connect.layout.mapFirst.title': 'The map as big as it goes: both side columns at their narrowest and the bottom row closed',
+  'connect.layout.listFirst.label': 'List first',
+  'connect.layout.listFirst.title': 'The chase and spot lists in two wide columns, with a small map between them and the bottom row closed',
+  'connect.layout.dashboard.label': 'Dashboard',
+  'connect.layout.dashboard.title': 'Seven panes open at once around a smaller map: conditions on the left, activity on the right, what is coming along the bottom',
+  'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
 
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Conditions',

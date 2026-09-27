@@ -56,6 +56,9 @@ function geometry(el: HTMLElement) {
 export interface RailWidthsApi {
   /** What the grid renders per side: a fitted stored width, or null for the tier default. */
   applied: RailWidths
+  /** The stored PREFERENCE (what the operator or a layout preset set), never re-clamped — the
+   *  ⊞ Layout picker reads which layout is on screen from it (features/connectPresets). */
+  pref: RailWidths
   /** The width a side renders at right now. */
   widthOf: (side: RailSide) => number
   /** The widest `side` may be in the current box, given the other rail. */
@@ -67,6 +70,8 @@ export interface RailWidthsApi {
   /** Back to the tier default for one side / both. */
   reset: (side: RailSide) => void
   resetAll: () => void
+  /** Replace both preferences at once and re-fit — a layout preset, and the Undo of one. */
+  setPrefs: (pref: RailWidths) => void
 }
 
 export function useRailWidths(
@@ -76,6 +81,14 @@ export function useRailWidths(
   // The operator's PREFERENCE, as stored. A re-clamp never writes it.
   const prefRef = useRef<RailWidths | null>(null)
   if (prefRef.current === null) prefRef.current = loadRailWidths()
+  // …and the same preference as STATE, for readers outside this hook (the ⊞ Layout picker). Every
+  // write goes through `store`, so the two cannot disagree.
+  const [pref, setPref] = useState<RailWidths>(() => prefRef.current!)
+  const store = (p: RailWidths) => {
+    prefRef.current = p
+    saveRailWidths(p)
+    setPref(p)
+  }
   const [view, setView] = useState<{ applied: RailWidths; room: number; defaultPx: number }>({
     applied: { left: null, right: null },
     room: Infinity,
@@ -159,8 +172,7 @@ export function useRailWidths(
   /** A ONE-RAIL move: persist the preferences, render the moved rail, and leave the other rail's
    *  applied width exactly as it was (stepRail / resetRail hold it). Never a re-fit. */
   const move = (next: RailState) => {
-    prefRef.current = next.pref
-    saveRailWidths(next.pref)
+    store(next.pref)
     const v = { ...viewRef.current, applied: next.applied }
     viewRef.current = v
     setView(v)
@@ -169,6 +181,7 @@ export function useRailWidths(
 
   return {
     applied: view.applied,
+    pref,
     widthOf,
     maxOf: (side) => clampRail(Infinity, otherOf(side), view.room),
     clamp,
@@ -177,8 +190,13 @@ export function useRailWidths(
     // Reset layout: BOTH rails back to their defaults, so this one does re-fit — the defaults
     // themselves must shrink in a box too small for them.
     resetAll: () => {
-      prefRef.current = { left: null, right: null }
-      saveRailWidths(prefRef.current)
+      store({ left: null, right: null })
+      fit()
+    },
+    // A layout's widths are a preference like any dragged one: stored as given, then fitted into
+    // this box by the same re-fit a reload runs — never applied raw.
+    setPrefs: (p) => {
+      store(p)
       fit()
     },
   }

@@ -10,7 +10,7 @@
 // The panes are an assignable wrap-the-globe grid (HamClock-style): every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
-import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense } from 'react'
 import type {
   GettingOut,
   MapSpot,
@@ -39,6 +39,8 @@ import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailH
 import { PanelsMenu } from './PanelsMenu'
 import type { PaneContext } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
+import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
+import type { RailWidths } from '../features/connectRails'
 import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
 import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
 import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
@@ -105,6 +107,14 @@ const SLOT_WHERE: Record<SlotId, () => string> = {
   bottom1: () => t('connect.slot.where.bottom1'),
   bottom2: () => t('connect.slot.where.bottom2'),
   bottom3: () => t('connect.slot.where.bottom3'),
+}
+
+/** The ⊞ Layout picker's words (features/connectPresets). Literal keys, resolved lazily at render
+ * (the INTENTS treatment). */
+const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => string }> = {
+  mapFirst: { label: () => t('connect.layout.mapFirst.label'), title: () => t('connect.layout.mapFirst.title') },
+  listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
+  dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
 }
 
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
@@ -449,9 +459,14 @@ export function ConnectView({
   // Reset replaced is held here and put back by the SAME Undo press. It is dropped by the next
   // change of any kind, so Undo only ever reverts the last change. Widths are not undo steps
   // (operator ruling), so an Undo after Reset leaves them at their defaults.
-  const slotsBeforeReset = useRef<typeof slots | null>(null)
+  //
+  // A LAYOUT PRESET (⊞ Layout, below) is held the same way and ALSO keeps the widths it replaced.
+  // A preset sets the whole board in one tap and its widths are most of what it changes, so an
+  // Undo that left them would not put the operator's arrangement back — and a saved arrangement
+  // is never overwritten silently. A width drag is still no undo step of its own.
+  const beforeSwitch = useRef<{ slots: typeof slots; rails?: RailWidths } | null>(null)
   const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
-    slotsBeforeReset.current = null
+    beforeSwitch.current = null
     fn(...a)
   }
   const shown = (s: SlotId) => panels.stateOf(s) !== 'removed'
@@ -471,6 +486,22 @@ export function ConnectView({
     ...(widths.applied.left != null ? { '--cn-rail-l': `${widths.applied.left}px` } : {}),
     ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
   } as React.CSSProperties
+
+  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard. Which one is on
+  // screen is READ BACK from the placement, the panel record and the stored rail widths — never
+  // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
+  const layoutNow = connectLayoutNow({ slots, panels: panels.layout, rails: widths.pref })
+  const layoutsId = useId()
+  // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
+  // splits in one write, and the placement + widths it replaced are held for the same Undo.
+  const pickLayout = (id: ConnectPresetId) => {
+    if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
+    const p = CONNECT_PRESETS[id]
+    beforeSwitch.current = { slots, rails: widths.pref }
+    panels.setLayout(layoutPanels(p))
+    restoreSlots(p.slots)
+    widths.setPrefs({ left: p.rails.left, right: p.rails.right })
+  }
 
   const frame = (s: SlotId, share?: number) => (
     <PaneFrame
@@ -548,18 +579,56 @@ export function ConnectView({
             }))}
             onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
             onUndo={() => {
-              const before = slotsBeforeReset.current
-              slotsBeforeReset.current = null
+              const before = beforeSwitch.current
+              beforeSwitch.current = null
               panels.undo()
-              if (before) restoreSlots(before)
+              if (before) {
+                restoreSlots(before.slots)
+                if (before.rails) widths.setPrefs(before.rails)
+              }
             }}
             canUndo={panels.canUndo}
             onReset={() => {
-              slotsBeforeReset.current = slots
+              beforeSwitch.current = { slots }
               panels.reset()
               resetSlots()
               widths.resetAll()
             }}
+            lead={
+              // THE LAYOUT PICKER. A column of choices, not a chip row: the popover is 220 px wide,
+              // where three chips side by side wrap at Large text or in German. The words over
+              // the operator's own arrangement say what a tap costs before it is made.
+              <div className="connect-layouts" role="group" aria-labelledby={`${layoutsId}-head`}>
+                <div className="connect-layouts-head">
+                  <span id={`${layoutsId}-head`}>{t('connect.layout.heading')}</span>
+                  <span className="connect-layout-now">
+                    {layoutNow === 'standard'
+                      ? t('connect.layout.standard')
+                      : layoutNow === 'custom'
+                        ? t('connect.layout.custom')
+                        : LAYOUT_WORDS[layoutNow].label()}
+                  </span>
+                </div>
+                {CONNECT_PRESET_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`connect-layout-opt${layoutNow === id ? ' active' : ''}`}
+                    aria-pressed={layoutNow === id}
+                    aria-describedby={layoutNow === 'custom' ? `${layoutsId}-cost` : undefined}
+                    title={LAYOUT_WORDS[id].title()}
+                    onClick={() => pickLayout(id)}
+                  >
+                    {LAYOUT_WORDS[id].label()}
+                  </button>
+                ))}
+                {layoutNow === 'custom' && (
+                  <span className="connect-layout-note" id={`${layoutsId}-cost`}>
+                    {t('connect.layout.replaces')}
+                  </span>
+                )}
+              </div>
+            }
           />
           {onPopOut && !remote && (
             <button
