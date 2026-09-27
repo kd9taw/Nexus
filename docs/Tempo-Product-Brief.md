@@ -72,7 +72,7 @@ For the full protocol deep-dive, see [Tempo-Protocol.md](Tempo-Protocol.md).
 
 ## Features at a glance
 
-- **Chat-first, ham-aware UI** — a single window with a conversation thread, station presence, and a modernized waterfall. SNR, audio offset, dT, dial/band/sideband, mode/tier, and T/R timing stay visible. Three themes incl. night-vision Amber, plus an adaptive, resizable workspace.
+- **Chat-first, ham-aware UI** — a single window with a conversation thread, station presence, and a modernized waterfall. SNR, audio offset, dT, dial/band/sideband, mode/tier, and T/R timing stay visible. Light, Dark and System themes, plus an adaptive, resizable workspace.
 - **Live decode feed** — color-coded by what matters: directed-to-you, worked-before (B4), CQ, new. One-tap Call / Work buttons start a directed QSO.
 - **Three operating modes** — **Chat** (presence, auto-chunked free text, directed inbox, store-and-forward), **QSO** (Run / Search-&-Pounce auto-sequencer), and **Field Day** (native exchange, dupe-checked log, ADIF/Cabrillo export). Contacts are operator-initiated by design.
 - **Logbook + ecosystem interop** — ADIF logbook with auto-logging and B4 highlighting; ADIF/Cabrillo export; the WSJT-X UDP API (double-click-to-call from GridTracker/JTAlert) and PSK Reporter spotting.

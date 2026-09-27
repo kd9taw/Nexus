@@ -124,6 +124,41 @@ export function loadSheets(sheets: readonly string[] = ['styles.css', 'cockpit-p
   }
 }
 
+/** The selectors of a selector LIST, split at top-level commas (`:is(.a, .b)` stays whole). */
+function selectorsOf(list: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let buf = ''
+  for (const ch of list) {
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    if (ch === ',' && depth === 0) {
+      out.push(buf.trim())
+      buf = ''
+    } else buf += ch
+  }
+  if (buf.trim()) out.push(buf.trim())
+  return out
+}
+
+/** A rule's specificity FOR THIS ELEMENT: that of the most specific selector in its list that
+ *  matches it. Scoring the whole list text summed every selector in it, so a grouped rule
+ *  (`:root[data-touch] .a, :root[data-touch] .b, …`) outranked a single more specific one it
+ *  loses to in a browser — a guard computed on that could not fail. */
+function matchedSpec(el: Element, list: string): number {
+  let best = -1
+  for (const sel of selectorsOf(list)) {
+    let hit = false
+    try {
+      hit = el.matches(sel)
+    } catch {
+      continue
+    }
+    if (hit) best = Math.max(best, spec(sel))
+  }
+  return best
+}
+
 /** Specificity as one comparable number: (ids, classes+attrs+pseudo-classes, elements). */
 function spec(sel: string): number {
   const s = sel.replace(/:where\([^)]*\)/g, '')
@@ -199,7 +234,7 @@ export function css(el: Element, prop: string): string | null {
     const value = fromRule(rule.style, prop)
     if (!value) continue
     const important = rule.style.getPropertyPriority(prop) === 'important'
-    const s = spec(rule.selectorText)
+    const s = matchedSpec(el, rule.selectorText)
     const better =
       win === null ||
       (important && !win.important) ||

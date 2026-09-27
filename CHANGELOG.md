@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
+  new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
+  and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
+  layout keeps its size. UI scale zooms the whole screen instead, so a bigger scale fits less on
+  it; the two can be combined. Normal is exactly the size text has always been, and the choice is
+  kept per computer, like the theme. The numbers drawn on the waterfall and the scope, the map's
+  labels and the other drawn graphics follow UI scale only.
+- **A Touch density for touchscreens.** Density (Settings ▸ Appearance ▸ Workspace) offers four
+  choices: **Comfortable**, **Standard**, **Compact** and **Touch**. Touch is Comfortable with
+  bigger places to tap: the larger buttons grow from 44 to 48 pixels tall, and the small chips
+  (the decode filters, the Settings choices, the top bar's toggles) get a 36-pixel box.
+  Comfortable spaces the decode, roster and log rows a little further apart than Standard.
+- **A System theme that follows your computer.** Settings ▸ Appearance ▸ Workspace ▸ Theme offers
+  **System** beside Light and Dark: it takes your computer's light or dark setting and changes
+  when the computer does, for example when it switches to dark in the evening. Dark stays the
+  default, and a theme you already picked is kept. The Remote station monitor's theme button
+  offers it too, as its third press.
+
 ### Changed
 
 - **ON AIR is now a solid red sign you cannot miss.** While the rig is keyed, the TX state in the
@@ -25,6 +45,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same whichever theme you run. In the dark theme they look as before. The waterfall's
   **TX** and **RX** markers, and the RX line in PSK and the Mark line in RTTY, now take the
   app's own TX and RX colours instead of colours of their own.
+- **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
+  two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
+  picked, and nothing on the screen moves.
+
+### Fixed
+
+- **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
+  pane's header, with its filter chips, is taller than the pane (a small window with large text,
+  or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,
+  the list and the lowest chips were cut off with no way to reach them. In the Classic layout the
+  Tx1–Tx6 panel scrolls inside its column in the same situation instead of running off the bottom
+  of the window. Nothing changes on a window where everything already fits.
+- **A long callsign in the Logbook ends in "…" instead of being cut through its last letter.** The
+  call column could not shorten a call the way the other columns shorten their text, so a call
+  wider than the column was sliced off at the edge.
+- **The QRZ link (↗) beside a worked station in the Call Roster shows at 1024×768 again.** The
+  Call column was sized before the link joined it, so on a narrow window a worked station's B4
+  and LoTW marks pushed the ↗ out of the cell. The column is a little wider; on a wide window
+  nothing changes.
+- **The Stations filters in the Classic layout wrap instead of cutting off the last one.** On a
+  narrow window the Needed filter was cut off at the panel's edge; the filters now take a second
+  line when they need one.
 
 ### Corrections to 1.15.0
 

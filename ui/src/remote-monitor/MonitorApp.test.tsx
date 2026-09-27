@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MonitorApp } from './MonitorApp'
 import { nativeSource } from './nativeSource'
 import { ampCommand } from '../api'
 import fixtures from './fixtures.v2.json'
 import type { MonitorSource } from './session'
+import { EN } from '../i18n'
 
 afterEach(() => {
   cleanup()
@@ -69,4 +70,43 @@ it('preserves first-miss absence, KPA units, unknown faults and radio changes in
   view.rerender(<MonitorApp source={source('noAmp')} />)
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Amplifier' })).toBeNull())
   expect(screen.queryByRole('button', { name: /SPE|KPA/ })).toBeNull()
+})
+
+it('the theme button cycles Dark → Light → System → Dark, and System follows the computer', async () => {
+  // The monitor keeps its own theme (it is not the app's Settings), so the third choice lives
+  // on the same one button: each press names the NEXT theme, as the Sun/Moon did.
+  let dark = false
+  const listeners = new Set<() => void>()
+  window.matchMedia = ((q: string) => ({
+    get matches() {
+      return q === '(prefers-color-scheme: dark)' && dark
+    },
+    media: q,
+    addEventListener: (_t: string, f: () => void) => listeners.add(f),
+    removeEventListener: (_t: string, f: () => void) => listeners.delete(f),
+  })) as unknown as typeof window.matchMedia
+  const theme = () => document.documentElement.dataset.theme
+  // The page's own starting theme (monitor.html is data-theme="dark"); an earlier case in this
+  // file leaves it light.
+  document.documentElement.dataset.theme = 'dark'
+  try {
+    render(<MonitorApp source={source('spe')} />)
+    await screen.findByText('14.074000')
+    expect(theme()).toBe('dark')
+    fireEvent.click(screen.getByRole('button', { name: EN['monitor.light'] }))
+    expect(theme()).toBe('light')
+    fireEvent.click(screen.getByRole('button', { name: EN['monitor.system'] }))
+    expect(theme(), 'System did not take the computer’s light setting').toBe('light')
+    dark = true
+    act(() => listeners.forEach((f) => f()))
+    expect(theme(), 'System did not follow the computer going dark').toBe('dark')
+    fireEvent.click(screen.getByRole('button', { name: EN['monitor.dark'] }))
+    expect(theme()).toBe('dark')
+    dark = false
+    act(() => listeners.forEach((f) => f()))
+    expect(theme(), 'a pinned Dark followed the computer').toBe('dark')
+  } finally {
+    delete (window as { matchMedia?: unknown }).matchMedia
+    document.documentElement.dataset.theme = 'dark'
+  }
 })

@@ -95,6 +95,7 @@ import { useContrastPrefs } from './useFieldMode'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
+import { textPx, useTextSize } from './useTextSize'
 import { useMotion } from './useMotion'
 
 // `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one — see
@@ -124,13 +125,13 @@ const FDCLUB_OFF_WRAP: CSSProperties = {
 }
 const FDCLUB_OFF_HEAD: CSSProperties = {
   margin: 0,
-  fontSize: 22,
+  fontSize: textPx(22),
   fontWeight: 700,
   color: 'var(--text)',
 }
 const FDCLUB_OFF_BODY: CSSProperties = {
   margin: 0,
-  fontSize: 16,
+  fontSize: textPx(16),
   lineHeight: 1.5,
   color: 'var(--text-dim)',
 }
@@ -140,13 +141,13 @@ const FDCLUB_OFF_ROUTE: CSSProperties = {
   borderRadius: 'var(--radius)',
   border: '1px solid var(--border)',
   background: 'var(--bg-elev-2)',
-  fontSize: 16,
+  fontSize: textPx(16),
   lineHeight: 1.5,
   color: 'var(--text)',
 }
 const FDCLUB_OFF_WAIT: CSSProperties = {
   margin: 0,
-  fontSize: 14,
+  fontSize: textPx(14),
   color: 'var(--text-faint)',
 }
 
@@ -215,6 +216,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const { scale } = useScale(fieldMode)
   useViewport(scale)
   useDensity()
+  useTextSize()
   useMotion()
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)

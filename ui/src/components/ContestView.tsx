@@ -14,6 +14,7 @@ import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
 import { contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
+import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
@@ -452,7 +453,7 @@ const DIVISION_BLOCK: CSSProperties = {
   gap: 6,
 }
 const DIVISION_LABEL: CSSProperties = {
-  fontSize: 11,
+  fontSize: textPx(11),
   fontWeight: 700,
   letterSpacing: '0.04em',
   textTransform: 'uppercase',
@@ -470,7 +471,7 @@ const CELL_BASE: CSSProperties = {
   padding: '4px 9px',
   borderRadius: 'var(--radius-sm)',
   fontFamily: 'var(--font-mono)',
-  fontSize: 14,
+  fontSize: textPx(14),
   lineHeight: 1.4,
 }
 const CELL_WORKED: CSSProperties = {
@@ -502,10 +503,10 @@ export function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
   return (
     <div style={SECTIONS_BOARD_WRAP} aria-label={t('fieldDay.sections.aria')}>
       <div style={SECTIONS_HEADER}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+        <span style={{ fontSize: textPx(15), fontWeight: 700, color: 'var(--text)' }}>
           {t('fieldDay.sections.head')}
         </span>
-        <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: textPx(13), color: 'var(--text-dim)' }}>
           {t('fieldDay.sections.count', { worked: workedCount, total: ARRL_SECTION_TOTAL })}
         </span>
       </div>
@@ -606,12 +607,12 @@ function MultiplierBoard({ board }: { board: ContestBoard }) {
       }
     >
       <div style={SECTIONS_HEADER}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+        <span style={{ fontSize: textPx(15), fontWeight: 700, color: 'var(--text)' }}>
           {/* A board id that is not Field Day's is a SLOT ID — an invariant token, shown
               as itself rather than run through a catalog that has no word for it. */}
           {isSections ? t('fieldDay.sections.head') : board.id}
         </span>
-        <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: textPx(13), color: 'var(--text-dim)' }}>
           {isSections
             ? t('fieldDay.sections.count', { worked: workedCount, total })
             : t('fieldDay.board.count', { worked: workedCount, total })}
@@ -738,7 +739,7 @@ const CLUB_CHIP_BASE: CSSProperties = {
   gap: 5,
   padding: '3px 10px',
   borderRadius: 'var(--radius-sm)',
-  fontSize: 12,
+  fontSize: textPx(12),
   fontWeight: 700,
   letterSpacing: '0.03em',
 }
@@ -762,11 +763,11 @@ const CLUB_BOARD_GRID: CSSProperties = {
   gridTemplateColumns: 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr',
   columnGap: 10,
   rowGap: 3,
-  fontSize: 13,
+  fontSize: textPx(13),
   alignItems: 'baseline',
 }
 const CLUB_COL_HEAD: CSSProperties = {
-  fontSize: 10,
+  fontSize: textPx(10),
   fontWeight: 700,
   letterSpacing: '0.04em',
   textTransform: 'uppercase',
@@ -774,10 +775,10 @@ const CLUB_COL_HEAD: CSSProperties = {
 }
 /** Column heads, at the docked size or the torn-off window's glance size. */
 function colHead(big: boolean): CSSProperties {
-  return big ? { ...CLUB_COL_HEAD, fontSize: 13 } : CLUB_COL_HEAD
+  return big ? { ...CLUB_COL_HEAD, fontSize: textPx(13) } : CLUB_COL_HEAD
 }
 const CLUB_WARN: CSSProperties = {
-  fontSize: 12,
+  fontSize: textPx(12),
   color: 'var(--status-new-entity)',
 }
 
@@ -911,7 +912,7 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
   const extra = [...byBand.keys()].filter((b) => !FD_BOARD_BANDS.includes(b)).sort(
     (a, b) => bandRank(a) - bandRank(b),
   )
-  const cell: CSSProperties = { fontSize: big ? 20 : 13, padding: big ? '4px 0' : '2px 0' }
+  const cell: CSSProperties = { fontSize: textPx(big ? 20 : 13), padding: big ? '4px 0' : '2px 0' }
   return (
     <div data-band-occupancy="" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: big ? 18 : 10 }}>
       <span style={colHead(big)}>{t('fieldDay.club.bands.column.band')}</span>
@@ -1011,22 +1012,22 @@ export function FdClubSection({
       aria-label={t('fieldDay.club.aria')}
     >
       <div style={big ? { ...CLUB_HEADER, gap: 14 } : CLUB_HEADER}>
-        <span style={{ fontSize: big ? 17 : 13, fontWeight: 700, color: 'var(--text)' }}>
+        <span style={{ fontSize: textPx(big ? 17 : 13), fontWeight: 700, color: 'var(--text)' }}>
           {t('fieldDay.club.head')}
         </span>
         <span
-          style={big ? { ...clubChipStyle(club.syncState), fontSize: 14, padding: '4px 12px' } : clubChipStyle(club.syncState)}
+          style={big ? { ...clubChipStyle(club.syncState), fontSize: textPx(14), padding: '4px 12px' } : clubChipStyle(club.syncState)}
           title={t('fieldDay.club.state.title')}
         >
           {clubChipText(club)}
         </span>
         {(club.event || club.hostCall) && (
-          <span style={{ fontSize: big ? 15 : 12, color: 'var(--text-dim)' }}>
+          <span style={{ fontSize: textPx(big ? 15 : 12), color: 'var(--text-dim)' }}>
             {t('fieldDay.club.hostLine', { event: club.event || '—', call: club.hostCall || '—' })}
           </span>
         )}
         <span style={{ flex: '1 1 auto' }} />
-        <span style={{ fontSize: big ? 16 : 13, color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: textPx(big ? 16 : 13), color: 'var(--text-dim)' }}>
           {t('fieldDay.club.counters', {
             score: club.score,
             qsos: club.qsos,
@@ -1080,13 +1081,13 @@ export function FdClubSection({
         // Sync IS on here (the block only rides the snapshot when it is), so this
         // says what it is waiting for and never sends anyone to Settings — the
         // torn-off window's own copy covers the sync-off case.
-        <span style={{ fontSize: big ? 16 : 12, color: 'var(--text-faint)' }}>
+        <span style={{ fontSize: textPx(big ? 16 : 12), color: 'var(--text-faint)' }}>
           {t('fieldDay.club.board.empty')}
         </span>
       ) : (
         <div
           data-club-board=""
-          style={big ? { ...CLUB_BOARD_GRID, fontSize: 20, columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
+          style={big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
         >
           <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
           <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
@@ -1149,7 +1150,7 @@ const OP_FIELD: CSSProperties = {
   minWidth: 0,
 }
 const OP_LABEL: CSSProperties = {
-  fontSize: 10,
+  fontSize: textPx(10),
   fontWeight: 700,
   letterSpacing: '0.04em',
   textTransform: 'uppercase',
@@ -1161,7 +1162,7 @@ const OP_INPUT: CSSProperties = {
   minWidth: 0,
   padding: '7px 11px',
   fontFamily: 'var(--font-mono)',
-  fontSize: 15,
+  fontSize: textPx(15),
   fontWeight: 700,
   letterSpacing: '0.04em',
   textTransform: 'uppercase',
@@ -1176,7 +1177,7 @@ const POPOUT_BTN: CSSProperties = {
   alignItems: 'center',
   gap: 6,
   padding: '7px 12px',
-  fontSize: 13,
+  fontSize: textPx(13),
   fontWeight: 600,
   color: 'var(--text-dim)',
   background: 'var(--bg-elev)',

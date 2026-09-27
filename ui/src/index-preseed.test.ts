@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
+import { renderHook } from '@testing-library/react'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { fitScale, fieldFitScale, naturalFor } from './useScale'
+import { useTextSize } from './useTextSize'
+import { useDensity } from './useDensity'
+import { useTheme } from './useTheme'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -241,5 +245,112 @@ describe('index.html preseed: field mode', () => {
     expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(
       String(fitScale(1366, 768) / 100),
     )
+  })
+})
+
+describe('index.html preseed: text size and density (#215)', () => {
+  // Text size moves every font on screen, so a seed that disagreed with the hooks would
+  // first-paint the whole app at one size and then jump to another. Held by PARITY rather
+  // than by constants: for every stored value, including none and nonsense, the seed must
+  // leave exactly the attributes useTextSize and useDensity then write.
+  const ATTRS = ['data-text-size', 'data-density', 'data-touch'] as const
+  const root = document.documentElement
+  const read = () => Object.fromEntries(ATTRS.map((a) => [a, root.getAttribute(a)]))
+  const clear = () => ATTRS.forEach((a) => root.removeAttribute(a))
+
+  it('seeds exactly the attributes the hooks write, for every stored value', () => {
+    const TEXT = [null, 'normal', 'large', 'larger', 'huge']
+    const DENSITY = [null, 'guided', 'standard', 'dense', 'touch', 'jumbo']
+    const bad: string[] = []
+    for (const t of TEXT) {
+      for (const den of DENSITY) {
+        localStorage.clear()
+        if (t !== null) localStorage.setItem('nexus-text-size', t)
+        if (den !== null) localStorage.setItem('nexus-density', den)
+        clear()
+        runPreseed()
+        const seeded = read()
+        clear()
+        const hooks = renderHook(() => {
+          useTextSize()
+          useDensity()
+        })
+        const written = read()
+        hooks.unmount()
+        if (JSON.stringify(seeded) !== JSON.stringify(written))
+          bad.push(`text=${t} density=${den}: seed ${JSON.stringify(seeded)} ≠ hooks ${JSON.stringify(written)}`)
+      }
+    }
+    expect(bad).toEqual([])
+  })
+
+  it('Larger + Touch seeds the attributes the sheet keys on (the case the parity loop could share a bug with)', () => {
+    // Parity alone passes if seed and hooks are wrong the same way; this pins the values.
+    localStorage.setItem('nexus-text-size', 'larger')
+    localStorage.setItem('nexus-density', 'touch')
+    clear()
+    runPreseed()
+    expect(read()).toEqual({ 'data-text-size': 'larger', 'data-density': 'guided', 'data-touch': '1' })
+  })
+})
+
+describe('index.html preseed: the theme, System included', () => {
+  // System resolves through prefers-color-scheme, in the seed and in useTheme alike. A seed that
+  // disagreed would paint the first frame in one theme and snap to the other. The page's own
+  // <html data-theme="dark"> is the default when the seed writes nothing, so "what the seed
+  // leaves" is the attribute or, absent that, dark.
+  const QUERY = '(prefers-color-scheme: dark)'
+  const root = document.documentElement
+  const os = (setting: 'dark' | 'light' | 'none') => {
+    if (setting === 'none') {
+      delete (window as { matchMedia?: unknown }).matchMedia
+      return
+    }
+    window.matchMedia = ((q: string) => ({
+      matches: q === QUERY && setting === 'dark',
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+  }
+  const painted = () => root.getAttribute('data-theme') ?? 'dark'
+
+  it('seeds the theme useTheme paints, for every stored value and OS setting', () => {
+    const bad: string[] = []
+    for (const stored of [null, 'light', 'dark', 'system', 'amber', 'sepia']) {
+      for (const setting of ['dark', 'light', 'none'] as const) {
+        os(setting)
+        localStorage.clear()
+        if (stored !== null) localStorage.setItem('tempo-theme', stored)
+        root.removeAttribute('data-theme')
+        runPreseed()
+        const seeded = painted()
+        localStorage.clear()
+        if (stored !== null) localStorage.setItem('tempo-theme', stored)
+        root.removeAttribute('data-theme')
+        const hook = renderHook(() => useTheme())
+        const written = root.getAttribute('data-theme')
+        hook.unmount()
+        if (seeded !== written) bad.push(`stored=${stored} os=${setting}: seed ${seeded} ≠ hook ${written}`)
+      }
+    }
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
+    expect(bad).toEqual([])
+  })
+
+  it('System seeds the OS setting (the case parity could share a bug with), and unset stays Dark', () => {
+    os('light')
+    localStorage.setItem('tempo-theme', 'system')
+    root.removeAttribute('data-theme')
+    runPreseed()
+    expect(root.getAttribute('data-theme')).toBe('light')
+    // New installs start Dark (the operator's pick), even on a computer set to light.
+    localStorage.clear()
+    root.removeAttribute('data-theme')
+    runPreseed()
+    expect(painted()).toBe('dark')
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
   })
 })

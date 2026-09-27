@@ -546,10 +546,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // which is half of why the reporter went hunting and gave up. NOT bare 'field' — the
     // configurations section already owns that word for home/field station presets, and an
     // exact keyword outranks everything but a label.
-    keywords: ['theme', 'dark', 'light', 'ui scale', 'text size', 'font size', 'zoom',
+    keywords: ['theme', 'dark', 'light', 'system theme', 'dark mode', 'light mode',
+      'ui scale', 'text size', 'font size', 'zoom',
       'contrast', 'high contrast', 'field mode', 'accessibility', 'large text', 'readable',
-      'daylight', 'sunlight',
-      'density', 'compact', 'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
+      'daylight', 'sunlight', 'larger text', 'bigger text',
+      'density', 'compact', 'comfortable', 'touch', 'touchscreen',
+      'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
   },
   {
     // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
