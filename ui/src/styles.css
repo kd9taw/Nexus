@@ -3632,6 +3632,24 @@ body.resizing-row {
   --border-soft: #3a475c;
 }
 
+/* ---- ON AIR: the sign that says the transmitter is keyed -----------------------------------
+   Operator pick, 2026-09-26: "Solid red, white text" — a steady, studio-style sign, the loudest
+   thing on the screen in every theme, with no motion. The FORM carries it (a filled pill with a
+   rim), so the state never rests on hue alone: the amber theme once showed a weak hue losing it.
+
+   The fill is the TX red taken 10% toward black. White on `--tx` itself measures 4.0:1 in the
+   dark theme (#e64343), under the 4.5:1 an ink needs; the deeper fill clears it (4.8:1) and still
+   stands 3.7:1 off the dark panel. It is DERIVED from `--tx`, so the sign can never drift from the
+   TX colour, and `--tx` stays locked. The rim is the theme's full-strength ink, so the pill's
+   edge holds against whatever it sits on — including Operate's strip, which washes itself red.
+   One declaration serves both themes: every term is resolved on <html>, against whichever
+   palette is live there. styles-on-air.test.ts measures all three signs in all four modes. */
+:root {
+  --on-air-bg: color-mix(in srgb, var(--tx) 90%, #000000);
+  --on-air-ink: #ffffff;
+  --on-air-rim: var(--text);
+}
+
 /* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
    Dark-tuned pastel text/icon colors that sit on PAGE backgrounds (not on
    solid colored chips) — each gets a same-hue ink readable on white. Scoped
@@ -4869,11 +4887,11 @@ select optgroup {
   background: color-mix(in srgb, var(--rx) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--rx) 35%, transparent);
 }
+/* The ON AIR sign (see `--on-air-*`): steady, never pulsing — the operator's pick. */
 .txrx-indicator.tx {
-  color: #fff;
-  background: var(--tx);
-  border: 1px solid var(--tx);
-  animation: pulse 0.9s ease-in-out infinite;
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border: 1px solid var(--on-air-rim);
 }
 @keyframes pulse {
   50% {
@@ -14284,9 +14302,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 600;
   color: var(--text-dim);
   white-space: nowrap;
+  /* The ON AIR pill's box, worn unkeyed too, with a transparent border: keying then only
+     repaints, and nothing beside the pill (Stop TX) moves as the rig keys. The clickable latch
+     (`.cockpit-txarm`, below) re-declares all three. */
+  padding: 1px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
+/* ON AIR (see `--on-air-*`). */
 .cockpit-txstate.on {
-  color: var(--tx);
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border-color: var(--on-air-rim);
 }
 /* Clickable arm variant (RTTY/SSTV cockpits — WSJT-X "Enable Tx"). Looks like the Tune
    button so it reads as an action, not a status pill. Green when armed. */
@@ -14805,12 +14832,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
   letter-spacing: 0.04em;
   white-space: nowrap;
+  /* The ON AIR pill's box in every state, so the key-down only repaints (the header pill's
+     reasoning; the panic controls already sit before this in the strip). */
+  padding: 1px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
 .cockpit-qso.rx .cq-statecap {
   color: var(--state-good, #29c281);
 }
+/* Operate's ON AIR sign (see `--on-air-*`). Its rim is what separates it from the strip's own
+   red wash above. */
 .cockpit-qso.tx .cq-statecap {
-  color: var(--tx);
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border-color: var(--on-air-rim);
 }
 /* Deliberate wrap point (graft of the two-row discipline): hidden at xl ONLY,
    where the one row always fits; everywhere below it forces the break BETWEEN

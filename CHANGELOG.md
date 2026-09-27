@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **ON AIR is now a solid red sign you cannot miss.** While the rig is keyed, the TX state in the
+  cockpit header (Phone, CW, RTTY, PSK, SSTV, JS8 and Tempo), Operate's **▲ TRANSMITTING** in the
+  QSO strip and the **TX** plate in the top bar all show as a steady red pill with white lettering
+  and an outline. It reads in the dark and light themes, and with High contrast or Field mode on.
+  The top bar's plate no longer blinks. The pill takes the same room keyed or not, so nothing
+  beside it, Stop TX included, moves when you key. The receive state looks as before, and the TX
+  colour itself is unchanged.
+
 ### Corrections to 1.15.0
 
 A released section is history and is not rewritten, so a credit it overstated is corrected here.
