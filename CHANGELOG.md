@@ -111,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same whichever theme you run. In the dark theme they look as before. The waterfall's
   **TX** and **RX** markers, and the RX line in PSK and the Mark line in RTTY, now take the
   app's own TX and RX colours instead of colours of their own.
+- **The light theme's highlight colour is a little darker, so it reads better.** The blue of
+  selected buttons and chips, links, your own chat bubbles, the focus outline and the top bar's
+  frequency digits is a deeper shade of the same blue. Words in it, and white words on it, now
+  meet the usual 4.5:1 reading contrast on the light panels, where they were about 3.5:1. The
+  dark theme is unchanged, and so is a colour you picked in Settings ▸ Appearance ▸ Colours.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.
@@ -124,6 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The top bar's TX plate lights for every transmission.** It lit only for FT8/FT4-style timed
+  overs, so during a Phone over, CW, RTTY, PSK or SSTV, a tune carrier, or with the mic keyed at
+  the radio itself, it read a green RX while the cockpit's ON AIR sign was red. It now shows TX
+  whenever the ON AIR sign does. Nothing about when or how the radio keys has changed.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,

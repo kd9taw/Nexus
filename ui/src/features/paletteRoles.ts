@@ -117,11 +117,15 @@ const ACCENT: PaletteRole = {
         '--bubble-mine': '#1f5d73',
         '--bubble-mine-text': '#eaf7fc',
       },
+      // Darkened on 2026-09-27 from #0d8ecf, same hue (operator: "Darken it slightly"): that
+      // read 3.3–3.6:1 as lettering on the light panels, this reads 4.7:1 or better. The focus
+      // ring follows the accent now; it was a shade darker only because #0d8ecf missed 3:1 on
+      // the page.
       light: {
-        '--accent': '#0d8ecf',
+        '--accent': '#0174ab',
         '--accent-ink': '#ffffff',
-        '--focus-ring': '#0b83c0',
-        '--bubble-mine': '#0d8ecf',
+        '--focus-ring': '#0174ab',
+        '--bubble-mine': '#0174ab',
         '--bubble-mine-text': '#ffffff',
       },
       night: {
@@ -132,7 +136,7 @@ const ACCENT: PaletteRole = {
           '--bubble-mine': '#124658',
           '--bubble-mine-text': '#bdc9ce',
         },
-        // Darker on the warm night panel, which also clears the 4.5:1 today's light cyan misses.
+        // Darker again on the warm night panel: Night must dim the day cyan above.
         light: {
           '--accent': '#006fae',
           '--accent-ink': '#ffffff',
@@ -231,7 +235,7 @@ const READOUT: PaletteRole = {
       id: 'cyan',
       labelKey: 'palette.preset.cyan',
       dark: { '--readout': '#4cc9f0' },
-      light: { '--readout': '#0d8ecf' },
+      light: { '--readout': '#0174ab' },
       night: { dark: { '--readout': '#42a7c7' }, light: { '--readout': '#006fae' } },
     },
     // At night the digits dim in the dark theme and in every well. Amber dims less than the

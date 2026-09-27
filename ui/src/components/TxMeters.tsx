@@ -6,6 +6,7 @@
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
 import { useRef } from 'react'
 import type { RadioStatus } from '../types'
+import { isOnAir } from '../types'
 import { t } from '../i18n'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
@@ -205,7 +206,7 @@ export function TxMeters({
   // lit this pane even though the SWR/ALC/Po poll runs whenever Nexus keys the rig and the
   // readings were sitting in the snapshot unshown. `txBusyReason` is Some for all seven
   // TX owners.
-  const onAir = radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
+  const onAir = isOnAir(radio)
   const reading = rows.some((r) => r.bar != null)
   const live = onAir && reading
   if (live) {

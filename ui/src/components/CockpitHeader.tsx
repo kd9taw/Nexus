@@ -20,6 +20,7 @@ import { useRef } from 'react'
 import { AmpStrip } from './AmpStrip'
 import type { ReactNode } from 'react'
 import type { AppSnapshot } from '../types'
+import { isOnAir } from '../types'
 import { bandLabelForMhz, bandRangeForLabel } from '../band'
 import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
@@ -257,7 +258,7 @@ export function CockpitHeader({
   // key and SSTV all read as "RX" through it — the #57 report (FTdx10, Phone/CW showed no
   // TX). `txBusyReason` ships whenever ANY of the seven owners holds the transmitter; the
   // same rule the wheel-tune gate above already follows.
-  const onAir = radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
+  const onAir = isOnAir(radio)
   const txPill = onAir ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (

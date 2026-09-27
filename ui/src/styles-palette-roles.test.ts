@@ -27,10 +27,15 @@
 //     unconfirmed, and must visibly change when they do (today's closest default: 0.11).
 //   · OK and amber ≥ 0.12 apart for every pair of presets: strong and marginal signal share the
 //     SNR column (today: 0.16 dark, 0.17 light).
+//   · The accent's presets ≥ 0.06 apart from each other, and the readout's: three noticeable
+//     differences, so another pick looks like another colour (today's closest: Cyan and Blue in
+//     the light theme, 0.071, since Cyan was darkened toward Blue's lightness).
 //
-// TODAY'S SHORTFALLS are recorded, not excused: the default accent and readout of the LIGHT theme
-// read below 4.5:1 as lettering (DEFAULT_SHORTFALLS). They are today's values, which the defaults
-// must keep byte for byte; every non-default preset clears every floor, with no exemption.
+// EVERY PRESET CLEARS EVERY FLOOR, THE DEFAULTS INCLUDED. Until 2026-09-27 the light theme's
+// default accent and readout, #0d8ecf (the colour they had always had), read 3.3–3.6:1 as
+// lettering, and this file recorded those 18 shortfalls rather than excusing them. The operator's
+// pick was "Darken it slightly": both are #0174ab now, the same hue, which clears 4.5:1 on every
+// light panel and stays brighter than the light Night accent (#006fae) that Night dims it to.
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -72,6 +77,7 @@ const LOCKED_DE = 0.15
 const LOCKED_DE_CVD = 0.06
 const PENDING_DE = 0.1
 const OK_AMBER_DE = 0.12
+const PRESET_DE = 0.06
 /** One 8-bit step in the green channel moves a mid-tone's contrast by about this much. */
 const ROUNDING = 0.05
 
@@ -129,7 +135,7 @@ function inHue(h: number, [from, to]: readonly [number, number]): boolean {
 }
 
 interface Problem {
-  /** Stable identity, no numbers: what DEFAULT_SHORTFALLS records. */
+  /** Stable identity, no numbers: what the controls at the end look for. */
   key: string
   message: string
 }
@@ -293,14 +299,19 @@ function blockProblems(rules: Rule[]): string[] {
 
 // ── Defaults are today's values ─────────────────────────────────────────────────────────────
 
-/** main at ab84af6b, before this change: what every role painted, dark (which is also every
- *  well) and light. The readout's is the accent's, because the digits were painted in it. */
+/** main at ab84af6b, before the colour roles: what every role painted, dark (which is also every
+ *  well) and light. The readout's is the accent's, because the digits were painted in it.
+ *
+ *  ONE DELIBERATE CHANGE SINCE: the light accent and readout, #0d8ecf → #0174ab (2026-09-27,
+ *  the operator's "Darken it slightly"), so they read 4.5:1 as lettering. The focus ring and your
+ *  own bubble follow the accent, as they do in every other preset (the ring had been one shade
+ *  darker, #0b83c0, only because #0d8ecf missed 3:1 on the page). The dark theme is untouched. */
 const TODAY: Record<string, { dark: Record<string, string>; light: Record<string, string> }> = {
   accent: {
     dark: { '--accent': '#4cc9f0', '--accent-ink': '#06222c', '--focus-ring': '#4cc9f0', '--bubble-mine': '#1f5d73', '--bubble-mine-text': '#eaf7fc' },
-    light: { '--accent': '#0d8ecf', '--accent-ink': '#ffffff', '--focus-ring': '#0b83c0', '--bubble-mine': '#0d8ecf', '--bubble-mine-text': '#ffffff' },
+    light: { '--accent': '#0174ab', '--accent-ink': '#ffffff', '--focus-ring': '#0174ab', '--bubble-mine': '#0174ab', '--bubble-mine-text': '#ffffff' },
   },
-  readout: { dark: { '--readout': '#4cc9f0' }, light: { '--readout': '#0d8ecf' } },
+  readout: { dark: { '--readout': '#4cc9f0' }, light: { '--readout': '#0174ab' } },
   ok: {
     dark: { '--snr-strong': '#69d98d', '--rx': '#69d98d', '--band-open': '#69d98d' },
     light: { '--snr-strong': '#007f35', '--rx': '#007f35', '--band-open': '#007f35' },
@@ -337,32 +348,11 @@ describe('the defaults are byte-identical to today', () => {
 
 // ── Readable, visible, clear of the reds ────────────────────────────────────────────────────
 
-/** Where today's colours fall short of the floors — the light theme's accent and readout as
- *  lettering. Recorded rather than exempted: the defaults must stay today's, so this is what an
- *  operator who never opens Colours sees, and every non-default preset clears all of it. */
-const DEFAULT_SHORTFALLS = [
-  ...(['light', 'light-high'] as const).flatMap((b) => [
-    `accent=cyan ${b} root: --accent on --panel`,
-    `accent=cyan ${b} root: --accent on --bg-elev`,
-    `accent=cyan ${b} root: --accent on --bg-elev-2`,
-    `accent=cyan ${b} root: --accent on --bg`,
-    `accent=cyan ${b} root: --accent-ink on --accent`,
-    `accent=cyan ${b} root: --bubble-mine-text on --bubble-mine`,
-    `readout=cyan ${b} root: --readout on --panel`,
-    `readout=cyan ${b} root: --readout on --bg-elev`,
-    `readout=cyan ${b} root: --readout on --bg-elev-2`,
-  ]),
-].sort()
-
 describe('every preset is readable and clear of the reds, in every mode and inside a well', () => {
-  const nonDefault = PALETTE_ROLES.flatMap((r) => r.presets.slice(1).map((p) => [`${r.id}=${p.id}`, r, p] as const))
-  it.each(nonDefault)('%s', (_n, r, p) => {
+  // The defaults with no exemption: they are what an operator who never opens Colours sees.
+  const presets = PALETTE_ROLES.flatMap((r) => r.presets.map((p) => [`${r.id}=${p.id}`, r, p] as const))
+  it.each(presets)('%s', (_n, r, p) => {
     expect(roleProblems(RULES, r, p).map((x) => x.message)).toEqual([])
-  })
-
-  it('the defaults fall short exactly where today does, and nowhere else', () => {
-    const found = PALETTE_ROLES.flatMap((r) => roleProblems(RULES, r, r.presets[0]).map((x) => x.key))
-    expect([...new Set(found)].sort()).toEqual(DEFAULT_SHORTFALLS)
   })
 })
 
@@ -381,6 +371,32 @@ describe('OK and amber stay apart for every pair of presets', () => {
       }
     }
     expect(bad).toEqual([])
+  })
+})
+
+/** Every pair of `r`'s presets, measured on what the sheet paints, in every mode and scope. Held
+ *  for the accent and the readout, the roles whose default was darkened toward Blue; the signal
+ *  roles have closer pairs today (Amber and Gold are 0.012 apart in the dark theme), and whether
+ *  that is right is a question about those presets. */
+function apartProblems(rules: Rule[], r: PaletteRole): string[] {
+  const out: string[] = []
+  for (const base of BASE_MODES) {
+    for (const scope of SCOPES) {
+      const paint = r.presets.map((p) => [p.id, rgbOf(tokensIn(rules, modeFor(r, p, base), scope), r.swatch)] as const)
+      paint.forEach(([a, x], i) =>
+        paint.slice(i + 1).forEach(([b, y]) => {
+          const d = deltaE(x, y)
+          if (d < PRESET_DE) out.push(`${r.id} ${a}/${b} ${base} ${scope}: ${hex(x)} vs ${hex(y)} ΔE ${d.toFixed(3)} < ${PRESET_DE}`)
+        }),
+      )
+    }
+  }
+  return out
+}
+
+describe('the accent and readout presets stay apart from each other', () => {
+  it.each(['accent', 'readout'].map((id) => [id, role(id)] as const))('%s', (_n, r) => {
+    expect(apartProblems(RULES, r)).toEqual([])
   })
 })
 
@@ -538,6 +554,17 @@ describe('the checks fire', () => {
       [data-theme='light'][data-ok='murk'] { ${decl('#1f4d2c')} }`)
     expect(parityProblems(rules, ok, dark)).toEqual([])
     expect(roleProblems(rules, ok, dark).map((x) => x.key)).toContain('ok=murk dark root: --snr-strong lightness')
+  })
+
+  it('two presets of a role that look alike are caught', () => {
+    const accent = role('accent')
+    const blue = accent.presets.find((p) => p.id === 'blue')!
+    const navy: PalettePreset = { id: 'navy', labelKey: blue.labelKey, dark: blue.dark, light: { ...blue.light, '--accent': '#2a5fb8' } }
+    const rules = withBlock(`
+      [data-theme='dark'][data-accent='navy'], [data-accent='navy'] .well { --accent: ${blue.dark['--accent']}; }
+      [data-theme='light'][data-accent='navy'] { --accent: #2a5fb8; }`)
+    const found = apartProblems(rules, { ...accent, presets: [...accent.presets, navy] })
+    expect(found.some((m) => m.startsWith('accent blue/navy light root:')), found.join('\n')).toBe(true)
   })
 
   it('a fill made worse than today is caught', () => {
