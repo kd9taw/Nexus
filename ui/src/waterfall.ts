@@ -6,6 +6,7 @@
 import { sampleLut, type ColormapName } from './colormaps'
 import { SingleFlightLatch } from './singleFlight'
 import type { MessageKey } from './i18n'
+import type { Tier } from './types'
 
 /** Floor below which a percentile span is widened so `normalize` never divides
  * by ~0 (magnitudes are 0..1, so this is comfortably sub-quantization). Exported
@@ -1213,6 +1214,76 @@ export const MASTER_PALETTES: { value: ColormapName | 'auto'; label: string; lab
 export function resolveColormap(palette: string, theme: string, night = false): ColormapName {
   const explicit = WATERFALL_PALETTES.some((p) => p.value === palette && p.value !== 'auto')
   return explicit ? (palette as ColormapName) : night ? 'amber-crt' : themeColormap(theme)
+}
+
+/** FST4's symbol length per period (s) as WSJT-X's PLOTTER has it. See `markerWidthHz`: three of
+ *  these are not the transmitter's. */
+const FST4_PLOTTER_NSPS: Record<number, number> = { 15: 800, 30: 1680, 60: 4000, 120: 8400, 300: 21504, 900: 66560, 1800: 134400 }
+/** Q65's symbol length per period (s): the plotter's, and its transmitter's too. */
+const Q65_NSPS: Record<number, number> = { 15: 1800, 30: 3600, 60: 7200, 120: 16000, 300: 41472 }
+
+/**
+ * The WIDTH of the FT waterfall's RX/TX markers: hertz above each marker's frequency, which is the
+ * signal's LOWEST tone. `null` = no width, and the marker stays the single line.
+ *
+ * These are WSJT-X's Wide Graph brackets (its "goal posts"). Every figure is WSJT-X's own, read in
+ * `CPlotter::DrawOverlay`, `widgets/plotter.cpp` at v3.0.2 (sha256 4ce2aaa9…, identical on master;
+ * 3.2.0-rc1 and 2.7.0 draw the same widths). A bracket runs from the lowest tone to the highest, so
+ * FT8's is 7 × 6.25 = 43.75 Hz, not the 50 Hz the signal occupies.
+ *
+ * | tier | width (Hz) | plotter.cpp |
+ * |---|---|---|
+ * | FT8 | 7 × 12000/1920 = 43.75 | 512 |
+ * | FT4 | 3 × 12000/576 = 62.5 | 511 |
+ * | FST4, FST4W | 3 × 12000/nsps, `FST4_PLOTTER_NSPS` | 513–524 |
+ * | Q65 | 65 × 2^submode × 12000/nsps, `Q65_NSPS` | 562–571 |
+ * | JT65 | 65 × 11025/4096, ×2 for B, ×4 for C | 572–576 |
+ *
+ * ⚠️ FST4's nsps are the PLOTTER's, and at 15, 60 and 120 s they are not the transmitter's (720,
+ * 3888 and 8200, `crates/fst4`), so the bracket there is up to 10 % narrower than the tones it
+ * marks. That is what WSJT-X draws, and parity is the point. The plotter also scales FST4 by
+ * 2^submode; Nexus sends FST4 at the standard spacing only, so the factor is 1.
+ *
+ * NO WIDTH, deliberately:
+ * - TempoFast and TempoDeep (Nexus's own modes), FT2 (Decodium's) and JS8: WSJT-X draws none of them.
+ * - MSK144: WSJT-X swaps the Wide Graph for the Fast Graph, as the docked Operate strip does.
+ * - WSPR: WSJT-X CENTRES its TX bracket on the TX frequency (plotter.cpp:697-700), because it
+ *   transmits WSPR centred there. Nexus's beacon puts its lowest tone on the offset, so that
+ *   bracket would sit 2.2 Hz below the signal it claims to mark.
+ * - A period or submode that is missing (settings not loaded yet) or not in WSJT-X's table is
+ *   never guessed.
+ *
+ * PAINT ONLY. Nothing that tunes reads this: a click lands on the hertz under the pointer exactly as
+ * it does with the single line (`Waterfall.widthClicks.test.tsx`).
+ */
+export function markerWidthHz(
+  tier: Tier | null | undefined,
+  mode: { periodS?: number; q65Submode?: number | null; jt65Submode?: number | null } = {},
+): number | null {
+  const submode = (n: number | null | undefined, max: number) =>
+    n != null && Number.isInteger(n) && n >= 0 && n <= max ? n : null
+  switch (tier) {
+    case 'FT8':
+      return (7 * 12000) / 1920
+    case 'FT4':
+      return (3 * 12000) / 576
+    case 'FST4':
+    case 'FST4W': {
+      const nsps = mode.periodS != null ? FST4_PLOTTER_NSPS[mode.periodS] : undefined
+      return nsps ? (3 * 12000) / nsps : null
+    }
+    case 'Q65': {
+      const nsps = mode.periodS != null ? Q65_NSPS[mode.periodS] : undefined
+      const sub = submode(mode.q65Submode, 4)
+      return nsps && sub != null ? (65 * 2 ** sub * 12000) / nsps : null
+    }
+    case 'JT65': {
+      const sub = submode(mode.jt65Submode, 2)
+      return sub != null ? (65 * 2 ** sub * 11025) / 4096 : null
+    }
+    default:
+      return null
+  }
 }
 
 /**

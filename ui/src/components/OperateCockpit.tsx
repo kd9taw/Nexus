@@ -94,6 +94,9 @@ interface Props {
   theme: string
   /** Active mode/tier (authoritative from the snapshot's link). */
   tier: Tier
+  /** How wide the waterfall draws its RX/TX markers on this tier (`markerWidthHz`, WSJT-X's
+   *  bracket), passed straight through to it. Absent ⇒ the single line. Paint only. */
+  markerWidthHz?: number | null
   onTierChange: (t: Tier) => void
   /** Open the Logbook filtered to a callsign (#192) — handed to the recall card in the side
    *  rail, whose previous-contact rows become clickable when it is present. Omitted ⇒ inert. */
@@ -316,6 +319,7 @@ export function OperateCockpit({
   snap,
   theme,
   tier,
+  markerWidthHz,
   onTierChange,
   onOpenLogbook,
   bandPlan,
@@ -1341,6 +1345,7 @@ export function OperateCockpit({
                   }}
                   active={active}
                   paletteScope={FT_PALETTE_SCOPE}
+                  markerWidthHz={markerWidthHz}
                   // An FT over is 13 s: the dark band reads as "that was us", and there is
                   // genuinely no receiver to picture during it. Explicit here because the
                   // default is OFF — the shared Waterfall also draws RTTY's and SSTV's band,

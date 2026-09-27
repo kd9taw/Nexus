@@ -121,6 +121,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The theme is three cards.** Light, Dark and System each show a line on their character:
   Light is a daylight panel with dark scopes and meters, Dark a dark panel with lit dials and
   meters, and System follows your computer.
+- **The waterfall's RX and TX markers show how wide the signal is, as in WSJT-X.** On FT8, FT4,
+  FST4, FST4W, Q65 and JT65 each marker is now two lines, one on its frequency (where the single
+  line was) and one on the signal's top tone, joined by a bar: along the top of the waterfall for
+  TX (red) and along the bottom for RX (green). The widths are the ones WSJT-X's Wide Graph draws:
+  43.75 Hz on FT8, 62.5 Hz on FT4, and on Q65, JT65 and FST4 they follow your submode and T/R
+  period. Clicking works exactly as before: left-click sets RX, right-click or Shift-click sets TX
+  for a split, and Ctrl-click sets both. A click inside a marker tunes to the spot you clicked. WSPR,
+  MSK144, FT2 and the Tempo modes keep the single line.
 
 ### Fixed
 
