@@ -160,6 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the band's own colour, which barely shows on a light background: 20m's green read about 1.5:1.
   In the light theme the name is now in the normal text colour, and the band's colour stays on the
   chip's border, its glow and the dot beside it.
+- **The six violet bands read clearly on the dark band chip.** 2200m, 630m, 160m, 70cm, 33cm and
+  23cm are lettered in a slightly lighter violet on the chip, so each reads at least 4.5:1. Every
+  other band looks exactly as before, and the map, the globes and the Field Day board keep their
+  colours.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,
