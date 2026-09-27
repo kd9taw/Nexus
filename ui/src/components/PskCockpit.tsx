@@ -686,7 +686,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           keyed={sending || latched || (snap?.radio.tuning ?? false)}
           rxOffsetHz={centerHz}
           txOffsetHz={0}
-          cursors={[{ hz: centerHz, color: '#3ddc8c', label: 'RX' }]}
+          cursors={[{ hz: centerHz, color: 'var(--rx)', label: 'RX' }]}
           hint={receiverControl ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={receiverControl ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
         />

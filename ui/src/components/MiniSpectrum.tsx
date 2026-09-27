@@ -154,7 +154,9 @@ export function MiniSpectrum({ pollMs = 120, height = 96, idleHint }: Props) {
             : ''}
         </span>
       </div>
-      <canvas ref={canvasRef} className="mini-spectrum-canvas" style={{ height }} />
+      {/* A display well (styles.css DISPLAY WELLS): the `--accent`/`--text-dim` read above come off
+          this canvas, so the trace is drawn in the dark theme's inks on a face dark in both. */}
+      <canvas ref={canvasRef} className="mini-spectrum-canvas well" style={{ height }} />
       {!alive && idleHint && <div className="mini-spectrum-idle">{remote&&!spec?t('remote.collectionUnavailable'):idleHint}</div>}
     </div>
   )

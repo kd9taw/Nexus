@@ -3415,9 +3415,13 @@ body.resizing-row {
   flex-wrap: wrap;
 }
 
-/* ---- DARK (shack) — default ---- */
+/* ---- DARK (shack) — default ----
+   `.well` is a SELECTOR of this palette, not a copy of it: a display well (see DISPLAY WELLS,
+   below the contrast blocks) is this theme wherever it sits, so a retuned dark ink retunes every
+   well with it. */
 :root,
-[data-theme='dark'] {
+[data-theme='dark'],
+.well {
   --bg: #0b0f17;
   --bg-elev: #131925;
   --bg-elev-2: #1a2231;
@@ -3620,7 +3624,8 @@ body.resizing-row {
   --border: #7d8899;
   --border-soft: #a8b3c2;
 }
-[data-theme='dark'][data-contrast='high'] {
+[data-theme='dark'][data-contrast='high'],
+[data-contrast='high'] .well {
   --text: #ffffff;
   --text-dim: #e8eef6;
   --text-faint: #dae2ec;
@@ -3630,6 +3635,63 @@ body.resizing-row {
   --bg-elev-2: #161d27;
   --border: #5a6980;
   --border-soft: #3a475c;
+}
+
+/* ---- ON AIR: the sign that says the transmitter is keyed -----------------------------------
+   Operator pick, 2026-09-26: "Solid red, white text" — a steady, studio-style sign, the loudest
+   thing on the screen in every theme, with no motion. The FORM carries it (a filled pill with a
+   rim), so the state never rests on hue alone: the amber theme once showed a weak hue losing it.
+
+   The fill is the TX red taken 10% toward black. White on `--tx` itself measures 4.0:1 in the
+   dark theme (#e64343), under the 4.5:1 an ink needs; the deeper fill clears it (4.8:1) and still
+   stands 3.7:1 off the dark panel. It is DERIVED from `--tx`, so the sign can never drift from the
+   TX colour, and `--tx` stays locked. The rim is the theme's full-strength ink, so the pill's
+   edge holds against whatever it sits on — including Operate's strip, which washes itself red.
+   One declaration serves both themes: every term is resolved on <html>, against whichever
+   palette is live there. styles-on-air.test.ts measures all three signs in all four modes. */
+:root {
+  --on-air-bg: color-mix(in srgb, var(--tx) 90%, #000000);
+  --on-air-ink: #ffffff;
+  --on-air-rim: var(--text);
+}
+
+/* ---- DISPLAY WELLS: dark displays in both themes -------------------------------------------
+   Operator pick, 2026-09-26: "Light frame, dark displays" — Zeus's "day shack", a light chassis
+   with dark display wells. The instruments stay dark in the light theme, so a signal reads the
+   same wherever the operator is: the S-meters, the transmit meters, the audio level meter, CW's
+   zero-beat bar, the VFO readout, the waterfall's stage (its axis strip, markers and legend),
+   the Fast Graph and the mini spectrum. The waterfall's and the Phone scope's floors were dark
+   already (the palette LUT); the well is what gives whatever is drawn ON them the right inks.
+
+   A WELL IS THE DARK THEME, NOT A DARK BACKGROUND. The light theme's inks are tuned for white
+   (light `--snr-weak` is #a20003) and vanish on a near-black face, so `.well` joins the dark
+   palette block above as a selector — and, under high contrast, the dark-high block — and every
+   token inside one resolves to the dark theme's value at the mode's own contrast. In the dark
+   theme that changes nothing but the face.
+   ⚠️ FOR ANY NEW ROOT-LEVEL AXIS: a well DECLARES the dark palette on itself, so a retune that
+   arrives by inheritance from <html> (a night block, a colour-role preset) does not reach
+   inside one. Such an axis must say what it does in a well, as the contrast block does with
+   `[data-contrast='high'] .well`.
+
+   The three tokens have one value in both themes, declared in both per the layout contract.
+   Canvas painters read them off their own element (`getComputedStyle(el).getPropertyValue`, the
+   MiniSpectrum pattern). styles-wells.test.ts is the spec: --well-ink ≥ 7:1 on --well-bg, every
+   status ink ≥ 3:1 on every instrument's face, and a well IS the dark palette in all four
+   modes. */
+:root,
+[data-theme='dark'] {
+  --well-bg: #0b0f17;
+  --well-ink: #e7edf6;
+  --well-grid: #334155;
+}
+[data-theme='light'] {
+  --well-bg: #0b0f17;
+  --well-ink: #e7edf6;
+  --well-grid: #334155;
+}
+.well {
+  background-color: var(--well-bg);
+  color: var(--well-ink);
 }
 
 /* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
@@ -4869,11 +4931,11 @@ select optgroup {
   background: color-mix(in srgb, var(--rx) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--rx) 35%, transparent);
 }
+/* The ON AIR sign (see `--on-air-*`): steady, never pulsing — the operator's pick. */
 .txrx-indicator.tx {
-  color: #fff;
-  background: var(--tx);
-  border: 1px solid var(--tx);
-  animation: pulse 0.9s ease-in-out infinite;
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border: 1px solid var(--on-air-rim);
 }
 @keyframes pulse {
   50% {
@@ -14105,6 +14167,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   min-width: 0;
 }
+/* The VFO readout is a display well (DISPLAY WELLS): dark in both themes. The padding is its
+   bezel, deep enough that the digits' focus ring (2px, offset 2px) stays on the dark face.
+   The bezel's HEIGHT is paint, not layout: the negative block margin hands back exactly what
+   the padding takes, so the header is the height it always was. Without it the readout became
+   the tallest item in its row at 1024×768 and the Phone and Operate headers grew ~7px (measured
+   in a real browser); the face now overhangs into the row gap instead. */
+.ch-readout.well {
+  padding: var(--space-1) var(--space-2);
+  margin-block: calc(-1 * var(--space-1));
+  border-radius: var(--radius-sm);
+}
 /* FT8/Tempo keep their frequency-PRESET dropdown (14.074 etc. — operator wants
    that, unchanged), but restyle it in the header's band slot to the BandPicker's
    bold/mono/bordered look so the band slot reads the same across every cockpit.
@@ -14284,9 +14357,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 600;
   color: var(--text-dim);
   white-space: nowrap;
+  /* The ON AIR pill's box, worn unkeyed too, with a transparent border: keying then only
+     repaints, and nothing beside the pill (Stop TX) moves as the rig keys. The clickable latch
+     (`.cockpit-txarm`, below) re-declares all three. */
+  padding: 1px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
+/* ON AIR (see `--on-air-*`). */
 .cockpit-txstate.on {
-  color: var(--tx);
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border-color: var(--on-air-rim);
 }
 /* Clickable arm variant (RTTY/SSTV cockpits — WSJT-X "Enable Tx"). Looks like the Tune
    button so it reads as an action, not a status pill. Green when armed. */
@@ -14805,12 +14887,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
   letter-spacing: 0.04em;
   white-space: nowrap;
+  /* The ON AIR pill's box in every state, so the key-down only repaints (the header pill's
+     reasoning; the panic controls already sit before this in the strip). */
+  padding: 1px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
 .cockpit-qso.rx .cq-statecap {
   color: var(--state-good, #29c281);
 }
+/* Operate's ON AIR sign (see `--on-air-*`). Its rim is what separates it from the strip's own
+   red wash above. */
 .cockpit-qso.tx .cq-statecap {
-  color: var(--tx);
+  color: var(--on-air-ink);
+  background: var(--on-air-bg);
+  border-color: var(--on-air-rim);
 }
 /* Deliberate wrap point (graft of the two-row discipline): hidden at xl ONLY,
    where the one row always fits; everywhere below it forces the break BETWEEN
@@ -20254,10 +20345,11 @@ button.sat-chip:disabled {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+/* A display well (DISPLAY WELLS): `.well` paints the dark face, and the trace and gridline the
+   component reads off this canvas resolve to the dark theme's inks. */
 .mini-spectrum-canvas {
   width: 100%;
   display: block;
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
   border: 1px solid var(--border);
   border-radius: 4px;
 }

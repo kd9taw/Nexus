@@ -249,3 +249,165 @@ export function contrastUnderGlare(fg: Rgb, bg: Rgb, r: number): number {
   const [a, b] = [luminance(fg) + r, luminance(bg) + r].sort((x, y) => y - x)
   return (a + 0.05) / (b + 0.05)
 }
+
+// ── Element-level resolution (2026-09-26, the ON AIR pill and the display wells) ────────────
+//
+// Everything above resolves the ROOT. A guard about one element — a pill's fill, the tokens
+// inside a `.well` — needs the same cascade computed for an element somewhere below it. The
+// element is described as a CHAIN, outermost ancestor first and the element itself last, and a
+// guard should read that chain off a component it actually rendered (`chainOf`) rather than
+// write one out: a selector is only as good as its reach, and only the rendered DOM says which
+// classes an element really carries.
+
+/** One element as a selector sees it. */
+export interface El {
+  tag: string
+  classes: string[]
+  attrs: Record<string, string>
+}
+
+/** A rendered element as an `El`. `class` and `style` are not attributes a sheet selects on here. */
+export function elOf(node: Element): El {
+  const attrs: Record<string, string> = {}
+  for (const a of [...node.attributes]) if (a.name !== 'class' && a.name !== 'style') attrs[a.name] = a.value
+  return { tag: node.tagName.toLowerCase(), classes: [...node.classList], attrs }
+}
+
+/** `node` and its ancestors below <body>, outermost first — the chain the resolvers take. */
+export function chainOf(node: Element): El[] {
+  const out: El[] = []
+  for (let n: Element | null = node; n && n.tagName !== 'BODY' && n.tagName !== 'HTML'; n = n.parentElement) {
+    out.unshift(elOf(n))
+  }
+  return out
+}
+
+/** One compound selector against one element. `:not(…)` is honoured; any other pseudo-class
+ *  (:hover, :focus-visible) is a state the element is not in, and a pseudo-element is not it. */
+export function compoundMatches(sel: string, el: El): boolean {
+  if (sel.includes('::')) return false
+  let rest = sel
+  for (const m of sel.matchAll(/:not\(([^()]*)\)/g)) {
+    if (compoundMatches(m[1], el)) return false
+    rest = rest.replace(m[0], '')
+  }
+  const attrs = [...rest.matchAll(/\[([\w-]+)(?:=['"]?([^'"\]]*)['"]?)?\]/g)]
+  const bare = rest.replace(/\[[^\]]*\]/g, '')
+  if (/:[\w-]/.test(bare)) return false
+  for (const [, name, value] of attrs) {
+    if (!(name in el.attrs)) return false
+    if (value !== undefined && el.attrs[name] !== value) return false
+  }
+  const classes = bare.match(/\.[\w-]+/g)?.map((c) => c.slice(1)) ?? []
+  const tag = bare.replace(/\.[\w-]+/g, '').trim()
+  if (tag && tag !== '*' && tag !== el.tag) return false
+  if (!tag && classes.length === 0 && attrs.length === 0) return false
+  return classes.every((c) => el.classes.includes(c))
+}
+
+/** A compound that can only be <html> under `mode` — the theme and contrast attributes, `:root`,
+ *  `html`. Unlike `matchesRoot` it accepts a bare `[data-contrast='high']`, which is an ancestor
+ *  the well scope is written against. Any other root attribute (density, viewport) is a state
+ *  this resolver does not know, so it does not match. */
+function rootCompoundMatches(t: string, mode: Mode): boolean {
+  if (!isHigh(mode) && t.includes('[data-contrast=')) return false
+  let rest = t
+    .replace(/:root/g, '')
+    .replace(/^html/, '')
+    .replace(new RegExp(`\\[data-theme='${baseTheme(mode)}'\\]`, 'g'), '')
+  if (isHigh(mode)) rest = rest.replace(/\[data-contrast='high'\]/g, '')
+  return rest !== t && rest.trim() === ''
+}
+
+/** Does `sel` reach the LAST element of `chain` under `mode`? The subject compound must match
+ *  it; each ancestor compound must match, right to left, an element further up the chain (the
+ *  parent exactly, after `>`) or the themed root. A sibling combinator never reaches. */
+export function reachesChain(sel: string, chain: El[], mode: Mode): boolean {
+  if (/[+~]/.test(sel.replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, ''))) return false
+  const tokens = sel.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean)
+  const subject = tokens.pop()
+  if (!subject || !compoundMatches(subject, chain[chain.length - 1])) return false
+  let at = chain.length - 1 // the element the last matched compound landed on
+  let child = false
+  while (tokens.length) {
+    const t = tokens.pop()!
+    if (t === '>') {
+      child = true
+      continue
+    }
+    let found = -1
+    for (let i = at - 1; i >= 0; i--) {
+      if (compoundMatches(t, chain[i])) {
+        found = i
+        break
+      }
+      if (child) break
+    }
+    if (found === -1) {
+      // Past the top of the chain the only element left is the root, which carries the theme.
+      // A root compound must be the LAST one standing: nothing can sit above <html>.
+      return tokens.length === 0 && (!child || at === 0) && rootCompoundMatches(t, mode)
+    }
+    at = found
+    child = false
+  }
+  return true
+}
+
+const important = (v: string) => /!\s*important\s*$/.test(v)
+
+/** The declaration that wins `prop` on the chain's last element under `mode`: `!important`
+ *  first, then specificity, then source order. Pass several props for a shorthand and its
+ *  longhands (`background` + `background-color`): they compete as one cascade, and the returned
+ *  `prop` says which one won. */
+export function winnerAt(
+  rules: Rule[],
+  mode: Mode,
+  chain: El[],
+  ...props: string[]
+): { rule: Rule; prop: string; value: string } | null {
+  let win: { rule: Rule; prop: string; value: string } | null = null
+  for (const rule of rules) {
+    const d = rule.decls.filter((x) => props.includes(x.prop)).pop()
+    if (!d || !reachesChain(rule.selector, chain, mode)) continue
+    const beats =
+      !win ||
+      (important(d.value) !== important(win.value)
+        ? important(d.value)
+        : cmpSpec(rule.spec, win.rule.spec) > 0 || (cmpSpec(rule.spec, win.rule.spec) === 0 && rule.order > win.rule.order))
+    if (beats) win = { rule, prop: d.prop, value: d.value.replace(/!\s*important\s*$/, '').trim() }
+  }
+  return win
+}
+
+/** The custom properties visible on the chain's last element under `mode`, with CSS's own
+ *  semantics: a token the element INHERITS arrives already computed by the element that
+ *  declared it, while a token declared ON an element (its cascade winner there) resolves its
+ *  var()s against that element's own tokens. The difference is the whole reason a scope such as
+ *  `.well` has to re-declare `--state-good` and not only `--snr-strong`: the alias was computed
+ *  on <html>, and a descendant that re-declares only the target inherits the old answer. */
+export function tokensAt(rules: Rule[], mode: Mode, chain: El[]): Map<string, string> {
+  const root = rootTokensFrom(rules, mode)
+  let tokens = new Map([...root].map(([k, v]) => [k, expandWith(root, v)]))
+  for (let i = 0; i < chain.length; i++) {
+    const at = chain.slice(0, i + 1)
+    const declared = new Map<string, { rule: Rule; value: string }>()
+    for (const rule of rules) {
+      if (!rule.decls.some((d) => d.prop.startsWith('--')) || !reachesChain(rule.selector, at, mode)) continue
+      for (const d of rule.decls) {
+        if (!d.prop.startsWith('--')) continue
+        const prev = declared.get(d.prop)
+        if (!prev || cmpSpec(rule.spec, prev.rule.spec) > 0 || (cmpSpec(rule.spec, prev.rule.spec) === 0 && rule.order > prev.rule.order)) {
+          declared.set(d.prop, { rule, value: d.value })
+        }
+      }
+    }
+    if (declared.size === 0) continue
+    const own = new Map(tokens)
+    for (const [k, { value }] of declared) own.set(k, value)
+    const computed = new Map(tokens)
+    for (const k of declared.keys()) computed.set(k, expandWith(own, own.get(k)!))
+    tokens = computed
+  }
+  return tokens
+}

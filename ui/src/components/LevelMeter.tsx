@@ -48,7 +48,9 @@ export function LevelMeter({ value, label = t('meters.rx.label'), variant = 'com
   const dbLabel = `${Math.round(db)} dB`
   return (
     <div
-      className={`level-meter ${variant} ${z}`}
+      // A display well (styles.css DISPLAY WELLS): dark in both themes, zone fills in the dark
+      // theme's inks — one family with the S-meter and the transmit meters.
+      className={`level-meter well ${variant} ${z}`}
       role="meter"
       aria-label={label}
       aria-valuemin={0}
