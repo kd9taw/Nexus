@@ -3460,6 +3460,23 @@ body.resizing-row {
   flex-wrap: wrap;
 }
 
+/* THE BROWSER'S OWN CONTROLS FOLLOW NEXUS'S THEME, NOT THE COMPUTER'S (2026-09-27).
+   index.html declares `color-scheme: dark light`, which lets the browser pick either; with
+   nothing here it picked the COMPUTER's setting. So whatever the sheet does not paint itself —
+   a checkbox's box, a slider's track, a number field's spinner, a button's face or ink —
+   followed Windows' or macOS's light/dark rather than the theme, and a Nexus-coloured word
+   could land on a browser face of almost the same shade. A census of every view and Settings
+   tab in real Chrome found 1.02–3.09:1 lettering that way (and 1.04:1 on the amp strip's
+   Operate, fixed on its own). `data-theme` is always light or dark (System resolves it before
+   the first paint), so an operator whose computer matches the theme sees no change at all.
+   styles-color-scheme.test.ts holds it. */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 /* ---- DARK (shack) — default ----
    `.well` is a SELECTOR of this palette, not a copy of it: a display well (see DISPLAY WELLS,
    below the contrast blocks) is this theme wherever it sits, so a retuned dark ink retunes every

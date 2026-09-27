@@ -232,6 +232,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header in both themes. The word is in the normal text colour, and Operate shows its green on
   the button's border and as a green tint. While a transmission locks them they dim slightly, and
   the word stays readable: it is the amplifier's state, which matters most during an over.
+- **Checkboxes, sliders and other built-in controls follow Nexus's theme.** The parts of the
+  screen your computer draws for Nexus — checkbox boxes, slider tracks, the arrows on number
+  fields and a few plain buttons — followed your computer's light or dark setting rather than
+  the theme you picked. With Nexus in the light theme on a computer set to dark, or the other way
+  round, some of their words could not be read. They now follow Nexus's theme. Nothing changes
+  when your computer's setting matches the theme, which it always does with the System theme.
 - **The SSTV picture viewer no longer misses an arrow key pressed as it opens.** On a busy
   computer, a ← or → pressed the moment the pictures appeared could be ignored, because the keys
   were connected to the pictures a moment after they were drawn. They are now connected as the
