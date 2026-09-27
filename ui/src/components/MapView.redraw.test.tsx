@@ -215,6 +215,25 @@ describe('MapView redraws when a colour role changes (Settings ▸ Appearance �
     expect(redraws(r.container)).toBe(first + 1)
   })
 
+  it('Night coming on redraws the map, so its labels and marks take the night inks', async () => {
+    // Night (Settings ▸ Appearance ▸ Workspace) retunes --text, --bg and the accent the map paints
+    // with, and changes neither the theme nor a colour role. Set the way useNight sets it.
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<MapView {...props(ROSTER)} />)
+    })
+    const first = redraws(r.container)
+    try {
+      await act(async () => {
+        document.documentElement.setAttribute('data-night', '1')
+        window.dispatchEvent(new Event(PALETTE_EVENT))
+      })
+      expect(redraws(r.container)).toBe(first + 1)
+    } finally {
+      document.documentElement.removeAttribute('data-night')
+    }
+  })
+
   it('CONTROL — the same event with no colour change does not redraw', async () => {
     let r!: ReturnType<typeof render>
     await act(async () => {

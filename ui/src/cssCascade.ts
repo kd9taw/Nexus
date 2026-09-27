@@ -20,6 +20,11 @@
 // `light-high accent=violet ok=teal` is <html data-theme='light' data-contrast='high'
 // data-accent='violet' data-ok='teal'>. MODES sweeps each base mode bare and under every
 // PALETTE_SETS entry, so every guard that walks MODES also walks every preset.
+//
+// NIGHT (2026-09-27) is a third axis, `data-night='1'` (useNight.ts): it dims and warms WHATEVER
+// theme is on, so each of the four base modes has a night twin — `dark-night`, `light-night`,
+// `dark-night-high`, `light-night-high` — and the colour-role sets ride on those too. `dayOf`
+// names a night mode's twin with Night off, which is what "night changed this" is measured from.
 
 import { PALETTE_ROLES } from './features/paletteRoles'
 
@@ -34,10 +39,27 @@ export interface Rule {
   spec: readonly [number, number, number]
 }
 
-export type BaseMode = 'dark' | 'light' | 'dark-high' | 'light-high'
+export type BaseMode =
+  | 'dark'
+  | 'light'
+  | 'dark-high'
+  | 'light-high'
+  | 'dark-night'
+  | 'light-night'
+  | 'dark-night-high'
+  | 'light-night-high'
 /** A base mode, optionally followed by colour-role presets: `dark accent=blue readout=amber`. */
 export type Mode = BaseMode | `${BaseMode} ${string}`
-export const BASE_MODES = ['dark', 'light', 'dark-high', 'light-high'] as const
+export const BASE_MODES = [
+  'dark',
+  'light',
+  'dark-high',
+  'light-high',
+  'dark-night',
+  'light-night',
+  'dark-night-high',
+  'light-night-high',
+] as const
 
 /**
  * The colour-role sets MODES adds to every base mode: set k puts EVERY role on its k-th
@@ -64,6 +86,9 @@ export const MODES: readonly Mode[] = [
 export const baseOf = (m: Mode): BaseMode => m.split(' ')[0] as BaseMode
 export const baseTheme = (m: Mode): 'dark' | 'light' => (m.startsWith('dark') ? 'dark' : 'light')
 export const isHigh = (m: Mode): boolean => baseOf(m).endsWith('-high')
+export const isNight = (m: Mode): boolean => baseOf(m).includes('-night')
+/** `m` with Night off: the same theme, contrast and colour-role presets. */
+export const dayOf = (m: Mode): Mode => m.replace('-night', '') as Mode
 
 /** The role presets a mode carries, by role id. */
 export function rolesOf(m: Mode): Record<string, string> {
@@ -90,6 +115,7 @@ function rootAttrsOf(m: Mode): readonly string[] {
   if (!out) {
     const attrs = [`[data-theme='${baseTheme(m)}']`]
     if (isHigh(m)) attrs.push(`[data-contrast='high']`)
+    if (isNight(m)) attrs.push(`[data-night='1']`)
     for (const [role, preset] of Object.entries(rolesOf(m))) attrs.push(`[data-${role}='${preset}']`)
     ROOT_ATTRS.set(m, (out = attrs))
   }
@@ -173,13 +199,15 @@ export function parseRules(sheet: string, order = { n: 0 }): Rule[] {
   return out
 }
 
-/** Does this selector match documentElement under `mode`? `data-theme`, `data-contrast` and the
- *  colour-role attributes are all set on document.documentElement, so `:root`, `html`,
- *  `[data-theme='…']`, `[data-contrast='high']` and `[data-accent='…']` all target the SAME
- *  element. A mode strips the attributes it carries; any other attribute a selector requires
- *  (a contrast the mode is not in, a role preset it does not carry) leaves the selector unmatched. */
+/** Does this selector match documentElement under `mode`? `data-theme`, `data-contrast`,
+ *  `data-night` and the colour-role attributes are all set on document.documentElement, so
+ *  `:root`, `html`, `[data-theme='…']`, `[data-contrast='high']`, `[data-night='1']` and
+ *  `[data-accent='…']` all target the SAME element. A mode strips the attributes it carries; any
+ *  other attribute a selector requires (a contrast or a night the mode is not in, a role preset it
+ *  does not carry) leaves the selector unmatched. */
 export function matchesRoot(sel: string, mode: Mode): boolean {
   if (!isHigh(mode) && sel.includes('[data-contrast=')) return false
+  if (!isNight(mode) && sel.includes('[data-night=')) return false
   const rest = stripRootAttrs(sel.replace(/:root/g, '').replace(/^html/, ''), mode)
   if (rest.trim() !== '') return false
   return sel.includes(':root') || sel.startsWith('html') || sel.includes('[data-theme=')
@@ -430,13 +458,15 @@ export function compoundMatches(sel: string, el: El): boolean {
   return classes.every((c) => el.classes.includes(c))
 }
 
-/** A compound that can only be <html> under `mode` — the theme, contrast and colour-role
- *  attributes, `:root`, `html`. Unlike `matchesRoot` it accepts a bare `[data-contrast='high']`
- *  or `[data-accent='violet']`, which are ancestors the well scope is written against. Any other
+/** A compound that can only be <html> under `mode` — the theme, contrast, night and colour-role
+ *  attributes, `:root`, `html`. Unlike `matchesRoot` it accepts a bare `[data-contrast='high']`,
+ *  `[data-night='1']` or `[data-accent='violet']`, which are ancestors the well scope is written
+ *  against. Any other
  *  root attribute (density, viewport) is a state this resolver does not know, so it does not
  *  match. */
 function rootCompoundMatches(t: string, mode: Mode): boolean {
   if (!isHigh(mode) && t.includes('[data-contrast=')) return false
+  if (!isNight(mode) && t.includes('[data-night=')) return false
   const rest = stripRootAttrs(t.replace(/:root/g, '').replace(/^html/, ''), mode)
   return rest !== t && rest.trim() === ''
 }

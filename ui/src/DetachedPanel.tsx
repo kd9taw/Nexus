@@ -93,6 +93,7 @@ import { readEnabledModes } from './useFeatures'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
+import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
@@ -223,6 +224,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   useTextSize()
   useMotion()
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // Night follows the station into a pop-out: this document's own writer of data-night, going by
+  // the same grid square and the same sun as the main window.
+  useNight(snap?.mygrid ?? '')
   const [settings, setSettings] = useState<Settings | null>(null)
   // Waterfall pop-out ⇄ dock: while this torn-off waterfall window lives, the main cockpit hides
   // its docked copy so the decode lists + roster get the room. On close (or unmount) we clear the

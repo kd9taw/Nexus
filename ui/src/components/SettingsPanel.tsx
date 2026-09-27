@@ -191,6 +191,7 @@ import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
+import type { NightChoice } from '../useNight'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
@@ -271,6 +272,12 @@ interface Props {
    *  (UI scale, just below); this is the half that had none. Same optional shape. */
   highContrast?: boolean
   onHighContrastChange?: (on: boolean) => void
+  /** Night — Off / On / Auto at dusk (`useNight`, owned by App): a darker, warmer screen after
+   *  dark. `nightGridKnown` is whether Auto has a grid square to go by, so the row can say when
+   *  it has none. Same optional shape as the theme. */
+  night?: NightChoice
+  onNightChange?: (c: NightChoice) => void
+  nightGridKnown?: boolean
   /** Settings ▸ Appearance ▸ Colours: the colour-role picks and their setter, owned by App's
    *  `usePaletteRoles`. Optional like the theme, so hosts and tests without the wiring render
    *  the tab unchanged. */
@@ -986,6 +993,9 @@ export function SettingsPanel({
   onFieldModeChange,
   highContrast = false,
   onHighContrastChange,
+  night = 'off',
+  onNightChange,
+  nightGridKnown = false,
   palette,
   onPaletteChange,
 }: Props) {
@@ -3551,6 +3561,53 @@ export function SettingsPanel({
                     {fieldMode
                       ? t('settings.workspace.contrast.hint.field')
                       : t('settings.workspace.contrast.hint')}
+                  </span>
+                </div>
+              )}
+              {/* NIGHT, under High contrast: the other row that changes how the theme above it
+                  paints (darker and warmer, whichever theme is on). A Settings row and NOT a
+                  top-bar chip — the operator's pick; Field stays the only quick toggle. Auto goes
+                  by the sun at the station's grid square, so with none it cannot work, and the
+                  hint says so rather than leaving a switch that silently does nothing. */}
+              {onNightChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.night.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.night.label')}
+                  >
+                    <button
+                      type="button"
+                      className={`theme-chip${night === 'off' ? ' active' : ''}`}
+                      aria-pressed={night === 'off'}
+                      onClick={() => onNightChange('off')}
+                    >
+                      {t('settings.workspace.night.off')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${night === 'on' ? ' active' : ''}`}
+                      aria-pressed={night === 'on'}
+                      onClick={() => onNightChange('on')}
+                    >
+                      {t('settings.workspace.night.on')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${night === 'auto' ? ' active' : ''}`}
+                      aria-pressed={night === 'auto'}
+                      onClick={() => onNightChange('auto')}
+                    >
+                      {t('settings.workspace.night.auto')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    {night !== 'auto'
+                      ? t('settings.workspace.night.hint')
+                      : nightGridKnown
+                        ? t('settings.workspace.night.hint.auto')
+                        : t('settings.workspace.night.hint.noGrid')}
                   </span>
                 </div>
               )}

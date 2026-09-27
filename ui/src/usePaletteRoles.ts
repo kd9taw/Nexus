@@ -17,7 +17,8 @@ import {
 //
 // `usePaletteKey` is for READERS that cache a token's value in a canvas — MapView's memo, the
 // waterfall's marker inks. A CSS custom property changing under them says nothing to React, so
-// they key their caches on this string, which changes exactly when the attributes do.
+// they key their caches on this string, which changes exactly when the attributes do (the role
+// attributes, and Night's, which retunes tokens the same way).
 //
 // PER MACHINE, webview-local, like the theme and field mode: a colour is a preference about this
 // screen and the eyes in front of it, not station data a backup should carry to another shack.
@@ -89,9 +90,12 @@ const subscribe = (onChange: () => void) => {
   window.addEventListener(PALETTE_EVENT, onChange)
   return () => window.removeEventListener(PALETTE_EVENT, onChange)
 }
-const snapshot = () => PALETTE_ROLES.map((r) => document.documentElement.getAttribute(r.attr) ?? '').join('|')
+// Night (useNight.ts) retunes the same kind of token without being a role, and fires the same
+// event, so it is part of the key: a canvas that cached a day colour must repaint at dusk.
+const snapshot = () =>
+  [...PALETTE_ROLES.map((r) => r.attr), 'data-night'].map((a) => document.documentElement.getAttribute(a) ?? '').join('|')
 
-/** A string that changes exactly when a colour-role attribute on <html> does. */
+/** A string that changes exactly when a colour attribute on <html> does: a colour role, or Night. */
 export function usePaletteKey(): string {
   return useSyncExternalStore(subscribe, snapshot, snapshot)
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, cwScopeSideSign, zoomRange, zoomWindow, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
+import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, cwScopeSideSign, zoomRange, zoomWindow, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS, WATERFALL_PALETTES } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -495,6 +495,29 @@ describe('bakeLut', () => {
   it('throws on an unknown colormap (via sampleLut)', () => {
     // @ts-expect-error intentional bad name
     expect(() => bakeLut('nope')).toThrow()
+  })
+})
+
+describe('resolveColormap at night (Settings ▸ Appearance ▸ Workspace ▸ Night)', () => {
+  // Auto rides the look, and Night is part of the look: an Auto waterfall goes Amber CRT after
+  // dark. A palette the operator picked by name is a choice, and Night never overrides it.
+  it('Auto is Amber CRT at night, in either theme — and so is a stale value that falls back like Auto', () => {
+    expect(resolveColormap('auto', 'dark', true)).toBe('amber-crt')
+    expect(resolveColormap('auto', 'light', true)).toBe('amber-crt')
+    expect(resolveColormap('no-such-map', 'dark', true)).toBe('amber-crt')
+  })
+
+  it('never overrides a palette picked by name', () => {
+    for (const p of WATERFALL_PALETTES.filter((x) => x.value !== 'auto')) {
+      expect(resolveColormap(p.value, 'dark', true), p.value).toBe(p.value)
+      expect(resolveColormap(p.value, 'light', true), p.value).toBe(p.value)
+    }
+  })
+
+  it('by day Auto is the theme\'s map, as before', () => {
+    expect(resolveColormap('auto', 'dark', false)).toBe('inferno')
+    expect(resolveColormap('auto', 'light', false)).toBe('cividis')
+    expect(resolveColormap('auto', 'light')).toBe('cividis')
   })
 })
 

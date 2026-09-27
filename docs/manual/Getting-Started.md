@@ -164,7 +164,7 @@ The settings file is tolerant of partial content: any key not present loads its 
 
 ## Themes and UI scale
 
-Settings ▸ Appearance ▸ Workspace has three theme choices: **Dark** (the default), **Light**, and **System**, which follows your computer's own light or dark setting and changes when it does. Theme changes apply instantly with no restart. **High contrast** strengthens text against its background in either theme.
+Settings ▸ Appearance ▸ Workspace has three theme choices: **Dark** (the default), **Light**, and **System**, which follows your computer's own light or dark setting and changes when it does. Theme changes apply instantly with no restart. **High contrast** strengthens text against its background in either theme. **Night** (Off, On, or Auto from dusk to dawn at your grid square) makes the screen darker and warmer after dark; the transmit red and the signal colours stay as they are.
 
 **Text size** (Normal, Large, Larger) makes the words bigger without zooming the rest of the screen. **UI scale** zooms the whole interface: **Auto (fit)** sizes it to the window, and **Manual** picks a fixed size from 65% to 175%.
 

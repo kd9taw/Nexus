@@ -19,9 +19,11 @@
 // is the one exception: it stubs a 200×100 rect FOR ITS OWN TESTS ONLY, because "the dial is at
 // the middle pixel" is not a statement you can make about a canvas one pixel wide.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, act } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 import { TRACE_HOLD_MS } from '../waterfall'
+import { sampleLut, type ColormapName } from '../colormaps'
+import { PALETTE_EVENT } from '../usePaletteRoles'
 import { WaterfallHistory } from '../waterfallHistory'
 
 /** A 512-bin row with one carrier, shaped like what the engine publishes. */
@@ -68,7 +70,9 @@ function recordingCtx() {
     textBaseline: 'alphabetic',
     createLinearGradient: () => {
       bump('createLinearGradient')
-      return { addColorStop: () => {} }
+      const g = { stops: [] as string[], addColorStop: (_at: number, c: string) => void g.stops.push(c) }
+      gradients.push(g)
+      return g
     },
     fillRect: () => bump('fillRect'),
     putImageData: () => bump('putImageData'),
@@ -84,6 +88,8 @@ function recordingCtx() {
   return { ctx, calls, ops }
 }
 
+/** Every trace gradient built, with the colour stops it was handed. */
+const gradients: { stops: string[] }[] = []
 let calls: Record<string, number>
 let ops: Op[]
 let realRaf: typeof requestAnimationFrame
@@ -91,6 +97,7 @@ let realCaf: typeof cancelAnimationFrame
 
 beforeEach(() => {
   rowsServed = 0
+  gradients.length = 0
   rowShape = { loHz: 0, hiHz: 4000, source: 'rx' }
   const rec = recordingCtx()
   calls = rec.calls
@@ -442,5 +449,46 @@ describe('the dial mark on a native RF panadapter', () => {
 
     expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
     expect(ops.filter((o) => o.op === 'fillText'), 'a dial off the row must not be drawn').toHaveLength(0)
+  })
+})
+
+describe('Night (Settings ▸ Appearance ▸ Workspace ▸ Night)', () => {
+  // The CW and Phone scopes share the master palette. On Auto it rides the look, and after dark
+  // that is Amber CRT; a palette picked by name is a choice Night never overrides. Observed on
+  // the trace gradient, whose stops are sampled from whichever colormap the scope resolved.
+  const stopsOf = (name: ColormapName) => {
+    const [c0, c1, c2] = [0.3, 0.7, 1.0].map((t) => sampleLut(name, t))
+    return [`rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`]
+  }
+  const night = () =>
+    act(async () => {
+      document.documentElement.setAttribute('data-night', '1')
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+  const lastStops = () => gradients[gradients.length - 1]?.stops
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-night')
+    localStorage.removeItem('nexus.waterfall.palette')
+  })
+
+  it('an Auto scope repaints in Amber CRT when Night comes on', async () => {
+    localStorage.setItem('nexus.waterfall.palette', 'auto')
+    render(<PhoneScope transmitting={false} theme="dark" traceHoldMs={TRACE_HOLD_MS.fast} />)
+    await runFrames(300)
+    expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
+    expect(lastStops(), 'Auto by day in the dark theme').toEqual(stopsOf('inferno'))
+    await night()
+    await runFrames(300)
+    expect(lastStops()).toEqual(stopsOf('amber-crt'))
+  })
+
+  it('a palette picked by name stays put', async () => {
+    localStorage.setItem('nexus.waterfall.palette', 'turbo')
+    render(<PhoneScope transmitting={false} theme="dark" traceHoldMs={TRACE_HOLD_MS.fast} />)
+    await runFrames(300)
+    expect(lastStops()).toEqual(stopsOf('turbo'))
+    await night()
+    await runFrames(300)
+    expect(lastStops()).toEqual(stopsOf('turbo'))
   })
 })

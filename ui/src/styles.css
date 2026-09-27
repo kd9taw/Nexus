@@ -3682,6 +3682,121 @@ body.resizing-row {
   --border-soft: #3a475c;
 }
 
+/* ---- NIGHT: a darker, warmer screen after dark (data-night='1') -----------------------------
+   Operator picks, 2026-09-26: "Dim + warm, TX red", "Dim the light theme", "Settings + Auto by
+   sun", "At dusk, sun 6° down". Settings ▸ Appearance ▸ Workspace ▸ Night (useNight.ts): Off, On,
+   or Auto from civil dusk to civil dawn at the station's grid square.
+
+   WHAT MOVES: the neutral surfaces and inks go darker and warmer, the accent family and the
+   frequency readout dim and keep their hue, and the display wells dim with the room. WHAT NEVER
+   MOVES: the TX red and the ON AIR fill and ink, and every alert, SNR, status, band and need
+   colour. No rule here may declare one, and styles-night-contrast.test.ts fails if one resolves
+   differently at night. (The ON AIR rim is the theme's full-strength ink by its own definition,
+   so it follows --text; the unconfirmed-dial ink is --text-dim, likewise.) No `filter:
+   brightness()` on .app: it would dim TX with everything else, and it costs frames on a Pi.
+
+   BOTH THEMES, because Night dims whichever one is on. The dark theme dims a long way: its
+   brightest ink keeps about 55% of its light. The LIGHT theme is held up by its own locked inks,
+   which were tuned for a near-white panel: --need-confirm #64748b reads 4.61:1 there and
+   --status-new-band #bb8805 3.07:1, so the panel can give up only ~2.5% of its light before a
+   Needed or status colour falls under its floor. The page is held up the same way: the Needed
+   board letters its mode cells in the page colour on a --need-mode fill (the sheet's cut-out
+   idiom, `color: var(--bg)`), which reads 4.74:1 by day, so the page can give up only ~5% before
+   those letters fall under 4.5:1 (high contrast's page is at that floor already). Light + Night
+   therefore warms the panels and the page (less blue light), dims them as far as those floors
+   allow, darkens the accent and dims every display well; the dark theme is the one for real
+   dark adaptation.
+
+   TWO-ATTRIBUTE SELECTORS, (0,2,0) like the contrast block, so they outrank the (0,1,0) theme
+   palettes wherever they sit. AFTER the contrast block, so at equal specificity Night takes the
+   tokens both declare, and the (0,3,0) night + high blocks put high contrast's strength back in
+   warm inks: at night, High contrast holds every ink at 7:1 (WCAG AAA; no sun, so the daylight
+   glare model does not apply). BEFORE the colour roles, so a preset's day block beats this
+   default accent and readout, and each preset's own (0,3,0) night block sits beside its day
+   ones (features/paletteRoles.ts, the `night` column).
+
+   WELLS DIM TOO, for dark adaptation: a well is where the eye rests (the VFO digits, the
+   meters), and a full-brightness well in a dimmed room would be the brightest thing left on the
+   screen. A well DECLARES the dark palette on itself (DISPLAY WELLS), so each dark block here
+   also names `[data-night='1'] .well`: at night a well is the dark + Night palette in either
+   theme, its signal colours still the dark theme's. Its own ground, ink and grid dim below.
+
+   Plain hexes, never color-mix(): the map, the waterfall's scale and the mini spectrum read these
+   tokens as strings and hand them to a canvas. */
+[data-theme='dark'][data-night='1'],
+[data-night='1'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #42a7c7;
+  --accent-ink: #001620;
+  --focus-ring: #42a7c7;
+  --bubble-mine: #124658;
+  --bubble-mine-text: #bdc9ce;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #42a7c7;
+}
+[data-theme='light'][data-night='1'] {
+  --bg: #eae4da;
+  --panel: #fcf9f1;
+  --bg-elev: #fcf9f1;
+  --bg-elev-2: #f8f4ed;
+  --border: #c5bcb0;
+  --border-soft: #d6cec3;
+  --text: #26211a;
+  --text-dim: #554f48;
+  --text-faint: #5f5851;
+  --accent: #006fae;
+  --accent-ink: #ffffff;
+  --focus-ring: #006fae;
+  --bubble-mine: #006fae;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #efe9df;
+  --bubble-theirs-text: #26211a;
+  --readout: #006fae;
+}
+[data-theme='dark'][data-contrast='high'][data-night='1'],
+[data-contrast='high'][data-night='1'] .well {
+  --text: #ddd3c5;
+  --text-dim: #c6bcaf;
+  --text-faint: #baafa2;
+  --bg: #000000;
+  --panel: #0c0806;
+  --bg-elev: #0c0806;
+  --bg-elev-2: #16120e;
+  --border: #6c6158;
+  --border-soft: #49413a;
+}
+[data-theme='light'][data-contrast='high'][data-night='1'] {
+  --text: #080503;
+  --text-dim: #272019;
+  --text-faint: #312a23;
+  --bg: #eae3db;
+  --panel: #fcf9f1;
+  --bg-elev: #fcf9f1;
+  --bg-elev-2: #f8f4ed;
+  --border: #8e8479;
+  --border-soft: #b2a99f;
+}
+/* The wells' own ground, ink and grid at night: one value in both themes, as by day. */
+[data-theme='dark'][data-night='1'] {
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #372f28;
+}
+[data-theme='light'][data-night='1'] {
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #372f28;
+}
+
 /* ---- ON AIR: the sign that says the transmitter is keyed -----------------------------------
    Operator pick, 2026-09-26: "Solid red, white text" — a steady, studio-style sign, the loudest
    thing on the screen in every theme, with no motion. The FORM carries it (a filled pill with a
@@ -3763,8 +3878,11 @@ body.resizing-row {
    The values are features/paletteRoles.ts's; styles-palette-roles.test.ts resolves this cascade
    for every role × preset × mode, at <html> and inside a well, and fails on any token that
    paints something else, reads below its contrast floor, or comes within ΔE 0.15 of the TX red
-   or the critical orange. A new night or look block that retunes one of these tokens must say
-   how it composes with a preset: at equal specificity the later block wins. */
+   or the critical orange. A new look block that retunes one of these tokens must say how it
+   composes with a preset: at equal specificity the later block wins. Night does it so: its
+   default accent and readout sit in NIGHT, before these blocks, so a preset's day block beats
+   them, and each Accent and Readout preset carries its own (0,3,0) night block below its day
+   ones. The OK, Amber and Cyan roles are signal colours, and Night leaves them alone. */
 :root,
 [data-theme='dark'],
 .well {
@@ -3805,6 +3923,38 @@ body.resizing-row {
   --bubble-mine: #6e44bc;
   --bubble-mine-text: #ffffff;
 }
+/* …and at night (NIGHT): each preset dimmer, its hue kept. (0,3,0), so it beats both the
+   preset's day block above and the default night accent. */
+[data-theme='dark'][data-night='1'][data-accent='blue'],
+[data-night='1'][data-accent='blue'] .well {
+  --accent: #5a86ce;
+  --accent-ink: #04122e;
+  --focus-ring: #5a86ce;
+  --bubble-mine: #243d65;
+  --bubble-mine-text: #c0c6d0;
+}
+[data-theme='light'][data-night='1'][data-accent='blue'] {
+  --accent: #0e49a5;
+  --accent-ink: #ffffff;
+  --focus-ring: #0e49a5;
+  --bubble-mine: #0e49a5;
+  --bubble-mine-text: #ffffff;
+}
+[data-theme='dark'][data-night='1'][data-accent='violet'],
+[data-night='1'][data-accent='violet'] .well {
+  --accent: #8c75ca;
+  --accent-ink: #170c2b;
+  --focus-ring: #8c75ca;
+  --bubble-mine: #403461;
+  --bubble-mine-text: #c6c4cf;
+}
+[data-theme='light'][data-night='1'][data-accent='violet'] {
+  --accent: #5b2da5;
+  --accent-ink: #ffffff;
+  --focus-ring: #5b2da5;
+  --bubble-mine: #5b2da5;
+  --bubble-mine-text: #ffffff;
+}
 
 /* Readout */
 [data-theme='dark'][data-readout='amber'],
@@ -3827,6 +3977,32 @@ body.resizing-row {
 }
 [data-theme='light'][data-readout='violet'] {
   --readout: #6e44bc;
+}
+/* …and at night (NIGHT), dimmer in the dark theme and in every well. Amber loses less than the
+   others: dimmed as far, it would come within ΔE 0.15 of the critical orange. In the light theme
+   the digits are dark ink on a light panel, so darkening them dims nothing; amber and green keep
+   their day ink there, because darker they fall within a colour-blind eye's reach of the TX red
+   (ΔE < 0.06 to a deutan). */
+[data-theme='dark'][data-night='1'][data-readout='amber'],
+[data-night='1'][data-readout='amber'] .well {
+  --readout: #d9ad48;
+}
+[data-theme='light'][data-night='1'][data-readout='amber'] {
+  --readout: #936823;
+}
+[data-theme='dark'][data-night='1'][data-readout='green'],
+[data-night='1'][data-readout='green'] .well {
+  --readout: #62c77b;
+}
+[data-theme='light'][data-night='1'][data-readout='green'] {
+  --readout: #11813c;
+}
+[data-theme='dark'][data-night='1'][data-readout='violet'],
+[data-night='1'][data-readout='violet'] .well {
+  --readout: #9e80d0;
+}
+[data-theme='light'][data-night='1'][data-readout='violet'] {
+  --readout: #5e31a8;
 }
 
 /* OK / green */

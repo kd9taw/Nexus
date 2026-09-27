@@ -206,6 +206,59 @@ describe('the axis strip is part of the dark display', () => {
   })
 })
 
+describe('Night (Settings ▸ Appearance ▸ Workspace ▸ Night)', () => {
+  // Night retunes the well's ground and ink (styles.css NIGHT) without touching the theme or a
+  // colour role, so a cache keyed on those alone would keep painting the day scale. The attribute
+  // is set the way useNight sets it, and the event is the one it fires.
+  const night = (on: boolean) =>
+    act(async () => {
+      if (on) document.documentElement.setAttribute('data-night', '1')
+      else document.documentElement.removeAttribute('data-night')
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+  const scaleInks = (f: Call[]) => [...new Set(f.filter((c) => c.op === 'fillText' && /^\d+$/.test(String(c.args[0]))).map((c) => c.fillStyle))]
+  const legend = (root: ParentNode) => (root.querySelector('.wf-legend-bar') as HTMLElement).style.background
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-night')
+    localStorage.removeItem('nexus.waterfall.palette')
+  })
+
+  it('reads the well ink again when Night comes on', async () => {
+    render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    await frames(120)
+    expect(scaleInks(lastFrame())).toEqual([WELL_INK])
+    setTokens({ '--well-ink': '#9a8b7c' })
+    await night(true)
+    await frames(120)
+    expect(scaleInks(lastFrame()), 'the day scale ink survived Night').toEqual(['#9a8b7c'])
+  })
+
+  it('an Auto waterfall goes Amber CRT at night, and back at dawn', async () => {
+    // The reference is Amber CRT itself, picked by name, by day: what the legend must become.
+    localStorage.setItem('nexus.waterfall.palette', 'amber-crt')
+    const ref = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    const AMBER = legend(ref.container)
+    ref.unmount()
+    expect(AMBER, 'CONTROL: the legend paints a gradient').toMatch(/^linear-gradient/)
+    localStorage.setItem('nexus.waterfall.palette', 'auto')
+    const { container } = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    const day = legend(container)
+    expect(day, 'CONTROL: Auto by day is not already Amber CRT').not.toBe(AMBER)
+    await night(true)
+    expect(legend(container)).toBe(AMBER)
+    await night(false)
+    expect(legend(container)).toBe(day)
+  })
+
+  it('never overrides a palette picked by name', async () => {
+    localStorage.setItem('nexus.waterfall.palette', 'turbo')
+    const { container } = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    const turbo = legend(container)
+    await night(true)
+    expect(legend(container)).toBe(turbo)
+  })
+})
+
 describe('no TX/RX marker literal survives in the canvas code', () => {
   // The literals the markers used to be. A copy of one anywhere in the UI source means a marker
   // (or a named cursor standing in for one) has gone back to ignoring the theme. Styles are not
