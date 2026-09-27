@@ -36,6 +36,7 @@ import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { SplitterSeam } from './SplitterSeam'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
+import type { ModeClass } from '../neededFilters'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -267,6 +268,10 @@ const PHONE_SPOT_MODES: readonly string[] = ['Phone']
 /** The Needed pane's filter record — per surface, like the board's own `neededFilters`, and
  *  never that one: a chip here and a chip on the Needed view must not move each other. */
 const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'
+/** …and what it opens on while that record is empty: the Phone needs (operator, 2026-09-27:
+ *  "Phone needs only — matches the Spots pane (phone spots, this band). Its chips still widen
+ *  it."). `Phone` is the board's own mode class for a voice need. */
+const PHONE_NEEDED_MODES: readonly ModeClass[] = ['Phone']
 
 /** The one ⊞ entry whose tick has consequences beyond the pane going away, so the entry
  *  carries them BEFORE the tick rather than apologising after. Hiding the keyer unmounts
@@ -1669,7 +1674,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       >
         <div className={feedWrap}>
           {(control || needsRead?.phase === 'ready') && (
-            <NeededPanel {...neededBoard} pane={{ filterKey: PHONE_NEEDED_FILTERS }} />
+            <NeededPanel {...neededBoard} pane={{ filterKey: PHONE_NEEDED_FILTERS, modes: PHONE_NEEDED_MODES }} />
           )}
           {!control && <CollectionStatus name="needs" />}
         </div>

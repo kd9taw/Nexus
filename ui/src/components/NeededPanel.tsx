@@ -121,10 +121,12 @@ type SortKey = 'priority' | 'call' | 'band' | 'entity' | 'mode' | 'zone' | 'freq
 // PANE of another screen passes its own key (NeededPane), so it and the view never share one.
 const FILTER_KEY = 'neededFilters'
 
-function loadFilters(key: string): NeededFilters {
+/** `initial` is what a record that has never been written opens on: the board's defaults, or a
+ *  pane's own opening modes (NeededPane `modes`). A record that exists is the operator's. */
+function loadFilters(key: string, initial: NeededFilters = DEFAULT_FILTERS): NeededFilters {
   try {
     const raw = surfaceGet(key)
-    if (!raw) return { ...DEFAULT_FILTERS }
+    if (!raw) return { ...initial }
     const parsed = JSON.parse(raw) as Partial<NeededFilters> & { needType?: unknown }
     // Need-type is now a multi-select array (empty = All). Accept the new `needTypes`
     // array, else migrate the old single `needType` string. Sanitize each entry against
@@ -154,8 +156,14 @@ function loadFilters(key: string): NeededFilters {
       modes,
     }
   } catch {
-    return { ...DEFAULT_FILTERS }
+    return { ...initial }
   }
+}
+
+/** The board's default filters with only `modes` switched on — a pane's first-run default. */
+function openingFilters(modes: readonly ModeClass[]): NeededFilters {
+  const on = Object.fromEntries(MODE_CLASSES.map((c) => [c, modes.includes(c)])) as ModeSet
+  return { ...DEFAULT_FILTERS, modes: on }
 }
 
 function saveFilters(key: string, f: NeededFilters): void {
@@ -268,9 +276,10 @@ export interface NeededPanelProps {
 
 /**
  * The board as a PANE of another screen (#345: the Phone cockpit's Needed pane), its THIRD host
- * after the Needed view and the pop-out. It keeps the board's own default filters — nobody chose
- * a pane-specific one — in a record of its own (`filterKey`, per surface like the view's), so a
- * chip in the pane and a chip on the board never move each other.
+ * after the Needed view and the pop-out. Its filters live in a record of its own (`filterKey`, per
+ * surface like the view's), so a chip in the pane and a chip on the board never move each other,
+ * and that record opens on the modes the host names (`modes`; the Phone pane's are Phone needs),
+ * else on the board's own defaults.
  *
  * As a pane it also leaves out what belongs to the BOARD's window: its heading (the frame's head
  * names the pane), "open at launch" (which launches the board's window, not this pane), and the
@@ -280,6 +289,11 @@ export interface NeededPanelProps {
  */
 export interface NeededPane {
   readonly filterKey: string
+  /** The mode classes it OPENS on while its record has never been written — the Phone
+   *  cockpit's pane opens on Phone needs (operator, 2026-09-27: "Phone needs only — matches the
+   *  Spots pane"). The chips widen it, and from the first chip on the record is the operator's.
+   *  Omitted ⇒ the board's own default, every mode. */
+  readonly modes?: readonly ModeClass[]
 }
 
 /** Compact phone-source descriptor for the board header: [css class, short text, tooltip].
@@ -340,7 +354,9 @@ export function NeededPanel({
   })
   // Whose filter record: the board's own, or the hosting pane's (NeededPane).
   const filterKey = pane?.filterKey ?? FILTER_KEY
-  const [filters, setFilters] = useState<NeededFilters>(() => loadFilters(filterKey))
+  const [filters, setFilters] = useState<NeededFilters>(() =>
+    loadFilters(filterKey, pane?.modes ? openingFilters(pane.modes) : DEFAULT_FILTERS),
+  )
   const [filtersOpen, setFiltersOpen] = useState(false)
   // Persisted launch behavior for the detached window (read by App's auto-pop).
   const [autopop, setAutopop] = useState<boolean>(() => {

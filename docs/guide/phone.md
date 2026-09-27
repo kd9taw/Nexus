@@ -63,13 +63,15 @@ the box, or a consequence to unticking it — the entry says so in a line under 
   empty space below the strips: on a wide window Spots goes under Band Activity and
   the keyer and Needed under Receiver and Transmitter; on a narrower one both go at
   the bottom of the control column, with a divider between them that you drag to
-  share the height. Spots opens on the voice spots on the
-  band your radio is on and moves with the radio when you change band. Its Filter
-  chips widen it to other modes and bands, and unticking your own band's chip stops
-  it following. Needed keeps the board's usual filters. Each pane keeps its own
-  filters, apart from the Spots and Needed screens'. A click on a row works the
-  station exactly as it does on those screens, and **Reset layout** unticks both
-  again. Closing either ends nothing.
+  share the height. On a smaller window, make room for them by hiding the keyer or
+  Receiver and Transmitter in ⊞ Panels, or by dragging the scope smaller. Spots
+  opens on the voice spots on the band your radio is on and moves with the radio
+  when you change band. Its Filter chips widen it to other modes and bands, and
+  unticking your own band's chip stops it following. Needed opens on the phone
+  needs, and its chips widen it the same way. Each pane keeps its own filters,
+  apart from the Spots and Needed screens'. A click on a row works the station
+  exactly as it does on those screens, and **Reset layout** unticks both again.
+  Closing either ends nothing.
 
 The line explains the screen; the tick is still yours. Every box in the menu can
 be ticked and unticked whenever you like, and what you choose applies the moment
