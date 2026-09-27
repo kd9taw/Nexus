@@ -4,6 +4,7 @@ import { StationDataContext, useStationCapability } from './stationAccess'
 import { publishBandConditions } from './bandConditions'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import { isOnAir } from './types'
 import { rigModeTransition, type RigMode } from './rigModeForView'
 import {
   callStation as apiCallStation,
@@ -2591,9 +2592,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     document.title = t('shell.windowTitle', { section: label })
     announce(label)
   }, [effectiveView])
-  // TX state → assertive announce + opt-in earcon. Snap-safe (null pre-connect).
+  // TX state → assertive announce + opt-in earcon. Snap-safe (null pre-connect). The arbiter the
+  // ON AIR sign shows, never the FT slot flag alone: that kept a voice over, CW and a tune silent
+  // for an operator who hears the TX state rather than sees it (operator, 2026-09-27).
   const prevTxRef = useRef<boolean | null>(null)
-  const txNow = snap?.radio.transmitting ?? false
+  const txNow = snap ? isOnAir(snap.radio) : false
   useEffect(() => {
     if (!snap) return
     if (prevTxRef.current !== null && prevTxRef.current !== txNow) {
