@@ -27189,6 +27189,8 @@ pub fn run() {
             .is_ok();
         if stored {
             settings.cloudlog_key.clear();
+            // Launch, before the Engine and any settings writer exist: a bare save, exempt from
+            // the writer's Engine-lock precondition (`tempo_app::settings::writer`).
             if let Err(e) = settings.save(&settings_path()) {
                 eprintln!("tempo: couldn't re-save settings after Cloudlog key migration: {e}");
             }
@@ -27229,6 +27231,8 @@ pub fn run() {
             }
         }
         if changed {
+            // Launch, before the Engine and any settings writer exist: a bare save, exempt from
+            // the writer's Engine-lock precondition (`tempo_app::settings::writer`).
             if let Err(e) = settings.save(&settings_path()) {
                 eprintln!("tempo: couldn't re-save settings after the tty.*→cu.* port heal: {e}");
             }

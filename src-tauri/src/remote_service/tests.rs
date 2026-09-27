@@ -1212,7 +1212,7 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
                 work.permission().begin_write(Instant::now()).unwrap();
                 sample(&relay_engine, &radio, 7_074_000);
                 let power = work.power_limit();
-                assert!(work.commit_tuning_readback(&mut relay_engine.lock().unwrap(), power, None));
+                assert!(work.commit_tuning_readback(&mut tempo_app::engine::engine_lock(&relay_engine), power, None));
                 if version == 5 {
                     // Unprompted: the browser sent nothing after the control.
                     let event = text(&mut socket, reply).await.expect("the station pushed the outcome");

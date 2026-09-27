@@ -42,6 +42,17 @@ fn on_disk(path: &Path) -> u64 {
     Settings::load(path).qrz_last_sync_unix
 }
 
+/// Run `f` holding the Engine lock's count, as every command holds it while it hands a snapshot
+/// over: the precondition `queue` and `save_now` assert. These writer tests hand over marked
+/// copies rather than an Engine's settings, so they take the count alone
+/// ([`tempo_core::logbook::io_fence::EngineHeld`], the token every `EngineGuard` carries); the race
+/// tests take a real `EngineGuard`. Never around a flush or a ticket's wait, which assert the
+/// opposite.
+fn locked<T>(f: impl FnOnce() -> T) -> T {
+    let _held = tempo_core::logbook::io_fence::EngineHeld::acquired();
+    f()
+}
+
 /// What a recording write saw: the snapshot each write carried, in the order the writes started,
 /// and the most writes that were ever on the file at once.
 #[derive(Default)]
@@ -151,7 +162,7 @@ fn a_writer_never_queued_on_starts_no_thread() {
         w.flush(Duration::ZERO),
         "nothing handed over, nothing to wait for"
     );
-    w.save_now(&marked(3)).expect("a synchronous save");
+    locked(|| w.save_now(&marked(3))).expect("a synchronous save");
     assert_eq!(on_disk(&d.settings()), 3);
     assert!(
         w.thread.get().is_none(),
@@ -163,24 +174,49 @@ fn a_writer_never_queued_on_starts_no_thread() {
     );
 }
 
-/// Eight threads make 25 changes each, every one under the lock that orders them — as every
-/// command changes a setting under the Engine lock — and hand the snapshot over before they let
+/// ⛔ THE ORDERING PRECONDITION, CHECKED. A snapshot is numbered as it is handed over, so it must
+/// be handed over holding the Engine lock it was taken under: one handed over after that lock was
+/// let go can be numbered after a newer one and win, and the newer value is gone from the disk.
+/// A debug build refuses a `queue` made without the lock…
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "settings writer: queue without the Engine lock")]
+fn a_queue_without_the_engine_lock_is_refused() {
+    let d = Dir::new("unlocked-queue");
+    let w = SettingsWriter::new(d.settings(), Arc::new(Settings::save));
+    w.queue(marked(1), |_| {});
+}
+
+/// …and a `save_now` made without it, which numbers the same way and supersedes the waiting
+/// snapshot on the strength of its number.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "settings writer: save_now without the Engine lock")]
+fn a_save_now_without_the_engine_lock_is_refused() {
+    let d = Dir::new("unlocked-save");
+    let w = SettingsWriter::new(d.settings(), Arc::new(Settings::save));
+    let _ = w.save_now(&marked(1));
+}
+
+/// Eight threads make 25 changes each to a real Engine, every one under its lock (an
+/// `EngineGuard`, as every command takes it), and hand the Engine's settings over before they let
 /// go of it. Once `settle` returns, the file must hold the newest change.
 fn race(hand_over: &(dyn Fn(Settings) + Sync), settle: &dyn Fn(), path: &Path) {
-    let engine = Mutex::new(Settings::default());
+    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
     std::thread::scope(|scope| {
         for _ in 0..8 {
             scope.spawn(|| {
                 for _ in 0..25 {
-                    let mut s = lock(&engine);
-                    s.qrz_last_sync_unix += 1;
-                    hand_over(s.clone());
+                    let mut eng = engine_lock(&engine);
+                    let next = eng.settings().qrz_last_sync_unix + 1;
+                    eng.set_qrz_sync_cursor(next);
+                    hand_over(eng.settings().clone());
                 }
             });
         }
     });
     settle();
-    let newest = lock(&engine).qrz_last_sync_unix;
+    let newest = engine_lock(&engine).settings().qrz_last_sync_unix;
     assert_eq!(newest, 200, "premise: every change was made");
     let file = on_disk(path);
     assert_eq!(
@@ -239,9 +275,9 @@ fn a_slow_writer_never_lands_an_older_snapshot_after_a_newer_one() {
     let w = SettingsWriter::new(d.settings(), write);
     for n in 1..=20 {
         if n == 10 {
-            w.save_now(&marked(n)).expect("the synchronous save");
+            locked(|| w.save_now(&marked(n))).expect("the synchronous save");
         } else {
-            w.queue(marked(n), |_| {});
+            locked(|| w.queue(marked(n), |_| {}));
         }
     }
     assert!(w.flush(Duration::from_secs(60)), "flushed");
@@ -263,18 +299,19 @@ fn synchronous_saves_and_queued_snapshots_land_in_order() {
     let d = Dir::new("mixed");
     let (write, rec) = recording(|n| Duration::from_micros((n % 5) * 400));
     let w = SettingsWriter::new(d.settings(), write);
-    let engine = Mutex::new(0u64);
+    let engine = Mutex::new(Engine::new("KD9TAW", "EN52", 0));
     std::thread::scope(|scope| {
         for t in 0..4u64 {
             let (w, engine) = (&w, &engine);
             scope.spawn(move || {
                 for i in 0..50u64 {
-                    let mut n = lock(engine);
-                    *n += 1;
+                    let mut eng = engine_lock(engine);
+                    let next = eng.settings().qrz_last_sync_unix + 1;
+                    eng.set_qrz_sync_cursor(next);
                     if (i + t) % 3 == 0 {
-                        w.save_now(&marked(*n)).expect("the synchronous save");
+                        w.save_now(eng.settings()).expect("the synchronous save");
                     } else {
-                        w.queue(marked(*n), |_| {});
+                        w.queue(eng.settings().clone(), |_| {});
                     }
                 }
             });
@@ -298,7 +335,7 @@ fn flush_waits_for_the_last_change() {
     let (write, _) = recording(|_| Duration::from_millis(30));
     let w = SettingsWriter::new(d.settings(), write);
     for n in 1..=10 {
-        w.queue(marked(n), |_| {});
+        locked(|| w.queue(marked(n), |_| {}));
     }
     assert!(w.flush(Duration::from_secs(60)), "flushed");
     assert_eq!(
@@ -313,7 +350,7 @@ fn flush_waits_for_the_last_change() {
     let (write, gate, at_gate, _) = gated(1, 0);
     let w = SettingsWriter::new(d.settings(), write);
     let _release = OpenOnDrop(Arc::clone(&gate));
-    w.queue(marked(1), |_| {});
+    locked(|| w.queue(marked(1), |_| {}));
     at_gate
         .recv_timeout(Duration::from_secs(10))
         .expect("the write reached the gate");
@@ -331,13 +368,12 @@ fn a_ticket_answers_with_the_write_that_carried_its_change() {
     let d = Dir::new("ticket");
     let (write, _, _, _) = gated(u64::MAX, 1);
     let w = SettingsWriter::new(d.settings(), write);
-    let e = w
-        .queue(marked(1), |_| {})
+    let e = locked(|| w.queue(marked(1), |_| {}))
         .wait()
         .expect_err("the write that carried change 1 failed");
     assert_eq!(e.kind(), io::ErrorKind::StorageFull);
     assert_eq!(e.to_string(), "the disk is full");
-    w.queue(marked(2), |_| {})
+    locked(|| w.queue(marked(2), |_| {}))
         .wait()
         .expect("change 2 is on the disk");
     assert_eq!(on_disk(&d.settings()), 2);
@@ -357,13 +393,15 @@ fn waiting_changes_are_written_once_and_a_failure_reaches_each_caller() {
         let told = Arc::clone(&told);
         move |e: &io::Error| lock(&told).push(format!("{who}: {e}"))
     };
-    w.queue(marked(1), tell("one"));
+    locked(|| w.queue(marked(1), tell("one")));
     at_gate
         .recv_timeout(Duration::from_secs(10))
         .expect("the first write reached the gate");
-    w.queue(marked(2), tell("two"));
-    w.queue(marked(3), tell("three"));
-    w.queue(marked(4), tell("four"));
+    locked(|| {
+        w.queue(marked(2), tell("two"));
+        w.queue(marked(3), tell("three"));
+        w.queue(marked(4), tell("four"));
+    });
     gate.open();
     assert!(w.flush(Duration::from_secs(60)), "flushed");
     assert_eq!(
@@ -386,7 +424,7 @@ fn waiting_changes_are_written_once_and_a_failure_reaches_each_caller() {
         "a failed write publishes nothing"
     );
 
-    w.queue(marked(5), tell("five"));
+    locked(|| w.queue(marked(5), tell("five")));
     assert!(w.flush(Duration::from_secs(60)), "flushed");
     assert_eq!(lock(&told).len(), 3, "a write that succeeds tells no one");
     assert_eq!(on_disk(&d.settings()), 5);
@@ -406,9 +444,11 @@ fn a_flush_returns_once_a_failed_write_has_been_reported() {
     let (telling, being_told) = mpsc::channel();
     {
         let report = Arc::clone(&report);
-        w.queue(marked(1), move |_| {
-            let _ = telling.send(());
-            report.pass();
+        locked(|| {
+            w.queue(marked(1), move |_| {
+                let _ = telling.send(());
+                report.pass();
+            })
         });
     }
     being_told
@@ -445,7 +485,7 @@ fn rewrite_reads_back_what_was_handed_over_before_it() {
     let d = Dir::new("rewrite");
     let (write, rec) = recording(|_| Duration::from_millis(40));
     let w = SettingsWriter::new(d.settings(), write);
-    w.queue(marked(5), |_| {});
+    locked(|| w.queue(marked(5), |_| {}));
     let mut seen = None;
     w.rewrite(|s| {
         seen = Some(s.qrz_last_sync_unix);

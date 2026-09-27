@@ -54,7 +54,7 @@ fn remote_phone_mode_admission_requires_v3_and_readback_without_persistence_or_r
         // Admission/receipt recovery uses an explicit worker readback here;
         // the actual CAT transaction is covered by the audio owner tests.
         assert!(work.commit_tuning_readback(
-            &mut f.engine.lock().unwrap(),
+            &mut tempo_app::engine::engine_lock(&f.engine),
             power,
             (target == "FM").then_some(("simplex", 0, 0.0))
         ));

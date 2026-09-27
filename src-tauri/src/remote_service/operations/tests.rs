@@ -576,7 +576,7 @@ fn mode_admission_is_pending_until_readback_and_duplicate_or_revoked_work_cannot
         } else {
             work.permission().begin_write(Instant::now()).unwrap();
             sample(work.target().0, work.target().1);
-            assert!(work.commit(&mut f.engine.lock().unwrap()));
+            assert!(work.commit(&mut tempo_app::engine::engine_lock(&f.engine)));
             let result = run(&Request::Result {
                 request_id: id(),
                 operation_id: command.id().into(),
@@ -755,7 +755,7 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
     assert_eq!(work.target(), (14_080_000, "PKTUSB"));
     work.permission().begin_write(Instant::now()).unwrap();
     sample(14_080_000);
-    assert!(work.commit(&mut f.engine.lock().unwrap()));
+    assert!(work.commit(&mut tempo_app::engine::engine_lock(&f.engine)));
     let result = Request::Result {
         request_id: id(),
         operation_id: command.id().into(),
@@ -1485,7 +1485,7 @@ fn band_selection_requires_v3_and_a_later_native_owner_receipt() {
         let work = f.engine.lock().unwrap().take_remote_radio().unwrap();
         assert_eq!(work.target(), (target_hz, target_mode.as_str()));
         sample(target_hz, &target_mode);
-        assert!(work.commit(&mut f.engine.lock().unwrap()));
+        assert!(work.commit(&mut tempo_app::engine::engine_lock(&f.engine)));
         let applied = run(3, &command).unwrap();
         assert_eq!(applied["outcome"], "applied");
         assert_eq!(applied["evidence"], "radioReadback");

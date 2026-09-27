@@ -61,7 +61,11 @@ fn memory_recall_needs_v3_its_hint_and_readback_and_never_arms_transmit() {
     work.permission().begin_write(Instant::now()).unwrap();
     sample(&f, &connection, 7_188_000, "USB");
     let power = work.power_limit();
-    assert!(work.commit_tuning_readback(&mut f.engine.lock().unwrap(), power, None));
+    assert!(work.commit_tuning_readback(
+        &mut tempo_app::engine::engine_lock(&f.engine),
+        power,
+        None
+    ));
     let applied = run(&f, 3, &command).unwrap();
     assert_eq!(applied["outcome"], "applied");
     assert_eq!(applied["evidence"], "radioReadback");

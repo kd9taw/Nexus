@@ -74,11 +74,17 @@ mod tests {
     use crate::engine::remote_transmit::tests::unexpired_deadline;
     use crate::remote_control::transmit::TransmitAuthority;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use tempo_core::logbook::io_fence::EngineHeld;
 
     struct Fixture {
         engine: Engine,
         dir: std::path::PathBuf,
         authority: TransmitAuthority,
+        /// The Engine lock's count, held while the fixture lives. Every Remote verb here stands for one
+        /// the dispatcher makes holding the Engine lock (an `EngineGuard`), and the settings writer checks
+        /// exactly that before it numbers a save. This Engine is owned outright, so there is no lock to
+        /// take: the count is what the guard would carry.
+        _lock: EngineHeld,
     }
     impl Fixture {
         fn new(tier: Tier) -> Self {
@@ -99,6 +105,7 @@ mod tests {
                 engine,
                 dir,
                 authority: TransmitAuthority::default(),
+                _lock: EngineHeld::acquired(),
             }
         }
         fn permit(&self) -> TransmitPermit {

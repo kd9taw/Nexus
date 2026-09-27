@@ -4,6 +4,7 @@ use crate::remote_monitor::provenance::Connection;
 use crate::settings::Settings;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tempo_core::logbook::io_fence::EngineHeld;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -37,6 +38,11 @@ struct Station {
     connection: Connection,
     authority: Revocation,
     path: PathBuf,
+    /// The Engine lock's count, held while the fixture lives. Every Remote verb here stands for one
+    /// the dispatcher makes holding the Engine lock (an `EngineGuard`), and the settings writer checks
+    /// exactly that before it numbers a save. This Engine is owned outright, so there is no lock to
+    /// take: the count is what the guard would carry.
+    _lock: EngineHeld,
 }
 impl Station {
     fn new(mode: OperatingMode) -> Self {
@@ -64,6 +70,7 @@ impl Station {
             connection,
             authority: Revocation::default(),
             path,
+            _lock: EngineHeld::acquired(),
         };
         let mode = station.engine.rig_mode_effective();
         station.sample(14_074_000, &mode);

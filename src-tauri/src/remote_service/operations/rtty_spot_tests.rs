@@ -72,7 +72,7 @@ fn rtty_spot_needs_v3_its_hint_and_readback_and_never_arms_transmit() {
     let target = work.target().1.to_owned();
     sample(&f, &connection, 14_086_500, &target);
     let power = work.power_limit();
-    assert!(work.commit_readback(&mut f.engine.lock().unwrap(), power));
+    assert!(work.commit_readback(&mut tempo_app::engine::engine_lock(&f.engine), power));
     let applied = run(&f, 3, &command).unwrap();
     assert_eq!(applied["outcome"], "applied");
     assert_eq!(applied["evidence"], "radioReadback");

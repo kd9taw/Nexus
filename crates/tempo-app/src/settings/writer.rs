@@ -218,12 +218,19 @@ impl SettingsWriter {
     ///
     /// ⛔ **Call it holding the Engine lock, with a snapshot taken under that same hold.** That is
     /// what numbers snapshots in the order the Engine made its changes; a snapshot handed over
-    /// after the lock was let go can be numbered after a newer one, and then it wins.
+    /// after the lock was let go can be numbered after a newer one, and then it wins. A debug
+    /// build checks the lock is held (the `EngineGuard` count the logbook fence keeps).
     pub fn queue(
         &self,
         snapshot: Settings,
         on_failure: impl FnOnce(&io::Error) + Send + 'static,
     ) -> Ticket {
+        debug_assert!(
+            tempo_core::logbook::io_fence::engine_guards_held() > 0,
+            "settings writer: queue without the Engine lock. A snapshot is numbered as it is \
+             handed over; one handed over after the lock was let go can be numbered after a \
+             newer one and win. Take the snapshot and queue it in one hold of the lock."
+        );
         let started = self
             .thread
             .get_or_init(|| {
@@ -270,8 +277,14 @@ impl SettingsWriter {
     ///
     /// ⛔ **The snapshot must be at least as new as everything handed over before it** (taken under
     /// the Engine lock, from the Engine's settings), because a successful save supersedes the
-    /// snapshot waiting: it is never written after this one.
+    /// snapshot waiting: it is never written after this one. A debug build checks the lock is held.
     pub fn save_now(&self, snapshot: &Settings) -> io::Result<()> {
+        debug_assert!(
+            tempo_core::logbook::io_fence::engine_guards_held() > 0,
+            "settings writer: save_now without the Engine lock. It supersedes the waiting \
+             snapshot on the strength of its number, so it must be taken and saved in one hold \
+             of the lock, after everything handed over before it."
+        );
         let file = lock(&self.shared.file);
         let seq = {
             let mut st = lock(&self.shared.state);
@@ -301,6 +314,11 @@ impl SettingsWriter {
     /// Read the file, let `edit` change it, and write it back when `edit` says it did: the base
     /// profile's mirrors. Whatever was handed over and not yet written is written first, so the
     /// read sees this process's last change, and nothing else writes the file in between.
+    ///
+    /// **Exempt from the Engine-lock precondition**, deliberately: it numbers nothing and
+    /// supersedes nothing, so no hand-over can be reordered by it. The base window's "use one
+    /// radio" (`use_single_radio`) calls it with no Engine lock; a per-radio window's mirrors call
+    /// it under one.
     pub fn rewrite(&self, edit: impl FnOnce(&mut Settings) -> bool) -> io::Result<()> {
         let file = lock(&self.shared.file);
         let written = self.shared.write_pending();

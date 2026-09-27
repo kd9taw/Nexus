@@ -58,7 +58,7 @@ fn aprs_tune_needs_v3_its_hint_and_fm_simplex_readback_and_never_arms_transmit()
     let power = work.power_limit();
     // The CAT transaction itself is covered by the audio owner tests; this is its readback.
     assert!(work.commit_tuning_readback(
-        &mut f.engine.lock().unwrap(),
+        &mut tempo_app::engine::engine_lock(&f.engine),
         power,
         Some(("simplex", 0, 0.0))
     ));
