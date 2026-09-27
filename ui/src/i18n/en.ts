@@ -6956,12 +6956,23 @@ export const EN = {
     'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). The waterfall stays sharp. Raise the max for big monitors.',
   'settings.workspace.scale.manual.hint':
     'Fixed scale. Switch to Auto to fit the interface to the window automatically.',
+  // #215 text size: the ids are the persisted tokens (useTextSize.ts); the words are prose.
+  'settings.workspace.textSize.label': 'Text size',
+  'settings.workspace.textSize.normal': 'Normal',
+  'settings.workspace.textSize.large': 'Large',
+  'settings.workspace.textSize.larger': 'Larger',
+  'settings.workspace.textSize.hint':
+    'Makes all the text bigger, including the decode and log lists. UI scale above zooms the whole screen instead.',
   'settings.workspace.density.label': 'Density',
   'settings.workspace.density.aria': 'Information density',
-  'settings.workspace.density.standard': 'Comfortable',
+  // `guided` is the roomy density (it had no Settings chip before Touch arrived); `standard`
+  // was labelled Comfortable while it was one of two choices.
+  'settings.workspace.density.guided': 'Comfortable',
+  'settings.workspace.density.standard': 'Standard',
   'settings.workspace.density.dense': 'Compact',
+  'settings.workspace.density.touch': 'Touch',
   'settings.workspace.density.hint':
-    'How tightly rows and controls pack. Compact fits more on screen.',
+    'How tightly rows and controls pack. Compact fits more on screen. Touch makes buttons big enough for a finger.',
   'settings.workspace.logbookGlobe.label': 'Logbook globe',
   'settings.workspace.logbookGlobe.aria': 'Show the 3-D globe above the Logbook',
   'settings.workspace.logbookGlobe.hint':

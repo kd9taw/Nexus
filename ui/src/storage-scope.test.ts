@@ -104,6 +104,9 @@ const SHARED = [
   'nexus.decodes.countryExclude.continents',
   'nexus.navOrder', // left-rail section order — a person/station preference, same in every window
   'nexus-density',
+  // Text size (#215): a fact about this screen and the eyes in front of it, like density. A
+  // pop-out showing a different size from the window that spawned it would read as broken.
+  'nexus-text-size',
   // The Logbook's "More columns" wide table (#239): a standing display preference, the same in
   // every window, like density.
   'nexus.logbook.moreColumns',

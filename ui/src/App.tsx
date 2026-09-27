@@ -68,6 +68,7 @@ import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
+import { useTextSize } from './useTextSize'
 import { useLocalClock } from './useLocalClock'
 import { useMotion } from './useMotion'
 import { useBandEdgeTones } from './useBandEdgeTones'
@@ -286,8 +287,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
-  // Density (row heights / padding). Comfortable ↔ Compact toggle lives in Settings.
+  // Density (row heights / padding) and text size (#215) — both chosen in Settings ▸ Workspace.
   const [density, setDensity] = useDensity()
+  const [textSize, setTextSize] = useTextSize()
   // #253: optional local-time clock beside UTC in the top bar (per machine, off by default).
   const [localClock, setLocalClock] = useLocalClock()
   useMotion()
@@ -3000,6 +3002,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onScaleCapChange={setScaleCap}
             density={density}
             onDensityChange={setDensity}
+            textSize={textSize}
+            onTextSizeChange={setTextSize}
             localClock={localClock}
             onLocalClockChange={setLocalClock}
             onResetLayout={resetWidths}

@@ -1902,8 +1902,16 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   big monitor. A cap this window can't reach is disabled and its tooltip says
   why ("a larger window or monitor unlocks it"). **Manual** picks a fixed
   percentage instead. The waterfall stays sharp either way.
-- **Density** — Comfortable or Compact. "How tightly rows and controls pack.
-  Compact fits more on screen."
+- **Text size** — Normal, Large or Larger. Makes every word on the screen bigger
+  (Large by 12%, Larger by 25%), the decode lists, the Call Roster and the Logbook
+  included, and leaves the rest of the layout at its size. UI scale above zooms
+  the whole screen instead; the two combine. The numbers drawn on the waterfall
+  and scope follow UI scale only. Remembered per computer.
+- **Density** — Comfortable, Standard, Compact or Touch. How tightly rows and
+  controls pack: Compact fits more on screen, Comfortable spaces the rows a little
+  further apart than Standard. **Touch** is Comfortable with bigger places to tap
+  for a touchscreen: the larger buttons grow to 48 pixels and the small chips get
+  a 36-pixel box.
 - **Logbook globe** — shows the 3-D globe above the Logbook table (on by
   default). Turn it off and the table starts at the top. Computers whose
   graphics cannot draw the globe never show it, whatever this says.

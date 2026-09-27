@@ -10,8 +10,13 @@
           var d = document.documentElement
           var t = localStorage.getItem('tempo-theme')
           if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t)
+          // Density and text size (#215): the first-paint copies of useDensity and useTextSize,
+          // held to them by index-preseed.test.ts. Touch is Comfortable plus data-touch.
           var den = localStorage.getItem('nexus-density')
-          if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
+          d.setAttribute('data-density', den === 'guided' || den === 'dense' ? den : den === 'touch' ? 'guided' : 'standard')
+          if (den === 'touch') d.setAttribute('data-touch', '1')
+          var ts = localStorage.getItem('nexus-text-size')
+          d.setAttribute('data-text-size', ts === 'large' || ts === 'larger' ? ts : 'normal')
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
           // The contrast axis, and the asymmetry IS the feature (#215 — useFieldMode.ts is
           // the runtime copy of this derivation). EITHER field mode or the standing

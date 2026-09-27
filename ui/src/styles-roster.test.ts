@@ -32,9 +32,13 @@ describe('styles.css call-roster overlap containment', () => {
 
   it('.or-row gives the first track a defined minimum width (header/data alignment)', () => {
     const b = block('.or-row')
-    // First (Call) track must start with a px minimum — a bare `<px>` track OR `minmax(<px>, …)`.
-    // Combined with the containment above, that keeps header and data rows aligned and prevents
-    // the first column from collapsing.
-    expect(b).toMatch(/grid-template-columns:\s*(?:\d+px|minmax\(\s*\d+px)/)
+    // First (Call) track must start with a px minimum — a bare `<px>` track OR `minmax(<px>, …)`,
+    // either of which may be written scaled by the root's text size (`calc(<px> * var(--text-scale))`,
+    // #215): that is the same number in every row, so it is still content-independent. Combined
+    // with the containment above, that keeps header and data rows aligned and prevents the first
+    // column from collapsing.
+    expect(b).toMatch(
+      /grid-template-columns:\s*(?:minmax\(\s*)?(?:\d+px|calc\(\s*\d+px\s*\*\s*var\(--text-scale\)\s*\))/,
+    )
   })
 })

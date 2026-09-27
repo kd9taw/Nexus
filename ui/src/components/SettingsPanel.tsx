@@ -187,6 +187,7 @@ import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '.
 import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
+import type { TextSize } from '../useTextSize'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
@@ -237,6 +238,10 @@ interface Props {
   onScaleCapChange: (c: Scale) => void
   density: Density
   onDensityChange: (d: Density) => void
+  /** #215: text size, Normal / Large / Larger (`useTextSize`). Optional so hosts/tests that do
+   *  not wire it render Workspace unchanged, without the row. */
+  textSize?: TextSize
+  onTextSizeChange?: (s: TextSize) => void
   /** #253: the optional local-time clock beside UTC (UI-only, per machine — `useLocalClock`).
    *  Optional so hosts/tests that do not wire it render Workspace unchanged, without the field. */
   localClock?: boolean
@@ -959,6 +964,8 @@ export function SettingsPanel({
   onScaleCapChange,
   density,
   onDensityChange,
+  textSize,
+  onTextSizeChange,
   localClock = false,
   onLocalClockChange,
   onResetLayout,
@@ -3675,6 +3682,48 @@ export function SettingsPanel({
                 )}
               </div>
 
+              {/* #215: TEXT SIZE, directly under UI scale because it is the other size control —
+                  scale magnifies everything (and so fits less), this grows the words and leaves
+                  the layout at its size. Normal / Large / Larger, +0 / +12 / +25 %. */}
+              {onTextSizeChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.textSize.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.textSize.label')}
+                  >
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${textSize === 'normal' ? ' active' : ''}`}
+                      aria-pressed={textSize === 'normal'}
+                      onClick={() => onTextSizeChange('normal')}
+                    >
+                      {t('settings.workspace.textSize.normal')}
+                    </button>
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${textSize === 'large' ? ' active' : ''}`}
+                      aria-pressed={textSize === 'large'}
+                      onClick={() => onTextSizeChange('large')}
+                    >
+                      {t('settings.workspace.textSize.large')}
+                    </button>
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${textSize === 'larger' ? ' active' : ''}`}
+                      aria-pressed={textSize === 'larger'}
+                      onClick={() => onTextSizeChange('larger')}
+                    >
+                      {t('settings.workspace.textSize.larger')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.workspace.textSize.hint')}</span>
+                </div>
+              )}
+
+              {/* Four densities, each chip pressed for its OWN id: `guided` is Comfortable (it had
+                  no writer before this row), Touch is Comfortable plus finger-sized targets. */}
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.density.label')}</span>
                 <div
@@ -3684,8 +3733,16 @@ export function SettingsPanel({
                 >
                   <button disabled={remote}
                     type="button"
-                    className={`theme-chip${density !== 'dense' ? ' active' : ''}`}
-                    aria-pressed={density !== 'dense'}
+                    className={`theme-chip${density === 'guided' ? ' active' : ''}`}
+                    aria-pressed={density === 'guided'}
+                    onClick={() => onDensityChange('guided')}
+                  >
+                    {t('settings.workspace.density.guided')}
+                  </button>
+                  <button disabled={remote}
+                    type="button"
+                    className={`theme-chip${density === 'standard' ? ' active' : ''}`}
+                    aria-pressed={density === 'standard'}
                     onClick={() => onDensityChange('standard')}
                   >
                     {t('settings.workspace.density.standard')}
@@ -3697,6 +3754,14 @@ export function SettingsPanel({
                     onClick={() => onDensityChange('dense')}
                   >
                     {t('settings.workspace.density.dense')}
+                  </button>
+                  <button disabled={remote}
+                    type="button"
+                    className={`theme-chip${density === 'touch' ? ' active' : ''}`}
+                    aria-pressed={density === 'touch'}
+                    onClick={() => onDensityChange('touch')}
+                  >
+                    {t('settings.workspace.density.touch')}
                   </button>
                 </div>
                 <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
