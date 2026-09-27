@@ -54,7 +54,6 @@ import {
   setAiCw,
   selectPeer,
   previewCw,
-  pointRotatorAtCall,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -76,6 +75,7 @@ import { controlFailureMessage } from '../remote-web/control-failure'
 import { latestOnly } from '../remote-web/latest-only'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
+import { rotorPointAt } from './rotorPointAt'
 import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
 import { subRowShown } from '../features/rigControls'
 import { useWheelTune } from '../useWheelTune'
@@ -1620,19 +1620,7 @@ export function CwCockpit({
         {control || rotatorControl ? <RotorStrip
           onOpenSettings={onOpenSettings}
           targetCall={guide.workedCall}
-          onPointAt={(call) =>
-            pointRotatorAtCall(call)
-              .then((bearing: number | null | undefined) =>
-                // A browser gets no bearing back: the station resolves it.
-                pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('cw.rotator.pointed', { call, bearing: Math.round(bearing) }), 'info'),
-              )
-              .catch((e) =>
-                pushToast(
-                  control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : controlFailureMessage(e),
-                  'error',
-                ),
-              )
-          }
+          onPointAt={rotorPointAt(control)}
         /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
             DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.

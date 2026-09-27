@@ -238,6 +238,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what reached WSPRnet: set to 1500 Hz on a 10.1387 MHz dial, it was spotted at 10.140202
   instead of 10.140200. The tones are now centred on the offset, the way WSJT-X sends WSPR. The
   message, the timing and the schedule are unchanged.
+- **LP on the rotator strip turns the antenna the long way.** In 1.15.0 the **LP** button on the
+  Phone, CW and FT screens turned the antenna the short way, exactly like **→ CALL**, and its
+  message gave the heading without saying which path. LP now asks for the long-path heading, and
+  its message says "long path". → CALL is unchanged. (#338)
 
 ### Corrections to 1.15.0
 

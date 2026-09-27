@@ -478,6 +478,8 @@ const MIGRATED = [
   // both held as named constants.
   'components/SubReceiverStrip.tsx',
   'components/RotorStrip.tsx',
+  // The strip's point-at handler as the cockpits wire it: migrated from birth, every word a key.
+  'components/rotorPointAt.ts',
   'components/prop/RotorPane.tsx',
   'components/prop/AmpPane.tsx',
   // The amplifier's cockpit strip — fully catalogued from the start. Its only bare literals are
