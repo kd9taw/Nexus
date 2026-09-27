@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 //
-// #215 — Settings ▸ Appearance ▸ Workspace carries High contrast, on its own row.
+// #215 — Settings ▸ Appearance ▸ Theme carries High contrast, on its own row (it moved there from
+// Workspace with the theme cards, in the redesign's Display sections of 2026-09-26).
 //
 // The reporter asked for larger type AND a higher-contrast theme. Field mode answered both at
 // once and was the ONLY route to the contrast tokens, so "more contrast at the size I have"
 // was not a thing the app could be told: in auto scale mode, turning field mode on moves the
-// zoom as well (`fieldFitScale`). The size half needed nothing — UI scale, two rows down, is
+// zoom as well (`fieldFitScale`). The size half needed nothing — UI scale, in Workspace, is
 // an eleven-step ladder plus a cap, and a boolean beside it would be a worse second control
 // for an axis that already had a better one. So this is one row, contrast only.
 //
@@ -132,10 +133,10 @@ describe('#215 Settings ▸ Workspace ▸ High contrast', () => {
     expect(changed).toHaveBeenCalledWith(false)
   })
 
-  it('sits in Workspace, under Theme and above Field mode and UI scale', async () => {
-    // Under Theme because it modifies the palette that row picks; above Field mode because
-    // field mode is the bundle of this plus the size change, and above UI scale because that
-    // is the size axis this row deliberately does not touch.
+  it('sits in Theme, under the theme cards and above Field mode, away from UI scale', async () => {
+    // Under the theme cards because it modifies the palette they pick; above Field mode because
+    // field mode is the bundle of this plus the size change. UI scale — the size axis this row
+    // deliberately does not touch — is Workspace's, not this section's.
     renderPanel({
       highContrast: false,
       onHighContrastChange: () => {},
@@ -149,12 +150,12 @@ describe('#215 Settings ▸ Workspace ▸ High contrast', () => {
     expect(section, 'High contrast is not inside a Settings section at all').not.toBeNull()
     expect(
       section?.querySelector('legend')?.textContent,
-      'High contrast is not in the Workspace section',
-    ).toBe(EN['settings.workspace.legend'])
+      'High contrast is not in the Theme section',
+    ).toBe(EN['settings.theme.legend'])
     const labels = Array.from(section!.querySelectorAll('.settings-label')).map((n) => n.textContent)
     const at = (label: string) => {
       const i = labels.indexOf(label)
-      expect(i, `"${label}" is not a row of the Workspace section`).toBeGreaterThanOrEqual(0)
+      expect(i, `"${label}" is not a row of the Theme section`).toBeGreaterThanOrEqual(0)
       return i
     }
     expect(at(LABEL), 'High contrast is above Theme').toBeGreaterThan(
@@ -163,9 +164,7 @@ describe('#215 Settings ▸ Workspace ▸ High contrast', () => {
     expect(at(LABEL), 'High contrast is below Field mode').toBeLessThan(
       at(EN['settings.workspace.field.label']),
     )
-    expect(at(LABEL), 'High contrast is below UI scale').toBeLessThan(
-      at(EN['settings.workspace.scale.label']),
-    )
+    expect(labels, 'UI scale is in the Theme section').not.toContain(EN['settings.workspace.scale.label'])
   })
 
   it('is not offered by a host that does not wire it', async () => {

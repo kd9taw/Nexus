@@ -297,7 +297,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const [textSize, setTextSize] = useTextSize()
   // #253: optional local-time clock beside UTC in the top bar (per machine, off by default).
   const [localClock, setLocalClock] = useLocalClock()
-  useMotion()
+  // Motion (Settings ▸ Appearance ▸ Performance): App is its one writer, like the theme.
+  const [motion, setMotion] = useMotion()
   // Modular features (toggles + profiles). Drives nav, view-gating, and the
   // gamification/achievements layer.
   const features = useFeatures()
@@ -316,7 +317,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
-  // Night (Settings ▸ Appearance ▸ Workspace): App is its one writer. Auto goes by the sun at the
+  // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
   const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
   // Routes a typed or clicked RX offset; kept through a brief control lapse so a commit made then
@@ -3028,6 +3029,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             nightGridKnown={nightGridKnown}
             palette={palette}
             onPaletteChange={setPalettePreset}
+            motion={motion}
+            onMotionChange={setMotion}
           />
         </main>
       )

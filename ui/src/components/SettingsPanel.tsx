@@ -172,6 +172,8 @@ import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
 import { ThemeSwitcher } from './ThemeSwitcher'
+import { SettingsLooks } from './SettingsLooks'
+import { PalettePicker } from './PalettePicker'
 import { SettingsColours } from './SettingsColours'
 import type { PaletteRoleId, PaletteSelection } from '../features/paletteRoles'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
@@ -192,6 +194,9 @@ import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
 import type { NightChoice } from '../useNight'
+import type { Motion } from '../useMotion'
+import { FT_PALETTE_SCOPE, getWaterfallPalette, setWaterfallPalette } from '../waterfallPalette'
+import { appearanceIn, withAppearance, type Appearance } from '../features/appearanceBackup'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
@@ -283,6 +288,10 @@ interface Props {
    *  the tab unchanged. */
   palette?: PaletteSelection
   onPaletteChange?: (role: PaletteRoleId, presetId: string) => void
+  /** Settings ▸ Appearance ▸ Performance ▸ Motion — Follow the computer or Reduce (`useMotion`,
+   *  owned by App). Optional like the theme: without it the Performance section is not offered. */
+  motion?: Motion
+  onMotionChange?: (m: Motion) => void
 }
 
 /** Display order for the Features section's category groups. */
@@ -998,6 +1007,8 @@ export function SettingsPanel({
   nightGridKnown = false,
   palette,
   onPaletteChange,
+  motion = 'system',
+  onMotionChange,
 }: Props) {
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
@@ -1028,8 +1039,13 @@ export function SettingsPanel({
       return
     }
     await withErrorToast(async () => {
-      const snap = await importSettingsBundle(await f.text())
+      const text = await f.text()
+      const snap = await importSettingsBundle(text)
       if (!snap) return
+      // The look the file carries (features/appearanceBackup.ts), put back only now that the
+      // station has accepted the rest. A backup from before it carries none: nothing changes.
+      const look = appearanceIn(text)
+      if (look) restoreAppearance(look)
       // Re-read and re-seed the form. Without this the panel goes on rendering the PRE-restore
       // values, so a restore looks like it did nothing — and the stale form is still live, so the
       // next Save writes the old values straight back over the restored ones.
@@ -1079,6 +1095,39 @@ export function SettingsPanel({
   }
   // D#278: browser-local display preference, not a Settings field — no save round-trip.
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
+  // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
+  // carries it: what this host wires, both waterfall palettes and the Logbook globe — and, by
+  // design, not Field mode or UI scale. A restore puts it back through the very setters the rows
+  // use, so it lands exactly as a tap on each row would, storage and screen together.
+  const appearanceNow = (): Partial<Appearance> => {
+    const a: Partial<Appearance> = {
+      density,
+      waterfallPalette: getWaterfallPalette(),
+      ftWaterfallPalette: getWaterfallPalette(FT_PALETTE_SCOPE),
+      logbookGlobe,
+    }
+    if (theme) a.theme = theme
+    if (onHighContrastChange) a.highContrast = highContrast
+    if (onNightChange) a.night = night
+    if (textSize) a.textSize = textSize
+    if (onMotionChange) a.motion = motion
+    if (palette) a.colours = { ...palette }
+    return a
+  }
+  const restoreAppearance = (a: Partial<Appearance>) => {
+    if (a.theme) onThemeChange?.(a.theme)
+    if (a.highContrast !== undefined) onHighContrastChange?.(a.highContrast)
+    if (a.night) onNightChange?.(a.night)
+    if (a.textSize) onTextSizeChange?.(a.textSize)
+    if (a.density) onDensityChange(a.density)
+    if (a.motion) onMotionChange?.(a.motion)
+    if (a.colours && onPaletteChange) {
+      for (const [role, preset] of Object.entries(a.colours)) onPaletteChange(role as PaletteRoleId, preset)
+    }
+    if (a.waterfallPalette) setWaterfallPalette(a.waterfallPalette)
+    if (a.ftWaterfallPalette) setWaterfallPalette(a.ftWaterfallPalette, FT_PALETTE_SCOPE)
+    if (a.logbookGlobe !== undefined) setLogbookGlobe(a.logbookGlobe)
+  }
   const [form, setForm] = useState<Settings | null>(null)
   // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
   // launch, so the readout keeps saying what THIS run is using until then.
@@ -3424,7 +3473,8 @@ export function SettingsPanel({
                     className="settings-linkbtn"
                     onClick={() =>
                       withErrorToast(async () => {
-                        const text = await exportSettingsBundle()
+                        // The station's bundle, with the look on screen added beside it.
+                        const text = withAppearance(await exportSettingsBundle(), appearanceNow())
                         const stamp = new Date().toISOString().slice(0, 10)
                         // The FILE NAME is invariant (batch 8): a translated word in it would
                         // reduce a non-Latin locale's backup to `nexus-settings-.json`.
@@ -3455,6 +3505,7 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
                 </span>
+                <span className="settings-hint">{t('settings.transmit.backup.appearance')}</span>
               </div>
 
                 {/* Start over. Deliberately the LAST thing in this tab: an operator who arrives
@@ -3481,6 +3532,23 @@ export function SettingsPanel({
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-workspace">
             <legend>{t('settings.workspace.legend')}</legend>
+            {/* THE ONE-TAP LOOKS, first on the tab and the full width of it: each look is a set of
+                the rows below and in Theme (features/looks.ts), named by reading them back. Offered
+                only when the host wires all five settings a look sets. Read-only on the Remote,
+                because a look writes Text size and Density, which are read-only there. */}
+            {onFieldModeChange && onNightChange && onHighContrastChange && onTextSizeChange && textSize && (
+              <SettingsLooks
+                now={{ fieldMode, night, highContrast, textSize, density }}
+                set={{
+                  setFieldMode: onFieldModeChange,
+                  setNight: onNightChange,
+                  setHighContrast: onHighContrastChange,
+                  setTextSize: onTextSizeChange,
+                  setDensity: onDensityChange,
+                }}
+                disabled={remote}
+              />
+            )}
             <div className="settings-grid">
               {/* LANGUAGE. Rendered only when a second catalog is actually installed — a picker
                   offering one language is a control that cannot do anything, and this app's
@@ -3504,145 +3572,6 @@ export function SettingsPanel({
                     ))}
                   </select>
                   <span className="settings-hint">{t('settings.workspace.language.hint')}</span>
-                </div>
-              )}
-              {/* Theme lives HERE now, not the top bar (operator, 2026-08-10): Light/Dark
-                  is a set-once preference, and the bar keeps only the Field quick toggle. */}
-              {theme && onThemeChange && (
-                <div className="settings-field">
-                  <span className="settings-label">{t('settings.workspace.theme.label')}</span>
-                  <ThemeSwitcher theme={theme} onChange={onThemeChange} />
-                  <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
-                </div>
-              )}
-              {/* #215: HIGH CONTRAST ON ITS OWN, directly under Theme because it modifies the
-                  palette the row above picks. The reporter asked for larger type and stronger
-                  contrast; the size half already had a finer control than a switch could be
-                  (UI scale, two rows down — an eleven-step ladder plus a cap), so no "large
-                  text" boolean is offered here and this row is contrast only. What it did NOT
-                  have was any way to reach these tokens without field mode, which in auto
-                  scale mode moves the zoom too.
-
-                  ⭐ IT DOES NOT FIGHT FIELD MODE. `data-contrast` is derived from both
-                  (useFieldMode.ts) — either lights it, neither clears the other's stored
-                  value, so leaving the field restores exactly the contrast the operator had
-                  chosen. While field mode is on it is ALSO asking for these tokens, and this
-                  row keeps showing the operator's own standing choice rather than the
-                  effective state: the note below says so, so a row reading "Off" on a
-                  high-contrast screen is explained instead of looking broken. Deliberately
-                  not disabled — the standing preference is still theirs to set, and it is
-                  what the screen falls back to the moment field mode goes off. */}
-              {onHighContrastChange && (
-                <div className="settings-field">
-                  <span className="settings-label">{t('settings.workspace.contrast.label')}</span>
-                  <div
-                    className="theme-switcher"
-                    role="group"
-                    aria-label={t('settings.workspace.contrast.label')}
-                  >
-                    <button
-                      type="button"
-                      className={`theme-chip${!highContrast ? ' active' : ''}`}
-                      aria-pressed={!highContrast}
-                      onClick={() => onHighContrastChange(false)}
-                    >
-                      {t('settings.workspace.contrast.off')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-chip${highContrast ? ' active' : ''}`}
-                      aria-pressed={highContrast}
-                      onClick={() => onHighContrastChange(true)}
-                    >
-                      {t('settings.workspace.contrast.on')}
-                    </button>
-                  </div>
-                  <span className="settings-hint">
-                    {fieldMode
-                      ? t('settings.workspace.contrast.hint.field')
-                      : t('settings.workspace.contrast.hint')}
-                  </span>
-                </div>
-              )}
-              {/* NIGHT, under High contrast: the other row that changes how the theme above it
-                  paints (darker and warmer, whichever theme is on). A Settings row and NOT a
-                  top-bar chip — the operator's pick; Field stays the only quick toggle. Auto goes
-                  by the sun at the station's grid square, so with none it cannot work, and the
-                  hint says so rather than leaving a switch that silently does nothing. */}
-              {onNightChange && (
-                <div className="settings-field">
-                  <span className="settings-label">{t('settings.workspace.night.label')}</span>
-                  <div
-                    className="theme-switcher"
-                    role="group"
-                    aria-label={t('settings.workspace.night.label')}
-                  >
-                    <button
-                      type="button"
-                      className={`theme-chip${night === 'off' ? ' active' : ''}`}
-                      aria-pressed={night === 'off'}
-                      onClick={() => onNightChange('off')}
-                    >
-                      {t('settings.workspace.night.off')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-chip${night === 'on' ? ' active' : ''}`}
-                      aria-pressed={night === 'on'}
-                      onClick={() => onNightChange('on')}
-                    >
-                      {t('settings.workspace.night.on')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-chip${night === 'auto' ? ' active' : ''}`}
-                      aria-pressed={night === 'auto'}
-                      onClick={() => onNightChange('auto')}
-                    >
-                      {t('settings.workspace.night.auto')}
-                    </button>
-                  </div>
-                  <span className="settings-hint">
-                    {night !== 'auto'
-                      ? t('settings.workspace.night.hint')
-                      : nightGridKnown
-                        ? t('settings.workspace.night.hint.auto')
-                        : t('settings.workspace.night.hint.noGrid')}
-                  </span>
-                </div>
-              )}
-              {/* #215: Field mode, BETWEEN theme and scale, because it is both — maximum
-                  contrast and larger type in one switch. It has been in the app since
-                  2026-08-09 and reachable only as a chip named "Field" in the top bar, so an
-                  operator who came to Settings for a high-contrast or large-text setting found
-                  the scale half and not the contrast half. The chip stays: this is the same
-                  boolean (`useContrastPrefs().fieldMode`), not a second one. */}
-              {onFieldModeChange && (
-                <div className="settings-field">
-                  <span className="settings-label">{t('settings.workspace.field.label')}</span>
-                  <div
-                    className="theme-switcher"
-                    role="group"
-                    aria-label={t('settings.workspace.field.label')}
-                  >
-                    <button
-                      type="button"
-                      className={`theme-chip${!fieldMode ? ' active' : ''}`}
-                      aria-pressed={!fieldMode}
-                      onClick={() => onFieldModeChange(false)}
-                    >
-                      {t('settings.workspace.field.off')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-chip${fieldMode ? ' active' : ''}`}
-                      aria-pressed={fieldMode}
-                      onClick={() => onFieldModeChange(true)}
-                    >
-                      {t('settings.workspace.field.on')}
-                    </button>
-                  </div>
-                  <span className="settings-hint">{t('settings.workspace.field.hint')}</span>
                 </div>
               )}
               <div className="settings-field">
@@ -3834,19 +3763,6 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
-
-              <label className="settings-field">
-                <span className="settings-label">{t('settings.workspace.logbookGlobe.label')}</span>
-                <span className="settings-input-row">
-                  <input disabled={remote}
-                    type="checkbox"
-                    checked={logbookGlobe}
-                    onChange={(e) => setLogbookGlobe(e.target.checked)}
-                    aria-label={t('settings.workspace.logbookGlobe.aria')}
-                  />
-                  <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
-                </span>
-              </label>
               {/* #253: an optional second clock in the top bar showing this computer's local
                   time. Per machine and off by default; UTC stays the station clock. */}
               {onLocalClockChange && (
@@ -3889,8 +3805,159 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- Theme: the theme cards, and the rows that change how the theme paints ----
+              High contrast, Night and Field mode moved here from Workspace with their rows
+              unchanged (the look-and-feel redesign's Display sections), in the order they had. */}
+          {tab === 'appearance' && ((theme && onThemeChange) || onHighContrastChange || onNightChange || onFieldModeChange) && (
+          <fieldset className="settings-section" id="settings-theme">
+            <legend>{t('settings.theme.legend')}</legend>
+            {/* Theme lives in Settings, not the top bar (operator, 2026-08-10): Light/Dark/System
+                is a set-once preference, and the bar keeps only the Field quick toggle. Three
+                cards, each with a one-line personality (ThemeSwitcher.tsx), across the section's
+                width rather than squeezed into one grid column. */}
+            {theme && onThemeChange && (
+              <div className="settings-field settings-theme-field">
+                <span className="settings-label">{t('settings.workspace.theme.label')}</span>
+                <ThemeSwitcher theme={theme} onChange={onThemeChange} />
+                <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
+              </div>
+            )}
+            <div className="settings-grid">
+              {/* #215: HIGH CONTRAST ON ITS OWN, directly under Theme because it modifies the
+                  palette the row above picks. The reporter asked for larger type and stronger
+                  contrast; the size half has finer controls than a switch could be (UI scale
+                  and Text size, in Workspace above), so no "large text" boolean is offered here
+                  and this row is contrast only. What it did NOT have was any way to reach these
+                  tokens without field mode, which in auto scale mode moves the zoom too.
+
+                  ⭐ IT DOES NOT FIGHT FIELD MODE. `data-contrast` is derived from both
+                  (useFieldMode.ts) — either lights it, neither clears the other's stored
+                  value, so leaving the field restores exactly the contrast the operator had
+                  chosen. While field mode is on it is ALSO asking for these tokens, and this
+                  row keeps showing the operator's own standing choice rather than the
+                  effective state: the note below says so, so a row reading "Off" on a
+                  high-contrast screen is explained instead of looking broken. Deliberately
+                  not disabled — the standing preference is still theirs to set, and it is
+                  what the screen falls back to the moment field mode goes off. */}
+              {onHighContrastChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.contrast.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.contrast.label')}
+                  >
+                    <button
+                      type="button"
+                      className={`theme-chip${!highContrast ? ' active' : ''}`}
+                      aria-pressed={!highContrast}
+                      onClick={() => onHighContrastChange(false)}
+                    >
+                      {t('settings.workspace.contrast.off')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${highContrast ? ' active' : ''}`}
+                      aria-pressed={highContrast}
+                      onClick={() => onHighContrastChange(true)}
+                    >
+                      {t('settings.workspace.contrast.on')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    {fieldMode
+                      ? t('settings.workspace.contrast.hint.field')
+                      : t('settings.workspace.contrast.hint')}
+                  </span>
+                </div>
+              )}
+              {/* NIGHT, under High contrast: the other row that changes how the theme above it
+                  paints (darker and warmer, whichever theme is on). A Settings row and NOT a
+                  top-bar chip — the operator's pick; Field stays the only quick toggle. Auto goes
+                  by the sun at the station's grid square, so with none it cannot work, and the
+                  hint says so rather than leaving a switch that silently does nothing. */}
+              {onNightChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.night.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.night.label')}
+                  >
+                    <button
+                      type="button"
+                      className={`theme-chip${night === 'off' ? ' active' : ''}`}
+                      aria-pressed={night === 'off'}
+                      onClick={() => onNightChange('off')}
+                    >
+                      {t('settings.workspace.night.off')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${night === 'on' ? ' active' : ''}`}
+                      aria-pressed={night === 'on'}
+                      onClick={() => onNightChange('on')}
+                    >
+                      {t('settings.workspace.night.on')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${night === 'auto' ? ' active' : ''}`}
+                      aria-pressed={night === 'auto'}
+                      onClick={() => onNightChange('auto')}
+                    >
+                      {t('settings.workspace.night.auto')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    {night !== 'auto'
+                      ? t('settings.workspace.night.hint')
+                      : nightGridKnown
+                        ? t('settings.workspace.night.hint.auto')
+                        : t('settings.workspace.night.hint.noGrid')}
+                  </span>
+                </div>
+              )}
+              {/* #215: Field mode, last in Theme: it is both — maximum contrast and larger type
+                  in one switch — and its contrast half is this section's. It has been in the app
+                  since 2026-08-09 and reachable only as a chip named "Field" in the top bar, so an
+                  operator who came to Settings for a high-contrast or large-text setting found
+                  the scale half and not the contrast half. The chip stays: this is the same
+                  boolean (`useContrastPrefs().fieldMode`), not a second one. */}
+              {onFieldModeChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.field.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.field.label')}
+                  >
+                    <button
+                      type="button"
+                      className={`theme-chip${!fieldMode ? ' active' : ''}`}
+                      aria-pressed={!fieldMode}
+                      onClick={() => onFieldModeChange(false)}
+                    >
+                      {t('settings.workspace.field.off')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${fieldMode ? ' active' : ''}`}
+                      aria-pressed={fieldMode}
+                      onClick={() => onFieldModeChange(true)}
+                    >
+                      {t('settings.workspace.field.on')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.workspace.field.hint')}</span>
+                </div>
+              )}
+            </div>
+          </fieldset>
+          )}
+
           {/* ---- Colours: the colour roles (features/paletteRoles.ts) ----
-              Right after Workspace, whose Theme row picks the palette these presets retune. Only
+              Right after Theme, whose cards pick the palette these presets retune. Only
               pre-checked presets, no hex field ("presets first, hex later", operator 2026-09-26);
               the transmit red, the alert orange and the Needed colours have no row at all. */}
           {tab === 'appearance' && palette && onPaletteChange && (
@@ -3898,6 +3965,100 @@ export function SettingsPanel({
             <legend>{t('settings.colours.legend')}</legend>
             <span className="settings-hint">{t('settings.colours.hint')}</span>
             <SettingsColours palette={palette} onChange={onPaletteChange} />
+          </fieldset>
+          )}
+
+          {/* ---- Waterfall & scopes: the palette pickers ----
+              The same two settings as the pickers in the cockpit headers (waterfallPalette.ts): the
+              palette Phone, CW, RTTY and SSTV share, and the FT waterfall's own. Here as well, so an
+              operator who comes to Settings for the waterfall's colours finds them without opening a
+              cockpit. Opening this writes nothing: a picker shows the stored value, or Turbo. On the
+              Remote they are read-only like the rest of its Settings page (BrowserApplication.test's
+              contract); the pickers in the cockpit headers still change the palette there. */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-waterfall-scopes">
+            <legend>{t('settings.waterfallScopes.legend')}</legend>
+            <div className="settings-grid">
+              <p className="settings-note">{t('settings.waterfallScopes.note')}</p>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.waterfallScopes.shared.label')}</span>
+                <PalettePicker
+                  className="settings-input"
+                  label={t('settings.waterfallScopes.shared.label')}
+                  disabled={remote}
+                />
+                <span className="settings-hint">{t('settings.waterfallScopes.shared.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.waterfallScopes.ft.label')}</span>
+                <PalettePicker
+                  className="settings-input"
+                  scope={FT_PALETTE_SCOPE}
+                  label={t('settings.waterfallScopes.ft.label')}
+                  disabled={remote}
+                />
+                <span className="settings-hint">{t('settings.waterfallScopes.ft.hint')}</span>
+              </div>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- Map & globe: the Logbook globe, and where the Connect map's own choices live ---- */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-map-globe">
+            <legend>{t('settings.mapGlobe.legend')}</legend>
+            <div className="settings-grid settings-grid--lone">
+              <p className="settings-note">{t('settings.mapGlobe.note')}</p>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.workspace.logbookGlobe.label')}</span>
+                <span className="settings-input-row">
+                  <input disabled={remote}
+                    type="checkbox"
+                    checked={logbookGlobe}
+                    onChange={(e) => setLogbookGlobe(e.target.checked)}
+                    aria-label={t('settings.workspace.logbookGlobe.aria')}
+                  />
+                  <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- Performance: Motion ----
+              `useMotion` (App owns it) had no control in Settings before this: Reduce was reachable
+              only through the computer's own reduce-motion setting. Per machine, like the theme. */}
+          {tab === 'appearance' && onMotionChange && (
+          <fieldset className="settings-section" id="settings-performance">
+            <legend>{t('settings.performance.legend')}</legend>
+            <div className="settings-grid settings-grid--lone">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.performance.motion.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.performance.motion.label')}
+                >
+                  <button
+                    type="button"
+                    className={`theme-chip${motion === 'system' ? ' active' : ''}`}
+                    aria-pressed={motion === 'system'}
+                    onClick={() => onMotionChange('system')}
+                  >
+                    {t('settings.performance.motion.system')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-chip${motion === 'reduce' ? ' active' : ''}`}
+                    aria-pressed={motion === 'reduce'}
+                    onClick={() => onMotionChange('reduce')}
+                  >
+                    {t('settings.performance.motion.reduce')}
+                  </button>
+                </div>
+                <span className="settings-hint">{t('settings.performance.motion.hint')}</span>
+              </div>
+            </div>
           </fieldset>
           )}
 

@@ -201,7 +201,8 @@ of a page.
 | Change how "worked before" is decided | [Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
 | Get an alert when a new one appears | [Settings ▸ Spots & Alerts ▸ Pounce](settings-reference.md#pounce--new-one-alert) |
 | Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup) |
-| Change theme, UI scale or density | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
+| Change theme, contrast or Night | [Settings ▸ Appearance ▸ Theme](settings-reference.md#theme) |
+| Change UI scale, text size or density, or pick a one-tap look | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
 | Turn a whole section off | [Settings ▸ Appearance ▸ Features](settings-reference.md#features) |
 | Turn on screen-reader announcements and earcons | [Settings ▸ Appearance ▸ Accessibility & eyes-free](settings-reference.md#accessibility--eyes-free) |
 | Back up, restore or reset everything | [Settings ▸ Config ▸ Backup & reset](settings-reference.md#backup--reset) |

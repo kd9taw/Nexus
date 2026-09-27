@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 //
-// #215 — Settings ▸ Appearance ▸ Workspace carries Field mode, beside Theme and UI scale.
+// #215 — Settings ▸ Appearance ▸ Theme carries Field mode, beside High contrast and Night (it moved
+// there from Workspace with the theme cards, in the redesign's Display sections of 2026-09-26; UI
+// scale and Text size, its size half, are Workspace's, directly above).
 //
 // The reporter asked for larger type and stronger contrast and could not find either. Half the
 // answer was under a label that does not say "size" until you click Manual (UI scale), and the
@@ -128,8 +130,8 @@ describe('#215 Settings ▸ Workspace ▸ Field mode', () => {
     expect(changed).toHaveBeenCalledWith(false)
   })
 
-  it('sits in the Workspace section, between Theme and UI scale', async () => {
-    // The ask was not "a switch exists somewhere" — it was that this belongs beside the two
+  it('sits in the Theme section, after the theme cards and the other contrast rows', async () => {
+    // The ask was not "a switch exists somewhere" — it was that this belongs beside the contrast
     // settings the operator was already sent to and found only half an answer in.
     renderPanel({
       fieldMode: false,
@@ -142,20 +144,18 @@ describe('#215 Settings ▸ Workspace ▸ Field mode', () => {
     expect(section, 'Field mode is not inside a Settings section at all').not.toBeNull()
     expect(
       section?.querySelector('legend')?.textContent,
-      'Field mode is not in the Workspace section',
-    ).toBe(EN['settings.workspace.legend'])
+      'Field mode is not in the Theme section',
+    ).toBe(EN['settings.theme.legend'])
     const labels = Array.from(section!.querySelectorAll('.settings-label')).map((n) => n.textContent)
     const at = (label: string) => {
       const i = labels.indexOf(label)
-      expect(i, `"${label}" is not a row of the Workspace section`).toBeGreaterThanOrEqual(0)
+      expect(i, `"${label}" is not a row of the Theme section`).toBeGreaterThanOrEqual(0)
       return i
     }
     expect(at(LABEL), 'Field mode is above Theme').toBeGreaterThan(
       at(EN['settings.workspace.theme.label']),
     )
-    expect(at(LABEL), 'Field mode is below UI scale').toBeLessThan(
-      at(EN['settings.workspace.scale.label']),
-    )
+    expect(at(LABEL), 'Field mode is not the last row of Theme').toBe(labels.length - 1)
   })
 
   it('is not offered by a host that does not wire it', async () => {
@@ -170,14 +170,16 @@ describe('#215 Settings ▸ Workspace ▸ Field mode', () => {
     // was already findable ('text size', 'zoom') and the contrast half matched nothing, so
     // Settings search answered "no results" to the question actually being asked.
     const ids = (q: string) => searchSettings(q).map((h) => h.section.id)
-    for (const q of ['contrast', 'high contrast', 'field mode', 'accessibility']) {
-      expect(ids(q), `Settings search cannot find Workspace from "${q}"`).toContain('workspace')
+    for (const q of ['contrast', 'high contrast', 'field mode']) {
+      expect(ids(q), `Settings search cannot find Theme from "${q}"`).toContain('theme')
     }
+    // …and the size half, one section up.
+    expect(ids('accessibility'), 'Settings search cannot find Workspace from "accessibility"').toContain('workspace')
     // CONTROL, both directions. A search that returned everything would satisfy the loop
     // above, and 'field' on its own must still belong to the station-preset section — an
     // exact keyword outranks all but a label, so claiming it here would have moved a hit.
-    expect(ids('rotator'), 'the search matches everything').not.toContain('workspace')
+    expect(ids('rotator'), 'the search matches everything').not.toContain('theme')
     expect(ids('field')[0], '"field" no longer lands on the home/field station presets')
-      .not.toBe('workspace')
+      .not.toBe('theme')
   })
 })

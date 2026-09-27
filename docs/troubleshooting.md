@@ -418,7 +418,7 @@ them before assuming something's broken:
 
 ## UI — themes and scaling
 
-- **Three theme choices** live in Settings ▸ Appearance ▸ Workspace: **Dark**
+- **Three theme choices** live in Settings ▸ Appearance ▸ Theme: **Dark**
   (default), **Light**, and **System**, which follows your computer's light or dark
   setting. They apply instantly, no restart.
 - **UI scale** fits the interface to the window (**Auto**) or holds a fixed size

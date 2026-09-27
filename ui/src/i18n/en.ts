@@ -5849,6 +5849,10 @@ export const EN = {
     'Save your radios, preferences, memory channels and watchlist to a file',
   'settings.transmit.backup.hint':
     "Your radios, operating preferences, memory channels, watchlist and chase sets in one file — for a new computer, or before a rebuild. <b>It holds no passwords or API keys</b>: those stay in your operating system's keychain, so a restore asks for them again, and the file is safe to keep on a USB stick. Your contact log is separate — export that from the Logbook. Restoring replaces your current setup.",
+  // The backup also carries the look (features/appearanceBackup.ts); Field mode and UI scale are
+  // left out on purpose — the one a situation, the other a fact about this computer's screen.
+  'settings.transmit.backup.appearance':
+    'It also carries how Nexus looks: the theme, colours, text size, density, Night and waterfall palettes, and a restore puts them back. Field mode and UI scale stay with each computer.',
   // `{{path}}` is where the file landed — a path, printed verbatim.
   'settings.transmit.backup.done': 'Settings backed up → {{path}}',
   'settings.transmit.backup.failed': 'Backup failed',
@@ -6918,6 +6922,22 @@ export const EN = {
   // invariant number and the `%` stays glued to it. The chips themselves (`100%`, `175%`)
   // are numbers alone and never enter this file.
   'settings.workspace.legend': 'Workspace',
+  // The one-tap looks (features/looks.ts): the ids are code; these are the names on the chips.
+  // A look is a set of the settings below it, applied by a tap and read back from them.
+  'settings.workspace.looks.label': 'Look',
+  'settings.workspace.looks.shack': 'Shack',
+  'settings.workspace.looks.field': 'Field / POTA',
+  'settings.workspace.looks.night': 'Night',
+  'settings.workspace.looks.contest': 'Contest',
+  'settings.workspace.looks.bigClear': 'Big & clear',
+  'settings.workspace.looks.touch': 'Touch',
+  'settings.workspace.looks.custom': 'Custom',
+  'settings.workspace.looks.custom.title':
+    'Your own mix of these settings. It matches none of the looks, and a tap on one replaces it.',
+  'settings.workspace.looks.undo': 'Undo',
+  'settings.workspace.looks.undo.title': 'Put back the settings you had before this look',
+  'settings.workspace.looks.hint':
+    'Shack, Field / POTA and Night set up the whole screen. Contest, Big & clear and Touch set text size, density and contrast, and keep Field mode and Night as they are. No look changes your theme, UI scale, colours, waterfall palettes or a Night set to Auto.',
   'settings.workspace.language.label': 'Language',
   'settings.workspace.language.hint':
     'The language Nexus writes in. Frequencies, signal reports, callsigns, grid squares, band and mode names are never translated or reformatted — a dial reads the same in every language.',
@@ -6992,6 +7012,26 @@ export const EN = {
   'settings.workspace.localClock.on': 'On',
   'settings.workspace.localClock.off': 'Off',
   'settings.workspace.localClock.hint': 'Show this computer\'s local time next to the UTC clock in the top bar. Logs, spots and FT slots always use UTC.',
+  // ── Settings ▸ Appearance: the other Display sections ─────────────────────────────
+  // Theme holds the theme cards and the High contrast, Night and Field mode rows, whose keys keep
+  // their `settings.workspace.*` ids: an id is an invariant token, and the rows only moved.
+  'settings.theme.legend': 'Theme',
+  'settings.waterfallScopes.legend': 'Waterfall & scopes',
+  'settings.waterfallScopes.note':
+    'The colours of the waterfalls and scopes: the same two settings as the pickers in the cockpits. Turbo is the default. Cividis looks almost the same to red-green colour-blind eyes as to everyone else.',
+  'settings.waterfallScopes.shared.label': 'Phone, CW, RTTY and SSTV',
+  'settings.waterfallScopes.shared.hint': 'Shared by the scopes and waterfalls of those four modes.',
+  'settings.waterfallScopes.ft.label': 'FT8 and FT4',
+  'settings.waterfallScopes.ft.hint': 'The FT waterfall keeps a palette of its own.',
+  'settings.mapGlobe.legend': 'Map & globe',
+  'settings.mapGlobe.note':
+    'The Connect map’s view (globe, flat or beam), its layers and its colours are chosen on the map itself, and Connect keeps a separate set for each activity you pick there.',
+  'settings.performance.legend': 'Performance',
+  'settings.performance.motion.label': 'Motion',
+  'settings.performance.motion.system': 'Follow the computer',
+  'settings.performance.motion.reduce': 'Reduce',
+  'settings.performance.motion.hint':
+    'Reduce turns off the animations and fades, which also helps a slow computer keep up. Alerts still show; they just stop pulsing. Follow the computer uses your system’s own reduce-motion setting.',
   'settings.dataFolder.legend': 'Data & log folder',
   'settings.dataFolder.note': 'Your logbook, the data tables Nexus downloads and the Winlink mailbox live in one folder. Keep it on a drive inside this computer. Nexus keeps your logbook in a database, and a database on a network drive can be damaged by the way file locking works across a network, so a network drive is refused. A synced folder (Dropbox, OneDrive, iCloud, Google Drive) is allowed, but only ONE Nexus may use it at a time: two computers writing one logbook through a sync client make a conflicted copy, not a merged log.',
   'settings.dataFolder.onNetwork': 'This folder is on a network drive. Nexus keeps your logbook in a database, and a database on network storage can be damaged by the way file locking works across a network — the worst case is a logbook that will not open. Copy the folder to a drive inside this computer and point Nexus at the copy.',
@@ -9543,15 +9583,20 @@ export const EN = {
   // separator's accessible name — is what says which handle it is.
   'splitter.title': 'Drag to resize ({{label}})',
 
-  // ── The theme chips ─────────────────────────────────────────────────────────────────
+  // ── The theme cards ─────────────────────────────────────────────────────────────────
+  // Each card: the theme's name, and under it a one-line personality in radio terms. The
+  // meters, the frequency readout and the scopes are dark in both themes (the display wells).
   'theme.aria': 'Theme',
   'theme.light.label': 'Light',
   'theme.light.title': 'Light (sunlight)',
+  'theme.light.line': 'Daylight panel, dark scopes and meters',
   'theme.dark.label': 'Dark',
   'theme.dark.title': 'Dark (shack)',
+  'theme.dark.line': 'Dark panel, lit dials and meters',
   // System: follow the computer's own light/dark setting (useTheme.ts). Dark stays the default.
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
+  'theme.system.line': 'Follows your computer, light or dark',
 
   // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
   // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on
@@ -9595,6 +9640,9 @@ export const EN = {
   'waterfall.palette.title.scoped': 'Waterfall color palette — applies to this mode',
   'waterfall.palette.title.shared':
     'Waterfall color palette — shared by Phone, CW, RTTY and SSTV. The FT waterfall keeps its own.',
+  // The one palette whose menu entry says more than its name (waterfall.ts MASTER_PALETTES): the
+  // map a red-green colour-blind operator can read. "Cividis" is the map's own name.
+  'waterfall.palette.cividis': 'Cividis (colour-blind safe)',
 
   // ── The FT wide graph (`Waterfall.tsx`) ─────────────────────────────────────────────
   // ⚠️ Every span in kHz, the `dBr` legend with its ticks, the frequency axis and scrollback

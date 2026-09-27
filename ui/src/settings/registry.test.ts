@@ -373,8 +373,14 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('keps')).toContain('orbital-elements')
     expect(ids('atno')).toContain('pounce')
     expect(ids('text size')).toContain('workspace')
-    expect(ids('night mode')).toContain('workspace') // the row says "Night"
-    expect(ids('dark adaptation')).toContain('workspace')
+    // The Display sections (2026-09-26): Night moved to Theme with its row; the looks are in
+    // Workspace; the palettes, the Logbook globe and Motion each have a section of their own.
+    expect(ids('night mode')).toContain('theme') // the row says "Night"
+    expect(ids('dark adaptation')).toContain('theme')
+    expect(ids('one tap')).toContain('workspace') // the row says "Look"
+    expect(ids('colour blind')).toContain('waterfall-scopes')
+    expect(ids('logbook globe')).toContain('map-globe')
+    expect(ids('reduce motion')).toContain('performance')
   })
 
   it('finds the toggle from issue #62 by the words that report used', () => {

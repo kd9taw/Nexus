@@ -232,7 +232,17 @@ describe('call sites agree with their catalog entries', () => {
     // `t(p.labelKey)` and `t(role.hintKey)` in `SettingsColours.tsx`, the Settings rows reading the
     // role table in `features/paletteRoles.ts` — the registry shape again, measured at 90 without
     // the file. Its keys stay checked the same way: literals in `labelKey`/`hintKey` entries.
-    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(94)
+    //
+    // 96 as of the one-tap looks and the Settings tidy-up (2026-09-26), and the three added were
+    // LOOKED AT, each a table read by its own row: `t(l.labelKey)` in `SettingsLooks.tsx` (the
+    // looks table, features/looks.ts), `t(o.lineKey)` in `ThemeSwitcher.tsx` (the theme cards'
+    // one-line personalities, beside the two keys that table already read) and `t(p.labelKey)` in
+    // `PalettePicker.tsx` (MASTER_PALETTES' Cividis entry). Measured file by file against the base
+    // at 1 / +1 / 1. The looks' tooltips were rewritten with literal keys rather than raise this
+    // further, and a generic arrow `<T>(…) =>` in features/appearanceBackup.ts, which this parser
+    // reads as a `<T>` element, became a plain function instead. The keys stay checked as literals
+    // in `labelKey`/`lineKey` entries.
+    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(97)
   })
 
   it('supplies every value its entry asks for', () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings ▸ Appearance ▸ Workspace ▸ Night: Off / On / Auto (operator, 2026-09-26: "Settings +
+// Settings ▸ Appearance ▸ Theme ▸ Night: Off / On / Auto (operator, 2026-09-26: "Settings +
 // Auto by sun"). It is a Settings row and NOT a top-bar chip — Field stays the only quick chip —
 // and it sits directly under High contrast, the other row that changes how the theme above it
 // paints. Auto is civil dusk to civil dawn at the station's grid square, so with no grid square it
@@ -134,10 +134,11 @@ describe('Settings ▸ Workspace ▸ Night', () => {
     renderPanel({ night: 'off', onNightChange: () => {}, nightGridKnown: true })
     const g = await screen.findByRole('group', { name: NIGHT })
     const section = g.closest('fieldset')!
-    expect(section.querySelector('legend')?.textContent).toBe(EN['settings.workspace.legend'])
+    // Theme, not Workspace, since the Display sections (2026-09-26): the row moved with the cards.
+    expect(section.querySelector('legend')?.textContent).toBe(EN['settings.theme.legend'])
     const labels = Array.from(section.querySelectorAll('.settings-label')).map((n) => n.textContent)
     const at = labels.indexOf(NIGHT)
-    expect(at, 'Night is not a row of the Workspace section').toBeGreaterThanOrEqual(0)
+    expect(at, 'Night is not a row of the Theme section').toBeGreaterThanOrEqual(0)
     expect(labels[at - 1], 'Night does not follow High contrast').toBe(EN['settings.workspace.contrast.label'])
     expect(labels[at + 1], 'Field mode does not follow Night').toBe(EN['settings.workspace.field.label'])
   })
@@ -165,7 +166,7 @@ describe('Settings ▸ Workspace ▸ Night', () => {
 
   it('is not offered by a host that does not wire it', async () => {
     renderPanel({})
-    // The Workspace section rendered (positive control), just without this row.
+    // The tab rendered (positive control), just without this row.
     await screen.findByRole('group', { name: EN['settings.workspace.contrast.label'] })
     expect(screen.queryByRole('group', { name: NIGHT })).toBeNull()
   })

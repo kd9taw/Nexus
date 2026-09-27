@@ -4,7 +4,7 @@ import { solarElevationDeg } from './mapGeo'
 import { PALETTE_EVENT } from './usePaletteRoles'
 
 // NIGHT — a darker, warmer screen for operating after dark: Off / On / Auto (Settings ▸
-// Appearance ▸ Workspace, under High contrast). Operator picks of 2026-09-26: "Dim + warm, TX
+// Appearance ▸ Theme, under High contrast). Operator picks of 2026-09-26: "Dim + warm, TX
 // red" (the transmit, alert and signal colours do not change), "Settings + Auto by sun" (a row in
 // Settings, NOT a top-bar chip: Field stays the only quick toggle), "Dim the light theme" (Night
 // dims whichever theme is on) and "At dusk, sun 6° down".

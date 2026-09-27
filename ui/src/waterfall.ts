@@ -5,6 +5,7 @@
 
 import { sampleLut, type ColormapName } from './colormaps'
 import { SingleFlightLatch } from './singleFlight'
+import type { MessageKey } from './i18n'
 
 /** Floor below which a percentile span is widened so `normalize` never divides
  * by ~0 (magnitudes are 0..1, so this is comfortably sub-quantization). Exported
@@ -1188,11 +1189,17 @@ export const WATERFALL_PALETTES: { value: ColormapName | 'auto'; label: string }
 /** The curated MASTER palette set shown in the per-mode pickers — one clean choice of ~8
  * that rides across every scope (FT8, CW, Phone). A perceptual default set plus the most
  * familiar SDR/retro looks; `resolveColormap` still accepts any value in `WATERFALL_PALETTES`
- * so a legacy stored palette keeps working even if it's not offered here. */
-export const MASTER_PALETTES: { value: ColormapName | 'auto'; label: string }[] = [
+ * so a legacy stored palette keeps working even if it's not offered here.
+ *
+ * CIVIDIS (2026-09-26, the look-and-feel redesign) sits with the perceptual maps: it is the one
+ * a red-green colour-blind operator reads almost exactly as everyone else does, and its entry
+ * says so through `labelKey`, the catalog's words (a palette's own name stays `label`). Adding
+ * it changes no default: Turbo is still what an empty store reads, and a stored pick is kept. */
+export const MASTER_PALETTES: { value: ColormapName | 'auto'; label: string; labelKey?: MessageKey }[] = [
   { value: 'auto', label: 'Auto (theme)' },
   { value: 'inferno', label: 'Inferno' },
   { value: 'viridis', label: 'Viridis' },
+  { value: 'cividis', label: 'Cividis', labelKey: 'waterfall.palette.cividis' },
   { value: 'turbo', label: 'Turbo' },
   { value: 'sdr-green', label: 'SDR Green' },
   { value: 'amber-crt', label: 'Amber CRT' },

@@ -1880,10 +1880,55 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 
 ### Workspace
 
+- **Look** — Shack, Field / POTA, Night, Contest, Big & clear or Touch: one tap
+  sets several of the rows below and in **Theme** together, and the row names the
+  look that is on screen, or **Custom** when your own mix matches none of them.
+  **Shack** is the app as installed. **Field / POTA** turns Field mode on for
+  sunlight, **Night** turns Night on; both put text size and density back to
+  Normal and Standard. **Contest** (Compact), **Big & clear** (Larger text, High
+  contrast, Comfortable) and **Touch** set the text size, density and contrast, and
+  leave Field mode and Night as they are, so Contest works outdoors and Big & clear
+  after dark. No look changes your theme, UI scale, colours, waterfall palettes or
+  motion, and a Night set to **Auto** stays on Auto (a look that turns Night off
+  switches off only a Night you turned **On**). Field / POTA also keeps your own
+  **High contrast** choice, which is what the screen goes back to when Field mode
+  goes off. Hover a look to see exactly what it sets. After a tap, **Undo** puts
+  back the settings that look replaced, until you change one of them yourself.
+  Nothing happens until you tap: opening Settings never applies a look.
 - **Language** — the language Nexus writes in. Frequencies, signal reports,
   callsigns, grid squares, and band and mode names are never translated or
   reformatted: a dial reads the same in every language.
-- **Theme** — Light, Dark or System. Light reads best outdoors in daylight.
+- **UI scale** — **Auto (fit)** scales the whole interface to the window so
+  nothing is cut off, with **Max scale** cap chips so auto never overshoots on a
+  big monitor. A cap this window can't reach is disabled and its tooltip says
+  why ("a larger window or monitor unlocks it"). **Manual** picks a fixed
+  percentage instead. The waterfall stays sharp either way.
+- **Text size** — Normal, Large or Larger. Makes every word on the screen bigger
+  (Large by 12%, Larger by 25%), the decode lists, the Call Roster and the Logbook
+  included, and leaves the rest of the layout at its size. UI scale above zooms
+  the whole screen instead; the two combine. The numbers drawn on the waterfall
+  and scope follow UI scale only. Remembered per computer.
+- **Density** — Comfortable, Standard, Compact or Touch. How tightly rows and
+  controls pack: Compact fits more on screen, Comfortable spaces the rows a little
+  further apart than Standard. **Touch** is Comfortable with bigger places to tap
+  for a touchscreen: the larger buttons grow to 48 pixels and the small chips get
+  a 36-pixel box.
+- **Local time beside UTC** — Off or On. On adds a second clock to the top bar
+  showing this computer's local time, next to the UTC clock. It is remembered per
+  computer. Logs, spots and FT slots always use UTC.
+- **Pane sizes** — **Reset pane sizes** restores the default pane widths. Pane
+  layout itself is set in the cockpits: drag the dividers between panes to resize
+  (double-click a divider to reset), and use the ⊞ menu to show or hide panes.
+
+![The Workspace row: Language set to English, Theme with Dark selected of Light and Dark, UI scale on Auto (fit) with max-scale chips from 100% to 175% and 125% lit, and Density set to Comfortable.](../img/manual/settings-workspace.webp)
+
+*Workspace in Nexus 1.10.3. Reset pane sizes sits to the right of Density.*
+
+### Theme
+
+- **Theme** — three cards, each with a line on its character: **Light**
+  (daylight panel, dark scopes and meters), **Dark** (dark panel, lit dials and
+  meters) and **System**. Light reads best outdoors in daylight.
   **System** follows your computer's own light or dark setting and changes when it
   does; Dark is the default. Either way, the top bar's **Field** chip boosts
   contrast and size on top of the theme you picked.
@@ -1891,7 +1936,7 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   whichever theme you are using, and changes nothing else — the interface stays
   exactly the size you have set it. This is the one to reach for if the screen
   is simply hard to read. If you want bigger as well as stronger, set **UI
-  scale** below to taste; the two are independent.
+  scale** or **Text size** in Workspace to taste; they are independent.
 - **Night** — Off, On or Auto. A darker, warmer screen for operating after dark, in
   whichever theme you use: the panels, the text and the accent colour dim and warm up, and
   the meters and the frequency readout dim with them. **Auto** turns Night on at dusk and off
@@ -1909,34 +1954,6 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   flipping either one moves both. While it is on it applies high contrast on its
   own, so the **High contrast** row above keeps showing your own standing
   choice, and that is what the screen goes back to when you turn Field mode off.
-- **UI scale** — **Auto (fit)** scales the whole interface to the window so
-  nothing is cut off, with **Max scale** cap chips so auto never overshoots on a
-  big monitor. A cap this window can't reach is disabled and its tooltip says
-  why ("a larger window or monitor unlocks it"). **Manual** picks a fixed
-  percentage instead. The waterfall stays sharp either way.
-- **Text size** — Normal, Large or Larger. Makes every word on the screen bigger
-  (Large by 12%, Larger by 25%), the decode lists, the Call Roster and the Logbook
-  included, and leaves the rest of the layout at its size. UI scale above zooms
-  the whole screen instead; the two combine. The numbers drawn on the waterfall
-  and scope follow UI scale only. Remembered per computer.
-- **Density** — Comfortable, Standard, Compact or Touch. How tightly rows and
-  controls pack: Compact fits more on screen, Comfortable spaces the rows a little
-  further apart than Standard. **Touch** is Comfortable with bigger places to tap
-  for a touchscreen: the larger buttons grow to 48 pixels and the small chips get
-  a 36-pixel box.
-- **Logbook globe** — shows the 3-D globe above the Logbook table (on by
-  default). Turn it off and the table starts at the top. Computers whose
-  graphics cannot draw the globe never show it, whatever this says.
-- **Local time beside UTC** — Off or On. On adds a second clock to the top bar
-  showing this computer's local time, next to the UTC clock. It is remembered per
-  computer. Logs, spots and FT slots always use UTC.
-- **Pane sizes** — **Reset pane sizes** restores the default pane widths. Pane
-  layout itself is set in the cockpits: drag the dividers between panes to resize
-  (double-click a divider to reset), and use the ⊞ menu to show or hide panes.
-
-![The Workspace row: Language set to English, Theme with Dark selected of Light and Dark, UI scale on Auto (fit) with max-scale chips from 100% to 175% and 125% lit, and Density set to Comfortable.](../img/manual/settings-workspace.webp)
-
-*Workspace in Nexus 1.10.3. Reset pane sizes sits to the right of Density.*
 
 ### Colours
 
@@ -1963,6 +1980,39 @@ remembered per computer, like the theme.
 colour already is. The transmit red (including the ON AIR sign), the alert
 orange and the Needed colours stay fixed and have no setting, so a keyed
 transmitter and an alert always look the same.
+
+### Waterfall & scopes
+
+The colours of the waterfalls and scopes, the same two settings as the palette
+pickers in the cockpits' scope headers — a pick here and a pick there are the
+same thing.
+
+- **Phone, CW, RTTY and SSTV** — the palette those four modes' scopes and
+  waterfalls share.
+- **FT8 and FT4** — the FT waterfall's own palette, separate from the others.
+
+**Turbo** is the default for both, and a palette you picked stays picked.
+**Cividis** is the colour-blind-safe choice: it looks almost the same to
+red-green colour-blind eyes as to everyone else. **Auto** follows the theme, and
+turns Amber CRT while Night is on. Remembered per computer.
+
+### Map & globe
+
+- **Logbook globe** — shows the 3-D globe above the Logbook table (on by
+  default). Turn it off and the table starts at the top. Computers whose
+  graphics cannot draw the globe never show it, whatever this says.
+
+The Connect map's own choices — the view (Globe, Flat or Beam), its layers and its
+colours — are made on the map itself, and Connect keeps a separate set for each
+activity you pick there.
+
+### Performance
+
+- **Motion** — **Follow the computer** or **Reduce**. Reduce turns off the
+  animations and fades, which also helps a slow computer (a Raspberry Pi, an old
+  laptop in the field) keep up. Alerts still appear; they just stop pulsing.
+  Follow the computer uses your system's own reduce-motion setting. Remembered per
+  computer.
 
 ### Connect on a TV
 
@@ -2144,10 +2194,14 @@ renamed one. Run one, or keep one machine's Nexus closed.
 
 - **Back up** — writes your radios, operating preferences, memory channels,
   watchlist and chase sets to a single `.json`. For a new computer, or before a
-  rebuild. **It holds no passwords or API keys** — those stay in your operating
-  system's keychain, so a restore asks for them again and the file is safe to
-  keep on a USB stick, or to attach to a support thread. Your contact log is
-  separate; export that from the Logbook.
+  rebuild. The file also carries how Nexus looks — the theme, colours, text size,
+  density, Night, motion, the waterfall palettes and the Logbook globe — and a
+  restore puts that back too; a backup made before it existed restores exactly as
+  it always did. Field mode and UI scale stay with each computer. **It holds no
+  passwords or API keys** — those stay in your operating system's keychain, so a
+  restore asks for them again and the file is safe to keep on a USB stick, or to
+  attach to a support thread. Your contact log is separate; export that from the
+  Logbook.
 - **Restore…** — replaces your current setup from a file written by *Back up*. It
   refuses anything that is not one of ours, by name and by schema: a partial
   restore of a mangled file is worse than a refusal, because you would believe

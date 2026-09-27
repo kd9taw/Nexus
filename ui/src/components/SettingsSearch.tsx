@@ -1,7 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { t } from '../i18n'
+import { IS_MAC, modChord } from '../platform'
 import { searchSettings, type SettingsHit } from '../settings/registry'
+
+/**
+ * Ctrl+K — ⌘K on a Mac — puts the caret in the search box (the look-and-feel redesign, 2026-09-26;
+ * the chord the Zeus reference and most search boxes use).
+ *
+ * FREE EVERYWHERE, checked before it was taken: a census of every key handler in the UI found no
+ * Ctrl/⌘+K anywhere — the cockpits' keys are Escape, Space, F1–F8, PgUp/PgDn and Alt+1–6, the app's
+ * own are Ctrl/⌘+1–9, and nothing is registered with the OS. It is live only while Settings is open,
+ * and it never touches another key, so Escape keeps reaching CW's and Operate's stop listeners.
+ *
+ * ⚠️ ONE MODIFIER PER PLATFORM, a deliberate exception to platform.ts's "Ctrl and ⌘ both, everywhere":
+ * that rule holds where accepting both is harmless, and here it is not. On a Mac, Ctrl+K is every
+ * text field's own "delete to the end of the line", so taking it would break editing in the very
+ * fields Settings is made of; off a Mac the ⌘ position is the Windows or Super key, which belongs to
+ * the system. The LETTER decides (Dvorak's K is where QWERTY has V); the key's position is read only
+ * when the layout types no Latin letter there (a Cyrillic layout's л).
+ */
+export function isSearchChord(
+  e: { key: string; code: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean },
+  mac: boolean,
+): boolean {
+  const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
+  if (!mod || e.altKey || e.shiftKey) return false
+  return /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() === 'k' : e.code === 'KeyK'
+}
 
 /**
  * Find a setting by name — the answer to "I know Nexus can do this, I cannot find where".
@@ -22,6 +48,23 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
   const boxRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  // Ctrl+K / ⌘K from anywhere in Settings — see `isSearchChord`. Bound for exactly as long as the
+  // box is on screen, and it cancels only the chord it takes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isSearchChord(e, IS_MAC)) return
+      e.preventDefault()
+      const input = inputRef.current
+      if (!input) return
+      input.focus({ preventScroll: true })
+      input.scrollIntoView?.({ block: 'nearest' })
+      input.select()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const hits = useMemo(() => searchSettings(q), [q])
 
@@ -73,10 +116,12 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
     <div className="settings-search" ref={boxRef}>
       <Search size={14} className="settings-search-icon" aria-hidden="true" />
       <input
+        ref={inputRef}
         type="search"
-        className="settings-search-input"
+        className={`settings-search-input${q === '' ? ' has-kbd' : ''}`}
         placeholder={t('settings.search.placeholder')}
         aria-label={t('settings.search.label')}
+        aria-keyshortcuts={IS_MAC ? 'Meta+K' : 'Control+K'}
         role="combobox"
         aria-expanded={open && hits.length > 0}
         aria-controls={listId}
@@ -89,6 +134,12 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
       />
+      {/* The chord, a key name rather than prose (`modChord`), while the box is empty. */}
+      {q === '' && (
+        <kbd className="settings-search-kbd" aria-hidden="true">
+          {modChord('K')}
+        </kbd>
+      )}
       {open && q.trim() !== '' && (
         <ul className="settings-search-results" id={listId} role="listbox">
           {hits.length === 0 ? (

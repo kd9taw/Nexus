@@ -107,12 +107,14 @@ const resetOf = (s: HTMLElement, id: PaletteRoleId) =>
   })
 
 describe('Settings ▸ Appearance ▸ Colours', () => {
-  it('sits on the Appearance tab, right after Workspace', async () => {
+  it('sits on the Appearance tab, right after Theme', async () => {
+    // Right after Theme, whose cards pick the palette these presets retune (it followed Workspace
+    // while the theme row lived there, before the Display sections of 2026-09-26).
     renderPanel({ palette: DEFAULT_SELECTION, onPaletteChange: () => {} })
     const s = await section()
     expect(s.id).toBe('settings-colours')
     const legends = Array.from(document.querySelectorAll('fieldset.settings-section > legend')).map((l) => l.textContent)
-    expect(legends.indexOf(E['settings.colours.legend'])).toBe(legends.indexOf(E['settings.workspace.legend']) + 1)
+    expect(legends.indexOf(E['settings.colours.legend'])).toBe(legends.indexOf(E['settings.theme.legend']) + 1)
   })
 
   it('has one row per role, in the table’s order, each with its name and what it paints', async () => {

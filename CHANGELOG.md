@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bigger places to tap: the larger buttons grow from 44 to 48 pixels tall, and the small chips
   (the decode filters, the Settings choices, the top bar's toggles) get a 36-pixel box.
   Comfortable spaces the decode, roster and log rows a little further apart than Standard.
-- **A System theme that follows your computer.** Settings ▸ Appearance ▸ Workspace ▸ Theme offers
+- **A System theme that follows your computer.** Settings ▸ Appearance ▸ Theme offers
   **System** beside Light and Dark: it takes your computer's light or dark setting and changes
   when the computer does, for example when it switches to dark in the evening. Dark stays the
   default, and a theme you already picked is kept. The Remote station monitor's theme button
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimum size it always had. Each window keeps its own layout, the Remote Connect page and the
   TV page have the same menu, and the map's own choices (globe or flat, layers, colours) are left
   alone.
-- **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Workspace has a new
+- **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the
   panels, the text and the accent colour in the dark and the light theme alike, and the meters and
@@ -65,6 +65,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme gives the darkest screen. With High contrast on, every word stays at least 7:1 against its
   background at night. Night is not a top-bar button: Field stays the one quick toggle there. It
   is remembered per computer, like the theme.
+- **One-tap looks.** Settings ▸ Appearance ▸ Workspace starts with a **Look** row: **Shack**,
+  **Field / POTA**, **Night**, **Contest**, **Big & clear** and **Touch**. One tap sets several of
+  the rows below together, and the row lights up the look that is on screen, or says **Custom**
+  when your own mix matches none of them. Shack is the app as installed. Field / POTA turns Field
+  mode on for sunlight and Night turns Night on; both put text size and density back to Normal and
+  Standard. Contest is Compact, Big & clear is Larger text with High contrast and Comfortable
+  spacing, and Touch is the Touch density; those three keep Field mode and Night as they are, so
+  Contest works at a Field Day site and Big & clear after dark. No look changes your theme, UI
+  scale, colours or waterfall palettes, and a Night set to Auto stays on Auto. Hover a look to see
+  what it sets; after a tap, **Undo** puts back what it replaced. Nothing happens until you tap.
+- **Ctrl+K finds a setting.** In Settings, Ctrl+K (⌘K on a Mac) puts the cursor in the search box
+  at the top, from anywhere in the panel, and the empty box shows the shortcut. It works only while
+  Settings is open, and it takes no key a cockpit uses: Esc, the space bar and the F-keys still stop
+  and send exactly as before.
+- **Cividis joins the waterfall palettes, marked colour-blind safe.** It looks almost the same to
+  red-green colour-blind eyes as to everyone else. Turbo stays the default, and a palette you
+  picked stays picked.
+- **The waterfall palettes are in Settings too.** Settings ▸ Appearance ▸ Waterfall & scopes has
+  the palette Phone, CW, RTTY and SSTV share and the FT waterfall's own, the same two settings as
+  the pickers in the cockpits.
+- **Reduce motion, in Settings.** Settings ▸ Appearance ▸ Performance ▸ Motion: **Follow the
+  computer** (as before) or **Reduce**, which turns off the animations and fades and helps a slow
+  computer keep up. Alerts still show; they just stop pulsing. Remembered per computer.
+- **Your backup carries how Nexus looks.** Settings ▸ Config ▸ Backup & reset now saves the theme,
+  colours, text size, density, Night, motion, the waterfall palettes and the Logbook globe with the
+  rest of your setup, and Restore puts them back. A backup made before this restores exactly as it
+  always did, and Field mode and UI scale stay with each computer.
 
 ### Changed
 
@@ -87,6 +114,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.
+- **Settings ▸ Appearance is in sections.** **Workspace** keeps the looks and the sizes (UI
+  scale, text size, density); **Theme** has the theme, High contrast, Night and Field mode;
+  then **Colours**, **Waterfall & scopes**, **Map & globe** (the Logbook globe) and
+  **Performance**. Every setting works as before, and searching still finds each one.
+- **The theme is three cards.** Light, Dark and System each show a line on their character:
+  Light is a daylight panel with dark scopes and meters, Dark a dark panel with lit dials and
+  meters, and System follows your computer.
 
 ### Fixed
 
