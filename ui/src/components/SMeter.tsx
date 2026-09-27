@@ -17,6 +17,7 @@
 // `feedback-a-host-ruling-is-not-a-component-ruling`, and the Operate recall card that went 5 px
 // past the fold when that was forgotten.
 import type { RadioStatus } from '../types'
+import { isOnAir } from '../types'
 import { t } from '../i18n'
 
 /** The scale's own name, as a rig prints it — a technical token, like `TxMeters`' four. */
@@ -70,8 +71,7 @@ export function SMeter({ radio }: SMeterProps) {
   // ⚠️ PAUSED, NOT ZEROED, while keyed. These fields are receive-side; a rig stops reporting
   // them on transmit, and a bar falling to the floor every time the operator keys would read
   // as "the signal went away" rather than "we are not listening".
-  const keyed =
-    radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
+  const keyed = isOnAir(radio)
   const live = db != null && !keyed
   const frac = live ? sFrac(db) : null
 

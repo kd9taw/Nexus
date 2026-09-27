@@ -11,7 +11,7 @@ import { useStationControl, useStationTierControl, useStationCapability } from '
 // and stay in the code.
 import { useEffect, useState } from 'react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
-import { isRxOnly } from '../types'
+import { isOnAir, isRxOnly } from '../types'
 import { Menu } from './ui/Menu'
 import { FrequencyControl } from './FrequencyControl'
 import { StatusLane } from './StatusLane'
@@ -355,6 +355,10 @@ export function TopBar({
   // launch is a read-only act, so Nexus never commands the rig into agreement. Surface the
   // disagreement instead of printing the belief as if it were fact. Display only.
   const rigModeMismatch = modeMismatch(radio.rigMode, radio.sideband, radio.rigConfirmed)
+  // The TX/RX plate asks the arbiter the cockpit header's ON AIR sign asks. It keyed on the FT
+  // slot flag alone, so a voice over, CW, a tune or a mic key held at the radio read RX in green
+  // under a header saying ON AIR. Display only.
+  const onAir = isOnAir(radio)
   // The engine refuses to arm TX on a receive-only tier; don't offer the control.
   // Stop TX stays live — disarming is always allowed, and it is the operator's way
   // out if they switched tiers mid-over.
@@ -493,8 +497,8 @@ export function TopBar({
       )}
 
       <div className="topbar-group txrx">
-        <span className={`txrx-indicator ${radio.transmitting ? 'tx' : 'rx'}`}>
-          {radio.transmitting ? TX : RX}
+        <span className={`txrx-indicator ${onAir ? 'tx' : 'rx'}`}>
+          {onAir ? TX : RX}
         </span>
 
         {/* Live-polled meter (100 ms, lock-free backend) — the meter's own title carries the
