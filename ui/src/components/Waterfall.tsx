@@ -39,6 +39,7 @@ import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
+import { usePaletteKey } from '../usePaletteRoles'
 
 /** The legend's unit — relative dB, the scale WSJT-X uses. A unit, not a word. */
 const DBR = 'dBr'
@@ -309,8 +310,10 @@ export function Waterfall({
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
   // The overlay's inks, read off the overlay canvas on its first frame and again after every
-  // theme change (the effect below drops them). See `readOverlayInks`.
+  // theme or colour-role change (the effect below drops them). See `readOverlayInks`.
   const inksRef = useRef<OverlayInks | null>(null)
+  // Settings ▸ Appearance ▸ Colours moves --rx (OK / green) without touching the theme.
+  const colourRoles = usePaletteKey()
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
   const cursorsRef = useRef(cursors)
@@ -377,11 +380,11 @@ export function Waterfall({
     // could only affect rows painted after the switch.
     rebuildRef.current?.()
   }, [palette, theme])
-  // …and the overlay's inks are read afresh on the next frame after a theme switch, before
-  // paint for the same reason: the markers must never lag the sign they agree with.
+  // …and the overlay's inks are read afresh on the next frame after a theme switch or a colour-role
+  // pick, before paint for the same reason: the markers must never lag the sign they agree with.
   useLayoutEffect(() => {
     inksRef.current = null
-  }, [theme])
+  }, [theme, colourRoles])
 
   // The view window moved — a zoom pick, or the RX marker moving under a zoomed view (issue
   // #115). Re-render the ACCUMULATED history at the new edges, the same cold path a palette

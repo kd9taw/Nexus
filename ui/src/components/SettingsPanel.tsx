@@ -172,6 +172,8 @@ import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
 import { ThemeSwitcher } from './ThemeSwitcher'
+import { SettingsColours } from './SettingsColours'
+import type { PaletteRoleId, PaletteSelection } from '../features/paletteRoles'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
@@ -262,6 +264,11 @@ interface Props {
    *  (UI scale, just below); this is the half that had none. Same optional shape. */
   highContrast?: boolean
   onHighContrastChange?: (on: boolean) => void
+  /** Settings ▸ Appearance ▸ Colours: the colour-role picks and their setter, owned by App's
+   *  `usePaletteRoles`. Optional like the theme, so hosts and tests without the wiring render
+   *  the tab unchanged. */
+  palette?: PaletteSelection
+  onPaletteChange?: (role: PaletteRoleId, presetId: string) => void
 }
 
 /** Display order for the Features section's category groups. */
@@ -970,6 +977,8 @@ export function SettingsPanel({
   onFieldModeChange,
   highContrast = false,
   onHighContrastChange,
+  palette,
+  onPaletteChange,
 }: Props) {
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
@@ -3753,6 +3762,18 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.workspace.panes.hint')}</span>
               </div>
             </div>
+          </fieldset>
+          )}
+
+          {/* ---- Colours: the colour roles (features/paletteRoles.ts) ----
+              Right after Workspace, whose Theme row picks the palette these presets retune. Only
+              pre-checked presets, no hex field ("presets first, hex later", operator 2026-09-26);
+              the transmit red, the alert orange and the Needed colours have no row at all. */}
+          {tab === 'appearance' && palette && onPaletteChange && (
+          <fieldset className="settings-section" id="settings-colours">
+            <legend>{t('settings.colours.legend')}</legend>
+            <span className="settings-hint">{t('settings.colours.hint')}</span>
+            <SettingsColours palette={palette} onChange={onPaletteChange} />
           </fieldset>
           )}
 

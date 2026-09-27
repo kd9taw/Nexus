@@ -227,7 +227,12 @@ describe('call sites agree with their catalog entries', () => {
     // same registry shape this comment describes, measured by replacing it with a literal and
     // watching the count fall back to 89. The keys themselves stay checked: they are literals
     // in a `hintKey` table, which `findKeys` reads.
-    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(91)
+    //
+    // 93 as of the colour roles (2026-09-26), and the three added were LOOKED AT: `t(role.labelKey)`,
+    // `t(p.labelKey)` and `t(role.hintKey)` in `SettingsColours.tsx`, the Settings rows reading the
+    // role table in `features/paletteRoles.ts` — the registry shape again, measured at 90 without
+    // the file. Its keys stay checked the same way: literals in `labelKey`/`hintKey` entries.
+    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(94)
   })
 
   it('supplies every value its entry asks for', () => {

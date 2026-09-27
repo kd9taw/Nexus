@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { fitScale, fieldFitScale, naturalFor } from './useScale'
+import { PALETTE_ROLES, attrValueOf } from './features/paletteRoles'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -241,5 +242,49 @@ describe('index.html preseed: field mode', () => {
     expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(
       String(fitScale(1366, 768) / 100),
     )
+  })
+})
+
+describe('index.html preseed: colour roles', () => {
+  // The first-paint copy of usePaletteRoles (Settings ▸ Appearance ▸ Colours): one attribute per
+  // role, set only for a preset the table knows and never for the default, which is NO attribute.
+  // Without it every launch with a picked colour flashes the stock one first. The seed carries its
+  // own copy of the preset ids (it runs before any module loads), so it is compared to the hook's
+  // own answer — `attrValueOf` — for every preset of every role, a value no preset has, and none.
+  const clearRoles = () => {
+    for (const r of PALETTE_ROLES) document.documentElement.removeAttribute(r.attr)
+  }
+  beforeEach(clearRoles)
+
+  it('seeds exactly the attribute the hook would, role by role and preset by preset', () => {
+    const bad: string[] = []
+    for (const r of PALETTE_ROLES) {
+      for (const stored of [...r.presets.map((p) => p.id), 'no-such-preset', null]) {
+        localStorage.clear()
+        clearRoles()
+        if (stored !== null) localStorage.setItem(r.storage, stored)
+        setWin(1366, 768)
+        runPreseed()
+        const want = attrValueOf(r, stored ?? '')
+        const got = document.documentElement.getAttribute(r.attr)
+        if (got !== want) bad.push(`${r.id} stored ${JSON.stringify(stored)}: seed ${JSON.stringify(got)}, hook ${JSON.stringify(want)}`)
+        for (const other of PALETTE_ROLES) {
+          if (other !== r && document.documentElement.getAttribute(other.attr) !== null) {
+            bad.push(`${r.id} stored ${JSON.stringify(stored)} also seeded ${other.attr}`)
+          }
+        }
+      }
+    }
+    expect(bad).toEqual([])
+  })
+
+  it('seeds every role at once, and leaves the zoom exactly where it was', () => {
+    for (const r of PALETTE_ROLES) localStorage.setItem(r.storage, r.presets[r.presets.length - 1].id)
+    setWin(1366, 768)
+    runPreseed()
+    for (const r of PALETTE_ROLES) {
+      expect(document.documentElement.getAttribute(r.attr), r.id).toBe(r.presets[r.presets.length - 1].id)
+    }
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(String(fitScale(1366, 768) / 100))
   })
 })

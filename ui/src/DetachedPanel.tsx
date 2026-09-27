@@ -92,6 +92,7 @@ import { surfaceGet, surfaceSet } from './features/windowScope'
 import { readEnabledModes } from './useFeatures'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
+import { usePaletteRoles } from './usePaletteRoles'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
@@ -209,6 +210,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // station, not about a window. Only `fieldMode` reaches useScale; high contrast on its own
   // must leave this window's zoom exactly where the operator left it.
   const { fieldMode } = useContrastPrefs()
+  // And the colour roles: this document's own writer of the data-<role> attributes, as useTheme
+  // is of data-theme (the preseed already painted them; this keeps them owned).
+  usePaletteRoles()
   // A torn-off window is its OWN document — it must publish the same layout/responsive
   // state the main app does, or the CSS falls back to the broken narrow/stacked layout
   // (vertical rails go horizontal, the map collapses to zero height). Mirror App.tsx.

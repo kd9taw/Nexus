@@ -3694,6 +3694,160 @@ body.resizing-row {
   color: var(--well-ink);
 }
 
+/* ---- COLOUR ROLES: the operator's picks (Settings ▸ Appearance ▸ Colours) ------------------
+   Operator picks, 2026-09-26: "Presets first, hex later" and "Agent picks, you review". Five
+   roles, each a named job a colour does, with a few pre-checked presets:
+     Accent  — --accent, --accent-ink, --focus-ring, --bubble-mine, --bubble-mine-text
+     Readout — --readout: the frequency digits (they were painted in the accent until now)
+     OK      — --snr-strong, --rx, --band-open (and --state-good through its alias)
+     Amber   — --alert-warning, --snr-marginal, --band-marginal (and --state-ok)
+     Cyan    — --alert-info
+   The TX red, the critical orange and the need set are LOCKED: no block here may declare them
+   (features/paletteRoles.ts, LOCKED_TOKENS).
+
+   ONE ATTRIBUTE PER ROLE on <html>, ABSENT AT THE DEFAULT. The default preset is today's values
+   — the theme blocks above, untouched — so an operator who never opens Colours sees nothing
+   move. A preset is two-attribute selectors, (0,2,0) like the contrast block, so it outranks the
+   (0,1,0) palettes whatever the source order; it declares none of the tokens the contrast block
+   does, so the two compose.
+
+   EVERY DARK BLOCK ALSO NAMES `[data-<role>='…'] .well`: a display well declares the dark
+   palette on itself (DISPLAY WELLS), so a preset that only arrived by inheritance from <html>
+   would stop at the well's edge. The dark value is what a well paints in either theme.
+
+   The values are features/paletteRoles.ts's; styles-palette-roles.test.ts resolves this cascade
+   for every role × preset × mode, at <html> and inside a well, and fails on any token that
+   paints something else, reads below its contrast floor, or comes within ΔE 0.15 of the TX red
+   or the critical orange. A new night or look block that retunes one of these tokens must say
+   how it composes with a preset: at equal specificity the later block wins. */
+:root,
+[data-theme='dark'],
+.well {
+  --readout: #4cc9f0;
+}
+[data-theme='light'] {
+  --readout: #0d8ecf;
+}
+
+/* Accent */
+[data-theme='dark'][data-accent='blue'],
+[data-accent='blue'] .well {
+  --accent: #6fa4fc;
+  --accent-ink: #0d1e3b;
+  --focus-ring: #6fa4fc;
+  --bubble-mine: #345284;
+  --bubble-mine-text: #eef4fe;
+}
+[data-theme='light'][data-accent='blue'] {
+  --accent: #255ebc;
+  --accent-ink: #ffffff;
+  --focus-ring: #255ebc;
+  --bubble-mine: #255ebc;
+  --bubble-mine-text: #ffffff;
+}
+[data-theme='dark'][data-accent='violet'],
+[data-accent='violet'] .well {
+  --accent: #ac8ff8;
+  --accent-ink: #221838;
+  --focus-ring: #ac8ff8;
+  --bubble-mine: #56477f;
+  --bubble-mine-text: #f4f2fd;
+}
+[data-theme='light'][data-accent='violet'] {
+  --accent: #6e44bc;
+  --accent-ink: #ffffff;
+  --focus-ring: #6e44bc;
+  --bubble-mine: #6e44bc;
+  --bubble-mine-text: #ffffff;
+}
+
+/* Readout */
+[data-theme='dark'][data-readout='amber'],
+[data-readout='amber'] .well {
+  --readout: #fdbe45;
+}
+[data-theme='light'][data-readout='amber'] {
+  --readout: #936823;
+}
+[data-theme='dark'][data-readout='green'],
+[data-readout='green'] .well {
+  --readout: #70ec90;
+}
+[data-theme='light'][data-readout='green'] {
+  --readout: #11813c;
+}
+[data-theme='dark'][data-readout='violet'],
+[data-readout='violet'] .well {
+  --readout: #bf9bfc;
+}
+[data-theme='light'][data-readout='violet'] {
+  --readout: #6e44bc;
+}
+
+/* OK / green */
+[data-theme='dark'][data-ok='teal'],
+[data-ok='teal'] .well {
+  --snr-strong: #49d9b9;
+  --rx: #49d9b9;
+  --band-open: #49d9b9;
+}
+[data-theme='light'][data-ok='teal'] {
+  --snr-strong: #007e68;
+  --rx: #007e68;
+  --band-open: #007e68;
+}
+[data-theme='dark'][data-ok='mint'],
+[data-ok='mint'] .well {
+  --snr-strong: #84eeb3;
+  --rx: #84eeb3;
+  --band-open: #84eeb3;
+}
+[data-theme='light'][data-ok='mint'] {
+  --snr-strong: #0d8557;
+  --rx: #0d8557;
+  --band-open: #0d8557;
+}
+
+/* Amber */
+[data-theme='dark'][data-amber='gold'],
+[data-amber='gold'] .well {
+  --alert-warning: #f0cf4c;
+  --snr-marginal: #f0cf4c;
+  --band-marginal: #f0cf4c;
+}
+[data-theme='light'][data-amber='gold'] {
+  --alert-warning: #977500;
+  --snr-marginal: #977500;
+  --band-marginal: #977500;
+}
+[data-theme='dark'][data-amber='yellow'],
+[data-amber='yellow'] .well {
+  --alert-warning: #f2e252;
+  --snr-marginal: #f2e252;
+  --band-marginal: #f2e252;
+}
+[data-theme='light'][data-amber='yellow'] {
+  --alert-warning: #8c7900;
+  --snr-marginal: #8c7900;
+  --band-marginal: #8c7900;
+}
+
+/* Cyan */
+[data-theme='dark'][data-cyan='cyan'],
+[data-cyan='cyan'] .well {
+  --alert-info: #50d9ef;
+}
+[data-theme='light'][data-cyan='cyan'] {
+  --alert-info: #10798c;
+}
+[data-theme='dark'][data-cyan='blue'],
+[data-cyan='blue'] .well {
+  --alert-info: #7daafd;
+}
+[data-theme='light'][data-cyan='blue'] {
+  --alert-info: #305eb7;
+}
+
 /* ---- LIGHT-MODE INK OVERRIDES ------------------------------------------
    Dark-tuned pastel text/icon colors that sit on PAGE backgrounds (not on
    solid colored chips) — each gets a same-hue ink readable on white. Scoped
@@ -4815,7 +4969,8 @@ select optgroup {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.01em;
-  color: var(--accent);
+  /* The Readout colour role (COLOUR ROLES); its default is the accent this used to be. */
+  color: var(--readout);
   font-variant-numeric: tabular-nums;
 }
 .readout.hero .readout-val {
@@ -4861,7 +5016,7 @@ select optgroup {
    jitter comes back. Background, radius, box-shadow and cursor are paint-only; the advance width
    of every glyph is untouched, so splitting the number into spans costs zero layout.
    The tint is mixed from `currentColor`, NOT from a colour of its own, so it follows the ink —
-   accent normally, and `--tx` red when `.readout.blocked` says the dial is off the band plan.
+   `--readout` normally, and `--tx` red when `.readout.blocked` says the dial is off the band plan.
    That red is the operator's band-edge cue; a `color` here would override it in both
    directions. `ns-resize` is the same "scroll here to tune" idiom as .tuning-readout-wheel. */
 .readout-digit {
@@ -4890,7 +5045,7 @@ select optgroup {
   font-family: var(--font-mono);
   font-size: var(--fs-display);
   font-weight: 700;
-  color: var(--accent);
+  color: var(--readout);
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -5213,6 +5368,49 @@ select optgroup {
 .theme-chip:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* Settings ▸ Appearance ▸ Colours: a role's name with its Reset beside it, so the preset chips
+   below always get the whole width (a Reset after four chips wrapped on its own at 1920). */
+.palette-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.palette-reset {
+  font-size: 11px;
+  font-weight: 600;
+  min-height: 26px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.palette-reset:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+/* Greyed at the default: there is nothing to go back to. */
+.palette-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* A preset's colour, as the theme in use paints it: SettingsColours hands the chip both values
+   (--swatch-dark, --swatch-light) and the theme picks one, so the chip needs no theme of its own.
+   The ring is the chip's own ink, so the dot stays outlined on a filled (active) chip too. */
+.palette-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--space-1);
+  border-radius: 50%;
+  vertical-align: -1px;
+  background: var(--swatch-dark);
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+}
+[data-theme='light'] .palette-swatch {
+  background: var(--swatch-light);
 }
 
 /* ===========================================================================

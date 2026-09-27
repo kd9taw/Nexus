@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,044 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,069 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -24,7 +24,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | QSO / QSOs | 96 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 82 | Computer Aided Transceiver — the radio control protocol. |
-| TX / RX | 79 / 71 | Transmit and receive. Printed on the radio itself. |
+| TX / RX | 79 / 72 | Transmit and receive. Printed on the radio itself. |
 | CW | 67 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 67 | Both the Q-code and the callsign lookup site. |
 | CQ | 63 | The call. Translating it would be strange on the air and on screen. |

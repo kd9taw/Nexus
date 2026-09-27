@@ -1918,6 +1918,32 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 
 *Workspace in Nexus 1.10.3. Reset pane sizes sits to the right of Density.*
 
+### Colours
+
+Pick your own colour for five jobs a colour does on screen, from a few choices
+each. Every choice has been checked for contrast in the light and dark themes,
+with High contrast or Field mode on, and on the dark displays (the frequency
+readout, the meters, the waterfall's scale). Changes apply at once and are
+remembered per computer, like the theme.
+
+- **Accent** — selected chips, focus rings, your own chat bubbles. Cyan (the
+  standard), Blue or Violet.
+- **Readout** — the frequency digits and other readouts. Cyan (the standard),
+  Amber, Green or Violet. The digits still turn red when the dial is outside
+  your licence privileges, whichever colour you pick.
+- **OK / green** — good signal, RX, confirmed. Green (the standard), Teal or
+  Mint. Teal sits further from the reds, which helps with red-green colour
+  blindness.
+- **Amber** — warnings and marginal signal. Amber (the standard), Gold or
+  Yellow. In the light theme these keep the standard amber's weight on the
+  page, so the change there is a shift of hue.
+- **Cyan** — information chips. Sky (the standard), Cyan or Blue.
+
+**Reset** puts a colour back to the standard one; it is greyed while the
+colour already is. The transmit red (including the ON AIR sign), the alert
+orange and the Needed colours stay fixed and have no setting, so a keyed
+transmitter and an alert always look the same.
+
 ### Connect on a TV
 
 Serves the [Connect](connect.md) view — the map with every layer, the panes,

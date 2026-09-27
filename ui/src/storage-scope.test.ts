@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { join, relative } from 'node:path'
 import { scopedKey, surfaceKey } from './features/windowScope'
 import { panelStorageKey } from './features/panelState'
+import { PALETTE_ROLES } from './features/paletteRoles'
 
 /** Every base key routed through the per-surface scope. Adding one here without routing
  *  it (or routing one without adding it here) fails `routes exactly the per-surface keys`
@@ -116,6 +117,14 @@ const SHARED = [
   // The optional local-time clock beside UTC (#253). Per MACHINE, like density and field mode:
   // local time is a fact about this computer's time zone, and every window of it agrees.
   'nexus-local-clock',
+  // The colour roles (Settings ▸ Appearance ▸ Colours), one key per role: a preference about this
+  // screen and the eyes in front of it, the same class as the theme, so every window agrees. The
+  // role table is their one source (`classifies every colour-role key`, below).
+  'nexus-palette-accent',
+  'nexus-palette-amber',
+  'nexus-palette-cyan',
+  'nexus-palette-ok',
+  'nexus-palette-readout',
   'nexus-motion',
   'nexus-ui-scale-cap',
   'nexus.connect.chaseDefault.v1',
@@ -479,6 +488,20 @@ describe('call sites agree with the classification', () => {
       expect(text, file).not.toContain("localStorage.getItem('nexus.spotlegend')")
       expect(text, file).not.toContain("localStorage.setItem('nexus.spotlegend'")
     }
+  })
+
+  /**
+   * The colour-role keys (Settings ▸ Appearance ▸ Colours) reach `localStorage` as
+   * `role.storage`, a property of the role table, so the literal scan above cannot see them
+   * (the useFieldMode.ts trap). The table is the one source of them, so it is checked here
+   * directly: every role's key is classified, and SHARED lists none the table does not have.
+   */
+  it('classifies every colour-role key, from the role table itself', () => {
+    const tableKeys = PALETTE_ROLES.map((r) => r.storage).sort()
+    expect(tableKeys.length).toBeGreaterThan(0)
+    const classified = [...PER_SURFACE, ...SHARED, ...DEDUPE, ...SESSION_SCOPED]
+    expect(tableKeys.filter((k) => !classified.includes(k)), 'unclassified colour-role keys').toEqual([])
+    expect(SHARED.filter((k) => k.startsWith('nexus-palette-')).sort()).toEqual(tableKeys)
   })
 
   it('classifies every key exactly once', () => {

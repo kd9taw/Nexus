@@ -35,7 +35,6 @@ import {
   chainOf,
   contrast,
   expandWith,
-  isHigh,
   parseRules,
   rgbHex as hex,
   rootTokensFrom,
@@ -77,8 +76,9 @@ const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')
 const ROOT = Object.fromEntries(MODES.map((m) => [m, rootTokensFrom(RULES, m)])) as Record<Mode, Map<string, string>>
 const rootValue = (mode: Mode, token: string) => expandWith(ROOT[mode], `var(${token})`).trim()
 
-/** Which palette a well must show in `mode`: always the DARK theme, at the mode's contrast. */
-const darkTwin = (mode: Mode): Mode => (isHigh(mode) ? 'dark-high' : 'dark')
+/** Which palette a well must show in `mode`: always the DARK theme, at the mode's contrast and
+ *  with the mode's colour-role presets (a well shows a preset's dark value in either theme). */
+const darkTwin = (mode: Mode): Mode => mode.replace(/^light/, 'dark') as Mode
 
 /** The status inks the scope must re-declare. `--state-*` are listed alongside `--snr-*`
  *  because the aliases are computed on <html>: a descendant that re-declares only the target
@@ -114,6 +114,7 @@ const ISLAND = [
   '--accent',
   '--accent-ink',
   '--focus-ring',
+  '--readout',
 ] as const
 
 // ── The well tokens ─────────────────────────────────────────────────────────────────────────

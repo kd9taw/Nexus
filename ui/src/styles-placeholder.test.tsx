@@ -280,11 +280,16 @@ describe('a Settings placeholder is styled as a placeholder, not left to the inp
 
   it('the placeholder ink is never the ink of an entered value, in any theme', () => {
     const same: string[] = []
-    for (const mode of MODES) {
-      for (const f of [...new Map(SETTINGS.map((f) => [f.classes + f.tag, f])).values()]) {
-        const input = inSettings(f)
-        const ph = rgbHex(rgbOf(placeholderInk(input).value, mode))
-        const val = rgbHex(rgbOf(valueInk(input).value, mode))
+    // Each field's winning declarations are resolved ONCE, then measured in every mode: which rule
+    // wins does not depend on the mode here, only what its var()s resolve to does, and MODES grew
+    // fourfold with the colour-role presets (cssCascade.ts PALETTE_SETS).
+    for (const f of [...new Map(SETTINGS.map((f) => [f.classes + f.tag, f])).values()]) {
+      const input = inSettings(f)
+      const phInk = placeholderInk(input).value
+      const valInk = valueInk(input).value
+      for (const mode of MODES) {
+        const ph = rgbHex(rgbOf(phInk, mode))
+        const val = rgbHex(rgbOf(valInk, mode))
         if (ph === val) same.push(`${mode} <${f.tag} class="${f.classes}"> → both ${ph}`)
       }
     }
@@ -337,10 +342,13 @@ describe('the rest of the app', () => {
     // fields, and some of them paint their own background. Anything that ends up under 4.5:1
     // there needs its own rule, not a shrug.
     const bad: string[] = []
-    for (const mode of MODES) {
-      for (const f of SHAPES) {
-        const input = bare(f)
-        const ratio = contrast(rgbOf(placeholderInk(input).value, mode), fieldSurface(input, mode))
+    // Resolved once per field and measured in every mode, as above: the winners are mode-free.
+    for (const f of SHAPES) {
+      const input = bare(f)
+      const ink = placeholderInk(input).value
+      const ground = elementProp(input, 'background')?.value ?? elementProp(input, 'background-color')?.value ?? 'var(--bg)'
+      for (const mode of MODES) {
+        const ratio = contrast(rgbOf(ink, mode), rgbOf(ground, mode))
         if (ratio < 4.5) bad.push(`${mode} <${f.tag} class="${f.classes}"> → ${ratio.toFixed(2)}:1`)
       }
     }
