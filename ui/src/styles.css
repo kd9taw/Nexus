@@ -5423,7 +5423,7 @@ select optgroup {
   gap: var(--space-2);
 }
 .palette-reset {
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   min-height: 26px;
   padding: var(--space-1) var(--space-2);
