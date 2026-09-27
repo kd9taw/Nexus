@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the computer does, for example when it switches to dark in the evening. Dark stays the
   default, and a theme you already picked is kept. The Remote station monitor's theme button
   offers it too, as its third press.
+- **Three ready-made layouts for Connect: Map first, List first and Dashboard.** **⊞ Panels** on
+  Connect now opens with a **Layout** section. **Map first** gives the map the full height and all
+  but two narrow side columns (Conditions and Band Advisor, Chase and Space Wx). **List first**
+  puts Chase, Chase Feed, Getting Out and Openings in two wide columns with a small map between
+  them. **Dashboard** opens seven panes around a smaller map: Space Wx and Band Advisor on the
+  left, Chase and Getting Out on the right, Openings, Band Outlook and Greyline along the bottom.
+  Nothing changes until you pick one: Connect still opens the way it always has, which the menu
+  calls **Standard**. Move or resize anything afterwards and the menu says **Custom**, and your
+  change stays put. Picking a layout over an arrangement of your own replaces it, the menu says
+  so first, and **Undo last change** puts it back, column widths included; **Reset layout** still
+  returns to Standard. On a small window the columns narrow to fit and the map keeps the same
+  minimum size it always had. Each window keeps its own layout, the Remote Connect page and the
+  TV page have the same menu, and the map's own choices (globe or flat, layers, colours) are left
+  alone.
 
 ### Changed
 

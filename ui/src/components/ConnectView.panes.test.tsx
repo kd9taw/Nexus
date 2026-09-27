@@ -35,6 +35,9 @@ vi.mock('../api', async (importOriginal) => ({
 import { ConnectView } from './ConnectView'
 import { DEFAULT_SLOTS, SLOT_IDS, type SlotId } from '../features/connectConfig'
 import { MAP_MIN, RAIL_MAX, RAIL_MIN } from '../features/connectRails'
+import { CONNECT_PRESET_IDS, CONNECT_PRESETS, type ConnectPresetId } from '../features/connectPresets'
+import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
+import { StationDataContext } from '../stationAccess'
 
 const RECORD = 'nexus.panels.connect.main'
 const POPOUT_RECORD = 'nexus.panels.connect.connect'
@@ -443,5 +446,194 @@ describe('resizing the rails', () => {
     fireEvent.doubleClick(seam)
     expect(record().share.left1).toBe(1)
     expect(record().share.left2).toBe(1)
+  })
+})
+
+// LAYOUT PRESETS (the UI redesign, 2026-09-26): Map first · List first · Dashboard, in the ⊞ Panels
+// menu. Additive — the approved default stays the default and nothing changes until a tap — and
+// read back from the records they write, so a moved or resized pane reads Custom and nothing
+// snaps back. The preset table itself is guarded in features/connectPresets.test.ts.
+describe('layout presets — ⊞ Panels ▸ Layout', () => {
+  const LABEL: Record<ConnectPresetId, string> = { mapFirst: 'Map first', listFirst: 'List first', dashboard: 'Dashboard' }
+  const CONFIG = 'nexus.connect.config'
+  const layouts = () => screen.getByRole('group', { name: 'Layout' })
+  const openMenu = () => {
+    if (!screen.queryByRole('group', { name: 'Layout' })) fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+  }
+  const chip = (label: string) => {
+    openMenu()
+    return within(layouts()).getByRole('button', { name: label })
+  }
+  const pick = (label: string) => fireEvent.click(chip(label))
+  /** What the picker says is on screen. */
+  const layoutNow = () => {
+    openMenu()
+    return layouts().querySelector('.connect-layout-now')?.textContent
+  }
+  const paneIn = (c: HTMLElement, s: SlotId) => c.querySelector(`.pane-frame[data-slot="${s}"]`)?.getAttribute('data-pane')
+  const stored = (key: string) => JSON.parse(localStorage.getItem(key) ?? 'null')
+
+  it('nothing picked: the picker reads Standard, the approved default is on screen, and nothing is written', async () => {
+    const { container } = await mount()
+    expect(layoutNow()).toBe('Standard')
+    for (const id of CONNECT_PRESET_IDS) expect(chip(LABEL[id]).getAttribute('aria-pressed'), id).toBe('false')
+    for (const s of SLOT_IDS) expect(paneIn(container, s), s).toBe(DEFAULT_SLOTS[s])
+    expect(localStorage.getItem(CONFIG), 'opening the menu must not write a layout').toBeNull()
+    expect(localStorage.getItem(RECORD)).toBeNull()
+    expect(localStorage.getItem(WIDTHS)).toBeNull()
+  })
+
+  for (const id of CONNECT_PRESET_IDS) {
+    it(`${LABEL[id]} applies on a tap — its slots, closed panes and widths — reads back as ${LABEL[id]}, and survives a remount`, async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        // The operator's own map setup for the intent in use: a Flat map coloured by signal — both
+        // unlike the POTA/SOTA defaults, so an overwrite would show.
+        localStorage.setItem('nexus.connect.intent', 'pota')
+        localStorage.setItem('nexus.connect.intents', JSON.stringify({ pota: { map: 'world', colorBy: 'snr' } }))
+        const { container } = await mount()
+        // Taken AFTER mount: MapView writes its layer table into the record when it mounts.
+        const intents = localStorage.getItem('nexus.connect.intents')
+        expect(JSON.parse(intents!).pota.map, 'control: the setup survived the mount').toBe('world')
+        pick(LABEL[id])
+        const p = CONNECT_PRESETS[id]
+        const shown = SLOT_IDS.filter((s) => !p.hidden.includes(s))
+        expect(slotsOn(container).sort()).toEqual([...shown].sort())
+        for (const s of shown) expect(paneIn(container, s), s).toBe(p.slots[s])
+        expect(stored(CONFIG).slots).toEqual(p.slots)
+        expect(stored(RECORD).state).toEqual(Object.fromEntries(p.hidden.map((s) => [s, 'removed'])))
+        expect(stored(RECORD).share).toEqual({})
+        expect(stored(WIDTHS)).toEqual(p.rails)
+        expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe(`${p.rails.left}px`)
+        expect(grid(container).style.getPropertyValue('--cn-rail-r')).toBe(`${p.rails.right}px`)
+        expect(layoutNow()).toBe(LABEL[id])
+        expect(chip(LABEL[id]).getAttribute('aria-pressed')).toBe('true')
+        // The map's own per-intent choices are not the layout's to change.
+        expect(localStorage.getItem('nexus.connect.intent')).toBe('pota')
+        expect(localStorage.getItem('nexus.connect.intents')).toBe(intents)
+
+        cleanup()
+        const again = await mount()
+        expect(slotsOn(again.container).sort()).toEqual([...shown].sort())
+        expect(layoutNow()).toBe(LABEL[id])
+      } finally {
+        restore()
+      }
+    })
+  }
+
+  it('after a preset, moving or resizing a pane reads Custom, and nothing snaps back', async () => {
+    const restore = fakeBoxes(1920)
+    try {
+      const first = await mount()
+      pick('Map first')
+      expect(layoutNow(), 'control: the preset is on screen').toBe('Map first')
+      fireEvent.keyDown(screen.getByRole('separator', { name: 'Left panel column width' }), { key: 'ArrowRight' })
+      expect(layoutNow(), 'a rail width step').toBe('Custom')
+      expect(chip('Map first').getAttribute('aria-pressed')).toBe('false')
+
+      pick('Map first')
+      expect(layoutNow(), 'a second tap puts it back — the only way it comes back').toBe('Map first')
+      fireEvent.change(first.container.querySelector('.pane-frame[data-slot="left1"] select')!, { target: { value: 'greyline' } })
+      expect(layoutNow(), 'a pane picked into a slot').toBe('Custom')
+
+      // Nothing remembers the pick to snap back to: a remount keeps the operator's arrangement.
+      cleanup()
+      const again = await mount()
+      expect(paneIn(again.container, 'left1')).toBe('greyline')
+      expect(layoutNow()).toBe('Custom')
+
+      pick('Dashboard')
+      closeSlot(again.container, 'bottom3')
+      expect(layoutNow(), 'a pane closed').toBe('Custom')
+      pick('Dashboard')
+      fireEvent.keyDown(screen.getByRole('separator', { name: 'Split between the left panels' }), { key: 'ArrowDown' })
+      expect(layoutNow(), 'a split moved').toBe('Custom')
+    } finally {
+      restore()
+    }
+  })
+
+  it('over the operator’s own arrangement, the menu says what a tap costs, and Undo puts all of it back — widths included', async () => {
+    const restore = fakeBoxes(1920)
+    try {
+      const { container } = await mount()
+      fireEvent.change(container.querySelector('.pane-frame[data-slot="left1"] select')!, { target: { value: 'greyline' } })
+      closeSlot(container, 'right2')
+      fireEvent.keyDown(screen.getByRole('separator', { name: 'Left panel column width' }), { key: 'ArrowRight' })
+      const before = { slots: stored(CONFIG).slots, record: stored(RECORD), widths: stored(WIDTHS), left: grid(container).style.getPropertyValue('--cn-rail-l') }
+      expect(before.left, 'control: the width step took').toBe('316px')
+      expect(layoutNow()).toBe('Custom')
+      expect(within(layouts()).getByText('Picking one replaces your own arrangement. Undo last change puts it back.')).toBeTruthy()
+
+      pick('List first')
+      expect(layoutNow()).toBe('List first')
+      expect(within(layouts()).queryByText(/Picking one replaces/), 'no warning once nothing of the operator’s is on screen').toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+      expect(stored(CONFIG).slots).toEqual(before.slots)
+      expect(stored(RECORD)).toEqual(before.record)
+      expect(stored(WIDTHS)).toEqual(before.widths)
+      expect(grid(container).style.getPropertyValue('--cn-rail-l')).toBe(before.left)
+      expect(paneIn(container, 'left1')).toBe('greyline')
+      expect(paneIn(container, 'right2'), 'the pane closed before the preset is closed again').toBeUndefined()
+      expect(layoutNow()).toBe('Custom')
+    } finally {
+      restore()
+    }
+  })
+
+  it('a preset’s widths are clamped on load: List first saved on a big window fits the 1024 floor and still reads List first', async () => {
+    let restore = fakeBoxes(1920)
+    const first = await mount()
+    pick('List first')
+    first.unmount()
+    restore()
+    restore = fakeBoxes(1024)
+    try {
+      const { container } = await mount()
+      const l = parseFloat(grid(container).style.getPropertyValue('--cn-rail-l'))
+      const r = parseFloat(grid(container).style.getPropertyValue('--cn-rail-r'))
+      // jsdom carries no sheet, so padding and gaps read 0 and the room is the box less the map floor.
+      expect(l + r, `rails ${l}+${r} leave the map less than its floor`).toBeLessThanOrEqual(1024 - MAP_MIN)
+      expect(l, 'control: the stored width really was squeezed').toBeLessThan(CONNECT_PRESETS.listFirst.rails.left!)
+      expect(r).toBeLessThan(CONNECT_PRESETS.listFirst.rails.right!)
+      expect(stored(WIDTHS), 'a clamp never rewrites the preference').toEqual(CONNECT_PRESETS.listFirst.rails)
+      expect(layoutNow()).toBe('List first')
+    } finally {
+      restore()
+    }
+  })
+
+  it('the Remote Connect page has the same picker, and a preset applies there', async () => {
+    const source = { client: { supports: () => true } } as unknown as RemoteCollections
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(
+        <StationDataContext.Provider value={false}>
+          <RemoteCollectionsContext.Provider value={source}>
+            <ConnectView {...props} />
+          </RemoteCollectionsContext.Provider>
+        </StationDataContext.Provider>,
+      )
+    })
+    expect(r.container.querySelector('.connect-header [role="status"]'), 'control: this is the Remote page').not.toBeNull()
+    expect(layoutNow()).toBe('Standard')
+    pick('List first')
+    expect(slotsOn(r.container).sort()).toEqual(['left1', 'left2', 'right1', 'right2'])
+    expect(layoutNow()).toBe('List first')
+  })
+
+  it('a pop-out’s preset is its own: the main window’s arrangement is not touched', async () => {
+    window.history.replaceState(null, '', '/?panel=connect')
+    const { container } = await mount()
+    pick('Map first')
+    expect(slotsOn(container).sort()).toEqual(['left1', 'left2', 'right1', 'right2'])
+    expect(stored('nexus.connect.config.connect').slots).toEqual(CONNECT_PRESETS.mapFirst.slots)
+    expect(stored(POPOUT_RECORD).state).toEqual({ bottom1: 'removed', bottom2: 'removed', bottom3: 'removed' })
+    expect(stored('nexus.connect.railWidths.connect')).toEqual(CONNECT_PRESETS.mapFirst.rails)
+    expect(localStorage.getItem(CONFIG), 'the main window’s placement').toBeNull()
+    expect(localStorage.getItem(RECORD), 'the main window’s record').toBeNull()
+    expect(localStorage.getItem(WIDTHS), 'the main window’s widths').toBeNull()
   })
 })

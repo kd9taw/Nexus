@@ -224,6 +224,31 @@ describe('usePanelLayout', () => {
     expect(result.current.stateOf('waterfall')).toBe('removed')
     expect(result.current.stateOf('stations')).toBe('removed')
   })
+
+  it('setLayout replaces the whole record in ONE undoable step, coerced like a load (a layout preset)', () => {
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setPanelState('waterfall', 'removed'))
+    act(() => result.current.setShare('rxfreq', 1.6))
+    act(() =>
+      result.current.setLayout({
+        v: 1,
+        state: { stations: 'removed', bogus: 'removed' } as PanelLayout<OperatePanelId>['state'],
+        share: { bandActivity: 1e-9 },
+      }),
+    )
+    // Replaced, not merged: the waterfall the old record hid is back, the old share is gone.
+    expect(result.current.stateOf('waterfall')).toBe('docked')
+    expect(result.current.stateOf('stations')).toBe('removed')
+    expect(result.current.shareOf('rxfreq')).toBe(1)
+    // Coerced: an unknown id is not written, a collapsing share is clamped to the floor.
+    expect(result.current.shareOf('bandActivity')).toBe(MIN_SHARE)
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ v: 1, state: { stations: 'removed' }, share: { bandActivity: MIN_SHARE } })
+    // One Undo brings back the whole previous record.
+    act(() => result.current.undo())
+    expect(result.current.stateOf('waterfall')).toBe('removed')
+    expect(result.current.stateOf('stations')).toBe('docked')
+    expect(result.current.shareOf('rxfreq')).toBe(1.6)
+  })
 })
 
 describe('share (seam resize)', () => {

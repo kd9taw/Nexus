@@ -82,6 +82,24 @@ you make things is remembered per window, and a saved width is trimmed to fit a
 smaller screen. **Reset layout** returns Connect to exactly how it first opened,
 including which pane sits in each slot.
 
+**Layouts.** The Panels menu opens with three ready-made arrangements of the same
+panes, and names the layout on screen: **Standard** (how Connect first opens), one
+of the three, or **Custom** once you have moved or resized anything yourself.
+
+| Layout | Left column | Right column | Bottom row | Column width |
+|---|---|---|---|---|
+| Map first | Conditions, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
+| List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
+| Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
+
+A layout applies only when you pick it, and nothing snaps back afterwards: change a
+pane or a width and the menu reads Custom. Over an arrangement of your own the menu
+says that a pick replaces it, and **Undo** puts it back, widths included. The panes a
+layout closes stay in their slots, so ticking one in the menu brings back what the
+layout parked there. On a smaller window the columns narrow to fit (the map keeps
+its 280 px minimum). A layout never changes the map's own settings: the Globe, 3D,
+Flat or Beam pick, the layers and the colouring stay as you left them for each intent.
+
 The panes you can assign:
 
 | Pane | Shows |

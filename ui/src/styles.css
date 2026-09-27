@@ -14410,6 +14410,60 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
   cursor: default;
 }
+/* ⊞ Panels ▸ Layout — Connect's layout presets (ConnectView), above the entries. A column of
+   full-width choices rather than a chip row: the popover is 220px wide, where three chips side by
+   side wrap at Large text or in German. The one on screen is FILLED — a change of form, not of
+   hue alone (DESIGN.md: never colour alone). */
+.connect-layouts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.connect-layouts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.connect-layout-now {
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.connect-layout-opt {
+  text-align: left;
+  font-size: var(--fs-label);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.connect-layout-opt:hover {
+  border-color: var(--accent);
+}
+.connect-layout-opt.active {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* What a tap costs, shown only over the operator's own arrangement. The entry notes' look
+   (.panels-menu-why) without their indent: there is no checkbox here to sit past. */
+.connect-layout-note {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
+}
 .cockpit-txstate {
   font-size: 0.8rem;
   font-weight: 600;

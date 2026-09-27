@@ -471,7 +471,13 @@ export function usePanelLayout<P extends string>(
   instance?: string,
   /** Read this instance's record while this surface has none of its own (loadPanelLayout). */
   inherit?: string,
-): PanelLayoutApi<P> {
+): PanelLayoutApi<P> & {
+  /** Replace the whole record in ONE undoable step — a layout preset (Connect's ⊞ Layout), whose
+   *  visibility and splits must come back with a single Undo, as Reset's do. Coerced like a load,
+   *  so an id outside the vocabulary cannot be written. Off PanelLayoutApi on purpose: cockpits
+   *  receive that as a prop and have no presets to apply. */
+  setLayout: (next: PanelLayout<P>) => void
+} {
   const key = useMemo(() => panelStorageKey(spec.view, instance), [spec.view, instance])
   // Current + previous in ONE state so the undo snapshot is taken by the same updater
   // that saves — two useStates could not do that atomically.
@@ -531,6 +537,10 @@ export function usePanelLayout<P extends string>(
     [key],
   )
   const reset = useCallback(() => apply(() => emptyPanelLayout<P>()), [apply])
+  const setLayout = useCallback(
+    (next: PanelLayout<P>) => apply(() => coercePanelLayout(spec, next)),
+    [apply, spec],
+  )
   // Which panes the pending undo would UNMOUNT: removed in the snapshot, present now.
   // Computed from the same history the undo restores, so it cannot describe a different
   // click than the one the button makes.
@@ -552,6 +562,7 @@ export function usePanelLayout<P extends string>(
     canUndo: hist.prev != null,
     undoRemoves,
     reset,
+    setLayout,
   }
 }
 
