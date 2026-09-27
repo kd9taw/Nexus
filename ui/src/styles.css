@@ -95,6 +95,10 @@
   min-height: 36px;
   padding: var(--space-2) var(--space-3);
 }
+/* A decode list squeezed by those taller chips keeps two rows to tap, not .od-scroll's one. */
+:root[data-touch] .od-scroll {
+  min-height: 3em;
+}
 
 /* TEXT SIZE (#215) — Settings ▸ Workspace ▸ Text size: Normal / Large / Larger,
    +0 / +12 / +25 % (operator, 2026-09-26), on ALL text, the decode and log lists included —

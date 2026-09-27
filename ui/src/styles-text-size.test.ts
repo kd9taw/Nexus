@@ -487,6 +487,19 @@ describe('Touch density: the chips the operator taps get bigger (computed winner
     expect(bad).toEqual([])
   })
 
+  it('a squeezed decode list keeps two rows under Touch, not one', () => {
+    // Measured in Chrome at 1024×768 with Touch at Normal text: the filter chips' 36px rows
+    // push Band Activity's list down to its one-row floor (1.5em = 21px) — a list you can scroll
+    // but not comfortably tap. Touch is for fingers, so its floor is two rows.
+    const list = mount('od-scroll', 'div')
+    const plain = pxOf(list, 'min-height')
+    document.documentElement.setAttribute('data-density', 'guided')
+    document.documentElement.setAttribute('data-touch', '1')
+    const touch = pxOf(list, 'min-height')
+    expect(plain, 'the one-row floor outside Touch moved').toBeCloseTo(1.5 * 14, 6)
+    expect(touch, 'Touch leaves the decode list at one row').toBeGreaterThanOrEqual(2 * plain)
+  })
+
   it('without Touch the chips keep the sizes they ship with (the control)', () => {
     // The mirror of the case above: a touch rule that leaked out of its attribute would pass
     // it and fail this. `.theme-chip` ships at min-height 26px (operator, 2026-08-09).
