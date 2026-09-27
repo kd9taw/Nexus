@@ -31,6 +31,7 @@
   "mode": "chat",
   "mycall": "W9XYZ",
   "mygrid": "EN37",
+  "parsecPresence": null,
   "pendingLog": null,
   "pendingLogsAutoLogged": 0,
   "pendingLogsWaiting": 0,

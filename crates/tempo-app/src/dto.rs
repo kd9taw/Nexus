@@ -3518,6 +3518,25 @@ pub struct AppSnapshot {
     /// every change is in the database or on its way there. The screen says so while it lasts.
     #[serde(default)]
     pub log_save_trouble: Option<LogSaveTrouble>,
+    /// Parsec presence mode, for its Settings readout and the status lane. `None` while the mode
+    /// is switched off, which is the default.
+    #[serde(default)]
+    pub parsec_presence: Option<ParsecPresenceDto>,
+}
+
+/// What Parsec presence mode knows — see [`AppSnapshot::parsec_presence`] and
+/// `engine/parsec_presence.rs`. Tokens only: the UI owns every word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsecPresenceDto {
+    /// `"starting"` (no read of Parsec's log yet) | `"connected"` | `"notConnected"` |
+    /// `"unreadable"` — the last thing the watcher found.
+    pub status: String,
+    /// When presence mode last stopped a transmission (unix seconds). Kept until the operator
+    /// transmits again, so the reason is still on screen when they reconnect.
+    pub stopped_at: Option<u64>,
+    /// What that stop ended: `"tune"` | `"ptt"` | `"rtty"` | `"psk"`.
+    pub stopped: Vec<String>,
 }
 
 /// Why the logbook database could not be opened at launch — see

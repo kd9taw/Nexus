@@ -18,6 +18,7 @@
 mod by_id_tests;
 mod field_day_display;
 mod mode_entry;
+pub mod parsec_presence;
 pub mod radio_selection;
 pub mod receivers;
 pub mod remote_logging;
@@ -3314,6 +3315,9 @@ pub struct Engine {
     /// In-flight SSTV TX progress `(played_ms, total_ms)`, stamped by the radio loop.
     /// `None` = no image queued or sending.
     sstv_tx_progress: Option<(f64, f64)>,
+    /// Parsec presence mode — the state machine the watcher's verdicts drive, and the last
+    /// stop it made. See `engine/parsec_presence.rs`.
+    parsec: parsec_presence::ParsecPresence,
 }
 
 /// Samples of recent audio kept for the live waterfall spectrum (~0.34 s at
@@ -4984,6 +4988,7 @@ impl Engine {
             sstv_sending: false,
             sstv_tx_mode: None,
             sstv_tx_progress: None,
+            parsec: parsec_presence::ParsecPresence::default(),
         }
     }
 
@@ -20441,6 +20446,7 @@ contact yourself."
         s.log_tick = self.station.log_tick();
         s.log_store_problem = self.station.store_problem.clone();
         s.log_save_trouble = self.station.store.save_trouble();
+        s.parsec_presence = self.parsec_presence_dto();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
