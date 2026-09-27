@@ -1411,11 +1411,13 @@ export function OperateCockpit({
               active={active}
               onOpenSettings={onOpenSettings}
               targetCall={selectedCall}
-              onPointAt={(call) =>
-                pointRotatorAtCall(call)
+              // The path is forwarded, and the LP toast names it: see `rotorPointAt`, which the
+              // other cockpits share. This one keeps its own `operate.rotor.*` wording.
+              onPointAt={(call, longPath) =>
+                pointRotatorAtCall(call, longPath)
                   .then((bearing: number | null | undefined) =>
                     // A browser gets no bearing back: the station resolves it.
-                    pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
+                    pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : longPath ? t('shell.rotator.pointedLong', { bearing: Math.round(bearing), call }) : t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
                   )
                   // `{{error}}` is the backend's own refusal, passed through as a value.
                   .catch((e) =>

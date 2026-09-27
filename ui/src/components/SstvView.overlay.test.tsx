@@ -22,6 +22,8 @@ import { overlayRect, type OverlayItem } from '../sstvOverlay'
 import { plateFor } from '../sstvIdOverlay'
 
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+// The rotor strip has its own suite (SstvView.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),

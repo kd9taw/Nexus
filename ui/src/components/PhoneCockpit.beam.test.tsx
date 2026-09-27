@@ -136,7 +136,9 @@ describe('the Phone cockpit can beam at the station it is working', () => {
 
     await waitFor(() => expect(rotor().getAttribute('data-target')).toBe('JA1ABC'))
     fireEvent.click(screen.getByRole('button', { name: /beam/i }))
-    await waitFor(() => expect(mockedPoint).toHaveBeenCalledWith('JA1ABC'))
+    // The short path, said explicitly: the host forwards the strip's path flag (absent means
+    // short). PhoneCockpit.longpath.test.tsx presses LP on the real strip.
+    await waitFor(() => expect(mockedPoint).toHaveBeenCalledWith('JA1ABC', false))
   })
 
   it('never wipes the callsign the operator typed', async () => {

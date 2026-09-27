@@ -38,6 +38,8 @@ vi.mock('../api', () => ({
   haltTx: vi.fn(),
 }))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The rotor strip has its own suite (RttyCockpit.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 
 const mocked = <T,>(f: T) => f as unknown as ReturnType<typeof vi.fn>
 

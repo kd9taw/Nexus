@@ -120,6 +120,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own screen as it does from Spots. Nothing transmits. **Reset layout** unticks both again. On the
   Remote page the panes show the spots and needs the station already shares, and say so when it
   does not.
+- **The rotator strip on the RTTY, PSK, SSTV and JS8 screens.** Phone, CW and FT already had it:
+  the antenna's heading in the cockpit header, with **→ CALL** and **LP** to turn toward the
+  station you are working the short or the long way, and ■ to stop the rotator. **→ CALL** turns
+  toward the call in the Call box on the RTTY and PSK screens, the station you selected on the
+  JS8 screen, and on the SSTV screen the station whose picture you would reply to (the last
+  callsign heard in a picture's ID). A station with no rotator sees nothing new, and the strip
+  asks the rotator nothing while its screen is not the one showing. On the Remote page it behaves
+  as it does on the Phone, CW and FT screens.
 
 ### Changed
 
@@ -238,6 +246,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what reached WSPRnet: set to 1500 Hz on a 10.1387 MHz dial, it was spotted at 10.140202
   instead of 10.140200. The tones are now centred on the offset, the way WSJT-X sends WSPR. The
   message, the timing and the schedule are unchanged.
+- **LP on the rotator strip turns the antenna the long way.** In 1.15.0 the **LP** button on the
+  Phone, CW and FT screens turned the antenna the short way, exactly like **→ CALL**, and its
+  message gave the heading without saying which path. LP now asks for the long-path heading, and
+  its message says "long path". → CALL is unchanged. (#338)
+- **Pointing the antenna at a station from the Remote page works again.** Since 1.15.0, **→ CALL**
+  on the Remote page's rotator strip, and ↗ on a Needed row, were stopped in the browser before
+  they reached the station, and the message said the command was not confirmed. They reach the
+  station again and turn the antenna the short way, as before 1.15.0. **LP** stays on the desktop.
+  Nothing changes at the station.
 
 ### Corrections to 1.15.0
 

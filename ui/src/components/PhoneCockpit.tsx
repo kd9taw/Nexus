@@ -82,9 +82,10 @@ import { pushToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { latestOnly } from '../remote-web/latest-only'
 import { RotorStrip } from './RotorStrip'
+import { rotorPointAt } from './rotorPointAt'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, openPanelWindow, getSettings, pointRotatorAtCall } from '../api'
+import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -2353,19 +2354,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         {control || rotatorControl ? <RotorStrip
           onOpenSettings={onOpenSettings}
           targetCall={workedCall || null}
-          onPointAt={(call) =>
-            pointRotatorAtCall(call)
-              .then((bearing: number | null | undefined) =>
-                // A browser gets no bearing back: the station resolves it.
-                pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('cw.rotator.pointed', { call, bearing: Math.round(bearing) }), 'info'),
-              )
-              .catch((e) =>
-                pushToast(
-                  control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : controlFailureMessage(e),
-                  'error',
-                ),
-              )
-          }
+          onPointAt={rotorPointAt(control)}
         /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what

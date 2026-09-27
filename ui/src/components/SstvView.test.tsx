@@ -12,6 +12,8 @@ import { SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY } from './SstvViewer'
 // and a working canvas 2D context — jsdom provides neither. These tests are about
 // the SSTV panel, so the waterfall is stubbed rather than propped up.
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+// The rotor strip has its own suite (SstvView.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 // Radix Popper (the header's band menu) observes its elements with a ResizeObserver jsdom lacks.
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 

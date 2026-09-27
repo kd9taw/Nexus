@@ -3555,6 +3555,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 panels={rttyPanels}
                 macros={settings?.macros}
                 onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
+                onOpenSettings={openSettingsAt}
               />
             </div>
           )}
@@ -3572,6 +3573,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 panels={pskPanels}
                 macros={settings?.macros}
                 onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
+                onOpenSettings={openSettingsAt}
               />
             </div>
           )}
@@ -3627,6 +3629,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={js8Panels}
+                onOpenSettings={openSettingsAt}
               />
             </div>
           )}

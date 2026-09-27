@@ -181,8 +181,13 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             break
           }
           case 'point_rotator_at_call':
-            // The bearing is resolved at the station; the page gets no bearing back.
-            if (!args || Object.keys(args).length !== 1 || !('call' in args)) throw Error('invalidOperation')
+            // The bearing is resolved at the station; the page gets no bearing back. The API names the
+            // path on every call (#338: `{ call, longPath }`), and the station's action has no path and
+            // takes none. The short path is what it does, so `longPath: false`, or no flag, maps to it
+            // unchanged. The long path is refused before anything is sent; the page never offers it
+            // (RotorStrip's browser branch has no LP).
+            if (!args || !('call' in args) || Object.keys(args).some(k => k !== 'call' && k !== 'longPath') ||
+              ('longPath' in args && args.longPath !== false)) throw Error('invalidOperation')
             action = stationAction({ action: 'rotator.pointAtCall', call: args.call })
             break
           case 'stop_rotator':

@@ -14,6 +14,8 @@ import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
+import { RotorStrip } from './RotorStrip'
+import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import {
   atuTune,
@@ -89,6 +91,9 @@ interface Props {
   macros?: Settings['macros'] | null
   /** The engine saved the macro sets: here is the `macros` it now holds, for the mirror. */
   onMacrosSaved?: (macros: Settings['macros']) => void
+  /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
+   *  opens the Rotator section through it, as it does in the Phone, CW and FT cockpits. */
+  onOpenSettings?: (target: string) => void
 }
 
 /** This cockpit's INVARIANT vocabulary — the mode's own technical tokens, gathered as
@@ -136,9 +141,9 @@ function fmtAfc(hz: number): string {
  * Mounted in a keep-alive host (like RTTY/SSTV) so the decoded stream keeps
  * accumulating while the operator is on another section.
  */
-export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved }: Props) {
+export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
   const frequencyControl = useStationCapability('frequency')
-  const control = useStationControl(), receiverControl = useStationCapability('decoder')
+  const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
   const host = panels
     ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels() })
@@ -663,7 +668,17 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               />
             ) : undefined
           }
-        />
+        >
+          {/* THE ROTOR STRIP, RTTY's placement and wiring (see there): the header's own control
+              cluster, `active` because this cockpit stays mounted while hidden, and → CALL at the
+              dock's Call box, settled. Its ■ stops the rotator, never a transmission. */}
+          {control || rotatorControl ? <RotorStrip
+            active={active}
+            onOpenSettings={onOpenSettings}
+            targetCall={settledHisCall || null}
+            onPointAt={rotorPointAt(control)}
+          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+        </CockpitHeader>
       )}
 
       {/* THE BAND WATERFALL — ⊞-hideable, the RTTY shape (`.psk-cockpit .waterfall-wrap`

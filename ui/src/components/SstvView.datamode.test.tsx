@@ -29,6 +29,8 @@ import * as api from '../api'
 import type { AppSnapshot, BandChannel, SstvHealth, SstvState } from '../types'
 
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+// The rotor strip has its own suite (SstvView.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),

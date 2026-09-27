@@ -17,6 +17,8 @@ import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState 
 import { Waterfall } from './Waterfall'
 import { CockpitHeader } from './CockpitHeader'
 import { FrequencyControl } from './FrequencyControl'
+import { RotorStrip } from './RotorStrip'
+import { rotorPointAt } from './rotorPointAt'
 import { PanelsMenu } from './PanelsMenu'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { panelHost } from '../features/panelHost'
@@ -591,6 +593,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
   // do it only while the station advertises its gallery verb.
   const galleryControl=useStationCapability('sstvGallery')
+  const rotatorControl=useStationCapability('rotator')
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -1785,6 +1788,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           >
             {t('sstv.manualRx.start.label')}
           </button>
+          {/* THE ROTOR STRIP, after the receive controls so none of them moves. SSTV has no Call
+              box: the station it answers is the one the Reply preset uses, the newest FSK ID heard.
+              `active`, because this cockpit stays mounted while hidden (its VIS receiver never
+              sleeps). Its ■ stops the rotator, never a transmission. */}
+          {canControl || rotatorControl ? <RotorStrip
+            active={active}
+            onOpenSettings={onOpenSettings}
+            targetCall={lastHeardCall}
+            onPointAt={rotorPointAt(canControl)}
+          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         </CockpitHeader>
       )}
 

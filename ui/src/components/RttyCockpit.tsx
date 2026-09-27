@@ -13,6 +13,8 @@ import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Setting
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { LogEntry } from './LogEntry'
+import { RotorStrip } from './RotorStrip'
+import { rotorPointAt } from './rotorPointAt'
 import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
@@ -96,6 +98,9 @@ interface Props {
   macros?: Settings['macros'] | null
   /** The engine saved the macro sets: here is the `macros` it now holds, for the mirror. */
   onMacrosSaved?: (macros: Settings['macros']) => void
+  /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
+   *  opens the Rotator section through it, as it does in the Phone, CW and FT cockpits. */
+  onOpenSettings?: (target: string) => void
 }
 
 /** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical
@@ -290,9 +295,9 @@ function knownCode(domain: string | undefined, value: string): boolean {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
   const frequencyControl = useStationCapability('frequency')
-  const control = useStationControl(), receiverControl = useStationCapability('decoder')
+  const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
@@ -877,7 +882,18 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               />
             ) : undefined
           }
-        />
+        >
+          {/* THE ROTOR STRIP, where CW carries it: the header's own control cluster. Its ■ stops
+              the ROTATOR, never a transmission, so it is on no stop-line census. `active`, because
+              this cockpit stays mounted behind every other screen and a hidden strip must not poll
+              the rotator. → CALL points at the dock's Call box, settled: the log strip's call. */}
+          {control || rotatorControl ? <RotorStrip
+            active={active}
+            onOpenSettings={onOpenSettings}
+            targetCall={settledHisCall || null}
+            onPointAt={rotorPointAt(control)}
+          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+        </CockpitHeader>
       )}
 
       {/* THE BAND WATERFALL, ⊞-hideable since 2026-08-16. A shell child whose render is gated,

@@ -9,6 +9,8 @@ import type { OperationVersion } from './operation-version'
 import { controlTransport } from './control-transport'
 import type { ApplicationClient } from './application-client'
 import type { ApplicationTransport } from '../applicationTransport'
+import { installApplicationTransport } from '../applicationTransport'
+import { pointRotatorAtCall } from '../api'
 import { controlFailureMessage } from './control-failure'
 import { t } from '../i18n'
 
@@ -1354,6 +1356,41 @@ it('sends no rotator command to an older station, without the hint, or with anyt
   await transport.invoke('read_rotator')
   expect(invoke).toHaveBeenCalledWith('read_rotator', undefined)
   h.client.disconnected()
+})
+
+// #338 MADE THE API NAME THE PATH ON EVERY POINT-AT, AND THIS CASE ADMITTED ONLY THE CALL.
+// `pointRotatorAtCall(call, longPath = false)` sends `{ call, longPath }`, two keys. So from 1.15.0,
+// every → CALL from a browser threw `invalidOperation` here, before it reached the station, and the
+// operator read "not confirmed". The cases above hand the transport a written-out `{ call }` and
+// could not see it; this one goes through the real API. The station's action has no path and takes
+// none, so the short path maps to it unchanged. The long path is refused before anything is sent,
+// and the page never offers it: RotorStrip's browser branch has no LP.
+it('points a browser at a call through the real API, and refuses the long path unsent', async () => {
+  const h = setup(storage(), ['rotator'], 3)
+  const uninstall = installApplicationTransport(controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client))
+  const commands = () => h.sent.filter(w => w.request.type === 'stationControl')
+  try {
+    let refused: string | null = null
+    const short = pointRotatorAtCall('JA1ABC', false).catch((e: Error) => { refused = e.message })
+    await h.advance(0)
+    expect(refused, 'the browser refused → CALL before sending it').toBeNull()
+    expect(commands()).toHaveLength(1)
+    const request = commands()[0].request
+    expect(request.action).toEqual({ action: 'rotator.pointAtCall', call: 'JA1ABC' })
+    h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+    await short
+    expect(refused).toBeNull()
+
+    let longRefused: string | null = null
+    void pointRotatorAtCall('JA1ABC', true).catch((e: Error) => { longRefused = e.message })
+    await h.advance(0)
+    expect(commands(), 'a long path reached the station').toHaveLength(1)
+    expect(longRefused).toBe('invalidOperation')
+  } finally {
+    uninstall()
+    h.client.disconnected()
+  }
 })
 
 const SCOPE_SETTINGS = [
