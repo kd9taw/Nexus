@@ -5,6 +5,17 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Corrections to 1.15.0
+
+A released section is history and is not rewritten, so a credit it overstated is corrected here.
+
+- **#174** reads as if every new-one alert can be kept to the continents and countries you pick.
+  Only the alerts raised from your own decodes can: the new-one, new-grid and CQ alerts. The
+  **Pounce** new-one alert works from cluster and RBN spots and still sounds for a spot from
+  anywhere, because it has no "spotted from" filter yet.
+
 ## [1.15.0] — 2026-09-26
 
 ### Added
