@@ -13,7 +13,7 @@
 // component and count what is on screen, which is what the details, the stepping and the
 // close assertions are.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import * as api from '../api'
 import { EN } from '../i18n/en'
 import { SstvViewer, SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY, setViewerPicture } from './SstvViewer'
@@ -24,6 +24,26 @@ vi.mock('../api', () => ({
   revealSstvGallery: vi.fn(async () => {}),
   savePngToDownloads: vi.fn(async () => '/home/op/Downloads/pic.png'),
 }))
+/** How long the picture's commit takes, in ms. Zero everywhere but the lost-key test, which
+ *  makes it slow so React's scheduler yields between committing the gallery and running its
+ *  passive effects — the load that exposed the race, reproduced on purpose instead of by chance. */
+const commit = vi.hoisted(() => ({ ms: 0 }))
+vi.mock('./SstvView', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./SstvView')>()
+  const { createElement, useLayoutEffect } = await import('react')
+  return {
+    ...actual,
+    GalleryThumb: (props: Parameters<typeof actual.GalleryThumb>[0]) => {
+      useLayoutEffect(() => {
+        const until = performance.now() + commit.ms
+        while (performance.now() < until) {
+          // a slow commit: the scheduler's time slice runs out here
+        }
+      })
+      return createElement(actual.GalleryThumb, props)
+    },
+  }
+})
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => {
@@ -79,6 +99,7 @@ const state = (gallery = GALLERY) => ({
 })
 
 beforeEach(() => {
+  commit.ms = 0
   localStorage.clear()
   getSstvState.mockReset().mockResolvedValue(state())
   closePanelWindow.mockReset().mockResolvedValue(undefined)
@@ -121,6 +142,35 @@ describe('the SSTV picture viewer', () => {
     // The step is written back, so the main window and this one agree about which picture
     // is open and re-opening the viewer lands on the one last looked at.
     expect(localStorage.getItem(SSTV_VIEWER_PATH_KEY)).toBe('/g/img-001-martin1.png')
+  })
+
+  it('⭐ an arrow key pressed the moment the pictures appear is not lost', async () => {
+    // The ← → handler is bound to the gallery the viewer has. The gallery arrives by IPC, outside
+    // any React event, so React renders and commits it from its scheduler — and when that commit
+    // runs past the scheduler's 5 ms slice (a busy computer), the scheduler yields BEFORE the
+    // passive effects that re-bind the handler. A key landing in that gap reached the old handler,
+    // still holding the EMPTY gallery, and was dropped. The test above went red exactly that way
+    // once under load (2026-09-27). Here the commit is made slow on purpose and the key is pressed
+    // from a MutationObserver as the picture appears — the gap, every time — and the step must
+    // happen. No clock in the assertion: it is on what that one key did.
+    commit.ms = 20
+    let deliver!: (s: ReturnType<typeof state>) => void
+    getSstvState.mockReset().mockImplementation(() => new Promise((resolve) => { deliver = resolve }))
+    setViewerPicture('/g/img-003-pd120.png')
+    render(<SstvViewer />)
+    let pressed!: () => void
+    const pressedNow = new Promise<void>((resolve) => { pressed = resolve })
+    const watch = new MutationObserver(() => {
+      if (!screen.queryByText('PD-120')) return
+      watch.disconnect()
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
+      pressed()
+    })
+    watch.observe(document.body, { subtree: true, childList: true, characterData: true })
+    deliver(state()) // the station's answer, outside act, as the IPC delivers it
+    await pressedNow
+    await act(async () => {})
+    expect(screen.queryByText('Scottie 1'), 'the → pressed as the pictures appeared was dropped').not.toBeNull()
   })
 
   it('⭐ Esc CLOSES THE WINDOW — not a flag, the window (#263)', async () => {

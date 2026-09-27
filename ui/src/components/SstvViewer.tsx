@@ -27,7 +27,7 @@
 // DESKTOP ONLY in this batch. A Remote browser fetches gallery images lazily and would
 // need the full-size copy on demand with something on screen while it loads; that is its
 // own piece of work, so the thumbnail is not clickable there.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { closePanelWindow, getSstvState, revealSstvGallery, savePngToDownloads } from '../api'
 import { pushToast, withErrorToast } from '../toast'
@@ -125,7 +125,13 @@ export function SstvViewer() {
   // Esc closes, ← / → step. Bound on the window because this document IS the viewer — there
   // is nothing else in it to take the keys, and an operator who has just moved the mouse to
   // this monitor should not have to click the picture first.
-  useEffect(() => {
+  //
+  // A LAYOUT effect, so the handler holding the new gallery is bound in the same commit that
+  // puts the picture on screen. The gallery arrives by IPC, outside any React event; bound in a
+  // passive effect, a commit that ran past the scheduler's slice on a busy computer left a gap
+  // between the picture appearing and the re-bind, and a → pressed in it reached the old handler
+  // — still holding the empty gallery — and was dropped (SstvViewer.test.tsx reproduces it).
+  useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
