@@ -146,6 +146,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RTTY, PSK, SSTV, a tune carrier or Nexus's own PTT. They now lock whenever the ON AIR sign is
   lit. The strip only refuses more: nothing about keying has changed. NEEDS-BENCH with an
   amplifier connected: key a voice over and check that the strip's buttons go grey until it ends.
+- **Operate's QSO strip shows ▲ TRANSMITTING for every transmission.** The strip's red wash and
+  its "▲ TRANSMITTING" followed only the FT over itself, so Operate's own Tune, the mic keyed at the
+  radio, or an over started from another screen showed "▼ Receiving" in green while the rig was
+  keyed. It now follows the ON AIR sign. Display only: nothing about keying has changed.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,

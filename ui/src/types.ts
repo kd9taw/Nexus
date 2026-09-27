@@ -29,13 +29,14 @@ export function isRxOnly(tier: Tier | null | undefined): boolean {
 }
 
 /** Is the transmitter on the air, whoever keyed it — one answer for the cockpit header's ON AIR
- * sign, the top bar's TX plate, the TX meters, the S-meter's pause, the spoken TX state and its
- * earcon, so they cannot disagree. `transmitting` alone is the FT slot flag, and only the
- * slot/beacon path writes it, so a voice over, CW, the tune carrier, RTTY, PSK, SSTV and a held
- * mic key all read as receive through it (#57). `txBusyReason` is the engine's `tx_owner()`
- * arbiter, set for all seven owners; `rigKeyed` is the rig's own PTT read back over CAT, for a
- * key Nexus did not press. Nothing is keyed on this answer, and the one thing refused on it is
- * the amplifier strip's buttons (AmpStrip's courtesy lock: it only ever refuses more). */
+ * sign, the top bar's TX plate, Operate's strip, the TX meters, the S-meter's pause, the spoken TX
+ * state and its earcon, so they cannot disagree.
+ * `transmitting` alone is the FT slot flag, and only the slot/beacon path writes it, so a voice
+ * over, CW, the tune carrier, RTTY, PSK, SSTV and a held mic key all read as receive through it
+ * (#57). `txBusyReason` is the engine's `tx_owner()` arbiter, set for all seven owners;
+ * `rigKeyed` is the rig's own PTT read back over CAT, for a key Nexus did not press. Nothing is
+ * keyed on this answer, and the one thing refused on it is the amplifier strip's buttons
+ * (AmpStrip's courtesy lock: it only ever refuses more). */
 export function isOnAir(radio: Pick<RadioStatus, 'transmitting' | 'txBusyReason' | 'rigKeyed'>): boolean {
   return radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
 }
