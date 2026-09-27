@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alert always look the same. A pick shows at once, on the map and the waterfall markers too, and
   is remembered per computer, like the theme. The frequency digits still turn red when the dial
   is outside your licence privileges, whatever colour you pick for them.
+- **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Workspace has a new
+  **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
+  dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the
+  panels, the text and the accent colour in the dark and the light theme alike, and the meters and
+  the frequency readout dim with the room. The transmit red, the ON AIR sign, alerts, and the
+  signal and Needed colours stay exactly as they are. A waterfall on the **Auto** palette turns
+  Amber CRT at night; a palette you picked by name never changes. Auto needs your grid square
+  (Settings ▸ Station): without one Night stays off, and the row says so. In the light theme the
+  change is gentle, because the Needed and signal colours were chosen for a white page; the Dark
+  theme gives the darkest screen. With High contrast on, every word stays at least 7:1 against its
+  background at night. Night is not a top-bar button: Field stays the one quick toggle there. It
+  is remembered per computer, like the theme.
 
 ### Changed
 

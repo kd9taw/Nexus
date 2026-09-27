@@ -14,8 +14,9 @@
 // too; the fidelity suite below is what proves the join holds.
 //
 // Every assertion is a computed relationship on the cascade winner, in dark, light, dark-high and
-// light-high, measured on the elements the components actually render (the chains are read off
-// the DOM, never written by hand).
+// light-high and their Night twins (where a well is the dark + Night palette, dimmed with the
+// room), measured on the elements the components actually render (the chains are read off the
+// DOM, never written by hand).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { createElement, type ReactElement } from 'react'
@@ -35,6 +36,7 @@ import {
   chainOf,
   contrast,
   expandWith,
+  isNight,
   parseRules,
   rgbHex as hex,
   rootTokensFrom,
@@ -122,23 +124,31 @@ const ISLAND = [
 describe('the well tokens', () => {
   const WELL = ['--well-bg', '--well-ink', '--well-grid'] as const
 
-  it.each(WELL)('%s is declared, with one value in every mode', (tok) => {
-    const values = MODES.map((m) => rootValue(m, tok))
-    expect(values[0], `${tok} is not declared`).not.toBe('')
-    for (const [i, m] of MODES.entries()) {
-      expect(ROOT[m].has(tok), `${tok} resolves in no ${m} block`).toBe(true)
-      expect(values[i], `${tok} differs in ${m}`).toBe(values[0])
+  it.each(WELL)('%s is declared, with one value in every mode of each Night setting', (tok) => {
+    // One value in both themes, at every contrast and under every colour role: a well looks the
+    // same wherever the operator is. Night dims the wells with the room (styles.css NIGHT), so
+    // there are exactly two values, the day one and the night one.
+    for (const night of [false, true]) {
+      const modes = MODES.filter((m) => isNight(m) === night)
+      const values = modes.map((m) => rootValue(m, tok))
+      expect(values[0], `${tok} is not declared`).not.toBe('')
+      for (const [i, m] of modes.entries()) {
+        expect(ROOT[m].has(tok), `${tok} resolves in no ${m} block`).toBe(true)
+        expect(values[i], `${tok} differs in ${m}`).toBe(values[0])
+      }
     }
   })
 
-  it('declares them in BOTH theme blocks, not only on :root (the contract: both themes)', () => {
+  it('declares them in BOTH theme blocks, by day and at night, not only on :root (the contract: both themes)', () => {
     for (const theme of ['dark', 'light'] as const) {
-      const blocks = RULES.filter((r) => r.selector === `[data-theme='${theme}']`)
-      for (const tok of WELL) {
-        expect(
-          blocks.some((r) => r.decls.some((d) => d.prop === tok)),
-          `${tok} is not declared under [data-theme='${theme}']`,
-        ).toBe(true)
+      for (const sel of [`[data-theme='${theme}']`, `[data-theme='${theme}'][data-night='1']`]) {
+        const blocks = RULES.filter((r) => r.selector === sel)
+        for (const tok of WELL) {
+          expect(
+            blocks.some((r) => r.decls.some((d) => d.prop === tok)),
+            `${tok} is not declared under ${sel}`,
+          ).toBe(true)
+        }
       }
     }
   })
@@ -245,7 +255,24 @@ interface Rendered {
   fills: { chain: El[]; inline: string }[]
 }
 
+/** `tokensAt` once per mode and chain: several suites below resolve the same element in the
+ *  same mode, and with Night the modes doubled. Pure — the rules never change in this file. */
+const RESOLVED = new Map<string, Map<string, string>>()
+function tokensOf(mode: Mode, chain: El[]): Map<string, string> {
+  const key = `${mode}|${JSON.stringify(chain)}`
+  let out = RESOLVED.get(key)
+  if (!out) RESOLVED.set(key, (out = tokensAt(RULES, mode, chain)))
+  return out
+}
+
+/** Each instrument is rendered ONCE and its chains kept: they are read off the real DOM, and they
+ *  do not depend on the mode — only the cascade resolved over them does. Rendered per case, the
+ *  32 modes Night brought (8 base × the colour-role sets) cost over a thousand renders. */
+const RENDERED = new Map<Instrument, Rendered>()
+
 function rendered(i: Instrument): Rendered {
+  const hit = RENDERED.get(i)
+  if (hit) return hit
   const { container } = render(i.mount())
   const el = container.querySelector(i.display)
   expect(el, `${i.name}: ${i.display} did not render`).not.toBeNull()
@@ -257,6 +284,7 @@ function rendered(i: Instrument): Rendered {
     : []
   const out = { display: chainOf(el!), fills }
   cleanup()
+  RENDERED.set(i, out)
   return out
 }
 
@@ -284,7 +312,7 @@ describe('every instrument IS a well', () => {
 describe('what an instrument paints is dark, and what it paints on it reads', () => {
   it.each(cases)('%s in %s: its face is dark (the well ink reads 7:1 on it)', (_n, mode, i) => {
     const { display } = rendered(i)
-    const tokens = tokensAt(RULES, mode, display)
+    const tokens = tokensOf(mode, display)
     const face = surfaceOf(display, mode, tokens)
     const ink = toRgb(expandWith(tokens, 'var(--well-ink)'), face)
     expect(ink, `--well-ink did not compute inside ${i.name}`).not.toBeNull()
@@ -294,7 +322,7 @@ describe('what an instrument paints is dark, and what it paints on it reads', ()
 
   it.each(cases)('%s in %s: every status ink reads 3:1 on its face', (_n, mode, i) => {
     const { display } = rendered(i)
-    const tokens = tokensAt(RULES, mode, display)
+    const tokens = tokensOf(mode, display)
     const face = surfaceOf(display, mode, tokens)
     for (const tok of STATUS) {
       const c = toRgb(expandWith(tokens, `var(${tok})`), face)
@@ -306,7 +334,7 @@ describe('what an instrument paints is dark, and what it paints on it reads', ()
 
   it.each(cases)('%s in %s: its labels read 4.5:1 on its face', (_n, mode, i) => {
     const { display } = rendered(i)
-    const tokens = tokensAt(RULES, mode, display)
+    const tokens = tokensOf(mode, display)
     const face = surfaceOf(display, mode, tokens)
     for (const tok of TEXT) {
       const c = toRgb(expandWith(tokens, `var(${tok})`), face)
@@ -320,9 +348,9 @@ describe('what an instrument paints is dark, and what it paints on it reads', ()
   it.each(withFills)('%s in %s: the level it lights is a dark-theme ink, 3:1 on the face', (_n, mode, i) => {
     const { display, fills } = rendered(i)
     expect(fills.length, `${i.name} lit nothing to measure`).toBeGreaterThan(0)
-    const face = surfaceOf(display, mode, tokensAt(RULES, mode, display))
+    const face = surfaceOf(display, mode, tokensOf(mode, display))
     for (const f of fills) {
-      const tokens = tokensAt(RULES, mode, f.chain)
+      const tokens = tokensOf(mode, f.chain)
       const w = winnerAt(RULES, mode, f.chain, 'background', 'background-color')
       // An inline style outranks the sheet (TxMeters and the scope strip set the zone colour so).
       const v = expandWith(tokens, f.inline || (w ? w.value : 'transparent'))
@@ -341,7 +369,7 @@ describe('a well is the dark theme, in every mode (the join holds)', () => {
   // reach the wells too.
   it.each(cases)('%s in %s', (_n, mode, i) => {
     const { display } = rendered(i)
-    const tokens = tokensAt(RULES, mode, display)
+    const tokens = tokensOf(mode, display)
     const twin = darkTwin(mode)
     const off = ISLAND.filter((tok) => expandWith(tokens, `var(${tok})`).trim() !== rootValue(twin, tok)).map(
       (tok) => `${tok}: ${expandWith(tokens, `var(${tok})`).trim()} (the ${twin} theme says ${rootValue(twin, tok)})`,

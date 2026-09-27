@@ -117,6 +117,9 @@ const SHARED = [
   // High contrast (#215), the other input to `data-contrast`: a fact about the operator's
   // eyes and this screen, so every window of the station agrees, exactly like field mode.
   'nexus-high-contrast',
+  // Night (Off / On / Auto at dusk): a fact about the room the station is in after dark, so a
+  // pop-out beside the main window dims with it (DetachedPanel runs its own useNight).
+  'nexus-night',
   // The optional local-time clock beside UTC (#253). Per MACHINE, like density and field mode:
   // local time is a fact about this computer's time zone, and every window of it agrees.
   'nexus-local-clock',

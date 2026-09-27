@@ -5,10 +5,11 @@
 //
 // The table in features/paletteRoles.ts is the spec; styles.css is the implementation. Nothing
 // here pins a preset's hex — every assertion is computed on the cascade winner, in dark, light,
-// dark-high and light-high, at <html> and INSIDE A DISPLAY WELL (a well declares the dark palette
-// on itself, so a preset that only arrives by inheritance stops at its edge). The one place hexes
-// ARE pinned is the defaults, because "nothing changes for anyone who does not touch it" is a
-// statement about exact values.
+// dark-high and light-high and their four Night twins, at <html> and INSIDE A DISPLAY WELL (a well
+// declares the dark palette on itself, so a preset that only arrives by inheritance stops at its
+// edge). At night the accent and readout paint their table's `night` values, and OK, Amber and
+// Cyan paint exactly their day ones. The one place hexes ARE pinned is the defaults by day,
+// because "nothing changes for anyone who does not touch it" is a statement about exact values.
 //
 // THE FLOORS, and why each is the number it is:
 //   · TEXT 4.5:1 (WCAG 1.4.3) — the accent where it is lettering, the ink ON an accent fill, your
@@ -41,6 +42,7 @@ import {
   contrast,
   deltaE,
   expandWith,
+  isNight,
   oklab,
   oklch,
   parseRules,
@@ -84,6 +86,10 @@ const modeFor = (r: PaletteRole, p: PalettePreset, base: BaseMode): Mode =>
   isDefault(r, p) ? base : withRoles(base, { [r.id]: p.id })
 /** Which of the table's two columns paints here: a well is the dark theme in either. */
 const columnOf = (mode: Mode, scope: Scope) => (scope === 'well' ? 'dark' : baseTheme(mode))
+/** What the table says `p` paints in `mode`: its night values at night, if its role dims. */
+const valuesOf = (p: PalettePreset, mode: Mode, scope: Scope) => (isNight(mode) && p.night ? p.night : p)[columnOf(mode, scope)]
+/** The four day modes: where "today's values" is a statement about exact hexes. */
+const DAY_MODES = BASE_MODES.filter((b) => !isNight(b))
 
 const memo = new WeakMap<Rule[], Map<string, Map<string, string>>>()
 /** Every custom property visible in `scope` under `mode`, var()s expanded. */
@@ -190,7 +196,7 @@ function parityProblems(rules: Rule[], r: PaletteRole, p: PalettePreset): string
     const mode = modeFor(r, p, base)
     for (const scope of SCOPES) {
       const tk = tokensIn(rules, mode, scope)
-      const want = p[columnOf(mode, scope)]
+      const want = valuesOf(p, mode, scope)
       for (const t of r.tokens) {
         const got = valueOf(tk, t)
         if (got !== want[t]) out.push(`${r.id}=${p.id} ${base} ${scope}: ${t} paints "${got}", the table says ${want[t]}`)
@@ -217,6 +223,26 @@ describe('the role table', () => {
         }
       }
       expect(new Set(r.presets.map((p) => p.id)).size, `${r.id} repeats a preset id`).toBe(r.presets.length)
+    }
+  })
+
+  it('gives every preset of a role Night dims its night values, for the same tokens — and none to the rest', () => {
+    // Night (styles.css NIGHT) dims the accent and the readout; OK, Amber and Cyan are signal
+    // colours it never touches. A preset of a dimming role with no night column would show its
+    // DAY colour at night, and one on a signal role would be a night retune of a signal colour.
+    expect(PALETTE_ROLES.filter((r) => r.dimsAtNight).map((r) => r.id)).toEqual(['accent', 'readout'])
+    for (const r of PALETTE_ROLES) {
+      for (const p of r.presets) {
+        if (!r.dimsAtNight) {
+          expect(p.night, `${r.id}=${p.id} has night values, but ${r.id} is a signal colour`).toBeUndefined()
+          continue
+        }
+        expect(p.night, `${r.id}=${p.id} has no night values`).toBeDefined()
+        for (const col of ['dark', 'light'] as const) {
+          expect(Object.keys(p.night![col]).sort(), `${r.id}=${p.id} night ${col}`).toEqual([...r.tokens].sort())
+          for (const v of Object.values(p.night![col])) expect(v, `${r.id}=${p.id} night ${col}`).toMatch(/^#[0-9a-f]{6}$/)
+        }
+      }
     }
   })
 })
@@ -292,7 +318,7 @@ describe('the defaults are byte-identical to today', () => {
   })
 
   it.each(PALETTE_ROLES.map((r) => [r.id, r] as const))('%s: with no attribute set, the sheet paints today’s values', (_n, r) => {
-    for (const base of BASE_MODES) {
+    for (const base of DAY_MODES) {
       for (const scope of SCOPES) {
         const tk = tokensIn(RULES, base, scope)
         const want = TODAY[r.id][columnOf(base, scope)]

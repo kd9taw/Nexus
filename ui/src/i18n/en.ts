@@ -6931,6 +6931,16 @@ export const EN = {
     'Stronger text-against-background in whichever theme you are using, at the size you already have. Turn this on if the screen is hard to read \u2014 it does not change the UI scale.',
   'settings.workspace.contrast.hint.field':
     'Field mode is on, so high contrast is applied already. This setting is your own standing choice, and it is what the screen keeps when you turn Field mode off.',
+  'settings.workspace.night.label': 'Night',
+  'settings.workspace.night.off': 'Off',
+  'settings.workspace.night.on': 'On',
+  'settings.workspace.night.auto': 'Auto',
+  'settings.workspace.night.hint':
+    'A darker, warmer screen for operating after dark, in whichever theme you use. The transmit red, alerts and signal colours stay exactly as they are.',
+  'settings.workspace.night.hint.auto':
+    'Comes on at dusk and goes off at dawn at your grid square: when the sun is 6° below the horizon there.',
+  'settings.workspace.night.hint.noGrid':
+    'Auto needs your grid square (Settings ▸ Station ▸ Grid) to know when the sun sets. Until it has one, Night stays off.',
   'settings.workspace.field.label': 'Field mode',
   'settings.workspace.field.on': 'On',
   'settings.workspace.field.off': 'Off',

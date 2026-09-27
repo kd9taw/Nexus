@@ -7,6 +7,7 @@ import { fitScale, fieldFitScale, naturalFor } from './useScale'
 import { useTextSize } from './useTextSize'
 import { useDensity } from './useDensity'
 import { useTheme } from './useTheme'
+import { useNight } from './useNight'
 import { PALETTE_ROLES, attrValueOf } from './features/paletteRoles'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
@@ -397,5 +398,49 @@ describe('index.html preseed: colour roles', () => {
       expect(document.documentElement.getAttribute(r.attr), r.id).toBe(r.presets[r.presets.length - 1].id)
     }
     expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(String(fitScale(1366, 768) / 100))
+  })
+})
+
+describe('index.html preseed: Night', () => {
+  // The first-paint copy of useNight (Settings ▸ Appearance ▸ Workspace ▸ Night). On paints Night
+  // from the first frame. Auto needs the station's grid square, which only the running app knows
+  // (it arrives with the first snapshot), so the seed leaves Auto to the hook: the page paints
+  // with Night off and the hook turns it on the moment the grid arrives, if the sun is down there.
+  // Parity is therefore against the hook as it stands before the grid is known.
+  const root = document.documentElement
+  beforeEach(() => root.removeAttribute('data-night'))
+
+  it('seeds exactly the attribute useNight writes before the grid is known, for every stored value', () => {
+    const bad: string[] = []
+    for (const stored of [null, 'off', 'on', 'auto', 'dim']) {
+      localStorage.clear()
+      if (stored !== null) localStorage.setItem('nexus-night', stored)
+      root.removeAttribute('data-night')
+      setWin(1366, 768)
+      runPreseed()
+      const seeded = root.getAttribute('data-night')
+      root.removeAttribute('data-night')
+      const hook = renderHook(() => useNight(''))
+      const written = root.getAttribute('data-night')
+      hook.unmount()
+      if (seeded !== written) bad.push(`stored=${stored}: seed ${JSON.stringify(seeded)} ≠ hook ${JSON.stringify(written)}`)
+    }
+    root.removeAttribute('data-night')
+    expect(bad).toEqual([])
+  })
+
+  it('On seeds data-night, Auto and Off do not (the case parity could share a bug with), and the zoom stays put', () => {
+    localStorage.setItem('nexus-night', 'on')
+    setWin(1366, 768)
+    runPreseed()
+    expect(root.getAttribute('data-night')).toBe('1')
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(String(fitScale(1366, 768) / 100))
+    for (const stored of ['auto', 'off']) {
+      localStorage.clear()
+      localStorage.setItem('nexus-night', stored)
+      root.removeAttribute('data-night')
+      runPreseed()
+      expect(root.getAttribute('data-night'), stored).toBeNull()
+    }
   })
 })

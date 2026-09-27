@@ -65,6 +65,7 @@ import { foldRetiredWantedList } from './features/watchlistFold'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
+import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
@@ -315,6 +316,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
   const layoutRef = useRef<HTMLElement>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
+  // Night (Settings ▸ Appearance ▸ Workspace): App is its one writer. Auto goes by the sun at the
+  // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
+  const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
   // Routes a typed or clicked RX offset; kept through a brief control lapse so a commit made then
   // still takes the FT runtime path (the transport sends it only once control is current).
   const ftRuntimeControl = useStationCapability('ftRuntime', true)
@@ -3019,6 +3023,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}
             onHighContrastChange={setHighContrast}
+            night={night}
+            onNightChange={setNight}
+            nightGridKnown={nightGridKnown}
             palette={palette}
             onPaletteChange={setPalettePreset}
           />

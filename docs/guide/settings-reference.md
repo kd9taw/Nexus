@@ -1892,6 +1892,17 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   exactly the size you have set it. This is the one to reach for if the screen
   is simply hard to read. If you want bigger as well as stronger, set **UI
   scale** below to taste; the two are independent.
+- **Night** — Off, On or Auto. A darker, warmer screen for operating after dark, in
+  whichever theme you use: the panels, the text and the accent colour dim and warm up, and
+  the meters and the frequency readout dim with them. **Auto** turns Night on at dusk and off
+  at dawn at your grid square, when the sun is 6° below the horizon there. It needs your grid
+  square (Settings ▸ Station); until it has one, Night stays off and the row says so. The
+  transmit red, the ON AIR sign, alerts, and the signal and Needed colours never change. A
+  waterfall on the **Auto** palette turns Amber CRT at night; a palette you picked by name
+  stays as it is. In the light theme the change is gentle, because the Needed and signal
+  colours were chosen for a white page and the page can only get a little darker before they
+  stop reading well; the Dark theme gives the darkest screen. With **High contrast** on, every
+  word keeps at least 7:1 against its background at night. Remembered per computer.
 - **Field mode** — Off or On. The outdoor switch: maximum contrast *and* larger
   type together, on top of whichever theme you are using, for reading the screen
   in daylight. It is the same switch as the **Field** chip in the top bar —

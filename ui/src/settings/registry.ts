@@ -550,6 +550,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'ui scale', 'text size', 'font size', 'zoom',
       'contrast', 'high contrast', 'field mode', 'accessibility', 'large text', 'readable',
       'daylight', 'sunlight', 'larger text', 'bigger text',
+      // Night (useNight.ts): the words for a dimmer screen after dark.
+      'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision',
       'density', 'compact', 'comfortable', 'touch', 'touchscreen',
       'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
   },

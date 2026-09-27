@@ -1201,10 +1201,11 @@ export const MASTER_PALETTES: { value: ColormapName | 'auto'; label: string }[] 
 ]
 
 /** Resolve the waterfall colormap: an explicit palette choice wins; `'auto'` (or an
- * unknown/stale value) falls back to the theme's default map. */
-export function resolveColormap(palette: string, theme: string): ColormapName {
+ * unknown/stale value) falls back to the theme's default map — or, at night (useNight.ts), to
+ * Amber CRT, in either theme. Night never overrides a palette picked by name. */
+export function resolveColormap(palette: string, theme: string, night = false): ColormapName {
   const explicit = WATERFALL_PALETTES.some((p) => p.value === palette && p.value !== 'auto')
-  return explicit ? (palette as ColormapName) : themeColormap(theme)
+  return explicit ? (palette as ColormapName) : night ? 'amber-crt' : themeColormap(theme)
 }
 
 /**

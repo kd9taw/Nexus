@@ -373,6 +373,8 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('keps')).toContain('orbital-elements')
     expect(ids('atno')).toContain('pounce')
     expect(ids('text size')).toContain('workspace')
+    expect(ids('night mode')).toContain('workspace') // the row says "Night"
+    expect(ids('dark adaptation')).toContain('workspace')
   })
 
   it('finds the toggle from issue #62 by the words that report used', () => {

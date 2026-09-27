@@ -165,12 +165,20 @@ interface Sign {
   quietWhenIdle: boolean
 }
 
-const capture = (make: (keyed: boolean) => Element) => (keyed: boolean) => {
-  const el = make(keyed)
-  expect(el, 'the annunciator did not render').not.toBeNull()
-  const chain = chainOf(el)
-  cleanup()
-  return chain
+/** Each state rendered ONCE and its chain kept: the chain is read off the real DOM and does not
+ *  depend on the mode, only the cascade resolved over it does — and with Night there are 32. */
+const capture = (make: (keyed: boolean) => Element) => {
+  const seen = new Map<boolean, El[]>()
+  return (keyed: boolean) => {
+    const hit = seen.get(keyed)
+    if (hit) return hit
+    const el = make(keyed)
+    expect(el, 'the annunciator did not render').not.toBeNull()
+    const chain = chainOf(el)
+    cleanup()
+    seen.set(keyed, chain)
+    return chain
+  }
 }
 
 const SIGNS: Sign[] = [
@@ -208,8 +216,20 @@ interface Paint {
   tokens: Map<string, string>
 }
 
+/** `tokensAt` once per rule set, mode and chain: every suite below resolves the same sign in the
+ *  same mode several times over. Keyed on the rule set too — the counterfactual swaps `--tx`. */
+const RESOLVED = new WeakMap<Rule[], Map<string, Map<string, string>>>()
+function tokensOf(rules: Rule[], mode: Mode, chain: El[]): Map<string, string> {
+  let byKey = RESOLVED.get(rules)
+  if (!byKey) RESOLVED.set(rules, (byKey = new Map()))
+  const key = `${mode}|${JSON.stringify(chain)}`
+  let out = byKey.get(key)
+  if (!out) byKey.set(key, (out = tokensAt(rules, mode, chain)))
+  return out
+}
+
 function paintOf(chain: El[], mode: Mode, backdrop: Rgb, rules: Rule[] = RULES): Paint {
-  const tokens = tokensAt(rules, mode, chain)
+  const tokens = tokensOf(rules, mode, chain)
   const x = (v: string) => expandWith(tokens, v)
   const fillW = winnerAt(rules, mode, chain, 'background', 'background-color')
   const fillValue = fillW ? x(fillW.value) : 'transparent'
@@ -253,13 +273,13 @@ const cases = SIGNS.flatMap((s) => MODES.map((m) => [s.name, m, s] as const))
 describe('ON AIR is a filled, rimmed sign in every mode', () => {
   it.each(cases)('%s in %s: the keyed state paints a fill', (_n, mode, s) => {
     const chain = s.chain(true)
-    const p = paintOf(chain, mode, surface(tokensAt(RULES, mode, chain), '--panel'))
+    const p = paintOf(chain, mode, surface(tokensOf(RULES, mode, chain), '--panel'))
     expect(p.fill, `${s.name} keyed in ${mode} paints no fill (background: ${p.fillValue}) — text alone`).not.toBeNull()
   })
 
   it.each(cases)('%s in %s: the ink reads on the fill at 4.5:1', (_n, mode, s) => {
     const chain = s.chain(true)
-    const p = paintOf(chain, mode, surface(tokensAt(RULES, mode, chain), '--panel'))
+    const p = paintOf(chain, mode, surface(tokensOf(RULES, mode, chain), '--panel'))
     expect(p.fill, `${s.name} paints no fill in ${mode}`).not.toBeNull()
     const ratio = contrast(p.ink, p.fill!)
     expect(ratio, `${s.name} in ${mode}: ink ${hex(p.ink)} on fill ${hex(p.fill!)} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(TEXT_MIN)
@@ -267,7 +287,7 @@ describe('ON AIR is a filled, rimmed sign in every mode', () => {
 
   it.each(cases)('%s in %s: the fill stands 3:1 off the panel and the page', (_n, mode, s) => {
     const chain = s.chain(true)
-    const tokens = tokensAt(RULES, mode, chain)
+    const tokens = tokensOf(RULES, mode, chain)
     for (const around of SURROUNDINGS) {
       const bg = surface(tokens, around)
       const p = paintOf(chain, mode, bg)
@@ -282,7 +302,7 @@ describe('ON AIR is a filled, rimmed sign in every mode', () => {
     // Operate's strip tints itself red while keyed, and a red fill on a red wash is an edge
     // nobody can see.
     const chain = s.chain(true)
-    const tokens = tokensAt(RULES, mode, chain)
+    const tokens = tokensOf(RULES, mode, chain)
     for (const around of SURROUNDINGS) {
       const bg = surface(tokens, around)
       const p = paintOf(chain, mode, bg)
@@ -295,7 +315,7 @@ describe('ON AIR is a filled, rimmed sign in every mode', () => {
 
   it.each(cases)('%s in %s: the fill is the TX red (the colour stays locked)', (_n, mode, s) => {
     const chain = s.chain(true)
-    const p = paintOf(chain, mode, surface(tokensAt(RULES, mode, chain), '--panel'))
+    const p = paintOf(chain, mode, surface(tokensOf(RULES, mode, chain), '--panel'))
     const tx = surface(p.tokens, '--tx')
     expect(p.fill, `${s.name} paints no fill in ${mode}`).not.toBeNull()
     const gap = hueGap(hue(p.fill!), hue(tx))
@@ -323,7 +343,7 @@ describe('the fill is DERIVED from --tx: a change to --tx reaches every sign', (
 
   it.each(cases)('%s in %s follows --tx', (_n, mode, s) => {
     const chain = s.chain(true)
-    const panel = surface(tokensAt(RULES, mode, chain), '--panel')
+    const panel = surface(tokensOf(RULES, mode, chain), '--panel')
     const now = paintOf(chain, mode, panel)
     const moved = paintOf(chain, mode, panel, SWAPPED)
     expect(now.fill, `${s.name} paints no fill in ${mode}`).not.toBeNull()
@@ -361,7 +381,7 @@ describe("Operate's caption holds on the strip's own keyed wash", () => {
     expect(anim, 'the keyed strip no longer animates — drop this block with it').not.toBeNull()
     const name = anim!.value.split(/\s+/).find((w) => new RegExp(`@keyframes\\s+${w}\\s*\\{`).test(RAW))
     expect(name, `no @keyframes for "${anim!.value}"`).toBeDefined()
-    const tokens = tokensAt(RULES, mode, strip)
+    const tokens = tokensOf(RULES, mode, strip)
     const panel = surface(tokens, '--panel')
     const washes = frames(name!).map((v) => toRgb(expandWith(tokens, v), panel))
     expect(washes.length, 'the wash has no frames').toBeGreaterThan(0)
@@ -406,7 +426,7 @@ describe('ON AIR is steady, and keying repaints without moving anything', () => 
     (_n, s) => {
       const idle = s.chain(false)
       for (const mode of MODES) {
-        const p = paintOf(idle, mode, surface(tokensAt(RULES, mode, idle), '--panel'))
+        const p = paintOf(idle, mode, surface(tokensOf(RULES, mode, idle), '--panel'))
         expect(p.fill, `${s.name} unkeyed paints a fill in ${mode}: ${p.fillValue}`).toBeNull()
         expect(p.rim, `${s.name} unkeyed draws a visible rim in ${mode}`).toBeNull()
       }

@@ -31,6 +31,10 @@
           if (fieldOn || localStorage.getItem('nexus-high-contrast') === '1') {
             d.setAttribute('data-contrast', 'high')
           }
+          // Night (Settings ▸ Appearance ▸ Workspace; useNight.ts is the runtime copy). On paints
+          // Night from the first frame. Auto needs the station's grid square, which only arrives
+          // with the first snapshot, so Auto is the hook's to set (index-preseed.test.ts).
+          if (localStorage.getItem('nexus-night') === 'on') d.setAttribute('data-night', '1')
           // The colour roles (Settings ▸ Appearance ▸ Colours; usePaletteRoles.ts is the runtime
           // copy): one attribute per role, set only for a preset the table knows. The default is
           // NO attribute. These ids mirror features/paletteRoles.ts, less each role's default;

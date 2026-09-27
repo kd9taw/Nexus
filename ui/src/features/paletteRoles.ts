@@ -28,7 +28,10 @@
 //
 // THE VALUES BELOW ARE THE SPEC, the sheet is the implementation: styles-palette-roles.test.ts
 // resolves the real cascade for every role × preset × mode (dark, light, dark-high, light-high,
-// and inside a well) and fails when a token paints anything other than what this table says.
+// their four Night twins, and inside a well) and fails when a token paints anything other than
+// what this table says. NIGHT dims the accent and the readout, each preset to its own `night`
+// values (same hue, less light); the OK, Amber and Cyan roles are signal colours and Night
+// leaves them exactly as picked.
 // The same suite holds every preset to the contrast floors and keeps it clear of the TX red and
 // the critical orange; a new preset goes in here AND in the sheet, and the guard says whether it
 // is readable. No hex fields this round — a typed colour needs the OKLCH clamp first.
@@ -47,6 +50,10 @@ export interface PalettePreset {
   /** The dark theme's values — also what every display well paints, in either theme. */
   dark: PaletteValues
   light: PaletteValues
+  /** Night (useNight.ts, styles.css NIGHT): what this preset paints after dark — dimmer, the
+   *  same hue. Only the roles Night dims carry it (`dimsAtNight`), on every preset; `dark` is
+   *  also what every well paints at night. */
+  night?: { dark: PaletteValues; light: PaletteValues }
 }
 
 export interface PaletteRole {
@@ -67,6 +74,9 @@ export interface PaletteRole {
   swatch: string
   /** The OKLCH hue window every chromatic value must sit in, degrees, clockwise from → to. */
   hue: readonly [number, number]
+  /** Night dims this role (the accent and the readout). The other three are signal colours, and
+   *  Night never touches a signal colour: their presets carry no `night` values. */
+  dimsAtNight: boolean
   /** presets[0] is the default: today's values. */
   presets: readonly PalettePreset[]
 }
@@ -95,6 +105,7 @@ const ACCENT: PaletteRole = {
   aliases: [],
   swatch: '--accent',
   hue: [185, 310],
+  dimsAtNight: true,
   presets: [
     {
       id: 'cyan',
@@ -112,6 +123,23 @@ const ACCENT: PaletteRole = {
         '--focus-ring': '#0b83c0',
         '--bubble-mine': '#0d8ecf',
         '--bubble-mine-text': '#ffffff',
+      },
+      night: {
+        dark: {
+          '--accent': '#42a7c7',
+          '--accent-ink': '#001620',
+          '--focus-ring': '#42a7c7',
+          '--bubble-mine': '#124658',
+          '--bubble-mine-text': '#bdc9ce',
+        },
+        // Darker on the warm night panel, which also clears the 4.5:1 today's light cyan misses.
+        light: {
+          '--accent': '#006fae',
+          '--accent-ink': '#ffffff',
+          '--focus-ring': '#006fae',
+          '--bubble-mine': '#006fae',
+          '--bubble-mine-text': '#ffffff',
+        },
       },
     },
     {
@@ -131,6 +159,22 @@ const ACCENT: PaletteRole = {
         '--bubble-mine': '#255ebc',
         '--bubble-mine-text': '#ffffff',
       },
+      night: {
+        dark: {
+          '--accent': '#5a86ce',
+          '--accent-ink': '#04122e',
+          '--focus-ring': '#5a86ce',
+          '--bubble-mine': '#243d65',
+          '--bubble-mine-text': '#c0c6d0',
+        },
+        light: {
+          '--accent': '#0e49a5',
+          '--accent-ink': '#ffffff',
+          '--focus-ring': '#0e49a5',
+          '--bubble-mine': '#0e49a5',
+          '--bubble-mine-text': '#ffffff',
+        },
+      },
     },
     {
       id: 'violet',
@@ -149,6 +193,22 @@ const ACCENT: PaletteRole = {
         '--bubble-mine': '#6e44bc',
         '--bubble-mine-text': '#ffffff',
       },
+      night: {
+        dark: {
+          '--accent': '#8c75ca',
+          '--accent-ink': '#170c2b',
+          '--focus-ring': '#8c75ca',
+          '--bubble-mine': '#403461',
+          '--bubble-mine-text': '#c6c4cf',
+        },
+        light: {
+          '--accent': '#5b2da5',
+          '--accent-ink': '#ffffff',
+          '--focus-ring': '#5b2da5',
+          '--bubble-mine': '#5b2da5',
+          '--bubble-mine-text': '#ffffff',
+        },
+      },
     },
   ],
 }
@@ -163,13 +223,42 @@ const READOUT: PaletteRole = {
   aliases: [],
   swatch: '--readout',
   hue: [70, 320],
+  dimsAtNight: true,
   presets: [
     // The digits were painted in the accent until this role existed, so the default is the
-    // accent's own two values: nothing moves for anyone who does not pick one.
-    { id: 'cyan', labelKey: 'palette.preset.cyan', dark: { '--readout': '#4cc9f0' }, light: { '--readout': '#0d8ecf' } },
-    { id: 'amber', labelKey: 'palette.preset.amber', dark: { '--readout': '#fdbe45' }, light: { '--readout': '#936823' } },
-    { id: 'green', labelKey: 'palette.preset.green', dark: { '--readout': '#70ec90' }, light: { '--readout': '#11813c' } },
-    { id: 'violet', labelKey: 'palette.preset.violet', dark: { '--readout': '#bf9bfc' }, light: { '--readout': '#6e44bc' } },
+    // accent's own two values: nothing moves for anyone who does not pick one. At night too.
+    {
+      id: 'cyan',
+      labelKey: 'palette.preset.cyan',
+      dark: { '--readout': '#4cc9f0' },
+      light: { '--readout': '#0d8ecf' },
+      night: { dark: { '--readout': '#42a7c7' }, light: { '--readout': '#006fae' } },
+    },
+    // At night the digits dim in the dark theme and in every well. Amber dims less than the
+    // others: taken as far, it would come within ΔE 0.15 of the critical orange. In the light
+    // theme darker ink on a light panel dims nothing, and amber and green darker would come
+    // within a deutan eye's ΔE 0.06 of the TX red, so they keep their day ink there.
+    {
+      id: 'amber',
+      labelKey: 'palette.preset.amber',
+      dark: { '--readout': '#fdbe45' },
+      light: { '--readout': '#936823' },
+      night: { dark: { '--readout': '#d9ad48' }, light: { '--readout': '#936823' } },
+    },
+    {
+      id: 'green',
+      labelKey: 'palette.preset.green',
+      dark: { '--readout': '#70ec90' },
+      light: { '--readout': '#11813c' },
+      night: { dark: { '--readout': '#62c77b' }, light: { '--readout': '#11813c' } },
+    },
+    {
+      id: 'violet',
+      labelKey: 'palette.preset.violet',
+      dark: { '--readout': '#bf9bfc' },
+      light: { '--readout': '#6e44bc' },
+      night: { dark: { '--readout': '#9e80d0' }, light: { '--readout': '#5e31a8' } },
+    },
   ],
 }
 
@@ -188,6 +277,7 @@ const OK: PaletteRole = {
   aliases: ['--state-good'],
   swatch: '--snr-strong',
   hue: [120, 200],
+  dimsAtNight: false,
   presets: [
     { id: 'green', labelKey: 'palette.preset.green', dark: okValues('#69d98d'), light: okValues('#007f35') },
     // Bluish green: further from the reds for a red-green colour-blind operator.
@@ -209,6 +299,7 @@ const AMBER: PaletteRole = {
   aliases: ['--state-ok'],
   swatch: '--snr-marginal',
   hue: [65, 110],
+  dimsAtNight: false,
   presets: [
     {
       id: 'amber',
@@ -232,6 +323,7 @@ const CYAN: PaletteRole = {
   aliases: [],
   swatch: '--alert-info',
   hue: [190, 300],
+  dimsAtNight: false,
   presets: [
     { id: 'sky', labelKey: 'palette.preset.sky', dark: { '--alert-info': '#79c0f1' }, light: { '--alert-info': '#0070a6' } },
     { id: 'cyan', labelKey: 'palette.preset.cyan', dark: { '--alert-info': '#50d9ef' }, light: { '--alert-info': '#10798c' } },
