@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,096 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,127 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,12 +20,12 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 104 | The program's name. |
+| Nexus | 105 | The program's name. |
 | QSO / QSOs | 96 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 82 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 79 / 72 | Transmit and receive. Printed on the radio itself. |
-| CW | 67 | The mode. Never "telegrafia" in a mode picker. |
+| CW | 68 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 67 | Both the Q-code and the callsign lookup site. |
 | CQ | 63 | The call. Translating it would be strange on the air and on screen. |
 | MHz / kHz / Hz | 62 / 16 / 44 | SI units. Never translated, never re-punctuated. |
@@ -34,17 +34,17 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | ADIF | 49 | The log file format. |
 | WSJT-X | 47 | The program Nexus is compatible with. |
 | DXCC | 43 | The award programme and the entity list. |
-| SSTV | 40 | The mode. |
+| SSTV | 41 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
 | Field Day | 34 | The ARRL/RAC event's official name. |
 | USB / LSB / SSB / FM | 33 / 10 / 27 / 21 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
-| FT8 / FT4 | 32 / 17 | Mode names. |
+| FT8 / FT4 | 33 / 18 | Mode names. |
 | HF / VHF / UHF | 32 / 18 / 4 | Band ranges. |
 | VFO | 31 | The tuning register, marked VFO on every rig. |
 | RF | 30 | Radio frequency (as in RF power, RF gain). |
 | eQSL | 30 | Service name. |
-| RTTY | 27 | The mode. |
+| RTTY | 28 | The mode. |
 | POTA / SOTA | 24 / 9 | Parks and Summits On The Air — programme names. |
 | CSV | 24 | File format. |
 | CHIRP | 23 | The radio-programming program. |
@@ -97,10 +97,10 @@ word in, and use only that word in the CSV.
 |---|---:|---|---|
 | band | 309 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 227 | The rig itself, and the radio list in Settings. | |
-| mode | 208 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
+| mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 151 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 130 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 118 | The Settings screen and every reference to it. | |
+| settings | 121 | The Settings screen and every reference to it. | |
 | grid | 113 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 106 | Sound cards, levels, routing. | |
 | station | 104 | Both your own station and the one you are working. | |
@@ -123,14 +123,14 @@ word in, and use only that word in the CSV.
 | entity | 37 | A DXCC entity. Not the same thing as a country — the distinction matters to the award. | |
 | section | 36 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
 | cluster | 34 | The DX cluster. | |
-| waterfall | 34 | The scrolling spectrum display. | |
+| waterfall | 38 | The scrolling spectrum display. | |
 | contact | 32 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |
 | antenna | 30 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
 | cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 19 / 8 | The movable boxes inside a cockpit. | |
+| pane / panel | 19 / 10 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
 | exchange | 15 | The contest exchange. | |

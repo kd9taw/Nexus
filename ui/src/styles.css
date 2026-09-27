@@ -3684,7 +3684,7 @@ body.resizing-row {
 
 /* ---- NIGHT: a darker, warmer screen after dark (data-night='1') -----------------------------
    Operator picks, 2026-09-26: "Dim + warm, TX red", "Dim the light theme", "Settings + Auto by
-   sun", "At dusk, sun 6° down". Settings ▸ Appearance ▸ Workspace ▸ Night (useNight.ts): Off, On,
+   sun", "At dusk, sun 6° down". Settings ▸ Appearance ▸ Theme ▸ Night (useNight.ts): Off, On,
    or Auto from civil dusk to civil dawn at the station's grid square.
 
    WHAT MOVES: the neutral surfaces and inks go darker and warmer, the accent family and the
@@ -5589,6 +5589,67 @@ select optgroup {
 .theme-chip:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* THE ONE-TAP LOOKS — Settings ▸ Appearance ▸ Workspace ▸ Look (SettingsLooks.tsx): the six chips
+   and, after a tap, its Undo, on one line that wraps. The row, like the theme cards below, stands
+   above its section's grid at the section's full width, so neither squeezes into one grid column. */
+.settings-looks,
+.settings-theme-field {
+  margin-bottom: var(--space-4);
+}
+.settings-looks-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* THE THEME CARDS — Settings ▸ Appearance ▸ Theme (ThemeSwitcher.tsx): Light, Dark and System, each
+   a card with its name and a one-line personality. The picked card takes the active chip's own
+   fill and ink (--accent / --accent-ink, the pair every chip's pressed state already uses), line
+   included, so the pressed state is a whole filled card rather than a hue on its border. */
+.theme-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  /* The three share the row equally — inside the 520px cap every settings field takes at md+
+     that is ~168px each, one row — and never grow past 16em where the field is wider (sm). */
+  flex: 1 1 0;
+  min-width: 8em;
+  max-width: 16em;
+  min-height: var(--touch);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.theme-card:hover {
+  border-color: var(--accent);
+}
+.theme-card.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.theme-card-name {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 700;
+}
+.theme-card-line {
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
+.theme-card.active .theme-card-line {
+  color: inherit;
 }
 /* Settings ▸ Appearance ▸ Colours: a role's name with its Reset beside it, so the preset chips
    below always get the whole width (a Reset after four chips wrapped on its own at 1920). */
@@ -11049,6 +11110,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .settings-search-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+/* The shortcut, shown inside the empty box (SettingsSearch.tsx renders it only while the box is
+   empty, and gives the input room for it then). A label, never a target: clicks reach the input. */
+.settings-search-input.has-kbd {
+  padding-right: 52px;
+}
+.settings-search-kbd {
+  position: absolute;
+  right: 6px;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
 }
 .settings-search-results {
   position: absolute;

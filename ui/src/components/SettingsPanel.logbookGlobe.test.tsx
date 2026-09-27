@@ -68,7 +68,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function openWorkspace() {
+async function openMapGlobe() {
   render(
     <SettingsPanel
       activeRadioId={0}
@@ -85,14 +85,15 @@ async function openWorkspace() {
   )
   await screen.findByRole('tab', { name: /appearance/i })
   fireEvent.click(screen.getByRole('tab', { name: /appearance/i }))
-  return document.getElementById('settings-workspace')
+  return document.getElementById('settings-map-globe')
 }
 
 describe('Logbook globe switch (D#278)', () => {
-  it('sits in Appearance ▸ Workspace, on by default, and turning it off writes the setting', async () => {
-    const workspace = await openWorkspace()
+  it('sits in Appearance ▸ Map & globe, on by default, and turning it off writes the setting', async () => {
+    // Map & globe, not Workspace, since the Display sections (2026-09-26).
+    const section = await openMapGlobe()
     const box = screen.getByRole('checkbox', { name: 'Show the 3-D globe above the Logbook' }) as HTMLInputElement
-    expect(workspace?.contains(box), 'the switch is not inside the Workspace section').toBe(true)
+    expect(section?.contains(box), 'the switch is not inside the Map & globe section').toBe(true)
     expect(box.checked).toBe(true)
     fireEvent.click(box)
     expect(box.checked).toBe(false)

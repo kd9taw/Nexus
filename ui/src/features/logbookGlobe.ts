@@ -3,7 +3,7 @@
 //
 // APP-GLOBAL, bare localStorage (NOT surfaceGet/surfaceSet), the same classification as the
 // units preference: it is a standing statement about how this operator wants the Logbook to
-// look, not a property of one window. The switch lives in Settings ▸ Appearance ▸ Workspace
+// look, not a property of one window. The switch lives in Settings ▸ Appearance ▸ Map & globe
 // and the Logbook reads it, and those are different components that can both be mounted
 // (keep-alive views), so a change is announced in-window as well — a `storage` event only
 // reaches OTHER windows.

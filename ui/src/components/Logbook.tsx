@@ -1028,7 +1028,7 @@ export function Logbook({
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
   const [globeOk] = useState(gpuCapableForGlobe)
-  // D#278: the operator's own switch (Settings ▸ Appearance ▸ Workspace). Off = no band at all,
+  // D#278: the operator's own switch (Settings ▸ Appearance ▸ Map & globe). Off = no band at all,
   // and the table starts at the top.
   const [globeWanted] = useLogbookGlobe()
   const globeShown = control && globeOk && globeWanted && logSize > 0

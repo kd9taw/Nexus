@@ -537,23 +537,32 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
 
   // ---- Appearance --------------------------------------------------------------
+  // The DISPLAY SECTIONS (2026-09-26, the look-and-feel redesign): Workspace keeps the one-tap
+  // looks and the sizes; Theme, Waterfall & scopes, Map & globe and Performance each hold what
+  // their name says. The theme, contrast, Night and Field words moved to Theme with their rows.
   {
     id: 'workspace',
     label: 'Workspace',
     tab: 'appearance',
     // #215: the words an operator actually types when the screen is hard to read. The size
-    // half was findable ('text size', 'zoom'); the contrast half was not searchable at all,
-    // which is half of why the reporter went hunting and gave up. NOT bare 'field' — the
-    // configurations section already owns that word for home/field station presets, and an
-    // exact keyword outranks everything but a label.
-    keywords: ['theme', 'dark', 'light', 'system theme', 'dark mode', 'light mode',
-      'ui scale', 'text size', 'font size', 'zoom',
-      'contrast', 'high contrast', 'field mode', 'accessibility', 'large text', 'readable',
-      'daylight', 'sunlight', 'larger text', 'bigger text',
-      // Night (useNight.ts): the words for a dimmer screen after dark.
-      'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision',
+    // half lives here ('text size', 'zoom'); the contrast half moved to Theme with its row. NOT
+    // bare 'field' — the configurations section already owns that word for home/field station
+    // presets, and an exact keyword outranks everything but a label.
+    keywords: ['look', 'looks', 'one tap', 'preset', 'shack', 'big and clear', 'big & clear',
+      'ui scale', 'text size', 'font size', 'zoom', 'accessibility', 'large text', 'readable',
+      'larger text', 'bigger text',
       'density', 'compact', 'comfortable', 'touch', 'touchscreen',
-      'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
+      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc'],
+  },
+  {
+    // The theme cards and the rows that change how the theme paints: High contrast, Night and
+    // Field mode. #215's contrast words, and Night's (useNight.ts) for a dimmer screen after dark.
+    id: 'theme',
+    label: 'Theme',
+    tab: 'appearance',
+    keywords: ['dark', 'light', 'system theme', 'dark mode', 'light mode', 'follow system',
+      'contrast', 'high contrast', 'field mode', 'daylight', 'sunlight',
+      'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision'],
   },
   {
     // The colour roles (features/paletteRoles.ts): a few pre-checked presets for the accent, the
@@ -565,6 +574,32 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['color', 'colors', 'colour', 'accent', 'palette', 'readout', 'frequency digits',
       'vfo colour', 'vfo color', 'digits colour', 'chip colour', 'personalise', 'personalize',
       'customise', 'customize', 'violet', 'purple', 'teal', 'amber'],
+  },
+  {
+    // The waterfall and scope palettes, the same two settings the pickers in the cockpit headers
+    // write: the one Phone, CW, RTTY and SSTV share, and the FT waterfall's own.
+    id: 'waterfall-scopes',
+    label: 'Waterfall & scopes',
+    tab: 'appearance',
+    keywords: ['palette', 'waterfall palette', 'colour map', 'color map', 'colormap', 'turbo',
+      'cividis', 'viridis', 'inferno', 'colour blind', 'color blind', 'colorblind', 'cvd',
+      'spectrum', 'panadapter', 'wide graph', 'scope colours', 'scope colors'],
+  },
+  {
+    // The Logbook's globe, and where the Connect map's own choices live.
+    id: 'map-globe',
+    label: 'Map & globe',
+    tab: 'appearance',
+    keywords: ['globe', 'logbook globe', '3d globe', 'map', 'world map', 'projection', 'layers',
+      'greyline', 'grayline'],
+  },
+  {
+    // Motion: animations and fades, and the switch for a slow computer.
+    id: 'performance',
+    label: 'Performance',
+    tab: 'appearance',
+    keywords: ['motion', 'reduce motion', 'reduced motion', 'animation', 'animations', 'fade',
+      'slow computer', 'raspberry pi', 'battery', 'cpu', 'smooth'],
   },
   {
     // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at

@@ -82,6 +82,10 @@ const MIGRATED = [
   // table whose `labelKey`/`hintKey` entries name every role and preset word.
   'components/SettingsColours.tsx',
   'features/paletteRoles.ts',
+  // Settings ▸ Appearance ▸ Workspace ▸ Look (2026-09-26) — born migrated, the same pair: the row,
+  // and the looks table whose `labelKey` entries name each look.
+  'components/SettingsLooks.tsx',
+  'features/looks.ts',
   // The RTTY F-key surface (2026-09-17): the macro buttons, their editor and the set switch,
   // and the set model's caption keys. Migrated as they were written. RttyCockpit.tsx stays on
   // PARTIAL for its stop controls; nothing here stops a transmission.
@@ -661,6 +665,11 @@ const PARTIAL = [
   // only over a radio that is still running, is `quit.logbook.stopTx`: the control's name as the
   // cockpits write it, held in the catalog because this dialog is otherwise all prose.
   'components/LogbookSaving.tsx',
+  // waterfall.ts (2026-09-26) — for MASTER_PALETTES' `labelKey` alone: Cividis's menu entry says
+  // "colour-blind safe" in the catalog's words, which the orphan check can only see if it reads
+  // this file. The rest of its palette labels are still code, the English "Auto (theme)" among
+  // them, so it is partial in exactly this list's sense and does not belong on MIGRATED.
+  'waterfall.ts',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
