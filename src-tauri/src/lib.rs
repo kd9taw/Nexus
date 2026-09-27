@@ -1893,8 +1893,12 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
 /// reads back must include anything still queued, and its write must not share the temporary file
 /// with the writer's thread.
 fn persist_simultaneous_to_base(enabled: bool) {
-    let base = config_dir_for(None).join("settings.json");
-    let _ = SettingsWriter::of(&base).rewrite(|s| {
+    mirror_simultaneous(&config_dir_for(None).join("settings.json"), enabled);
+}
+
+/// [`persist_simultaneous_to_base`] for the base config at `base`.
+fn mirror_simultaneous(base: &Path, enabled: bool) {
+    let _ = SettingsWriter::of(base).rewrite(|s| {
         if s.simultaneous_radios == enabled {
             return false;
         }
@@ -1974,10 +1978,82 @@ fn persist_routing_to_base(live: &Settings) {
 /// The picker's "use one radio" escape: turn simultaneous-radios OFF (in the base config the picker
 /// reads) and let this window proceed as the single, band-following instance — the pre-picker
 /// behavior. Frontend dismisses the picker after this resolves.
-#[tauri::command]
-fn use_single_radio() -> Result<(), String> {
-    persist_simultaneous_to_base(false);
+#[tauri::command(async)]
+fn use_single_radio(state: State<'_, SharedEngine>) -> Result<(), String> {
+    use_one_radio(
+        &state,
+        &settings_path(),
+        &config_dir_for(None).join("settings.json"),
+    );
     Ok(())
+}
+
+/// "Use one radio", with the files named: this window's settings.json (`own`) and the base config
+/// the picker reads (`base`). They are the same file in the base window, the only one that shows
+/// the picker.
+fn use_one_radio(engine: &SharedEngine, own: &Path, base: &Path) {
+    // This window's Engine learns the choice, and its own file gets it through the writer like any
+    // change: its next save of anything writes the whole settings, this flag included, so an Engine
+    // still holding `true` would put the picker back.
+    {
+        let mut eng = engine_lock(engine);
+        let settings = eng.set_simultaneous_radios(false).clone();
+        SettingsWriter::of(own).queue(settings, |e| {
+            eprintln!("tempo: failed to persist the single-radio choice: {e}")
+        });
+    }
+    // …and the base config the picker reads: in the base window the same file, where the write
+    // queued above lands first; from any other window, the base profile's.
+    mirror_simultaneous(base, false);
+}
+
+#[cfg(test)]
+mod single_radio_tests {
+    use super::*;
+    use tempo_app::settings::writer::Flushed;
+
+    /// ⛔ "USE ONE RADIO" STICKS. The launch picker's escape writes `simultaneous_radios = false`
+    /// to the base config the picker reads. In the base window, the only one that shows the picker,
+    /// that file IS the window's own settings.json, and its Engine still held `true`: the next
+    /// setting the window saved wrote `true` back, and the picker returned at the next launch.
+    #[test]
+    fn use_one_radio_survives_the_next_settings_change() {
+        let dir = std::env::temp_dir().join(format!("nexus-one-radio-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+        let mut settings = Settings {
+            simultaneous_radios: true,
+            ..Settings::default()
+        };
+        settings.ensure_radio_profiles();
+        settings
+            .save(&file)
+            .expect("the base window's settings, as launch read them");
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+
+        // The base window: its own settings.json is the base config.
+        use_one_radio(&engine, &file, &file);
+        // The next change in that window, persisted the way every command persists one.
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_tx_level(0.5);
+            SettingsWriter::of(&file).queue(eng.settings().clone(), |_| {});
+        }
+        assert_eq!(
+            SettingsWriter::of(&file).flush(std::time::Duration::from_secs(30)),
+            Flushed::Saved
+        );
+        assert!(
+            !Settings::load(&file).simultaneous_radios,
+            "the next launch reads the operator's choice: no picker"
+        );
+        assert!(
+            !engine_lock(&engine).settings().simultaneous_radios,
+            "and this window's Engine agrees with its file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// The SHARED data directory that holds the ONE unified logbook across all instances.

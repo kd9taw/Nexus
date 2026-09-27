@@ -5808,6 +5808,16 @@ impl Engine {
         &self.settings
     }
 
+    /// Simultaneous radios on or off, for the launch picker's "use one radio" (a Settings save writes
+    /// it through the form too). The picker decides from this value, and the base window's file is
+    /// the one it reads, so the window that declines the picker must hold the new value: its next
+    /// save of anything writes the whole settings, this flag included. Returns the settings for the
+    /// caller to persist.
+    pub fn set_simultaneous_radios(&mut self, on: bool) -> &Settings {
+        self.settings.simultaneous_radios = on;
+        &self.settings
+    }
+
     /// ⛔ **THE ONE WRITER of `remote_autostart_offer_answered`**: Remote's one-time offer to start
     /// Nexus at sign-in was answered, either way, and is never shown again.
     pub fn answer_remote_autostart_offer(&mut self) -> &Settings {
