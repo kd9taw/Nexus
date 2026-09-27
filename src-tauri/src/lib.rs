@@ -35894,17 +35894,20 @@ mod tests {
     /// the wall clock: that anchors the fixture to the SET, so it survives
     /// both the passage of time and a regenerated seed.
     ///
-    /// ⚠️ The held-back tail is NOT asserted, and that is deliberate. `release-prep`
-    /// re-cuts this seed from the live catalogs at every release, so whether any bird
-    /// sits past the 30 d ceiling is satellite weather, not a property of this code —
-    /// the 2026-09-08 bundle (335 birds, oldest 21.5 d) has no tail at all, which is a
-    /// HEALTHIER catalog, not a regression. Asserting a tail made a good fetch fail the
-    /// release gate. The mechanism this test was written for — a max over admitted
-    /// birds parking just under the ceiling, so the headline must not follow the tail
-    /// down — is pinned bundle-free by `the_headline_does_not_park_just_under_the_30_day_ceiling` below.
+    /// ⚠️ NO tail is asserted, and that is deliberate. `release-prep` re-cuts this seed
+    /// from the live catalogs at every release, so whether any bird sits past the 30 d
+    /// ceiling — or even past the 14 d line — is satellite weather, not a property of
+    /// this code. The 2026-09-08 bundle (335 birds, oldest 21.5 d) had no held-back
+    /// tail, and the 2026-09-26 re-cut (333 birds, oldest 9.2 d) had no bird past 14 d:
+    /// both HEALTHIER catalogs, not regressions, and asserting each tail made a good
+    /// fetch fail the release gate. The mechanism this test was written for — a max
+    /// over admitted birds parking just under the ceiling, so the headline must not
+    /// follow the tail down — is pinned bundle-free by `the_headline_does_not_park_just_under_the_30_day_ceiling` below.
     /// What stays asserted here is what must hold for ANY shippable bundle: enough
     /// usable birds, and a headline that describes the set rather than its oldest
-    /// member.
+    /// member. Every bundle cut so far has had a bird days old (9.2 d on the
+    /// 2026-09-26 re-cut), so `headline < 3.0` is also what tells the median from a
+    /// max over the set here.
     #[test]
     fn the_set_wide_readout_describes_the_set_not_its_oldest_bird() {
         let seed = tle_seed(SEED_NOW).expect("the seed must load");
@@ -35920,21 +35923,6 @@ mod tests {
         );
         let newest = raw.iter().copied().fold(f64::INFINITY, f64::min);
         let ages: Vec<Option<f64>> = raw.iter().map(|a| Some(a - newest)).collect();
-
-        // The fixture still reproduces the report: a slow-cadence tail (AO-7
-        // and the SatNOGS birds re-observed every few weeks) whose oldest
-        // ADMITTED member is well past the 14 d line.
-        let oldest_admitted = ages
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|a| *a <= TLE_ACT_STALE_DAYS)
-            .fold(0.0f64, f64::max);
-        assert!(
-            oldest_admitted > 14.0,
-            "the seed no longer carries a slow-cadence tail (oldest admitted \
-             {oldest_admitted:.1} d) — this test no longer reproduces the bug"
-        );
 
         let c = tle_set_currency(
             ages.iter().copied(),
