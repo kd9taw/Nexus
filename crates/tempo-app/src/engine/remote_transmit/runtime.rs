@@ -2,6 +2,7 @@
 //! receive adjustment during an owned FT session cannot move the TX marker.
 use super::settings::FtSettingsContext;
 use super::*;
+use crate::settings::writer::SettingsWriter;
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -45,11 +46,12 @@ impl Engine {
                 if !permit.valid(Instant::now()) {
                     return Err(Reason::AuthorityExpired);
                 }
-                next.save(
+                SettingsWriter::of(
                     self.remote_settings_path
                         .as_ref()
                         .ok_or(Reason::UnsupportedAction)?,
                 )
+                .save_now(&next)
                 .map_err(|_| Reason::PersistenceFailed)?;
                 // Native RX is independent of TX even with Hold off. Complete
                 // the admitted saved choice without renewing or acquiring TX.

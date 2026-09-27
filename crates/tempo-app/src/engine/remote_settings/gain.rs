@@ -41,11 +41,12 @@ impl Engine {
         if !permit.valid(Instant::now()) {
             return Err(Reason::AuthorityExpired);
         }
-        next.save(
+        SettingsWriter::of(
             self.remote_settings_path
                 .as_ref()
                 .ok_or(Reason::UnsupportedAction)?,
         )
+        .save_now(&next)
         .map_err(|_| Reason::PersistenceFailed)?;
         // Persistence is the admission boundary. The normal audio owner reads
         // this value on its next tick; a receipt does not assert live audio.

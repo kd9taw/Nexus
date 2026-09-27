@@ -134,6 +134,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   period. Clicking works exactly as before: left-click sets RX, right-click or Shift-click sets TX
   for a split, and Ctrl-click sets both. A click inside a marker tunes to the spot you clicked. WSPR,
   MSK144, FT2 and the Tempo modes keep the single line.
+- **Changing a setting no longer holds up the radio.** A band pick, the Pwr slider, a TX offset,
+  a switch in Settings: every change used to make the loop that runs the radio wait while the
+  settings file was written to disk, a few milliseconds on a fast drive and longer on a slow one
+  or while an antivirus scanned the file. The file is now written in the background, always with
+  the newest change, and Nexus writes the last one before it quits, restarts, reopens for
+  another radio or installs an update. What each setting does, and when it takes effect, is
+  unchanged.
 
 ### Fixed
 

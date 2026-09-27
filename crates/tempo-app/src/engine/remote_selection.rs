@@ -5,6 +5,7 @@ use super::radio_selection::RadioSelection;
 use super::remote_radio::{AgcSpeed, RadioLevel, Workspace};
 use super::Engine;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
+use crate::settings::writer::SettingsWriter;
 use crate::settings::Settings;
 pub use modes::Ft8A7ResetGuard;
 use std::time::Instant;
@@ -671,12 +672,13 @@ impl Request {
         // Do this before installation too: unwinding may not leave a retry behind.
         engine.take_immediate_retune();
         install(engine);
-        let saved = engine.settings.save(
+        let saved = SettingsWriter::of(
             engine
                 .remote_settings_path
                 .as_ref()
                 .expect("validated settings store"),
-        );
+        )
+        .save_now(&engine.settings);
         self.completion.finish(if saved.is_ok() {
             Outcome::Applied {
                 evidence: Evidence::RadioReadback,

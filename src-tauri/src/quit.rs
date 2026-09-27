@@ -808,6 +808,41 @@ mod tests {
         );
     }
 
+    /// A settings change reaches the disk a moment after its command returns (the writer's own
+    /// thread writes it), so every road out of the process puts the last one there first, and so
+    /// does the picker's relaunch, whose new instance reads this window's `settings.json`.
+    /// Source-scanned like the radio stop above: which function each path calls, and where, is
+    /// what is under test.
+    ///
+    /// - `quit_cleanup` flushes on every quit (a restart included), after the radio stop and
+    ///   outside the attached-only branch: what was queued before the attach is the operator's
+    ///   too;
+    /// - the Windows update flushes before the installer ends the process without a quit;
+    /// - `choose_radio` flushes before it spawns the instance that seeds its profile from the file.
+    #[test]
+    fn every_exit_puts_the_last_settings_change_on_the_disk() {
+        let lib = include_str!("lib.rs");
+        let at = |hay: &str, needle: &str| {
+            hay.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is there"))
+        };
+        let cleanup = body_of(lib, "fn quit_cleanup(");
+        assert!(
+            at(cleanup, "stop_the_radio();") < at(cleanup, "\n    flush_settings();\n"),
+            "quit_cleanup flushes the settings on every quit, after the radio stop"
+        );
+        let update = body_of(lib, "async fn prepare_update_install(");
+        assert!(
+            at(update, "persist_other_journals(&app);") < at(update, "flush_settings();"),
+            "the Windows update flushes the settings before the installer"
+        );
+        let choose = body_of(lib, "fn choose_radio(");
+        assert!(
+            at(choose, "flush_settings();") < at(choose, ".spawn()"),
+            "the picker's relaunch starts once this window's settings are on the disk"
+        );
+    }
+
     /// However the quit ends, the window closes. A panic inside it — here the radio stop itself
     /// — still reaches the close, so no window is left held that no close can shut; on the way
     /// out, `quit_cleanup` runs the radio stop again and the logbook's final flush.

@@ -152,14 +152,16 @@ fn run(
             },
             Err(reason) => Outcome::Rejected { reason },
         },
+        // `settingsSaved` answers once the write has been made, as it did when the save ran inside
+        // the verb. The save's result was never part of the answer, and still is not.
         Command::UplinkMap { map, radio_id } => {
-            crate::write_sat_uplink(engine, map, radio_id);
+            let _ = crate::write_sat_uplink(engine, map, radio_id).wait();
             Outcome::Applied {
                 evidence: Evidence::SettingsSaved,
             }
         }
         Command::Peg { on } => {
-            crate::write_peg_lock(engine, on);
+            let _ = crate::write_peg_lock(engine, on).wait();
             Outcome::Applied {
                 evidence: Evidence::SettingsSaved,
             }

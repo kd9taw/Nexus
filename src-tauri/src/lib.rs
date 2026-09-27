@@ -79,6 +79,7 @@ use tempo_app::dto::{
     WinlinkSession,
 };
 use tempo_app::engine::{engine_lock, engine_lock_result, engine_try_lock, Engine};
+use tempo_app::settings::writer::SettingsWriter;
 use tempo_app::settings::{Settings, VoiceMessage};
 
 /// The engine, shared between UI commands and the radio loop.
@@ -1864,6 +1865,9 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
 #[tauri::command]
 fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // The new instance seeds its profile from this window's settings.json as it starts: the
+    // last change here must be on the disk before it reads.
+    flush_settings();
     tempo_core::process::command(exe)
         .arg("--profile")
         .arg(radio_profile_key(radio_id))
@@ -1883,13 +1887,20 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
 /// blocks the base window's Settings, so a per-radio window is the ONLY place the operator can
 /// reach the toggle; without mirroring it here, the base config keeps the flag ON forever and the
 /// picker can never be turned off (the trap). Best-effort; a failure just leaves the old value.
+///
+/// Through the base file's writer, like every settings write: in the base window itself (the
+/// picker's "use one radio") the base file IS this window's `settings.json`, so the change it
+/// reads back must include anything still queued, and its write must not share the temporary file
+/// with the writer's thread.
 fn persist_simultaneous_to_base(enabled: bool) {
     let base = config_dir_for(None).join("settings.json");
-    let mut s = Settings::load(&base);
-    if s.simultaneous_radios != enabled {
+    let _ = SettingsWriter::of(&base).rewrite(|s| {
+        if s.simultaneous_radios == enabled {
+            return false;
+        }
         s.simultaneous_radios = enabled;
-        let _ = s.save(&base);
-    }
+        true
+    });
 }
 
 /// Mirror the ROSTER IDENTITY (which radios exist) into the BASE profile's settings.json.
@@ -1912,25 +1923,27 @@ fn persist_roster_to_base(radios: &[tempo_app::settings::RadioProfile]) {
         return; // the base config itself, or an independent named profile — nothing to mirror
     }
     let base = config_dir_for(None).join("settings.json");
-    let mut s = Settings::load(&base);
-    let added: Vec<_> = radios
-        .iter()
-        .filter(|r| !s.radios.iter().any(|b| b.id == r.id))
-        .cloned()
-        .collect();
-    let removed = s
-        .radios
-        .iter()
-        .any(|b| !radios.iter().any(|r| r.id == b.id));
-    if added.is_empty() && !removed {
-        return;
-    }
-    s.radios.retain(|b| radios.iter().any(|r| r.id == b.id));
-    s.radios.extend(added);
-    s.ensure_radio_profiles();
-    s.ensure_distinct_radio_ports();
-    s.ensure_routing_targets();
-    if let Err(e) = s.save(&base) {
+    let mirrored = SettingsWriter::of(&base).rewrite(|s| {
+        let added: Vec<_> = radios
+            .iter()
+            .filter(|r| !s.radios.iter().any(|b| b.id == r.id))
+            .cloned()
+            .collect();
+        let removed = s
+            .radios
+            .iter()
+            .any(|b| !radios.iter().any(|r| r.id == b.id));
+        if added.is_empty() && !removed {
+            return false;
+        }
+        s.radios.retain(|b| radios.iter().any(|r| r.id == b.id));
+        s.radios.extend(added);
+        s.ensure_radio_profiles();
+        s.ensure_distinct_radio_ports();
+        s.ensure_routing_targets();
+        true
+    });
+    if let Err(e) = mirrored {
         eprintln!("tempo: couldn't mirror the radio roster to the base config: {e}");
     }
 }
@@ -1944,14 +1957,16 @@ fn persist_routing_to_base(live: &Settings) {
         return;
     }
     let base = config_dir_for(None).join("settings.json");
-    let mut s = Settings::load(&base);
-    if s.routing_rules == live.routing_rules && s.default_radio == live.default_radio {
-        return;
-    }
-    s.routing_rules = live.routing_rules.clone();
-    s.default_radio = live.default_radio;
-    s.ensure_routing_targets();
-    if let Err(e) = s.save(&base) {
+    let mirrored = SettingsWriter::of(&base).rewrite(|s| {
+        if s.routing_rules == live.routing_rules && s.default_radio == live.default_radio {
+            return false;
+        }
+        s.routing_rules = live.routing_rules.clone();
+        s.default_radio = live.default_radio;
+        s.ensure_routing_targets();
+        true
+    });
+    if let Err(e) = mirrored {
         eprintln!("tempo: couldn't mirror the routing table to the base config: {e}");
     }
 }
@@ -4445,6 +4460,40 @@ fn settings_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
+/// Hand the Engine's settings to `settings.json`'s writer (`tempo_app::settings::writer`) and
+/// return at once: its own thread writes them, so the radio loop, which needs the Engine lock
+/// every 20 ms, never waits on the disk behind a changed setting.
+///
+/// ⛔ Call it holding the Engine lock, with `snapshot` taken from the Engine under that same hold:
+/// that is what numbers the snapshots in the order the Engine made its changes, so an older one
+/// never lands over a newer file. `failure` is told if the write carrying this change fails, as
+/// the command's own save used to report it.
+fn persist_settings(
+    snapshot: Settings,
+    failure: impl FnOnce(&std::io::Error) + Send + 'static,
+) -> tempo_app::settings::writer::Ticket {
+    SettingsWriter::of(&settings_path()).queue(snapshot, failure)
+}
+
+/// How long a quit, a restart, a relaunch or the Windows installer waits for the last settings
+/// change to reach the disk: the logbook flush's own patience.
+const SETTINGS_FLUSH: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Put every settings change handed to the writer on the disk before the process goes (a quit, a
+/// restart, the Windows installer) or another instance reads the file (the picker's relaunch).
+/// Bounded, so a wedged disk cannot hold a quit forever, and never under the Engine lock.
+fn flush_settings() {
+    if !SettingsWriter::of(&settings_path()).flush(SETTINGS_FLUSH) {
+        tempo_core::applog::warn(
+            "settings",
+            &format!(
+                "settings.json was still being written after {} s; the last change may not be saved",
+                SETTINGS_FLUSH.as_secs()
+            ),
+        );
+    }
+}
+
 /// Persisted geometry (logical px) + side-dock of the torn-off band-map window, so the
 /// vertical band map reopens where the operator left it instead of re-arranging it every
 /// launch. A tiny sibling of settings.json (not part of the big Settings blob — it's pure
@@ -5991,9 +6040,9 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
     let mut eng = engine_lock(&state);
     eng.set_source(kind)?;
     // Persist the choice so it survives restart (set_source recorded it in settings).
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist signal source: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist signal source: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -12546,9 +12595,9 @@ fn save_and_publish(
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
             }
-            if let Err(e) = eng.settings().save(&settings_path()) {
-                eprintln!("tempo: failed to persist settings: {e}");
-            }
+            persist_settings(eng.settings().clone(), |e| {
+                eprintln!("tempo: failed to persist settings: {e}")
+            });
             // Mirror the fleet-level multi-radio toggle to the BASE config from a per-radio window, so
             // turning it off here actually stops the launch picker (the base config drives that, and
             // the picker otherwise blocks the base window's Settings — the trap). No-op in the base.
@@ -13051,8 +13100,11 @@ fn import_settings_bundle(
         let mut eng = engine_lock(&state);
         eng.apply_restored_settings(settings);
         // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
-        // next launch while looking like it had worked.
-        if let Err(e) = eng.settings().save(&settings_path()) {
+        // next launch while looking like it had worked. Synchronous, under the lock as it always
+        // was: a restore that did not reach the disk says so and mirrors nothing to the base
+        // config, so it cannot go through the writer's thread. Through the writer's file lock all
+        // the same, so it never shares the temporary file with a queued write.
+        if let Err(e) = SettingsWriter::of(&settings_path()).save_now(eng.settings()) {
             return Err(format!(
                 "The settings were restored but could not be saved: {e}"
             ));
@@ -14082,9 +14134,9 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
 fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_ai_cw_enabled(on);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist ai-cw toggle: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist ai-cw toggle: {e}")
+    });
     // The AI decoder is one of the assistance sources, so its state belongs in the record.
     journal_assistance(eng.settings(), "AI CW decoder toggled", false);
     Ok(eng.snapshot())
@@ -14121,9 +14173,9 @@ fn set_unassisted_mode(
             *b = tempo_net::cluster::SpotBuffer::default();
         }
     }
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist unassisted-mode toggle: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist unassisted-mode toggle: {e}")
+    });
     let note = if on {
         "UNASSISTED entry declared by the operator"
     } else {
@@ -14410,9 +14462,9 @@ fn aprs_send_message(
 fn aprs_tune(state: State<'_, SharedEngine>, dial_mhz: f64) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.aprs_tune(dial_mhz)?;
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist frequency: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -14434,9 +14486,9 @@ fn repeater_tune(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.repeater_tune(output_mhz, &shift, offset_hz, tone_hz)?;
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist frequency: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -14662,9 +14714,9 @@ async fn get_js8_state(state: State<'_, SharedEngine>) -> Result<tempo_app::dto:
 /// Persist the engine's settings after a JS8 verb changed one of them (the engine holds
 /// settings, the command layer owns the file — the `purge_log` shape).
 fn js8_persist_settings(eng: &Engine) {
-    if let Err(e) = eng.settings().clone().save(&settings_path()) {
-        eprintln!("tempo: failed to save settings after a JS8 change: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to save settings after a JS8 change: {e}")
+    });
 }
 
 /// Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo): the slot clock and the
@@ -14742,9 +14794,9 @@ fn js8_arm(
     let mut eng = engine_lock(&state);
     eng.js8_arm(which, on)?;
     if which != tempo_app::engine::js8::Js8Switch::Hb {
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: failed to persist JS8 switch: {e}");
-        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist JS8 switch: {e}")
+        });
     }
     Ok(eng.js8_state())
 }
@@ -15264,9 +15316,9 @@ fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSn
 fn set_msk144_period(state: State<'_, SharedEngine>, secs: u16) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_msk144_period(secs);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_msk144_period save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_msk144_period save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -15275,9 +15327,9 @@ fn set_msk144_period(state: State<'_, SharedEngine>, secs: u16) -> Result<AppSna
 fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_tx_level(level);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_tx_level save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_tx_level save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -15288,9 +15340,9 @@ fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapsho
 fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_rx_gain(gain);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_rx_gain save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_rx_gain save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -15303,9 +15355,9 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
     let snap = {
         let mut eng = engine_lock(&state);
         eng.set_active_radio(id);
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: set_active_radio save failed: {e}");
-        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: set_active_radio save failed: {e}")
+        });
         eng.snapshot()
     }; // drop the engine lock before touching the rotator daemon
        // Each radio carries its own rotator — re-sync the rotctld daemon to the newly-active radio's
@@ -15344,12 +15396,12 @@ fn write_sat_uplink(
     state: &SharedEngine,
     map: Option<tempo_app::settings::SatVfoMap>,
     radio_id: Option<u32>,
-) {
+) -> tempo_app::settings::writer::Ticket {
     let mut eng = engine_lock(state);
     eng.confirm_sat_uplink(radio_id, map);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: confirm_sat_uplink save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: confirm_sat_uplink save failed: {e}")
+    })
 }
 
 /// Peg-lock the active radio (dual-radio): when on, selecting a band never auto-switches the
@@ -15363,12 +15415,12 @@ fn set_peg_lock(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot,
 /// Peg-lock, with no Tauri in it, so a Remote browser's 🔒 in the satellite radio-binding line
 /// reaches exactly this code. `radio_pegged` is live roster state a whole-settings payload cannot
 /// carry, which is why this is its own verb (see the command above).
-fn write_peg_lock(state: &SharedEngine, on: bool) {
+fn write_peg_lock(state: &SharedEngine, on: bool) -> tempo_app::settings::writer::Ticket {
     let mut eng = engine_lock(state);
     eng.set_radio_pegged(on);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_peg_lock save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_peg_lock save failed: {e}")
+    })
 }
 
 /// The readiness rail's Doppler fix: the one Settings switch the satellite section turns on where
@@ -15396,9 +15448,9 @@ fn write_sat_doppler(
 fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.add_radio();
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: add_radio save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: add_radio save failed: {e}")
+    });
     // Mirror the new radio into the base config, or a THIRD radio added from a per-radio window is
     // invisible to the launch picker forever — see `persist_roster_to_base`.
     persist_roster_to_base(&eng.settings().radios);
@@ -15422,9 +15474,9 @@ fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, 
                 .into(),
         );
     }
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: remove_radio save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: remove_radio save failed: {e}")
+    });
     // …and out of the base config too, else the picker keeps offering a radio that no longer exists.
     persist_roster_to_base(&eng.settings().radios);
     persist_routing_to_base(eng.settings());
@@ -15440,9 +15492,9 @@ fn rename_radio(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.rename_radio(id, &name);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: rename_radio save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: rename_radio save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -15456,9 +15508,9 @@ fn set_radio_bands(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_radio_bands(id, bands);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_radio_bands save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_radio_bands save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -15472,9 +15524,9 @@ fn set_routing_rules(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_routing_rules(rules);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_routing_rules save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_routing_rules save failed: {e}")
+    });
     persist_routing_to_base(eng.settings());
     Ok(eng.snapshot())
 }
@@ -15488,9 +15540,9 @@ fn set_default_radio(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_default_radio(id);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_default_radio save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_default_radio save failed: {e}")
+    });
     persist_routing_to_base(eng.settings());
     Ok(eng.snapshot())
 }
@@ -15534,9 +15586,9 @@ fn update_radio_profile(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.update_radio_profile(id, patch);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: update_radio_profile save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: update_radio_profile save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -15923,9 +15975,9 @@ fn get_band_plan(
 fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_license_class(&class);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist license class: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist license class: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16007,9 +16059,9 @@ fn set_frequency(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_frequency(dial_mhz, &band, &mode);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist frequency: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16025,9 +16077,9 @@ fn sstv_tune(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.sstv_tune(dial_mhz, &band, &mode);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist frequency: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16046,9 +16098,9 @@ fn tune_channel(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.tune_channel(dial_mhz, &band, &mode);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist frequency: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16068,9 +16120,9 @@ fn pick_band(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.pick_band(&band, mode.as_deref());
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist frequency: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16088,9 +16140,9 @@ fn set_operating_mode(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_operating_mode(&mode, follow_freq);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist operating mode: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist operating mode: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16133,9 +16185,9 @@ fn work_spot(
     let mut eng = engine_lock(&state);
     eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist worked spot: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist worked spot: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16205,9 +16257,9 @@ fn set_cw_wpm(
     //     station you're working must not overwrite the operator's own stored speed.
     // The UI commits once after the operator settles. SF ticket #2.
     if commit {
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: set_cw_wpm save failed: {e}");
-        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: set_cw_wpm save failed: {e}")
+        });
     }
     Ok(eng.snapshot())
 }
@@ -16218,9 +16270,9 @@ fn set_cw_wpm(
 fn set_decode_depth(state: State<'_, SharedEngine>, depth: u8) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_decode_depth(depth);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_decode_depth save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_decode_depth save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16537,9 +16589,9 @@ fn set_cw_keyer(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_cw_keyer(&backend, pitch);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist CW keyer: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist CW keyer: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16626,9 +16678,9 @@ fn stop_voice_recording(
         let mut eng = engine_lock(&state);
         let lbl = (!label.trim().is_empty()).then_some(label.as_str());
         eng.set_voice_message(slot, lbl, Some(&path.to_string_lossy()));
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: failed to persist voice message: {e}");
-        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist voice message: {e}")
+        });
         Ok(eng.voice_messages().to_vec())
     }
     #[cfg(not(feature = "radio"))]
@@ -16670,9 +16722,9 @@ fn import_voice_message(
         let mut eng = engine_lock(&state);
         let lbl = (!label.trim().is_empty()).then_some(label.as_str());
         eng.set_voice_message(slot, lbl, Some(&path.to_string_lossy()));
-        if let Err(e) = eng.settings().save(&settings_path()) {
-            eprintln!("tempo: failed to persist voice message: {e}");
-        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist voice message: {e}")
+        });
         Ok(eng.voice_messages().to_vec())
     }
     #[cfg(not(feature = "radio"))]
@@ -16691,9 +16743,9 @@ fn set_voice_label(
 ) -> Result<Vec<VoiceMessage>, String> {
     let mut eng = engine_lock(&state);
     eng.set_voice_message(slot, Some(&label), None);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist voice label: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist voice label: {e}")
+    });
     Ok(eng.voice_messages().to_vec())
 }
 
@@ -16705,9 +16757,9 @@ fn clear_voice_message(
 ) -> Result<Vec<VoiceMessage>, String> {
     let mut eng = engine_lock(&state);
     eng.clear_voice_message(slot);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist voice clear: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist voice clear: {e}")
+    });
     // Clear means gone: delete the orphaned recording too (best-effort).
     let _ = std::fs::remove_file(voice_dir().join(format!("slot{slot}.wav")));
     Ok(eng.voice_messages().to_vec())
@@ -16773,9 +16825,9 @@ fn stop_qso_recording(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
 fn set_tx_even(state: State<'_, SharedEngine>, even: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_tx_even(even);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist tx period: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist tx period: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16795,9 +16847,9 @@ fn set_tx_cycle_auto(state: State<'_, SharedEngine>, auto: bool) -> Result<AppSn
 fn set_beacon(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_beacon(on);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist heartbeat setting: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist heartbeat setting: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16875,9 +16927,9 @@ fn override_next_tx(
 fn set_rx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_rx_offset(hz);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist rx offset: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist rx offset: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16886,9 +16938,9 @@ fn set_rx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot,
 fn set_tx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_tx_offset(hz);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist tx offset: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist tx offset: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16898,9 +16950,9 @@ fn set_tx_offset(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot,
 fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_hold_tx_freq(on);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist hold-tx: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist hold-tx: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16913,9 +16965,9 @@ fn set_hold_tx_freq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnaps
 fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     let s = eng.set_fd_operator(call);
-    if let Err(e) = s.save(&settings_path()) {
-        eprintln!("tempo: failed to persist field day operator: {e}");
-    }
+    persist_settings(s, |e| {
+        eprintln!("tempo: failed to persist field day operator: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16929,9 +16981,13 @@ fn set_fd_operator(state: State<'_, SharedEngine>, call: String) -> Result<AppSn
 /// launch, which folds nothing twice.
 #[tauri::command(async)]
 fn retire_wanted_calls(state: State<'_, SharedEngine>) -> Result<(), String> {
-    let mut eng = engine_lock(&state);
-    eng.retire_wanted_calls()
-        .save(&settings_path())
+    let saved = {
+        let mut eng = engine_lock(&state);
+        persist_settings(eng.retire_wanted_calls().clone(), |_| {})
+    };
+    // Answered once the write that carries it is done, as before, but with the lock released.
+    saved
+        .wait()
         .map_err(|e| format!("could not save the settings: {e}"))
 }
 
@@ -16966,9 +17022,9 @@ fn set_watch_list(
 fn set_beta_updates(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     let s = eng.set_beta_updates(on);
-    if let Err(e) = s.save(&settings_path()) {
-        eprintln!("tempo: failed to persist beta updates opt-in: {e}");
-    }
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: failed to persist beta updates opt-in: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -16994,9 +17050,9 @@ fn set_launch_at_login(
     changed.map_err(|_| "launchAtLoginUnsupported".to_string())?;
     let mut eng = engine_lock(&state);
     let s = eng.set_launch_at_login(on);
-    if let Err(e) = s.save(&settings_path()) {
-        eprintln!("tempo: failed to persist start at sign-in: {e}");
-    }
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: failed to persist start at sign-in: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -17007,9 +17063,9 @@ fn set_launch_at_login(
 fn answer_remote_autostart_offer(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     let s = eng.answer_remote_autostart_offer();
-    if let Err(e) = s.save(&settings_path()) {
-        eprintln!("tempo: failed to persist the Remote start-at-sign-in answer: {e}");
-    }
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: failed to persist the Remote start-at-sign-in answer: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -17024,9 +17080,9 @@ fn set_blocked_calls(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_blocked_calls(calls);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist blocked calls: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist blocked calls: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -17367,9 +17423,9 @@ fn set_skip_tx1(state: State<'_, SharedEngine>, enabled: bool) -> Result<(), Str
 fn set_area(state: State<'_, SharedEngine>, area: String) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_area(&area);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: set_area save failed: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_area save failed: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -17920,13 +17976,13 @@ async fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
             // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
             // an incremental cursor is a lie about an empty log). Persist that here — the
             // engine holds settings, the command layer owns the file.
-            if let Err(e) = eng.settings().clone().save(&settings_path()) {
+            persist_settings(eng.settings().clone(), |e| {
                 conn_log(
                     "LoTW",
                     "error",
                     format!("failed to reset the sync cursor after a purge: {e}"),
-                );
-            }
+                )
+            });
             Ok(removed)
         })
     })
@@ -20777,9 +20833,9 @@ fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: b
             UploadToggle::Hrdlog => eng.set_hrdlog_upload(on),
             UploadToggle::Wrl => eng.set_wrl_upload(on),
         };
-        if let Err(e) = updated.save(&settings_path()) {
-            eprintln!("tempo: couldn't persist settings: {e}");
-        }
+        persist_settings(updated, |e| {
+            eprintln!("tempo: couldn't persist settings: {e}")
+        });
         conn_log(
             connector,
             "info",
@@ -20965,13 +21021,13 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
                 && eng.settings().lotw_username.trim() == used_username.trim()
             {
                 let updated = eng.set_lotw_cursor(high_water);
-                if let Err(e) = updated.save(&settings_path()) {
+                persist_settings(updated, |e| {
                     conn_log(
                         "LoTW",
                         "error",
                         format!("failed to persist the sync cursor: {e}"),
-                    );
-                }
+                    )
+                });
             }
         }
         eng.log_rows()
@@ -21470,9 +21526,9 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             && eng.settings().eqsl_username.trim() == used_username.trim()
         {
             let updated = eng.set_eqsl_cursor(next_cursor);
-            if let Err(e) = updated.save(&settings_path()) {
-                eprintln!("tempo: failed to persist eQSL cursor: {e}");
-            }
+            persist_settings(updated, |e| {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}")
+            });
         }
     }
     // On disk before the sync says so — off the lock, on the blocking pool.
@@ -22930,9 +22986,9 @@ async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), 
     {
         let mut eng = engine_lock(&state);
         let updated = eng.set_wrl_logbook_id(resolved.as_deref().unwrap_or(""));
-        if let Err(e) = updated.save(&settings_path()) {
-            eprintln!("tempo: couldn't persist settings: {e}");
-        }
+        persist_settings(updated, |e| {
+            eprintln!("tempo: couldn't persist settings: {e}")
+        });
     }
     conn_log(
         "World Radio League",
@@ -24700,9 +24756,9 @@ fn contest_i_moved(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     let s = eng.contest_i_moved(values)?;
-    if let Err(e) = s.save(&settings_path()) {
-        eprintln!("tempo: failed to persist the moved contest location: {e}");
-    }
+    persist_settings(s, |e| {
+        eprintln!("tempo: failed to persist the moved contest location: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -25434,9 +25490,9 @@ async fn lookup_park_live(reference: String) -> Result<ParkDto, String> {
 fn qsy_set_enabled(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.qsy_set_enabled(on);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist qsy enable: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist qsy enable: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -25449,9 +25505,9 @@ fn qsy_configure(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.qsy_configure(channels, cadence);
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist qsy config: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist qsy config: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -25476,9 +25532,9 @@ fn qsy_pause(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
 fn qsy_stop(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.qsy_stop();
-    if let Err(e) = eng.settings().save(&settings_path()) {
-        eprintln!("tempo: failed to persist qsy stop: {e}");
-    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist qsy stop: {e}")
+    });
     Ok(eng.snapshot())
 }
 
@@ -26516,6 +26572,9 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // The last settings change, still on its way to `settings.json` on the writer's thread. On
+    // every quit, attached or not: it is only what the operator changed, written late.
+    flush_settings();
     if attached {
         persist_journals(app_handle);
     } else {
@@ -26657,6 +26716,8 @@ async fn prepare_update_install(app: tauri::AppHandle) -> Result<(), String> {
         quit::flush_logbook_unlocked(app.state::<SharedEngine>().inner(), LOG_FLUSH_ON_EXIT);
         capture_all_window_geometry(&app);
         persist_other_journals(&app);
+        // …and the last settings change, which the installer's exit would otherwise drop.
+        flush_settings();
         tempo_core::applog::flush();
     })
     .await
@@ -27703,9 +27764,9 @@ fn start_on_the_logbook(
         // re-push every contact as new.
         let (posid, generated) = eng.fd_ensure_position_id();
         if generated {
-            if let Err(e) = eng.settings().save(&settings_path()) {
-                eprintln!("tempo: couldn't persist the FD position id: {e}");
-            }
+            persist_settings(eng.settings().clone(), |e| {
+                eprintln!("tempo: couldn't persist the FD position id: {e}")
+            });
         }
         // The Field Day contest log journals to its own ADIF beside the logbook —
         // written per contact and restored when FD mode starts, so a mid-event
@@ -27818,9 +27879,9 @@ fn start_on_the_logbook(
                         // (#54; the 1.0.5 "intermittent mode drift" field report).
                         let mut eng = engine_lock(&sync_engine);
                         eng.set_qrz_sync_cursor(now);
-                        if let Err(e) = eng.settings().save(&settings_path()) {
-                            eprintln!("[qrz-sync] settings save failed: {e}");
-                        }
+                        persist_settings(eng.settings().clone(), |e| {
+                            eprintln!("[qrz-sync] settings save failed: {e}")
+                        });
                     }
                     // Quiet unless something actually changed — an hourly "0 new"
                     // line would bury the log it shares with everything else.
@@ -27903,9 +27964,9 @@ fn start_on_the_logbook(
                         // (#54, same as the QRZ cursor above).
                         let mut eng = engine_lock(&auto_engine);
                         eng.set_lotw_auto_upload_cursor(now);
-                        if let Err(e) = eng.settings().save(&settings_path()) {
-                            eprintln!("[lotw-auto] settings save failed: {e}");
-                        }
+                        persist_settings(eng.settings().clone(), |e| {
+                            eprintln!("[lotw-auto] settings save failed: {e}")
+                        });
                     }
                     match r.outcome.as_str() {
                         // A bad certificate, a wrong Station Location, or one malformed

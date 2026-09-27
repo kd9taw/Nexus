@@ -30,6 +30,13 @@
 //! the test code as well (which it does not scan), it named 923 of the census's 964 with no false
 //! finding; the 41 it missed hold a handle unpacked from a tuple a test scene builder returns
 //! (`let (engine, pool, ports) = three_radio_pool()`), a shape no production code uses.
+//!
+//! # And `settings.json` through its writer
+//!
+//! The same sources, read a second way: every write of a settings file goes through its writer
+//! (`tempo_app::settings::writer`), so a change to a setting never holds the radio loop on the
+//! disk and never races the writer's thread for the file's one temporary file. A bare `.save(`
+//! is the finding; see [`bare_settings_saves`].
 
 use std::path::{Path, PathBuf};
 
@@ -860,5 +867,128 @@ fn the_guard_constructors_answer_as_the_mutex_does_and_count_while_held() {
         engine_lock(&m).snapshot().mycall,
         "K2DEF",
         "engine_lock recovers, as it always has"
+    );
+}
+
+/// Every `.save(` call outside test code, as `path:line: receiver.save(`, but the Remote vault's
+/// (`vault.save(`, a credential store, not a settings file) and, unless `launch_too`, launch's in
+/// `run()`, made before the Engine or any writer thread exists. Every other `.save(` in these
+/// crates writes a settings file, and each one belongs to the file's writer
+/// (`tempo_app::settings::writer::SettingsWriter`): a snapshot queued under the Engine lock, a
+/// synchronous `save_now` where the save's result decides the change, a `rewrite` for a
+/// read-modify-write. A bare save holds the radio loop on the disk when it runs under the Engine
+/// lock, and anywhere else it can race the writer's thread for the one temporary file a process has
+/// per settings file (`Settings::tmp_path`) and publish a mixture, which the next launch reads as
+/// defaults.
+fn bare_settings_saves(files: &[(String, String)], launch_too: bool) -> Vec<String> {
+    let mut out: Vec<(&str, usize, String)> = Vec::new();
+    for (path, text) in files.iter().filter(|(path, _)| !test_file(path)) {
+        let code = without_test_items(&code_only(text));
+        let items = fns(&code);
+        for (dot, _) in code.match_indices(".save(") {
+            let (start, recv) = receiver(&code, dot);
+            let recv: String = recv.split_whitespace().collect();
+            if recv == "vault" || recv.ends_with(".vault") {
+                continue;
+            }
+            let in_run = items
+                .iter()
+                .filter(|f| f.range.contains(&dot))
+                .min_by_key(|f| f.range.len())
+                .is_some_and(|f| f.name == "run");
+            if !launch_too && in_run && path == "src-tauri/src/lib.rs" {
+                continue;
+            }
+            let line = text[..start].matches('\n').count() + 1;
+            out.push((path.as_str(), line, format!("{recv}.save(")));
+        }
+    }
+    out.sort();
+    out.into_iter()
+        .map(|(path, line, call)| format!("{path}:{line}: {call}"))
+        .collect()
+}
+
+#[test]
+fn settings_files_are_written_through_their_writer_everywhere_outside_tests() {
+    let found = bare_settings_saves(&production_sources(), false);
+    assert!(
+        found.is_empty(),
+        "these write a settings file around its writer: hand the Engine's snapshot over under the \
+         lock (`persist_settings` in src-tauri), or use `SettingsWriter::save_now` / `rewrite` \
+         (tempo_app::settings::writer). A save that is not of a settings file is excused in \
+         `bare_settings_saves`, with the reason:\n{}",
+        found.join("\n")
+    );
+}
+
+/// The control on the real tree: with launch not excused, the scan finds launch's two re-saves
+/// in `run()` (the Cloudlog-key migration's and the tty-port heal's) and nothing else, so it read
+/// `lib.rs`, blanked nothing it should not have, and saw through to the calls.
+#[test]
+fn the_settings_scan_sees_launchs_two_saves() {
+    let found = bare_settings_saves(&production_sources(), true);
+    assert_eq!(found.len(), 2, "{found:#?}");
+    assert!(
+        found
+            .iter()
+            .all(|f| f.starts_with("src-tauri/src/lib.rs:") && f.ends_with(": settings.save(")),
+        "{found:#?}"
+    );
+}
+
+/// The scan names a bare save in every shape the settings code had (a command's under the lock,
+/// one split across lines, a read-modify-write's) and nothing that is not one: the writer's own
+/// calls, a save in a comment or a string, in a test item or a test file, the vault's, launch's.
+#[test]
+fn the_settings_scan_names_every_bare_save_and_nothing_else() {
+    // Built from quoted lines, like the lock scan's, so this file's own text is never a finding.
+    let lib = [
+        "fn set_tx_level(state: State<'_, SharedEngine>, level: f32) {",
+        "    let mut eng = engine_lock(&state);",
+        "    eng.set_tx_level(level);",
+        "    if let Err(e) = eng.settings().save(&settings_path()) {}",
+        "}",
+        "fn retire(state: State<'_, SharedEngine>) -> Result<(), String> {",
+        "    engine_lock(&state).retire_wanted_calls()",
+        "        .save(&settings_path())",
+        "        .map_err(|e| e.to_string())",
+        "}",
+        "fn mirror(base: &Path) {",
+        "    let mut s = Settings::load(base);",
+        "    let _ = s.save(base);",
+        "}",
+        "fn converted(eng: &Engine, p: &Path) {",
+        "    persist_settings(eng.settings().clone(), |e| eprintln!(\"{e}\"));",
+        "    let _ = SettingsWriter::of(p).save_now(eng.settings());",
+        "    // eng.settings().save(&settings_path()) in a comment",
+        "    let s = \"s.save(&base)\";",
+        "}",
+        "fn vault(&self) { self.vault.save(&binding, &token)?; }",
+        "fn run() {",
+        "    let mut settings = Settings::load(&settings_path());",
+        "    if let Err(e) = settings.save(&settings_path()) {}",
+        "}",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    fn setup(e: &Engine) { e.settings().save(&path).unwrap(); }",
+        "}",
+    ]
+    .join("\n");
+    let test_file = "fn t(e: &Engine) { e.settings().save(&path).unwrap(); }".to_string();
+    let files = vec![
+        ("src-tauri/src/lib.rs".to_string(), lib),
+        (
+            "src-tauri/src/remote_service/operations/x_tests.rs".to_string(),
+            test_file,
+        ),
+    ];
+    assert_eq!(
+        bare_settings_saves(&files, false),
+        [
+            "src-tauri/src/lib.rs:4: eng.settings().save(",
+            "src-tauri/src/lib.rs:7: engine_lock(&state).retire_wanted_calls().save(",
+            "src-tauri/src/lib.rs:13: s.save(",
+        ]
     );
 }
