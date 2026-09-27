@@ -91,7 +91,7 @@
 // lines are the same on the event weekend as off it. The Field Day section itself draws no
 // transmit control at all — it is setup, score, sections, bonuses, the log and the club board.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 import * as api from '../api'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
@@ -752,12 +752,45 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
   const rttyStop = () => vi.mocked(api.rttyStop)
   const haltTx = () => vi.mocked(api.haltTx)
 
-  /** Mount RTTY in `state`, wait until the cockpit shows it, and open the F1 editor. */
-  async function openEditor(state: RttyState, ready: () => void) {
+  /** The station this fixture stands in for, answering EVERY state question the same way. The
+   *  cockpit asks twice at mount — its poll's leading read (`getRttyState`) and the decoder's
+   *  auto-arm (`rttyAutoArm`) — and both answers carry the whole RTTY state, so whichever lands
+   *  last is what renders. Only the poll used to be set: the auto-arm kept answering the idle
+   *  file fixture, landed second and wiped `sending`/`latched`, and the check passed only because
+   *  the poll's NEXT tick restored them — 500 ms later, on a wall clock, inside `waitFor`'s 1 s
+   *  window. At load ~32 that tick came late and the test went red with nothing wrong. */
+  const answering = (state: RttyState) => {
     vi.mocked(api.getRttyState).mockImplementation(async () => state)
+    vi.mocked(api.rttyAutoArm).mockImplementation(async () => state)
+  }
+  const asked = () => ({ reads: vi.mocked(api.getRttyState).mock.results.length, arms: vi.mocked(api.rttyAutoArm).mock.results.length })
+
+  /** Await every state answer the cockpit has asked for since `from`, inside act so what they
+   *  deliver is committed — the event itself, never a clock, so a loaded box can make this
+   *  slower but never red. The caller then asserts `ready` synchronously: a pill or a control
+   *  that never comes still fails, and at once. */
+  async function answered(from: { reads: number; arms: number }) {
+    const reads = vi.mocked(api.getRttyState).mock
+    const arms = vi.mocked(api.rttyAutoArm).mock
+    expect(reads.results.length, 'the cockpit never read its RTTY state').toBeGreaterThan(from.reads)
+    for (let r = from.reads, a = from.arms; r < reads.results.length || a < arms.results.length; ) {
+      const pending = [...reads.results.slice(r), ...arms.results.slice(a)].map((x) => x.value)
+      r = reads.results.length
+      a = arms.results.length
+      await act(async () => {
+        await Promise.all(pending)
+      })
+    }
+  }
+
+  /** Mount RTTY in `state`, wait until the cockpit has it, and open the F1 editor. */
+  async function openEditor(state: RttyState, ready: () => void) {
+    answering(state)
+    const from = asked()
     render(<RttyCockpit snap={snap} active onSetTxEnabled={() => {}} />)
     await settle()
-    await waitFor(ready)
+    await answered(from)
+    ready()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Edit the F1 macro' }))
     })
@@ -769,9 +802,7 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
   const latchUp = () =>
     expect(document.querySelector('.rtty-tx-latch')?.getAttribute('aria-pressed')).toBe('true')
 
-  afterEach(() => {
-    vi.mocked(api.getRttyState).mockImplementation(async () => rttyState)
-  })
+  afterEach(() => answering(rttyState))
 
   it('Stop TX and the Esc/Stop macro are on screen and enabled while an over is on the air', async () => {
     await openEditor({ ...rttyState, sending: true } as RttyState, onAir)

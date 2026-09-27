@@ -7,7 +7,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 import { useMemo } from 'react'
 import type { BandChannel, RadioMode } from '../types'
 import { bandLabelForMhz } from '../band'
-import { bandColor } from '../bandColors'
+import { bandChipInk, bandColor } from '../bandColors'
 import { t } from '../i18n'
 import { FrequencyReadout } from './FrequencyReadout'
 import { BandMenu } from './BandMenu'
@@ -105,7 +105,8 @@ export function FrequencyControl({
   // The band is a primary operating fact — color the control with the active
   // band's color (shared with the map spot dots + the CW/Phone BandPicker) so
   // FT8/FT4 and Tempo read the band the same way CW/Phone do.
-  const col = bandColor(band || bandLabelForMhz(dialMhz) || '')
+  const bandKey = band || bandLabelForMhz(dialMhz) || ''
+  const col = bandColor(bandKey)
 
   return (
     <div className={`freq-control ${variant}`} role="group" aria-label={t('freq.control.aria')}>
@@ -124,7 +125,7 @@ export function FrequencyControl({
               channel: active ? channelText(active) : t('freq.channel.custom', { band: band || '—' }),
             })}
             triggerLabel={active ? channelText(active) : t('freq.channel.custom', { band: band || '—' })}
-            triggerStyle={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
+            triggerStyle={{ color: bandChipInk(bandKey), borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
             items={grouped.flatMap((g) =>
               g.items.map((c) => ({
                 value: chanKey(c),
@@ -145,7 +146,7 @@ export function FrequencyControl({
           onChange={(e) => selectChannel(e.target.value)}
           title={active ? active.note : t('freq.channel.title')}
           aria-label={t('freq.channel.aria')}
-          style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
+          style={{ color: bandChipInk(bandKey), borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
         >
           <option value="">
             {active

@@ -9128,6 +9128,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: default;
   opacity: 0.6;
 }
+/* THE BAND CHIP IN THE LIGHT THEME (operator, 2026-09-27: "Text colour + band border"). The band
+   palette (bandColors.ts) is tuned for dark surfaces and read 1.2–4.2:1 as lettering on a light
+   one, so here the band name takes the theme's ink and the band's colour stays on the border, the
+   glow and the dot. `!important` because the band colour arrives as an inline style — the band's
+   own — and nothing else can outrank it. BandChip.contrast.test.tsx measures every band, every
+   mode, in all three hosts. */
+[data-theme='light'] .band-menu-trigger,
+[data-theme='light'] .freq-control.full .freq-channel {
+  color: var(--text) !important;
+}
 .band-menu-value {
   min-width: 0;
   overflow: hidden;

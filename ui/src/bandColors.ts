@@ -28,6 +28,26 @@ export function bandColor(band: string): string {
   return BAND_COLOR[band] ?? '#8aa0b0'
 }
 
+/** Six violets read under 4.5:1 as lettering on the dark theme's band chip (3.4–4.5:1 on the top
+ *  bar's `--bg-elev`), so the chip letters them in the same violet taken just light enough to
+ *  read 4.6:1 there (operator, 2026-09-27: "Tune the six violets"). The CHIP's only: the palette
+ *  above, which the globes and the Field Day board also paint, keeps its own values. */
+const CHIP_INK: Readonly<Record<string, string>> = {
+  '2200m': '#7b6eff',
+  '630m': '#7b6efe',
+  '160m': '#836bfe',
+  '70cm': '#b151ff',
+  '33cm': '#a659ff',
+  '23cm': '#9a60ff',
+}
+
+/** The band name's ink on the band chip (FrequencyControl, BandPicker): the band's colour, or its
+ *  lifted violet. The light theme letters the name in its own text colour instead (styles.css,
+ *  THE BAND CHIP). The chip's border, glow and dot keep the palette colour in both themes. */
+export function bandChipInk(band: string): string {
+  return CHIP_INK[band] ?? bandColor(band)
+}
+
 // Propagation-mode colors for opening visuals (map sectors, mode chips): one hue
 // per physical mode so "what KIND of opening" reads at a glance on every surface.
 // Keys are the backend PropMode labels carried in OpeningView.mode.

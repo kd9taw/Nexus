@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { useStationCapability, useStationControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
-import { bandColor } from '../bandColors'
+import { bandChipInk, bandColor } from '../bandColors'
 import { BandMenu } from './BandMenu'
 import { t } from '../i18n'
 import { controlFailureMessage } from '../remote-web/control-failure'
@@ -96,7 +96,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
         title={t('bandPicker.select.title')}
         ariaLabel={t('bandPicker.menu.aria', { band: snap.radio.band || '—' })}
         triggerLabel={snap.radio.band || '—'}
-        triggerStyle={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
+        triggerStyle={{ color: bandChipInk(snap.radio.band), borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
         items={[
           ...(!known && snap.radio.band ? [snap.radio.band] : []),
           ...plan.map((c) => c.band),
