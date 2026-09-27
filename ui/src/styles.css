@@ -15248,8 +15248,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+/* Locked while the rig is keyed, and dimmed far less than Tune (0.4): the word is the amplifier's
+   own state, which matters most during an over, so it still reads 4.5:1 (5.0:1 at worst, at
+   Night with the Mint preset). */
 .amp-strip button:disabled {
-  opacity: 0.4;
+  opacity: 0.8;
   cursor: not-allowed;
 }
 /* Standby is the resting state and stays quiet. Operate means the amplifier is in line, which

@@ -17,9 +17,10 @@
 // The cascade guards read the author sheet and never the browser's defaults, so the first check
 // is that no amplifier button is left to them: each declares its own face, ink and border. Then
 // the word clears 4.5:1 on that face in every mode and under every OK preset (the green is the OK
-// role's), and Operate keeps the good-state colour on its border at 3:1 from any surface the
-// header sits on: a status colour is held to 3:1, which a border needs and lettering does not
-// meet. The other buttons that say Operate are held to the same floor: the Remote page's quick
+// role's), locked or not: the strip locks while the rig is keyed, which is exactly when the
+// amplifier's state matters, so a locked button is measured through its own dimming. And Operate
+// keeps the good-state colour on its border at 3:1 from any surface the header sits on: a status
+// colour is held to 3:1, which a border needs and lettering does not meet. The other buttons that say Operate are held to the same floor: the Remote page's quick
 // navigation and the amplifier strip in its quick header. Settings ▸ Features names Operate as a
 // label and a heading, not a button; both read over 5:1 in Chrome and are not re-measured here.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
@@ -171,19 +172,24 @@ function leftToTheBrowser(buttons: Button[]): string[] {
   return [...out]
 }
 
-/** Every enabled button whose word reads under 4.5:1 on its own face, in any mode and backdrop. */
+const through = (c: Rgb, under: Rgb, opacity: number): Rgb => [0, 1, 2].map((i) => Math.round(c[i] * opacity + under[i] * (1 - opacity))) as unknown as Rgb
+
+/** Every button whose word reads under 4.5:1 on its own face, in any mode and backdrop. A locked
+ *  one is measured too, through its own dimming: the word is the amplifier's state, and the strip
+ *  locks exactly while the rig is keyed, which is when that state matters most. */
 function unreadable(buttons: Button[]): string[] {
   const out: string[] = []
-  for (const b of buttons.filter((x) => !x.disabled)) {
+  for (const b of buttons) {
     for (const mode of MODES) {
       const tokens = tokensFor(b.rules, mode, b.chain)
       const face = win(b.rules, mode, b.chain, ...FACE)
       const ink = win(b.rules, mode, b.chain, 'color')
       if (!face || !ink) continue // leftToTheBrowser names it
+      const opacity = Number(win(b.rules, mode, b.chain, 'opacity')?.value ?? 1)
       for (const s of BACKDROPS) {
         const under = colour(tokens, `var(${s})`, [0, 0, 0])
-        const bg = colour(tokens, face.value, under)
-        const fg = colour(tokens, ink.value, bg)
+        const bg = through(colour(tokens, face.value, under), under, opacity)
+        const fg = through(colour(tokens, ink.value, colour(tokens, face.value, under)), under, opacity)
         const r = contrast(fg, bg)
         if (r < TEXT_MIN) out.push(`${b.host} ${b.label} ${mode} on ${s}: ${hex(fg)} on ${hex(bg)} = ${r.toFixed(2)}:1`)
       }
@@ -214,7 +220,7 @@ describe('every button that says Operate reads, in both themes', () => {
     expect(leftToTheBrowser([...desktop, ...quick, nav])).toEqual([])
   })
 
-  it('every enabled button letters at 4.5:1 on its own face, in every mode, under every OK preset', () => {
+  it('every button letters at 4.5:1 on its own face, locked or not, in every mode, under every OK preset', () => {
     expect(unreadable([...desktop, ...quick, nav])).toEqual([])
   })
 
@@ -237,7 +243,7 @@ describe('every button that says Operate reads, in both themes', () => {
     }
   })
 
-  it('a disabled amplifier button looks disabled (it is not measured: an inactive control is exempt)', () => {
+  it('a locked amplifier button looks locked (and, above, still reads through its dimming)', () => {
     for (const b of [...desktop, ...quick].filter((x) => x.disabled)) {
       const o = win(b.rules, 'light', b.chain, 'opacity')
       expect(Number(o?.value ?? 1), `${b.host} ${b.label}`).toBeLessThan(1)

@@ -230,8 +230,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   So the green word "Operate" could sit on a grey of almost the same shade: in the light theme on
   a computer set to dark, it all but disappeared. The buttons now look like the rest of the
   header in both themes. The word is in the normal text colour, and Operate shows its green on
-  the button's border and as a green tint. While a transmission locks them, they dim as the Tune
-  button does.
+  the button's border and as a green tint. While a transmission locks them they dim slightly, and
+  the word stays readable: it is the amplifier's state, which matters most during an over.
 - **The SSTV picture viewer no longer misses an arrow key pressed as it opens.** On a busy
   computer, a ← or → pressed the moment the pictures appeared could be ignored, because the keys
   were connected to the pictures a moment after they were drawn. They are now connected as the
