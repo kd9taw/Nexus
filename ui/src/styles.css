@@ -3579,9 +3579,13 @@ body.resizing-row {
   --text: #14202e;
   --text-dim: #46556e;
   --text-faint: #57647a;
-  --accent: #0d8ecf;
+  /* #0174ab since 2026-09-27: the #0d8ecf this shipped as, darkened at the same hue (operator:
+     "Darken it slightly"). That read 3.3–3.6:1 as lettering on these panels and white read 3.6:1
+     on it; this reads 4.7:1 on --bg-elev-2 and white 5.1:1 on it. It stays brighter than the
+     light Night accent (#006fae), because Night must dim it (styles-night-contrast.test.ts). */
+  --accent: #0174ab;
   --accent-ink: #ffffff;
-  --bubble-mine: #0d8ecf;
+  --bubble-mine: #0174ab;
   --bubble-mine-text: #ffffff;
   --bubble-theirs: #eef2f7;
   --bubble-theirs-text: #14202e;
@@ -3602,13 +3606,13 @@ body.resizing-row {
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
-  /* One shade darker than the #0d8ecf this shipped as. That value measured 2.999:1 against
-     --bg (#e5eaf0) — WCAG 1.4.11 wants 3:1 for a focus indicator, so the app-wide ring
-     failed on the page background by a rounding error, on every focusable control in light
-     mode. Nothing looked broken, which is why it took a direct contrast assertion
-     (styles-contrast.test.ts) to find it. #0b83c0 is the same hue and clears 3.4:1 on --bg,
-     3.9:1 on --bg-elev-2 (the ⊞ popover) and 4.1:1 on --bg-elev. */
-  --focus-ring: #0b83c0;
+  /* The accent itself again. While the accent was #0d8ecf the ring was one shade darker,
+     #0b83c0: #0d8ecf measured 2.999:1 against --bg (#e5eaf0) — WCAG 1.4.11 wants 3:1 for a
+     focus indicator, so the app-wide ring failed on the page background by a rounding error,
+     on every focusable control in light mode. Nothing looked broken, which is why it took a
+     direct contrast assertion (styles-contrast.test.ts) to find it. #0174ab clears 4.2:1 on
+     --bg, 4.7:1 on --bg-elev-2 (the ⊞ popover) and 5.0:1 on --bg-elev. */
+  --focus-ring: #0174ab;
   /* DXpedition identity palette, light inks — the same ten hues as dark, taken
      darker and more saturated so the solid spine reads against the off-white
      panel and the low-alpha tint does not wash out to nothing. */
@@ -3889,7 +3893,7 @@ body.resizing-row {
   --readout: #4cc9f0;
 }
 [data-theme='light'] {
-  --readout: #0d8ecf;
+  --readout: #0174ab;
 }
 
 /* Accent */

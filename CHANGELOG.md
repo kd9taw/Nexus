@@ -111,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same whichever theme you run. In the dark theme they look as before. The waterfall's
   **TX** and **RX** markers, and the RX line in PSK and the Mark line in RTTY, now take the
   app's own TX and RX colours instead of colours of their own.
+- **The light theme's highlight colour is a little darker, so it reads better.** The blue of
+  selected buttons and chips, links, your own chat bubbles, the focus outline and the top bar's
+  frequency digits is a deeper shade of the same blue. Words in it, and white words on it, now
+  meet the usual 4.5:1 reading contrast on the light panels, where they were about 3.5:1. The
+  dark theme is unchanged, and so is a colour you picked in Settings ▸ Appearance ▸ Colours.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.
