@@ -101,6 +101,18 @@ struct Shared {
     file: Mutex<()>,
 }
 
+/// What a flush found when it returned.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Flushed {
+    /// Every snapshot handed over before the flush is on the disk.
+    Saved,
+    /// The last write before the flush failed: its callers have been told, and the file keeps
+    /// the snapshot before it. The failure, in words.
+    Failed(String),
+    /// Time ran out with a write still on its way.
+    OutOfTime,
+}
+
 /// A write of the waiting snapshot, made and not yet recorded ([`Shared::finish`]).
 struct Written {
     seq: u64,
@@ -333,14 +345,18 @@ impl SettingsWriter {
         result
     }
 
-    /// Wait until every snapshot handed over so far has been written, for at most `within`:
-    /// `true` once they have, `false` when the time ran out first. A quit, a restart, a relaunch
-    /// and the Windows installer flush, so the last change reaches the disk before the process
-    /// goes.
+    /// Wait until every snapshot handed over so far has been written, for at most `within`, and
+    /// say what was found. A quit, a restart, a relaunch and the Windows installer flush, so the
+    /// last change reaches the disk before the process goes.
+    ///
+    /// A write that FAILS also ends the wait (it is done; its callers have been told), so the
+    /// answer says which it was: [`Flushed::Saved`] when the newest change is on the disk,
+    /// [`Flushed::Failed`] when the last write before the flush failed and the file keeps the
+    /// snapshot before it, [`Flushed::OutOfTime`] when `within` ran out first.
     ///
     /// ⚠️ **Never holding the Engine lock**: the radio loop would wait on the disk. The fence
     /// stops it in a debug build.
-    pub fn flush(&self, within: Duration) -> bool {
+    pub fn flush(&self, within: Duration) -> Flushed {
         tempo_core::logbook::io_fence::off_engine_lock("a wait for the settings writer");
         let deadline = Instant::now() + within;
         let mut st = lock(&self.shared.state);
@@ -348,7 +364,7 @@ impl SettingsWriter {
         while st.done < upto {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return false;
+                return Flushed::OutOfTime;
             }
             st = self
                 .shared
@@ -357,7 +373,14 @@ impl SettingsWriter {
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
-        true
+        // Done includes a write that failed (its callers told), so ask whether it landed.
+        if st.saved >= upto {
+            return Flushed::Saved;
+        }
+        Flushed::Failed(match &st.error {
+            Some((_, _, message)) => message.clone(),
+            None => "the settings were not saved".to_string(),
+        })
     }
 }
 

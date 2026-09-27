@@ -159,7 +159,7 @@ fn a_writer_never_queued_on_starts_no_thread() {
     let d = Dir::new("idle");
     let w = SettingsWriter::of(&d.settings());
     assert!(
-        w.flush(Duration::ZERO),
+        w.flush(Duration::ZERO) == Flushed::Saved,
         "nothing handed over, nothing to wait for"
     );
     locked(|| w.save_now(&marked(3))).expect("a synchronous save");
@@ -240,7 +240,7 @@ fn concurrent_changes_leave_the_newest_on_the_disk() {
                 failures.fetch_add(1, SeqCst);
             });
         },
-        &|| assert!(w.flush(Duration::from_secs(60)), "flushed"),
+        &|| assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved),
         &d.settings(),
     );
     assert_eq!(failures.load(SeqCst), 0, "no write failed");
@@ -280,7 +280,7 @@ fn a_slow_writer_never_lands_an_older_snapshot_after_a_newer_one() {
             locked(|| w.queue(marked(n), |_| {}));
         }
     }
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
     let started = rec.started();
     assert!(
         started.windows(2).all(|p| p[0] < p[1]),
@@ -317,7 +317,7 @@ fn synchronous_saves_and_queued_snapshots_land_in_order() {
             });
         }
     });
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
     let started = rec.started();
     assert!(
         started.windows(2).all(|p| p[0] < p[1]),
@@ -337,7 +337,7 @@ fn flush_waits_for_the_last_change() {
     for n in 1..=10 {
         locked(|| w.queue(marked(n), |_| {}));
     }
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
     assert_eq!(
         on_disk(&d.settings()),
         10,
@@ -354,11 +354,40 @@ fn flush_waits_for_the_last_change() {
     at_gate
         .recv_timeout(Duration::from_secs(10))
         .expect("the write reached the gate");
-    let gave_up = !w.flush(Duration::from_millis(50));
+    let gave_up = w.flush(Duration::from_millis(50)) == Flushed::OutOfTime;
     gate.open();
     assert!(gave_up, "a flush that runs out of time says so");
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
     assert_eq!(on_disk(&d.settings()), 1);
+}
+
+/// A flush says what it found: the newest change on the disk, the last write before it failed
+/// (the file keeps the snapshot before that one), or time ran out. A quit logs the failure, which
+/// the callers' own reports, mostly stderr, never showed an operator.
+#[test]
+fn a_flush_says_when_the_last_write_failed() {
+    let d = Dir::new("flush-failed");
+    let (write, _, _, _) = gated(u64::MAX, 2);
+    let w = SettingsWriter::new(d.settings(), write);
+    locked(|| w.queue(marked(1), |_| {}));
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
+    locked(|| w.queue(marked(2), |_| {}));
+    assert_eq!(
+        w.flush(Duration::from_secs(60)),
+        Flushed::Failed("the disk is full".into()),
+        "the last write before the flush failed"
+    );
+    assert_eq!(
+        on_disk(&d.settings()),
+        1,
+        "and the file keeps the snapshot before it"
+    );
+    locked(|| w.queue(marked(3), |_| {}));
+    assert_eq!(
+        w.flush(Duration::from_secs(60)),
+        Flushed::Saved,
+        "a later write that lands clears it"
+    );
 }
 
 /// A command that answers with the save's result waits for THE write that carried its change, and
@@ -403,7 +432,11 @@ fn waiting_changes_are_written_once_and_a_failure_reaches_each_caller() {
         w.queue(marked(4), tell("four"));
     });
     gate.open();
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(
+        w.flush(Duration::from_secs(60)),
+        Flushed::Failed("the disk is full".into()),
+        "the flush says the last write failed"
+    );
     assert_eq!(
         rec.started(),
         [1, 4],
@@ -425,7 +458,7 @@ fn waiting_changes_are_written_once_and_a_failure_reaches_each_caller() {
     );
 
     locked(|| w.queue(marked(5), tell("five")));
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
     assert_eq!(lock(&told).len(), 3, "a write that succeeds tells no one");
     assert_eq!(on_disk(&d.settings()), 5);
 }
@@ -471,8 +504,8 @@ fn a_flush_returns_once_a_failed_write_has_been_reported() {
     );
     assert_eq!(
         returned.recv_timeout(Duration::from_secs(10)),
-        Ok(true),
-        "and returns once it is out"
+        Ok(Flushed::Failed("the disk is full".into())),
+        "and returns once it is out, saying the write failed"
     );
     flusher.join().expect("the flush");
 }
@@ -602,7 +635,7 @@ fn measure_how_long_a_settings_change_holds_the_engine_lock() {
     let after = hold(&|eng| {
         w.queue(eng.settings().clone(), |e| panic!("the write failed: {e}"));
     });
-    assert!(w.flush(Duration::from_secs(60)), "flushed");
+    assert_eq!(w.flush(Duration::from_secs(60)), Flushed::Saved);
     let stats = |mut v: Vec<Duration>| {
         v.sort();
         let at = |q: f64| v[((v.len() - 1) as f64 * q).round() as usize];

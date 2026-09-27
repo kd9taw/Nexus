@@ -4481,16 +4481,23 @@ const SETTINGS_FLUSH: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Put every settings change handed to the writer on the disk before the process goes (a quit, a
 /// restart, the Windows installer) or another instance reads the file (the picker's relaunch).
-/// Bounded, so a wedged disk cannot hold a quit forever, and never under the Engine lock.
+/// Bounded, so a wedged disk cannot hold a quit forever, and never under the Engine lock. The
+/// diagnostic log says when the last change did not make it: the callers' own reports of a failed
+/// write go to stderr, which no operator sees.
 fn flush_settings() {
-    if !SettingsWriter::of(&settings_path()).flush(SETTINGS_FLUSH) {
-        tempo_core::applog::warn(
+    match SettingsWriter::of(&settings_path()).flush(SETTINGS_FLUSH) {
+        tempo_app::settings::writer::Flushed::Saved => {}
+        tempo_app::settings::writer::Flushed::Failed(why) => tempo_core::applog::warn(
+            "settings",
+            &format!("the last settings change was not saved before exit: {why}"),
+        ),
+        tempo_app::settings::writer::Flushed::OutOfTime => tempo_core::applog::warn(
             "settings",
             &format!(
                 "settings.json was still being written after {} s; the last change may not be saved",
                 SETTINGS_FLUSH.as_secs()
             ),
-        );
+        ),
     }
 }
 
