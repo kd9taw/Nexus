@@ -31,6 +31,21 @@
           if (fieldOn || localStorage.getItem('nexus-high-contrast') === '1') {
             d.setAttribute('data-contrast', 'high')
           }
+          // The colour roles (Settings ▸ Appearance ▸ Colours; usePaletteRoles.ts is the runtime
+          // copy): one attribute per role, set only for a preset the table knows. The default is
+          // NO attribute. These ids mirror features/paletteRoles.ts, less each role's default;
+          // index-preseed.test.ts holds the two copies together preset by preset.
+          var PALETTE = {
+            accent: ['blue', 'violet'],
+            readout: ['amber', 'green', 'violet'],
+            ok: ['teal', 'mint'],
+            amber: ['gold', 'yellow'],
+            cyan: ['cyan', 'blue'],
+          }
+          for (var role in PALETTE) {
+            var pick = localStorage.getItem('nexus-palette-' + role)
+            if (PALETTE[role].indexOf(pick) !== -1) d.setAttribute('data-' + role, pick)
+          }
           // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS, the
           // per-surface natural fit model, keys nexus-ui-scale-mode /
           // nexus-ui-scale-cap): a pinned Manual scale applies directly (capped in a

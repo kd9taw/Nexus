@@ -70,7 +70,7 @@ describe('what the operator sees while the station has not answered', () => {
 
 describe('the provisional value decides the digits and nothing else', () => {
   it('cannot turn the privilege red on or off — that is the caller\'s answer about the STATION\'s dial', () => {
-    // The optimistic number is 10 MHz away and out of every band; the readout stays accent, because
+    // The optimistic number is 10 MHz away and out of every band; the readout keeps its colour, because
     // `txBlocked` is `!radio.txAllowed` — the backend's verdict on where the radio actually is.
     const { container } = render(<FrequencyReadout dialMhz={14.074} provisionalMhz={24.074} />)
     expect(readout(container).className).not.toContain('blocked')
@@ -116,7 +116,7 @@ describe('the pending ink', () => {
       const pending = resolved(mode, '--state-pending')
       expect(parseHex(pending), `--state-pending is a real colour in ${mode}`).not.toBeNull()
       expect(pending, `--state-pending is distinguishable from the confirmed dial in ${mode}`)
-        .not.toBe(resolved(mode, '--accent'))
+        .not.toBe(resolved(mode, '--readout'))
     }
     // Control: a token nothing defines resolves to nothing, so the assertions above can fail.
     expect(parseHex(resolved(MODES[0], '--state-pending-not-a-token'))).toBeNull()

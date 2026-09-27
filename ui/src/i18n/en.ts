@@ -9529,6 +9529,37 @@ export const EN = {
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
 
+  // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
+  // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on
+  // screen. The preset names are plain colour words shared between roles — "Cyan" is both the
+  // accent's standard colour and a Readout choice — and the preset ids are invariant tokens.
+  'settings.colours.legend': 'Colours',
+  'settings.colours.hint':
+    'A few choices for each colour, every one checked for contrast in both themes and on the dark displays. Transmit red, the alert orange and the Needed colours stay fixed.',
+  'settings.colours.reset': 'Reset',
+  'settings.colours.reset.title': 'Back to the standard colour',
+  'settings.colours.reset.aria': 'Reset {{role}} to its standard colour',
+  'palette.accent.label': 'Accent',
+  'palette.accent.hint': 'Selected chips, focus rings, your own chat bubbles',
+  'palette.readout.label': 'Readout',
+  'palette.readout.hint': 'The frequency digits and other readouts',
+  'palette.ok.label': 'OK / green',
+  'palette.ok.hint': 'Good signal, RX, confirmed',
+  'palette.amber.label': 'Amber',
+  'palette.amber.hint': 'Warnings and marginal signal',
+  'palette.cyan.label': 'Cyan',
+  'palette.cyan.hint': 'Information chips',
+  'palette.preset.cyan': 'Cyan',
+  'palette.preset.blue': 'Blue',
+  'palette.preset.violet': 'Violet',
+  'palette.preset.amber': 'Amber',
+  'palette.preset.green': 'Green',
+  'palette.preset.teal': 'Teal',
+  'palette.preset.mint': 'Mint',
+  'palette.preset.gold': 'Gold',
+  'palette.preset.yellow': 'Yellow',
+  'palette.preset.sky': 'Sky',
+
   // ── The waterfall palette picker ────────────────────────────────────────────────────
   // Two wordings, and the difference is load-bearing: an UNSCOPED picker drives the master
   // value four cockpits share, a SCOPED one drives that mode's key alone. Naming the modes it

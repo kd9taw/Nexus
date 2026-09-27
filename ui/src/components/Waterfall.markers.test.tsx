@@ -20,6 +20,7 @@ import { render, cleanup, act } from '@testing-library/react'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Waterfall } from './Waterfall'
+import { PALETTE_EVENT } from '../usePaletteRoles'
 
 vi.mock('../api', () => ({
   getSpectrumRow: () => new Promise(() => {}),
@@ -152,6 +153,23 @@ describe('the TX/RX markers are the theme tokens, not literals', () => {
     rerender(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="light" />)
     await frames(120)
     expect(markerLines(lastFrame()).map((c) => c.fillStyle), 'stale marker colours after a theme change').toEqual([TX2, RX2])
+  })
+
+  it('reads the tokens again when a colour role changes, with no theme change', async () => {
+    // Settings ▸ Appearance ▸ Colours moves --rx (OK / green) without touching the theme, so a
+    // cache keyed on the theme alone kept painting the old RX marker. The attribute is set the
+    // way usePaletteRoles sets it, and the event is the one it fires.
+    render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    await frames(120)
+    expect(markerLines(lastFrame()).map((c) => c.fillStyle)).toEqual([TX, RX])
+    setTokens({ '--rx': RX2 })
+    await act(async () => {
+      document.documentElement.setAttribute('data-ok', 'teal')
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+    await frames(120)
+    document.documentElement.removeAttribute('data-ok')
+    expect(markerLines(lastFrame()).map((c) => c.fillStyle), 'stale RX marker after an OK colour change').toEqual([TX, RX2])
   })
 
   it('a named cursor given as var(--rx) paints the token (PSK RX, RTTY mark)', async () => {

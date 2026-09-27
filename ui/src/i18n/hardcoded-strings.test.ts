@@ -78,6 +78,10 @@ const MIGRATED = [
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
+  // Settings ▸ Appearance ▸ Colours (2026-09-26) — born migrated: the section's rows, and the role
+  // table whose `labelKey`/`hintKey` entries name every role and preset word.
+  'components/SettingsColours.tsx',
+  'features/paletteRoles.ts',
   // The RTTY F-key surface (2026-09-17): the macro buttons, their editor and the set switch,
   // and the set model's caption keys. Migrated as they were written. RttyCockpit.tsx stays on
   // PARTIAL for its stop controls; nothing here stops a transmission.

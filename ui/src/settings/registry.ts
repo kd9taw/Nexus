@@ -554,6 +554,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
   },
   {
+    // The colour roles (features/paletteRoles.ts): a few pre-checked presets for the accent, the
+    // frequency digits and the OK / amber / info colours. Both spellings, and the words an
+    // operator reaches for when a colour is the thing they want to change.
+    id: 'colours',
+    label: 'Colours',
+    tab: 'appearance',
+    keywords: ['color', 'colors', 'colour', 'accent', 'palette', 'readout', 'frequency digits',
+      'vfo colour', 'vfo color', 'digits colour', 'chip colour', 'personalise', 'personalize',
+      'customise', 'customize', 'violet', 'purple', 'teal', 'amber'],
+  },
+  {
     // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
     // Connect, not a station or contest setting — and the keywords carry the words an
     // operator would actually search for ("tv", "chromecast", "cast", "browser").

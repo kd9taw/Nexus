@@ -38,6 +38,7 @@ vi.mock('../mapGeo', async (importOriginal) => {
 })
 
 import { MapView } from './MapView'
+import { PALETTE_EVENT } from '../usePaletteRoles'
 
 class RO {
   observe() {}
@@ -190,5 +191,39 @@ describe('MapView caches the base map across redraws', () => {
     for (let i = 0; i < 3; i++) await act(async () => void vi.advanceTimersByTime(1_000))
     expect(redraws(r.container), 'the pulse must keep repainting').toBeGreaterThanOrEqual(first + 3)
     expect(basemapCalls.n, 'a pulse frame must not re-project the world').toBe(projected)
+  })
+})
+
+describe('MapView redraws when a colour role changes (Settings ▸ Appearance ▸ Colours)', () => {
+  // The map paints the accent and the SNR greens/ambers from a per-draw token memo, and a CSS
+  // custom property changing under a canvas says nothing to React. Keyed on the theme alone, a
+  // new accent or OK green would sit unpainted until something unrelated redrew the map. The
+  // attribute is set the way usePaletteRoles sets it, and the event is the one it fires.
+  afterEach(() => document.documentElement.removeAttribute('data-accent'))
+
+  it('a new accent redraws the map, so every token is read again', async () => {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<MapView {...props(ROSTER)} />)
+    })
+    const first = redraws(r.container)
+    expect(first, 'CONTROL: the map really drew').toBeGreaterThan(0)
+    await act(async () => {
+      document.documentElement.setAttribute('data-accent', 'violet')
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+    expect(redraws(r.container)).toBe(first + 1)
+  })
+
+  it('CONTROL — the same event with no colour change does not redraw', async () => {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<MapView {...props(ROSTER)} />)
+    })
+    const first = redraws(r.container)
+    await act(async () => {
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+    expect(redraws(r.container)).toBe(first)
   })
 })

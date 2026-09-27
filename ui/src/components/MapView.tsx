@@ -102,6 +102,7 @@ import { needMeta, satTooltip, spotTooltip } from '../propViz'
 import { modeClassOf } from '../features/needs'
 import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
+import { usePaletteKey } from '../usePaletteRoles'
 // Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
 // downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
 import reliefUrl from '../assets/earth-relief.webp'
@@ -756,6 +757,10 @@ export function MapView({
     canvas: null,
     deps: [],
   })
+  // The colour roles (Settings ▸ Appearance ▸ Colours) move --accent and the SNR greens/ambers
+  // this map paints; a draw dependency like `theme`, so a new pick repaints with fresh tokens.
+  // The base map reads none of them, so its cache stays keyed as it was.
+  const colourRoles = usePaletteKey()
   // Opening-pulse tick: the main nowMs clock is a 60 s greyline tick, far too
   // coarse to animate the heat pulse (it froze the sine). Run a 1 s tick ONLY
   // while the heat layer is on AND an opening is actually detected — an idle map
@@ -2470,10 +2475,11 @@ export function MapView({
       ctx.fill()
       haloStroke(1.5)
     }
-    // theme is a draw dependency so colors refresh on theme switch (the cssVar
-    // memo is emptied at the top of this effect).
+    // theme and the colour roles are draw dependencies so colors refresh when either changes (the
+    // cssVar memo is emptied at the top of this effect).
     void theme
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+    void colourRoles
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the

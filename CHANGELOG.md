@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the computer does, for example when it switches to dark in the evening. Dark stays the
   default, and a theme you already picked is kept. The Remote station monitor's theme button
   offers it too, as its third press.
+- **Pick your own colours.** Settings ▸ Appearance ▸ Colours lets you change five colours, each
+  from a few choices that are checked for contrast in the light and dark themes, with High
+  contrast or Field mode on, and on the dark displays: the **Accent** (selected chips, focus
+  rings, your own chat bubbles: Cyan, Blue or Violet), the **Readout** (the frequency digits:
+  Cyan, Amber, Green or Violet), **OK / green** (good signal, RX, confirmed: Green, Teal or Mint),
+  **Amber** (warnings and marginal signal: Amber, Gold or Yellow) and **Cyan** (information chips:
+  Sky, Cyan or Blue). Each colour has its own **Reset**. Nothing changes until you pick
+  something: the first choice in each row is the colour you have today. Teal is the green that
+  stays furthest from the reds for a red-green colour-blind operator. The transmit red, the ON AIR
+  sign, the alert orange and the Needed colours cannot be changed, so a keyed transmitter and an
+  alert always look the same. A pick shows at once, on the map and the waterfall markers too, and
+  is remembered per computer, like the theme. The frequency digits still turn red when the dial
+  is outside your licence privileges, whatever colour you pick for them.
 
 ### Changed
 

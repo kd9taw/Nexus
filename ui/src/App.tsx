@@ -64,6 +64,7 @@ import { loadWatchlist, type WatchFilter } from './watchlist'
 import { foldRetiredWantedList } from './features/watchlistFold'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
+import { usePaletteRoles } from './usePaletteRoles'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
@@ -279,6 +280,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // (#215). Both set data-contrast on <html>; only field mode is handed to useScale, because
   // only it carries the larger auto-fit. Global — facts about the station, like the theme.
   const { fieldMode, setFieldMode, highContrast, setHighContrast } = useContrastPrefs()
+  // The colour roles (Settings ▸ Appearance ▸ Colours): App is their one writer, and Settings is
+  // handed the picks and the setter, the same way it gets the theme.
+  const { palette, setPreset: setPalettePreset } = usePaletteRoles()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
   // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
   // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
@@ -3015,6 +3019,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}
             onHighContrastChange={setHighContrast}
+            palette={palette}
+            onPaletteChange={setPalettePreset}
           />
         </main>
       )
