@@ -20,7 +20,7 @@
 //   · the Spots pane opens on phone spots on the radio's band, follows the band, and its chips
 //     widen it — with its filters in keys of its own, so neither it nor the Spots view can move
 //     the other's;
-//   · the Needed pane keeps the board's own default filters in a record of its own;
+//   · the Needed pane opens on Phone needs in a record of its own, and its chips widen it;
 //   · the divider between them commits the split to the Phone record;
 //   · working a spot from the pane is the Spots view's own handler, and nothing here keys;
 //   · on Remote, a pane whose data the page does not have says so with the existing status.
@@ -182,7 +182,14 @@ const alert = (call: string, band: string, mode: string, freqMhz: number | null)
   mode,
   freqMhz,
 })
-const ALERTS: NeedAlert[] = [alert('JA1AAA', '20m', 'Phone', 14.21), alert('JA2BBB', '40m', 'Phone', 7.18)]
+// Two phone needs, then a CW one and a digital one (FT8 is a Digital submode to the board's filter),
+// so the Phone pane's opening default has something to leave out.
+const ALERTS: NeedAlert[] = [
+  alert('JA1AAA', '20m', 'Phone', 14.21),
+  alert('JA2BBB', '40m', 'Phone', 7.18),
+  alert('K1NEED', '20m', 'CW', 14.025),
+  alert('VK9FT8', '20m', 'FT8', 14.074),
+]
 
 function boards() {
   return {
@@ -407,28 +414,43 @@ describe('the Spots pane: phone spots on the radio’s band', () => {
 })
 
 describe('the Needed pane keeps a filter record of its own', () => {
-  it('opens on the board’s own defaults, and neither it nor the Needed view moves the other', () => {
+  // The operator's pick for it (2026-09-27): "Phone needs only — matches the Spots pane (phone
+  // spots, this band). Its chips still widen it." A FIRST-RUN default of the pane's own record:
+  // the Needed view keeps the board's defaults, every mode, and neither moves the other.
+  it('opens on Phone needs only, its chips widen it, and neither it nor the Needed view moves the other', () => {
     const wiring = boards()
     const view = render(<NeededPanel {...wiring.neededBoard} />)
     const viewCalls = () => [...view.container.querySelectorAll('.np-row:not(.np-header) .np-call button')].map((c) => c.textContent)
-    render(<Live wiring={wiring} />)
+    const paneCalls = () => callsIn(pane('needed')).map((c) => c?.replace(/↗/g, '')).sort()
+    const r = render(<Live wiring={wiring} />)
     fireEvent.click(box(/^Needed$/))
-    // The board's own defaults: every need, every band, every mode.
-    expect(callsIn(pane('needed')).map((c) => c?.replace(/↗/g, ''))).toEqual(['JA1AAA', 'JA2BBB'])
+    expect(paneCalls(), 'a fresh Needed pane opened on more than the Phone needs').toEqual(['JA1AAA', 'JA2BBB'])
+    // …while the view, on its own record, still shows every mode.
+    expect(viewCalls().sort()).toEqual(['JA1AAA', 'JA2BBB', 'K1NEED', 'VK9FT8'])
     const viewKey = localStorage.getItem('neededFilters')
 
-    const needed = within(pane('needed')!)
+    // A chip widens it, and the widening is the pane's own record from then on.
+    let needed = within(pane('needed')!)
+    fireEvent.click(needed.getByRole('button', { name: /^Filter/ }))
+    fireEvent.click(needed.getByRole('button', { name: 'CW' }))
+    expect(paneCalls()).toEqual(['JA1AAA', 'JA2BBB', 'K1NEED'])
+    expect(JSON.parse(localStorage.getItem('nexus.phone.neededFilters')!).modes).toEqual({ Digital: false, CW: true, Phone: true })
+    r.unmount()
+    render(<Live wiring={wiring} />)
+    expect(paneCalls(), 'a restart put the opening default back over the operator’s own pick').toEqual(['JA1AAA', 'JA2BBB', 'K1NEED'])
+
+    needed = within(pane('needed')!)
     fireEvent.click(needed.getByRole('button', { name: /^Filter/ }))
     fireEvent.click(needed.getByRole('button', { name: '40m' }))
-    expect(callsIn(pane('needed')).map((c) => c?.replace(/↗/g, ''))).toEqual(['JA2BBB'])
+    expect(paneCalls()).toEqual(['JA2BBB'])
     expect(localStorage.getItem('neededFilters'), 'the pane wrote the Needed view’s filters').toBe(viewKey)
     expect(JSON.parse(localStorage.getItem('nexus.phone.neededFilters')!).bands).toEqual(['40m'])
-    expect(viewCalls()).toEqual(['JA1AAA', 'JA2BBB'])
+    expect(viewCalls().sort()).toEqual(['JA1AAA', 'JA2BBB', 'K1NEED', 'VK9FT8'])
 
     fireEvent.click(within(view.container).getByRole('button', { name: /^Filter/ }))
     fireEvent.click(within(view.container).getByRole('button', { name: '20m' }))
-    expect(viewCalls()).toEqual(['JA1AAA'])
-    expect(callsIn(pane('needed')).map((c) => c?.replace(/↗/g, '')), 'the view’s chip moved the pane').toEqual(['JA2BBB'])
+    expect(viewCalls().sort()).toEqual(['JA1AAA', 'K1NEED', 'VK9FT8'])
+    expect(paneCalls(), 'the view’s chip moved the pane').toEqual(['JA2BBB'])
   })
 })
 

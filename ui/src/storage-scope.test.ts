@@ -500,7 +500,7 @@ describe('call sites agree with the classification', () => {
     expect(needed).toContain('const filterKey = pane?.filterKey ?? FILTER_KEY')
     const phone = readFileSync(join(SRC, 'components/PhoneCockpit.tsx'), 'utf8')
     expect(phone).toContain("const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'")
-    expect(phone).toContain('pane={{ filterKey: PHONE_NEEDED_FILTERS }}')
+    expect(phone).toContain('pane={{ filterKey: PHONE_NEEDED_FILTERS,')
   })
 
   it('scopes BOTH writers of a key written from two components', () => {
