@@ -1,0 +1,20 @@
+[F 2026-09-27 07:58:12] ===== Parsec: Started =====
+[D 2026-09-27 07:58:12] Parsec Virtual USB Adapter available
+[D 2026-09-27 07:58:12] supdater_fetch: parsecd.exe is up to date
+[D 2026-09-27 07:58:17] STUN reply from ::ffff:203.0.113.7:3478
+[D 2026-09-27 07:58:17] net           = BUD|::ffff:192.0.2.10|56020
+[D 2026-09-27 07:58:18] IPC AS Client Connected.
+[I 2026-09-27 07:58:18] * mfx_shared_init/MFXInit[56] = -3
+[D 2026-09-27 08:01:09] Virtual Display Driver State: OK
+[D 2026-09-27 08:01:09] display_x     = 1920
+[I 2026-09-27 08:01:10] shackop#1234567 connected.
+[D 2026-09-27 08:01:10] encoder       = nvidia
+[D 2026-09-27 08:01:10] codec         = h264
+[D 2026-09-27 08:01:17] [0] FPS:59.9/0, L:2.5/7.1, B:3.2/10.0, N:0/0/0
+[D 2026-09-27 08:01:19] [0] FPS:48.7/0, L:3.4/6.5, B:1.3/7.9, N:0/0/0
+[D 2026-09-27 08:02:00] UPNP: 192.0.2.1 reported as not connected
+[I 2026-09-27 08:03:30] visitor#7654321 connected.
+[I 2026-09-27 08:04:02] visitor#7654321 disconnected.
+[D 2026-09-27 08:05:44] display_hz    = 60
+[I 2026-09-27 08:05:45] shackop#1234567 disconnected.
+[I 2026-09-27 08:05:46] * mfx_shared_init/MFXInit[56] = -3

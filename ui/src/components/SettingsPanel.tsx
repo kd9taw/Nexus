@@ -164,7 +164,8 @@ import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, reve
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
-import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus } from '../types'
+import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
+import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
@@ -233,6 +234,9 @@ interface Props {
   targetSeq?: number
   /** Live radio status, so the Audio section can show the real RX meter. */
   radio?: RadioStatus
+  /** Parsec presence mode as the station reports it (`snap.parsecPresence`), for the readout
+   *  under its switch. Absent from tests, the setup wizard and a station older than the mode. */
+  parsecPresence?: ParsecPresence | null
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
@@ -980,6 +984,7 @@ export function SettingsPanel({
   target,
   targetSeq,
   radio,
+  parsecPresence,
   activeRadioId,
   onProveTx,
   scale,
@@ -6651,6 +6656,45 @@ export function SettingsPanel({
                     : t('settings.transmit.swrStop.hint')}
               </span>
             </div>
+
+            {/* PARSEC PRESENCE MODE (operator sign-off 2026-09-27 — a transmit-path feature, scoped
+                exactly): when the operator's Parsec session drops, the station stops a latched PTT,
+                continuous RTTY/PSK and Tune through their own stop paths. Stop-only and OFF by
+                default; the engine is the guard (engine/parsec_presence.rs) and this is the switch
+                and its explanation. Offered where the watcher runs — a Windows station, the Parsec
+                host — explained as unavailable elsewhere, and never on the Remote page: the key is
+                withheld from Remote's settings projection and that page's surface is frozen. The
+                readout is what the station last found in Parsec's log, shown only while the switch
+                AND the station both say the mode is on, so an unsaved flip never shows a status
+                that belongs to the other setting. */}
+            {parsecSwitchPlacement(IS_WINDOWS, remote) === 'offered' && (
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.transmit.parsecStop.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.parsecPresenceStop === true}
+                    className={`toggle${form.parsecPresenceStop === true ? ' on' : ''}`}
+                    onClick={() => updateBool('parsecPresenceStop', form.parsecPresenceStop !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.transmit.parsecStop.hint')}</span>
+                {form.parsecPresenceStop === true && parsecPresence && (
+                  <span className="settings-hint" role="status">
+                    {parsecStatusText(parsecPresence.status)}
+                  </span>
+                )}
+              </div>
+            )}
+            {parsecSwitchPlacement(IS_WINDOWS, remote) === 'unavailable' && (
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.transmit.parsecStop.label')}</span>
+                <span className="settings-hint">{t('settings.transmit.parsecStop.unavailable')}</span>
+              </div>
+            )}
 
             <p className="settings-note">
               <T

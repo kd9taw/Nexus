@@ -635,6 +635,19 @@ full power on every mode.*
   Hamlib with no scale Nexus can vouch for, and it can be far out — one popular
   radio reads 1.2:1 on its own meter and reports 6:1 to Nexus. A cut-off driven
   by that would take you off the air for nothing.
+- **Stop latched transmissions if my Parsec session drops** — off by default,
+  and on Windows only. It is for running the shack remotely over Parsec. Nexus
+  watches Parsec's own log on the shack PC (`log.txt` in `%APPDATA%\Parsec` for
+  a per-user install, `%ProgramData%\Parsec` for a per-computer one). When the
+  Parsec session that was connected drops, or that log can no longer be read,
+  it stops a latched PTT, continuous RTTY or PSK, and Tune, exactly as their
+  own Stop does, and the Now-Bar says why until you transmit again. It never
+  starts a transmission or turns TX back on, and it leaves FT8/FT4 alone: an
+  over ends by itself and the TX watchdog still applies. Sitting at the shack
+  with no Parsec session, nothing happens. How fast it acts is up to Parsec,
+  which allows about a minute for a pulled network cable before it gives up on
+  the session, so this backs up the watchdog; it does not replace it. With it
+  on, the line under the switch shows what Nexus last read from Parsec's log.
 - **Share this radio with other programs** — the CAT broker: "Run a
   rigctld-compatible server so WSJT-X / N1MM / loggers share this radio THROUGH
   Nexus." Takes effect right away, no restart, and works even when Nexus is

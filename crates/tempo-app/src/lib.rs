@@ -27,6 +27,7 @@ pub mod logexport;
 pub mod logfill;
 pub mod logstore;
 pub mod logwrite;
+pub mod presence;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
@@ -995,6 +996,8 @@ impl AppState {
             log_store_problem: None,
             // Filled by the engine while the database has refused a change; None here.
             log_save_trouble: None,
+            // Filled by the engine while Parsec presence mode is on; None here.
+            parsec_presence: None,
         }
     }
 

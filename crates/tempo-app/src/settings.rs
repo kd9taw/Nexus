@@ -1901,6 +1901,15 @@ pub struct Settings {
     /// would halt every over instantly) or a NaN cannot reach the transmit path.
     #[serde(default = "default_swr_stop_threshold")]
     pub swr_stop_threshold: f32,
+    /// Presence mode for a shack run remotely over Parsec: when the Parsec session that was
+    /// connected drops — or Parsec's log can no longer be read — stop a latched Phone PTT,
+    /// continuous RTTY/PSK TX and Tune through their own stop paths. **Default OFF**, and STOP-ONLY:
+    /// it never keys, retunes or re-arms anything, and FT auto-sequencing is deliberately not
+    /// covered (an FT over ends by itself; the permit and the watchdog stay as they are).
+    /// Operator sign-off, 2026-09-27. Only a Windows station runs the watcher (the Parsec host);
+    /// see `crate::presence` for what it reads and `engine/parsec_presence.rs` for what it stops.
+    #[serde(default)]
+    pub parsec_presence_stop: bool,
     #[serde(default)]
     pub max_power_phone: Option<f32>,
     #[serde(default)]
@@ -4245,6 +4254,7 @@ impl Default for Settings {
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
+            parsec_presence_stop: false,
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
@@ -8754,6 +8764,68 @@ mod tests {
             !declares("swrStop") && !declares("maxSWR") && !declares("swrStopEnabledd"),
             "the scan finds only what is really declared"
         );
+    }
+
+    /// Parsec presence mode's switch — ships OFF, its exact wire key, an upgrader's file, a
+    /// save-and-load round trip, and the TS mirror read out of `types.ts` itself.
+    ///
+    /// Global, not per-radio: it watches the SHACK PC's Parsec host, and one host serves every
+    /// radio, so it has no `RadioProfile` mirror and no `RadioProfilePatch` seam to drift.
+    #[test]
+    fn parsec_presence_stop_ships_off_wire_key_round_trip_and_ts_mirror() {
+        let s = Settings::default();
+        assert!(
+            !s.parsec_presence_stop,
+            "ships OFF — the operator's sign-off"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"parsecPresenceStop\":false"),
+            "missing wire key in {json}"
+        );
+
+        // An upgrader's file predates the key: off, never on by accident.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.parsec_presence_stop);
+
+        // On survives a save and a load — through the real file path, not just serde.
+        let dir = std::env::temp_dir().join(format!("nexus-parsec-setting-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut on = Settings::default();
+        on.parsec_presence_stop = true;
+        on.save(&path).unwrap();
+        assert!(
+            Settings::load(&path).parsec_presence_stop,
+            "on came back off"
+        );
+        on.parsec_presence_stop = false;
+        on.save(&path).unwrap();
+        assert!(
+            !Settings::load(&path).parsec_presence_stop,
+            "off came back on"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The TS mirror, read from types.ts itself.
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("parsecPresenceStop"),
+            "ui/src/types.ts Settings is missing `parsecPresenceStop`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("parsecPresenceStopp") && !declares("parsecStop"));
     }
 
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.

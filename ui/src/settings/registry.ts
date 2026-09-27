@@ -236,7 +236,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'foreign ptt', 'wsjt-x share', 'n1mm share',
       // The high-SWR cutoff. NOT the bare word 'swr' — that belongs to the amplifier
       // section's own SWR read-out, and one term cannot land the operator on two sections.
-      'high swr', 'swr cutoff', 'stop on swr', 'antenna fault'],
+      'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',
+      // Parsec presence mode: the words an operator running the shack over Parsec reaches for.
+      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt'],
   },
 
   // ---- Modes -------------------------------------------------------------------

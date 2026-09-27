@@ -5838,6 +5838,22 @@ export const EN = {
   'settings.transmit.swrStop.noMeterStream':
     'Nexus is not receiving this Flex\'s own SWR meter, so this cutoff will not stop anything, however high the SWR goes. That meter comes from the radio\'s native stream, and it is off. Turn on "Flex native panadapter (early access)" in Settings \u25b8 Radio \u25b8 Rig & CAT to start it. Until then this setting has no effect.',
 
+  // Parsec presence mode (operator sign-off 2026-09-27): stop-only, off by default. The hint
+  // says what it watches and what it stops, and names what it leaves alone. `Parsec`, `PTT`,
+  // `RTTY`, `PSK`, `Tune`, `TX`, `FT8/FT4` and the two folder paths are tokens.
+  'settings.transmit.parsecStop.label': 'Stop latched transmissions if my Parsec session drops',
+  'settings.transmit.parsecStop.hint':
+    "For running the shack over Parsec. Nexus watches Parsec's own log on this computer. If the Parsec session that was connected drops, or its log can no longer be read, Nexus stops a latched PTT, continuous RTTY or PSK, and Tune, exactly as their own Stop does, and says why. It never starts a transmission or turns TX back on. FT8/FT4 overs are not touched: they end by themselves, and the TX watchdog still applies. Parsec can take up to a minute to notice a pulled network cable, so this backs up the watchdog rather than replacing it.",
+  'settings.transmit.parsecStop.unavailable':
+    'Available on Windows only, where Nexus can read the Parsec host\u2019s log.',
+  'settings.transmit.parsecStop.status.starting': 'Checking Parsec\u2019s log\u2026',
+  'settings.transmit.parsecStop.status.connected':
+    'A Parsec session is connected. If it drops, a latched transmission stops.',
+  'settings.transmit.parsecStop.status.notConnected':
+    'No Parsec session is connected, so nothing will be stopped.',
+  'settings.transmit.parsecStop.status.unreadable':
+    'Nexus cannot find or read Parsec\u2019s log (it looks for log.txt in %APPDATA%\\Parsec and %ProgramData%\\Parsec), so nothing will be stopped until it can.',
+
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
   'settings.transmit.note':
@@ -9248,6 +9264,15 @@ export const EN = {
   'shell.lane.txPowerZero.detail':
     'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the Pwr slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
   'shell.lane.recording.message': 'RECORDING',
+  // Parsec presence mode stopped a transmission while the operator was away; the lane keeps it
+  // until they transmit again. `{{what}}` is a list of the `.what.*` entries below.
+  'shell.lane.parsecStop.message': 'PARSEC DROPPED — TX STOPPED',
+  'shell.lane.parsecStop.detail':
+    'Your Parsec session dropped (or Parsec’s log stopped answering) at {{time}} UTC, so Nexus stopped: {{what}}. Nothing was restarted; key up again when you are back.',
+  'shell.lane.parsecStop.what.ptt': 'latched PTT',
+  'shell.lane.parsecStop.what.rtty': 'continuous RTTY',
+  'shell.lane.parsecStop.what.psk': 'continuous PSK',
+  'shell.lane.parsecStop.what.tune': 'Tune',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':
     'No live propagation data yet — set your callsign in Settings and check your internet connection.',

@@ -46,6 +46,9 @@ mod log_folds;
 /// The UI's log questions answered by the engine — pages, places, a call's history, an entity's
 /// slots (SPEC-2 v3 C17a).
 mod log_queries;
+/// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
+/// session drops (off by default; started on Windows only).
+mod parsec_presence;
 mod pouncer;
 mod profile_sync;
 /// The quit when the logbook still has changes on their way to disk: the window is held while
@@ -27820,6 +27823,10 @@ fn start_on_the_logbook(
     }
     // Field Day, if the operator left it on — after the attach, and before the radio loop starts.
     resume_field_day(&engine);
+
+    // Parsec presence mode — reads Parsec's log off the engine lock and passes only a verdict in.
+    // A no-op off Windows, and idle until the operator switches the mode on.
+    parsec_presence::spawn(engine.clone());
 
     // Decay + persist the grid-activity census on a slow cadence (10 min): the
     // decay keeps a one-off DXpedition from permanently un-raring a water grid,

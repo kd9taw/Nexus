@@ -485,6 +485,9 @@ const MIGRATED = [
   // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
   // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
   'components/AmpStrip.tsx',
+  // Parsec presence mode's words (the Settings readout, the status-lane stop report) — migrated
+  // from birth. The station sends tokens; every sentence is here, from the catalog.
+  'features/parsecPresence.ts',
 ]
 
 /**
