@@ -78,6 +78,9 @@ it('shows a live remote Stop and the point-at slew with the hint and a configure
   fireEvent.click(screen.getByTitle(t('rotor.strip.pointAt.title', { call: 'JA1ABC' })))
   expect(pointAt).toHaveBeenCalledTimes(1)
   expect(pointAt).toHaveBeenCalledWith('JA1ABC')
+  // No long path from a browser (#338 is the desktop's): the station's action takes no path, and
+  // the transport refuses one unsent (control.test.ts).
+  expect(screen.queryByRole('button', { name: 'LP' })).toBeNull()
 })
 
 it('shows no live remote strip without the hint, and nothing at all with no rotator configured', async () => {

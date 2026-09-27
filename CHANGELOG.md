@@ -250,6 +250,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Phone, CW and FT screens turned the antenna the short way, exactly like **→ CALL**, and its
   message gave the heading without saying which path. LP now asks for the long-path heading, and
   its message says "long path". → CALL is unchanged. (#338)
+- **Pointing the antenna at a station from the Remote page works again.** Since 1.15.0, **→ CALL**
+  on the Remote page's rotator strip, and ↗ on a Needed row, were stopped in the browser before
+  they reached the station, and the message said the command was not confirmed. They reach the
+  station again and turn the antenna the short way, as before 1.15.0. **LP** stays on the desktop.
+  Nothing changes at the station.
 
 ### Corrections to 1.15.0
 
