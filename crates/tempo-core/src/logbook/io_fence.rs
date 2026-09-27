@@ -66,8 +66,10 @@
 //!   deliberately so no change lands after it — once the radio loop has stopped;
 //! - the held-QSO journal (`persist_pending_qso`), still written under the lock: Remote
 //!   publishes the same file by a rename checked against the hold under that lock, and a write
-//!   still queued on another thread could land after it; and `settings.json`. Neither is the
-//!   logbook store;
+//!   still queued on another thread could land after it; and `settings.json`'s synchronous saves
+//!   (Remote's save-then-publish, a backup restore), whose result decides the change. Neither is
+//!   the logbook store. Every other `settings.json` save is written on the file's own thread
+//!   (`tempo_app::settings::writer`), and a wait for one is fenced ([`off_engine_lock`]);
 //! - the 1.13 path's reads of `log.adi` — the launch's load of it into a store in memory, and
 //!   the station taking in a file another machine changed — under the lock by design, as 1.13's
 //!   were. Its writes are not: since SPEC-2 v3 C19 (D1-A) its appends and rewrites run on the

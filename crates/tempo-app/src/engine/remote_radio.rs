@@ -5,6 +5,7 @@
 use super::{DecoderMutation, Engine};
 use crate::dto::Tier;
 use crate::remote_control::{Completion, Evidence, Outcome, Permit, Reason, WritePermission};
+use crate::settings::writer::SettingsWriter;
 use crate::settings::OperatingMode;
 use std::path::PathBuf;
 use std::sync::TryLockError;
@@ -1206,12 +1207,13 @@ impl Request {
         // The native tier verb changes live tier/decoder state and does not
         // persist Settings. Frequency and section gestures retain their save.
         let saved = if persist {
-            engine.settings.save(
+            SettingsWriter::of(
                 engine
                     .remote_settings_path
                     .as_ref()
                     .expect("validated store"),
             )
+            .save_now(&engine.settings)
         } else {
             Ok(())
         };

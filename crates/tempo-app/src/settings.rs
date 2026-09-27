@@ -8,6 +8,8 @@ use crate::dto::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod writer;
+
 /// What kind of operating the active section is doing — the per-section rig-mode
 /// policy. **Digital** OBEYS the rig (max compatibility; FT8/FT4 live in an audio
 /// sub-carrier on USB/Data, so forcing the mode would break the operator's setup).
@@ -5313,6 +5315,12 @@ impl Settings {
     /// to happen is that it evaporates. The erasure this all exists to stop was never a race
     /// — it was an older build dropping fields it did not understand at load
     /// ([`Settings::unknown`]), which no amount of write ordering would have changed.
+    ///
+    /// # Within one instance
+    ///
+    /// The app makes this call through the file's [`writer::SettingsWriter`], never bare (launch
+    /// aside, before any writer exists): a command hands the writer a snapshot under the Engine
+    /// lock and its thread writes it, and every write of one file holds that writer's file lock.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;

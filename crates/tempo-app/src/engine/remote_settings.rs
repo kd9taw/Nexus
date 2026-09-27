@@ -4,6 +4,7 @@
 use super::Engine;
 use crate::dto::{SourceKind, Tier};
 use crate::remote_control::{Permit, Reason};
+use crate::settings::writer::SettingsWriter;
 use crate::settings::OperatingMode;
 use std::sync::TryLockError;
 use std::time::Instant;
@@ -179,11 +180,12 @@ impl Engine {
         // failed save changes neither the decoder nor the visible preference.
         // Once this atomic save is admitted it may finish after disconnection;
         // it is a saved choice, never a deferred or replayable hardware write.
-        next.save(
+        SettingsWriter::of(
             self.remote_settings_path
                 .as_ref()
                 .ok_or(Reason::UnsupportedAction)?,
         )
+        .save_now(&next)
         .map_err(|_| Reason::PersistenceFailed)?;
         match setting {
             DecoderSetting::Js8Speed { speed, .. } => self
@@ -235,7 +237,9 @@ impl Engine {
             return Err(Reason::AuthorityExpired);
         }
         self.remote_actuation.revoke();
-        next.save(path).map_err(|_| Reason::PersistenceFailed)?;
+        SettingsWriter::of(path)
+            .save_now(&next)
+            .map_err(|_| Reason::PersistenceFailed)?;
         // Publish only after the native atomic save succeeds. Do not run the
         // broad form-apply path or copy an old Settings snapshot over live state.
         self.settings.amp_follow_band = follow;
@@ -272,7 +276,9 @@ impl Engine {
             return Err(Reason::AuthorityExpired);
         }
         // Publish only after the atomic save succeeds, through the native verb.
-        next.save(path).map_err(|_| Reason::PersistenceFailed)?;
+        SettingsWriter::of(path)
+            .save_now(&next)
+            .map_err(|_| Reason::PersistenceFailed)?;
         self.set_ai_cw_enabled(on);
         Ok(())
     }
@@ -331,7 +337,9 @@ impl Engine {
         if serde_json::to_value(&next).map_err(|_| Reason::InvalidAction)? != expected {
             return Err(Reason::InvalidAction);
         }
-        next.save(&path).map_err(|_| Reason::PersistenceFailed)?;
+        SettingsWriter::of(&path)
+            .save_now(&next)
+            .map_err(|_| Reason::PersistenceFailed)?;
         self.settings = next;
         Ok(())
     }

@@ -1,6 +1,7 @@
 //! FT cockpit preferences reuse native setters without acquiring or extending
 //! TX ownership. The displayed values and incarnation bind every gesture.
 use super::*;
+use crate::settings::writer::SettingsWriter;
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -75,11 +76,12 @@ impl Engine {
             return Err(Reason::AuthorityExpired);
         }
         if !matches!(change, FtSettingChange::Auto { .. }) {
-            next.save(
+            SettingsWriter::of(
                 self.remote_settings_path
                     .as_ref()
                     .ok_or(Reason::UnsupportedAction)?,
             )
+            .save_now(&next)
             .map_err(|_| Reason::PersistenceFailed)?;
         }
         // Once admitted, a saved preference completes even if the connection
