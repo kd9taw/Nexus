@@ -15234,17 +15234,32 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 0.72rem;
   color: var(--text-dim);
 }
+/* The theme's own buttons, never the browser's. A native button's face follows the computer's
+   light or dark setting, not Nexus's theme, so the green Operate landed on whatever grey the
+   system chose: 1.04:1 in the light theme on a dark computer (operator, 2026-09-27: "the operate
+   button is hard to read in light mode"). The Remote page's quick header already painted these
+   the same way. OperateButton.contrast.test.tsx holds every mode and OK preset. */
 .amp-strip button {
   font-size: 0.72rem;
   line-height: 1;
   padding: 3px 6px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.amp-strip button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 /* Standby is the resting state and stays quiet. Operate means the amplifier is in line, which
    is worth seeing at a glance from across the shack — but it is NOT an alert, so it takes the
-   good-state token rather than a warning colour. */
+   good-state token rather than a warning colour: on the border and as a tint of the face, with
+   the word in the text colour (the band chip's light-theme fix). A status colour is held to
+   3:1, enough for a border; the OK presets' greens do not all make 4.5:1 as lettering. */
 .amp-op.on {
-  color: var(--state-good);
   border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 16%, var(--panel));
 }
 .amp-band {
   display: inline-flex;
