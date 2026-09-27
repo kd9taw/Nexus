@@ -111,6 +111,31 @@ mod tests {
     }
 
     #[test]
+    fn a_wspr_beacon_is_spotted_on_the_offset_it_was_sent_on() {
+        // The radio's own path (tx_mode → encode → gen_wave, lead-in included) at the operator's
+        // TX offset, then our copy of wsprd. WSJT-X centres WSPR's four tones on the TX frequency
+        // and wsprd reports the centre, so a beacon sent on 1450 Hz must be spotted at 1450 Hz.
+        // Until the tones were centred (`wspr::gen_wave`) it was spotted 2.2 Hz high, by this
+        // decoder and by stock WSJT-X wsprd alike.
+        let mode = tx_mode(ModeKind::Wspr).expect("WSPR transmits");
+        let msg = "KD9TAW EN52 30";
+        let tones = mode.encode(msg);
+        assert!(!tones.is_empty(), "WSPR encode failed");
+        let wave = mode.gen_wave(&tones, FS, 1450.0);
+        let frame = to_i16_frame(&wave, mode.frame_samples(), 0, 8000.0);
+        let spots = mode.decode_frame(&frame, 0, 0, 3, "", "", 0, 0, 0, false, false);
+        let spot = spots
+            .iter()
+            .find(|d| d.message == msg)
+            .unwrap_or_else(|| panic!("the beacon did not decode: {spots:?}"));
+        assert!(
+            (spot.freq - 1450.0).abs() < 0.3,
+            "sent on 1450 Hz, spotted at {:.2} Hz",
+            spot.freq
+        );
+    }
+
+    #[test]
     fn mode_metadata() {
         let m8 = make_mode(ModeKind::Ft8);
         assert_eq!(m8.name(), "FT8");

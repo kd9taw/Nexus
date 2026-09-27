@@ -1989,6 +1989,8 @@ impl Mode for WsprMode {
             return Vec::new();
         }
         let sym: Vec<u8> = itone.iter().map(|&t| t as u8).collect();
+        // `f0` is the operator's TX offset. WSPR reports the CENTRE of its four tones, and
+        // `wspr::gen_wave` centres them on `f0` as WSJT-X does, so the spot lands on the offset.
         let Some(tones) = wspr::gen_wave(&sym, fsample, f0) else {
             return Vec::new();
         };

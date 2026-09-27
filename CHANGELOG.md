@@ -164,6 +164,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Stations filters in the Classic layout wrap instead of cutting off the last one.** On a
   narrow window the Needed filter was cut off at the panel's edge; the filters now take a second
   line when they need one.
+- **A WSPR beacon is spotted on the frequency you set.** Nexus started WSPR's four tones at your
+  TX offset, so stations decoding it with WSJT-X or wsprd spotted it 2.2 Hz higher, and that is
+  what reached WSPRnet: set to 1500 Hz on a 10.1387 MHz dial, it was spotted at 10.140202
+  instead of 10.140200. The tones are now centred on the offset, the way WSJT-X sends WSPR. The
+  message, the timing and the schedule are unchanged.
 
 ### Corrections to 1.15.0
 
