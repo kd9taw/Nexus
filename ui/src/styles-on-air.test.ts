@@ -20,6 +20,19 @@
 // Every assertion is a computed relationship on the cascade WINNER in all four modes (dark,
 // light, dark-high, light-high). Nothing pins a hex: re-tuning a colour is free, breaking the
 // sign is not. This is presentation only — nothing here reads or changes what keys the rig.
+//
+// THE FILL (coordinator ruling, 2026-09-26: option (a)). White on `--tx` itself measures 4.00:1
+// in the dark theme (#e64343), under the 4.5:1 an ink needs, and `--tx` is locked. So the fill is
+// `--tx` taken 10% toward black — DERIVED from the token, which the counterfactual suite below
+// pins: swap `--tx` for a colour no theme uses and every sign's fill must follow it.
+// Measured on this sheet when written, by this file's own resolver (the assertions are the spec,
+// these numbers are the margins it had):
+//
+//   mode        --tx     fill     ink/fill  fill/--panel  fill/--bg  rim/--panel  rim/--bg
+//   dark        #e64343  #cf3c3c    4.81        3.73         3.99       15.26       16.30
+//   light       #a50000  #950000    9.22        8.98         7.62       16.03       13.61
+//   dark-high   #e64343  #cf3c3c    4.81        3.91         4.36       18.81       21.00
+//   light-high  #a50000  #950000    9.22        9.22         7.27       21.00       16.56
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { createElement } from 'react'
@@ -43,6 +56,7 @@ import {
   type El,
   type Mode,
   type Rgb,
+  type Rule,
 } from './cssCascade'
 import type { AppSnapshot, QsoStatus, RadioStatus } from './types'
 
@@ -194,16 +208,16 @@ interface Paint {
   tokens: Map<string, string>
 }
 
-function paintOf(chain: El[], mode: Mode, backdrop: Rgb): Paint {
-  const tokens = tokensAt(RULES, mode, chain)
+function paintOf(chain: El[], mode: Mode, backdrop: Rgb, rules: Rule[] = RULES): Paint {
+  const tokens = tokensAt(rules, mode, chain)
   const x = (v: string) => expandWith(tokens, v)
-  const fillW = winnerAt(RULES, mode, chain, 'background', 'background-color')
+  const fillW = winnerAt(rules, mode, chain, 'background', 'background-color')
   const fillValue = fillW ? x(fillW.value) : 'transparent'
   const fill = /^(transparent|none)?$/.test(fillValue.trim()) ? null : toRgb(fillValue, backdrop)
   // `color` inherits, so the ink is the nearest ancestor's winner when the element has none.
   let inkValue = 'var(--text)'
   for (let i = chain.length; i > 0; i--) {
-    const w = winnerAt(RULES, mode, chain.slice(0, i), 'color')
+    const w = winnerAt(rules, mode, chain.slice(0, i), 'color')
     if (w && w.value !== 'inherit') {
       inkValue = w.value
       break
@@ -211,8 +225,8 @@ function paintOf(chain: El[], mode: Mode, backdrop: Rgb): Paint {
   }
   const ink = toRgb(x(inkValue), fill ?? backdrop)
   expect(ink, `ink did not compute: ${x(inkValue)}`).not.toBeNull()
-  const rimW = winnerAt(RULES, mode, chain, 'border', 'border-color')
-  const widthW = winnerAt(RULES, mode, chain, 'border', 'border-width')
+  const rimW = winnerAt(rules, mode, chain, 'border', 'border-color')
+  const widthW = winnerAt(rules, mode, chain, 'border', 'border-width')
   const rimValue = rimW ? (rimW.prop === 'border' ? borderColourOf(x(rimW.value)) || x(inkValue) : x(rimW.value)) : ''
   const rim = rimValue && !/^transparent$/.test(rimValue.trim()) ? toRgb(rimValue, backdrop) : null
   const rimWidth = widthW ? (widthW.prop === 'border' ? borderWidthOf(x(widthW.value)) : x(widthW.value)) : '0'
@@ -286,6 +300,39 @@ describe('ON AIR is a filled, rimmed sign in every mode', () => {
     expect(p.fill, `${s.name} paints no fill in ${mode}`).not.toBeNull()
     const gap = hueGap(hue(p.fill!), hue(tx))
     expect(gap, `${s.name} in ${mode}: fill ${hex(p.fill!)} is ${gap.toFixed(0)}° off --tx ${hex(tx)}`).toBeLessThanOrEqual(10)
+  })
+})
+
+describe('the fill is DERIVED from --tx: a change to --tx reaches every sign', () => {
+  // The hue check above says the fill LOOKS like the TX red today; it cannot tell a derived fill
+  // from a hard-coded hex that happens to match — and a hex would silently keep the old red the
+  // day `--tx` is retuned, so the sign and the TX colour would part company. This pins the
+  // derivation by counterfactual instead of by reading the declaration: every `--tx` in the
+  // sheet is replaced with a colour no theme uses, and each sign's fill must MOVE, to that
+  // colour's hue. The sentinel is a blue, as far from any red as the wheel allows.
+  const SENTINEL = '#2080e0'
+  const SWAPPED: Rule[] = RULES.map((r) => ({
+    ...r,
+    decls: r.decls.map((d) => (d.prop === '--tx' ? { ...d, value: SENTINEL } : d)),
+  }))
+
+  it('the swap reaches the sheet (the counterfactual is not a no-op)', () => {
+    const swapped = SWAPPED.filter((r, i) => r.decls !== RULES[i].decls).length
+    expect(swapped, 'no rule declares --tx — the swap changed nothing').toBeGreaterThan(0)
+  })
+
+  it.each(cases)('%s in %s follows --tx', (_n, mode, s) => {
+    const chain = s.chain(true)
+    const panel = surface(tokensAt(RULES, mode, chain), '--panel')
+    const now = paintOf(chain, mode, panel)
+    const moved = paintOf(chain, mode, panel, SWAPPED)
+    expect(now.fill, `${s.name} paints no fill in ${mode}`).not.toBeNull()
+    expect(moved.fill, `${s.name} paints no fill in ${mode} once --tx is ${SENTINEL}`).not.toBeNull()
+    expect(hex(moved.fill!), `${s.name} in ${mode}: the fill did not move with --tx — a literal, not a derivation`).not.toBe(
+      hex(now.fill!),
+    )
+    const gap = hueGap(hue(moved.fill!), hue(toRgb(SENTINEL, panel)!))
+    expect(gap, `${s.name} in ${mode}: with --tx ${SENTINEL} the fill is ${hex(moved.fill!)}, ${gap.toFixed(0)}° off it`).toBeLessThanOrEqual(10)
   })
 })
 
