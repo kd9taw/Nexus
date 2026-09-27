@@ -114,12 +114,21 @@ pub fn encode(msg: &str) -> Option<Vec<u8>> {
     (n as usize == NSYM).then_some(sym)
 }
 
-/// Synthesise the WSPR audio for `symbols` at carrier `f0`, WITHOUT the lead-in.
+/// Synthesise the WSPR audio for `symbols` CENTRED on `f0`, WITHOUT the lead-in.
 ///
-/// Plain continuous-phase 4-FSK: tone *k* sits at `f0 + k * TONE_SPACING_HZ`, each
-/// held for [`NSPS`] samples, with phase carried ACROSS symbol boundaries and never
-/// reset. Resetting per symbol would splatter a mode whose whole point is occupying
-/// ~6 Hz.
+/// `f0` is where the signal is REPORTED — the centre of its four tones — so tone *k* sits at
+/// `f0 + (k − 1.5) * TONE_SPACING_HZ`. That is how WSJT-X sends WSPR (3.0.2: `MainWindow`
+/// starts the modulator 1.5 spacings below the TX frequency, `mainwindow.cpp:12815`, and adds
+/// one spacing per tone, `Modulator.cpp:297`) and where `wsprd` measures a signal (`wsprd.c:506`
+/// models the tones at `f0 + (k − 1.5)·df`), so a beacon is spotted on the frequency the
+/// operator set.
+///
+/// ⚠️ It used to put tone 0 ON `f0`, and every beacon was spotted 2.2 Hz above its set
+/// frequency: stock `wsprd` read an `f0 = 1500` beacon on a 10.1387 MHz dial at 10.1402022.
+///
+/// Plain continuous-phase 4-FSK: each tone held for [`NSPS`] samples, with phase carried
+/// ACROSS symbol boundaries and never reset. Resetting per symbol would splatter a mode whose
+/// whole point is occupying ~6 Hz.
 ///
 /// Returns `None` unless `symbols` is exactly [`NSYM`] values in 0..=3.
 pub fn gen_wave(symbols: &[u8], fsample: f32, f0: f32) -> Option<Vec<f32>> {
@@ -134,7 +143,7 @@ pub fn gen_wave(symbols: &[u8], fsample: f32, f0: f32) -> Option<Vec<f32>> {
     let mut phi = 0f64;
     let mut k = 0usize;
     for &s in symbols {
-        let freq = f64::from(f0) + f64::from(s) * f64::from(TONE_SPACING_HZ);
+        let freq = f64::from(f0) + (f64::from(s) - 1.5) * f64::from(TONE_SPACING_HZ);
         let dphi = std::f64::consts::TAU * freq * dt;
         for _ in 0..nsps_out {
             wave[k] = phi.sin() as f32;
@@ -374,6 +383,50 @@ mod tests {
             gen_wave(&bad, SAMPLE_RATE, 1500.0).is_none(),
             "symbol 4 does not exist"
         );
+    }
+
+    /// The frequency a stretch of pure tone sits at, from the sine recurrence
+    /// `x[n+1] + x[n−1] = 2·cos(ω)·x[n]` solved by least squares over the stretch. Exact for a
+    /// pure tone, and every WSPR symbol is one, so this reads the tone the synthesiser wrote to a
+    /// small fraction of a hertz, with no FFT bin for it to fall between.
+    fn tone_hz(seg: &[f32], fsample: f32) -> f64 {
+        let (mut num, mut den) = (0f64, 0f64);
+        for w in seg.windows(3) {
+            let (a, b, c) = (f64::from(w[0]), f64::from(w[1]), f64::from(w[2]));
+            num += (a + c) * b;
+            den += 2.0 * b * b;
+        }
+        (num / den).acos() * f64::from(fsample) / std::f64::consts::TAU
+    }
+
+    #[test]
+    fn the_four_tones_are_centred_on_f0_as_wsjtx_sends_them() {
+        // WSJT-X 3.0.2 starts its modulator 1.5 spacings BELOW the TX frequency
+        // (mainwindow.cpp:12815, TxFreq − 1.5·12000/8192) and adds one spacing per tone
+        // (Modulator.cpp:297), so tone k sits at TxFreq + (k − 1.5)·12000/8192: the four tones
+        // are centred on the frequency the operator set, which is where wsprd reports the signal
+        // (wsprd.c:506 models the tones at f0 + (k − 1.5)·df). Nexus used to put tone 0 ON f0,
+        // so every beacon was spotted 2.2 Hz above its set frequency.
+        let sym = encode("KD9TAW EN52 30").expect("encodes");
+        for tone in 0..=3u8 {
+            assert!(
+                sym.contains(&tone),
+                "CONTROL: the frame carries tone {tone}"
+            );
+        }
+        let f0 = 1500.0_f32;
+        for fsample in [SAMPLE_RATE, 48_000.0] {
+            let nsps = (NSPS as f32 * fsample / SAMPLE_RATE).round() as usize;
+            let w = gen_wave(&sym, fsample, f0).expect("valid frame");
+            for (i, &s) in sym.iter().enumerate() {
+                let got = tone_hz(&w[i * nsps..(i + 1) * nsps], fsample);
+                let want = f64::from(f0) + (f64::from(s) - 1.5) * 12_000.0 / 8_192.0;
+                assert!(
+                    (got - want).abs() < 0.01,
+                    "{fsample} Hz audio, symbol {i} (tone {s}): {got:.3} Hz, WSJT-X sends {want:.3} Hz"
+                );
+            }
+        }
     }
 
     #[test]
