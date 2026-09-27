@@ -92,7 +92,7 @@ ok "ui/node_modules"
 
 # 4 — the GUI app + offline .deb + AppImage ---------------------------------------------------
 bold "4/4  Nexus GUI app + .deb + AppImage"
-cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "^2" --locked; }
+cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "=2.11.5" --locked; }
 [ -f "$REPO/src-tauri/icons/128x128.png" ] || python3 "$REPO/scripts/gen-icons.py"
 # Linux BUNDLES its own Hamlib as of 2026-08-24 — see scripts/fetch-hamlib-unix.sh for why: the
 # AppImage installs nothing by definition, so "apt install libhamlib-utils" was a CAT-dead
@@ -169,8 +169,9 @@ ok "linuxdeploy-plugin-gtk pinned at ${gtk_plugin_rev:0:10} (sha256 verified)"
 # stale one could be picked up by anything.
 find "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true
 ok "Nexus .deb + AppImage"
-# The pin only holds while the bundler leaves the file alone; a later tauri-cli (it floats on ^2)
-# that re-downloads every time would build from `master` again without a word.
+# The pin only holds while the bundler leaves the file alone. tauri-cli 2.12.0 does not: it
+# re-downloads the script from `master` on every build, and this check refused the 1.15.0 AppImage
+# for it. So tauri-cli is pinned at 2.11.5 (above, and in release.yml and the Windows scripts).
 echo "$gtk_plugin_sha256  $gtk_plugin" | sha256sum -c --status - \
   || die "the pinned linuxdeploy-plugin-gtk.sh was replaced during the build — the AppImage's GTK
   hook came from an unpinned copy. Check the bundler's download logic before shipping it."

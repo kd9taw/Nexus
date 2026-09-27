@@ -618,8 +618,11 @@ jobs:
           npm --prefix ui ci
           npm --prefix ui run build
 
+      # Pinned, not "^2": tauri-cli 2.12.0 (2026-09-26) re-downloads linuxdeploy-plugin-gtk.sh over
+      # the pinned copy (scripts/build-linux.sh refused the 1.15.0 AppImage for it). Every job builds
+      # with the version 1.14.0 shipped with; move it deliberately, all four installs together.
       - name: Install tauri-cli
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo install tauri-cli --version "=2.11.5" --locked
 
       # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
       # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship

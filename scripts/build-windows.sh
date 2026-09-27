@@ -83,8 +83,8 @@ ok "node $(node --version)  npm $(npm --version)"
 if cargo tauri --version >/dev/null 2>&1; then
   ok "tauri-cli present ($(cargo tauri --version 2>/dev/null | head -1))"
 else
-  printf '      installing: cargo install tauri-cli --version "^2"\n'
-  cargo install tauri-cli --version "^2"
+  printf '      installing: cargo install tauri-cli --version "=2.11.5"\n'
+  cargo install tauri-cli --version "=2.11.5"
 fi
 
 # 4 — App icons (generate if missing) ----------------------------------------
