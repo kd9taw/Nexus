@@ -394,11 +394,15 @@ export function CockpitHeader({
         {/* The amplifier's own controls. Rendered from `snap` with no prop of its own, so every
             cockpit using this header gets it and none can forget to pass it — and it renders
             NOTHING when no amplifier is configured, which is almost every station.
-            ⛔ Not a stop control: an amplifier in standby does not end a transmission. */}
+            ⛔ Not a stop control: an amplifier in standby does not end a transmission.
+            Its buttons lock on the ON AIR sign's answer, so every over Nexus keys locks them —
+            `transmitting || rigKeyed` left them live through a voice over, CW, RTTY, PSK, SSTV,
+            a tune and Nexus's PTT whenever the amplifier's own flag did not say keyed (an
+            Elecraft has none). Operator, 2026-09-27: it only ever refuses more. */}
         <AmpStrip
           amp={snap?.radio?.amp ?? null}
           radioId={snap?.activeRadioId}
-          radioTransmitting={!!(snap?.radio?.transmitting || snap?.radio?.rigKeyed)}
+          radioTransmitting={onAir}
         />
 
         {power && (

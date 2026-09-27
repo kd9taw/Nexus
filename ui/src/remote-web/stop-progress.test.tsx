@@ -164,3 +164,60 @@ it('POSITIVE CONTROL: the two states are actually different words', () => {
   // The acceptance wording must not assert RF has stopped.
   expect(EN['remote.stop.sent'].toLowerCase()).not.toContain('stopped')
 })
+
+// ── An over the slot flag cannot see (2026-09-27) ──────────────────────────────────────────────
+//
+// "Transmitter free" was read as `!transmitting && !tuning && !rigKeyed && !txEnabled`. The slot
+// flag, the rig's own PTT and the arm latch all say "free" while the voice keyer, a CW macro or an
+// RTTY over is still keying: only the arbiter (`txBusyReason`, the engine's `tx_owner()`) knows.
+// So a Stop accepted while such an over outlived it said STOPPED over a keyed radio, the failure
+// this hook exists to prevent. It now asks `isOnAir()`, the answer the ON AIR sign shows, and
+// keeps its `tuning` and `txEnabled` terms: the direction the hook's own comment calls safe.
+
+/** The station's reading while an over it keyed itself is still on the air: every flag but the
+ *  arbiter says "free". The sentences are the engine's own (`TxOwner::busy_reason`). */
+const busy = (reason: string) => ({ ...snapshot(false), radio: { ...radio(false), txBusyReason: reason } }) as AppSnapshot
+const phoneOf = (snap: AppSnapshot) => <PhoneCockpit snap={snap} theme="dark" spots={[]} onWorkSpot={() => {}} onSnap={() => {}} panels={panels as never}/>
+const wrapped = (client: OperationClient, element: React.ReactElement) => <StationControlContext.Provider value={false}>
+  <StationDataContext.Provider value={true}><RemoteOperationsContext.Provider value={client}>{element}</RemoteOperationsContext.Provider></StationDataContext.Provider>
+</StationControlContext.Provider>
+
+async function stopAccepted(h: ReturnType<typeof session>) {
+  fireEvent.click(screen.getByRole('button', { name: /^stop tx$/i }))
+  await settle()
+  await act(async () => {
+    h.client.receive({ type: 'operationResponse', requestId: h.stops()[0].requestId, value: { stop: 'accepted' } })
+  })
+  await settle()
+}
+
+it.each([
+  'A voice message is transmitting — stop it first',
+  'CW is sending — stop it first',
+  'RTTY is transmitting — stop it first',
+])('the cockpit header says stop sent, never stopped, while the station reports "%s"', async (reason) => {
+  const h = session()
+  const view = remote(h.client, phoneOf(busy(reason)))
+  await settle()
+  await stopAccepted(h)
+  expect(shown('remote.stop.sent'), 'accepted, and the over is still on the air').not.toBeNull()
+  expect(shown('remote.stop.stopped'), 'the arbiter says keyed — nothing may say stopped').toBeNull()
+  // The over ends: the same header now says stopped, so the wording above was the reading and not
+  // a state the hook can never leave.
+  view.rerender(wrapped(h.client, phoneOf(snapshot(false))))
+  await settle()
+  expect(shown('remote.stop.stopped')).not.toBeNull()
+})
+
+it("Operate's Stop (FtStopControl) reads the same answer", async () => {
+  const h = session()
+  const stop = (r: RadioStatus) => <FtStopControl onHaltTx={() => { void h.client.stopTransmit().catch(() => {}) }} radio={r}/>
+  const view = remote(h.client, stop(busy('A voice message is transmitting — stop it first').radio))
+  await settle()
+  await stopAccepted(h)
+  expect(shown('remote.stop.sent')).not.toBeNull()
+  expect(shown('remote.stop.stopped')).toBeNull()
+  view.rerender(wrapped(h.client, stop(radio(false))))
+  await settle()
+  expect(shown('remote.stop.stopped')).not.toBeNull()
+})

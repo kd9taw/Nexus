@@ -5,6 +5,7 @@ import { createContext, useContext, useSyncExternalStore } from 'react'
 import type { OperationClient } from './remote-web/operation-client'
 import { TUNE_CAPABILITIES, TX_IDLE_CAPABILITIES, type ControlCapability } from './remote-web/station-operation'
 import type { RadioStatus } from './types'
+import { isOnAir } from './types'
 
 export const StationControlContext = createContext(true)
 export function useStationControl(): boolean { return useContext(StationControlContext) }
@@ -96,12 +97,16 @@ export function useStationStopControl(): boolean {
  * says `sent`, never `stopped`, and only the station's OWN reading of the transmitter turns it into
  * `stopped`. Saying "stopped" while the rig is still keyed is the failure this exists to prevent;
  * saying "stop sent" a moment longer than necessary costs nothing. With no reading to go on
- * (`radio` absent) it stays `sent` — the safe direction, never an assertion nobody made. */
+ * (`radio` absent) it stays `sent` — the safe direction, never an assertion nobody made.
+ *
+ * "Free" is `isOnAir()`, the ON AIR sign's answer, plus the tune and arm flags. It was the slot
+ * flag and the rig's own PTT, which a voice, CW or RTTY over outliving the Stop never sets — so the
+ * arbiter's `txBusyReason` could still hold the transmitter while this said "stopped". */
 export function useStationStopProgress(radio?: RadioStatus | null): 'idle' | 'sending' | 'sent' | 'stopped' {
   const local = useStationControl(), client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   if (local || !view) return 'idle'
   if (view.stopSending) return 'sending'
   if (!view.stopAccepted) return 'idle'
-  return radio && !radio.transmitting && !radio.tuning && !radio.rigKeyed && !radio.txEnabled ? 'stopped' : 'sent'
+  return radio && !isOnAir(radio) && !radio.tuning && !radio.txEnabled ? 'stopped' : 'sent'
 }

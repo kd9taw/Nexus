@@ -14,6 +14,7 @@ import { useStationControl, useStationCapability } from '../stationAccess'
 import { useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
+import { isOnAir } from '../types'
 import { modeMismatch } from './TopBar'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
@@ -183,6 +184,11 @@ export function OperateQsoStrip({
   //
   // Same verdict function as the TopBar — imported, not re-derived, so the two can never drift.
   const rigDiverged = radio ? modeMismatch(radio.rigMode, radio.sideband, radio.rigConfirmed) : null
+  // The strip's ON AIR wash and "▲ TRANSMITTING" read the arbiter the header's sign reads, never
+  // the FT slot flag alone: that said "▼ Receiving" through this cockpit's own Tune, a key held at
+  // the radio and an over another screen started. Paint only — no control here keys, enables or
+  // routes on it (Stop TX's authority is `useStationStopControl()`).
+  const onAir = radio ? isOnAir(radio) : false
   const filterHz = radio?.filterWidthHz ?? null
   const narrowFilter = filterHz != null && filterHz > 0 && filterHz < NARROW_FILTER_HZ
 
@@ -198,7 +204,7 @@ export function OperateQsoStrip({
   }
 
   return (
-    <section className={`cockpit-qso panel${radio ? (radio.transmitting ? ' tx' : ' rx') : ''}`}>
+    <section className={`cockpit-qso panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
       {/* POSITION-STABILITY ORDER (OperateQsoStrip.geometry.test): the two button
           clusters render FIRST, so the six panic-adjacent controls are anchored at
           the strip's start. Every state-variable readout member (state cap,
@@ -295,7 +301,7 @@ export function OperateQsoStrip({
       )}
       {radio && (
         <span className="cq-statecap">
-          {radio.transmitting
+          {onAir
             ? t('operate.strip.state.transmitting')
             : radio.txEnabled
               ? t('operate.strip.state.receiving')
