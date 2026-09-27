@@ -144,6 +144,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frequency digits is a deeper shade of the same blue. Words in it, and white words on it, now
   meet the usual 4.5:1 reading contrast on the light panels, where they were about 3.5:1. The
   dark theme is unchanged, and so is a colour you picked in Settings ▸ Appearance ▸ Colours.
+- **The Gold warning colour no longer looks like Amber or Yellow.** In Settings ▸ Appearance ▸
+  Colours, Gold was almost the same colour as Amber in the dark theme, and as Yellow in the light
+  theme. It is now a deeper gold in the dark theme and a duller, brass-like gold in the light
+  theme, clearly apart from both in each, and it still passes the same readability checks as the
+  others. Amber and Yellow look exactly as before, and nothing changes unless you picked Gold.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.

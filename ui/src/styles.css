@@ -4036,14 +4036,14 @@ body.resizing-row {
 /* Amber */
 [data-theme='dark'][data-amber='gold'],
 [data-amber='gold'] .well {
-  --alert-warning: #f0cf4c;
-  --snr-marginal: #f0cf4c;
-  --band-marginal: #f0cf4c;
+  --alert-warning: #e0b030;
+  --snr-marginal: #e0b030;
+  --band-marginal: #e0b030;
 }
 [data-theme='light'][data-amber='gold'] {
-  --alert-warning: #977500;
-  --snr-marginal: #977500;
-  --band-marginal: #977500;
+  --alert-warning: #8e7640;
+  --snr-marginal: #8e7640;
+  --band-marginal: #8e7640;
 }
 [data-theme='dark'][data-amber='yellow'],
 [data-amber='yellow'] .well {
