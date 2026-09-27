@@ -150,6 +150,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its "▲ TRANSMITTING" followed only the FT over itself, so Operate's own Tune, the mic keyed at the
   radio, or an over started from another screen showed "▼ Receiving" in green while the rig was
   keyed. It now follows the ON AIR sign. Display only: nothing about keying has changed.
+- **A Remote Stop says "Stopped" only when nothing is transmitting.** After Stop TX in a Remote
+  browser, the note beside it says "Stop sent" until the station reports its transmitter free, and
+  "Stopped" after that. A voice, CW or RTTY over still running at the station could already read
+  "Stopped", because only the FT and mic-key flags were checked. It now waits for the same reading
+  as the ON AIR sign. The Stop itself works exactly as before.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,
