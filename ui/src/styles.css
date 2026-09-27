@@ -7908,6 +7908,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   border: 1px solid var(--border);
+  /* The key's own ink. Without it a key with bare text (SSTV's manual Start, JS8's queries and
+     inbox and queue keys) took the browser's button ink, black or white by the COMPUTER's
+     setting, and read 1.03:1 in the light theme on a dark computer. The labelled keys pin theirs
+     on `.cw-macro-label` below and are unchanged. NativeControls.contrast.test.tsx holds it. */
+  color: var(--text);
   transition: var(--transition);
 }
 .cw-macro:hover {

@@ -238,6 +238,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the theme you picked. With Nexus in the light theme on a computer set to dark, or the other way
   round, some of their words could not be read. They now follow Nexus's theme. Nothing changes
   when your computer's setting matches the theme, which it always does with the System theme.
+- **Keys that could go blank now always show their words.** SSTV's manual-receive Start, the
+  SSTV picture viewer's Previous, Next and Save, JS8's station queries, inbox Read and Delete,
+  Cancel and Drop, and the Remote page's Refresh, retry and SSTV Save keys took the colour of
+  their words from your computer's light or dark setting, and could be invisible when it differed
+  from Nexus's theme. They now use the theme's text colour, like the other keys.
 - **The SSTV picture viewer no longer misses an arrow key pressed as it opens.** On a busy
   computer, a ← or → pressed the moment the pictures appeared could be ignored, because the keys
   were connected to the pictures a moment after they were drawn. They are now connected as the
