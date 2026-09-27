@@ -16729,6 +16729,23 @@ button.cq-skiptx1.on {
   cursor: pointer;
   user-select: none;
 }
+/* Spot is a button among the checkbox labels, taking `.or-filter`'s ink, and nothing gave it a
+   face: the browser's grey showed through, 2.21:1 under that ink in the dark theme even on a dark
+   computer. The theme draws it now, in the box the browser's took; a disabled Spot (nothing
+   selected) dims as it did not before. */
+.or-spot {
+  padding: 2px 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.or-spot:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.or-spot:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .or-filter input {
   accent-color: var(--accent);
 }
@@ -23389,7 +23406,12 @@ button.sat-chip:disabled {
   color: var(--state-weak);
   font-size: calc(15px * var(--text-scale));
   line-height: 1;
-  padding: 0 var(--space-1);
+  /* A face of its own: the browser's grey read 1.57:1 under this red in the dark theme even on a
+     dark computer. The same box as the browser's 2px border (1px of it moves into the padding). */
+  padding: 1px calc(var(--space-1) + 1px);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 .sstv-tx-controls {
   display: flex;
@@ -24043,6 +24065,21 @@ tr.sel .aprs-sym {
   font-size: calc(12px * var(--text-scale));
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+/* The navigable version of a health chip is a <button> (SetupHealth.tsx), and nothing gave it a
+   face: it was the browser's own, grey by the COMPUTER's light or dark setting, under the theme's
+   ink (3.09:1 in the light theme on a dark computer, 1.02:1 the other way). The theme draws it now,
+   a chip with a border, in the box the browser's took (a 2px border over 1px/6px of padding). The
+   state stays on the dot. NativeControls.contrast.test.tsx holds it. */
+.setup-health .health-item-link {
+  padding: 2px 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.setup-health .health-item-link:hover {
+  border-color: var(--accent);
 }
 .setup-health .health-dot {
   width: 8px;

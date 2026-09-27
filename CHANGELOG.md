@@ -243,6 +243,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cancel and Drop, and the Remote page's Refresh, retry and SSTV Save keys took the colour of
   their words from your computer's light or dark setting, and could be invisible when it differed
   from Nexus's theme. They now use the theme's text colour, like the other keys.
+- **Three more buttons are readable in both themes.** The status chips at the top of Settings ▸
+  Radio ("Rig responding", "RX audio …"), the Spot button in Operate's call roster and the ×
+  that removes an SSTV text overlay were drawn as your computer's own grey buttons. Their words
+  could be hard to read, and the roster's Spot and the overlay × were hard to read in the dark
+  theme even when your computer was set to dark too. Each now has a border and a background
+  from Nexus's theme and stays the same size. A Spot button with no station selected now dims.
 - **The SSTV picture viewer no longer misses an arrow key pressed as it opens.** On a busy
   computer, a ← or → pressed the moment the pictures appeared could be ignored, because the keys
   were connected to the pictures a moment after they were drawn. They are now connected as the
