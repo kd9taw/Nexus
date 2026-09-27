@@ -65,6 +65,11 @@ vi.mock('./LogEntry', () => ({
   ),
 }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
+// The two boards Phone hosts as feeds (#345). Stubbed like every other pane's content: this
+// suite asserts WHERE they sit and that tier flips keep them, PhoneCockpit.boards.test.tsx what
+// they show.
+vi.mock('./SpotsPanel', () => ({ SpotsPanel: () => <div data-testid="spots-stub" /> }))
+vi.mock('./NeededPanel', () => ({ NeededPanel: () => <div data-testid="needed-stub" /> }))
 
 /** The observed element's callback, so a test can fire a resize the way the browser
  *  does (the useRegionCols.test.tsx harness). */
@@ -526,6 +531,124 @@ describe('PhoneCockpit pane-grid shell', () => {
     act(() => fire!())
     await frame()
     expect(region2.getAttribute('data-cols')).toBe('2')
+  })
+})
+
+// ── SPOTS AND NEEDED (#345): two FEEDS where the empty real estate is ────────────────────
+//
+// They are fill panes (a list stretches; a strip does not) and they go below the strips, where
+// the surplus the tester reported is: both at the foot of the LEADING column at tiers 1 and 2,
+// and at tier 3 Spots there and Needed at the foot of the middle column (measured in Chrome: in
+// one column at 1920×1080 Needed sat below the fold while the middle column stood empty). The
+// log and the keyer keep their columns and their places in them, so the keyed-column rule above
+// is untouched — and it is re-run here WITH the feeds shown, because a new child in the keyer's
+// own column is exactly how a sibling's position (and so its fiber) could move.
+describe('PhoneCockpit Spots and Needed feeds', () => {
+  const wiring = {
+    spotsBoard: { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} },
+    neededBoard: { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} },
+  }
+  const withFeeds = (panels = fakePanels()) => (
+    <PhoneCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} {...wiring} />
+  )
+  const framesIn = (col: Element) =>
+    [...col.querySelectorAll(':scope > .pane-frame')].map((f) => (f as HTMLElement).dataset.pane)
+  async function tier(region: Element, width: number) {
+    stubWidth(region, width)
+    act(() => fire!())
+    await frame()
+  }
+
+  it('close the leading column at tiers 1 and 2; at tier 3 Spots leads and Needed takes the middle', async () => {
+    render(withFeeds())
+    const region = document.querySelector('.cockpit-panes')!
+    for (const [width, cols] of [[0, '1'], [1200, '2']] as const) {
+      if (width) await tier(region, width)
+      expect(region.getAttribute('data-cols')).toBe(cols)
+      const lead = region.querySelector(':scope > .cockpit-col')!
+      expect(framesIn(lead).slice(0, 2), `tier ${cols}: band + keyer no longer lead`).toEqual(['bandActivity', 'voiceKeyer'])
+      expect(framesIn(lead).slice(-2), `tier ${cols}: the feeds left the leading column`).toEqual(['spots', 'needed'])
+      const log = region.querySelector(':scope > .cockpit-col:last-child')!
+      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log'])
+    }
+    await tier(region, 1800)
+    expect(region.getAttribute('data-cols')).toBe('3')
+    const cols3 = region.querySelectorAll(':scope > .cockpit-col')
+    expect(framesIn(cols3[0])).toEqual(['bandActivity', 'voiceKeyer', 'spots'])
+    expect(framesIn(cols3[1])).toEqual(['receiver', 'transmitter', 'needed'])
+    expect(framesIn(cols3[2])).toEqual(['log'])
+    for (const id of ['spots', 'needed']) {
+      const f = document.querySelector(`[data-pane="${id}"]`) as HTMLElement
+      expect(f.dataset.fit, `${id} is a content strip — a list must be able to use the surplus`).toBe('fill')
+    }
+  })
+
+  // Needed is not on these lists: at tier 3 it changes column, as the strips do, and remounts —
+  // its filters are stored, so what it loses is its sort order and scroll. Spots does not move.
+  it('a 2↔3 flip with both feeds shown keeps the log form, the keyer AND Spots mounted', async () => {
+    render(withFeeds())
+    const region = document.querySelector('.cockpit-panes')!
+    await tier(region, 1200)
+    expect(region.getAttribute('data-cols')).toBe('2')
+    const nodes = ['log-stub', 'vk-stub', 'spots-stub'].map((id) => [id, document.querySelector(`[data-testid="${id}"]`)!] as const)
+    for (const width of [1800, 1200, 1800]) {
+      await tier(region, width)
+      for (const [id, n0] of nodes) {
+        expect(document.querySelector(`[data-testid="${id}"]`)!.isSameNode(n0), `${id} remounted on a flip to ${width}px`).toBe(true)
+      }
+    }
+  })
+
+  it('first measurement (1→3 in one pass) with the feeds shown remounts neither the log, the keyer nor Spots', async () => {
+    render(withFeeds())
+    const nodes = ['log-stub', 'vk-stub', 'spots-stub'].map((id) => [id, document.querySelector(`[data-testid="${id}"]`)!] as const)
+    await tier(document.querySelector('.cockpit-panes')!, 1800)
+    for (const [id, n0] of nodes) {
+      expect(document.querySelector(`[data-testid="${id}"]`)!.isSameNode(n0), `${id} remounted on entry`).toBe(true)
+    }
+  })
+
+  it('ticking a feed on or off never remounts the log form or the keyer', async () => {
+    const r = render(withFeeds(fakePanels(['spots', 'needed'])))
+    const region = document.querySelector('.cockpit-panes')!
+    await tier(region, 1800)
+    const log0 = document.querySelector('[data-testid="log-stub"]')!
+    const vk0 = document.querySelector('[data-testid="vk-stub"]')!
+    for (const removed of [['needed'], [], ['spots'], ['spots', 'needed']] as PhonePanelId[][]) {
+      r.rerender(withFeeds(fakePanels(removed)))
+      await frame()
+      expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), `log remounted at {${removed}}`).toBe(true)
+      expect(document.querySelector('[data-testid="vk-stub"]')!.isSameNode(vk0), `keyer remounted at {${removed}}`).toBe(true)
+    }
+  })
+
+  it('the feeds alone hold their tracks, and no track is ever left empty', async () => {
+    // Everything else unticked: at tier 3 Spots holds the leading track and Needed the middle one,
+    // so an ultrawide still gets three — none of them empty (the "empty black" rule counts them).
+    const r = render(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter'])))
+    const region = document.querySelector('.cockpit-panes')!
+    await tier(region, 1800)
+    expect(region.getAttribute('data-cols')).toBe('3')
+    let cols = region.querySelectorAll(':scope > .cockpit-col')
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log']])
+    // Spots alone as well: nothing for a middle track, so an ultrawide stays at two.
+    r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'needed'])))
+    await frame()
+    expect(region.getAttribute('data-cols')).toBe('2')
+    cols = region.querySelectorAll(':scope > .cockpit-col')
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['log']])
+    // …and Needed alone, with nothing in the leading track at tier 3: two, Needed leading.
+    r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'spots'])))
+    await frame()
+    expect(region.getAttribute('data-cols')).toBe('2')
+    cols = region.querySelectorAll(':scope > .cockpit-col')
+    expect([...cols].map(framesIn)).toEqual([['needed'], ['log']])
+  })
+
+  it('without the board wiring (no host to feed them) neither pane renders, ticked or not', () => {
+    render(<PhoneCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} panels={fakePanels()} />)
+    expect(document.querySelector('[data-pane="spots"]')).toBeNull()
+    expect(document.querySelector('[data-pane="needed"]')).toBeNull()
   })
 })
 

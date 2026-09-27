@@ -16171,6 +16171,79 @@ button.cq-skiptx1.on {
 .sp-grid .np-row {
   grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
 }
+/* ── THE TWO BOARDS AS PHONE PANES (#345) ─────────────────────────────────────────────────
+   The Spots and Needed boards render inside a CockpitPaneFrame on the Phone cockpit, as fill
+   panes. This is the content half of that, in the sanctioned place (`.pane-body > .cw-decode`
+   is the precedent): `.np-pane` is Phone's wrapper, `.np-board` the board's own root when it is
+   hosted as a pane (SpotsPane / NeededPane) — never `.layout.single.needed-panel`, which is
+   the VIEW's shell and sizes a view.
+
+   1. FILL, with the board's GRID as the one scroller. At the bounded tiers `height: 100%`
+      resolves against the body's definite height, and each level below is a column flex whose
+      scroller has a ZERO basis, so the head and the filter bar keep their height and the rows
+      scroll under the sticky header. A PERCENTAGE basis (the grid's own `flex: 1`) would not
+      do: against an indefinite box it resolves to CONTENT height, which in the stacking flow
+      is every row of the feed in one column above the log.
+   2. THE FLOOR IS ONLY FOR THE STACKING FLOW (`--stacked`, set by the host while its region
+      stacks). There the body is content height, `height: 100%` computes to auto, and without
+      a floor the zero-basis grid would get no rows at all — an invisible list. With one, the
+      pane is the head and a handful of rows with the list scrolling inside, rather than the
+      whole feed ahead of the log. At the bounded tiers there is none, deliberately: the frame
+      already floors at the column's fill minimum, and a larger floor inside it would overflow
+      a squeezed pane into a second, nested scroller. `.pane-body` is `overflow: auto`, so
+      either way nothing is clipped (the design3 §3 permitted case). */
+.pane-body > .np-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  height: 100%;
+}
+.pane-body > .np-pane--stacked {
+  min-height: 16em;
+}
+.np-board {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.np-board > .np-grid {
+  flex: 1 1 0;
+}
+/* 3. THE COLUMNS, NARROWED FOR A PANE. The view's templates floor their columns at about
+   700 px, sized for a full-width board. As panes the boards get far less, measured in Chrome:
+   the leading column is ~640 CSS px at the 1024×768 floor, and the middle column that holds
+   Needed at the widest tier is 446 px at 1920×1080 — so on the view's templates both would
+   scroll sideways. The same columns in the same order, with smaller floors, and the free-text
+   columns (entity, spotter, comment, why) allowed to shrink and ellipsize — they already carry
+   `overflow: hidden`. Every column that holds text can give: a need column capped at a fixed
+   max (the view's) is paid its content before any `fr` column gets a pixel, which at 446 px
+   crushed Entity to nothing and pushed the row out sideways. And Needed drops its Zone column
+   as a pane: a zone need is already said by the row's chip and headline, and the 36 px it frees
+   is what lets Entity and Why read at all in that column. */
+.np-board .np-row {
+  grid-template-columns: minmax(48px, 0.8fr) minmax(60px, 1fr) minmax(0, 1fr) 36px 50px 52px minmax(0, 1.4fr);
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+}
+.np-board .np-zone,
+.np-board .np-th[data-col='zone'] {
+  display: none;
+}
+/* A heading keeps to one line and to its own column: in a narrow pane "AGE ▲" wrapped the
+   header row onto two lines (a row of the list, in a pane that holds a few), and "ENTITY" ran on
+   into the BAND heading beside it. */
+.np-board .np-th,
+.np-board .np-th-static {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-board .sp-grid .np-row {
+  grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr);
+}
 .sp-state {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;

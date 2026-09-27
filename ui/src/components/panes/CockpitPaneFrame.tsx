@@ -25,7 +25,7 @@
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The pane's own NAME
 // arrives from the cockpit and is interpolated as data; the two head buttons' words are here.
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode, Ref } from 'react'
 import { t } from '../../i18n'
 import { PaneCloseButton } from './PaneCloseButton'
 
@@ -35,6 +35,8 @@ export function CockpitPaneFrame({
   children,
   fit,
   weight,
+  share,
+  paneRef,
   onPopOut,
   onRemove,
   hideNote,
@@ -65,6 +67,14 @@ export function CockpitPaneFrame({
   fit?: 'content'
   /** Fill share among fill siblings, default 1 (CW gives DECODE 3). Ignored with fit. */
   weight?: number
+  /** The OPERATOR'S share for a fill pane that a SplitterSeam splits (the panel record's
+   *  `share`) — `weight`, carried as `--pane-share` on the frame itself so the seam can repaint
+   *  it live mid-drag, and so the record's value (React's) is what stands after a release, a
+   *  Reset or an Undo. Still a typed number from the host, never a size the pane declares.
+   *  Omitted ⇒ `weight` alone, inline, exactly as before. Ignored with fit. */
+  share?: number
+  /** The frame's own box, for a SplitterSeam to measure and repaint. Omitted ⇒ no ref. */
+  paneRef?: Ref<HTMLElement>
   /** Tear this pane off into its own window (open_panel_window). Omitted ⇒ no button. */
   onPopOut?: () => void
   /** Hide this pane (panelState 'removed'). Omitted ⇒ the pane cannot be removed — which
@@ -81,6 +91,7 @@ export function CockpitPaneFrame({
   return (
     <section
       className="pane-frame"
+      ref={paneRef}
       data-pane={paneId}
       data-fit={fit ?? 'fill'}
       aria-label={title}
@@ -89,7 +100,13 @@ export function CockpitPaneFrame({
       style={
         fit === 'content'
           ? { flex: '0 0 auto' }
-          : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 'var(--cockpit-fill-min, 0)' }
+          : share != null
+            ? ({
+                '--pane-share': share,
+                flex: 'var(--cockpit-pane-flex, var(--pane-share) 1 0)',
+                minHeight: 'var(--cockpit-fill-min, 0)',
+              } as CSSProperties)
+            : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 'var(--cockpit-fill-min, 0)' }
       }
     >
       <header className="pane-head">

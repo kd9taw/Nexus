@@ -73,6 +73,10 @@ export interface PanelHostSpec<P extends string> {
    *  (Phone's voiceKeyer). RTTY's `stream` hosts a stop control but its hide ends nothing —
    *  unmounting it calls no wire — so it correctly carries neither. */
   readonly endsOnHide?: Partial<Record<P, string | undefined>>
+  /** The panes this layout SHIPS HIDDEN — pass the vocabulary's own `defaultRemoved`, never a
+   *  copy of it. Their unticked entries are the stock layout, not something the operator hid, so
+   *  the ⊞ button leaves them out of its "n hidden" (PanelsMenuItem `shipsHidden`). */
+  readonly shipsHidden?: readonly P[]
 }
 
 export interface PanelHost<P extends string> {
@@ -93,6 +97,7 @@ export interface PanelHost<P extends string> {
     label: string
     state: PanelState
     note?: string
+    shipsHidden?: boolean
   }>
   /** THE PANE'S OWN ✕ — the props that make a pane header's close button do EXACTLY what
    *  unticking the same entry in ⊞ Panels does: the same `setPanelState(id, 'removed')`,
@@ -139,6 +144,7 @@ export function panelHost<P extends string>(
       // A consequence outranks an availability reason: a pane that is empty right now AND
       // ends something on its way out must say the second — the operator can act on it.
       note: spec.endsOnHide?.[id] ?? spec.notes?.[id],
+      shipsHidden: spec.shipsHidden?.includes(id),
     })),
     closeProps: (id) =>
       (spec.menu as readonly string[]).includes(id)

@@ -2807,6 +2807,47 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       panels={cwPanels}
     />
   )
+  // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below and by
+  // the Phone cockpit's Spots and Needed panes (#345) — so a pane can never be wired differently
+  // from its view, and working a row from a pane is the view's own act.
+  const spotsBoard = {
+    bandPlan,
+    selectedCall: activePeer,
+    myGrid: snap.mygrid,
+    onSelect: handleSelect,
+    onWork: handleWorkSpot,
+    canWork: remote ? canRemoteWorkSpot : undefined,
+    // The BOARD's feed (band scopes honoured, mode-feature neutral), because the panel asks
+    // it exactly what the Needed board would say: is this station still needed on the band
+    // and mode it is spotted on? If so, Hide worked leaves it alone.
+    needAlerts: boardAlerts,
+  }
+  const neededBoard = {
+    // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
+    // so a disabled CW/Phone feature no longer hides those needs here — but STILL
+    // scoped by band: `boardNeeds` is that exact half, and it is a named function so
+    // the scopes cannot be dropped again by swapping this prop.
+    alerts: boardAlerts,
+    bandPlan,
+    selectedCall: activePeer,
+    myGrid: snap.mygrid,
+    onQsy: (a: NeedAlert) => handleQsy(a.band, a.freqMhz ?? undefined),
+    onSelect: handleSelect,
+    onWork: handleWorkNeeded,
+    canWork: remote ? canRemoteWork : undefined,
+    onPoint:
+      (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
+        ? handlePointAntenna
+        : undefined,
+    onOpenSettings: openSettingsAt,
+    phoneSource: feedHealth
+      ? {
+          status: feedHealth.phoneCluster,
+          host: feedHealth.phoneClusterHost,
+          spotsSeen: feedHealth.phoneSpotsSeen,
+        }
+      : null,
+  }
   const phoneWorkspace = (
     <PhoneCockpit
       active={!remote || (effectiveView === 'phone' && !remote.stale)}
@@ -2827,6 +2868,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
       onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
       onOpenSettings={openSettingsAt}
+      spotsBoard={spotsBoard}
+      neededBoard={neededBoard}
     />
   )
 
@@ -2911,54 +2954,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       break
     case 'needed':
       workspace = (
-        <NeededPanel
-          // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
-          // so a disabled CW/Phone feature no longer hides those needs here — but STILL
-          // scoped by band: `boardNeeds` is that exact half, and it is a named function so
-          // the scopes cannot be dropped again by swapping this prop.
-          alerts={boardAlerts}
-          bandPlan={bandPlan}
-          selectedCall={activePeer}
-          myGrid={snap.mygrid}
-          onQsy={(a) => handleQsy(a.band, a.freqMhz ?? undefined)}
-          onSelect={handleSelect}
-          onWork={handleWorkNeeded}
-          canWork={remote ? canRemoteWork : undefined}
-          onPoint={
-              (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
-                ? handlePointAntenna
-                : undefined
-            }
-          onPopOut={remote ? undefined : () => void openPanelWindow('needed')}
-          onOpenSettings={openSettingsAt}
-          phoneSource={
-            feedHealth
-              ? {
-                  status: feedHealth.phoneCluster,
-                  host: feedHealth.phoneClusterHost,
-                  spotsSeen: feedHealth.phoneSpotsSeen,
-                }
-              : null
-          }
-        />
+        <NeededPanel {...neededBoard} onPopOut={remote ? undefined : () => void openPanelWindow('needed')} />
       )
       break
     case 'spots':
-      workspace = (
-        <SpotsPanel
-          spots={allSpots}
-          bandPlan={bandPlan}
-          selectedCall={activePeer}
-          myGrid={snap.mygrid}
-          onSelect={handleSelect}
-          onWork={handleWorkSpot}
-          canWork={remote ? canRemoteWorkSpot : undefined}
-          // The BOARD's feed (band scopes honoured, mode-feature neutral), because the panel asks
-          // it exactly what the Needed board would say: is this station still needed on the band
-          // and mode it is spotted on? If so, Hide worked leaves it alone.
-          needAlerts={boardAlerts}
-        />
-      )
+      workspace = <SpotsPanel spots={allSpots} {...spotsBoard} />
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).

@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,127 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,133 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -95,8 +95,8 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 309 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 227 | The rig itself, and the radio list in Settings. | |
+| band | 310 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| radio | 228 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 151 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 130 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
@@ -115,8 +115,8 @@ word in, and use only that word in the CSV.
 | power | 52 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 49 | Both noun and verb. | |
-| spot / spots | 31 / 46 | A cluster or RBN spot. Both noun and verb. | |
-| needed | 46 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
+| spot / spots | 32 / 49 | A cluster or RBN spot. Both noun and verb. | |
+| needed | 50 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
 | import / export | 45 / 42 | ADIF import and export. | |
 | upload | 61 | Sending the log to LoTW, QRZ, eQSL, ClubLog. | |
 | satellite | 41 | | |

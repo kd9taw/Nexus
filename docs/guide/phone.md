@@ -58,6 +58,18 @@ the box, or a consequence to unticking it — the entry says so in a line under 
   leaving the Phone screen, Nexus tells you what it ended: the over it cut short,
   or the recording it discarded. Nothing else changes: PTT, Tune and Stop TX are
   not panels and have no entry, so no layout you save can put them out of reach.
+- **Spots** and **Needed** are the [Spots](spots.md) and [Needed](needed-dx.md)
+  boards as panes of this screen, and they start unticked. Tick one and it takes
+  empty space below the strips: on a wide window Spots goes under Band Activity and
+  the keyer and Needed under Receiver and Transmitter; on a narrower one both go at
+  the bottom of the control column, with a divider between them that you drag to
+  share the height. Spots opens on the voice spots on the
+  band your radio is on and moves with the radio when you change band. Its Filter
+  chips widen it to other modes and bands, and unticking your own band's chip stops
+  it following. Needed keeps the board's usual filters. Each pane keeps its own
+  filters, apart from the Spots and Needed screens'. A click on a row works the
+  station exactly as it does on those screens, and **Reset layout** unticks both
+  again. Closing either ends nothing.
 
 The line explains the screen; the tick is still yours. Every box in the menu can
 be ticked and unticked whenever you like, and what you choose applies the moment
@@ -74,9 +86,11 @@ last change** and **Reset layout** stay reachable.
 RX-DSP strips share the leading column, and none of them can shrink. When the
 stack stands taller than the space it has — a small window, or a large UI zoom —
 that column scrolls, so the NR slider, the AGC chips, the DSP toggles and the
-keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
-**Stop TX** and **Tune** are not in the pane region at all, so nothing you do in
-⊞ Panels and no window size moves them.
+keyer's F-keys are always reachable rather than rendered past the edge. Spots and
+Needed, when ticked, come after the strips and take whatever height they leave,
+which is where a tall window used to have empty space. **PTT**, **Stop TX**
+and **Tune** are not in the pane region at all, so nothing you do in ⊞ Panels and
+no window size moves them.
 
 <!-- TODO: capture screenshot — the bandscope with the Full / Voice / Low / High span chips -->
 

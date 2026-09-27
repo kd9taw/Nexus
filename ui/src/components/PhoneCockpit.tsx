@@ -19,7 +19,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
 import { useEffect, useState, useRef } from 'react'
-import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
+import { PHONE_PANEL_IDS, PHONE_PANELS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
@@ -33,6 +33,9 @@ import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
+import { SplitterSeam } from './SplitterSeam'
+import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
+import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -206,6 +209,12 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
+   *  them — so working a row from the Spots pane is the view's own act. `spots` above is the
+   *  feed. Absent ⇒ there is no Spots pane to show, ticked or not. */
+  spotsBoard?: Omit<SpotsPanelProps, 'spots' | 'pane'>
+  /** The Needed board exactly as App wires the Needed VIEW. Absent ⇒ no Needed pane. */
+  neededBoard?: Omit<NeededPanelProps, 'pane' | 'onPopOut'>
 }
 
 /**
@@ -235,7 +244,29 @@ const phonePanelLabels = (): Record<PhonePanelId, string> => ({
   transmitter: t('phone.panel.transmitter'),
   bandActivity: t('phone.panel.bandActivity'),
   voiceKeyer: t('phone.panel.voiceKeyer'),
+  spots: t('phone.panel.spots'),
+  needed: t('phone.panel.needed'),
 })
+
+/** THE SPOTS PANE'S OWN VIEW OF THE BOARD (#345, the operator's pick: "Phone spots, this band —
+ *  SSB/AM/FM spots on the band you're on, like a phone operator's band map").
+ *
+ *  ⭐ `Phone` IS WHAT A VOICE SPOT CARRIES, read off the data rather than guessed. A spot's `mode`
+ *  is the backend's frequency-derived CLASS (`propagation::classify_spot_mode`: CW | Phone |
+ *  Digital, from the band plan's segments), and `submode` is only ever the token an RBN SKIMMER
+ *  put on the wire (`cluster.rs::skimmer_mode`: CW, RTTY, FT8, FT4, PSK…) — no spot carries SSB,
+ *  AM or FM, because no skimmer decodes a voice. The board filters on `submode ?? mode`, so this
+ *  keeps a spot in a phone segment AND drops a skimmer's CW decode sitting in one (a CW signal
+ *  is not a voice station, whatever segment it is in). Known edge, the backend's own: VHF/UHF FM
+ *  (146.52 simplex, repeaters) classes as Digital by design (`vhf_segment`), so it is not here
+ *  until its chip is ticked.
+ *
+ *  `scope` names this pane's copy of the board's session filters (`nexus.spots.<key>.phone`). */
+const PHONE_SPOTS_SCOPE = 'phone'
+const PHONE_SPOT_MODES: readonly string[] = ['Phone']
+/** The Needed pane's filter record — per surface, like the board's own `neededFilters`, and
+ *  never that one: a chip here and a chip on the Needed view must not move each other. */
+const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'
 
 /** The one ⊞ entry whose tick has consequences beyond the pane going away, so the entry
  *  carries them BEFORE the tick rather than apologising after. Hiding the keyer unmounts
@@ -271,9 +302,11 @@ export const VOICE_KEYER_STOPS_ON_HIDE =
  *  first; so does this.
  *
  *  ⊞ RESET LAYOUT DOES NOT REACH IT, and three places used to say it did. `reset` applies
- *  `emptyPanelLayout()` and `stateOf` reads an absent state as 'docked', so Reset can only
- *  ever MOUNT the keyer — it is Undo that is the second hide path, and it is the one that
- *  needed covering.
+ *  `emptyPanelLayout()`, which puts every pane at its vocabulary's default, and the keyer's
+ *  default is 'docked', so Reset can only ever MOUNT the keyer — it is Undo that is the second
+ *  hide path, and it is the one that needed covering. (Reset DOES hide Spots and Needed, the
+ *  two panes Phone ships hidden; their hides end nothing, which is what lets them ship that
+ *  way — `defaultRemoved` in features/panelState.ts.)
  *
  *  Hand-paired with `voiceKeyer` here rather than generalised through panelHost: there is
  *  exactly one pane in the app whose hide ends anything. The PAIRING is what is computed —
@@ -527,7 +560,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
+export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
@@ -546,6 +579,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const [sendScopeRef] = useState(() => latestOnly((tenths: number) => setScopeRef(tenths), scopeFailed))
   const [sendFlexRef] = useState(() => latestOnly((dbm: number) => setFlexPanRef(dbm), scopeFailed))
   const spotsRead = useRemoteCollection('spots')
+  const needsRead = useRemoteCollection('needs')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -1245,6 +1279,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         // than `notes` so the pane's own ✕ carries the same sentence the ⊞ entry prints —
         // one wording, two doors (panelHost).
         endsOnHide: { voiceKeyer: VOICE_KEYER_STOPS_ON_HIDE },
+        // Spots and Needed ship unticked: the stock ⊞ button must not read "2 hidden" (#345).
+        shipsHidden: PHONE_PANELS.defaultRemoved,
       })
     : null
   const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
@@ -1263,22 +1299,32 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const hasReceiverPane = shown('receiver')
   const hasTransmitterPane = shown('transmitter')
   const auxPresent = hasRigScopePane || hasReceiverPane || hasTransmitterPane
+  // THE TWO FEEDS (#345): the Spots and Needed boards. Each needs its board's wiring from the
+  // host as well as the tick — Band Activity's `onWorkSpot` rule — and ships unticked
+  // (PHONE_PANELS.defaultRemoved), so a stock Phone screen is exactly what it was.
+  const hasSpotsPane = spotsBoard != null && shown('spots')
+  const hasNeededPane = neededBoard != null && shown('needed')
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
   // column holding nothing beside the log, which is the "band of empty black" this region
   // was rebuilt to kill. So the column is not rendered when it is empty, and maxCols
   // collapses with it — a bounded tier (2/3, `overflow:hidden`) never gets a track with
-  // nothing in it.
-  const leadPresent = hasBandPane || hasKeyerPane || auxPresent
+  // nothing in it. Below the 3-col tier both feeds live in this column, so they count.
+  const leadPresent = hasBandPane || hasKeyerPane || auxPresent || hasSpotsPane || hasNeededPane
   // Three columns are band | keyer+rig/dsp | log, so the tier is only offered when the
   // leading column (Band Activity) AND at least one aux pane exist — otherwise a track
   // would sit empty, the operator's "band of empty black" rebuilt. This is the same
   // collapse panelHost ships as dataCols 'one'|'two' for Operate; it feeds maxCols and
-  // is NEVER stamped on the region (useRegionCols owns data-cols='1|2|3').
+  // is NEVER stamped on the region (useRegionCols owns data-cols='1|2|3'). At that tier
+  // Spots holds the leading track as Band Activity does and Needed the middle one as a
+  // strip does (see the feeds below), so each counts for its own track.
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
-    auxPresent && hasBandPane ? 3 : leadPresent ? 2 : 1,
+    (auxPresent || hasNeededPane) && (hasBandPane || hasSpotsPane) ? 3 : leadPresent ? 2 : 1,
   )
+  // The divider between the two feeds measures and repaints their frames (SplitterSeam).
+  const spotsFrameRef = useRef<HTMLElement>(null)
+  const neededFrameRef = useRef<HTMLElement>(null)
 
   // ── WHAT THIS RIG DRIVES, one boolean per control ────────────────────────────────────
   // Read through `reports`, so each one is "reporting now, or reported at some point this
@@ -1553,6 +1599,106 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       /> : <p className="dim" role="status">{t('remote.voiceKeyerUnavailable')}</p>}
     </CockpitPaneFrame>
   ) : null
+
+  // ── THE SPOTS AND NEEDED FEEDS (#345) ─────────────────────────────────────────────────
+  // The tester's report was empty real estate on the Phone screen, and the ask was the two
+  // boards beside the rig. Each is the REAL board (SpotsPanel / NeededPanel, the views' own
+  // component) with the handlers App gives its view, hosted as a FILL pane — a list stretches
+  // to what it is given, which is the role question's "yes" (a strip's is "no").
+  //
+  // Where they sit — each goes where the surplus is, below content-height strips, and the
+  // placement was chosen by MEASURING it (headless Chrome, the full app, #345's report):
+  //   · tiers 1 and 2: both at the foot of the LEADING column, the widest one the region has
+  //     (1fr beside a log capped at 40%) and the only one besides the log. The divider between
+  //     them is at tier 2.
+  //   · tier 3: Spots stays at the foot of the leading column (1.6fr — the nine-column table's
+  //     width), and Needed goes to the foot of the MIDDLE one, under the rig strips. With both in
+  //     the leading column, 1920×1080 left Needed entirely below that column's fold (it
+  //     scrolled 187 px) while the middle column stood 133 px empty; 2560×1440 gave each feed
+  //     207 px beside 529 px of empty middle column, which is the tester's report exactly.
+  // The log and the keyer keep their columns and their positions in them, so the keyed-column
+  // rule below is untouched, and Spots holds a FIXED slot after the strips' (see the region), so
+  // a 2↔3 flip does not remount it either. Needed changes column on that flip and remounts, the
+  // aux strips' accepted residual: its filters are stored, so what it loses is its sort order
+  // and its scroll.
+  //
+  // Hiding either ends nothing, so neither ⊞ entry carries a note; neither sends (a row QSYs
+  // through the view's own handler), and THE STOP LINE is not near them.
+  //
+  // On Remote the page shows what it already carries — the station's `spots` and `needs`
+  // collections, the same reads the two views make — and where one is not there, the existing
+  // status says so (Band Activity's pattern). No command, topic or permission is added.
+  //
+  // The wrapper that sizes a board inside its pane (styles.css, beside `.cw-decode`'s). At the
+  // bounded tiers it fills the pane body exactly and the board's rows scroll; in the stacking
+  // flow the body is content height, so it takes a readable floor there instead. With a feed
+  // shown the leading column is never empty, so `cols === 1` IS the stacking flow — and a floor
+  // at the bounded tiers would overflow a pane squeezed to its fill floor into a second scroller.
+  const feedWrap = `np-pane${cols === 1 ? ' np-pane--stacked' : ''}`
+  const spotsPane =
+    hasSpotsPane && spotsBoard ? (
+      <CockpitPaneFrame
+        title={t('phone.pane.spots.title')}
+        paneId="spots"
+        share={panels?.shareOf('spots')}
+        paneRef={spotsFrameRef}
+        {...closeProps('spots')}
+      >
+        <div className={feedWrap}>
+          {control || spotsRead?.phase === 'ready' ? (
+            <SpotsPanel
+              {...spotsBoard}
+              spots={spots ?? []}
+              pane={{ scope: PHONE_SPOTS_SCOPE, modes: PHONE_SPOT_MODES, band: snap.radio.band }}
+            />
+          ) : (
+            <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>
+          )}
+          {!control && <CollectionStatus name="spots" />}
+        </div>
+      </CockpitPaneFrame>
+    ) : null
+  const neededPane =
+    hasNeededPane && neededBoard ? (
+      <CockpitPaneFrame
+        title={t('phone.pane.needed.title')}
+        paneId="needed"
+        share={panels?.shareOf('needed')}
+        paneRef={neededFrameRef}
+        {...closeProps('needed')}
+      >
+        <div className={feedWrap}>
+          {(control || needsRead?.phase === 'ready') && (
+            <NeededPanel {...neededBoard} pane={{ filterKey: PHONE_NEEDED_FILTERS }} />
+          )}
+          {!control && <CollectionStatus name="needs" />}
+        </div>
+      </CockpitPaneFrame>
+    ) : null
+  // Below tier 3, the two together with the divider between them when both are shown: the
+  // operator's split, painted live and committed to the Phone record on release (the Operate side
+  // rail's seam). Only at tier 2, where they share a column in the bounded flow — at tier 3 they
+  // are in different columns, and with a feed shown `cols` is 1 only when the region measured
+  // narrow, where every pane is content height and a drag would rewrite a share nothing reads.
+  // Spots is the FIRST child of this fragment and of the tier-3 one alike, so it keeps its fiber.
+  const feedPanes =
+    cols === 3 ? (
+      <>{spotsPane}</>
+    ) : (
+      <>
+        {spotsPane}
+        {hasSpotsPane && hasNeededPane && cols === 2 && panels && (
+          <SplitterSeam
+            above={spotsFrameRef}
+            below={neededFrameRef}
+            varName="--pane-share"
+            onCommit={(av, bv) => panels.setShares({ spots: av, needed: bv })}
+            label={t('phone.seam.spotsNeeded.label')}
+          />
+        )}
+        {neededPane}
+      </>
+    )
 
   /* Aux panes — rig-scope / DSP / RX-DSP-levels control strips. In the 3-column tier
      they share the middle column with the voice keyer; below that they append to the
@@ -2415,15 +2561,27 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           TX-capable pane outranks the grouping aesthetic (fix-round D1, 2026-07-31;
           guarded by PhoneCockpit.structure.test.tsx). Aux strips still change columns
           on a 2↔3 flip and do remount — they hold no local state (their sliders bind
-          to cockpit state), so that residual is harmless and accepted. */}
+          to cockpit state), so that residual is harmless and accepted.
+
+          The Spots and Needed feeds (#345) close the leading column below tier 3. At tier 3
+          Spots stays there and Needed closes the middle column (the placement note above the
+          feeds says why). Spots is NOT that residual: the strips' slot stays in the leading
+          column as a `null`, so it keeps its position among the children and React carries its
+          fiber (and the board's scroll and focus) across the flip. Needed IS: it changes column,
+          like the strips, and its filters are stored. */}
       <div className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`} ref={panesRef}>
         {cols === 3 ? (
           <>
             <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
               {bandPane}
               {keyerPane}
+              {null}
+              {feedPanes}
             </div>
-            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux">{auxPanes}</div>
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux">
+              {auxPanes}
+              {neededPane}
+            </div>
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">{logPane}</div>
           </>
         ) : (
@@ -2433,6 +2591,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                 {bandPane}
                 {keyerPane}
                 {auxPanes}
+                {feedPanes}
               </div>
             )}
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">{logPane}</div>

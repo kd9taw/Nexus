@@ -50,6 +50,10 @@ export const PER_SURFACE = [
   // window's shape: a pop-out inherits it on first open and clamps it against its own box.
   'nexus.connect.railWidths',
   'nexus.decodes.filter',
+  // The Phone cockpit's Needed pane's own filter record (#345). The board's `neededFilters`
+  // under another name, for the same reason: what THIS board shows. Never that key — a chip in
+  // the pane and one on the Needed view must not move each other.
+  'nexus.phone.neededFilters',
   'nexus.decodes.hideB4',
   'nexus.decodes.hideBlocked',
   'nexus.decodes.hideConfirmed',
@@ -228,6 +232,12 @@ const DEDUPE = [
 const SESSION_SCOPED = [
   'nexus.spots.bands',
   'nexus.spots.filtersOpen',
+  // The band a PANE of the board follows, and the modes it opens on as an allow-list (#345: the
+  // Phone cockpit's Spots pane). Each is kept only by that pane; the view keeps `hiddenModes`
+  // instead and no follow switch at all. A pane keeps EVERY key here as its own copy,
+  // `<key>.<scope>` (`nexus.spots.bands.phone`): same store, same lifetime, same verdict.
+  'nexus.spots.followBand',
+  'nexus.spots.shownModes',
   'nexus.spots.hiddenModes',
   // Hide worked and the window it reaches back over. Session-lived like the filters around them:
   // on again next launch, which is the default the operator chose.
@@ -324,6 +334,9 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.cw.scope',
     'nexus.split.phone.scope',
   ],
+  // The Needed board's filter record: its own key as the view and the pop-out, or the key the
+  // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
+  'components/NeededPanel.tsx:key': ['neededFilters', 'nexus.phone.neededFilters'],
 }
 
 const routed = new Set<string>()
@@ -481,6 +494,13 @@ describe('call sites agree with the classification', () => {
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }
+    // The Needed board's `key`: its own when nobody passes one, the Phone pane's when it does.
+    const needed = readFileSync(join(SRC, 'components/NeededPanel.tsx'), 'utf8')
+    expect(needed).toContain("const FILTER_KEY = 'neededFilters'")
+    expect(needed).toContain('const filterKey = pane?.filterKey ?? FILTER_KEY')
+    const phone = readFileSync(join(SRC, 'components/PhoneCockpit.tsx'), 'utf8')
+    expect(phone).toContain("const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'")
+    expect(phone).toContain('pane={{ filterKey: PHONE_NEEDED_FILTERS }}')
   })
 
   it('scopes BOTH writers of a key written from two components', () => {
