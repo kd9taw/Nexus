@@ -20,12 +20,22 @@
 // ink, unless an author rule beats it (only `!important` can). It is measured against both
 // surfaces the chip is drawn on — its own `--bg` fill in the cockpit headers and the picker, and
 // the top bar's `--bg-elev` behind its transparent trigger.
+//
+// THE SAME FIX ON THE LOGBOOK GLOBE AND THE FIELD DAY BOARD (operator, 2026-09-27: "Same small fix
+// as the chip, same guard; no colour changes in dark or on the globe itself"). The globe's band
+// select and the Field Day band board letter a band name in the same palette. In the light theme
+// both now take the theme's ink and keep the band's colour on a marker: the select on its border,
+// and the board's name, which has no border, on an underline. In the dark theme both keep the
+// palette exactly, violets included (the lift above is the chip's alone), and the globe's own
+// drawing is not touched.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { FrequencyControl } from './FrequencyControl'
 import { BandPicker } from './BandPicker'
+import QsoGlobe from './QsoGlobe'
+import { FdBandOccupancy } from './ContestView'
 import { BAND_COLOR } from '../bandColors'
 import {
   BASE_MODES,
@@ -44,12 +54,22 @@ import {
   type Rgb,
   type Rule,
 } from '../cssCascade'
-import type { AppSnapshot } from '../types'
+import type { AppSnapshot, FdClubStatus } from '../types'
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   getLicensedBandPlan: vi.fn(async () => []),
 }))
+// jsdom has no WebGL. The globe never mounts here anyway (its box measures 0×0); the band select
+// in the HUD above it is what is measured, and the log answers with every band so it offers all.
+vi.mock('react-globe.gl', () => ({ default: () => null }))
+vi.mock('../features/logSource', async (importOriginal) => {
+  const { BAND_COLOR } = await import('../bandColors')
+  return {
+    ...(await importOriginal<typeof import('../features/logSource')>()),
+    useLogAnswer: (q: { kind: string } | null) => (q?.kind === 'bandsInLog' ? Object.keys(BAND_COLOR) : undefined),
+  }
+})
 
 beforeAll(() => {
   // Radix Popper observes its trigger with a ResizeObserver jsdom lacks.
@@ -79,6 +99,8 @@ interface Chip {
   ink: Rgb
   border: Rgb
 }
+/** A lettered band name, whatever carries its band's colour besides. */
+type Lettered = Pick<Chip, 'host' | 'band' | 'chain' | 'ink'>
 
 const rgbOfStyle = (v: string): Rgb => {
   const c = toRgb(v, [0, 0, 0])
@@ -132,7 +154,7 @@ function cascadeOf(rules: Rule[], mode: Mode, chain: El[]) {
 }
 
 /** The lettering a chip paints under `mode`: its inline ink, unless an author rule beats it. */
-function letteringOf(rules: Rule[], chip: Chip, mode: Mode): Rgb {
+function letteringOf(rules: Rule[], chip: Lettered, mode: Mode): Rgb {
   const { tokens, color: w } = cascadeOf(rules, mode, chip.chain)
   const important = !!w && w.rule.decls.some((d) => d.prop === 'color' && /!\s*important\s*$/.test(d.value))
   if (!important) return chip.ink
@@ -140,7 +162,7 @@ function letteringOf(rules: Rule[], chip: Chip, mode: Mode): Rgb {
 }
 
 /** Every chip × mode × surface where the band name reads under 4.5:1. */
-function unreadable(rules: Rule[], chips: Chip[], modes: readonly Mode[] = BASE_MODES): string[] {
+function unreadable(rules: Rule[], chips: Lettered[], modes: readonly Mode[] = BASE_MODES): string[] {
   const out: string[] = []
   for (const chip of chips) {
     for (const mode of modes) {
@@ -206,5 +228,125 @@ describe("the band chip's band name reads, in every theme", () => {
     expect(found.some((m) => m.startsWith('BandPicker 15m light-high:')), 'light-high 15m').toBe(true)
     expect(found.some((m) => m.startsWith('FrequencyControl 2200m dark:')), 'dark 2200m').toBe(true)
     expect(found.some((m) => m.startsWith('BandPicker 20m dark:')), 'dark 20m passes, so it is not reported').toBe(false)
+  })
+})
+
+// ── THE LOGBOOK GLOBE'S BAND SELECT AND THE FIELD DAY BAND BOARD (see the header) ──────────────────
+
+/** A band name on the globe's select or the board, and the inline colour of what carries its band
+ *  besides the lettering: the select's border, the board name's underline ('' when there is none). */
+interface Name extends Lettered {
+  marker: string
+}
+
+/** One live position per band that has worked somebody, so every band is busy and, one to a band
+ *  and one mode, none clashes. */
+const clubOn = (bands: string[], mode = 'CW'): FdClubStatus =>
+  ({
+    board: bands.map((band, i) => ({ posid: `p${i}`, posName: `tent ${i}`, band, mode, operator: 'W9AAA', qsos: 1, rate: 1, lastSeenSecs: 1 })),
+  }) as unknown as FdClubStatus
+
+/** The board's band-name cell for `band`: the grid cell whose text is the band. */
+function boardName(container: HTMLElement, band: string): HTMLElement {
+  const board = container.querySelector('[data-band-occupancy]')
+  expect(board, 'no Field Day band board rendered').not.toBeNull()
+  const cell = [...board!.children].find((e) => e.textContent?.trim() === band) as HTMLElement | undefined
+  expect(cell, `the board has no ${band} row`).toBeTruthy()
+  return cell!
+}
+
+function renderNames(): Name[] {
+  const out: Name[] = []
+  render(<QsoGlobe />)
+  const select = document.querySelector('select.qso-globe-band-pick') as HTMLSelectElement | null
+  expect(select, 'QsoGlobe: no band select rendered').not.toBeNull()
+  for (const band of BANDS) {
+    fireEvent.change(select!, { target: { value: band } })
+    expect(select!.value, `QsoGlobe does not offer ${band}`).toBe(band)
+    out.push({ host: 'QsoGlobe', band, chain: chainOf(select!), ink: rgbOfStyle(select!.style.color), marker: select!.style.borderColor })
+  }
+  cleanup()
+  // The board at both sizes: the dashboard's, and the torn-off Field Day window's `big` one.
+  for (const big of [false, true]) {
+    const r = render(<FdBandOccupancy club={clubOn(BANDS)} big={big} />)
+    for (const band of BANDS) {
+      const cell = boardName(r.container, band)
+      out.push({ host: big ? 'FdBandOccupancy(big)' : 'FdBandOccupancy', band, chain: chainOf(cell), ink: rgbOfStyle(cell.style.color), marker: cell.style.textDecorationColor })
+    }
+    cleanup()
+  }
+  return out
+}
+
+const underlineOf = (rules: Rule[], mode: Mode, chain: El[]) =>
+  winnerAt(rules, mode, chain, 'text-decoration', 'text-decoration-line')?.value ?? 'none'
+
+describe('the same band name on the Logbook globe and the Field Day board', () => {
+  // Rendered once the file's ResizeObserver stub is in: the globe measures its box on mount.
+  let names: Name[] = []
+  beforeAll(() => {
+    names = renderNames()
+  })
+  const light = BASE_MODES.filter((m) => baseTheme(m) === 'light')
+  const dark = BASE_MODES.filter((m) => baseTheme(m) === 'dark')
+  const onBoard = (n: Name) => n.host.startsWith('FdBandOccupancy')
+
+  it('renders a name for every band, on the globe select and both boards (the census cannot silently empty out)', () => {
+    expect(names).toHaveLength(BANDS.length * 3)
+  })
+
+  it('in the light theme every band name takes the theme text colour, and clears 4.5:1 on both surfaces', () => {
+    for (const n of names) {
+      for (const mode of light) {
+        const text = rgbOfStyle(expandWith(cascadeOf(RULES, mode, n.chain).tokens, 'var(--text)'))
+        expect(hex(letteringOf(RULES, n, mode)), `${n.host} ${n.band} ${mode}`).toBe(hex(text))
+      }
+    }
+    expect(unreadable(RULES, names, light)).toEqual([])
+  })
+
+  it("the band's colour stays on the select's border and the board name's underline, drawn in the light theme only", () => {
+    for (const n of names) expect(n.marker && hex(rgbOfStyle(n.marker)), `${n.host} ${n.band}`).toBe(BAND_COLOR[n.band])
+    for (const n of names.filter(onBoard)) {
+      for (const mode of BASE_MODES) {
+        expect(underlineOf(RULES, mode, n.chain), `${n.host} ${n.band} ${mode}`).toBe(baseTheme(mode) === 'light' ? 'underline' : 'none')
+      }
+    }
+  })
+
+  it('in the dark theme every band letters in its palette colour, byte for byte, the six violets included', () => {
+    for (const n of names) {
+      for (const mode of dark) expect(hex(letteringOf(RULES, n, mode)), `${n.host} ${n.band} ${mode}`).toBe(BAND_COLOR[n.band])
+    }
+  })
+
+  it("in the dark theme every band but the six violets clears 4.5:1 (the violets are the operator's call: no colour change in dark)", () => {
+    expect(unreadable(RULES, names.filter((n) => !VIOLETS.includes(n.band)), dark)).toEqual([])
+  })
+
+  it('a clash keeps its alarm ink and no underline in the light theme: the fix never paints over it', () => {
+    const r = render(<FdBandOccupancy club={clubOn(['20m', '20m'], 'DIG')} big />)
+    const cell = boardName(r.container, '20m')
+    expect(cell.nextElementSibling?.getAttribute('data-band-clash'), 'the fixture must clash').toBe('20m')
+    const chain = chainOf(cell)
+    // Control: a light rule written over every name on the board WOULD paint over the alarm, so
+    // the pass below is the rule's selector at work, not an assertion that cannot fail.
+    const overEveryName = RULES.map((rule) => (rule.selector.includes('[data-band-ink]') ? { ...rule, selector: rule.selector.replace('[data-band-ink]', 'span') } : rule))
+    for (const mode of light) {
+      const { tokens } = cascadeOf(RULES, mode, chain)
+      const alarm = { host: 'FdBandOccupancy(big)', band: '20m', chain, ink: rgbOfStyle(expandWith(tokens, cell.style.color)) }
+      expect(hex(alarm.ink), `${mode}: the clash is not in the alert ink`).toBe(hex(rgbOfStyle(expandWith(tokens, 'var(--alert-critical)'))))
+      expect(hex(letteringOf(RULES, alarm, mode)), mode).toBe(hex(alarm.ink))
+      expect(underlineOf(RULES, mode, chain), mode).toBe('none')
+      expect(hex(letteringOf(overEveryName, alarm, mode)), `${mode}: control`).not.toBe(hex(alarm.ink))
+    }
+  })
+
+  it('FIRES: without the light rule these names letter in the palette, and the light theme catches them', () => {
+    const noLightRule = RULES.filter((r) => !(r.selector.includes("[data-theme='light']") && /qso-globe-band-pick|data-band-ink/.test(r.selector)))
+    const found = unreadable(noLightRule, names, light)
+    expect(found.some((m) => m.startsWith('QsoGlobe 20m light:')), 'globe 20m light').toBe(true)
+    expect(found.some((m) => m.startsWith('FdBandOccupancy(big) 15m light-high:')), 'board 15m light-high').toBe(true)
+    expect(found.some((m) => m.startsWith('FdBandOccupancy 6m light-night:')), 'board 6m light-night').toBe(true)
   })
 })

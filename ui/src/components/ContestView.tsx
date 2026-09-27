@@ -894,9 +894,12 @@ function bandClashClasses(here: FdClubStatus['board']): string[] {
  * COLOUR carries the two readings this board is glanced at for. A busy band takes its own
  * `BAND_COLOR` — the same ink the map spots and the band picker use, so 20m looks like 20m
  * everywhere — while a free band stays dim and uncoloured, because the gap is what the eye is
- * hunting for. A band where two live positions share a mode class goes to the alert ink with a
- * ⛔ and the word CLASH: it is read from across a tent, so it has to be wrong at a glance, and
- * the word (not the colour) is what carries it to a colour-blind operator or a screen reader.
+ * hunting for. (In the light theme, where that palette is too pale to read as lettering, a busy
+ * band's name takes the theme's ink and keeps its colour on an underline: the band chip's
+ * light-theme fix, on a name with no border to carry it.) A band where two live positions share a
+ * mode class goes to the alert ink with a ⛔ and the word CLASH: it is read from across a tent, so
+ * it has to be wrong at a glance, and the word (not the colour) is what carries it to a
+ * colour-blind operator or a screen reader.
  */
 export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big?: boolean }) {
   const byBand = new Map<string, typeof club.board>()
@@ -927,10 +930,15 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
         const why = clash.length
           ? t('fieldDay.club.bands.clash.why', { band, mode: clash.join(' / ') })
           : undefined
+        // Lettered in its band's colour: busy and no clash. The light theme re-inks exactly these
+        // names and underlines them in that colour instead (styles.css, the band chip's rule), so
+        // the attribute is what keeps a clash's alarm ink out of its reach.
+        const bandInk = busy && clash.length === 0
         return (
           <Fragment key={band}>
             <span
               className="mono"
+              data-band-ink={bandInk ? '' : undefined}
               style={{
                 ...cell,
                 fontWeight: 800,
@@ -940,6 +948,7 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
                   : busy
                     ? bandColor(band)
                     : undefined,
+                textDecorationColor: bandInk ? bandColor(band) : undefined,
               }}
             >
               {band}

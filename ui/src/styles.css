@@ -9133,10 +9133,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    one, so here the band name takes the theme's ink and the band's colour stays on the border, the
    glow and the dot. `!important` because the band colour arrives as an inline style — the band's
    own — and nothing else can outrank it. BandChip.contrast.test.tsx measures every band, every
-   mode, in all three hosts. */
+   mode, in all three hosts.
+   The Logbook globe's band select and the Field Day band board letter the same palette and take
+   the same fix ("Same small fix as the chip"; the dark theme and the globe's drawing unchanged):
+   the select keeps its band on its border, and the board's name, which has no border, on an
+   underline in its band's colour (its inline text-decoration-color). The board marks only a name
+   lettered in its band's colour with `data-band-ink`, so a clash keeps its alarm ink. */
 [data-theme='light'] .band-menu-trigger,
-[data-theme='light'] .freq-control.full .freq-channel {
+[data-theme='light'] .freq-control.full .freq-channel,
+[data-theme='light'] .qso-globe-band-pick,
+[data-theme='light'] [data-band-occupancy] [data-band-ink] {
   color: var(--text) !important;
+}
+[data-theme='light'] [data-band-occupancy] [data-band-ink] {
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
 }
 .band-menu-value {
   min-width: 0;
@@ -10996,7 +11008,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   pointer-events: none;
 }
 /* Band picker on the QSO globe — grids are a per-band achievement (VUCC), so a 2m
-   chaser can view 2m squares on their own. Text takes the band's colour. */
+   chaser can view 2m squares on their own. Text takes the band's colour (in the light
+   theme the theme's ink, with the band on the border: the band chip's light rule). */
 .qso-globe-band-pick {
   font-size: 0.72rem;
   font-weight: 700;

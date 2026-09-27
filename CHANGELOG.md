@@ -213,6 +213,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   23cm are lettered in a slightly lighter violet on the chip, so each reads at least 4.5:1. Every
   other band looks exactly as before, and the map, the globes and the Field Day board keep their
   colours.
+- **Band names on the Logbook globe and the Field Day board are readable in the light theme.** The
+  band picker on the Logbook's globe and the band column of the Field Day band board spelled each
+  band in its own colour, as the band chip did, and it barely showed on a light background. In the
+  light theme the name is now in the normal text colour. The band's colour stays on the picker's
+  border, and on the board it moves to an underline beneath the band name. A clash on the board
+  keeps its red. The dark theme and the globe's dots look exactly as before.
 - **The SSTV picture viewer no longer misses an arrow key pressed as it opens.** On a busy
   computer, a ← or → pressed the moment the pictures appeared could be ignored, because the keys
   were connected to the pictures a moment after they were drawn. They are now connected as the
