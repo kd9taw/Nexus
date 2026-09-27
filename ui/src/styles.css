@@ -5232,6 +5232,9 @@ select optgroup {
 }
 .station-filter-tabs {
   display: flex;
+  /* Wraps for the reason `.od-filters` does: as a nowrap group the tabs are one atom, and the
+     last one ("Needed") was cut by the Stations panel's clip at the 1024×768 floor. */
+  flex-wrap: wrap;
   gap: 6px;
   flex: 0 1 auto;
   min-width: 0;
@@ -16005,14 +16008,15 @@ button.cq-skiptx1.on {
   /* Call comes first (people scan by callsign), then Calling — who they are working, the pair
      read together as "K2DEF → W1ABC" — then the Need column, the "why work this station" column
      carrying the need chips AND the rarity pill. Call is compact (callsigns are short; its
-     88px min still fits VE2OPR-length calls + the B4/L marks); Calling holds a bare callsign, so
+     124px min fits a six-character call + the B4/L marks + the ↗ QRZ link, measured — the old
+     88px predated the link and cut it off at the 1024×768 floor); Calling holds a bare callsign, so
      it needs no room for marks; Need is the WIDEST and flexible so it has room for all the chips
      + a 💎 ULTRA pill without clipping. Anything past the (roomy) Need cell is clipped by
      `.or-need` rather than bleeding into the next column. State is a fixed two letters. */
   /* The fixed tracks hold text (state, grid, distance, bearing, SNR, age), so they grow with
      Settings ▸ Workspace ▸ Text size (#215); at Normal each is exactly its px. */
   grid-template-columns:
-    minmax(calc(88px * var(--text-scale)), 1fr) minmax(calc(68px * var(--text-scale)), 0.8fr)
+    minmax(calc(124px * var(--text-scale)), 1fr) minmax(calc(68px * var(--text-scale)), 0.8fr)
     minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(50px * var(--text-scale)), 0.85fr)
     calc(40px * var(--text-scale)) calc(54px * var(--text-scale)) calc(56px * var(--text-scale))
     calc(48px * var(--text-scale)) calc(44px * var(--text-scale)) calc(48px * var(--text-scale));

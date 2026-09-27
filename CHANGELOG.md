@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A long callsign in the Logbook ends in "…" instead of being cut through its last letter.** The
   call column could not shorten a call the way the other columns shorten their text, so a call
   wider than the column was sliced off at the edge.
+- **The QRZ link (↗) beside a worked station in the Call Roster shows at 1024×768 again.** The
+  Call column was sized before the link joined it, so on a narrow window a worked station's B4
+  and LoTW marks pushed the ↗ out of the cell. The column is a little wider; on a wide window
+  nothing changes.
+- **The Stations filters in the Classic layout wrap instead of cutting off the last one.** On a
+  narrow window the Needed filter was cut off at the panel's edge; the filters now take a second
+  line when they need one.
 
 ### Corrections to 1.15.0
 

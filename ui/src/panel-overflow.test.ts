@@ -202,6 +202,22 @@ describe('Band Activity: the filter chips wrap instead of clipping in the rail',
   })
 })
 
+describe('Stations: the filter tabs wrap instead of clipping in the panel', () => {
+  // The same nowrap-atom mechanism as `.od-filters` above, in the Classic layout's Stations
+  // panel. `.station-filter-row` wraps, which only moves the tab GROUP to its own line; the
+  // group itself was one atom, so at the 1024×768 floor the last tab ("Needed") sat 11px past
+  // the panel's clip at Normal text, and 46–54px past it at Larger text with Touch (measured in
+  // Chrome, 2026-09-27) — a filter the operator could see only in part and at larger text not
+  // at all.
+  it('.station-filter-tabs wraps', () => {
+    expect(
+      winner('.station-filter-tabs', 'flex-wrap'),
+      '.station-filter-tabs has no flex-wrap: the four tabs do not fit a narrow Stations panel, ' +
+        'which clips overflow-x — the last tab is cut instead of moving to a second line.',
+    ).toBe('wrap')
+  })
+})
+
 describe('Phone Receiver: the attenuator chips wrap instead of clipping in the column', () => {
   // The same nowrap-atom mechanism as `.od-filters` above. `.ph-steps` draws the pads the
   // radio PUBLISHES, one chip each, and the IC-7610 publishes fifteen (3–45 dB) plus Off. In
