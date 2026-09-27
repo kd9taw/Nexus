@@ -121,13 +121,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The theme is three cards.** Light, Dark and System each show a line on their character:
   Light is a daylight panel with dark scopes and meters, Dark a dark panel with lit dials and
   meters, and System follows your computer.
-- **Changing a setting no longer holds up the radio.** A band pick, the Pwr slider, a TX offset,
-  a switch in Settings: every change used to make the loop that runs the radio wait while the
+- **Most settings changes no longer hold up the radio.** A band pick, the Pwr slider, a TX
+  offset, a switch in Settings: each used to make the loop that runs the radio wait while the
   settings file was written to disk, a few milliseconds on a fast drive and longer on a slow one
   or while an antivirus scanned the file. The file is now written in the background, always with
   the newest change, and Nexus writes the last one before it quits, restarts, reopens for
-  another radio or installs an update. What each setting does, and when it takes effect, is
-  unchanged.
+  another radio or installs an update. Some changes still save on the spot, because whether the
+  save worked decides the change: changes made from Remote, restoring a backup, the RTTY and PSK
+  macro editors and the satellite Doppler switch. What each setting does, and when it takes
+  effect, is unchanged.
 
 ### Fixed
 
