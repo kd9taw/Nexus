@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The top bar's plate no longer blinks. The pill takes the same room keyed or not, so nothing
   beside it, Stop TX included, moves when you key. The receive state looks as before, and the TX
   colour itself is unchanged.
+- **The light theme keeps its displays dark.** The frequency readout in the cockpit header, the
+  S-meters, the transmit meters (SWR, ALC, PO, COMP), the RX audio level meter, CW's zero-beat
+  bar, the waterfall's frequency scale and legend, the MSK144 Fast Graph and the small audio
+  spectrum (Settings and Connect) now stay dark in the light theme, like the waterfall itself. Everything around them
+  stays light: think of a light-coloured radio with dark display windows. The meter colours and
+  the readout's digits are the ones the dark theme uses, so a strong signal or a high SWR looks
+  the same whichever theme you run. In the dark theme they look as before. The waterfall's
+  **TX** and **RX** markers, and the RX line in PSK and the Mark line in RTTY, now take the
+  app's own TX and RX colours instead of colours of their own.
 
 ### Corrections to 1.15.0
 

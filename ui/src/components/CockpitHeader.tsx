@@ -265,8 +265,10 @@ export function CockpitHeader({
       <div className="ch-identity">{modeIndicator}<ModeEntry snap={snap} mode={remoteMode} workspace={remoteWorkspace} onSnap={onSnap} /></div>
 
       <div className="ch-freq">
+        {/* The VFO display is a well (styles.css DISPLAY WELLS): dark in both themes. Only the
+            readout — the band control, Tune and ATU beside it are controls and stay on the frame. */}
         <div
-          className="ch-readout"
+          className="ch-readout well"
           ref={readoutRef}
           title={
             digitTune

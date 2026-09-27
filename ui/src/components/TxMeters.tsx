@@ -274,7 +274,9 @@ export function TxMeters({
       {visible.map((r) => (
         <div key={r.key} className="ph-txmeter" title={r.title}>
           <span className="ph-txmeter-label">{r.label}</span>
-          <div className="ph-txmeter-track">
+          {/* A display well (styles.css DISPLAY WELLS), in all three hosts alike: the zone colours
+              above resolve to the dark theme's inks on a track that is dark in both themes. */}
+          <div className="ph-txmeter-track well">
             <div
               className="ph-txmeter-fill"
               style={{

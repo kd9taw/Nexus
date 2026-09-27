@@ -80,8 +80,10 @@ export function ZeroBeat({ targetHz, filterHz, active = true }: Props) {
       <span className="zb-lamp" aria-hidden="true" />
       {/* The bar is decoration for the number beside it — the reading itself is text, in the
           DOM, and a screen reader gets it there. Deliberately NOT an aria-live region: this
-          updates ten times a second and would narrate a new number every 100 ms. */}
-      <span className="zb-bar" aria-hidden="true">
+          updates ten times a second and would narrate a new number every 100 ms.
+          It is a display well (styles.css DISPLAY WELLS), one family with the S-meter: dark in
+          both themes, its needle in the dark theme's inks. */}
+      <span className="zb-bar well" aria-hidden="true">
         <span className="zb-centre" />
         {err !== null && <span className="zb-needle" style={{ left: `${pct}%` }} />}
       </span>

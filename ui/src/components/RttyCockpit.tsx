@@ -914,7 +914,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           rxOffsetHz={(rtty.markHz + rtty.spaceHz) / 2}
           txOffsetHz={0}
           cursors={[
-            { hz: rtty.markHz, color: '#3ddc8c', label: 'M' },
+            { hz: rtty.markHz, color: 'var(--rx)', label: 'M' },
             { hz: rtty.spaceHz, color: '#ffb347', label: 'S' },
           ]}
           hint={receiverControl ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}

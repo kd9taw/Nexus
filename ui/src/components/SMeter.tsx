@@ -90,7 +90,9 @@ export function SMeter({ radio }: SMeterProps) {
     >
       <div className="ph-txmeter">
         <span className="ph-txmeter-label">{PLATE_S}</span>
-        <div className="ph-smeter-track" data-testid="smeter-track">
+        {/* A display well (styles.css DISPLAY WELLS): the segments stay dark in both themes and
+            light in the dark theme's inks. The printed scale below stays on the frame. */}
+        <div className="ph-smeter-track well" data-testid="smeter-track">
           {Array.from({ length: SEGMENTS }, (_, i) => {
             // A segment lights when the reading reaches ITS point on the scale, so the last lit
             // segment IS the reading rather than the one after it.

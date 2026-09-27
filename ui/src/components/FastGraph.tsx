@@ -42,8 +42,8 @@ export function FastGraph({ periodS, decodes, theme }: Props) {
   periodRef.current = periodS
   const decodesRef = useRef(decodes)
   decodesRef.current = decodes
-  const themeRef = useRef(theme)
-  themeRef.current = theme
+  /** The current frame's painter, for a repaint that no new sample asked for. */
+  const redrawRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -82,7 +82,7 @@ export function FastGraph({ periodS, decodes, theme }: Props) {
       return Math.max(0, Math.min(1, (db - DB_FLOOR) / -DB_FLOOR))
     }
 
-    const drawPanel = (y0: number, h: number, pts: Array<[number, number]>, dim: boolean) => {
+    const drawPanel = (y0: number, h: number, pts: Array<[number, number]>, dim: boolean, grid: string) => {
       const period = periodRef.current
       ctx.strokeStyle = dim ? 'rgba(80,200,120,0.55)' : 'rgb(80,220,120)'
       ctx.lineWidth = Math.max(1, devH / 300)
@@ -99,7 +99,7 @@ export function FastGraph({ periodS, decodes, theme }: Props) {
       }
       if (started) ctx.stroke()
       // 1 s ticks along the panel base, the fastplot scale.
-      ctx.fillStyle = 'rgba(255,255,255,0.25)'
+      ctx.fillStyle = grid
       for (let s = 1; s < period; s++) {
         const x = Math.round((s / period) * devW)
         ctx.fillRect(x, y0 + h - Math.max(3, h * 0.06), 1, Math.max(3, h * 0.06))
@@ -108,14 +108,19 @@ export function FastGraph({ periodS, decodes, theme }: Props) {
 
     const draw = () => {
       if (devW <= 0 || devH <= 0) return
-      const dark = themeRef.current !== 'light'
-      ctx.fillStyle = dark ? '#0b0f14' : '#f2f5f8'
+      // A DARK DISPLAY IN BOTH THEMES (styles.css DISPLAY WELLS). The ground used to follow the
+      // theme (`#f2f5f8` in light), under a trace, ticks and decode marks drawn for a dark ground
+      // in every theme — white ticks on near-white. Read off this canvas, the MiniSpectrum
+      // pattern; both tokens are declared in both themes (styles-wells.test.ts).
+      const style = getComputedStyle(canvas)
+      const grid = style.getPropertyValue('--well-grid').trim()
+      ctx.fillStyle = style.getPropertyValue('--well-bg').trim()
       ctx.fillRect(0, 0, devW, devH)
       const half = Math.floor(devH / 2)
-      drawPanel(0, half - 1, cur, false)
-      drawPanel(half + 1, devH - half - 1, prev, true)
+      drawPanel(0, half - 1, cur, false, grid)
+      drawPanel(half + 1, devH - half - 1, prev, true, grid)
       // divider
-      ctx.fillStyle = 'rgba(128,128,128,0.4)'
+      ctx.fillStyle = grid
       ctx.fillRect(0, half - 1, devW, 1)
       // Decode markers on the CURRENT panel: a tick + callsign at each ping's T.
       const period = periodRef.current
@@ -157,17 +162,25 @@ export function FastGraph({ periodS, decodes, theme }: Props) {
       if (running) setTimeout(tick, POLL_MS)
     }
     void tick()
+    redrawRef.current = draw
 
     return () => {
       running = false
+      redrawRef.current = null
       ro.disconnect()
     }
     // run once; live props via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // A theme change repaints from the tokens at once. A quiet band brings no new sample, and
+  // without this the old ground would stay up until one did.
+  useEffect(() => {
+    redrawRef.current?.()
+  }, [theme])
+
   return (
-    <div className="fastgraph-wrap" style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div className="fastgraph-wrap well" style={{ position: 'relative', width: '100%', height: '100%' }}>
       <canvas
         ref={canvasRef}
         aria-label={t('fastGraph.aria')}

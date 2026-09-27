@@ -1321,7 +1321,9 @@ export function PhoneScope({
         {!hideSmeter && (
           <>
             <span className="ph-scope-smeter-label">S</span>
-            <div className="ph-scope-smeter-track">
+            {/* A display well (styles.css DISPLAY WELLS): the bar only — the strip around it
+                carries controls and stays on the frame. */}
+            <div className="ph-scope-smeter-track well">
               <div
                 className="ph-scope-smeter-fill"
                 style={{ width: sm ? `${Math.round(sm.frac * 100)}%` : '0%', background: smColor }}

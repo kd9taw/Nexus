@@ -93,6 +93,43 @@ function loadZoom(): number {
   return Number.isFinite(v) ? coerceZoomSpan(v) : 0
 }
 
+/** What the overlay paints with. */
+interface OverlayInks {
+  tx: string
+  rx: string
+  /** The axis strip's ground and its scale. */
+  ground: string
+  scale: string
+  /** A named cursor's colour: `var(--token)` resolves against the overlay, anything else is
+   *  already a colour (the canvas cannot read a var() itself). */
+  color: (value: string) => string
+}
+
+/** The overlay's inks, read off the OVERLAY CANVAS (the MiniSpectrum pattern). Read there and
+ *  not off <html>, because the waterfall's stage is a display well (styles.css DISPLAY WELLS):
+ *  the markers are drawn on the dark floor in either theme, so they take the dark theme's
+ *  `--tx`/`--rx`, which is what the well resolves them to. They used to be fixed colour
+ *  literals that no theme could reach (Waterfall.markers.test.tsx now sweeps for them). Every
+ *  token here is declared in both themes (styles-wells.test.ts), so a mounted overlay never
+ *  reads one empty. */
+function readOverlayInks(el: Element): OverlayInks {
+  const style = getComputedStyle(el)
+  const read = (name: string) => style.getPropertyValue(name).trim()
+  const named = new Map<string, string>()
+  return {
+    tx: read('--tx'),
+    rx: read('--rx'),
+    ground: read('--well-bg'),
+    scale: read('--well-ink'),
+    color: (value) => {
+      const m = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value.trim())
+      if (!m) return value
+      if (!named.has(m[1])) named.set(m[1], read(m[1]))
+      return named.get(m[1])!
+    },
+  }
+}
+
 interface Props {
   transmitting: boolean
   /** Receive audio offset (Hz) — the green marker (where we listen). */
@@ -121,7 +158,8 @@ interface Props {
   paneTitle?: string
   /** Named vertical cursors (Hz + color + short label) drawn IN PLACE OF the RX/TX
    * markers — e.g. RTTY mark/space. When set, the RX/TX marker block is skipped; the
-   * FT8 path is byte-identical when this is undefined. */
+   * FT8 path is byte-identical when this is undefined. A cursor that stands for a marker
+   * passes its token (`var(--rx)`), which resolves the way the markers' own do. */
   cursors?: { hz: number; color: string; label: string }[]
   /** Header hint text override (default: the left/right/Shift/Ctrl legend). */
   hint?: string
@@ -270,7 +308,9 @@ export function Waterfall({
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
-  const themeRef = useRef(theme)
+  // The overlay's inks, read off the overlay canvas on its first frame and again after every
+  // theme change (the effect below drops them). See `readOverlayInks`.
+  const inksRef = useRef<OverlayInks | null>(null)
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
   const cursorsRef = useRef(cursors)
@@ -318,7 +358,6 @@ export function Waterfall({
 
   txRef.current = transmitting
   txBlanksRef.current = txBlanks
-  themeRef.current = theme
   rxOffRef.current = rxOffsetHz
   txOffRef.current = txOffsetHz
   cursorsRef.current = cursors
@@ -338,6 +377,11 @@ export function Waterfall({
     // could only affect rows painted after the switch.
     rebuildRef.current?.()
   }, [palette, theme])
+  // …and the overlay's inks are read afresh on the next frame after a theme switch, before
+  // paint for the same reason: the markers must never lag the sign they agree with.
+  useLayoutEffect(() => {
+    inksRef.current = null
+  }, [theme])
 
   // The view window moved — a zoom pick, or the RX marker moving under a zoomed view (issue
   // #115). Re-render the ACCUMULATED history at the new edges, the same cold path a palette
@@ -798,14 +842,17 @@ export function Waterfall({
       octx.clearRect(0, 0, W, H)
       const AXIS_H = axisHFor(H)
       const wfH = H - AXIS_H
-      const th = themeRef.current
-      const axisColor = th === 'light' ? 'rgba(40,50,70,0.7)' : 'rgba(190,205,230,0.7)'
-      const axisBg = th === 'light' ? 'rgba(245,247,250,0.95)' : 'rgba(10,14,22,0.92)'
+      const ink = (inksRef.current ??= readOverlayInks(overlay!))
 
       // --- bottom frequency axis ---
-      octx.fillStyle = axisBg
+      // Part of the dark display in either theme (styles.css DISPLAY WELLS) — it used to turn
+      // pale in the light theme, a light band across the bottom of a dark picture. The alphas
+      // are the old strip's: the ground lets a trace of the floor through, the scale is dimmed.
+      octx.globalAlpha = 0.92
+      octx.fillStyle = ink.ground
       octx.fillRect(0, wfH, W, AXIS_H)
-      octx.fillStyle = axisColor
+      octx.globalAlpha = 0.7
+      octx.fillStyle = ink.scale
       octx.font = `${10 * textScale}px system-ui, sans-serif`
       octx.textBaseline = 'middle'
       const vlo = viewLoRef.current
@@ -819,6 +866,7 @@ export function Waterfall({
         octx.fillRect(x, wfH, 1, 4)
         octx.fillText(`${f}`, Math.min(W - 26 * textScale, x + 2), wfH + AXIS_H / 2)
       }
+      octx.globalAlpha = 1
 
       // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
       // spectrum clean; callsigns live in the Band Activity list. Only the
@@ -846,7 +894,8 @@ export function Waterfall({
         // ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD,
         // which was upside down against the picture in the only direction that existed: it
         // labelled the top (oldest) rows as the most recent. Mirrored, not merely flipped.
-        octx.fillStyle = axisColor
+        octx.globalAlpha = 0.7
+        octx.fillStyle = ink.scale
         octx.font = `${9 * textScale}px system-ui, sans-serif`
         const devRows = Math.max(1, Math.round(wfH * scaleY))
         for (let i = 1; i <= 4; i++) {
@@ -857,6 +906,7 @@ export function Waterfall({
           if (!fr) continue
           octx.fillText(`−${ageLabel(Date.now() - fr.tsMs)}`, W - 34 * textScale, yCss)
         }
+        octx.globalAlpha = 1
       }
 
       // Named cursors (e.g. RTTY mark/space) REPLACE the RX/TX markers when
@@ -867,7 +917,7 @@ export function Waterfall({
         for (const c of cursors) {
           if (c.hz < vlo || c.hz > vhi) continue // scrolled outside a zoom window
           const cx = freqToX(c.hz, W, vlo, vhi)
-          octx.fillStyle = c.color
+          octx.fillStyle = ink.color(c.color)
           octx.fillRect(cx - 1, 0, 2, wfH)
           octx.fillText(c.label, Math.min(W - 14 * textScale, cx + 3), 9 * textScale)
         }
@@ -875,12 +925,15 @@ export function Waterfall({
         // --- TX marker (red) then RX marker (green), drawn last so they're on top ---
         // Markers map through the same view; skip one that's scrolled outside a zoom
         // window (else freqToX would clamp it misleadingly to the edge).
+        // `--tx` / `--rx`, so the scope agrees with the ON AIR sign; the line is dimmer than its
+        // label, and the TX line brightens while we transmit — by alpha, never by hue.
         const txOff = txOffRef.current
         if (txOff >= vlo && txOff <= vhi) {
           const txx = freqToX(txOff, W, vlo, vhi)
-          octx.fillStyle = txRef.current ? 'rgba(255,70,70,0.95)' : 'rgba(255,90,90,0.7)'
+          octx.globalAlpha = txRef.current ? 0.95 : 0.7
+          octx.fillStyle = ink.tx
           octx.fillRect(txx - 1, 0, 2, wfH)
-          octx.fillStyle = '#ff5a5a'
+          octx.globalAlpha = 1
           octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
           octx.fillText('TX', Math.min(W - 18 * textScale, txx + 3), 9 * textScale)
         }
@@ -888,9 +941,10 @@ export function Waterfall({
         const rxOff = rxOffRef.current
         if (rxOff >= vlo && rxOff <= vhi) {
           const rxx = freqToX(rxOff, W, vlo, vhi)
-          octx.fillStyle = 'rgba(60,220,140,0.9)'
+          octx.globalAlpha = 0.9
+          octx.fillStyle = ink.rx
           octx.fillRect(rxx - 1, 0, 2, wfH)
-          octx.fillStyle = '#3ddc8c'
+          octx.globalAlpha = 1
           octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
           octx.fillText('RX', Math.min(W - 18 * textScale, rxx + 3), wfH - 6 * textScale)
         }
@@ -1140,7 +1194,10 @@ export function Waterfall({
             buttons — the ✕ is in the same place on every removable pane in the app. */}
         <PaneCloseButton title={paneTitle ?? ''} onRemove={onRemove} hideNote={hideNote} />
       </div>
-      <div className="wf-stage">
+      {/* A display well (styles.css DISPLAY WELLS): the floor is the palette's and dark already;
+          the well is what the axis strip, the markers, the legend and the held badge are
+          painted in, so they read the same on it in either theme. */}
+      <div className="wf-stage well">
         <canvas
           ref={canvasRef}
           className="waterfall-canvas"
