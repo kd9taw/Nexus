@@ -139,6 +139,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a falling one. Both followed only FT8/FT4-style timed overs, so a Phone over, CW, RTTY, PSK,
   SSTV, a tune carrier or the mic keyed at the radio itself went by in silence. They now follow
   the ON AIR sign. Speech and sound only: nothing about keying has changed.
+- **The amplifier strip locks during every transmission.** The Standby/Operate and band ◀ ▶
+  buttons in the cockpit header are refused while you transmit, because changing band on a keyed
+  amplifier can damage it. With an amplifier that reports no transmit state of its own (the
+  Elecraft KPA), or one whose own flag still read idle, they stayed live during a Phone over, CW,
+  RTTY, PSK, SSTV, a tune carrier or Nexus's own PTT. They now lock whenever the ON AIR sign is
+  lit. The strip only refuses more: nothing about keying has changed. NEEDS-BENCH with an
+  amplifier connected: key a voice over and check that the strip's buttons go grey until it ends.
 - **Band Activity and Rx Frequency scroll instead of cutting off on a short window.** When a decode
   pane's header, with its filter chips, is taller than the pane (a small window with large text,
   or a big UI scale), the pane now scrolls and its decode list keeps at least one row. Before,
