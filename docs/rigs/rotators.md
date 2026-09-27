@@ -121,7 +121,7 @@ Once it's configured and answering, rotator control appears throughout the app:
   position** (the Hy-Gain DCU-1 is one — its Hamlib backend has no read-back at
   all) keeps the pane, the slew and the STOP, and shows `—°T` instead of a
   needle.
-- **RotorStrip in the Phone, CW and Operate cockpits** — a compact heading strip.
+- **RotorStrip in the Phone, CW, Operate, RTTY, PSK, SSTV and JS8 cockpits** — a compact heading strip.
   It **hides when there's nothing to show**, and displays **"ROTOR —"** when a
   rotator is configured but not answering, so you can tell "no rotator" from
   "rotator not responding" at a glance. Click it to land on the model and port.

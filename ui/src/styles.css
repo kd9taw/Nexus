@@ -14738,6 +14738,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+/* A passed child can render nothing: the rotor strip on a station with no rotator, which is the
+   RTTY, PSK and JS8 headers' only child. Empty, the region would still cost the header's line a
+   gap (and the Remote Quick header a grid row), so it leaves layout until something is in it.
+   Guarded by CockpitHeader.emptyExtras.test.tsx. */
+.ch-mode-extras:empty {
+  display: none;
+}
 /* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
    control on whichever line the pair lands (#287, measured at 1024x768 110-125%). */
 .ch-bandtune {

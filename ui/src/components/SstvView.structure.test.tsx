@@ -26,6 +26,8 @@ vi.mock('./Waterfall', () => ({
   // the live-instrument 50 ms cadence, not the FT surfaces' 120 ms default.
   Waterfall: (p: { rowMs?: number }) => <div data-testid="band-waterfall" data-rowms={p.rowMs} />,
 }))
+// The rotor strip has its own suite (SstvView.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
   sstvArm: vi.fn(),

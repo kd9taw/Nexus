@@ -43,6 +43,8 @@ vi.mock('../api', () => ({
   getSpectrumRow: vi.fn(),
 }))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The rotor strip has its own suite (RttyCockpit.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),

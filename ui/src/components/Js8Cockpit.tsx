@@ -6,7 +6,7 @@
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStationControl, useStationData } from '../stationAccess'
+import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { useJs8Context } from '../remote-web/useJs8Context'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { useReceiverSettings } from '../remote-web/useReceiverSettings'
@@ -20,6 +20,8 @@ import { panelHost } from '../features/panelHost'
 import { JS8_PANEL_IDS, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
+import { RotorStrip } from './RotorStrip'
+import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
@@ -99,6 +101,9 @@ interface Props {
   wheelSensitivity?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
+  /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
+   *  opens the Rotator section through it, as it does in the Phone, CW and FT cockpits. */
+  onOpenSettings?: (target: string) => void
 }
 
 /** Display labels for the JS8 removable panels — resolved when the menu is BUILT. */
@@ -153,8 +158,10 @@ export function Js8Cockpit({
   wheelSensitivity,
   onOpenLogbook,
   panels,
+  onOpenSettings,
 }: Props) {
   const canControl = useStationControl(), dataAvailable = useStationData()
+  const rotatorControl = useStationCapability('rotator')
   const decoderSettings = useDecoderSettings(snap, 'JS8')
   const receiverSettings = useReceiverSettings(snap, 'JS8')
   const host = panels
@@ -895,7 +902,19 @@ export function Js8Cockpit({
               />
             ) : undefined
           }
-        />
+        >
+          {/* THE ROTOR STRIP, in the header's own control cluster as in the keyboard cockpits.
+              → CALL points at the SELECTED station, the heard one the log strip is prefilled
+              from, and not at the To box, which also takes group addresses (@ALLCALL) and calls
+              nobody has heard. `active`, because this cockpit stays mounted while hidden. Its ■
+              stops the rotator, never a transmission. */}
+          {canControl || rotatorControl ? <RotorStrip
+            active={active}
+            onOpenSettings={onOpenSettings}
+            targetCall={selected?.call ?? null}
+            onPointAt={rotorPointAt(canControl)}
+          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+        </CockpitHeader>
       )}
 
       {/* THE BAND WATERFALL — ⊞-hideable (SCOPE_PANEL_ID). The RX/TX cursors are the engine's

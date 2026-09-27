@@ -120,6 +120,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own screen as it does from Spots. Nothing transmits. **Reset layout** unticks both again. On the
   Remote page the panes show the spots and needs the station already shares, and say so when it
   does not.
+- **The rotator strip on the RTTY, PSK, SSTV and JS8 screens.** Phone, CW and FT already had it:
+  the antenna's heading in the cockpit header, with **→ CALL** and **LP** to turn toward the
+  station you are working the short or the long way, and ■ to stop the rotator. **→ CALL** turns
+  toward the call in the Call box on the RTTY and PSK screens, the station you selected on the
+  JS8 screen, and on the SSTV screen the station whose picture you would reply to (the last
+  callsign heard in a picture's ID). A station with no rotator sees nothing new, and the strip
+  asks the rotator nothing while its screen is not the one showing. On the Remote page it behaves
+  as it does on the Phone, CW and FT screens.
 
 ### Changed
 

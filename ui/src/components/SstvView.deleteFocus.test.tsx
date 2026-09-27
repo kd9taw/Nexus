@@ -13,6 +13,8 @@ import { getSstvState, sstvDeleteImage } from '../api'
 import type { AppSnapshot, SstvState } from '../types'
 
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+// The rotor strip has its own suite (SstvView.rotor.test.tsx), and it reaches the rotator on mount.
+vi.mock('./RotorStrip', () => ({ RotorStrip: () => null }))
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
