@@ -254,6 +254,8 @@ describe('every button that says Operate reads, in both themes', () => {
     }
   })
 
+  // The same sweep as above (every mode, every OK preset), run twice: 1.6 s alone, 4.5–5.1 s under the
+  // full suite on a loaded box, so the budget is explicit here too.
   it('FIRES: the strip as it shipped is caught, and so is a green word on a themed face', () => {
     // Before 2026-09-27: `.amp-strip button` set only font-size, line-height and padding, and
     // `.amp-op.on` a green ink and border; there was no disabled rule.
@@ -278,5 +280,5 @@ describe('every button that says Operate reads, in both themes', () => {
     ]
     const found = unreadable(desktop.map((b) => ({ ...b, rules: greenWord })))
     expect(found.some((m) => m.startsWith('cockpit header Operate light on')), found.join('\n')).toBe(true)
-  })
+  }, 20_000)
 })
