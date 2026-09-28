@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, so you can see it and pick from it. Switching to another tab ends the stream; press
   **Start the stream** again when you are back. If Remote access is switched off for your account
   while you stream, the stream ends within about two seconds and the page says why.
-- **Remote as a stream: the station can put the browser's microphone on the air (Windows).** A
-  streamed operator's own voice reaches the rig in Phone, played into the rig's USB audio.
+- **Remote as a stream: talk on the rig with your browser's microphone (Windows).** A streamed
+  operator's own voice reaches the rig in Phone, played into the rig's USB audio.
   **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig
   keys only when the operator's voice starts arriving, so a held PTT with the microphone off or
   muted puts nothing on the air. The over ends 200 ms after the voice stops arriving or the PTT
