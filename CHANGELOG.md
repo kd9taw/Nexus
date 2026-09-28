@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote as a stream, the station's half (Windows, off by default).** With **Stream this window
+  to an approved browser** on (Settings ▸ Station ▸ Remote access), a browser approved for
+  station controls, while it holds control, can be shown this Nexus window and operate it, and
+  hear the station's receive audio. Only the Nexus window is sent, cropped to its contents: a
+  dialog that opens outside it, such as a file picker, is not, and a minimized window sends
+  nothing. Windows draws its yellow capture border round the window while a stream is attached.
+  The browser's clicks and keys reach Nexus only, never anything else on the computer. While a
+  browser is attached, every transmission at the station stops within five seconds if its
+  connection drops, and within seven if its picture freezes. The picture is VP8 over encrypted
+  WebRTC, at most 30 frames a second. The browser side is not in this build yet, so the switch
+  has nothing to connect to for now.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
