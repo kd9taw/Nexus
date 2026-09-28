@@ -137,8 +137,11 @@ export function StreamView({ connection, station, disconnect, signOut }: {
         {!running && idled && <p role="note">{t('remote.stream.idle.ended')}</p>}
         <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
         {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
-        {!running && (state?.phase === 'available' || state?.phase === 'controlling') &&
-          <button type="button" className="remote-button remote-button--primary" disabled={wanted || ops.busy} onClick={start}>{t('remote.stream.start')}</button>}
+        {!running && (state?.phase === 'available' || state?.phase === 'controlling') && <>
+          <button type="button" className="remote-button remote-button--primary" disabled={wanted || ops.busy} onClick={start}>{t('remote.stream.start')}</button>
+          {/* What the stream needs at the shack, as far as the capture code shows it. */}
+          <p className="remote-stream-entry-note" role="note">{t('remote.stream.display')}</p>
+        </>}
       </div>}
       {/* "Still there?", over the picture and never over the header, so Stop TX stays where it is,
           uncovered. A press anywhere on it stays its own until it is let go (the capture), so no part

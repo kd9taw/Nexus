@@ -731,3 +731,22 @@ it('THE STOP LINE while "Still there?" is up: Stop TX is where it was, as enable
     expect(v.operations.stopTransmit).toHaveBeenCalledTimes(1)
   } finally { vi.useRealTimers() }
 })
+
+// ── The display note (P7: "Full desktop needs a display at the shack", as far as it is verified) ─
+
+const STREAM_DISPLAY = 'The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.'
+
+it('the stream\'s entry says, beside Start the stream, that Nexus at the shack must stay open and not minimized; CONTROL: not while it streams, nor with no stream to start', async () => {
+  const v = view(controlling)
+  const note = () => screen.queryByText(STREAM_DISPLAY)
+  expect(note(), 'on the entry').toBeTruthy()
+  expect(note()!.closest('.remote-stream-placeholder')?.contains(screen.getByRole('button', { name: 'Start the stream' })) ?? false, 'beside Start').toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  expect(note(), 'streaming: the picture is the answer').toBeNull()
+  cleanup()
+  // Another browser has control: nothing can be started here, and there is nothing to prepare for.
+  view({ state: state('occupied'), fresh: true })
+  expect(screen.queryByRole('button', { name: 'Start the stream' })).toBeNull()
+  expect(note(), 'with another browser in control').toBeNull()
+})

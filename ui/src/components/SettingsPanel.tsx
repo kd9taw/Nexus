@@ -4360,6 +4360,9 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.remoteStream.hint')}</span>
+                {/* What the capture needs from this PC, as far as the code shows it: a minimized
+                    window gives no picture, and closing Nexus ends the capture. */}
+                <span className="settings-hint">{t('settings.remoteStream.display')}</span>
               </div>
             )}
             {!remote && !IS_WINDOWS && (

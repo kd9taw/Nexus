@@ -99,6 +99,10 @@ async function openStationTab() {
 }
 
 const theSwitch = () => screen.queryByRole('switch', { name: EN['settings.remoteStream.label'] })
+// Only what the capture code shows: a minimized (or hidden) window gives no picture, and closing
+// Nexus ends the capture. What a locked session or a missing display does is for the bench.
+const DISPLAY_NOTE =
+  'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.'
 
 function clickSave() {
   const save = screen
@@ -144,6 +148,14 @@ describe('on a Windows station', () => {
     expect(screen.getByText(EN['settings.remoteStream.hint'])).toBeTruthy()
   })
 
+  it('says beside the switch that the stream is this window as Windows draws it, so Nexus stays open and not minimized', async () => {
+    renderPanel()
+    await openStationTab()
+    const sw = await waitFor(() => theSwitch()!)
+    const note = screen.getByText(DISPLAY_NOTE)
+    expect(note.closest('.settings-field')?.contains(sw) ?? false, 'the note is not beside the switch').toBe(true)
+  })
+
   it('writes remoteStream: true on Save once it is turned on', async () => {
     renderPanel()
     await openStationTab()
@@ -181,6 +193,7 @@ describe('where the switch is not offered', () => {
       expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy(),
     )
     expect(theSwitch()).toBeNull()
+    expect(screen.queryByText(DISPLAY_NOTE), 'a note about a stream this station cannot send').toBeNull()
   })
 
   it('is never on the Remote page: no browser may turn streaming on', async () => {
@@ -190,5 +203,6 @@ describe('where the switch is not offered', () => {
     await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
     expect(theSwitch()).toBeNull()
     expect(screen.queryByText(EN['settings.remoteStream.unavailable'])).toBeNull()
+    expect(screen.queryByText(DISPLAY_NOTE)).toBeNull()
   })
 })

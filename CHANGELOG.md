@@ -70,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the picture, listening and the station transmitting do not count, so an FT8 sequence left
   running does not keep a stream open. A PTT held down counts for as long as it is held. The
   question sits over the picture: **Stop TX** stays where it is and works the whole time.
+- **Remote as a stream: what it needs at the shack, said where you start it.** Beside **Stream
+  this window to an approved browser** in Settings, and on the stream page beside **Start the
+  stream**, Nexus says that the stream is its window as Windows draws it at the shack, so Nexus
+  must stay open there and not minimized.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

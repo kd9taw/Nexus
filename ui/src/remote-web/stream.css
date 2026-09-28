@@ -56,7 +56,8 @@
   color: var(--text); background: var(--bg-elev); font-size: var(--fs-body); text-align: center; overflow-wrap: anywhere;
 }
 .remote-stream-note[data-tone='warn'] { border-color: var(--alert-warning); }
-.remote-stream-identify { color: var(--text-dim); font-size: var(--fs-body); }
+.remote-stream-identify,
+.remote-stream-entry-note { color: var(--text-dim); font-size: var(--fs-body); }
 
 /* "Still there?" (an idle stream), in the middle of the picture and never over the header, so Stop TX
    stays where it is, uncovered. Unlike the notes it takes its own clicks: a press on it is the

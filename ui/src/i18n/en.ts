@@ -398,6 +398,7 @@ export const EN = {
   "remote.stream.permission": "Station control is off for this browser. Allow it in Nexus at the station (Settings → Station → Remote access), then start the stream.",
   "remote.stream.occupied": "Another browser controls the station. The stream can start once it lets go.",
   "remote.stream.ready": "Ready. Start the stream to see and operate Nexus at the shack.",
+  "remote.stream.display": "The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.",
   "remote.stream.starting": "Starting the stream…",
   "remote.stream.waitingForPicture": "Waiting for the station's picture…",
   "remote.stream.live": "Streaming Nexus at the shack",
@@ -5924,6 +5925,8 @@ export const EN = {
   'settings.remoteStream.label': 'Stream this window to an approved browser',
   'settings.remoteStream.hint':
     'A browser you approved for station control, while it holds control, is shown this Nexus window and can operate it. Its clicks and keys reach Nexus only, never anything else on this computer. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a minimized window sends nothing. The stream is encrypted end to end. While a browser is connected, every transmission stops within five seconds if its connection drops, and within seven if its picture freezes.',
+  'settings.remoteStream.display':
+    'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.',
   'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
