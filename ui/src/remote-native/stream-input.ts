@@ -48,6 +48,18 @@ type AnyInit = PointerEventInit | WheelEventInit | KeyboardEventInit | InputEven
 const modifiers = (bits: number): Modifiers =>
   ({ shiftKey: !!(bits & MOD_SHIFT), ctrlKey: !!(bits & MOD_CTRL), altKey: !!(bits & MOD_ALT), metaKey: !!(bits & MOD_META) })
 const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"], [contenteditable=""]'
+
+/** Above zero only while an event this module fired is being handled: dispatch is synchronous,
+ *  so every listener it reaches runs inside it. */
+let dispatching = 0
+
+/** Whether the event being handled right now came through the stream: the MARK the operator's
+ *  ruling "Arms your mic" rests on. A press of the Phone cockpit's PTT made here arms the streamed
+ *  operator's microphone over and never keys the rig on the shack's own microphone. Only this
+ *  module can make it true, and only for the length of its own dispatch, so a press at the shack
+ *  can never carry it. If it were ever lost, a streamed press would key as a press at the shack
+ *  does, which is where things stood before the mark. */
+export function isStreamInput(): boolean { return dispatching > 0 }
 const TEXT_TYPES = new Set(['text', 'search', 'url', 'tel', 'email', 'password', 'number', ''])
 
 export class StreamInputDispatcher {
@@ -150,7 +162,8 @@ export class StreamInputDispatcher {
       : kind === 'key' ? new w.KeyboardEvent(type, init)
       : kind === 'input' ? new (w.InputEvent ?? w.Event)(type, init)
       : new w.Event(type, init)
-    return target.dispatchEvent(event)
+    dispatching++
+    try { return target.dispatchEvent(event) } finally { dispatching-- }
   }
 
   private pointer(p: StreamPointer): void {

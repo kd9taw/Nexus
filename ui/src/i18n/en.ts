@@ -9151,6 +9151,7 @@ export const EN = {
   // toasts it raises, and a toast is neither a control nor anything a sweep can see.
   'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
+  'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
 
   // ── Phone ▸ the scope strip, its span chips and its zoom ─────────────────────────────
   // The strip is the rig's real RF panadapter when one streams and the receiver's audio

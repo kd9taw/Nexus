@@ -5637,6 +5637,7 @@ export const JA: PartialCatalog = {
   "phone.rxMeter.label": "RX音声レベル",
   "phone.tx.locked": "TXロック中 — この周波数／モードは免許の範囲外です",
   "phone.tx.turnedBackOn": "TXがオフだったため、オンに戻しました。もう一度PTTを押すと送信できます。",
+  "phone.tx.remoteLock": "Lock（ハンズフリーPTT）はRemoteからは使えません。Lockのチェックを外し、PTTかスペースキーを押したまま話してください。",
   "phone.scope.tuneHint": "ここでスクロールするとVFOを同調できます",
   "phone.scope.nativeRf.label": "RFパナアダプター",
   "phone.scope.nativeRf.title": "ネイティブRFパナアダプター — 復調後の音声帯域ではなく、ダイヤル周辺の実際のRFスペクトラムです。",

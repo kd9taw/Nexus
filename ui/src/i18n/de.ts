@@ -5279,6 +5279,7 @@ export const DE: PartialCatalog = {
   "phone.rxMeter.label": "RX-Audiopegel",
   "phone.tx.locked": "TX gesperrt — diese Frequenz/Betriebsart liegt außerhalb Ihrer Lizenzrechte",
   "phone.tx.turnedBackOn": "TX war aus — wieder eingeschaltet. Zum Sprechen erneut PTT drücken.",
+  "phone.tx.remoteLock": "Lock (freihändiges PTT) funktioniert über Remote nicht. Lock abwählen, dann zum Sprechen PTT oder die Leertaste gedrückt halten.",
   "phone.scope.tuneHint": "Hier scrollen, um den VFO abzustimmen",
   "phone.scope.nativeRf.label": "HF-Panadapter",
   "phone.scope.nativeRf.title": "Nativer HF-Panadapter — das echte HF-Spektrum um Ihre Frequenz, nicht das demodulierte NF-Passband.",

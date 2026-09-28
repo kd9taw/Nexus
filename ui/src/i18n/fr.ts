@@ -3206,6 +3206,7 @@ export const FR: PartialCatalog = {
   "phone.split.setFailed": "Impossible d'activer le Split",
   "phone.tx.locked": "TX verrouillé — cette fréquence ou ce mode est hors de vos privilèges de licence",
   "phone.tx.turnedBackOn": "Le TX était coupé — il a été réactivé. Appuyez de nouveau sur PTT pour parler.",
+  "phone.tx.remoteLock": "Lock (PTT mains libres) ne fonctionne pas via Remote. Décochez Lock, puis maintenez PTT ou la barre d'espace enfoncée pour parler.",
   "pounce.dismiss.aria": "Fermer l'alerte",
   "pounce.tag.fallback": "NOUVEAU",
   "pounce.work.label": "Contacter",
