@@ -912,6 +912,16 @@ jobs:
           --target x86_64-pc-windows-gnu
           --features radio,custom-protocol
 
+      # Security test A2 (Remote as a stream, S11): nothing compiled into the Windows build
+      # injects operating-system input (SendInput, keybd_event, mouse_event), beyond the two
+      # reviewed Tauri callers the script names. It reads sources, not Nexus.exe: Tauri's own
+      # crates already import SendInput, so the binary cannot answer the question. The
+      # self-test plants calls first, so a clean result comes from a check shown to find one.
+      - name: No operating-system input injection (A2)
+        run: |
+          python3 scripts/check-no-input-injection.py --self-test
+          python3 scripts/check-no-input-injection.py
+
   # Job 5b — macOS compile check (fast feedback; the SHIPPING mac build lives in release.yml).
   #
   # Since 1.5.0 macOS IS a supported platform: release.yml's `macos` job does the signed,
