@@ -862,6 +862,30 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok(holds.length>=3,'held for 450 ms: re-asserted about every 100 ms ('+holds.length+')')
         assert.equal(new Set(ptt.map(m=>m.holdId)).size,1,'one press, one hold id')
         assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
+        // THE PTT KEY NEVER TRAVELS AS A KEY. Once the station says Space is its push-to-talk key, Space
+        // held on the picture is re-asserted on the ptt channel under a hold id of its own, and no key
+        // goes for it on control.
+        const heldIds=[...new Set(ptt.map(m=>m.holdId))]
+        const linkWord=`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return c.stream.getSnapshot().pttKey;f=f.return}return null})()`
+        await evaluate(`document.querySelector('.remote-stream-video').focus();true`)
+        await atShack(`__shack.control.send(JSON.stringify({type:'pttKey',armed:true}));true`)
+        await until(`${linkWord}===true`)
+        const space={key:' ',code:'Space',windowsVirtualKeyCode:32}
+        await browser.call('Input.dispatchKeyEvent',{type:'keyDown',text:' ',...space},session)
+        await sleep(450)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyUp',...space},session)
+        await untilShack(`__shack.received.ptt.some(m=>m.type==='pttRelease'&&!${JSON.stringify(heldIds)}.includes(m.holdId))`)
+        const spaceHolds=(await atShack('__shack.received.ptt')).filter(m=>m.type==='pttHold'&&!heldIds.includes(m.holdId))
+        assert.ok(spaceHolds.length>=3,'Space held for 450 ms: re-asserted as PTT ('+spaceHolds.length+')')
+        assert.equal(new Set(spaceHolds.map(m=>m.holdId)).size,1,'one Space press, one hold id')
+        assert.equal(await atShack(`__shack.received.control.some(m=>m.type==='key'&&m.code==='Space')`),false,'no key went for the PTT key')
+        // Control: where the station says Space is typing, the same key goes as a key and holds nothing.
+        await atShack(`__shack.control.send(JSON.stringify({type:'pttKey',armed:false}));true`)
+        await until(`${linkWord}===false`)
+        const pttSent=(await atShack('__shack.received.ptt')).length
+        await typeKey(' ','Space',' ')
+        await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.code==='Space'&&m.action==='up')`)
+        assert.equal((await atShack('__shack.received.ptt')).length,pttSent,'a typed space holds nothing')
         // THE STOP LINE, in real layout: Stop TX is on screen and nothing covers it, at every size.
         for(const [w,h] of [[360,640],[390,844],[844,390],[1024,768],[1280,800],[1920,1080]])for(const theme of ['dark','light']){
           await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false},session)
@@ -892,7 +916,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
-        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), Space as held PTT (${spaceHolds.length} holds, no key) and as a typed key, Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
       }finally{
         shackLive=false
         await Promise.allSettled([signalling,trickle])
