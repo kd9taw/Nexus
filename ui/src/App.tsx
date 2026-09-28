@@ -155,6 +155,7 @@ import {
 } from './features/memories'
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
+import { sameCall } from './callsign'
 import { processFlare, effectiveXray } from './flareAlert'
 import { processPotaAlert } from './features/potaAlert'
 import { processStorm, processStormForecast } from './stormAlert'
@@ -1387,7 +1388,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // the self-QSO, but without this the command still returns a snapshot and
       // we'd flash a FALSE "Working KD9TAW" success toast.
       const me = mycallRef.current.trim().toUpperCase()
-      if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
+      if (me && sameCall(call, me)) {
         pushToast(t('shell.ownCall', { call }), 'info', 2500)
         return
       }
@@ -1759,7 +1760,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // Same own-call guard as handleCall — the engine no-ops on a self-target
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
-    if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
+    if (me && sameCall(call, me)) {
       pushToast(t('shell.ownCall', { call }), 'info', 2500)
       return
     }

@@ -291,6 +291,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they reached the station, and the message said the command was not confirmed. They reach the
   station again and turn the antenna the short way, as before 1.15.0. **LP** stays on the desktop.
   Nothing changes at the station.
+- **The park fills in for every POTA or SOTA activator you click.** Clicking a second activator's
+  spot while the first one's park was still in the log strip could leave the park box empty,
+  though the hunt line above it named the park. Whether it happened depended on timing, which is
+  why some parks filled and others did not. With no callbook, the first activator's park could
+  stay in the box instead and be logged on the second contact. The box now takes the park of the
+  station you clicked, and a park you type yourself for the station you are working is still
+  kept. An activator spotted with a portable suffix (KE7G/P) now fills too, a prefix form
+  (VE7/KE7G) no longer shows the "call ≠ hunt" warning, and two different portable stations
+  (KE7G/P and KF7XYZ/P) are no longer taken for the same one. Clicking a station also tells your
+  own call apart the same way, so an operator signing VE7/ followed by their call can work other
+  VE7/ stations.
 
 ### Corrections to 1.15.0
 
