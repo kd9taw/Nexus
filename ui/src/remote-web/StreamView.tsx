@@ -60,7 +60,8 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   // Control gone - released, taken over, or the socket lost - ends the stream here at once, rather
   // than on the station's word a moment later.
   useEffect(() => { if (running && controlling === false) link.close('notController') }, [running, controlling, link])
-  useInput(video, connection, stream.phase === 'live' || stream.phase === 'stalled')
+  // Blind means no authority, for a click as much as for PTT: a frozen picture takes no input.
+  useInput(video, connection, stream.phase === 'live')
 
   const start = () => {
     setWanted(true)
@@ -151,8 +152,8 @@ function ended(reason: string | null): string {
 
 /** The input bridge's page half (S11, A2). Listeners go on the PICTURE and nowhere else: a pointer
  *  on the header, a key typed while any other control has focus, never reaches the station. What
- *  was pressed through the picture is released through it when it loses focus, so nothing is left
- *  held at the shack by a key-up this page never saw. */
+ *  was pressed through the picture is released through it when it loses focus or stops being live,
+ *  so nothing is left held at the shack by a key-up this page never saw. */
 function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedConnection, active: boolean): void {
   useEffect(() => {
     const element = video.current

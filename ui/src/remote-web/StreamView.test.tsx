@@ -218,6 +218,32 @@ it('releases at the shack whatever it pressed there when the picture loses focus
   expect(input.sent).toHaveLength(4)
 })
 
+it('blind means no authority: a frozen picture sends no input, and lets go of what it held when it froze', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control')
+  const input = () => control.sent.filter(m => m.type !== 'heartbeat')
+  const press = () => v.video.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 1, detail: 1 }))
+  press()
+  expect(input()).toHaveLength(1)
+  v.tick(2500)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+  expect(v.link.getSnapshot().phase).toBe('stalled')
+  // What was held comes up the moment the picture freezes, not when the operator next moves.
+  expect(input().slice(1)).toEqual([{ type: 'pointer', action: 'up', x: 0.5, y: 0.5, button: 0, buttons: 0, modifiers: 0, pointerType: 'mouse', clicks: 0 }])
+  // Nothing new goes while it stays frozen.
+  press()
+  fireEvent.keyDown(v.video, { key: 'a', code: 'KeyA' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(input()).toHaveLength(2)
+  // Positive control: a new frame, and the picture takes input again.
+  act(() => frames.get(v.video)?.(0, { rtpTimestamp: 180000 }))
+  expect(v.link.getSnapshot().phase).toBe('live')
+  fireEvent.keyDown(v.video, { key: 'a', code: 'KeyA' })
+  expect(last(input())).toMatchObject({ type: 'key', action: 'down', key: 'a' })
+})
+
 it('holds PTT while the button is held, and lets go when it is released', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
