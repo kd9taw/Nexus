@@ -2302,6 +2302,55 @@ test('a station sending a message outside the contract is closed, never forwarde
   await assert.rejects(live.browser.take(typed('streamState'), 300), /timeout/)
 })
 
+// Remote switched off by hand in the middle of a stream (operator decision, 2026-09-27: "Within
+// about 2 s"). Once up, a stream runs peer to peer where this room cannot gate it, so the relay tells
+// the station to end it (`streamEnd`, roomToStationEnd), and the station ends that session's transmit
+// presence at once. The relay learns of the switch-off by re-reading the entitlement while the stream
+// runs, as the page's socket heartbeats arrive.
+test('Remote switched off by hand mid-stream: the relay ends that stream at the station within about 2 s', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, { ...STREAM_HEADERS, ...OPERATION_HEADERS })
+  const leaseId = crypto.randomUUID(), boot = crypto.randomUUID()
+  live.browser.ackObservations()
+  // A live station for the length of the test, as Nexus is one: it answers the relay's demand for a
+  // picture and the page's heartbeats. (A stand-in that answers neither is dropped by the relay as
+  // too slow at about three seconds, and its streams with it.)
+  let serving = true
+  const station = (async () => {
+    while (serving) {
+      let asked
+      try { asked = await live.station.take(value => (value.type === 'watch' && value.enabled) || value.type === 'operationRequest', 200) } catch { continue }
+      if (asked.type === 'watch') {
+        const frame = sample(); frame.sequence = ++settleSequence
+        live.station.send({ type: 'publication', requestId: asked.requestId, frame })
+      } else live.station.send({ type: 'operationResponse', sessionId: asked.sessionId, requestId: asked.request.requestId,
+        value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2, commandWindowId: crypto.randomUUID(),
+          nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false } })
+    }
+  })()
+  // A stream up: the page's offer reaches the station, and the station admits it.
+  live.browser.send(pageSignal('offer', leaseId))
+  await live.station.take(typed('streamSignal'))
+  live.station.send(stationMessage('streaming', live.session.sessionId))
+  assert.equal((await live.browser.take(typed('streamState'))).streaming, true)
+  // The page's socket heartbeat, which goes on through a stream, once a second as the page sends it.
+  const beat = setInterval(() => live.browser.send({ type: 'operationRequest', operationVersion: 4,
+    request: { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId } }), 1000)
+  try {
+    // THE CONTROL first: four seconds of a live stream on an entitled account, and nothing ends it.
+    await assert.rejects(live.station.take(typed('streamEnd'), 4000), /timeout/, 'control: a stream on an entitled account is not ended')
+    assert.equal(live.station.closed, false, 'and the station is still up, so the control observed a live room')
+    await app.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(pair.browser.accountId).run()
+    const off = Date.now()
+    const end = await live.station.take(typed('streamEnd'), 5000)
+    const took = Date.now() - off
+    assert.deepEqual(end, { ...streamCase('roomToStationEnd', 'Remote access switched off'), sessionId: live.session.sessionId })
+    assert.ok(took <= 2000, `the station was told ${took} ms after the switch-off`)
+    // Once: a stream the relay has ended is not ended again at every heartbeat.
+    await assert.rejects(live.station.take(typed('streamEnd'), 2500), /timeout/, 'one streamEnd per stream')
+  } finally { clearInterval(beat); serving = false; await station; live.browser.close(); live.station.close() }
+})
+
 test('a revoked entitlement refuses a stream offer at the relay, and a live one does not', async () => {
   const pair = await app.paired()
   const live = await admitted(pair, 1, STREAM_HEADERS)

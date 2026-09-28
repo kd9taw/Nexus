@@ -194,6 +194,7 @@ export const FR: PartialCatalog = {
   "remote.stream.ended.notController": "Le direct s’est arrêté car le contrôle de la station a été perdu.",
   "remote.stream.ended.unavailable": "Cette station ne prend pas encore en charge le direct. Mettez à jour Nexus à la station et activez-y le direct.",
   "remote.stream.ended.accessExpired": "Votre accès à Remote a pris fin, le direct ne peut donc pas démarrer.",
+  "remote.stream.ended.remoteOff": "L’accès à Remote a été désactivé pour ce compte, le direct s’est donc arrêté.",
   "remote.stream.ended.tryLater": "Trop de tentatives. Attendez une minute, puis redémarrez le direct.",
   "remote.stream.ended.station": "La station a arrêté le direct.",
   "remote.stream.ended.insecure": "La réponse de la station n’était pas chiffrée de bout en bout, le direct a donc été refusé.",

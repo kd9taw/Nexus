@@ -194,6 +194,7 @@ export const ES: PartialCatalog = {
   "remote.stream.ended.notController": "El directo terminó porque se perdió el control de la estación.",
   "remote.stream.ended.unavailable": "Esta estación aún no admite el directo. Actualiza Nexus en la estación y activa allí el directo.",
   "remote.stream.ended.accessExpired": "Tu acceso a Remote ha terminado, así que el directo no puede iniciarse.",
+  "remote.stream.ended.remoteOff": "Se desactivó el acceso a Remote de esta cuenta, así que el directo terminó.",
   "remote.stream.ended.tryLater": "Demasiados intentos. Espera un minuto y vuelve a iniciar el directo.",
   "remote.stream.ended.station": "La estación terminó el directo.",
   "remote.stream.ended.insecure": "La respuesta de la estación no estaba cifrada de extremo a extremo, así que se rechazó el directo.",

@@ -184,6 +184,7 @@ export const JA: PartialCatalog = {
   "remote.stream.ended.notController": "局の操作権を失ったため、ライブを終了しました。",
   "remote.stream.ended.unavailable": "この局はまだライブに対応していません。シャックのNexusを更新し、そこでライブをオンにしてください。",
   "remote.stream.ended.accessExpired": "Remote の利用期間が終了したため、ライブを開始できません。",
+  "remote.stream.ended.remoteOff": "このアカウントの Remote アクセスがオフになったため、ライブを終了しました。",
   "remote.stream.ended.tryLater": "試行回数が多すぎます。1分待ってから、もう一度ライブを開始してください。",
   "remote.stream.ended.station": "局がライブを終了しました。",
   "remote.stream.ended.insecure": "局からの応答がエンドツーエンドで暗号化されていなかったため、ライブを拒否しました。",
