@@ -770,6 +770,35 @@ Wrangler and Miniflare (<https://github.com/cloudflare/workers-sdk>) and `ws`
 are not shipped inside the browser or desktop app. Wrangler is MIT OR Apache-2.0;
 Miniflare is MIT. Their bundled dependencies retain their own inline notices.
 
+### Nexus Remote streaming
+
+The streamed Remote session (the station's own Nexus window over WebRTC, `crates/tempo-stream`)
+links **str0m 0.24.0** (MIT OR Apache-2.0, © 2022 Martin Algesten; authors Martin Algesten, Hugo
+Tunius and Davide Bertola; <https://github.com/algesten/str0m>), a Sans-I/O WebRTC implementation.
+It is built with its default features off and the `wincrypto` backend: DTLS runs on **dimpl 0.7.4**
+(MIT OR Apache-2.0, pure Rust, <https://github.com/algesten/dimpl>) and the cryptography on Windows
+CNG, an operating-system component Nexus does not ship, so no OpenSSL, aws-lc or ring comes with it.
+Data channels run on **sctp-proto 0.10.5** (MIT OR Apache-2.0, © 2021-2026 WebRTC.rs and 2026 Martin
+Algesten, <https://github.com/algesten/sctp-proto>). The other new crates are the str0m project's
+**str0m-proto 0.7.0**, **str0m-wincrypto 0.8.1** and **is 0.11.1**, plus **arrayvec 0.7.8** (© Ulrik
+Sverdrup), **base64ct 1.8.3** (© Steve Thomas and the RustCrypto Project Developers), **crc 3.4.0**
+(© crc-rs Developers) and **crc-catalog 2.5.0** (© Akhil Velagapudi), all MIT OR Apache-2.0.
+
+Said plainly, because the upstream files do not say it for us:
+
+- None of these crates carries per-file license headers, so each license rests on the crate's
+  metadata and root license files. str0m-proto, str0m-wincrypto and is ship no license file at
+  all; they are part of the str0m project and are taken as licensed under its LICENSE-MIT.
+- str0m states that its bandwidth estimator is ported from libWebRTC's GoogCC. libWebRTC is
+  BSD-3-Clause, "Copyright (c) 2011, The WebRTC project authors. All rights reserved." str0m does
+  not reproduce that notice, so Nexus does, verbatim, in the bundle below.
+- str0m's RTP packetizers share comments with webrtc-rs and Pion (both MIT), which suggests a
+  common lineage. That is an inference from the source, not an upstream statement.
+
+The license texts travel in every installer as `resources/stream/THIRD-PARTY.txt`
+(`licenses/stream/THIRD-PARTY.txt` in this repository), with MIT elected where a crate offers MIT
+OR Apache-2.0.
+
 ### Existing application dependencies
 
 Nexus's Rust workspace — 17 crates under `crates/`: `deepcw`, `fst4`, `ft4`, `ft8`, `jt65`,
@@ -982,6 +1011,10 @@ The bundled and linked components combine into the GPLv3 whole:
 - Remote's MIT dependencies combine under GPLv3. The webpki-roots certificate
   data retains CDLA-Permissive-2.0, whose text accompanies that data. Remote
   does not change Nexus's GPL-3.0-only license or the existing DeepCW obligations.
+- The Remote stream's Rust crates (str0m and its dependencies, MIT OR Apache-2.0,
+  MIT elected) and the BSD-3-Clause libWebRTC notice carried for str0m's
+  bandwidth estimator combine one way into the GPLv3 whole, on the same reasoning
+  as the other permissive components above.
 
 Runtime data services (the "Runtime data services" section above) are **not
 bundled or linked** — the app merely queries them over the network — so their

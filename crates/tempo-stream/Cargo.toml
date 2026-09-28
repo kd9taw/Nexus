@@ -15,3 +15,11 @@ workspace = true
 # Both crates are already workspace-wide, so no new external code enters the tree here.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# WebRTC, Sans-I/O (MIT OR Apache-2.0; licence-reviewed 2026-09-27, NOTICE "Streaming"). Exactly the
+# reviewed configuration: default features OFF, so feature unification can never switch the crypto
+# backend to aws-lc (C) behind our back, and `wincrypto`: DTLS on the pure-Rust dimpl, crypto on
+# Windows CNG. ⚠️ That backend exists ONLY on Windows: elsewhere str0m compiles but has no crypto
+# provider and panics if asked to build an `Rtc`, so `session` refuses before it gets that far. It is
+# a dependency on every platform anyway, so the session code is compiled, linted and (for everything
+# that needs no `Rtc`) tested by CI's Linux jobs rather than only type-checked by windows-cross.
+str0m = { version = "0.24", default-features = false, features = ["wincrypto"] }

@@ -5,8 +5,11 @@
 //! profile (`UDP/TLS/RTP/SAVPF` for media, `UDP/DTLS/SCTP` for the data channel), the offer must
 //! carry a SHA-256 DTLS fingerprint, and it must carry no `a=crypto` line (SDES: SRTP keys written
 //! into the SDP, where the relay could read them). A plain `RTP/AVP` offer, or an `RTP/SAVP` one
-//! keyed by SDES, is refused here. The transport refuses a peer without DTLS as well; this is the
-//! first of the two locks, and the one that runs before any transport exists.
+//! keyed by SDES, is refused here, before any transport exists. This check is load-bearing, not a
+//! second opinion: the transport's SDP parser DROPS a non-DTLS media line rather than refusing the
+//! offer (measured, and pinned below). The transport's own lock comes later: it speaks only DTLS
+//! and verifies the peer's certificate against the offer's fingerprint, so a peer without DTLS
+//! never connects.
 //!
 //! It also refuses an offer the stream cannot serve: no VP8 video the page can receive, or no data
 //! channel for control and receive audio.
@@ -195,5 +198,33 @@ mod tests {
         assert_eq!(check(&no_data), Err(OfferRefusal::NoDataChannel));
         let big = format!("{offer}{}", "a=x\r\n".repeat(2000));
         assert_eq!(check(&big), Err(OfferRefusal::TooLarge));
+    }
+
+    /// ⚠️ WHY `check` IS LOAD-BEARING, measured: the transport does NOT refuse a plain-RTP offer.
+    /// str0m's SDP parser knows only the DTLS profiles, and a media line on any other profile is
+    /// dropped as if it were not there, while the rest of the offer parses. So a plain `RTP/AVP`
+    /// video offer would be answered with the data channel alone. str0m's own lock is later and
+    /// different: it speaks nothing but DTLS and verifies the peer's certificate against the
+    /// offer's fingerprint, so a peer without DTLS never connects. That half needs a WebRTC session
+    /// and is tested where one can be built. This pins the parser's behaviour; if str0m ever starts
+    /// refusing such an offer outright, this fails and the note above is updated.
+    #[test]
+    fn the_transport_drops_a_non_dtls_media_line_rather_than_refusing_the_offer() {
+        use str0m::change::SdpOffer;
+        // CONTROL: the DTLS offer keeps its video line through the parser.
+        let dtls = SdpOffer::from_sdp_string(&fixture_offer()).expect("the contract offer parses");
+        assert!(dtls.to_sdp_string().contains("m=video"));
+        for profile in ["RTP/AVP", "RTP/SAVP", "RTP/AVPF"] {
+            let plain = fixture_offer().replace("UDP/TLS/RTP/SAVPF", profile);
+            let parsed = SdpOffer::from_sdp_string(&plain).unwrap_or_else(|e| {
+                panic!("str0m now refuses a {profile} offer ({e}): update the note")
+            });
+            assert!(
+                !parsed.to_sdp_string().contains("m=video"),
+                "str0m kept a {profile} video line"
+            );
+            // …which is why the station's own check must refuse it first.
+            assert_eq!(check(&plain), Err(OfferRefusal::NotDtls));
+        }
     }
 }
