@@ -8974,9 +8974,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text);
   cursor: pointer;
 }
-.pota-parklist-import:hover {
+.pota-parklist-import:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Start and Download wear this look too. Start is disabled until a park is typed, and the browser
+   greyed it only while it drew the button itself. */
+.pota-parklist-import:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 /* Persistent Sent/Rcvd captions on the two RST boxes — the placeholders were hidden behind the
    default "59", so the send vs receive side was unlabeled. */
