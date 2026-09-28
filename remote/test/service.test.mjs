@@ -866,6 +866,30 @@ test('compiled hosted shell has pinned security headers and distributes its lice
     'tokio-tungstenite 0.30.0', 'Community Data License Agreement', 'Copyright (c) 2018 Auth0']) assert.ok(text.includes(marker))
 })
 
+// W3: THE STREAM NEEDS NOTHING LOOSER. WebRTC is governed by no fetch directive: ICE, STUN and DTLS
+// never pass through connect-src, and a <video> fed a MediaStream through `srcObject` loads no URL,
+// so media-src (left to default-src 'none') does not apply either. The policy is pinned WHOLE, so a
+// directive added "for the stream" - a stun:/turn: source, a media-src, a webrtc allowance - turns
+// this red and has to be argued for. The real-browser half (a stream under this very header) is the
+// `stream` scenario in browser.test.mjs.
+test('the hosted page\'s policy is exactly what it was before the stream: no media, WebRTC or ICE allowance', async () => {
+  const response = await app.mf.dispatchFetch(app.origin)
+  const policy = Object.fromEntries(response.headers.get('content-security-policy').split(';')
+    .map(directive => directive.trim().split(/\s+/)).map(([name, ...sources]) => [name, sources]))
+  assert.deepEqual(policy, {
+    'default-src': ["'none'"], 'script-src': ["'self'"], 'style-src': ["'self'", "'unsafe-inline'"],
+    'img-src': ["'self'", 'data:', 'blob:'],
+    'connect-src': ["'self'", app.origin.replace(/^http/, 'ws'), 'https://identity.remote-test.invalid'],
+    'frame-src': ['https://identity.remote-test.invalid'], 'worker-src': ["'self'"], 'form-action': ["'self'"],
+    'frame-ancestors': ["'none'"], 'base-uri': ["'none'"], 'object-src': ["'none'"],
+  })
+  // Stated separately so the reason reads in the failure, not only in a diff.
+  const raw = response.headers.get('content-security-policy')
+  for (const loosening of ['media-src', 'webrtc', 'stun:', 'turn:', 'turns:', "'unsafe-eval'"]) assert.equal(raw.includes(loosening), false, loosening)
+  // The microphone stays off until the mic uplink (a later wave) turns it on deliberately.
+  assert.equal(response.headers.get('permissions-policy'), 'camera=(), microphone=(), geolocation=()')
+})
+
 test('an in-flight publication survives the last browser disconnect and hibernation', async () => {
   const pair = await app.paired(), live = await admitted(pair)
   const pending = await live.station.take(value => value.type === 'watch' && value.enabled)
