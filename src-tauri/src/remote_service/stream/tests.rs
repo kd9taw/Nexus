@@ -625,7 +625,7 @@ fn the_pages_microphone_keys_only_an_armed_over() {
     let now = Instant::now();
     let f = fixture(now);
     tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     streaming.presence.renew(&f.station, &streaming.offer, now);
     // 20 ms of Opus silence (CELT, fullband): what a browser sends between words.
     let packet = |seq: u64| tempo_stream::session::MicPacket {
@@ -673,7 +673,7 @@ fn the_page_is_told_what_the_microphone_over_does() {
     let now = Instant::now();
     let f = fixture(now);
     tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     streaming.presence.renew(&f.station, &streaming.offer, now);
     assert_eq!(
         streaming.mic_state(),
@@ -1160,8 +1160,10 @@ fn a5_after_dtls_a_mismatched_certificate_ends_the_session_before_any_input_or_p
     );
     streaming.ptt(hold.as_bytes(), now);
     tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
+    // Under M1 a hold ARMS the microphone over and the operator's voice keys it, so the control is
+    // the same observable the unchecked page must leave empty: the hold reached the PTT.
     assert!(
-        tempo_app::engine::engine_lock(&f.station.engine).manual_ptt(),
-        "control: the hold keys"
+        !streaming.ptt_reports().is_empty(),
+        "control: the hold reaches the PTT"
     );
 }
