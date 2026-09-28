@@ -108,7 +108,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
 
   {
     id: 'remote-access', label: 'Remote access', tab: 'station',
-    keywords: ['browser', 'shack', 'pairing', 'account', 'device approval', 'observation', 'internet'],
+    keywords: ['browser', 'shack', 'pairing', 'account', 'device approval', 'observation', 'internet',
+      // Remote as a stream: the words for sending this window to a browser.
+      'stream', 'streaming', 'screen sharing', 'video'],
   },
 
   // ---- Radio -------------------------------------------------------------------

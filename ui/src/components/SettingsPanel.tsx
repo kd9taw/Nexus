@@ -4338,6 +4338,36 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-remote-access">
             <legend>{t('remote.settingsLegend')}</legend>
             {remote ? <p className="settings-note">{t('remote.configurationLocal')}</p> : <RemoteStation />}
+            {/* REMOTE AS A STREAM (TX sign-off 2026-09-27, "Session permit"): an approved browser
+                holding station control is shown this window and operates it; while one is
+                attached, every transmission stops within five seconds of it going away, and
+                seven of its picture freezing (the engine is the guard: engine/remote_stream.rs).
+                OFF by default. Offered on Windows, where the station can capture its window,
+                explained as unavailable elsewhere, and never on the Remote page: the key is
+                withheld from Remote's settings projection, so no browser can switch it on. */}
+            {!remote && IS_WINDOWS && (
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.remoteStream.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.remoteStream === true}
+                    className={`toggle${form.remoteStream === true ? ' on' : ''}`}
+                    onClick={() => updateBool('remoteStream', form.remoteStream !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.remoteStream.hint')}</span>
+              </div>
+            )}
+            {!remote && !IS_WINDOWS && (
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.remoteStream.label')}</span>
+                <span className="settings-hint">{t('settings.remoteStream.unavailable')}</span>
+              </div>
+            )}
           </fieldset>
           )}
 
