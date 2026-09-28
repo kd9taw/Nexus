@@ -220,10 +220,13 @@ it('S7: shows what the station did with the press, and only for this press', asy
   const control = h.peer.channel('control')
   h.link.holdPtt()
   const holdId = h.peer.channel('ptt').sent[0].holdId as string
-  control.deliver({ ...byName(CHANNEL.controlStationToBrowser, 'ptt keyed'), holdId })
+  // Another press's news does not key this one: the contract's case names a different hold id.
+  const other = byName(CHANNEL.controlStationToBrowser, 'ptt keyed')
+  expect(other.holdId).not.toBe(holdId)
+  control.deliver(other)
+  expect(h.link.getSnapshot().keyed).toBe(false)
+  control.deliver({ ...other, holdId })
   expect(h.link.getSnapshot().keyed).toBe(true)
-  // Another press's news does not key this one.
-  control.deliver({ ...byName(CHANNEL.controlStationToBrowser, 'ptt keyed') })
   control.deliver({ ...byName(CHANNEL.controlStationToBrowser, 'ptt ended: lapsed'), holdId })
   expect(h.link.getSnapshot().keyed).toBe(false)
 })
