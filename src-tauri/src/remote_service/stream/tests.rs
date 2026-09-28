@@ -552,3 +552,193 @@ fn a_held_set_reaches_the_window_only_while_presence_is_live() {
         "the window got something other than what the page sent"
     );
 }
+
+// ----- The lead's rulings: which heartbeat renews what, blind stops, B -----
+
+fn keyed(f: &Fixture) {
+    let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+    e.set_operating_mode("phone", false);
+    e.set_ptt(true);
+    assert!(e.manual_ptt(), "premise: keyed");
+}
+
+fn poll(f: &Fixture, at: Instant) -> bool {
+    tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(at)
+}
+
+/// ★ Ruling 1: while a stream is attached, only a `control` heartbeat with a fresh picture
+/// renews presence. The observe socket's own heartbeat, which the relay's operation lane
+/// delivers exactly as below, keeps the LEASE and never presence, so a socket that lives while
+/// the picture is frozen cannot keep the station transmitting. CONTROL: a fresh `control`
+/// heartbeat at the same moment keeps both, and the station does not halt.
+#[test]
+fn a_socket_heartbeat_keeps_the_lease_and_not_presence() {
+    for fresh_on_control in [false, true] {
+        let t0 = Instant::now();
+        let f = fixture(t0);
+        let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+        streaming.presence.renew(&f.station, &streaming.offer, t0);
+        keyed(&f);
+        let t1 = t0 + Duration::from_secs(3);
+        if fresh_on_control {
+            streaming.control(&heartbeat(&f.lease, Some(1)), |_| true, t1);
+        } else {
+            f.station
+                .authority
+                .handle_version(
+                    (f.station.connection, OPERATION_VERSION),
+                    SESSION,
+                    DEVICE,
+                    &Request::Heartbeat {
+                        request_id: id(),
+                        lease_id: f.lease.clone(),
+                    },
+                    &f.station.engine,
+                    t1,
+                )
+                .expect("the socket heartbeat renews the lease");
+        }
+        let t2 = t0 + Duration::from_secs(5);
+        assert_eq!(
+            poll(&f, t2),
+            !fresh_on_control,
+            "fresh on control: {fresh_on_control}"
+        );
+        // The lease outlived t2 either way.
+        assert_eq!(
+            f.station
+                .authority
+                .stream_admitted(SESSION, DEVICE, &f.lease, t2),
+            Ok(())
+        );
+    }
+}
+
+/// ★ Ruling A, and its exception: blind input is refused, and a blind Stop still stops. With no
+/// presence (the picture never confirmed), a click is not delivered, but `stopTransmit` on
+/// `control` is admitted and halts what is on the air. CONTROL: the click with presence live is
+/// delivered (`input_is_delivered_only_while_presence_is_live`).
+#[test]
+fn blind_input_is_refused_and_a_blind_stop_still_stops() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    keyed(&f);
+    streaming.control(&click(), |_| true, now);
+    assert!(
+        f.delivered.lock().unwrap().is_empty(),
+        "blind input delivered"
+    );
+    assert!(!streaming.presence.live(now), "premise: blind");
+    let stop = stop_request(&mut streaming, &f.lease, now);
+    let (answer, _) = streaming.control(&stop, |_| true, now);
+    assert_eq!(
+        reply_of(&answer.unwrap())["value"]["stop"],
+        "accepted",
+        "a blind Stop was refused"
+    );
+    assert!(
+        !tempo_app::engine::engine_lock(&f.station.engine).manual_ptt(),
+        "a blind Stop did not stop"
+    );
+}
+
+/// The same with the lease lapsed too: a browser that held control still stops (the relay path's
+/// ruling of 2026-09-15, which the stream inherits). It needs the current stop token, which
+/// `state` hands an expired controller as it does a live one.
+#[test]
+fn a_stop_after_the_lease_lapsed_still_stops() {
+    let t0 = Instant::now();
+    let f = fixture(t0);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+    keyed(&f);
+    let later = t0 + Duration::from_secs(8);
+    assert!(
+        f.station
+            .authority
+            .stream_admitted(SESSION, DEVICE, &f.lease, later)
+            .is_err(),
+        "premise: the lease has lapsed"
+    );
+    let stop = stop_request(&mut streaming, &f.lease, later);
+    let (answer, _) = streaming.control(&stop, |_| true, later);
+    assert_eq!(
+        reply_of(&answer.unwrap())["value"]["stop"],
+        "accepted",
+        "a Stop with the lease lapsed was refused"
+    );
+    assert!(!tempo_app::engine::engine_lock(&f.station.engine).manual_ptt());
+}
+
+/// A `stopTransmit` as the page sends it, with the stop token from a `state` asked just before.
+fn stop_request(streaming: &mut Streaming, lease: &str, now: Instant) -> Vec<u8> {
+    let (answer, _) = streaming.control(
+        &serde_json::to_vec(&serde_json::json!({"type":"state","requestId":id()})).unwrap(),
+        |_| true,
+        now,
+    );
+    let state = reply_of(&answer.unwrap())["value"].clone();
+    let epoch = state["transmitEpoch"]
+        .as_str()
+        .expect("state hands the stop token")
+        .to_string();
+    serde_json::to_vec(&serde_json::json!({
+        "type":"stopTransmit","requestId":id(),"stationBootId":state["stationBootId"],
+        "leaseId":lease,"transmitEpoch":epoch,
+    }))
+    .unwrap()
+}
+
+/// ★ Question B, answered by the operator on 2026-09-27, verbatim: "Control grant is enough",
+/// offered as "As the plan wrote it: the tick only mattered for the old page; any controller can
+/// stream and transmit." So a browser with the station-control grant and a live lease, and
+/// WITHOUT the FT8/FT4 transmit tick, is admitted to stream. Deliberate: change it only with the
+/// operator. CONTROL: without the control grant the same browser is refused.
+#[test]
+fn a_controller_without_the_transmit_tick_is_admitted() {
+    let now = Instant::now();
+    let f = fixture(now);
+    f.station.authority.permit_transmit(DEVICE, false).unwrap();
+    assert_eq!(
+        f.station
+            .authority
+            .stream_admitted(SESSION, DEVICE, &f.lease, now),
+        Ok(())
+    );
+    assert_eq!(admit(&f.station, &offer(&f.lease), now), passed());
+    f.station.authority.permit_station(DEVICE, false).unwrap();
+    assert_eq!(
+        admit(&f.station, &offer(&f.lease), now),
+        Err(StreamReason::NotController)
+    );
+}
+
+/// ★ S8 (d): a lease lapse ends presence. Presence is minted no later than the lease runs, so
+/// renewing presence alone cannot outlive it, and once the lease has lapsed nothing renews
+/// presence at all. CONTROL: up at 4.999 s, down at 5.000 s, the lease's own end.
+#[test]
+fn a_lapsed_lease_ends_presence() {
+    let t0 = Instant::now();
+    let f = fixture(t0);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+    streaming.presence.renew(&f.station, &streaming.offer, t0);
+    keyed(&f);
+    // Four seconds in, presence alone is renewed (no heartbeat, so the lease is not): it is capped
+    // at the lease's end, five seconds after it was acquired.
+    streaming
+        .presence
+        .renew(&f.station, &streaming.offer, t0 + Duration::from_secs(4));
+    assert!(!poll(&f, t0 + Duration::from_millis(4999)), "halted early");
+    assert!(
+        poll(&f, t0 + Duration::from_secs(5)),
+        "presence outlived the lease"
+    );
+    let after = t0 + Duration::from_secs(6);
+    streaming
+        .presence
+        .renew(&f.station, &streaming.offer, after);
+    assert!(
+        !streaming.presence.live(after),
+        "presence renewed with no lease"
+    );
+}
