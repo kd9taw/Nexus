@@ -272,7 +272,6 @@ export const DE: PartialCatalog = {
   "remote.approveInShackNamed": "„{{station}}“ ist mit deinem Konto verknüpft und wartet auf die Freigabe in Nexus in der Funkbude. Vergleiche dort die Konto-ID und gib die Kopplung frei. Der Code gilt noch etwa {{minutes}} Minuten.",
   "remote.licenses": "Lizenzen und Mitwirkende",
   "remote.nativeIntro": "Diese Station mit deinem Remote-Konto koppeln. Wenn du die Kopplung bestätigst, schaltet sich Remote ein und der Browser, mit dem du gekoppelt hast, wird freigegeben; jeden weiteren Browser gibst du hier frei. Solange Remote eingeschaltet ist, erhalten freigegebene Browser Stations-, Kontakt-, Funkgeräte- und Verstärkerdaten.",
-  "remote.openNexus": "Nexus öffnen",
   "remote.browserWorkspace": "Nexus Remote",
   "remote.quick.name": "Schnellbetrieb",
   "remote.quick.full": "Vollständiges Nexus",

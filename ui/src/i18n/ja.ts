@@ -277,7 +277,6 @@ export const JA: PartialCatalog = {
   "remote.approveInShackNamed": "「{{station}}」はアカウントに紐付けられ、シャックの Nexus での承認を待っています。そちらでアカウント ID を照合して承認してください。コードの残り有効時間は約 {{minutes}} 分です。",
   "remote.licenses": "ライセンスとクレジット",
   "remote.nativeIntro": "この局をリモートアカウントとペアリングします。ペアリングを承認すると Remote がオンになり、ペアリングに使ったブラウザーも承認されます。ほかのブラウザーはここで承認してください。Remote がオンの間、承認済みブラウザーは局、交信、無線機、アンプのデータを受け取ります。",
-  "remote.openNexus": "Nexusを開く",
   "remote.browserWorkspace": "Nexus Remote",
   "remote.quick.name": "クイック運用",
   "remote.quick.full": "フル Nexus",

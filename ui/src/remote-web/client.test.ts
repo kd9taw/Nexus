@@ -326,6 +326,17 @@ const controllingState = () => ({ stationBootId: crypto.randomUUID(), allowed: t
   commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a' })
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const operationRequests = (socket: Socket): any[] => socket.sent.map(value => JSON.parse(value)).filter(m => m.type === 'operationRequest').map(m => m.request)
+// REMOVAL STAGE 3 (the change plan's §4.4): the stream's session opens the operation lane (its lease
+// and Stop) and nothing of the retired application lane. CONTROL: the operation lane still opens.
+it('opens the operation lane for a stream session, and never the retired application lane', async () => {
+  const { remote, socket } = await connection(true, 4)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(operationRequests(socket)[0]?.type, 'control: the lease and Stop lane opened').toBe('state')
+  const application = socket.sent.map(value => JSON.parse(value)).filter(m => String(m.type).startsWith('application'))
+  expect(application, 'no application frame leaves the page').toEqual([])
+  remote.stop()
+})
 async function controlled() {
   const { remote, socket } = await connection(true, 4)
   socket.receive({ type: 'session', sessionId: crypto.randomUUID() })

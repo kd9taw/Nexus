@@ -62,7 +62,16 @@ const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
 // shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
 // was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
-const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true}]
+// REMOVAL STAGE 3 (the change plan's §4.4; the operator's picks 2026-09-27: the old page "Remove
+// entirely", "Now, alongside the PoC"): the Remote page watches or streams a station and no longer
+// offers the workspace. RETIRED with the workspace: the 17 application-version scenarios (v1-v17) and
+// the ten that operate through it (operations, FT operating, session layout, quick layout and its CW
+// mode, contact continuity, DX work, radio selection, routed decoder, routed workspace). Their bodies
+// stay below, unreachable, until stage 4 deletes them with the code they drove. REMAINING: `monitor`
+// (sign-in, pairing, device approval, the observer view and its layouts; the first half of every
+// retired scenario) and `stream`.
+const RETIRED_SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true}]
+const SCENARIOS = [{applicationVersion:NEWEST_APPLICATION_VERSION,operating:false,monitor:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true}]
 
 // Shard selection. Unset means shard 0 of 1 — i.e. EVERYTHING — so a local run,
 // `npm --prefix remote run test:browser` and `scripts/gates` all keep full coverage. CI
@@ -81,8 +90,8 @@ const SHARD_SCENARIOS = SCENARIOS.filter((_, index) => index % SHARDS === SHARD)
 if (SHARDS === 1 && SHARD_SCENARIOS.length !== SCENARIOS.length) throw new Error('unsharded run must select every scenario')
 console.log(`# browser shard ${SHARD} of ${SHARDS}: running ${SHARD_SCENARIOS.length} of ${SCENARIOS.length} scenarios`)
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream} of SHARD_SCENARIOS) test(`compiled hosted browser ${stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream,monitor} of SHARD_SCENARIOS) test(`compiled hosted browser ${monitor?'monitor':stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, monitor?'monitor':stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -960,6 +969,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await click(`document.querySelector('.rm-amp-strip')`)
     if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-observer.png'),Buffer.from(shot.data,'base64'))}
     await click(button('Disconnect and return to stations'))
+    // REMOVAL STAGE 3: the station card offers watching and streaming, and not the old workspace.
+    await until(`!!${button('Observe station')}`)
+    if(monitor){
+      assert.equal(await evaluate(`!!${button('Open Nexus')}`),false,'the old workspace is not offered')
+      assert.equal(await evaluate(`!!${button('Stream Nexus')}`),true,'control: the stream is offered on the same card')
+      assert.equal(exceptions,0,'the page raised no runtime exception')
+      console.log('Compiled browser monitor: PKCE sign-in, pairing, device approval, the observer view at every layout, and no workspace offered')
+      return
+    }
     await until(`!!${button('Open Nexus')}`)
     await geometry(1280,800)
     await click(button('Open Nexus'))

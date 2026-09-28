@@ -460,7 +460,9 @@ export class HostedConnection {
           }
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
-            if (this.applicationMode) { this.application.open(); this.operations.open() }
+            // REMOVAL STAGE 3 (the change plan's §4.4): the application lane is retired and never
+            // opened; the stream takes its lease and sends its Stop on the operation lane.
+            if (this.applicationMode) this.operations.open()
             this.sessionId = message.sessionId
             // A session proves the SERVICE is reachable, so this connection starts counting
             // towards its reconnect credit here rather than only when a data frame lands. Those

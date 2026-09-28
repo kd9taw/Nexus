@@ -485,3 +485,16 @@ it('M11 control: a stream with no over in it ends with no prompt', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'End the stream' }))
   expect(screen.queryByText('Remember to give your call sign at the end of the contact.')).toBeNull()
 })
+
+// REMOVAL STAGE 3 (the change plan's §4.4): with the old workspace gone, the stream is where a browser
+// holding control listens and stops the transmitter. Both are on it while it runs.
+it('Listen and Stop TX are on the stream while it runs under control', async () => {
+  const offered = state('controlling', { controls: { context: {}, capabilities: ['audioListen'] } } as unknown as Partial<OperationState>)
+  const v = view({ state: offered, fresh: true })
+  expect(screen.getByRole('button', { name: 'Stop TX' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  expect(v.link.getSnapshot().phase).toBe('live')
+  expect(screen.getByRole('button', { name: 'Listen' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Stop TX' })).toBeTruthy()
+})

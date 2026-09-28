@@ -14,9 +14,9 @@ function account(entitled = true): AccountSession {
       state: entitled ? 'active' : 'none', startedAt: entitled ? now : null,
       source: entitled ? 'trial' : null } }
 }
-function client(value: AccountSession | null, signInRefusal: BrowserClient['signInRefusal'] = null) {
+function client(value: AccountSession | null, signInRefusal: BrowserClient['signInRefusal'] = null, streamVersion = 0) {
   const post = vi.fn(async (_path: string, _body?: object): Promise<unknown> => value)
-  const service = { post, authenticated: async () => !!value, signIn: vi.fn(async (_createAccount?: boolean) => {}), signOut: vi.fn(async () => {}), signInRefusal }
+  const service = { post, authenticated: async () => !!value, signIn: vi.fn(async (_createAccount?: boolean) => {}), signOut: vi.fn(async () => {}), signInRefusal, streamVersion }
   vi.spyOn(BrowserClient, 'load').mockResolvedValue(service as unknown as BrowserClient)
   return service
 }
@@ -289,7 +289,7 @@ it('shows how long this browser stays approved, and warns in its last seven days
       expires_at: session.serverNow + expires * day, renewsUntil: cap === null ? null : session.serverNow + cap * day } })
     client(session)
     render(<RemoteApp />)
-    await screen.findByRole('button', { name: 'Open Nexus' })
+    await screen.findByRole('button', { name: 'Observe station' })
     const text = document.body.textContent ?? ''
     expect(text, label).toContain(`This browser is approved until ${date(session.serverNow + expires * day)} UTC`)
     if (cap !== null) expect(text, label).toContain(`up to ${date(session.serverNow + cap * day)} UTC`)
@@ -516,4 +516,27 @@ it('offers Keep watching to an observer-only browser, not only to the full works
   expect(keep.getAttribute('aria-pressed')).toBe('false')
   fireEvent.click(keep)
   expect(screen.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
+})
+
+// REMOVAL STAGE 3 (the change plan's §4.4): the Remote page shows the station and streams it. The old
+// workspace is no longer offered; watching the station and streaming it are what remain, and the
+// stream carries its own Stop TX (and Listen, StreamView.test.tsx).
+it('shows the station and streams it: the old workspace is gone, the monitor and the stream remain', async () => {
+  const session = account()
+  session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
+  client(session, null, 1)
+  vi.spyOn(HostedConnection.prototype, 'start').mockImplementation(() => {})
+  vi.spyOn(HostedConnection.prototype, 'stop').mockImplementation(() => {})
+  render(<RemoteApp />)
+  expect(await screen.findByRole('button', { name: 'Stream Nexus' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Observe station' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Open Nexus' }), 'the old workspace is not offered').toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Stream Nexus' }))
+  expect(await screen.findByRole('button', { name: 'Stop TX' })).toBeTruthy()
+  expect(document.querySelector('.remote-stream-app')).toBeTruthy()
+  expect(document.querySelector('.remote-service-app, .remote-workspace'), 'no workspace is mounted').toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect and return to stations' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  expect(await screen.findByRole('button', { name: 'Keep watching' })).toBeTruthy()
+  expect(document.querySelector('.remote-service-app, .remote-workspace'), 'no workspace is mounted').toBeNull()
 })
