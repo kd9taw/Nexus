@@ -47,6 +47,30 @@ describe('patchSettings', () => {
     await expect(patchSettings(() => ({ fdPowerMult: 5 }))).rejects.toThrow('engine busy')
     expect(setSettings).not.toHaveBeenCalled()
   })
+
+  it('runs back-to-back patches one after another, so the second reads what the first wrote', async () => {
+    // The backend's write lands a moment after it is sent, as a real save does.
+    let stored = { ...live, fdBonuses: [] } as Settings
+    vi.mocked(getSettings).mockImplementation(async () => stored)
+    const landsLater = async (s: Settings) => {
+      await new Promise((r) => setTimeout(r, 5))
+      stored = s
+      return {} as never
+    }
+    vi.mocked(setSettings).mockImplementationOnce(landsLater).mockImplementationOnce(landsLater)
+    await Promise.all([
+      patchSettings((s) => ({ fdBonuses: [...(s.fdBonuses ?? []), 'youth'] })),
+      patchSettings((s) => ({ fdBonuses: [...(s.fdBonuses ?? []), 'safety-officer'] })),
+    ])
+    expect(stored.fdBonuses).toEqual(['youth', 'safety-officer'])
+  })
+
+  it('a failed patch does not hold up the next one', async () => {
+    vi.mocked(getSettings).mockRejectedValueOnce(new Error('engine busy')).mockResolvedValue(live)
+    await expect(patchSettings(() => ({ fdPowerMult: 5 }))).rejects.toThrow('engine busy')
+    await patchSettings(() => ({ fdPowerMult: 1 }))
+    expect(saved().fdPowerMult).toBe(1)
+  })
 })
 
 // THE SETTINGS FORM'S SIDE (`changedSince`): its Save sends what the form changed since it loaded,

@@ -16,10 +16,13 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, Settings } from '../types'
 
 let station: Record<string, unknown> = {}
+/** How long a save takes to land at the backend, in ms (0: at once). */
+let writeDelay = 0
 
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({ ...station })),
   setSettings: vi.fn(async (s: Record<string, unknown>) => {
+    if (writeDelay) await new Promise((r) => setTimeout(r, writeDelay))
     station = { ...s }
     return {}
   }),
@@ -76,7 +79,10 @@ const tickYouth = async () => {
   await settle()
 }
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  writeDelay = 0
+})
 
 describe('a scoring save keeps what changed elsewhere since the view opened', () => {
   it("'use one radio' chosen after the view opened stays chosen", async () => {
@@ -101,5 +107,19 @@ describe('a scoring save keeps what changed elsewhere since the view opened', ()
     await pickQrp()
     expect(station.fdPowerMult).toBe(5)
     expect(station.fdOperator).toBe('W9XYZ')
+  })
+
+  it('two bonuses ticked one right after the other are both saved', async () => {
+    // Each save reads the station first, so the second tick must not read before the first
+    // has landed: a real save takes a moment.
+    await openOn({})
+    writeDelay = 5
+    fireEvent.click(screen.getByRole('button', { name: /Bonuses/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Youth Participation/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Safety Officer/ }))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(station.fdBonuses).toEqual(['youth', 'safety-officer'])
   })
 })

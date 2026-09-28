@@ -23,9 +23,13 @@
  * with what the form loaded, so every field the form writes counts — an edit, and anything the form
  * or its save rewrites.
  *
- * ⚠️ The read and the write are two calls. A change that lands between them — a window of
- * milliseconds — is still overwritten. Closing it needs the backend to apply the fields under its
- * own lock.
+ * Patches from this window run one after another, each reading only once the one before it has
+ * been written. Two made back to back (a quick tick, tick down the Field Day bonus list) would
+ * otherwise both read before either wrote, and the second would write the first away.
+ *
+ * ⚠️ The read and the write are two calls. A change from elsewhere that lands between them — a
+ * window of milliseconds — is still overwritten. Closing it needs the backend to apply the fields
+ * under its own lock.
  *
  * `setSettings` is imported directly only by the modules `writers.test.ts` lists, each of which
  * reads the settings immediately before it writes; every other writer goes through here.
@@ -33,12 +37,18 @@
 import { getSettings, setSettings } from '../api'
 import type { AppSnapshot, Settings } from '../types'
 
+/** The last patch this window started: the next one reads only after it has been written. */
+let previous: Promise<unknown> = Promise.resolve()
+
 /** Save `edit`'s fields over the settings the backend holds now. */
-export async function patchSettings(
-  edit: (current: Settings) => Partial<Settings>,
-): Promise<AppSnapshot> {
-  const current = await getSettings()
-  return setSettings({ ...current, ...edit(current) })
+export function patchSettings(edit: (current: Settings) => Partial<Settings>): Promise<AppSnapshot> {
+  const write = previous.then(async () => {
+    const current = await getSettings()
+    return setSettings({ ...current, ...edit(current) })
+  })
+  // A failed patch rejects for its caller and must not hold up the next one.
+  previous = write.catch(() => undefined)
+  return write
 }
 
 /** Fields that describe ONE thing: a form that changed any of them saves all of them. The tune is
