@@ -37,6 +37,8 @@ fn fixture(now: Instant) -> Fixture {
     engine.set_remote_transmit_revocation(authority.transmit_revocation());
     let ptt = PttHold::default();
     engine.set_remote_ptt_hold(ptt.clone());
+    let mic = tempo_app::mic::MicFeed::default();
+    engine.set_remote_mic_feed(mic.clone());
     let mut settings = engine.settings().clone();
     settings.remote_stream = true;
     engine.apply_settings(settings);
@@ -80,6 +82,7 @@ fn fixture(now: Instant) -> Fixture {
             host: Host {
                 input: Some(input),
                 ptt,
+                mic,
                 window: None,
             },
             #[cfg(feature = "radio")]
@@ -369,7 +372,8 @@ fn a_lapse_of_presence_resets_the_window_once() {
     assert_eq!(resets(), 2);
 }
 
-/// A held PTT is taken only while presence is live, and keys through the engine.
+/// A held PTT is taken only while presence is live, and ARMS the microphone over through the
+/// engine (M1: the page's audio keys it, not the hold).
 #[test]
 fn a_held_ptt_is_taken_only_while_presence_is_live() {
     let now = Instant::now();
@@ -380,8 +384,8 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
     streaming.ptt(hold.as_bytes(), now);
     tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
     assert!(
-        !tempo_app::engine::engine_lock(&f.station.engine).manual_ptt(),
-        "keyed with no presence"
+        !tempo_app::engine::engine_lock(&f.station.engine).mic_armed(),
+        "armed with no presence"
     );
     // The engine would refuse it too (a second lock); this is the FIRST one: the hold never
     // reached the held-PTT state at all, so there is not even a refusal to report.
@@ -389,13 +393,20 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
         streaming.ptt_reports().is_empty(),
         "a hold with no presence reached the PTT"
     );
-    // CONTROL: with presence, a fresh press keys.
+    // CONTROL: with presence, a fresh press arms the microphone, and keys nothing by itself.
     streaming.presence.renew(&f.station, &streaming.offer, now);
     let other = "10000000-0000-4000-8000-00000000000b";
     let hold = format!(r#"{{"type":"pttHold","holdId":"{other}","seq":0}}"#);
     streaming.ptt(hold.as_bytes(), now);
     tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
-    assert!(tempo_app::engine::engine_lock(&f.station.engine).manual_ptt());
+    {
+        let e = tempo_app::engine::engine_lock(&f.station.engine);
+        assert!(e.mic_armed(), "a press with presence did not arm");
+        assert!(
+            !e.mic_keyed() && !e.manual_ptt(),
+            "the press alone keyed the station"
+        );
+    }
     // …and the page is told so.
     let reports: Vec<Value> = streaming
         .ptt_reports()

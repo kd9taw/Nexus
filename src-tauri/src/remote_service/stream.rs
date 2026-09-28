@@ -76,8 +76,11 @@ pub struct Host {
     /// Where admitted input goes: the station's own main window, as the `remote-stream-input`
     /// event. `None` in a build or a test with no window, and then input is dropped.
     pub input: Option<InputSink>,
-    /// The held PTT the engine keys and releases. Installed into the engine when Remote is built.
+    /// The held PTT the engine arms and releases. Installed into the engine when Remote is built.
     pub ptt: PttHold,
+    /// The page's microphone, decoded, on its way to the engine's microphone over. Installed into
+    /// the engine when Remote is built; it takes audio only while an over is armed.
+    pub mic: tempo_app::mic::MicFeed,
     /// The one window a stream shows: the station's `main` window. `None` where there is none
     /// (a test, or a build without a window), and then a stream is answered unavailable.
     pub window: Option<WindowHandle>,
