@@ -520,6 +520,40 @@ pub enum ControlOut {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<PttReason>,
     },
+    /// The operator's microphone over, as the station holds it (plan S6, the audio design's M1).
+    /// Sent when any field changes. `armed`: a press (the page's PTT, or one made through the
+    /// picture) armed an over; `keyed`: the operator's voice has keyed the rig; `noPowerOut`: the
+    /// voice has been arriving for about two seconds and the rig reports no power out, which is
+    /// display only and changes nothing about the over; `ended`: on the message that reports an
+    /// over's end, why it ended.
+    MicState {
+        armed: bool,
+        keyed: bool,
+        #[serde(rename = "noPowerOut")]
+        no_power_out: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ended: Option<MicEnded>,
+    },
+}
+
+/// Why a microphone over ended, as the page is told (the audio design's §7 captions).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MicEnded {
+    /// The operator let go.
+    Released,
+    /// A stop at the station, TX turned off, leaving Phone, a tune, or the licence.
+    Stopped,
+    /// No audio arrived for 200 ms (M2): the uplink stalled or the microphone went quiet.
+    AudioGap,
+    /// The session's transmit presence lapsed (M7).
+    Presence,
+    /// The 10-minute ceiling.
+    Ceiling,
+    /// The wall-clock TX watchdog.
+    Watchdog,
+    /// The station's transmit audio route changed under the over (G7).
+    RouteChanged,
 }
 
 /// Why a held PTT is not keyed.
@@ -842,7 +876,7 @@ mod tests {
         );
         assert_eq!(
             round_trip::<ControlOut>(CHANNEL, "controlStationToBrowser"),
-            10
+            20
         );
         assert_eq!(round_trip::<PttIn>(CHANNEL, "pttBrowserToStation"), 7);
         assert_eq!(round_trip::<AudioOut>(CHANNEL, "audioStationToBrowser"), 3);

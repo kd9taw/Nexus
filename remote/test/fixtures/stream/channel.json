@@ -350,6 +350,103 @@
         "keyed": false,
         "reason": "stopped"
       }
+    },
+    {
+      "name": "mic armed, no audio yet (a held PTT keys nothing until the operator's voice arrives)",
+      "message": {
+        "type": "micState",
+        "armed": true,
+        "keyed": false,
+        "noPowerOut": false
+      }
+    },
+    {
+      "name": "mic keyed by the operator's voice",
+      "message": {
+        "type": "micState",
+        "armed": true,
+        "keyed": true,
+        "noPowerOut": false
+      }
+    },
+    {
+      "name": "mic keyed, and the rig reports no power out (display only)",
+      "message": {
+        "type": "micState",
+        "armed": true,
+        "keyed": true,
+        "noPowerOut": true
+      }
+    },
+    {
+      "name": "mic over ended: released",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "released"
+      }
+    },
+    {
+      "name": "mic over ended: stopped",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "stopped"
+      }
+    },
+    {
+      "name": "mic over ended: audioGap",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "audioGap"
+      }
+    },
+    {
+      "name": "mic over ended: presence",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "presence"
+      }
+    },
+    {
+      "name": "mic over ended: ceiling",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "ceiling"
+      }
+    },
+    {
+      "name": "mic over ended: watchdog",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "watchdog"
+      }
+    },
+    {
+      "name": "mic over ended: routeChanged",
+      "message": {
+        "type": "micState",
+        "armed": false,
+        "keyed": false,
+        "noPowerOut": false,
+        "ended": "routeChanged"
+      }
     }
   ],
   "pttBrowserToStation": [

@@ -89,11 +89,11 @@ nothing.
 ## Data channels (`channel.json`)
 
 The page creates three data channels before `createOffer`, each with the label and reliability
-shown. The station identifies them by label.
+shown, and one audio line it sends, for its microphone. The station identifies the channels by label.
 
 | Label | Reliability | Carries |
 |---|---|---|
-| `control` | reliable, ordered | today's operation requests (`state`, `heartbeat`, `release`, `stopTransmit`), input, their replies, `pttState` |
+| `control` | reliable, ordered | today's operation requests (`state`, `heartbeat`, `release`, `stopTransmit`), input, their replies, `pttState`, `micState` |
 | `ptt` | unordered, `maxRetransmits: 0` | `pttHold`, `pttRelease`, `held` |
 | `audio` | unordered, `maxRetransmits: 0` | receive audio, exactly the relay's `audioRx` bundle and `audioState` |
 
@@ -140,6 +140,20 @@ a courtesy: the gap is the guarantee. A press the station has ended never keys a
 arrives late, so a new press needs a new `holdId`. The station reports what it did on `control`
 as `pttState { holdId, keyed, reason? }`, where `reason` is one of `refused`, `lapsed`,
 `released`, `stopped`.
+
+**The microphone** (the page's audio line, `sendonly` Opus, 20 ms frames, DTX off). A held PTT
+ARMS an over and the operator's voice keys it: a press with no audio arriving puts nothing on the
+air. So `pttState.keyed` says the press was taken, not that the rig is on the air. The station
+says what its over is doing on `control` as `micState { armed, keyed, noPowerOut, ended? }`,
+whenever a field changes. `armed`: an over is armed, by the page's PTT or by a press made through
+the picture. `keyed`: the operator's voice has keyed the rig. `noPowerOut`: the voice has been
+arriving for about two seconds and the rig reports no power out. It is display only (the rig's
+SSB audio source is most likely its own microphone), it is never sent for a rig with no power
+reading, and it changes nothing about the over. `ended` appears only on the message that reports
+an over's end: `released` (the operator let go), `stopped` (a stop at the station, TX off,
+leaving Phone, a tune, the licence), `audioGap` (no audio for 200 ms), `presence` (the session's
+transmit presence lapsed), `ceiling` (the 10-minute limit), `watchdog` (the TX watchdog) or
+`routeChanged` (the station's transmit audio route changed).
 
 **Input** is a DOM-level description of what the operator did over the video, never an OS input
 event. `x` and `y` are fractions (0 to 1) of the decoded video frame, which is the station's
