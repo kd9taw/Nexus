@@ -6,6 +6,7 @@ import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable } from './features/durableStore'
 import { startMemoryPublisher } from './remote-native/memoryPublisher'
+import { installStreamInput } from './remote-native/stream-input'
 import { initLocale, installCatalog } from './i18n'
 import { DE } from './i18n/de'
 import { ES } from './i18n/es'
@@ -105,6 +106,9 @@ const tree = (
 // failure mode, and not one to re-create over a preferences file.
 void loadDurable().finally(() => {
   if (!panel) startMemoryPublisher()
+  // A streamed Remote operator's input, as DOM events in this window and nowhere else. The main
+  // window only: the station sends it nowhere else. Inert until a stream is admitted at the shack.
+  if (!panel) installStreamInput()
   // Language BEFORE the first render, for the same reason the durable store is: `t()` reads a
   // module-level variable, so a locale applied after mount would leave the first paint in
   // English and switch it under the operator a frame later. Reads the stored choice, else the

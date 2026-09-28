@@ -69,6 +69,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AppSnapshot } from './types'
 import App from './App'
+import { installStreamInput } from './remote-native/stream-input'
 
 // ── the recorder ────────────────────────────────────────────────────────────────────────────
 type BridgeCall = { cmd: string; args?: Record<string, unknown> }
@@ -510,6 +511,107 @@ describe('JS8', () => {
 
   it('Esc sends halt_tx (the keyboard-only stop)', async () => {
     expect(await fire(() => fireEvent.keyDown(window, { key: 'Escape' }))).toEqual(['halt_tx'])
+  })
+})
+
+// ── the same controls, driven over the stream ─────────────────────────────────────────────────
+//
+// Remote as a stream: a streamed operator's input reaches this window as DOM events that the input
+// bridge dispatches (remote-native/stream-input.ts), fed here through the Tauri event the station
+// emits. Held against the REAL cockpit and the real api module, the lead's rules for it: a key or a
+// click travels as itself and the cockpit decides what it means (a Space outside a field keys PTT,
+// in a field it types); and whatever the stream holds down is a re-asserted state that comes up
+// within 200 ms of the page going quiet (the dead-man), with the station's `reset` as the backstop.
+const WEBVIEW = JSON.parse(readFileSync(resolve(__dirname, '../../remote/test/fixtures/stream/webview.json'), 'utf8')) as {
+  stationToWebview: { name: string; message: Record<string, unknown> }[]
+}
+const streamed = (name: string) => structuredClone(WEBVIEW.stationToWebview.find((c) => c.name === name)!.message)
+const SPACE_DOWN = "key down, Space (an ordinary key: the window's own handlers decide what it does)"
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+describe('Phone, over the stream', () => {
+  let send: (payload: unknown) => void = () => {}
+  let remove: () => void = () => {}
+  let seq = 0
+  const deliver = (name: string) => send(streamed(name))
+  const at = (el: Element) => Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => el })
+  const click = () => { deliver('pointer down'); deliver('pointer up') }
+  /** The page re-asserting what it holds as the page does: at once, then every 100 ms, for `ms`.
+   *  Returns when the last re-assertion went. Each wait is started after a re-assertion, so however
+   *  late the event loop runs, the next one is due before the window's 200 ms deadline and is
+   *  handled first. */
+  const reassert = async (keys: string[], buttons: number, ms: number): Promise<number> => {
+    let last = performance.now()
+    for (let t = 0; t < ms; t += 100) { send({ type: 'held', keys, buttons, seq: seq++ }); last = performance.now(); await pause(100) }
+    return last
+  }
+  /** Wait for the unkey after the page went quiet, and say how long after its last re-assertion. */
+  const unkeyedAfter = async (m: number, quiet: number): Promise<number> => {
+    await waitFor(() => expect(firedSince(m)).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}']))
+    return performance.now() - quiet
+  }
+  beforeEach(async () => {
+    seq = 0
+    await mountOn('phone')
+    const tauri = window as unknown as { __TAURI__?: unknown }
+    tauri.__TAURI__ = { event: { listen: (_name: string, handler: (event: { payload: unknown }) => void) => {
+      send = (payload) => handler({ payload })
+      return Promise.resolve(() => {})
+    } } }
+    remove = installStreamInput(window)
+    await Promise.resolve()
+  })
+  afterEach(() => {
+    remove()
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  })
+
+  it('a streamed Space keys PTT through the cockpit\'s own handler, stays keyed while re-asserted, and unkeys within 200 ms of the page going quiet', async () => {
+    const m = mark()
+    deliver(SPACE_DOWN)
+    const quiet = await reassert(['Space'], 0, 600)
+    expect(firedSince(m), 'keyed, and held for 600 ms: still keyed').toEqual(['set_ptt {"on":true}'])
+    expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
+  })
+
+  it('a streamed space typed into a field is typed there, and keys nothing', async () => {
+    const comment = [...document.querySelectorAll<HTMLInputElement>('input.le-comment')].find((el) => el.closest('[hidden]') == null)
+    expect(comment, 'the log strip\'s comment field is not on screen').toBeTruthy()
+    at(comment!)
+    const m = mark()
+    click()
+    const digit = (key: string, action: 'down' | 'up') => send({ type: 'key', action, key, code: `Digit${key}`, modifiers: 0, repeat: false })
+    digit('5', 'down'); digit('5', 'up')
+    deliver(SPACE_DOWN); deliver('key up, Space')
+    digit('9', 'down'); digit('9', 'up')
+    await waitFor(() => expect(comment!.value).toBe('5 9'))
+    expect(document.activeElement).toBe(comment)
+    expect(firedSince(m), 'typing a space keyed nothing').toEqual([])
+  })
+
+  it('a streamed click is a click: Stop TX sends halt_tx, Tune keys the carrier and drops it', async () => {
+    at(onScreenButton(STOP_TX))
+    expect(await fire(click)).toEqual(['halt_tx'])
+    at(onScreenButton(TUNE))
+    expect(await fire(click)).toEqual(['set_tune {"on":true}'])
+    await waitFor(() => expect(onScreenButton(TUNE).getAttribute('aria-pressed')).toBe('true'))
+    at(onScreenButton(TUNE))
+    expect(await fire(click)).toEqual(['set_tune {"on":false}'])
+  })
+
+  it('the PTT button held over the stream keys, stays keyed while re-asserted, and unkeys within 200 ms of the page going quiet; reset unkeys it too', async () => {
+    at(document.querySelector('.ph-ptt')!)
+    const m = mark()
+    deliver('pointer down')
+    const quiet = await reassert([], 1, 600)
+    expect(firedSince(m), 'keyed, and held for 600 ms: still keyed').toEqual(['set_ptt {"on":true}'])
+    expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
+    // The backstop: a stream's end or a lapse of presence releases it at once.
+    const again = mark()
+    deliver('pointer down')
+    send({ type: 'reset' })
+    expect(firedSince(again)).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}'])
   })
 })
 

@@ -18,8 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The browser's clicks and keys reach Nexus only, never anything else on the computer. While a
   browser is attached, every transmission at the station stops within five seconds if its
   connection drops, and within seven if its picture freezes. The picture is VP8 over encrypted
-  WebRTC, at most 30 frames a second. The browser side is not in this build yet, so the switch
-  has nothing to connect to for now.
+  WebRTC, at most 30 frames a second.
+- **Remote: stream Nexus from the shack (first test build).** Each station on the Remote page has
+  a **Stream Nexus** button: the Nexus window at the shack, live in your browser, worked with your
+  own mouse and keyboard. It needs a Nexus at the shack with streaming turned on, and the page says
+  so when that is missing. Only the Nexus window is sent,
+  never the rest of the PC's screen, and what you click and type reaches Nexus and no other
+  program. Nothing streams until you press **Start the stream**, and only with station control
+  allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
+  and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
+  or let the picture freeze, and it lets go. In Phone the space bar over the picture is push-to-talk
+  as it is at the shack, and a space typed into a Nexus field still types. Anything you hold down
+  over the picture, a key or a mouse button, is let go at the shack within a fifth of a second if
+  the connection drops. While the picture is frozen Nexus takes no clicks or keys from the browser,
+  and Stop TX still works. A band or mode list you open from the browser opens inside the Nexus
+  window, so you can see it and pick from it. Switching to another tab ends the stream; press
+  **Start the stream** again when you are back. If Remote access is switched off for your account
+  while you stream, the stream ends within about two seconds and the page says why.
 - **Remote as a stream: the station can put the browser's microphone on the air (Windows).** A
   streamed operator's own voice reaches the rig in Phone, played into the rig's USB audio.
   **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig
