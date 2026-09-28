@@ -8,7 +8,9 @@
 //!   a picture only when the window changes, and the page's freshness rule (S9) needs frames to
 //!   echo, so the last picture is encoded again, stamped now. That is honest because nothing
 //!   changed: the picture IS the window as of now. It stops the moment the window is not showing
-//!   (minimized, or closed), so a page never sees an old picture presented as current.
+//!   (minimized, or closed), or changes into something that gives no picture (dragged too small
+//!   to encode, or a frame that could not be read: [`Mailbox::lost`]), so a page never sees an
+//!   old picture presented as current.
 //! - **A frame the transport cannot take is not silently lost.** The output holds a few frames;
 //!   when it is full the frame is dropped and the next one is a keyframe, because every VP8 frame
 //!   after a lost one decodes wrong until a keyframe arrives.
@@ -60,6 +62,8 @@ pub struct Encoded {
 #[derive(Default)]
 struct Slot {
     picture: Option<Bgra>,
+    /// The window changed into something that gives no picture.
+    lost: bool,
     ended: bool,
 }
 
@@ -73,6 +77,8 @@ pub struct Mailbox {
 /// What [`Mailbox::take`] found.
 pub enum Taken {
     Picture(Bgra),
+    /// The window changed, but gave no picture: the last one is no longer the window.
+    Lost,
     /// Nothing new within the wait.
     Nothing,
     /// The capture is over and nothing is left.
@@ -84,6 +90,17 @@ impl Mailbox {
     pub fn put(&self, picture: Bgra) {
         let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
         slot.picture = Some(picture);
+        slot.lost = false;
+        self.ready.notify_one();
+    }
+
+    /// The window changed into something that cannot be sent (too small to encode, or a frame
+    /// that could not be read). Whatever picture the encoder holds is no longer the window, so it
+    /// is not sent again until a new one arrives.
+    pub fn lost(&self) {
+        let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
+        slot.picture = None;
+        slot.lost = true;
         self.ready.notify_one();
     }
 
@@ -103,10 +120,14 @@ impl Mailbox {
         let slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
         let (mut slot, _) = self
             .ready
-            .wait_timeout_while(slot, wait, |s| s.picture.is_none() && !s.ended)
+            .wait_timeout_while(slot, wait, |s| s.picture.is_none() && !s.lost && !s.ended)
             .unwrap_or_else(|p| p.into_inner());
         match slot.picture.take() {
             Some(picture) => Taken::Picture(picture),
+            None if slot.lost => {
+                slot.lost = false;
+                Taken::Lost
+            }
             None if slot.ended => Taken::Ended,
             None => Taken::Nothing,
         }
@@ -232,6 +253,9 @@ impl Encoder {
             match mailbox.take(wait.max(Duration::from_millis(1))) {
                 Taken::Picture(captured) => {
                     let Some(picture) = picture::to_i420(&captured) else {
+                        // Nothing encodable (a window dragged too small): the old picture is not
+                        // the window any more.
+                        self.last = None;
                         continue;
                     };
                     self.last = Some(picture);
@@ -246,6 +270,7 @@ impl Encoder {
                         self.send(shared, Instant::now(), out);
                     }
                 }
+                Taken::Lost => self.last = None,
                 Taken::Ended => break,
             }
         }
@@ -482,6 +507,27 @@ mod tests {
         mailbox.put(grey(9, 32, Instant::now()));
         let next = wait_for(&pipeline, 1, Duration::from_secs(2));
         assert!(next[0].keyframe, "the decoder was left without a keyframe");
+    }
+
+    /// The window changed into something that gives no picture (a frame that could not be
+    /// read, or a window dragged too small to encode): the old picture is not sent again as if
+    /// it were the window. CONTROL: a new picture brings the stream back.
+    #[test]
+    fn a_lost_or_unencodable_picture_is_not_sent_again() {
+        for lose in [(|m: &Mailbox| m.lost()) as fn(&Mailbox), |m: &Mailbox| {
+            m.put(grey(0, 8, Instant::now()))
+        }] {
+            let mailbox = Arc::new(Mailbox::default());
+            let pipeline =
+                Pipeline::start(mailbox.clone(), Box::new(|| true), fake(), no_priority).unwrap();
+            mailbox.put(grey(0, 32, Instant::now()));
+            assert_eq!(wait_for(&pipeline, 1, Duration::from_secs(2)).len(), 1);
+            lose(&mailbox);
+            std::thread::sleep(STILL_FRAME * 3);
+            assert!(pipeline.take().is_empty(), "the old picture was sent again");
+            mailbox.put(grey(1, 32, Instant::now()));
+            assert_eq!(wait_for(&pipeline, 1, Duration::from_secs(2)).len(), 1);
+        }
     }
 
     /// The capture ended: the thread ends too, and says so.

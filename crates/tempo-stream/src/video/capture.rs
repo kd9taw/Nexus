@@ -152,18 +152,22 @@ impl GraphicsCaptureApiHandler for Handler {
         if !showing(self.window) {
             return Ok(());
         }
+        // A window too small to encode, or a frame that cannot be read, is a change the page
+        // cannot be shown: the encoder is told the picture it holds is no longer the window.
         let Some((x, y, w, h)) = client_area(self.window, frame.width(), frame.height()) else {
+            self.mailbox.lost();
             return Ok(());
         };
         let captured_at = Instant::now();
-        // A frame that cannot be read is skipped; the next change brings another.
         let Ok(mut buffer) = frame.buffer_crop(x, y, x + w, y + h) else {
+            self.mailbox.lost();
             return Ok(());
         };
         let pitch = buffer.row_pitch() as usize;
         let row = w as usize * 4;
         let raw = buffer.as_raw_buffer();
         if pitch < row || raw.len() < pitch * (h as usize - 1) + row {
+            self.mailbox.lost();
             return Ok(());
         }
         let mut pixels = Vec::with_capacity(row * h as usize);
