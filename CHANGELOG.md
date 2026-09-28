@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote: stream Nexus from the shack (first test build).** Each station on the Remote page has
+  a **Stream Nexus** button: the Nexus window at the shack, live in your browser, worked with your
+  own mouse and keyboard. It needs a Nexus at the shack with streaming turned on, and the page says
+  so when that is missing. Only the Nexus window is sent,
+  never the rest of the PC's screen, and what you click and type reaches Nexus and no other
+  program. Nothing streams until you press **Start the stream**, and only with station control
+  allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
+  and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
+  or let the picture freeze, and it lets go. A band or mode list you open from the browser opens
+  inside the Nexus window, so you can see it and pick from it. Switching to another tab ends the
+  stream; press **Start the stream** again when you are back.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
