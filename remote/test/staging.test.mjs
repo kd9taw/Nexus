@@ -139,9 +139,14 @@ test('every D1 migration is additive, including the approval-lifetime column', a
   // time, and so is never renewed, which is what the Nexus that gave it expects.
   const lifetime = additive(await readFile(join(directory, '0007_device_lifetime.sql'), 'utf8'))
   assert.deepEqual(lifetime, [])
-  const statements = (await readFile(join(directory, '0007_device_lifetime.sql'), 'utf8')).split('\n')
+  const statements = async name => (await readFile(join(directory, name), 'utf8')).split('\n')
     .filter(line => !line.trimStart().startsWith('--')).join('\n').split(';').map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
-  assert.deepEqual(statements, ['ALTER TABLE devices ADD COLUMN approved_at INTEGER'])
+  assert.deepEqual(await statements('0007_device_lifetime.sql'), ['ALTER TABLE devices ADD COLUMN approved_at INTEGER'])
+  // The device key (A5) adds two nullable columns and nothing else: a browser approved before it has
+  // no key, and a pairing confirmed before it brought none.
+  assert.ok(names.includes('0008_device_key.sql'))
+  assert.deepEqual(await statements('0008_device_key.sql'),
+    ['ALTER TABLE devices ADD COLUMN public_key TEXT', 'ALTER TABLE enrollments ADD COLUMN public_key TEXT'])
 })
 
 test('staging configuration requires exact service/database scope and public Auth0 tenant values', () => {
