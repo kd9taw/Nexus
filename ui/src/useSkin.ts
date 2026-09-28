@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { activeSkin, skinOf, type SkinId } from './features/skins'
 import { PALETTE_EVENT } from './usePaletteRoles'
 import type { Theme } from './useTheme'
@@ -22,7 +22,7 @@ import type { Theme } from './useTheme'
 // picks up a change the next time it opens.
 //
 // A change fires PALETTE_EVENT: the canvases that cache token colours key their caches on
-// usePaletteKey, which reads this attribute too.
+// usePaletteKey, which reads this attribute too, and the scopes' Auto palette reads useSkinActive.
 
 // ⚠️ The localStorage calls name SKIN_STORAGE_KEY directly: storage-scope.test.ts resolves a key
 // only when it is a literal or a same-file const at the call site (see useFieldMode.ts).
@@ -63,4 +63,16 @@ export function useSkin(theme: Theme): [SkinId | null, (id: SkinId | null) => vo
   }, [])
 
   return [skin, setSkin]
+}
+
+const subscribe = (onChange: () => void) => {
+  window.addEventListener(PALETTE_EVENT, onChange)
+  return () => window.removeEventListener(PALETTE_EVENT, onChange)
+}
+const snapshot = () => skinOf(document.documentElement.getAttribute('data-skin'))?.id ?? null
+
+/** The built-in theme painting in this document, for a reader that bakes colours of its own:
+ *  the scopes' Auto palette is the theme's (resolveColormap). */
+export function useSkinActive(): SkinId | null {
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
 }

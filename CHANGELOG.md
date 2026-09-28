@@ -140,8 +140,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in **Colours** wins over the theme's (that row calls the theme's colour **Theme's own**). On a
   theme, the band name on the band chip, the Logbook globe's band picker and the Field Day band
   board is lettered in the theme's text colour, with the band's colour on its border or underline,
-  as in Light. Pick Light, Dark or System to go back. The theme is remembered per computer, and
-  your backup carries it with the rest of the look.
+  as in Light. A waterfall or scope on the **Auto** palette takes the theme's own palette (Amber
+  CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue VFD, Cividis on Paper…); Night still
+  turns it Amber CRT, and a palette you picked by name never changes. Pick Light, Dark or System
+  to go back. The theme is remembered per computer, and your backup carries it with the rest of
+  the look.
 
 ### Changed
 

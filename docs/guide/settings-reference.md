@@ -2016,7 +2016,11 @@ same thing.
 **Turbo** is the default for both, and a palette you picked stays picked.
 **Cividis** is the colour-blind-safe choice: it looks almost the same to
 red-green colour-blind eyes as to everyone else. **Auto** follows the theme, and
-turns Amber CRT while Night is on. Remembered per computer.
+turns Amber CRT while Night is on. On one of the ready-made themes, Auto is that
+theme's own palette: Amber CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue
+VFD, Viridis on Silver chassis, Slate and Lagoon, Cividis on Paper and Inferno on
+the rest. A palette you picked by name never changes with the theme. Remembered per
+computer.
 
 ### Map & globe
 

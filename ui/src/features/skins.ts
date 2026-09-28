@@ -52,6 +52,7 @@
 // board letters its mode cells in the page colour, and #dfe3e8 read 4.45:1 on them by day and
 // 4.09:1 at night (styles-theme-cascade.test.ts); #e2e6eb reads 4.58:1, and 4.54:1 at night.
 
+import type { ColormapName } from '../colormaps'
 import type { MessageKey } from '../i18n'
 import type { Theme } from '../useTheme'
 
@@ -82,6 +83,9 @@ export interface Skin {
   lineKey: MessageKey
   /** The theme this skin rides on: what picking it sets `tempo-theme` to. */
   base: Theme
+  /** What a waterfall or scope on the Auto palette paints under it (resolveColormap). Night still
+   *  turns Auto Amber CRT, and a palette picked by name is never changed (operator, "Yes, on Auto"). */
+  waterfall: ColormapName
   /** By day, at <html> — and, on a dark skin, inside every display well. */
   day: SkinValues
   /** A light skin's display wells by day: the accent and readout only (the well stays dark). */
@@ -124,6 +128,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.amberLcd.label',
     lineKey: 'theme.amberLcd.line',
     base: 'dark',
+    waterfall: 'amber-crt',
     day: {
       '--bg': '#0c0a07', '--panel': '#14110c', '--bg-elev': '#1a160f', '--bg-elev-2': '#221c13',
       '--border': '#3a3020', '--border-soft': '#2a2418', '--text': '#f0e6d2', '--text-dim': '#bfae90',
@@ -147,6 +152,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.greenLcd.label',
     lineKey: 'theme.greenLcd.line',
     base: 'dark',
+    waterfall: 'sdr-green',
     day: {
       '--bg': '#070a08', '--panel': '#0e130f', '--bg-elev': '#131a14', '--bg-elev-2': '#1a231b',
       '--border': '#24382a', '--border-soft': '#1a2a1e', '--text': '#dfeadf', '--text-dim': '#a3b7a6',
@@ -170,6 +176,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.blueVfd.label',
     lineKey: 'theme.blueVfd.line',
     base: 'dark',
+    waterfall: 'blue',
     day: {
       '--bg': '#06090f', '--panel': '#0c1220', '--bg-elev': '#111a2d', '--bg-elev-2': '#182440',
       '--border': '#263a5e', '--border-soft': '#1b2b47', '--text': '#e6eefc', '--text-dim': '#93a1bb',
@@ -193,6 +200,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.silver.label',
     lineKey: 'theme.silver.line',
     base: 'light',
+    waterfall: 'viridis',
     day: {
       '--bg': '#e2e6eb', '--panel': '#f9fafb', '--bg-elev': '#f9fafb', '--bg-elev-2': '#f3f5f7',
       '--border': '#9aa3ad', '--border-soft': '#b9c1ca', '--text': '#1b1f24', '--text-dim': '#4a525c',
@@ -220,6 +228,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.midnight.label',
     lineKey: 'theme.midnight.line',
     base: 'dark',
+    waterfall: 'inferno',
     day: {
       '--bg': '#000000', '--panel': '#0a0a0c', '--bg-elev': '#101014', '--bg-elev-2': '#17171c',
       '--border': '#2a2a33', '--border-soft': '#1c1c22', '--text': '#ececf1', '--text-dim': '#a9a9b6',
@@ -243,6 +252,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.slate.label',
     lineKey: 'theme.slate.line',
     base: 'dark',
+    waterfall: 'viridis',
     day: {
       '--bg': '#14181f', '--panel': '#1b2029', '--bg-elev': '#222833', '--bg-elev-2': '#2a3140',
       '--border': '#3f4859', '--border-soft': '#323a49', '--text': '#e5ebf3', '--text-dim': '#a6b2c2',
@@ -266,6 +276,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.lagoon.label',
     lineKey: 'theme.lagoon.line',
     base: 'dark',
+    waterfall: 'viridis',
     day: {
       '--bg': '#001a20', '--panel': '#02252d', '--bg-elev': '#063039', '--bg-elev-2': '#0b3a44',
       '--border': '#1a5560', '--border-soft': '#0f434e', '--text': '#e3eeeb', '--text-dim': '#9fb9b3',
@@ -289,6 +300,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.ember.label',
     lineKey: 'theme.ember.line',
     base: 'dark',
+    waterfall: 'inferno',
     day: {
       '--bg': '#1a1613', '--panel': '#221d19', '--bg-elev': '#2a2420', '--bg-elev-2': '#332c27',
       '--border': '#4a3f37', '--border-soft': '#3a322c', '--text': '#efe3d0', '--text-dim': '#c2b39c',
@@ -312,6 +324,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.nebula.label',
     lineKey: 'theme.nebula.line',
     base: 'dark',
+    waterfall: 'inferno',
     day: {
       '--bg': '#16151e', '--panel': '#1e1c28', '--bg-elev': '#262333', '--bg-elev-2': '#2f2b3f',
       '--border': '#47415f', '--border-soft': '#38334d', '--text': '#eee9fb', '--text-dim': '#a69dbf',
@@ -335,6 +348,7 @@ export const SKINS: readonly Skin[] = [
     labelKey: 'theme.paper.label',
     lineKey: 'theme.paper.line',
     base: 'light',
+    waterfall: 'cividis',
     day: {
       '--bg': '#ede7d8', '--panel': '#fcfaf5', '--bg-elev': '#fcfaf5', '--bg-elev-2': '#f7f5f0',
       '--border': '#c9c0ab', '--border-soft': '#ddd5c2', '--text': '#2b2618', '--text-dim': '#5b5445',
