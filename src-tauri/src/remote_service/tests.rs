@@ -1362,12 +1362,23 @@ async fn fake_cloud() -> FakeCloud {
                         json!({"accountId":ACCOUNT,"approved":false}).to_string(),
                     )
                 } else if head.contains("/enroll/approve ") {
-                    // The service approves the browser that confirmed the pairing along with it.
-                    let device = if lifetime {
+                    // The service approves the browser that confirmed the pairing along with it, with
+                    // the device key its confirm brought (A5), if it brought one: here, the key the
+                    // browser list names for it.
+                    let mut device = if lifetime {
                         json!({"id":BROWSER,"expiresAt":APPROVED_UNTIL,"generation":2})
                     } else {
                         json!({"id":BROWSER,"expiresAt":APPROVED_UNTIL})
                     };
+                    let confirmed =
+                        serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                            .ok()
+                            .and_then(|l| {
+                                l["devices"][0]["publicKey"].as_str().map(str::to_string)
+                            });
+                    if let Some(key) = confirmed {
+                        device["publicKey"] = key.into();
+                    }
                     let approved = json!({"stationId":STATION,"accountId":ACCOUNT,"device":device});
                     ("200 OK", approved.to_string())
                 } else if head.contains("/native/devices ") {
@@ -2829,4 +2840,57 @@ async fn a5_a_browser_that_changed_its_key_is_shown_unpinned_until_approved_agai
     let again = approve_shown(&service, Some(hex(&new.pin())), false).await;
     assert_eq!(again.pinned_devices, [BROWSER]);
     assert_eq!(pinned(&service), Some(new.pin()));
+}
+
+/// ★ A5, operator ruling D4 (2026-09-28): approving the pairing pins the device key of the browser
+/// that confirmed it, on first use (the same trust the pairing already places in the service). Both
+/// ends show its fingerprint straight after, and revoking the browser is one click. CONTROL: a
+/// pairing whose browser brought no key pins nothing, and that browser is approved again before it
+/// streams.
+#[tokio::test(flavor = "multi_thread")]
+async fn a5_approving_the_pairing_pins_the_key_the_confirming_browser_brought() {
+    for keyed in [true, false] {
+        let cloud = fake_cloud().await;
+        let vault = MemoryVault::default();
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let key = DeviceKey::new();
+        let mut listed: serde_json::Value =
+            serde_json::from_str(&device_list(1, APPROVED_UNTIL)).unwrap();
+        if keyed {
+            listed["devices"][0]["publicKey"] = key.public_key.clone().into();
+        }
+        *cloud.devices.lock().unwrap() = listed.to_string();
+        let service = launch(&cloud, &vault, &engine);
+        service
+            .action(Action::Begin {
+                name: "Test station".into(),
+            })
+            .await
+            .unwrap();
+        service.action(Action::Refresh {}).await.unwrap();
+        service
+            .action(Action::Approve {
+                enrollment_id: STATION.into(),
+                account_id: ACCOUNT.into(),
+                transmit: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(pinned(&service), keyed.then(|| key.pin()), "keyed={keyed}");
+        let shown = eventually(&service, "the browser list after the pairing", |s| {
+            !s.devices.is_empty()
+        })
+        .await;
+        let expected: &[&str] = if keyed { &[BROWSER] } else { &[] };
+        assert_eq!(shown.pinned_devices, expected, "keyed={keyed}");
+        settle().await;
+        assert_eq!(
+            vault
+                .pins()
+                .unwrap()
+                .and_then(|p| p.keys.get(BROWSER).cloned()),
+            keyed.then(|| hex(&key.pin())),
+            "keyed={keyed}: the pins entry"
+        );
+    }
 }

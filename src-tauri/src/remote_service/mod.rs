@@ -1309,20 +1309,28 @@ impl Controller {
                                 expires_at: d.get("expiresAt")?.as_u64()?,
                                 generation: d.get("generation").and_then(|g| g.as_u64()),
                             },
+                            // The device key the confirming browser brought (A5), if any.
+                            d.get("publicKey")
+                                .and_then(|k| k.as_str())
+                                .and_then(fingerprint),
                         ))
                     })
-                    .filter(|(id, approval)| identifier(id) && approval.expires_at > now_ms());
+                    .filter(|(id, approval, _)| identifier(id) && approval.expires_at > now_ms());
                 if let Ok(mut control) = self.control.lock() {
                     // A new pairing starts with nothing remembered: off, no grants, no pins.
                     control.remember(Persist::Bound(binding.clone(), None, None));
-                    if let Some((device_id, approval)) = paired {
+                    if let Some((device_id, approval, key)) = paired {
                         control.remember(Persist::Browser {
-                            device_id,
+                            device_id: device_id.clone(),
                             approval: Some(approval),
                             logging: Some(true),
                             control: Some(true),
                             transmit: Some(transmit),
                         });
+                        // A5, operator ruling D4 (2026-09-28): that browser's key is pinned on first
+                        // use, the trust the pairing already places in the service. Both ends show
+                        // its fingerprint straight after, and revoking the browser is one click.
+                        control.remember(Persist::Pin { device_id, key });
                     }
                 }
                 self.binding = Some(binding);
