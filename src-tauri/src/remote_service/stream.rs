@@ -289,6 +289,9 @@ pub(super) struct Streaming {
     pub offer: Offer,
     pub presence: Presence,
     checked: Instant,
+    /// Was presence live at the last look? Its lapse is when the window lets go of anything the
+    /// streamed operator was holding down.
+    was_live: bool,
     #[cfg(feature = "radio")]
     audio: super::audio::AudioLane,
 }
@@ -300,9 +303,22 @@ impl Streaming {
             offer,
             presence: Presence::default(),
             checked: now,
+            was_live: false,
             #[cfg(feature = "radio")]
             audio: super::audio::AudioLane::unaddressed(),
         }
+    }
+
+    /// Once per lapse of presence, the window's `reset`: a button or key a blind operator was
+    /// holding down is released, as the contract promises, not left held until their next input.
+    pub fn watch_presence(&mut self, now: Instant) {
+        let live = self.presence.live(now);
+        if self.was_live && !live {
+            if let Some(deliver) = &self.station.host.input {
+                deliver(&WebviewInput::Reset {});
+            }
+        }
+        self.was_live = live;
     }
 
     fn handle(&self, request: &Request, now: Instant) -> Result<Value, &'static str> {
@@ -694,6 +710,7 @@ fn run(
             }
         }
         streaming.presence.install(&station, now);
+        streaming.watch_presence(now);
         for report in streaming.ptt_reports() {
             session.send(Lane::Control, &report, now);
         }

@@ -332,6 +332,42 @@ fn input_is_delivered_only_while_presence_is_live() {
     );
 }
 
+/// When presence lapses, the window is told to let go of whatever the operator held down, once
+/// per lapse; a renewal re-arms it. CONTROL: nothing is reset while presence is live.
+#[test]
+fn a_lapse_of_presence_resets_the_window_once() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let resets = || {
+        f.delivered
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|i| matches!(i, WebviewInput::Reset {}))
+            .count()
+    };
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    streaming.watch_presence(now);
+    assert_eq!(resets(), 0, "control: reset while presence was live");
+    // A stale picture keeps the lease and lets presence lapse.
+    let stale = now + Duration::from_secs(3);
+    streaming.control(&heartbeat(&f.lease, Some(1)), |_| false, stale);
+    let lapsed = now + Duration::from_secs(5);
+    streaming.watch_presence(lapsed);
+    assert_eq!(resets(), 1, "the lapse did not reset the window");
+    streaming.watch_presence(lapsed + Duration::from_millis(500));
+    assert_eq!(resets(), 1, "one lapse, one reset");
+    // A fresh picture again: presence is back, and its next lapse is a second reset.
+    let again = now + Duration::from_secs(6);
+    streaming.control(&heartbeat(&f.lease, Some(1)), |_| true, again);
+    assert!(streaming.presence.live(again), "premise: presence renewed");
+    streaming.watch_presence(again);
+    assert_eq!(resets(), 1);
+    streaming.watch_presence(again + Duration::from_secs(5));
+    assert_eq!(resets(), 2);
+}
+
 /// A held PTT is taken only while presence is live, and keys through the engine.
 #[test]
 fn a_held_ptt_is_taken_only_while_presence_is_live() {
