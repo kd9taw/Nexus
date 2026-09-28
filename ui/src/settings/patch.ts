@@ -10,7 +10,8 @@
  * view's scoring chips turned simultaneous radios back on after "use one radio" in the launch
  * picker, handed the log back to the operator from before a seat swap, and sent the dial back to
  * where the rig was when the view opened — which the radio loop then commands, because a saved dial
- * that differs from the rig's is a retune.
+ * that differs from the rig's is a retune. The CW cockpit's macro-set switch did the same from the
+ * copy it reads when the CW view opens.
  *
  * `patchSettings(edit)` reads the settings the backend holds NOW and saves them with `edit`'s fields
  * applied. `edit` is handed that read, so a change that depends on the current value (one id toggled

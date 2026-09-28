@@ -44,7 +44,6 @@ import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
 import {
   getSettings,
-  setSettings,
   sendCw,
   setCwKeyer,
   setCwWpm,
@@ -68,6 +67,7 @@ import {
   stopQsoRecording,
   getCatCwUnprovenRigModels,
 } from '../api'
+import { patchSettings } from '../settings/patch'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
@@ -716,8 +716,8 @@ export function CwCockpit({
   // F-key macros come from the ACTIVE named CW profile (Settings ▸ CW). A rotating
   // operator can switch profiles right here in the cockpit bar; an empty profile falls
   // back to the built-in defaults — which swap to the Field Day set (with the {EXCH}
-  // exchange tokens) while FD mode is on. Keep the full settings so the switcher can
-  // persist the new active-profile index without dropping other fields.
+  // exchange tokens) while FD mode is on. The settings as they were when the view opened,
+  // for display only: the switcher saves through the patch seam, never from this copy.
   const [cwSettings, setCwSettings] = useState<Settings | null>(null)
   // Models whose CAT CW keyer is UNPROVEN and cannot report its own failure. Fetched from the
   // backend, which owns the rule (`rigmodels::cat_cw_unproven_rig_models`) — the SAME list
@@ -761,14 +761,14 @@ export function CwCockpit({
       : DEFAULT_CONTEST_MACROS
     : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
-  // Switch the active macro profile from the cockpit (optimistic) and persist it.
+  // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
+  // alone, over the live settings. Saving the view's copy with the index merged in wrote every
+  // field changed since the view opened back to what it was, the dial the operator had tuned
+  // to among them (and the radio loop then retuned the rig there).
   const switchProfile = (i: number) => {
     if (!control) return
     setActiveProfile(i)
-    if (!cwSettings) return
-    const next = { ...cwSettings, macros: { ...cwSettings.macros, activeCwProfile: i } }
-    setCwSettings(next)
-    void setSettings(next)
+    void patchSettings((s) => ({ macros: { ...s.macros, activeCwProfile: i } }))
       .then((s) => onSnap?.(s))
       .catch(() => pushToast(t('cw.macroProfile.failed'), 'error'))
   }
