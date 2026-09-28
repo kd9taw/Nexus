@@ -27,12 +27,15 @@
 //! from its own revocation, which `halt_tx`'s stand-down does not move: a Stop ends a
 //! transmission, not the session.
 //!
-//! ## The held PTT (S7)
+//! ## The held PTT (S7), under M1
 //!
-//! [`PttHold`] is the state; this is where it is keyed and released, through the engine's own PTT
-//! verb, so every guard the desktop's PTT has still applies (TX enabled, inside the licence). A
-//! remote key is admitted only while presence is live and in Phone, the one cockpit whose PTT it
-//! stands for.
+//! [`PttHold`] is the state; this is where it is decided. Under the audio design's M1 the hold
+//! ARMS the streamed operator's microphone over (`engine/remote_mic.rs`) and their audio keys it:
+//! a hold with no audio puts nothing on the air. (Before M1 the hold keyed the station through the
+//! desktop's own PTT verb, on the hold alone.) Either gap ends the over: the hold's own 200 ms,
+//! here, and 200 ms without audio, in the microphone's predicate, which ends the press with it. A
+//! press is admitted only while presence is live and in Phone, the one cockpit whose PTT it stands
+//! for, and every other gate the arm checks is the microphone's own.
 use super::Engine;
 use crate::remote_control::ptt_hold::PttHold;
 use crate::remote_control::transmit::TransmitPermit;
@@ -85,16 +88,21 @@ impl Engine {
         true
     }
 
-    /// Presence first, so a lapse has already stopped the key before the held PTT is decided.
+    /// Presence first, so a lapse has already stopped the over before the held PTT is decided.
+    /// The press's "key" is the microphone over's ARM (M1); it stays up while the over does.
     pub(super) fn poll_remote_stream(&mut self, now: Instant) -> bool {
         let halted = self.poll_remote_presence(now);
         if let Some(hold) = self.remote_ptt_hold.clone() {
             let may_key = self.remote_presence_live(now)
                 && self.settings.operating_mode == OperatingMode::Phone;
-            let key_up = self.manual_ptt;
-            hold.tick(now, may_key, key_up, |on| {
-                self.set_ptt(on);
-                self.manual_ptt
+            let armed = self.mic_armed();
+            hold.tick(now, may_key, armed, |on| {
+                if on {
+                    self.arm_remote_mic(now)
+                } else {
+                    self.drop_mic_latch();
+                    false
+                }
             });
         }
         halted
@@ -118,6 +126,7 @@ mod tests {
         let transmit = TransmitAuthority::default();
         e.set_remote_transmit_revocation(transmit.revocation());
         e.set_remote_ptt_hold(PttHold::default());
+        e.set_remote_mic_feed(crate::mic::MicFeed::default());
         let presence = TransmitAuthority::default();
         let t0 = Instant::now();
         assert!(e.hold_remote_presence(presence.permit(t0 + PRESENCE).unwrap(), t0));
@@ -371,7 +380,9 @@ mod tests {
         assert!(native.manual_ptt(), "a station with no stream was halted");
     }
 
-    // ----- S7: the held PTT, keyed and released on the radio loop's poll -----
+    // ----- S7: the held PTT, decided on the radio loop's poll. Under M1 a press ARMS the
+    // microphone over and the page's audio keys it (`engine/remote_mic.rs` tests the keying);
+    // these pin what the press itself does. -----
 
     const PRESS: &str = "10000000-0000-4000-8000-00000000000a";
 
@@ -382,7 +393,7 @@ mod tests {
 
     /// ★ A6: no hold for 200 ms and the over ends; re-asserted every 100 ms, it does not.
     #[test]
-    fn a_held_ptt_keys_while_reasserted_and_ends_200_ms_after_the_last_hold() {
+    fn a_held_ptt_arms_while_reasserted_and_ends_200_ms_after_the_last_hold() {
         let (mut e, _transmit, presence, t0) = attached();
         let hold = phone(&mut e);
         for i in 0..20u64 {
@@ -394,15 +405,18 @@ mod tests {
             hold.hold(PRESS, at);
             for tick in 0..5u64 {
                 e.poll_remote_transmit(at + Duration::from_millis(tick * 20));
-                assert!(e.manual_ptt(), "dropped at {} ms", i * 100 + tick * 20);
+                assert!(e.mic_armed(), "dropped at {} ms", i * 100 + tick * 20);
             }
         }
+        // M1: the press arms the microphone and never the desktop's own PTT.
+        assert!(!e.manual_ptt(), "the hold keyed the desktop's PTT");
         let last = t0 + Duration::from_millis(1900);
         e.poll_remote_transmit(last + Duration::from_millis(199));
-        assert!(e.manual_ptt(), "released inside the gap");
+        assert!(e.mic_armed(), "released inside the gap");
         e.poll_remote_transmit(last + Duration::from_millis(200));
-        assert!(!e.manual_ptt(), "the gap did not end the over");
-        // The key came down through the PTT verb, not a halt: Phone stays armed for the next press.
+        assert!(!e.mic_armed(), "the gap did not end the over");
+        // The over came down through its own release, not a halt: Phone stays armed for the next
+        // press.
         assert!(e.tx_enabled());
     }
 
@@ -419,7 +433,7 @@ mod tests {
         e.set_tx_enabled(true);
         hold.hold(PRESS, t0);
         e.poll_remote_transmit(t0 + Duration::from_millis(20));
-        assert!(!e.manual_ptt(), "keyed with no presence");
+        assert!(!e.mic_armed(), "armed with no presence");
         assert_eq!(
             hold.reports().last().unwrap().end,
             Some(crate::remote_control::ptt_hold::HoldEnd::Refused)
@@ -435,33 +449,34 @@ mod tests {
         e.set_tx_enabled(true);
         hold.hold(PRESS, t0);
         e.poll_remote_transmit(t0 + Duration::from_millis(20));
-        assert!(!e.manual_ptt(), "a held PTT keyed outside Phone");
+        assert!(!e.mic_armed(), "a held PTT armed outside Phone");
     }
 
-    /// Every existing guard on the PTT verb still applies: TX off refuses the key.
+    /// The existing transmit gates still apply to the arm: TX off refuses the press.
     #[test]
-    fn a_hold_with_tx_off_is_refused_by_the_ptt_verb() {
+    fn a_hold_with_tx_off_is_refused() {
         let (mut e, _transmit, _presence, t0) = attached();
         let hold = phone(&mut e);
         e.set_tx_enabled(false);
         hold.hold(PRESS, t0);
         e.poll_remote_transmit(t0 + Duration::from_millis(20));
-        assert!(!e.manual_ptt(), "keyed with TX off");
+        assert!(!e.mic_armed(), "armed with TX off");
     }
 
-    /// A Stop at the shack while the held PTT is keyed: the key comes down and the same press
-    /// does not re-key it.
+    /// A Stop at the shack while the held PTT is armed: the over ends and the same press does not
+    /// arm it again.
     #[test]
     fn a_stop_ends_a_held_ptt_for_good() {
         let (mut e, _transmit, _presence, t0) = attached();
         let hold = phone(&mut e);
         hold.hold(PRESS, t0);
         e.poll_remote_transmit(t0);
-        assert!(e.manual_ptt());
+        assert!(e.mic_armed());
         e.halt_tx();
+        assert!(!e.mic_armed(), "the stop left the over armed");
         e.set_tx_enabled(true);
         hold.hold(PRESS, t0 + Duration::from_millis(100));
         e.poll_remote_transmit(t0 + Duration::from_millis(110));
-        assert!(!e.manual_ptt(), "the press re-keyed after a stop");
+        assert!(!e.mic_armed(), "the press re-armed after a stop");
     }
 }

@@ -26,6 +26,7 @@ use tempo_app::engine::{
     DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
+use tempo_app::mic::{MicTick, MIC};
 use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
@@ -3168,6 +3169,19 @@ struct RadioLoop {
     /// Last TX-mute state pushed to the audio backend, so the loop only speaks on a CHANGE.
     /// `false` initially, which matches a monitor that starts unmuted.
     monitor_tx_muted: bool,
+    /// The Remote microphone over (`tempo_app::mic`) has keyed PTT through this loop.
+    mic_keyed: bool,
+    /// When the microphone audio already queued runs out (loop ms): what the look-ahead (M3) is
+    /// measured against.
+    mic_busy_until: f64,
+    /// The transmit route's generation, the microphone's G7: it moves whenever the route transmit
+    /// audio leaves by is replaced (the sound card released or reopened, the Flex DAX tee
+    /// installed or removed), so an over cannot carry on across the change.
+    tx_route_gen: u64,
+    /// Tests only: the monotonic instant that stands for the loop clock's zero, so a test's
+    /// synthetic clock also drives the microphone's arrival-based timing. `None` in the app,
+    /// where the monotonic clock is `Instant::now()`.
+    mono_origin: Option<Instant>,
     /// One-shot: force the RX-audio backend to rebuild on the next tick even if `audio_differs` is
     /// false. Set by a dual-radio handoff — the new radio's audio device MUST be (re)opened, and a
     /// radio whose audio is "system default" (empty) would otherwise compare equal to another empty
@@ -3729,6 +3743,10 @@ impl RadioLoop {
             voice_mic_failed: false,
             monitor_reapply: false,
             monitor_tx_muted: false,
+            mic_keyed: false,
+            mic_busy_until: 0.0,
+            tx_route_gen: 0,
+            mono_origin: None,
             force_audio_rebuild: false,
             audio_retry_at: None,
             audio_suspect: None,
@@ -4928,6 +4946,14 @@ impl RadioLoop {
         !self.handoff_deferred && !self.cat_hold_active && !self.switch_unhanded
     }
 
+    /// The monotonic clock the microphone's timing is measured on (see `mono_origin`).
+    fn mono_now(&self, now: f64) -> Instant {
+        match self.mono_origin {
+            Some(origin) => origin + Duration::from_secs_f64(now.max(0.0) / 1000.0),
+            None => Instant::now(),
+        }
+    }
+
     /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the
     /// STILL-ALIVE old rig and daemon, clear this loop's TX state, then halt TX for a CONTEXT
     /// change. Order matters: dropping the daemon or swapping the rig first would send the
@@ -5415,7 +5441,7 @@ impl RadioLoop {
 
         // Remote TX expiry is station-owned and does not depend on the host
         // receiving another socket message. Native operation has no permit.
-        engine_lock(engine).poll_remote_transmit(Instant::now());
+        engine_lock(engine).poll_remote_transmit(self.mono_now(now));
 
         // Continuously fold captured audio into the rolling RX window. Always drain the soundcard
         // ring (so it can't overflow), but when native Flex DAX RX audio is the active source, use
@@ -5461,6 +5487,7 @@ impl RadioLoop {
             if self.dax_tee_set {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
+                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
                 // The mic is the operator's again — see the tee-sync block below for why this
                 // transition has to reach the engine from BOTH places that clear the tee.
                 engine_lock(engine).observe_flex_dax_tx(false);
@@ -5499,11 +5526,13 @@ impl RadioLoop {
             (Some(dax), false) => {
                 backend.set_tx_tee(Some(dax.tx_tee()));
                 self.dax_tee_set = true;
+                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
                 engine_lock(engine).observe_flex_dax_tx(true);
             }
             (None, true) => {
                 backend.set_tx_tee(None);
                 self.dax_tee_set = false;
+                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
                 engine_lock(engine).observe_flex_dax_tx(false);
             }
             _ => {}
@@ -6039,6 +6068,8 @@ impl RadioLoop {
                 // another app holds momentarily.
                 self.rx_tap.retire_receive_audio();
                 backend.release_device();
+                // The card that carried transmit audio is gone, whatever replaces it.
+                self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
                 match reopen_audio(&want) {
                     Ok(b) => {
                         // ⚠️ THE SWAP DROPS THE OLD BACKEND, AND THAT DROP IS A NATIVE
@@ -9400,6 +9431,85 @@ impl RadioLoop {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_sstv_sending(false);
+                }
+            }
+        }
+
+        // The Remote microphone: a streamed operator's voice (`tempo_app::mic`). The ENGINE decides
+        // everything on every tick (`Engine::poll_mic`: every gate, both gaps, the ceiling, the
+        // watchdog, presence for this over, the route, and what audio is due); this block keys
+        // what it is told to and measures the ring for the look-ahead. It shares the voice
+        // keyer's seams, which are proven on the air: the same PTT, the same `play()` (the Flex DAX
+        // tee when one is installed, the sound card otherwise), and `tx_until_ms`, the deadline
+        // that unkeys the rig if this loop dies.
+        {
+            let mono = self.mono_now(now);
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                let tick = if self.may_key() {
+                    // M3: what the ring can take without reaching more than the look-ahead past
+                    // now. The engine clamps it to the per-push cap as well.
+                    let queued = (self.mic_busy_until - now).max(0.0);
+                    eng.poll_mic(mono, MIC.ahead_ms as f64 - queued, self.tx_route_gen)
+                } else {
+                    // `rig` is not the operator's radio this tick (a deferred handoff, a CAT
+                    // hold). A queue could wait; a keyed transmitter cannot: the over ends.
+                    eng.drop_mic_latch();
+                    MicTick::Idle
+                };
+                // AFTER the poll, so an abort IT armed is consumed on this same tick.
+                (eng.take_mic_abort(), tick)
+            };
+            // Something else unkeyed the rig under a keyed over: its deadline expired over a
+            // stalled loop, a hard stop or a rebuild cleared the hold, or the operator's own PTT
+            // was released on top of it. The over does not come back by itself.
+            let unkeyed_under = self.mic_keyed && (self.tx_until_ms.is_none() || !rig.keyed);
+            // The engine is keying an over this loop never keyed (the loop was rebuilt under it).
+            let never_keyed =
+                !self.mic_keyed && matches!(tick, MicTick::Ahead | MicTick::Samples(_));
+            if unkeyed_under || never_keyed {
+                engine_lock(engine).drop_mic_latch();
+            }
+            if (abort || unkeyed_under) && self.mic_keyed {
+                // M12: the epoch has already moved and the feed is closed (the engine's kill
+                // path); here the queued audio goes (the only thing that stops a VOX rig) and PTT
+                // drops.
+                let dropped = backend.flush_output();
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+                crate::civ::diag::note(&format!(
+                    "remote microphone over ended: unkey, {dropped} queued samples dropped"
+                ));
+            }
+            if abort || unkeyed_under || never_keyed {
+                self.mic_keyed = false;
+                self.mic_busy_until = 0.0;
+            } else {
+                match tick {
+                    MicTick::Key => {
+                        self.ensure_commanded(rig); // read-only launch: assert before key
+                        self.publish_tx_intent_now(); // before keying — the fail-safe must know
+                        let ptt_err = rig.ptt(true).is_err();
+                        self.report_ptt(engine, ptt_err);
+                        self.mic_keyed = true;
+                        self.mic_busy_until = now;
+                        // The lead-in and the silent pre-roll come before any audio is queued:
+                        // hold PTT across them, and no further.
+                        let until =
+                            now + (MIC.lead_in_ms + MIC.ahead_ms) as f64 + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    MicTick::Samples(buf) => {
+                        backend.play(&buf);
+                        // Contiguous in audio time: the deadline advances from where the queued
+                        // audio ends, re-based only after an underrun. THIS is the bound that makes
+                        // a wedged loop unkey instead of sticking.
+                        self.mic_busy_until = self.mic_busy_until.max(now)
+                            + buf.len() as f64 * 1000.0 / f64::from(MIC.rate_hz);
+                        let until = self.mic_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
                 }
             }
         }
@@ -24212,6 +24322,475 @@ mod tests {
             .unwrap();
         assert!(!rig.keyed, "a wedged loop left the transmitter keyed");
         assert!(state.tx_until_ms.is_none());
+    }
+
+    // ----- The Remote microphone at the transmitter (tempo_app::mic, engine/remote_mic.rs) -----
+
+    const MIC_PRESS: &str = "10000000-0000-4000-8000-00000000000a";
+
+    /// A streamed operator in Phone at the radio loop: presence held, the held PTT and the
+    /// microphone feed installed as `Service::start` installs them, a VOX rig and a mock card,
+    /// and the loop's monotonic clock tied to the test's (`mono_origin`), so the page's frames
+    /// can be stamped with the moment they "arrive".
+    struct MicScene {
+        engine: Arc<Mutex<Engine>>,
+        state: RadioLoop,
+        backend: MockBackend,
+        rig: Rig,
+        hold: tempo_app::remote_control::ptt_hold::PttHold,
+        feed: tempo_app::mic::MicFeed,
+        presence: tempo_app::remote_control::transmit::TransmitAuthority,
+        origin: Instant,
+        /// The page's RTP sequence number, one per frame sent.
+        seq: u64,
+    }
+
+    impl MicScene {
+        fn new() -> Self {
+            let origin = Instant::now();
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let hold = tempo_app::remote_control::ptt_hold::PttHold::default();
+            let feed = tempo_app::mic::MicFeed::default();
+            let presence = tempo_app::remote_control::transmit::TransmitAuthority::default();
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_remote_ptt_hold(hold.clone());
+                e.set_remote_mic_feed(feed.clone());
+                e.set_operating_mode("phone", false); // arms TX, as entering Phone does
+                let deadline = origin + Duration::from_secs(60);
+                assert!(e.hold_remote_presence(presence.permit(deadline).unwrap(), origin));
+            }
+            let mut state = loop_state();
+            state.mono_origin = Some(origin);
+            Self {
+                engine,
+                state,
+                backend: MockBackend::new(),
+                rig: Rig::vox(),
+                hold,
+                feed,
+                presence,
+                origin,
+                seq: 0,
+            }
+        }
+        fn mono(&self, t: f64) -> Instant {
+            self.origin + Duration::from_secs_f64(t / 1000.0)
+        }
+        /// The page's 20 ms frame captured at `t` and arriving then, at `level`. Its place on the
+        /// media clock follows the page's capture clock, which runs on through a pause in what
+        /// arrives: a frame lost on the way leaves a hole, it does not pull the next one earlier.
+        fn frame(&mut self, t: f64, level: f32) -> Result<(), tempo_app::mic::Refused> {
+            self.seq += 1;
+            let frame = tempo_app::mic::MicFrame {
+                seq: self.seq,
+                media: MIC.samples(20) * (t / 20.0).round() as u64,
+                arrived: self.mono(t),
+                samples: vec![level; MIC.samples(20) as usize],
+            };
+            self.feed.push(frame)
+        }
+        fn step(&mut self, t: f64) {
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            self.state
+                .step(
+                    &self.engine,
+                    &mut self.backend,
+                    &mut self.rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        /// One 20 ms tick: the page re-asserts its hold every 100 ms and, when `audio`, sends a
+        /// frame; then the loop steps.
+        fn tick(&mut self, t: f64, audio: bool) {
+            if (t as u64).is_multiple_of(100) {
+                self.hold.hold(MIC_PRESS, self.mono(t));
+            }
+            if audio {
+                let _ = self.frame(t, 0.5);
+            }
+            self.step(t);
+        }
+        /// Press at 0 ms, audio from 20 ms, run to `until`: a keyed over, fed.
+        fn keyed(until: f64) -> Self {
+            let mut s = Self::new();
+            s.hold.hold(MIC_PRESS, s.mono(0.0));
+            s.step(0.0);
+            let mut t = 20.0;
+            while t <= until {
+                s.tick(t, true);
+                t += 20.0;
+            }
+            assert!(s.rig.keyed, "premise: the page's audio keyed the rig");
+            s
+        }
+    }
+
+    /// ★ M1 at the transmitter (the design's `arming_without_audio_never_asserts_ptt`): a held PTT
+    /// with no audio, for a hundred ticks, keys nothing and plays nothing. Then the page's first
+    /// frame keys the rig, the lead-in passes with nothing played, and the audio that follows is a
+    /// silent pre-roll and then the operator's voice.
+    #[test]
+    fn a_remote_mic_over_keys_on_audio_never_on_the_hold() {
+        let mut s = MicScene::new();
+        let mut t = 0.0;
+        for _ in 0..100 {
+            s.tick(t, false);
+            assert!(
+                !s.rig.keyed,
+                "the hold keyed the rig at {t} ms with no audio"
+            );
+            t += 20.0;
+        }
+        assert!(
+            s.backend.played.is_empty(),
+            "samples reached the transmitter with no audio"
+        );
+        assert!(
+            s.engine.lock().unwrap().mic_armed(),
+            "premise: the hold armed the over"
+        );
+        // The page's first frame keys the rig, and nothing is fed inside the lead-in.
+        s.tick(t, true);
+        assert!(s.rig.keyed, "the first frame did not key the rig");
+        let keyed_at = t;
+        while t < keyed_at + MIC.lead_in_ms as f64 - 20.0 {
+            t += 20.0;
+            s.tick(t, true);
+            assert!(
+                s.backend.played.is_empty(),
+                "audio was fed {} ms into the lead-in",
+                t - keyed_at
+            );
+        }
+        for _ in 0..20 {
+            t += 20.0;
+            s.tick(t, true);
+        }
+        let played = &s.backend.played;
+        assert!(!played.is_empty(), "nothing was fed after the lead-in");
+        let pre_roll = MIC.samples(MIC.ahead_ms) as usize;
+        assert!(
+            played[..pre_roll].iter().all(|&x| x == 0.0),
+            "the pre-roll carried audio"
+        );
+        assert!(
+            played[pre_roll..].contains(&0.5),
+            "the operator's voice never followed"
+        );
+    }
+
+    /// ★ M2 at the transmitter: the page's audio stops, and PTT is released between 200 and 240 ms
+    /// after the last frame, with the queued audio flushed. CONTROL: a 180 ms pause does not.
+    #[test]
+    fn a_remote_mic_over_unkeys_within_the_gap_and_a_pause_does_not() {
+        let mut s = MicScene::keyed(600.0);
+        s.backend.flush_calls = 0;
+        let last = 600.0;
+        let mut t = last + 20.0;
+        let mut released = None;
+        while t <= last + 400.0 {
+            s.tick(t, false);
+            if !s.rig.keyed && released.is_none() {
+                released = Some(t - last);
+            }
+            t += 20.0;
+        }
+        let after = released.expect("PTT stayed up with no audio arriving");
+        assert!(
+            (MIC.gap_ms as f64..=MIC.gap_ms as f64 + 40.0).contains(&after),
+            "PTT released {after} ms after the last frame"
+        );
+        assert!(
+            s.backend.flush_calls > 0,
+            "the queued audio was not flushed"
+        );
+
+        let mut s = MicScene::keyed(600.0);
+        let mut t = 620.0;
+        while t < 600.0 + 180.0 {
+            s.tick(t, false);
+            t += 20.0;
+        }
+        while t <= 1_400.0 {
+            s.tick(t, true);
+            assert!(s.rig.keyed, "a 180 ms pause unkeyed the rig (at {t} ms)");
+            t += 20.0;
+        }
+    }
+
+    /// ★ M3 at the transmitter: on every tick of a long over the audio fed is never more than the
+    /// look-ahead past real time, and the unkey deadline is never further out than what is queued
+    /// plus the tail: a wedged loop unkeys, it does not stay up on queued voice.
+    #[test]
+    fn a_remote_mic_over_never_reaches_past_the_look_ahead() {
+        let mut s = MicScene::keyed(20.0);
+        let first_feed = 20.0 + MIC.lead_in_ms as f64;
+        let mut t = 40.0;
+        while t <= 3_000.0 {
+            s.tick(t, true);
+            let fed_ms = s.backend.played.len() as f64 * 1000.0 / f64::from(MIC.rate_hz);
+            let real_ms = (t - first_feed).max(0.0);
+            assert!(
+                fed_ms <= real_ms + MIC.ahead_ms as f64 + 1e-6,
+                "at {t} ms, {fed_ms:.1} ms fed against {real_ms:.1} ms of real time"
+            );
+            let hold = s
+                .state
+                .tx_until_ms
+                .expect("a keyed over holds PTT to a deadline")
+                - t;
+            assert!(
+                hold <= (MIC.lead_in_ms + MIC.ahead_ms) as f64 + crate::slot::TX_TAIL_MS,
+                "at {t} ms the unkey deadline was {hold:.0} ms out"
+            );
+            t += 20.0;
+        }
+        // …and it did keep up: the over was fed, not starved, at the loop's rate.
+        let fed_ms = s.backend.played.len() as f64 * 1000.0 / f64::from(MIC.rate_hz);
+        assert!(
+            fed_ms >= 3_000.0 - first_feed - 40.0,
+            "only {fed_ms:.0} ms fed in 3 s"
+        );
+    }
+
+    /// ★ The stop line at the transmitter, for the microphone: every stop the station has ends a
+    /// keyed over within a tick, flushes what is queued, and nothing keys again after.
+    #[test]
+    fn every_stop_unkeys_a_remote_mic_over_within_a_tick() {
+        for (name, stop) in [
+            ("halt_tx (Stop TX, the stream's Stop, UDP HaltTx)", 0),
+            ("the TX-enable latch (M10)", 1),
+            ("leaving Phone", 2),
+            ("presence revoked (M7)", 3),
+            ("the page released the hold (S7)", 4),
+            ("the transmit route changed (G7)", 5),
+        ] {
+            let mut s = MicScene::keyed(600.0);
+            s.backend.flush_calls = 0;
+            match stop {
+                0 => s.engine.lock().unwrap().halt_tx(),
+                1 => s.engine.lock().unwrap().set_tx_enabled(false),
+                2 => s.engine.lock().unwrap().set_operating_mode("cw", false),
+                3 => s.presence.revoke(),
+                4 => s.hold.release(MIC_PRESS),
+                _ => s.state.tx_route_gen += 1,
+            }
+            // Audio keeps arriving and the hold keeps being re-asserted, as a live page would.
+            s.tick(620.0, true);
+            assert!(!s.rig.keyed, "{name}: still keyed a tick later");
+            assert!(
+                s.backend.flush_calls > 0,
+                "{name}: the queued audio was not flushed"
+            );
+            assert!(
+                s.state.tx_until_ms.is_none(),
+                "{name}: the PTT hold survived"
+            );
+            assert!(
+                !s.engine.lock().unwrap().mic_armed(),
+                "{name}: the over survived"
+            );
+            let played = s.backend.played.len();
+            let mut t = 640.0;
+            for _ in 0..20 {
+                s.tick(t, true);
+                t += 20.0;
+            }
+            assert!(!s.rig.keyed, "{name}: keyed again after the stop");
+            assert_eq!(
+                s.backend.played.len(),
+                played,
+                "{name}: audio fed after the stop"
+            );
+        }
+    }
+
+    /// ★ R4 (the operator's ruling of 2026-09-27, "Top up to 40 ms"): each tick tops the ring up to
+    /// the look-ahead with what is due, so an over plays WITHOUT A GAP at the loop's real tick
+    /// lengths (31 ms is `sleep(20)` on Windows' default timer; 40 ms is the longest the
+    /// look-ahead can bridge), and never holds more than the look-ahead. Measured against the
+    /// device's own clock: from the first push it drains 12 samples a millisecond.
+    #[test]
+    fn a_mic_over_plays_without_a_gap_at_31_and_40_ms_ticks() {
+        for tick in [31.0, 40.0] {
+            let mut s = MicScene::new();
+            let mut captured = 0.0; // the page's capture clock
+            let mut first_push: Option<f64> = None;
+            let mut t = 0.0;
+            while t <= 3_000.0 {
+                // The page, live: its hold re-asserted, every 20 ms frame it captured by now sent.
+                s.hold.hold(MIC_PRESS, s.mono(t));
+                while captured <= t {
+                    let _ = s.frame(captured, 0.5);
+                    captured += 20.0;
+                }
+                let before = s.backend.played.len() as f64;
+                if let Some(f) = first_push {
+                    let drained = (t - f) * f64::from(MIC.rate_hz) / 1000.0;
+                    assert!(
+                        before >= drained.floor(),
+                        "{tick} ms ticks: the ring ran dry at {t} ms ({before} fed, {drained:.0} played)"
+                    );
+                }
+                s.step(t);
+                let after = s.backend.played.len() as f64;
+                if first_push.is_none() && after > 0.0 {
+                    first_push = Some(t);
+                }
+                if let Some(f) = first_push {
+                    let limit = (t - f + MIC.ahead_ms as f64) * f64::from(MIC.rate_hz) / 1000.0;
+                    assert!(
+                        after <= limit.ceil(),
+                        "{tick} ms ticks: more than the look-ahead queued at {t} ms"
+                    );
+                }
+                t += tick;
+            }
+            assert!(
+                s.rig.keyed,
+                "{tick} ms ticks: the over did not survive the run"
+            );
+            // Past the silent pre-roll, the voice runs unbroken: no moment went out as a hole.
+            let played = &s.backend.played;
+            let voice = played
+                .iter()
+                .position(|&x| x != 0.0)
+                .expect("no voice was played");
+            assert!(
+                played[voice..].iter().all(|&x| x == 0.5),
+                "{tick} ms ticks: a hole in the voice"
+            );
+        }
+    }
+
+    /// ★ R4: after a stall, nothing overdue is played. The loop stalls 300 ms while the page's
+    /// audio keeps arriving; the next tick feeds no more than the look-ahead, and only audio whose
+    /// moment has not gone by. Each frame carries its own level, so the audio fed says which
+    /// frame it came from.
+    #[test]
+    fn after_a_stall_nothing_overdue_is_played() {
+        let level = |t: f64| 0.1 + 0.001 * (t / 20.0).round() as f32;
+        let mut s = MicScene::new();
+        s.hold.hold(MIC_PRESS, s.mono(0.0));
+        s.step(0.0);
+        let mut t = 20.0;
+        while t <= 600.0 {
+            s.hold.hold(MIC_PRESS, s.mono(t));
+            let _ = s.frame(t, level(t));
+            s.step(t);
+            t += 20.0;
+        }
+        assert!(s.rig.keyed, "premise: keyed");
+        // The stall: no tick from 620 to 900 ms, while the page's frames keep arriving.
+        let mut c = 620.0;
+        while c <= 900.0 {
+            let _ = s.frame(c, level(c));
+            c += 20.0;
+        }
+        s.hold.hold(MIC_PRESS, s.mono(900.0));
+        let before = s.backend.played.len();
+        s.step(900.0);
+        let fed = &s.backend.played[before..];
+        assert!(
+            fed.len() as u64 <= MIC.samples(MIC.ahead_ms),
+            "the tick after the stall fed {} samples: more than the look-ahead",
+            fed.len()
+        );
+        // Keyed at 20 ms, so the over's voice runs 60 + 40 ms behind the page's capture clock: at
+        // 900 ms the moment on the air is about 800 ms. Nothing older than that may be fed.
+        let oldest = fed
+            .iter()
+            .filter(|&&x| x != 0.0)
+            .fold(f32::MAX, |m, &x| m.min(x));
+        assert!(
+            oldest >= level(760.0),
+            "fed audio captured at {:.0} ms after the stall: its moment had gone by",
+            (oldest - 0.1) / 0.001 * 20.0
+        );
+        assert!(
+            s.rig.keyed,
+            "the stall ended the over: audio was arriving throughout"
+        );
+    }
+
+    /// ★ R4: the worst case after a total link death, which the look-ahead is signed off for: PTT
+    /// comes down within the gap (200 ms) and a tick of the last audio arriving, never more than
+    /// the look-ahead is queued at any moment, and what is queued is flushed at the unkey. With the
+    /// card's own buffer that is the design's ~280 ms of RF after the last audio.
+    #[test]
+    fn the_worst_case_after_a_link_death_holds() {
+        let mut s = MicScene::keyed(1_000.0);
+        let last = 1_000.0;
+        let mut t = last + 20.0;
+        let mut queued_max: f64 = 0.0;
+        let unkeyed = loop {
+            s.hold.hold(MIC_PRESS, s.mono(t)); // the page's hold survives on another channel
+            s.backend.flush_calls = 0;
+            s.step(t);
+            if !s.rig.keyed {
+                break t;
+            }
+            queued_max = queued_max.max(s.state.mic_busy_until - t);
+            t += 20.0;
+            assert!(
+                t < last + 1_000.0,
+                "PTT stayed up a second after the link died"
+            );
+        };
+        assert!(
+            unkeyed - last <= MIC.gap_ms as f64 + 20.0,
+            "PTT came down {} ms after the last audio",
+            unkeyed - last
+        );
+        assert!(
+            queued_max <= MIC.ahead_ms as f64,
+            "{queued_max:.1} ms was queued ahead"
+        );
+        assert!(
+            s.backend.flush_calls > 0,
+            "what was queued was not flushed at the unkey"
+        );
+    }
+
+    /// Something outside the over unkeys the rig under it while the page is still live (the
+    /// station's own PTT released on top of it; a rebuild or a hard stop elsewhere clearing the
+    /// hold): the over ends there and does not key itself back up, though the page's audio and its
+    /// hold keep arriving.
+    #[test]
+    fn a_remote_mic_over_unkeyed_under_it_does_not_come_back() {
+        for (name, under) in [("the rig unkeyed", 0), ("the PTT hold cleared", 1)] {
+            let mut s = MicScene::keyed(600.0);
+            match under {
+                0 => {
+                    let _ = s.rig.ptt(false);
+                }
+                _ => s.state.tx_until_ms = None,
+            }
+            s.tick(620.0, true);
+            assert!(
+                !s.engine.lock().unwrap().mic_armed(),
+                "{name}: the over carried on"
+            );
+            let played = s.backend.played.len();
+            let mut t = 640.0;
+            for _ in 0..10 {
+                s.tick(t, true);
+                t += 20.0;
+            }
+            assert!(!s.rig.keyed, "{name}: the over keyed itself back up");
+            assert_eq!(
+                s.backend.played.len(),
+                played,
+                "{name}: audio fed with nothing keyed"
+            );
+        }
     }
 
     #[test]

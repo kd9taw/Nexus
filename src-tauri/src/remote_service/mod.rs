@@ -452,9 +452,12 @@ impl Service {
         // of arming the rig a second later. See `Engine::halt_tx`.
         tempo_app::engine::engine_lock(&engine)
             .set_remote_transmit_revocation(operations.transmit_revocation());
-        // A streamed operator's held PTT: the stream records the holds, the engine keys and
-        // releases on its own radio-loop tick (`engine/remote_stream.rs`).
+        // A streamed operator's held PTT: the stream records the holds, the engine arms and
+        // releases the microphone over on its own radio-loop tick (`engine/remote_stream.rs`).
         tempo_app::engine::engine_lock(&engine).set_remote_ptt_hold(feeds.stream.ptt.clone());
+        // …and the page's microphone, which the stream decodes and the engine's microphone over
+        // plays, only while that press has armed it (`engine/remote_mic.rs`).
+        tempo_app::engine::engine_lock(&engine).set_remote_mic_feed(feeds.stream.mic.clone());
         let control = Arc::new(Mutex::new(Control {
             operations,
             memories: feeds

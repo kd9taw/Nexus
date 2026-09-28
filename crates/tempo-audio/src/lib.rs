@@ -68,6 +68,7 @@ pub mod flexdax;
 #[cfg(feature = "device")]
 pub mod flexspectrum;
 pub mod frames;
+pub mod mic_decode;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
 /// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.

@@ -29902,6 +29902,7 @@ fn remote_service_for(
         remote_service::stream::Host {
             input: Some(input),
             ptt: Default::default(),
+            mic: Default::default(),
             window: Some(main_window),
         },
     )

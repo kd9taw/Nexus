@@ -37,6 +37,8 @@ fn fixture(now: Instant) -> Fixture {
     engine.set_remote_transmit_revocation(authority.transmit_revocation());
     let ptt = PttHold::default();
     engine.set_remote_ptt_hold(ptt.clone());
+    let mic = tempo_app::mic::MicFeed::default();
+    engine.set_remote_mic_feed(mic.clone());
     let mut settings = engine.settings().clone();
     settings.remote_stream = true;
     engine.apply_settings(settings);
@@ -80,6 +82,7 @@ fn fixture(now: Instant) -> Fixture {
             host: Host {
                 input: Some(input),
                 ptt,
+                mic,
                 window: None,
             },
             #[cfg(feature = "radio")]
@@ -369,7 +372,8 @@ fn a_lapse_of_presence_resets_the_window_once() {
     assert_eq!(resets(), 2);
 }
 
-/// A held PTT is taken only while presence is live, and keys through the engine.
+/// A held PTT is taken only while presence is live, and ARMS the microphone over through the
+/// engine (M1: the page's audio keys it, not the hold).
 #[test]
 fn a_held_ptt_is_taken_only_while_presence_is_live() {
     let now = Instant::now();
@@ -380,8 +384,8 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
     streaming.ptt(hold.as_bytes(), now);
     tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
     assert!(
-        !tempo_app::engine::engine_lock(&f.station.engine).manual_ptt(),
-        "keyed with no presence"
+        !tempo_app::engine::engine_lock(&f.station.engine).mic_armed(),
+        "armed with no presence"
     );
     // The engine would refuse it too (a second lock); this is the FIRST one: the hold never
     // reached the held-PTT state at all, so there is not even a refusal to report.
@@ -389,13 +393,20 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
         streaming.ptt_reports().is_empty(),
         "a hold with no presence reached the PTT"
     );
-    // CONTROL: with presence, a fresh press keys.
+    // CONTROL: with presence, a fresh press arms the microphone, and keys nothing by itself.
     streaming.presence.renew(&f.station, &streaming.offer, now);
     let other = "10000000-0000-4000-8000-00000000000b";
     let hold = format!(r#"{{"type":"pttHold","holdId":"{other}","seq":0}}"#);
     streaming.ptt(hold.as_bytes(), now);
     tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
-    assert!(tempo_app::engine::engine_lock(&f.station.engine).manual_ptt());
+    {
+        let e = tempo_app::engine::engine_lock(&f.station.engine);
+        assert!(e.mic_armed(), "a press with presence did not arm");
+        assert!(
+            !e.mic_keyed() && !e.manual_ptt(),
+            "the press alone keyed the station"
+        );
+    }
     // …and the page is told so.
     let reports: Vec<Value> = streaming
         .ptt_reports()
@@ -529,6 +540,55 @@ fn the_relays_stream_end_ends_presence_and_halts_a_transmission() {
         told.recv_timeout(Duration::from_secs(1)),
         Ok(Signal::Close(StreamReason::RemoteOff)),
         "the session thread was not told to end, with the relay's reason"
+    );
+}
+
+/// S6 end to end on the station: a packet of the page's microphone is decoded on the session's
+/// thread and reaches the engine, where the first one after the press keys the over (M1). A packet
+/// that arrives before the press goes nowhere (M5): the over it would have keyed does not exist yet.
+#[cfg(feature = "radio")]
+#[test]
+fn the_pages_microphone_keys_only_an_armed_over() {
+    use tempo_app::mic::MicTick;
+    let now = Instant::now();
+    let f = fixture(now);
+    tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    // 20 ms of Opus silence (CELT, fullband): what a browser sends between words.
+    let packet = |seq: u64| tempo_stream::session::MicPacket {
+        seq,
+        rtp: 960 * seq,
+        clock_hz: 48_000,
+        arrived: now,
+        payload: vec![0xF8, 0xFF, 0xFE],
+    };
+    let poll = |at: Instant| {
+        let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+        e.poll_remote_transmit(at);
+        e.poll_mic(at, 40.0, 0)
+    };
+    // Before any press: the packet goes nowhere, and nothing is armed to key.
+    streaming.mic(&packet(1));
+    assert_eq!(
+        poll(now),
+        MicTick::Idle,
+        "audio with no press did something"
+    );
+    // The press arms; the packet that came before it is gone.
+    let hold = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":0}}"#);
+    streaming.ptt(hold.as_bytes(), now);
+    assert_eq!(
+        poll(now),
+        MicTick::Armed,
+        "a press with no new audio did something"
+    );
+    // The page's next packet keys it.
+    streaming.mic(&packet(2));
+    assert_eq!(
+        poll(now + Duration::from_millis(20)),
+        MicTick::Key,
+        "the page's audio did not key the armed over"
     );
 }
 

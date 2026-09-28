@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, so you can see it and pick from it. Switching to another tab ends the stream; press
   **Start the stream** again when you are back. If Remote access is switched off for your account
   while you stream, the stream ends within about two seconds and the page says why.
+- **Remote as a stream: the station can put the browser's microphone on the air (Windows).** A
+  streamed operator's own voice reaches the rig in Phone, played into the rig's USB audio.
+  **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig
+  keys only when the operator's voice starts arriving, so a held PTT with the microphone off or
+  muted puts nothing on the air. The over ends 200 ms after the voice stops arriving or the PTT
+  is let go, whichever comes first. Stop TX, TX Off, a lost connection, a frozen picture and
+  leaving Phone each end it at once, and no over lasts longer than 10 minutes. Voice that arrives
+  late is dropped, never played late. The rig must take its SSB audio from USB (the menu that
+  sets the transmit audio source for voice); on most radios the factory setting is the front
+  microphone, and then an over keys the rig on the shack's microphone instead of yours. The
+  browser's microphone control is not in this build yet.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

@@ -28,6 +28,10 @@
 //!   this path.
 //! - **Receive audio (S5)** is the relay's own audio lane, unaddressed, on the `audio` channel:
 //!   the same encoder, the same bounds, the same "drop, never queue".
+//! - **The page's microphone (S6)** arrives as the session's Opus track. Each packet is decoded
+//!   here, on the session's thread, to the transmit route's 12 kHz and handed to [`Host::mic`],
+//!   which takes it only while the streamed operator's over is armed. What keys, and when, is the
+//!   engine's alone (`tempo_app::mic`, `engine/remote_mic.rs`): nothing on this thread keys a rig.
 //! - **The picture (S1, S2) is the main window's, and nothing else's (A1).** The application
 //!   resolves its `main` window's handle through [`Host::window`]; the station checks it can be
 //!   captured before it opens a socket, starts capturing when the session connects, and stops when
@@ -76,8 +80,11 @@ pub struct Host {
     /// Where admitted input goes: the station's own main window, as the `remote-stream-input`
     /// event. `None` in a build or a test with no window, and then input is dropped.
     pub input: Option<InputSink>,
-    /// The held PTT the engine keys and releases. Installed into the engine when Remote is built.
+    /// The held PTT the engine arms and releases. Installed into the engine when Remote is built.
     pub ptt: PttHold,
+    /// The page's microphone, decoded, on its way to the engine's microphone over. Installed into
+    /// the engine when Remote is built; it takes audio only while an over is armed.
+    pub mic: tempo_app::mic::MicFeed,
     /// The one window a stream shows: the station's `main` window. `None` where there is none
     /// (a test, or a build without a window), and then a stream is answered unavailable.
     pub window: Option<WindowHandle>,
@@ -318,6 +325,10 @@ pub(super) struct Streaming {
     was_live: bool,
     #[cfg(feature = "radio")]
     audio: super::audio::AudioLane,
+    /// This session's decoder for the page's microphone. One per session: a decoder carries state
+    /// from packet to packet. `None` if libopus would not start one, and then the audio is dropped.
+    #[cfg(feature = "radio")]
+    mic: Option<tempo_audio::mic_decode::MicDecoder>,
 }
 
 impl Streaming {
@@ -330,7 +341,27 @@ impl Streaming {
             was_live: false,
             #[cfg(feature = "radio")]
             audio: super::audio::AudioLane::unaddressed(),
+            #[cfg(feature = "radio")]
+            mic: tempo_audio::mic_decode::MicDecoder::new().ok(),
         }
+    }
+
+    /// A packet of the page's microphone (S6): decoded to the transmit route's rate and offered to
+    /// the feed, which keeps it only while an over is armed. Decoded either way, so the decoder's
+    /// state is current when an over does arm. A packet libopus refuses is dropped: its moment is
+    /// silence, as a lost one's is.
+    #[cfg(feature = "radio")]
+    pub fn mic(&mut self, packet: &tempo_stream::session::MicPacket) {
+        use tempo_audio::mic_decode::media_position;
+        let Some(samples) = self.mic.as_mut().and_then(|d| d.decode(&packet.payload)) else {
+            return;
+        };
+        let _ = self.station.host.mic.push(tempo_app::mic::MicFrame {
+            seq: packet.seq,
+            media: media_position(packet.rtp, packet.clock_hz),
+            arrived: packet.arrived,
+            samples,
+        });
     }
 
     /// Once per lapse of presence, the window's `reset`: a button or key a blind operator was
@@ -769,6 +800,12 @@ fn run(
                     if let Some(video) = &video {
                         video.request_keyframe();
                     }
+                }
+                SessionEvent::Mic(packet) => {
+                    #[cfg(feature = "radio")]
+                    streaming.mic(&packet);
+                    #[cfg(not(feature = "radio"))]
+                    let _ = packet;
                 }
                 SessionEvent::Closed(reason) => ended = reason,
             }

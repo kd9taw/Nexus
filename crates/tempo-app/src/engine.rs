@@ -22,6 +22,7 @@ pub mod parsec_presence;
 pub mod radio_selection;
 pub mod receivers;
 pub mod remote_logging;
+pub mod remote_mic;
 pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
@@ -2487,6 +2488,17 @@ pub struct Engine {
     /// A streamed session's transmit presence, and its held PTT: see `engine/remote_stream.rs`.
     remote_presence: Option<crate::remote_control::transmit::TransmitPermit>,
     remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
+    /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
+    mic: crate::mic::MicLatch,
+    mic_feed: Option<crate::mic::MicFeed>,
+    /// The presence permit the over armed under: G5 is "presence, for THIS over".
+    mic_presence: Option<crate::remote_control::transmit::TransmitPermit>,
+    /// One-shot microphone abort: the loop flushes the output ring + unkeys, then clears it.
+    mic_abort: bool,
+    /// The no-power warning's evidence for the current over (display only): the rig reported
+    /// power out, or reported ~0 while the operator's voice was arriving.
+    mic_rf_seen: bool,
+    mic_zero_seen: bool,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4329,6 +4341,8 @@ pub enum TxOwner {
     Tune,
     /// A held mic key — the operator's, or a CAT-broker client's.
     ManualPtt,
+    /// A streamed Remote operator's microphone over, armed or keyed (`engine/remote_mic.rs`).
+    Mic,
     /// The voice keyer is playing a message.
     Voice,
     /// CW is sending (queue non-empty).
@@ -4348,6 +4362,7 @@ impl TxOwner {
             TxOwner::Slot => "Another transmission is in flight — stop it first",
             TxOwner::Tune => "Tune carrier is up — stop tuning first",
             TxOwner::ManualPtt => "Mic PTT is held — release it first",
+            TxOwner::Mic => "The Remote microphone is transmitting — stop it first",
             TxOwner::Voice => "A voice message is transmitting — stop it first",
             TxOwner::Cw => "CW is sending — stop it first",
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
@@ -4799,6 +4814,12 @@ impl Engine {
             remote_transmit: None,
             remote_presence: None,
             remote_ptt_hold: None,
+            mic: crate::mic::MicLatch::default(),
+            mic_feed: None,
+            mic_presence: None,
+            mic_abort: false,
+            mic_rf_seen: false,
+            mic_zero_seen: false,
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
@@ -9201,6 +9222,7 @@ impl Engine {
         if po_w.is_some() {
             self.rig_tx_po_w = po_w;
         }
+        self.observe_mic_power(po_w);
         if comp_db.is_some() {
             self.rig_tx_comp_db = comp_db;
         }
@@ -9592,6 +9614,16 @@ impl Engine {
     /// while TX is disabled (Monitor), so a stray F-key never keys unexpectedly. Replaces
     /// any still-pending message (one voice over at a time).
     pub fn send_voice(&mut self, samples: Vec<f32>) {
+        // A streamed operator's microphone over owns the transmitter from its arm: a canned
+        // message queued under it would be appended to the output ring behind their voice, and
+        // their live audio would then reach the air late (the microphone's M3 and M4).
+        if self.mic.active() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: the Remote microphone is transmitting",
+            );
+            return;
+        }
         if self.tx_enabled && self.tx_allowed() && !samples.is_empty() {
             tempo_core::applog::info(
                 "tx",
@@ -13330,6 +13362,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // TX re-enables — else re-arming TX re-keys the radio with nobody holding it.
         self.manual_ptt = false;
         self.broker_ptt = false;
+        // …and a streamed operator's microphone over: dropped, its feed closed, and the abort
+        // armed so the loop flushes and unkeys (M10: halt_tx is still the universal stop).
+        self.drop_mic_latch();
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
@@ -13717,6 +13752,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.psk_queue.clear();
             self.psk_abort = true;
             self.drop_psk_latch();
+            // The microphone over joins RTTY and SSTV (the audio design's M10): it is latched,
+            // with no end of its own, so TX Off ends it in flight rather than letting it run.
+            self.drop_mic_latch();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -16508,6 +16546,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(TxOwner::Tune)
         } else if self.manual_ptt || self.broker_ptt {
             Some(TxOwner::ManualPtt)
+        } else if self.mic.active() {
+            // From the arm, before any audio: an armed over owns the transmitter the way a
+            // latched RTTY stream does from its first tick, so nothing else can key under it.
+            Some(TxOwner::Mic)
         } else if self.voice_tx.is_some() {
             Some(TxOwner::Voice)
         } else if !self.cw_queue.is_empty() {
