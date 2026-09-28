@@ -45,7 +45,8 @@ it('handles every input the contract hands this window, and nothing it refuses',
   for (const accepted of WEBVIEW.stationToWebview) {
     const before = seen.length
     d.handle(accepted.message)
-    if (accepted.message.type !== 'reset') expect(seen.length, accepted.name).toBeGreaterThan(before)
+    // `reset` and a re-assertion (`held`) only let go of or keep what is already held.
+    if (accepted.message.type !== 'reset' && accepted.message.type !== 'held') expect(seen.length, accepted.name).toBeGreaterThan(before)
   }
   expect(field.value, 'the committed text landed in the focused field').toContain('W1AW')
 })
