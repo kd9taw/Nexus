@@ -4,6 +4,7 @@ import { useViewport } from '../useViewport'
 import { MonitorApp } from '../remote-monitor/MonitorApp'
 import { BrowserClient, HostedConnection, RemoteError } from './client'
 import { FeedWatch } from './FeedWatch'
+import { StreamView } from './StreamView'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
 import './remote.css'
@@ -40,6 +41,9 @@ export function RemoteApp() {
   const [session, setSession] = useState<AccountSession | null>(null)
   const [connection, setConnection] = useState<HostedConnection | null>(null)
   const [workspace, setWorkspace] = useState(false)
+  // The station name while the stream is the open view, or null. A view of its own: it shares the
+  // connection and its lease/Stop core with the workspace and nothing else.
+  const [streaming, setStreaming] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [code, setCode] = useState('')
@@ -89,8 +93,10 @@ export function RemoteApp() {
     finally { setBusy(false) }
   }
   async function refresh() { if (client) setSession(await client.post<AccountSession>('session')) }
-  function open(stationId: string, application: boolean) {
-    const next = new HostedConnection(client!, stationId, application)
+  function open(stationId: string, application: boolean, stream: string | null = null) {
+    // The stream rides the application socket: its signalling and the lease it is offered under
+    // travel there.
+    const next = new HostedConnection(client!, stationId, application || stream !== null)
     // A refused ticket is final: the trial ended mid-session, the station or this browser was
     // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
     // unavailable… check that Nexus is running", which blamed the shack. Go back to the account
@@ -101,10 +107,11 @@ export function RemoteApp() {
       setError(cause.code === 'signInRequired' ? 'signInRequired' : 'sessionEnded')
       void refresh().catch(() => {})
     }
-    setWorkspace(application); setConnection(next); next.start()
+    setWorkspace(application); setStreaming(stream); setConnection(next); next.start()
   }
   const leave = () => { connection?.stop(); setConnection(null) }
   const signOutOfSession = () => { connection?.stop(); setConnection(null); setSession(null); void client?.signOut() }
+  if (connection && streaming !== null) return <StreamView connection={connection} station={streaming} disconnect={leave} signOut={signOutOfSession} />
   if (connection && workspace) return <Suspense fallback={<p role="status">{t('monitor.connecting')}</p>}>
     <BrowserApplication connection={connection} disconnect={leave} signOut={signOutOfSession} />
   </Suspense>
@@ -261,6 +268,9 @@ export function RemoteApp() {
             <div className="remote-actions">
             <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => open(station.id, true)}>{t('remote.openNexus')}</button>
             <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false)}>{t('remote.observe')}</button>
+            {/* Only from a service that carries the stream's signalling; the station's own Nexus says
+                whether it can stream once the view is open. */}
+            {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false, station.name)}>{t('remote.stream.open')}</button>}
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
               await client?.post(`stations/${station.id}/forget-device`); await refresh()
             })}>{t('remote.forgetBrowser')}</button>
