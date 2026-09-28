@@ -3834,11 +3834,12 @@ export function SettingsPanel({
             {/* Theme lives in Settings, not the top bar (operator, 2026-08-10): Light/Dark/System
                 is a set-once preference, and the bar keeps only the Field quick toggle. Three
                 cards, each with a one-line personality (ThemeSwitcher.tsx), across the section's
-                width rather than squeezed into one grid column. */}
+                width rather than squeezed into one grid column, then the ten built-in themes
+                in two groups (operator, 2026-09-27: "All ten"). */}
             {theme && onThemeChange && (
               <div className="settings-field settings-theme-field">
                 <span className="settings-label">{t('settings.workspace.theme.label')}</span>
-                <ThemeSwitcher theme={theme} onChange={onThemeChange} />
+                <ThemeSwitcher theme={theme} skin={skin} onChange={onThemeChange} onSkinChange={onSkinChange} />
                 <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
               </div>
             )}

@@ -1945,6 +1945,15 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   **System** follows your computer's own light or dark setting and changes when it
   does; Dark is the default. Either way, the top bar's **Field** chip boosts
   contrast and size on top of the theme you picked.
+  Below them are ten ready-made themes, each card with a swatch of its colours. **Rig
+  looks**: Amber LCD, Green LCD, Blue VFD and Silver chassis. **Modern**: Midnight
+  (true black), Slate, Lagoon, Ember, Nebula and Paper. Silver chassis and Paper are
+  light themes and the rest are dark. Picking **Light**, **Dark** or **System** again
+  goes back to a standard theme. Every theme is checked for contrast like the standard
+  two: the scopes and meters stay dark, and the transmit red, the ON AIR sign, alerts,
+  and the signal and Needed colours are the same in every theme. **High contrast** keeps
+  its own look whatever the theme, **Night** dims each theme in its own colours, and a
+  colour you pick in **Colours** wins over the theme's.
 - **High contrast** — Off or On. Strengthens text against its background in
   whichever theme you are using, and changes nothing else — the interface stays
   exactly the size you have set it. This is the one to reach for if the screen

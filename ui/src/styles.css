@@ -6177,6 +6177,48 @@ select optgroup {
 .theme-card.active .theme-card-line {
   color: inherit;
 }
+/* THE GALLERY — the built-in themes (features/skins.ts) after the three standard cards, in two
+   named groups, "Rig looks" and "Modern". One grid for all three groups, so the cards line up in
+   columns and wrap by the field's width and the text size: at 1024x768 or with Larger text a row
+   holds fewer cards and never clips one. A built-in theme's card adds a swatch of its page, panel,
+   accent and readout, drawn from the table (each chip's `--chip`, set inline), at the card's foot
+   so the swatches of a row line up. */
+.theme-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.theme-gallery .theme-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9em, 1fr));
+}
+.theme-gallery .theme-card {
+  min-width: 0;
+  max-width: none;
+}
+.theme-family {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.theme-family-name {
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.theme-card-swatch {
+  display: flex;
+  gap: 3px;
+  margin-top: auto;
+  padding-top: var(--space-1);
+}
+.theme-card-swatch > span {
+  width: 1.2em;
+  height: 1.2em;
+  border-radius: 3px;
+  background: var(--chip);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
 /* Settings ▸ Appearance ▸ Colours: a role's name with its Reset beside it, so the preset chips
    below always get the whole width (a Reset after four chips wrapped on its own at 1920). */
 .palette-head {

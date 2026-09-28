@@ -1,3 +1,6 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). A theme's name and line
+// come from the catalog; the ids and the colour values are code.
+//
 // THE BUILT-IN THEMES — "skins" in code, "Theme" in the UI (Settings ▸ Appearance ▸ Theme). Operator
 // picks of 2026-09-27 (tasks/themes-and-layout-spec-2026-09-27.md §4): "All ten", "Keep locked inks",
 // "Per-theme Night", "HC wins surfaces", "Dark/Light switch", "Yes, on Auto", "Keep these names".
@@ -49,6 +52,7 @@
 // board letters its mode cells in the page colour, and #dfe3e8 read 4.45:1 on them by day and
 // 4.09:1 at night (styles-theme-cascade.test.ts); #e2e6eb reads 4.58:1, and 4.54:1 at night.
 
+import type { MessageKey } from '../i18n'
 import type { Theme } from '../useTheme'
 
 export type SkinId =
@@ -73,6 +77,9 @@ export interface Skin {
   /** The invariant token: the attribute value and the stored value. Never translated. */
   id: SkinId
   family: SkinFamily
+  /** Its name on the gallery card, and the one-line personality under it. */
+  labelKey: MessageKey
+  lineKey: MessageKey
   /** The theme this skin rides on: what picking it sets `tempo-theme` to. */
   base: Theme
   /** By day, at <html> — and, on a dark skin, inside every display well. */
@@ -114,6 +121,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'amber-lcd',
     family: 'rig',
+    labelKey: 'theme.amberLcd.label',
+    lineKey: 'theme.amberLcd.line',
     base: 'dark',
     day: {
       '--bg': '#0c0a07', '--panel': '#14110c', '--bg-elev': '#1a160f', '--bg-elev-2': '#221c13',
@@ -135,6 +144,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'green-lcd',
     family: 'rig',
+    labelKey: 'theme.greenLcd.label',
+    lineKey: 'theme.greenLcd.line',
     base: 'dark',
     day: {
       '--bg': '#070a08', '--panel': '#0e130f', '--bg-elev': '#131a14', '--bg-elev-2': '#1a231b',
@@ -156,6 +167,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'blue-vfd',
     family: 'rig',
+    labelKey: 'theme.blueVfd.label',
+    lineKey: 'theme.blueVfd.line',
     base: 'dark',
     day: {
       '--bg': '#06090f', '--panel': '#0c1220', '--bg-elev': '#111a2d', '--bg-elev-2': '#182440',
@@ -177,6 +190,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'silver',
     family: 'rig',
+    labelKey: 'theme.silver.label',
+    lineKey: 'theme.silver.line',
     base: 'light',
     day: {
       '--bg': '#e2e6eb', '--panel': '#f9fafb', '--bg-elev': '#f9fafb', '--bg-elev-2': '#f3f5f7',
@@ -202,6 +217,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'midnight',
     family: 'modern',
+    labelKey: 'theme.midnight.label',
+    lineKey: 'theme.midnight.line',
     base: 'dark',
     day: {
       '--bg': '#000000', '--panel': '#0a0a0c', '--bg-elev': '#101014', '--bg-elev-2': '#17171c',
@@ -223,6 +240,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'slate',
     family: 'modern',
+    labelKey: 'theme.slate.label',
+    lineKey: 'theme.slate.line',
     base: 'dark',
     day: {
       '--bg': '#14181f', '--panel': '#1b2029', '--bg-elev': '#222833', '--bg-elev-2': '#2a3140',
@@ -244,6 +263,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'lagoon',
     family: 'modern',
+    labelKey: 'theme.lagoon.label',
+    lineKey: 'theme.lagoon.line',
     base: 'dark',
     day: {
       '--bg': '#001a20', '--panel': '#02252d', '--bg-elev': '#063039', '--bg-elev-2': '#0b3a44',
@@ -265,6 +286,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'ember',
     family: 'modern',
+    labelKey: 'theme.ember.label',
+    lineKey: 'theme.ember.line',
     base: 'dark',
     day: {
       '--bg': '#1a1613', '--panel': '#221d19', '--bg-elev': '#2a2420', '--bg-elev-2': '#332c27',
@@ -286,6 +309,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'nebula',
     family: 'modern',
+    labelKey: 'theme.nebula.label',
+    lineKey: 'theme.nebula.line',
     base: 'dark',
     day: {
       '--bg': '#16151e', '--panel': '#1e1c28', '--bg-elev': '#262333', '--bg-elev-2': '#2f2b3f',
@@ -307,6 +332,8 @@ export const SKINS: readonly Skin[] = [
   {
     id: 'paper',
     family: 'modern',
+    labelKey: 'theme.paper.label',
+    lineKey: 'theme.paper.line',
     base: 'light',
     day: {
       '--bg': '#ede7d8', '--panel': '#fcfaf5', '--bg-elev': '#fcfaf5', '--bg-elev-2': '#f7f5f0',

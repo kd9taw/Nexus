@@ -128,6 +128,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsign heard in a picture's ID). A station with no rotator sees nothing new, and the strip
   asks the rotator nothing while its screen is not the one showing. On the Remote page it behaves
   as it does on the Phone, CW and FT screens.
+- **Ten ready-made themes.** Settings ▸ Appearance ▸ Theme now shows ten more themes below Light,
+  Dark and System, each card with its name, a line on its character and a swatch of its colours.
+  **Rig looks**: **Amber LCD** (black chassis, amber digits), **Green LCD**, **Blue VFD** and
+  **Silver chassis**. **Modern**: **Midnight** (true black, for OLED screens and dark rooms),
+  **Slate**, **Lagoon**, **Ember**, **Nebula** and **Paper** (a warm cream page). Silver chassis and
+  Paper are light themes and the rest are dark. Every one is checked for contrast in every mode,
+  exactly like Light and Dark: the scopes and meters stay dark, and the transmit red, the ON AIR
+  sign, alerts, and the signal and Needed colours are the same in every theme. High contrast keeps
+  its own look whatever the theme, Night dims each theme in its own colours, and a colour you pick
+  in **Colours** wins over the theme's (that row calls the theme's colour **Theme's own**). On a
+  theme, the band name on the band chip, the Logbook globe's band picker and the Field Day band
+  board is lettered in the theme's text colour, with the band's colour on its border or underline,
+  as in Light. Pick Light, Dark or System to go back. The theme is remembered per computer, and
+  your backup carries it with the rest of the look.
 
 ### Changed
 
@@ -187,6 +201,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
+  colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
+  you picked. The dark theme is unchanged.
 - **The top bar's TX plate lights for every transmission.** It lit only for FT8/FT4-style timed
   overs, so during a Phone over, CW, RTTY, PSK or SSTV, a tune carrier, or with the mic keyed at
   the radio itself, it read a green RX while the cockpit's ON AIR sign was red. It now shows TX

@@ -9632,6 +9632,31 @@ export const EN = {
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
   'theme.system.line': 'Follows your computer, light or dark',
+  // The built-in themes (features/skins.ts): two groups of cards after the three above, each card
+  // a theme's name and its one-line personality. The names are the operator's (2026-09-27, "Keep
+  // these names"); the ids are invariant tokens. LCD, VFD and OLED are display types.
+  'theme.family.rig': 'Rig looks',
+  'theme.family.modern': 'Modern',
+  'theme.amberLcd.label': 'Amber LCD',
+  'theme.amberLcd.line': 'Black chassis, amber digits, warm-white lit keys',
+  'theme.greenLcd.label': 'Green LCD',
+  'theme.greenLcd.line': 'Black chassis, green phosphor digits',
+  'theme.blueVfd.label': 'Blue VFD',
+  'theme.blueVfd.line': 'Deep navy chassis, blue-white fluorescent digits',
+  'theme.silver.label': 'Silver chassis',
+  'theme.silver.line': 'Pale silver front, white panels, dark scopes and meters',
+  'theme.midnight.label': 'Midnight',
+  'theme.midnight.line': 'True black for OLED and dark rooms, cyan lit',
+  'theme.slate.label': 'Slate',
+  'theme.slate.line': 'Soft blue-grey editor dark, low glare',
+  'theme.lagoon.label': 'Lagoon',
+  'theme.lagoon.line': 'Deep teal dark with soft sea-green inks',
+  'theme.ember.label': 'Ember',
+  'theme.ember.line': 'Warm sepia dark with amber digits and aqua keys',
+  'theme.nebula.label': 'Nebula',
+  'theme.nebula.line': 'Violet-tinted dark with lavender keys and digits',
+  'theme.paper.label': 'Paper',
+  'theme.paper.line': 'Warm cream page, white panels, ink-blue keys — low glare',
 
   // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
   // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on

@@ -559,12 +559,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   {
     // The theme cards and the rows that change how the theme paints: High contrast, Night and
     // Field mode. #215's contrast words, and Night's (useNight.ts) for a dimmer screen after dark.
+    // The ten built-in themes by name (features/skins.ts), and the words for wanting one. Never
+    // bare 'amber' or 'green': Colours owns those, and an exact keyword outranks all but a label.
     id: 'theme',
     label: 'Theme',
     tab: 'appearance',
     keywords: ['dark', 'light', 'system theme', 'dark mode', 'light mode', 'follow system',
       'contrast', 'high contrast', 'field mode', 'daylight', 'sunlight',
-      'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision'],
+      'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision',
+      'themes', 'skin', 'skins', 'rig look', 'rig looks', 'lcd', 'vfd', 'amber lcd', 'green lcd',
+      'blue vfd', 'silver', 'silver chassis', 'midnight', 'oled', 'true black', 'slate', 'lagoon',
+      'ember', 'sepia', 'nebula', 'paper', 'cream'],
   },
   {
     // The colour roles (features/paletteRoles.ts): a few pre-checked presets for the accent, the
