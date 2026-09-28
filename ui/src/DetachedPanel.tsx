@@ -71,6 +71,7 @@ import {
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
 import { useLogAnswer } from './features/logSource'
 import { bandLabelForMhz } from './band'
+import { sameCall } from './callsign'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
 import { PotaSotaView } from './components/PotaSotaView'
@@ -383,8 +384,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }
   // Work a decoded/roster station from the cockpit (guards the self-QSO false toast).
   const onCall = (call: string, grid?: string, message?: string, snr?: number, freq?: number) => {
-    const me = (snap?.mycall ?? '').trim().toUpperCase().split('/')[0]
-    if (me && call.trim().toUpperCase().split('/')[0] === me) return
+    const me = (snap?.mycall ?? '').trim()
+    if (me && sameCall(call, me)) return
     apply(callStation(call, grid, message, snr, freq))
   }
   const onTune = (hz: number, target: 'tx' | 'rx' | 'both') => {
