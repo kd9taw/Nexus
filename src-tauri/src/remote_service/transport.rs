@@ -243,9 +243,10 @@ pub struct Feeds {
     /// — so a browser is never offered a control the station cannot honour.
     ///
     /// Holding this grants nothing: it is a read of already-captured receive audio, and
-    /// while nobody is listening it copies nothing.
+    /// while nobody is listening it copies nothing. It is the station's ONE encoder, shared by
+    /// the Listen lane here and every stream's `audio` channel (plan P5).
     #[cfg(feature = "radio")]
-    pub audio: Option<std::sync::Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
+    pub audio: Option<std::sync::Arc<super::audio::ReceiveFanout>>,
     /// What a streamed session needs from the application: the window its input goes to, and
     /// the held PTT the engine keys. Holding it grants nothing; a stream is admitted on its own.
     pub stream: super::stream::Host,
@@ -491,9 +492,9 @@ where
     let mut stream = super::application::Stream::default();
     let mut application_tick = tokio::time::interval(Duration::from_millis(100));
     application_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The receive-audio lane. It holds no encoder until a browser asks to listen, and
-    // its select branch below is guarded on that, so on a station nobody is listening to
-    // this timer is never even polled.
+    // The receive-audio lane. It holds no share of the station's encoder until a browser
+    // asks to listen, and its select branch below is guarded on that, so on a station nobody
+    // is listening to this timer is never even polled.
     #[cfg(feature = "radio")]
     let mut audio_lane = super::audio::AudioLane::default();
     // A plain bool rather than `audio_lane.listening()`, because a `select!` branch

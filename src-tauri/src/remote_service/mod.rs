@@ -497,8 +497,9 @@ impl Service {
                 spectrum: Some(spectrum),
                 meters,
                 sources,
+                // One encoder for the station, whoever listens: the Listen lane and every stream.
                 #[cfg(feature = "radio")]
-                audio,
+                audio: audio.map(audio::ReceiveFanout::new),
                 stream,
             },
         )

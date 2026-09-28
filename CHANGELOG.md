@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. The station starts a stream only for that browser, on that key. A browser approved before
   this update must be approved once more in Nexus at the shack before it can stream. So must a
   browser whose key changed, for example after its site data was cleared. The page says which.
+- **Remote: Listen and the stream hear the station at the same time.** Listening on the Remote page
+  and a stream's audio used to shut each other out: whichever started first had the station's
+  receive audio, and the other was told it was in use. The station now encodes its receive audio
+  once and sends it to both. A browser that falls behind loses its own audio as a short gap and
+  never delays or cuts the other's, and a station nobody listens to still encodes nothing.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

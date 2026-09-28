@@ -115,7 +115,7 @@ pub(super) struct Station {
     pub connection: u64,
     pub host: Host,
     #[cfg(feature = "radio")]
-    pub audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
+    pub audio: Option<Arc<super::audio::ReceiveFanout>>,
     /// The station's own id, as its pairing holds it: one of the ids a browser signs (A5).
     pub station_id: String,
     pub pinned: PinnedKeys,
