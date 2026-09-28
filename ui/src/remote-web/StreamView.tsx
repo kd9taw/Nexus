@@ -139,6 +139,7 @@ function ended(reason: string | null): string {
   return reason === 'notController' ? t('remote.stream.ended.notController')
     : reason === 'streamUnavailable' ? t('remote.stream.ended.unavailable')
     : reason === 'serviceAccessExpired' ? t('remote.stream.ended.accessExpired')
+    : reason === 'remoteOff' ? t('remote.stream.ended.remoteOff')
     : reason === 'tryLater' ? t('remote.stream.ended.tryLater')
     : reason === 'streamClosed' ? t('remote.stream.ended.station')
     : reason === 'streamDisabled' ? t('remote.stream.ended.disabled')

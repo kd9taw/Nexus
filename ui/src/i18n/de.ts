@@ -179,6 +179,7 @@ export const DE: PartialCatalog = {
   "remote.stream.ended.notController": "Der Stream wurde beendet, weil die Stationssteuerung verloren ging.",
   "remote.stream.ended.unavailable": "Diese Station kann noch nicht streamen. Aktualisiere Nexus an der Station und schalte das Streamen dort ein.",
   "remote.stream.ended.accessExpired": "Dein Remote-Zugang ist abgelaufen, daher kann der Stream nicht starten.",
+  "remote.stream.ended.remoteOff": "Der Remote-Zugang für dieses Konto wurde ausgeschaltet, daher wurde der Stream beendet.",
   "remote.stream.ended.tryLater": "Zu viele Versuche. Warte eine Minute und starte den Stream dann erneut.",
   "remote.stream.ended.station": "Die Station hat den Stream beendet.",
   "remote.stream.ended.insecure": "Die Antwort der Station war nicht durchgehend verschlüsselt, daher wurde der Stream abgelehnt.",

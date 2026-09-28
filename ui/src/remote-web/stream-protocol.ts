@@ -30,13 +30,14 @@ export const STREAM_SDP_BYTES = 6144
 export const STREAM_CANDIDATE_CHARS = 512
 const MID = /^[A-Za-z0-9_-]{1,32}$/
 
-/** Why a stream is not running, in the station's words and the relay's. A page refuses anything
- *  else. The station sends the first seven; the relay sends `streamUnavailable` for a station that
- *  never advertised the lane, and the last two for refusals of its own made before anything reaches
- *  the station (proposed to the contract's owner, pending: see the WB report). */
+/** Why a stream is not running, in the station's words and the relay's (the contract's README). A
+ *  page refuses anything else. The station sends the first seven, and `remoteOff` when it ends a
+ *  stream the relay ended with `streamEnd` (Remote switched off by hand mid-stream); the relay says
+ *  `streamUnavailable` for a station that never advertised the lane, and `serviceAccessExpired` and
+ *  `tryLater` for refusals of its own, which the station never sends. */
 export const STREAM_STATE_REASONS = [
   'notController', 'streamDisabled', 'streamUnavailable', 'streamInUse', 'invalidOffer', 'connectionFailed', 'streamClosed',
-  'serviceAccessExpired', 'tryLater',
+  'remoteOff', 'serviceAccessExpired', 'tryLater',
 ] as const
 export type StreamStateReason = (typeof STREAM_STATE_REASONS)[number]
 
@@ -136,16 +137,23 @@ export function parseReceivedMessage(raw: unknown): ReceivedStreamMessage {
  *  picture, SCTP over DTLS for the data channels. Plain RTP (`RTP/AVP`, `RTP/AVPF`) and SDES-keyed
  *  SRTP (`RTP/SAVP`, `RTP/SAVPF`) are refused, whatever else the answer says. */
 const SECURE_PROTOCOLS = new Set(['UDP/TLS/RTP/SAVPF', 'UDP/DTLS/SCTP'])
-/** A4, the page's half: is this answer end-to-end encrypted as far as its SDP can say? It needs a
- *  SHA-256 DTLS certificate fingerprint (session- or media-level) and only DTLS transports on every
- *  `m=` line. The browser would refuse most of this itself; checking here makes the refusal the
- *  page's own and names it, instead of trusting a library error to arrive. */
+/** A4, the page's half: is this answer end-to-end encrypted as far as its SDP can say? Every `m=`
+ *  section must be on a DTLS transport and covered by a SHA-256 DTLS certificate fingerprint - its
+ *  own, or one at session level, which covers them all. str0m writes one per media section, so a
+ *  section stripped of its own is uncovered even while another section keeps one. The browser would
+ *  refuse most of this itself; checking here makes the refusal the page's own and names it, instead
+ *  of trusting a library error to arrive. */
 export function secureAnswer(description: string): boolean {
-  const lines = description.split(/\r\n|\n/)
-  const media = lines.filter(line => line.startsWith('m='))
+  const sections: string[][] = [[]]
+  for (const line of description.split(/\r\n|\n/)) {
+    if (line.startsWith('m=')) sections.push([])
+    sections[sections.length - 1].push(line)
+  }
+  const [session, ...media] = sections
   if (!media.length) return false
-  if (!lines.some(line => /^a=fingerprint:sha-256 [0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31}$/.test(line))) return false
-  return media.every(line => SECURE_PROTOCOLS.has(line.split(' ')[2] ?? ''))
+  const fingerprinted = (lines: string[]) => lines.some(line => /^a=fingerprint:sha-256 [0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31}$/.test(line))
+  const everywhere = fingerprinted(session)
+  return media.every(lines => SECURE_PROTOCOLS.has(lines[0].split(' ')[2] ?? '') && (everywhere || fingerprinted(lines)))
 }
 
 // ── The data channels ─────────────────────────────────────────────────────────────────────────────

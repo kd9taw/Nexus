@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StreamLink } from './stream-link'
 import type { AudioEnvironment } from './audio-listen'
-import { parseReceivedMessage, parseStreamInput, secureAnswer } from './stream-protocol'
+import { parseHeld, parseReceivedMessage, parseStreamInput, secureAnswer } from './stream-protocol'
 import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
@@ -52,7 +52,9 @@ it('A4: refuses an answer without a DTLS fingerprint, or with a plain-RTP line, 
   // The positive control is str0m's own answer, from the contract.
   expect(secureAnswer(ANSWER)).toBe(true)
   for (const [what, sdp] of [
-    ['no fingerprint (a stripped SDP)', ANSWER.replace(`${FINGERPRINT}\r\n`, '')],
+    ['no fingerprint (a stripped SDP)', ANSWER.split(`${FINGERPRINT}\r\n`).join('')],
+    // str0m writes one per media section: the picture's stripped, the data channels' kept.
+    ['one section stripped of its own fingerprint', ANSWER.replace(`${FINGERPRINT}\r\n`, '')],
     ['plain RTP', ANSWER.replace('m=video 9 UDP/TLS/RTP/SAVPF 96 97', 'm=video 9 RTP/AVP 96 97')],
     ['SDES-keyed SRTP', ANSWER.replace('m=video 9 UDP/TLS/RTP/SAVPF 96 97', 'm=video 9 RTP/SAVPF 96 97')],
     ['a truncated fingerprint', ANSWER.replace(FINGERPRINT, 'a=fingerprint:sha-256 AB:CD')],
@@ -68,6 +70,10 @@ it('A4: refuses an answer without a DTLS fingerprint, or with a plain-RTP line, 
     expect(h.peer.closed, what).toBe(true)
     expect(last(h.signals)?.payload, what).toEqual({ kind: 'close' })
   }
+  // The fingerprint may cover every section from session level instead.
+  const sessionLevel = ANSWER.split(`${FINGERPRINT}\r\n`).join('').replace('t=0 0\r\n', `t=0 0\r\n${FINGERPRINT}\r\n`)
+  expect(sessionLevel).not.toBe(ANSWER)
+  expect(secureAnswer(sessionLevel)).toBe(true)
   // Positive control on the same path: the contract's answer is applied, unchanged.
   const h = harness()
   await h.link.start(LEASE)
@@ -279,6 +285,20 @@ it('THE DEAD-MAN: re-asserts what the picture holds every 100 ms on ptt, from 0 
   expect(h.peer.channel('ptt').sent).toEqual([{ type: 'held', keys: ['KeyA'], buttons: 0, seq: 0 }])
 })
 
+it('re-asserts in the contract\'s own shape: every held case it names parses, and every one it refuses is refused', async () => {
+  const helds = CHANNEL.pttBrowserToStation.filter(c => c.message.type === 'held')
+  expect(helds.length, 'the contract names re-assertions').toBeGreaterThan(0)
+  for (const accepted of helds) expect(() => parseHeld(accepted.message), accepted.name).not.toThrow()
+  const refused = CHANNEL.pttRefused.filter(c => c.message.type === 'held')
+  expect(refused.length).toBeGreaterThan(0)
+  for (const bad of refused) expect(() => parseHeld(bad.message), bad.name).toThrow()
+  // And what this page sends has exactly the contract's fields.
+  const h = harness()
+  await h.live()
+  h.link.holdInput(['Space'], 0)
+  expect(keysOf(last(h.peer.channel('ptt').sent)!)).toEqual(keysOf(byName(CHANNEL.pttBrowserToStation, 'held: a key')))
+})
+
 it('sends Stop in the contract\'s shape on the control channel, past every budget', async () => {
   const h = harness()
   expect(h.link.stopTransmit(TARGET)).toBe(false)
@@ -326,7 +346,7 @@ it('drops moves, never presses, keys or text, when the control channel is backed
   control.bufferedAmount = 1024 * 1024
   h.link.input(byName(CHANNEL.controlBrowserToStation, 'pointer move (no button change)') as never)
   h.advance(16)
-  h.link.input(byName(CHANNEL.controlBrowserToStation, 'key down, Space, the Phone cockpit\'s PTT key') as never)
+  h.link.input(byName(CHANNEL.controlBrowserToStation, "key down, Space (an ordinary key: the window's own handlers decide what it does)") as never)
   h.link.input(byName(CHANNEL.controlBrowserToStation, 'committed text') as never)
   expect(control.types().filter(type => type !== 'heartbeat')).toEqual(['key', 'text'])
 })
@@ -335,7 +355,7 @@ it('sends no input before the picture is live, and none the contract would refus
   const h = harness()
   await h.link.start(LEASE)
   h.peer.channel('control').open()
-  h.link.input(byName(CHANNEL.controlBrowserToStation, 'key up') as never)
+  h.link.input(byName(CHANNEL.controlBrowserToStation, 'key up, Space') as never)
   expect(h.peer.channel('control').types()).toEqual(['heartbeat'])
   const live = harness()
   await live.live()

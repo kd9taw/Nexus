@@ -90,7 +90,7 @@ it('tells the page the lane is unavailable rather than handing an old station a 
   const { station, browser, relay } = setup({ supported: false })
   relay.receiveBrowser(session, offer(), NOW)
   expect(station.send).not.toHaveBeenCalled()
-  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'streamUnavailable' })
+  expect(sentTo(browser)).toEqual(byName(signal.roomToBrowserFromRelay, 'the station does not stream (it never advertised the header)'))
   expect(browser.close).not.toHaveBeenCalled()
 })
 
@@ -98,7 +98,7 @@ it('refuses an offer from an account whose command entitlement has lapsed, and o
   const { station, browser, relay } = setup({ commandUntil: NOW })
   relay.receiveBrowser(session, offer(), NOW)
   expect(station.send).not.toHaveBeenCalled()
-  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'serviceAccessExpired' })
+  expect(sentTo(browser)).toEqual(byName(signal.roomToBrowserFromRelay, 'command entitlement lapsed'))
   // A close and a candidate still reach the station: ending a stream never needs an entitlement.
   relay.receiveBrowser(session, close(), NOW)
   expect((sentTo(station).payload as { kind: string }).kind).toBe('close')
@@ -121,7 +121,7 @@ it('bounds a looping page: the signal past the budget is refused with tryLater a
   expect(station.send).toHaveBeenCalledTimes(STREAM_RATE_LIMIT)
   relay.receiveBrowser(session, candidate(), NOW + STREAM_RATE_LIMIT)
   expect(station.send).toHaveBeenCalledTimes(STREAM_RATE_LIMIT)
-  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'tryLater' })
+  expect(sentTo(browser)).toEqual(byName(signal.roomToBrowserFromRelay, 'over the signalling budget'))
   // A close is never budgeted: ending a negotiation is what a looping page should do next.
   relay.receiveBrowser(session, close(), NOW + STREAM_RATE_LIMIT)
   expect(station.send).toHaveBeenCalledTimes(STREAM_RATE_LIMIT + 1)
@@ -165,7 +165,7 @@ it('tells the page rather than throwing when the station socket cannot take the 
   const { station, browser, relay } = setup()
   station.send.mockImplementation(() => { throw Error('gone') })
   relay.receiveBrowser(session, offer(), NOW)
-  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'streamUnavailable' })
+  expect(sentTo(browser)).toEqual(byName(signal.roomToBrowserFromRelay, 'the station does not stream (it never advertised the header)'))
 })
 
 it('the fixtures\' own identities are the relay\'s stamps, and the offer\'s lease is the page\'s claim', () => {

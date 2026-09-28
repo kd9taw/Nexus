@@ -404,6 +404,7 @@ export const EN = {
   "remote.stream.ended.notController": "The stream ended because station control was lost.",
   "remote.stream.ended.unavailable": "This station can't stream yet. Update Nexus at the shack and turn streaming on there.",
   "remote.stream.ended.accessExpired": "Your Remote access has ended, so the stream can't start.",
+  "remote.stream.ended.remoteOff": "Remote access was switched off for this account, so the stream ended.",
   "remote.stream.ended.tryLater": "Too many tries. Wait a minute, then start the stream again.",
   "remote.stream.ended.station": "The station ended the stream.",
   "remote.stream.ended.insecure": "The station's reply was not encrypted end to end, so the stream was refused.",

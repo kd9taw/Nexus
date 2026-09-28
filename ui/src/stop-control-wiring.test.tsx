@@ -526,7 +526,7 @@ const WEBVIEW = JSON.parse(readFileSync(resolve(__dirname, '../../remote/test/fi
   stationToWebview: { name: string; message: Record<string, unknown> }[]
 }
 const streamed = (name: string) => structuredClone(WEBVIEW.stationToWebview.find((c) => c.name === name)!.message)
-const SPACE_DOWN = "key down, Space, the Phone cockpit's PTT key"
+const SPACE_DOWN = "key down, Space (an ordinary key: the window's own handlers decide what it does)"
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe('Phone, over the stream', () => {
@@ -536,13 +536,13 @@ describe('Phone, over the stream', () => {
   const deliver = (name: string) => send(streamed(name))
   const at = (el: Element) => Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => el })
   const click = () => { deliver('pointer down'); deliver('pointer up') }
-  /** The page re-asserting what it holds as the page does: at once, then (inside the 100 ms it
-   *  promises) every 50 ms, for `ms`. Returns when the last re-assertion went. Each wait is started
-   *  after a re-assertion, so however late the event loop runs, the next one is due before the
-   *  window's 200 ms deadline and is handled first. */
+  /** The page re-asserting what it holds as the page does: at once, then every 100 ms, for `ms`.
+   *  Returns when the last re-assertion went. Each wait is started after a re-assertion, so however
+   *  late the event loop runs, the next one is due before the window's 200 ms deadline and is
+   *  handled first. */
   const reassert = async (keys: string[], buttons: number, ms: number): Promise<number> => {
     let last = performance.now()
-    for (let t = 0; t < ms; t += 50) { send({ type: 'held', keys, buttons, seq: seq++ }); last = performance.now(); await pause(50) }
+    for (let t = 0; t < ms; t += 100) { send({ type: 'held', keys, buttons, seq: seq++ }); last = performance.now(); await pause(100) }
     return last
   }
   /** Wait for the unkey after the page went quiet, and say how long after its last re-assertion. */
@@ -575,20 +575,19 @@ describe('Phone, over the stream', () => {
     expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
   })
 
-  it('a streamed Space in the log strip is typing: the field gets the key, and nothing is keyed', async () => {
-    const call = [...document.querySelectorAll<HTMLInputElement>('input.le-call')].find((el) => el.closest('[hidden]') == null)
-    expect(call, 'the log strip\'s call field is not on screen').toBeTruthy()
-    const typed: string[] = []
-    call!.addEventListener('keydown', (event) => typed.push(event.code))
-    at(call!)
+  it('a streamed space typed into a field is typed there, and keys nothing', async () => {
+    const comment = [...document.querySelectorAll<HTMLInputElement>('input.le-comment')].find((el) => el.closest('[hidden]') == null)
+    expect(comment, 'the log strip\'s comment field is not on screen').toBeTruthy()
+    at(comment!)
     const m = mark()
     click()
-    deliver(SPACE_DOWN)
-    deliver('key up')
-    await pause(50)
-    expect(document.activeElement).toBe(call)
-    expect(typed).toEqual(['Space'])
-    expect(firedSince(m)).toEqual([])
+    const digit = (key: string, action: 'down' | 'up') => send({ type: 'key', action, key, code: `Digit${key}`, modifiers: 0, repeat: false })
+    digit('5', 'down'); digit('5', 'up')
+    deliver(SPACE_DOWN); deliver('key up, Space')
+    digit('9', 'down'); digit('9', 'up')
+    await waitFor(() => expect(comment!.value).toBe('5 9'))
+    expect(document.activeElement).toBe(comment)
+    expect(firedSince(m), 'typing a space keyed nothing').toEqual([])
   })
 
   it('a streamed click is a click: Stop TX sends halt_tx, Tune keys the carrier and drops it', async () => {

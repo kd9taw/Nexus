@@ -37,10 +37,13 @@ pub const CANDIDATE_BYTES: usize = 512;
 pub const SDP_MID_CHARS: usize = 32;
 /// The largest message the page sends on the `control` or `ptt` data channel.
 pub const CONTROL_BYTES: usize = 1024;
-/// How often the page re-asserts a held PTT.
+/// How often the page re-asserts a held PTT, and its held keys and buttons (`held`).
 pub const PTT_HOLD_EVERY_MS: u64 = 100;
-/// How long the station keeps a PTT keyed with no hold arriving.
+/// How long the station keeps a PTT keyed with no hold arriving, and how long the station's
+/// window keeps a key or button held with no `held` re-asserting it.
 pub const PTT_GAP_MS: u64 = 200;
+/// The most keys one `held` may name.
+pub const HELD_KEYS: usize = 16;
 /// The oldest decoded frame that still renews transmit presence.
 pub const FRESH_FRAME_MS: u64 = 2000;
 /// The video track's RTP clock.
@@ -209,6 +212,15 @@ pub enum StreamReason {
     ConnectionFailed,
     /// The page closed the stream.
     StreamClosed,
+    /// Remote access was switched off, and the relay ended the stream (`streamEnd`). The station
+    /// echoes the reason in its last `streamState`.
+    RemoteOff,
+    /// Relay-originated: the account's command entitlement has lapsed. The relay refuses an offer
+    /// with it, or ends a running stream with it. The station never sends it of its own accord.
+    ServiceAccessExpired,
+    /// Relay-originated: the page is over the relay's signalling budget. The station never sends
+    /// it.
+    TryLater,
 }
 
 /// Page → relay, before the relay stamps it.
@@ -234,6 +246,14 @@ pub enum RoomToStation {
         #[serde(rename = "leaseId")]
         lease_id: String,
         payload: BrowserSignal,
+    },
+    /// The relay ends this session's stream: Remote access was switched off (operator decision
+    /// 2026-09-27, "within about 2 s"), or the relay ended it for another reason it names. The
+    /// station ends the session's transmit presence at once and tears the session down.
+    StreamEnd {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        reason: StreamReason,
     },
 }
 
@@ -531,13 +551,47 @@ pub enum PttIn {
         hold_id: String,
         seq: u32,
     },
+    Held(HeldInput),
 }
 
 impl Validate for PttIn {
     fn valid(&self) -> bool {
         match self {
             Self::PttHold { hold_id, .. } | Self::PttRelease { hold_id, .. } => identifier(hold_id),
+            Self::Held(held) => held.valid(),
         }
+    }
+}
+
+/// Everything the page is holding down over the picture: the held-key dead-man. The page sends it
+/// at once when the set changes and then every [`PTT_HOLD_EVERY_MS`] while anything is held; the
+/// station's window releases, with a proper key-up or pointer-up, anything not re-asserted within
+/// [`PTT_GAP_MS`]. A held Space is an ordinary held key: what it does is the window's to decide.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HeldInput {
+    /// The DOM `code` of each key held, without repeats.
+    pub keys: Vec<String>,
+    /// The DOM `buttons` bitmask of the pointer buttons held on the picture.
+    pub buttons: u8,
+    /// Counts up from 0 over the stream, one per message; the window ignores one that is not
+    /// above the last it saw.
+    pub seq: u32,
+}
+
+impl Validate for HeldInput {
+    fn valid(&self) -> bool {
+        let code = |k: &String| {
+            (1..=32).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_alphanumeric())
+        };
+        self.keys.len() <= HELD_KEYS
+            && self.keys.iter().all(code)
+            && self
+                .keys
+                .iter()
+                .enumerate()
+                .all(|(i, k)| !self.keys[..i].contains(k))
+            && self.buttons <= 31
     }
 }
 
@@ -572,6 +626,8 @@ pub enum WebviewInput {
     Wheel(WheelInput),
     Key(KeyInput),
     Text(TextInput),
+    /// The page's held set, re-asserted: it presses nothing, it only keeps held what already is.
+    Held(HeldInput),
     /// Release anything the window's input module is still holding down.
     Reset {},
 }
@@ -586,6 +642,7 @@ impl Validate for WebviewInput {
             Self::Wheel(input) => input.valid(),
             Self::Key(input) => input.valid(),
             Self::Text(input) => input.valid(),
+            Self::Held(input) => input.valid(),
             Self::Reset {} => true,
         }
     }
@@ -668,16 +725,20 @@ mod tests {
     }
     impl Validate for RoomToStation {
         fn valid(&self) -> bool {
-            let Self::StreamSignal {
-                session_id,
-                device_id,
-                lease_id,
-                payload,
-            } = self;
-            [session_id, device_id, lease_id]
-                .into_iter()
-                .all(|id| identifier(id))
-                && payload.valid()
+            match self {
+                Self::StreamSignal {
+                    session_id,
+                    device_id,
+                    lease_id,
+                    payload,
+                } => {
+                    [session_id, device_id, lease_id]
+                        .into_iter()
+                        .all(|id| identifier(id))
+                        && payload.valid()
+                }
+                Self::StreamEnd { session_id, .. } => identifier(session_id),
+            }
         }
     }
     impl Validate for StationToRoom {
@@ -708,8 +769,14 @@ mod tests {
     fn every_signalling_case_round_trips_on_its_hop() {
         assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 4);
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 4);
-        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 10);
-        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 10);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 11);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 11);
+        // The relay's own: it ends a station's stream, and it answers a page by itself.
+        assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStationEnd"), 2);
+        assert_eq!(
+            round_trip::<RoomToPage>(SIGNAL, "roomToBrowserFromRelay"),
+            3
+        );
     }
 
     #[test]
@@ -749,9 +816,11 @@ mod tests {
     /// the relay's ceiling with room to spare, so a real page's offer has room too.
     #[test]
     fn every_fixture_fits_its_bound() {
-        for (name, message) in cases(SIGNAL, "roomToStation") {
-            let wire = serde_json::to_string(&message).unwrap();
-            assert!(wire.len() <= SIGNAL_BYTES, "{name}: {} bytes", wire.len());
+        for list in ["roomToStation", "roomToStationEnd"] {
+            for (name, message) in cases(SIGNAL, list) {
+                let wire = serde_json::to_string(&message).unwrap();
+                assert!(wire.len() <= SIGNAL_BYTES, "{name}: {} bytes", wire.len());
+            }
         }
         for (name, message) in cases(SIGNAL, "stationToRoom") {
             let parsed: StationToRoom = serde_json::from_value(message).unwrap();
@@ -775,7 +844,7 @@ mod tests {
             round_trip::<ControlOut>(CHANNEL, "controlStationToBrowser"),
             10
         );
-        assert_eq!(round_trip::<PttIn>(CHANNEL, "pttBrowserToStation"), 3);
+        assert_eq!(round_trip::<PttIn>(CHANNEL, "pttBrowserToStation"), 7);
         assert_eq!(round_trip::<AudioOut>(CHANNEL, "audioStationToBrowser"), 3);
     }
 
@@ -834,9 +903,9 @@ mod tests {
 
     #[test]
     fn the_window_receives_exactly_the_input_the_channel_carried() {
-        assert_eq!(round_trip::<WebviewInput>(WEBVIEW, "stationToWebview"), 11);
+        assert_eq!(round_trip::<WebviewInput>(WEBVIEW, "stationToWebview"), 12);
         refused::<WebviewInput>(WEBVIEW, "refused");
-        // Every input case on the channel reaches the window unchanged, and nothing else does.
+        // Every input case on `control` reaches the window unchanged, and nothing else does.
         let channel: Vec<Value> = cases(CHANNEL, "controlBrowserToStation")
             .into_iter()
             .filter_map(|(_, m)| {
@@ -847,13 +916,58 @@ mod tests {
         let window: Vec<Value> = cases(WEBVIEW, "stationToWebview")
             .into_iter()
             .map(|(_, m)| m)
-            .filter(|m| m["type"] != "reset")
+            .filter(|m| m["type"] != "reset" && m["type"] != "held")
             .collect();
         assert_eq!(channel.len(), 10, "premise: ten input cases");
         assert_eq!(channel.len(), window.len());
         for (a, b) in channel.iter().zip(&window) {
             assert!(same(a, b), "{a} vs {b}");
         }
+        // And a `held` from `ptt` reaches it unchanged too.
+        let held: Vec<Value> = cases(WEBVIEW, "stationToWebview")
+            .into_iter()
+            .map(|(_, m)| m)
+            .filter(|m| m["type"] == "held")
+            .collect();
+        assert_eq!(held.len(), 1, "premise: one held case");
+        let on_ptt = cases(CHANNEL, "pttBrowserToStation");
+        assert!(
+            on_ptt.iter().any(|(_, m)| same(m, &held[0])),
+            "the window's held case is not one the ptt channel carries"
+        );
+        let Ok(PttIn::Held(parsed)) = parse_ptt(&serde_json::to_vec(&held[0]).unwrap()) else {
+            panic!("the held case does not parse on ptt");
+        };
+        assert!(same(
+            &serde_json::to_value(WebviewInput::Held(parsed)).unwrap(),
+            &held[0]
+        ));
+    }
+
+    /// The held set's bounds, beyond the fixtures: sixteen keys pass and seventeen do not; a key
+    /// named twice, an empty key or a space in a key is refused. CONTROL for each: the same set
+    /// without the fault passes.
+    #[test]
+    fn a_held_set_is_bounded() {
+        let held = |keys: &[&str], buttons: u8| HeldInput {
+            keys: keys.iter().map(|k| k.to_string()).collect(),
+            buttons,
+            seq: 1,
+        };
+        let sixteen: Vec<String> = (0..16)
+            .map(|i| format!("Key{}", (b'A' + i) as char))
+            .collect();
+        let sixteen: Vec<&str> = sixteen.iter().map(String::as_str).collect();
+        assert!(held(&sixteen, 31).valid());
+        let mut seventeen = sixteen.clone();
+        seventeen.push("KeyZ");
+        assert!(!held(&seventeen, 0).valid());
+        assert!(!held(&["Space", "Space"], 0).valid());
+        assert!(held(&["Space", "KeyA"], 0).valid());
+        assert!(!held(&[""], 0).valid());
+        assert!(!held(&["Key A"], 0).valid());
+        assert!(!held(&[], 32).valid());
+        assert!(held(&[], 0).valid());
     }
 
     #[test]

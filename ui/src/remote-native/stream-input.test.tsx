@@ -26,7 +26,7 @@ const pointer = (action: string, extra: Record<string, unknown> = {}) =>
 const key = (action: 'down' | 'up', keyValue: string, code: string, modifiers = 0) => ({ type: 'key', action, key: keyValue, code, modifiers, repeat: false })
 /** The page's re-assertion of what it holds down over the picture (the lead's dead-man ruling). */
 const held = (keys: string[], buttons: number, seq: number) => ({ type: 'held', keys, buttons, seq })
-const SPACE_DOWN = "key down, Space, the Phone cockpit's PTT key", SPACE_UP = 'key up'
+const SPACE_DOWN = "key down, Space (an ordinary key: the window's own handlers decide what it does)", SPACE_UP = 'key up, Space'
 const click = (d: StreamInputDispatcher, extra: Record<string, unknown> = {}) => { d.handle(pointer('down', extra)); d.handle(pointer('up', extra)) }
 const box = (el: Element, rect: { left: number; top: number; width: number; height: number }) => {
   el.getBoundingClientRect = () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON: () => ({}) })
@@ -262,7 +262,7 @@ it('reset releases what the stream was holding: Space comes up, the button comes
     under = screen.getByRole('button', { name: 'PTT' })
     const d = bridge()
     // The Phone cockpit keys on Space down and unkeys on Space up, both on the window.
-    d.handle(byName("key down, Space, the Phone cockpit's PTT key"))
+    d.handle(byName(SPACE_DOWN))
     d.handle(pointer('down'))
     d.handle({ type: 'reset' })
     expect(windowKeys).toEqual(['keydown Space', 'keyup Space'])
@@ -273,7 +273,7 @@ it('reset releases what the stream was holding: Space comes up, the button comes
     // Space held ON the button when the stream ends: the press is abandoned, as a browser abandons it
     // when the window loses focus mid-press - it never becomes a click.
     screen.getByRole('button', { name: 'PTT' }).focus()
-    d.handle(byName("key down, Space, the Phone cockpit's PTT key"))
+    d.handle(byName(SPACE_DOWN))
     d.handle({ type: 'reset' })
     expect(windowKeys.slice(2)).toEqual(['keydown Space', 'keyup Space'])
     expect(onClick).not.toHaveBeenCalled()
