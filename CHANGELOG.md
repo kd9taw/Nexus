@@ -18,8 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The browser's clicks and keys reach Nexus only, never anything else on the computer. While a
   browser is attached, every transmission at the station stops within five seconds if its
   connection drops, and within seven if its picture freezes. The picture is VP8 over encrypted
-  WebRTC, at most 30 frames a second. The browser side is not in this build yet, so the switch
-  has nothing to connect to for now.
+  WebRTC, at most 30 frames a second.
 - **Remote: stream Nexus from the shack (first test build).** Each station on the Remote page has
   a **Stream Nexus** button: the Nexus window at the shack, live in your browser, worked with your
   own mouse and keyboard. It needs a Nexus at the shack with streaming turned on, and the page says
