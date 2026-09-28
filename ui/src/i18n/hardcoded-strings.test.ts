@@ -78,6 +78,7 @@ const MIGRATED = [
   'remote-web/stream-link.ts',
   'remote-web/control-failure.ts',
   'remote-native/RemoteStation.tsx',
+  'remote-native/stream-input.ts',
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
