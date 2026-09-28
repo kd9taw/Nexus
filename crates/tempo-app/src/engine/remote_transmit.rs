@@ -387,13 +387,16 @@ impl Engine {
     /// Called by the real radio loop and at both FT planning and commit. A
     /// disconnected host cannot leave the station waiting for another request
     /// to notice expiry. Native halt supplies the existing flush/unkey signals.
+    /// A streamed session's presence and held PTT are polled here too, on the
+    /// same tick (`remote_stream.rs`).
     pub fn poll_remote_transmit(&mut self, now: Instant) -> bool {
-        if self.remote_transmit.as_ref().is_some_and(|p| !p.valid(now)) {
+        let halted = if self.remote_transmit.as_ref().is_some_and(|p| !p.valid(now)) {
             self.halt_tx();
             true
         } else {
             false
-        }
+        };
+        self.poll_remote_stream(now) || halted
     }
 }
 

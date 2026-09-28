@@ -25,6 +25,7 @@ pub mod remote_logging;
 pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
+pub mod remote_stream;
 pub mod remote_transmit;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
@@ -2483,6 +2484,9 @@ pub struct Engine {
     remote_settings_path: Option<std::path::PathBuf>,
     remote_selection_host_ready: bool,
     remote_transmit: Option<crate::remote_control::transmit::TransmitPermit>,
+    /// A streamed session's transmit presence, and its held PTT: see `engine/remote_stream.rs`.
+    remote_presence: Option<crate::remote_control::transmit::TransmitPermit>,
+    remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4793,6 +4797,8 @@ impl Engine {
             remote_settings_path: None,
             remote_selection_host_ready: false,
             remote_transmit: None,
+            remote_presence: None,
+            remote_ptt_hold: None,
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
