@@ -81,6 +81,7 @@ import {
 import { pushToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { latestOnly } from '../remote-web/latest-only'
+import { armStreamPttKey } from '../remote-native/stream-input'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
@@ -1143,6 +1144,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lock])
+  // Remote as a stream: while the handler above keys the rig on Space, a streamed Space must never
+  // arrive as a key. Arming tells the stream's input bridge so, and the page holds PTT instead. It
+  // lives exactly as long as that handler would key: the same `control` read, the same `lock`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => (control && !lock ? armStreamPttKey() : undefined), [lock])
 
   // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
   // slot) — what the SESSION is composing, which is what the next contact will hear. Empty
