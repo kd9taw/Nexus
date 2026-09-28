@@ -26,6 +26,9 @@
  * ⚠️ The read and the write are two calls. A change that lands between them — a window of
  * milliseconds — is still overwritten. Closing it needs the backend to apply the fields under its
  * own lock.
+ *
+ * `setSettings` is imported directly only by the modules `writers.test.ts` lists, each of which
+ * reads the settings immediately before it writes; every other writer goes through here.
  */
 import { getSettings, setSettings } from '../api'
 import type { AppSnapshot, Settings } from '../types'
