@@ -1910,6 +1910,15 @@ pub struct Settings {
     /// see `crate::presence` for what it reads and `engine/parsec_presence.rs` for what it stops.
     #[serde(default)]
     pub parsec_presence_stop: bool,
+    /// Remote as a stream: whether a browser that holds station control may be shown this
+    /// station's own Nexus window over WebRTC, and drive it. **Default OFF.** While a stream is
+    /// attached, its transmit presence stops every transmission at the station within five
+    /// seconds of the stream going away or its picture going stale (TX sign-off 2026-09-27,
+    /// "Session permit"). Global, not per-radio: one window serves every radio. Windows only
+    /// today; elsewhere the station answers an offer "unavailable". Withheld from Remote's own
+    /// settings projection like every field not listed there, so no browser can turn it on.
+    #[serde(default)]
+    pub remote_stream: bool,
     #[serde(default)]
     pub max_power_phone: Option<f32>,
     #[serde(default)]
@@ -4255,6 +4264,7 @@ impl Default for Settings {
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
             parsec_presence_stop: false,
+            remote_stream: false,
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
@@ -8826,6 +8836,59 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("parsecPresenceStopp") && !declares("parsecStop"));
+    }
+
+    /// Remote as a stream's switch: ships OFF, its exact wire key, an upgrader's file, a save-and-
+    /// load round trip, and the TS mirror read out of `types.ts` itself.
+    ///
+    /// Global, not per-radio: one Nexus window serves every radio, so it has no `RadioProfile`
+    /// mirror and no `RadioProfilePatch` seam to drift.
+    #[test]
+    fn remote_stream_ships_off_wire_key_round_trip_and_ts_mirror() {
+        let s = Settings::default();
+        assert!(!s.remote_stream, "ships OFF");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"remoteStream\":false"),
+            "missing wire key in {json}"
+        );
+
+        // An upgrader's file predates the key: off, never on by accident.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.remote_stream);
+
+        // On survives a save and a load, through the real file path.
+        let dir = std::env::temp_dir().join(format!("nexus-stream-setting-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut on = Settings::default();
+        on.remote_stream = true;
+        on.save(&path).unwrap();
+        assert!(Settings::load(&path).remote_stream, "on came back off");
+        on.remote_stream = false;
+        on.save(&path).unwrap();
+        assert!(!Settings::load(&path).remote_stream, "off came back on");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The TS mirror, read from types.ts itself.
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("remoteStream"),
+            "ui/src/types.ts Settings is missing `remoteStream`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("remoteStreamm") && !declares("stream"));
     }
 
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.

@@ -29023,6 +29023,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         &d,
         handle.state::<remote_monitor::Publisher>().inner().clone(),
         handle.state::<LogTallies>().needs.clone(),
+        &handle,
     ));
     // Pounce detector. Emits `pounce` to every window when a rare one appears — the
     // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
@@ -29832,7 +29833,20 @@ fn remote_service_for(
     d: &BuildDeps,
     publisher: remote_monitor::Publisher,
     needs: NeedsKept,
+    handle: &tauri::AppHandle,
 ) -> remote_service::Service {
+    // Remote as a stream: a streamed operator's input goes to THIS app's main window, as a DOM
+    // event its own page dispatches, and nowhere else. There is no OS input call on this path.
+    let window = handle.clone();
+    let input: remote_service::stream::InputSink =
+        Arc::new(move |input: &tempo_stream::protocol::WebviewInput| {
+            use tauri::Emitter;
+            let _ = window.emit_to(
+                "main",
+                tempo_stream::protocol::WEBVIEW_INPUT_EVENT,
+                input.clone(),
+            );
+        });
     remote_service::Service::new(
         d.engine.clone(),
         publisher,
@@ -29864,6 +29878,10 @@ fn remote_service_for(
         // advertised and no browser is ever offered the control.
         #[cfg(feature = "radio")]
         Some(d.receive_audio.clone()),
+        remote_service::stream::Host {
+            input: Some(input),
+            ptt: Default::default(),
+        },
     )
 }
 

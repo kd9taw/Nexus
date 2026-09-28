@@ -341,6 +341,7 @@ fn cloud_runtime_probe() {
             sources: Some(sources.clone()),
             #[cfg(feature = "radio")]
             audio: None,
+            stream: Default::default(),
         },
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -871,6 +872,7 @@ fn cloud_runtime_probe() {
                         sources: Some(sources.clone()),
                         #[cfg(feature = "radio")]
                         audio: None,
+                        stream: Default::default(),
                     },
                 );
                 std::thread::sleep(Duration::from_millis(100));
@@ -960,7 +962,7 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
             });
             let token = transport::random_secret().unwrap();
             let result = transport::connected(&client, "00000000-0000-4000-8000-000000000001", &token,
-                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None }, &status).await;
+                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() }, &status).await;
             assert_eq!(result, Err("invalidResponse"));
             server.await.unwrap();
             assert_eq!(serde_json::to_value(engine.lock().unwrap().snapshot().radio).unwrap(), before);
@@ -998,7 +1000,7 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
             }
         });
         let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
         let supervised = tokio::spawn(transport::supervise(client, binding, transport::random_secret().unwrap(), cancellation, engine, feeds, status.clone()));
         let mut seen = None;
         for _ in 0..250 {
@@ -1115,7 +1117,7 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
         let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped, not because a send timed out");
@@ -1244,7 +1246,7 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
             });
             let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
             let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-            let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: None };
+            let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: None, stream: Default::default() };
             let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
             relay.await.unwrap();
             assert_eq!(served, Ok(()));

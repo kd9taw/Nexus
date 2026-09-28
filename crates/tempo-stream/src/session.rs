@@ -122,11 +122,19 @@ impl Session {
     /// Answer an admitted page's offer, sending from the socket at `base`. Returns the session and
     /// the answer to signal back.
     pub fn accept(sdp: &str, base: SocketAddr, now: Instant) -> Result<(Session, String), Refusal> {
+        Self::precheck(sdp)?;
+        Self::build(sdp, base, None, now)
+    }
+
+    /// Everything [`Session::accept`] would refuse without touching the network or building
+    /// anything: the offer check (A4) and the platform. The caller runs it before it opens a
+    /// socket, so a refused offer costs the station nothing.
+    pub fn precheck(sdp: &str) -> Result<(), Refusal> {
         offer::check(sdp).map_err(Refusal::Offer)?;
         if !cfg!(windows) {
             return Err(Refusal::Unavailable);
         }
-        Self::build(sdp, base, None, now)
+        Ok(())
     }
 
     /// The session behind [`Session::accept`], past the checks that must come before it.

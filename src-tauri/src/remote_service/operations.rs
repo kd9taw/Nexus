@@ -381,6 +381,11 @@ pub struct Authority {
     core: Mutex<Core>,
     hardware: Revocation,
     transmit: TransmitAuthority,
+    /// A streamed session's transmit presence (see `stream_presence`). Its own authority, not
+    /// `transmit`'s: the engine's stand-down (`halt_tx`) moves `transmit`, and a Stop ends a
+    /// transmission, not the session that is watching it. Revoked with every other execution
+    /// authority when a lease ends, which stops everything at the station on the next tick.
+    presence: TransmitAuthority,
     stop_owner: Mutex<Option<transmit_stop::Owner>>,
     transmit_revocations: Mutex<BTreeSet<String>>,
     /// Logging and station-control revokes, queued as `transmit_revocations` is; see
@@ -476,6 +481,7 @@ impl Authority {
     fn revoke_execution(&self) {
         self.hardware.revoke();
         self.transmit.revoke();
+        self.presence.revoke();
     }
     pub fn with_spots(spots: Option<crate::SharedSpots>) -> Self {
         Self {
@@ -844,6 +850,56 @@ impl Authority {
         }
         Ok(())
     }
+    /// May this browser stream the station (security acceptance test A3)? Exactly the audio lane's
+    /// rule, deliberately one definition: the operator's local control grant plus this browser's
+    /// own live lease. Asked before any WebRTC state exists, and again on a slow cadence while a
+    /// stream runs, so a lapsed lease or a revoked device ends it.
+    pub fn stream_admitted(
+        &self,
+        session: &str,
+        device: &str,
+        lease_id: &str,
+        now: Instant,
+    ) -> Result<(), &'static str> {
+        self.audio_admitted(session, device, lease_id, now)
+    }
+
+    /// S8: the streamed session's transmit presence, minted under the lease that admitted it. The
+    /// same checks as admission; a deadline of five seconds from now, and never past the lease.
+    ///
+    /// ⛔ IT GRANTS NOTHING. It is not the FT permit (`permit_generation`): nothing is armed or
+    /// keyed with it and no browser gesture is bound to it, so there is no displayed generation to
+    /// check it against. Held by the engine, its only power is to stop every transmission at the
+    /// station when it lapses (`engine/remote_stream.rs`).
+    pub fn stream_presence(
+        &self,
+        session: &str,
+        device: &str,
+        lease_id: &str,
+        now: Instant,
+    ) -> Result<tempo_app::remote_control::transmit::TransmitPermit, &'static str> {
+        if !identifier(session) || !identifier(device) || !identifier(lease_id) {
+            return Err("invalidRequest");
+        }
+        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        self.reconcile(&mut c, now)?;
+        if !c.control_grants.contains(device) {
+            return Err("notController");
+        }
+        let lease = c.lease.as_ref().ok_or("notController")?;
+        if lease.id != lease_id || lease.session != session || lease.device != device {
+            return Err("notController");
+        }
+        let deadline = (now + LEASE).min(lease.until);
+        self.presence.permit(deadline).ok_or("authorityUnavailable")
+    }
+
+    /// The stream ended: its presence ends with it, and the engine halts on its next tick if it
+    /// held any. Ending a session that never connected stops nothing, because it held none.
+    pub fn end_stream_presence(&self) {
+        self.presence.revoke();
+    }
+
     /// Any admitted browser departure ends the shared logging lease. This is
     /// deliberately conservative and cannot wait behind a file append. Grants
     /// survive; a controller must explicitly acquire a fresh lease afterward.

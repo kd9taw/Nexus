@@ -11,6 +11,8 @@ pub(crate) mod query;
 pub(crate) mod sstv;
 #[cfg(test)]
 pub(crate) mod stored_log_tests;
+/// Remote as a stream: the `streamSignal` lane and the session thread (see its header).
+pub(crate) mod stream;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -373,6 +375,8 @@ impl Service {
         // `audio`: the station's bounded receive-audio copy, for a listening browser.
         // `None` leaves the audio lane unadvertised, so nothing is ever offered it.
         #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
+        // What a streamed session needs from the application: the window its input goes to.
+        stream: stream::Host,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -387,6 +391,7 @@ impl Service {
                 sources,
                 #[cfg(feature = "radio")]
                 audio,
+                stream,
             },
         )
     }
@@ -408,6 +413,7 @@ impl Service {
                 sources: None,
                 #[cfg(feature = "radio")]
                 audio: None,
+                stream: stream::Host::default(),
             },
         )
     }
@@ -446,6 +452,9 @@ impl Service {
         // of arming the rig a second later. See `Engine::halt_tx`.
         tempo_app::engine::engine_lock(&engine)
             .set_remote_transmit_revocation(operations.transmit_revocation());
+        // A streamed operator's held PTT: the stream records the holds, the engine keys and
+        // releases on its own radio-loop tick (`engine/remote_stream.rs`).
+        tempo_app::engine::engine_lock(&engine).set_remote_ptt_hold(feeds.stream.ptt.clone());
         let control = Arc::new(Mutex::new(Control {
             operations,
             memories: feeds

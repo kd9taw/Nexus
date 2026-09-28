@@ -3697,6 +3697,10 @@ export interface Settings {
    *  through their own stop paths. Stop-only; FT auto-sequencing is not covered. The watcher
    *  runs on a Windows station only (the Parsec host). */
   parsecPresenceStop?: boolean
+  /** Remote as a stream. Default OFF. A browser holding station control may be shown this
+   *  station's own Nexus window and drive it; while one is attached, every transmission stops
+   *  within five seconds of the stream going away or its picture going stale. Windows only. */
+  remoteStream?: boolean
   maxPowerPhone?: number | null
   maxPowerCw?: number | null
   maxPowerDigital?: number | null

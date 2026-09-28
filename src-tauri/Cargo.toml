@@ -126,6 +126,10 @@ tempo-core = { path = "../crates/tempo-core" }
 # (off the engine lock). Already in the lockfile transitively via tempo-audio; a
 # direct dep here needs no new external crate.
 tempo-sstv = { path = "../crates/tempo-sstv" }
+# Remote as a stream: the wire contract and the station's WebRTC session. str0m arrives with it,
+# in exactly the reviewed configuration (see crates/tempo-stream/Cargo.toml, and NOTICE's "Nexus
+# Remote streaming" for the licences).
+tempo-stream = { path = "../crates/tempo-stream" }
 # Real sound-card + rig transport (optional; enabled by the `radio` feature).
 tempo-audio = { path = "../crates/tempo-audio", optional = true }
 
