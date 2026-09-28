@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,179 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,198 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -24,7 +24,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | QSO / QSOs | 96 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 82 | Computer Aided Transceiver — the radio control protocol. |
-| TX / RX | 79 / 72 | Transmit and receive. Printed on the radio itself. |
+| TX / RX | 80 / 72 | Transmit and receive. Printed on the radio itself. |
 | CW | 68 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 67 | Both the Q-code and the callsign lookup site. |
 | CQ | 63 | The call. Translating it would be strange on the air and on screen. |
@@ -37,7 +37,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | SSTV | 41 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
 | Field Day | 34 | The ARRL/RAC event's official name. |
-| USB / LSB / SSB / FM | 33 / 10 / 27 / 21 | Mode names, as marked on the radio. |
+| USB / LSB / SSB / FM | 35 / 10 / 29 / 21 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
 | FT8 / FT4 | 33 / 18 | Mode names. |
 | HF / VHF / UHF | 32 / 18 / 4 | Band ranges. |
@@ -57,7 +57,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | ARRL / RAC / IARU | 20 / 3 / 1 | Organisation names. |
 | SatNOGS | 19 | The satellite database. |
 | AOS / LOS | 19 / 12 | Acquisition and loss of signal, on a satellite pass. |
-| PTT | 19 | Push to talk. Printed on the microphone. |
+| PTT | 24 | Push to talk. Printed on the microphone. |
 | RBN | 18 | Reverse Beacon Network. |
 | QTH | 17 | Q-code: location. |
 | QSL | 16 | The confirmation, the card and the act. |
@@ -98,21 +98,21 @@ word in, and use only that word in the CSV.
 | band | 310 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 228 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
-| rig | 151 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
+| rig | 155 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 130 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 121 | The Settings screen and every reference to it. | |
+| settings | 122 | The Settings screen and every reference to it. | |
 | grid | 113 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
-| audio | 106 | Sound cards, levels, routing. | |
+| audio | 112 | Sound cards, levels, routing. | |
 | station | 121 | Both your own station and the one you are working. | |
 | port | 97 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 96 / 30 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 98 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 85 | A satellite pass. | |
 | callsign | 78 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
 | frequency | 73 | | |
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
-| power | 52 | RF power, in watts. | |
+| power | 53 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 49 | Both noun and verb. | |
 | spot / spots | 32 / 49 | A cluster or RBN spot. Both noun and verb. | |
@@ -124,7 +124,7 @@ word in, and use only that word in the CSV.
 | section | 36 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
 | cluster | 34 | The DX cluster. | |
 | waterfall | 38 | The scrolling spectrum display. | |
-| contact | 32 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
+| contact | 33 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |
 | antenna | 30 | | |
