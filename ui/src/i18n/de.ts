@@ -5922,6 +5922,7 @@ export const DE: PartialCatalog = {
   "palette.preset.gold": "Gold",
   "palette.preset.yellow": "Gelb",
   "palette.preset.sky": "Himmelblau",
+  "palette.preset.themeOwn": "Vom Design",
   "waterfall.palette.aria.scoped": "Farbpalette des Wasserfalls (diese Betriebsart)",
   "waterfall.palette.aria.shared": "Farbpalette des Wasserfalls (Phone, CW, RTTY und SSTV — FT hat eine eigene)",
   "waterfall.palette.title.scoped": "Farbpalette des Wasserfalls — gilt für diese Betriebsart",

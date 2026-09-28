@@ -2108,6 +2108,7 @@
 "4","palette.preset.gold","Gold","","","A colour name, on a chip in Settings ▸ Appearance ▸ Colours. Name the colour as a Brazilian operator would. The same English text ""Gold"" is also a Journey award tier (journey.tier.gold)."
 "4","palette.preset.yellow","Yellow","","","A colour name, on a chip in Settings ▸ Appearance ▸ Colours. Name the colour as a Brazilian operator would."
 "4","palette.preset.sky","Sky","","","A colour name, on a chip in Settings ▸ Appearance ▸ Colours. Name the colour as a Brazilian operator would."
+"4","palette.preset.themeOwn","Theme’s own","","","On a chip in Settings ▸ Appearance ▸ Colours, in place of a colour name: while one of the built-in themes (Amber LCD, Paper…) is picked in Settings ▸ Appearance ▸ Theme, the Accent's and the Readout's standard choice is that theme's own colour. Use the same word for ""theme"" as the Theme section (theme.aria)."
 "5","phone.panel.scope","Scope","","","Short label on: Phone (SSB) cockpit. The same English text ""Scope"" is used by 2 different keys (e.g. cw.panel.scope) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "5","phone.panel.rigscope","Rig Scope Controls","","",""
 "5","phone.panel.txmeters","TX Meters","","TX","Short label on: Phone (SSB) cockpit. The same English text ""TX Meters"" is used by 3 different keys (e.g. operate.panel.txmeters, cw.panel.txmeters) — each can take a different Portuguese word, so choose the one that fits THIS screen."

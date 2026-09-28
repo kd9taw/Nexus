@@ -135,6 +135,9 @@ const SHARED = [
   'nexus-palette-cyan',
   'nexus-palette-ok',
   'nexus-palette-readout',
+  // The built-in theme (Settings ▸ Appearance ▸ Theme; useSkin.ts): part of the theme, the same
+  // class, so a pop-out paints the theme the window that opened it paints.
+  'nexus-skin',
   'nexus-motion',
   'nexus-ui-scale-cap',
   'nexus.connect.chaseDefault.v1',

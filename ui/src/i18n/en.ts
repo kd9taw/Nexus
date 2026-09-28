@@ -9663,6 +9663,9 @@ export const EN = {
   'palette.preset.gold': 'Gold',
   'palette.preset.yellow': 'Yellow',
   'palette.preset.sky': 'Sky',
+  // On a built-in theme (Settings ▸ Appearance ▸ Theme), the Accent's and the Readout's standard
+  // chip is the theme's own colour rather than the standard one, and says so.
+  'palette.preset.themeOwn': 'Theme’s own',
 
   // ── The waterfall palette picker ────────────────────────────────────────────────────
   // Two wordings, and the difference is load-bearing: an UNSCOPED picker drives the master

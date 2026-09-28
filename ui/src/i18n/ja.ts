@@ -5928,6 +5928,7 @@ export const JA: PartialCatalog = {
   "palette.preset.gold": "ゴールド",
   "palette.preset.yellow": "イエロー",
   "palette.preset.sky": "スカイ",
+  "palette.preset.themeOwn": "テーマの色",
   "waterfall.palette.aria.scoped": "ウォーターフォールのカラーパレット(このモード)",
   "waterfall.palette.aria.shared": "ウォーターフォールのカラーパレット(フォーン・CW・RTTY・SSTV共通 — FTは独立)",
   "waterfall.palette.title.scoped": "ウォーターフォールのカラーパレット — このモードにのみ適用されます",

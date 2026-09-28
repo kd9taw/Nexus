@@ -6132,6 +6132,7 @@ export const FR: PartialCatalog = {
   "palette.preset.gold": "Or",
   "palette.preset.yellow": "Jaune",
   "palette.preset.sky": "Bleu ciel",
+  "palette.preset.themeOwn": "Couleur du thème",
   "toast.action.default": "Contacter",
   "toast.dismiss": "Fermer la notification",
   "topbar.clock.corrected.label": "horloge {{offset}} ✓",

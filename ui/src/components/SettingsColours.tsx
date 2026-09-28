@@ -9,16 +9,25 @@
 //
 // The picks and the setter arrive as props from App's usePaletteRoles, the one writer of the
 // attributes; this component never touches <html> or storage itself.
+//
+// ON A BUILT-IN THEME (features/skins.ts) the default of a role the theme retunes — the Accent and
+// the Readout — is the theme's own colour, not the standard one, so that chip says "Theme's own"
+// and shows the theme's colour. Otherwise the row would claim the standard cyan is what the
+// operator sees. A pick still wins over the theme, as it does over the standard colour.
 import type { CSSProperties } from 'react'
 import { t } from '../i18n'
 import { PALETTE_ROLES, defaultPresetId, type PaletteRoleId, type PaletteSelection } from '../features/paletteRoles'
+import { skinOf, type SkinId } from '../features/skins'
 
 interface Props {
   palette: PaletteSelection
+  /** The built-in theme on screen, or null for a standard one. */
+  skin?: SkinId | null
   onChange: (role: PaletteRoleId, presetId: string) => void
 }
 
-export function SettingsColours({ palette, onChange }: Props) {
+export function SettingsColours({ palette, skin = null, onChange }: Props) {
+  const theme = skinOf(skin)
   return (
     <div className="settings-grid">
       {PALETTE_ROLES.map((role) => {
@@ -44,9 +53,13 @@ export function SettingsColours({ palette, onChange }: Props) {
             <span className="theme-switcher" role="group" aria-label={name}>
               {role.presets.map((p) => {
                 const on = p.id === current
+                // The theme's own colour, when this is the default of a role the theme retunes.
+                const own = p.id === standard ? theme?.day[role.swatch] : undefined
                 // Both themes' colours ride on the swatch and the sheet shows the one for the
                 // theme in use, so the chip never needs to know which theme that is.
-                const swatch = { '--swatch-dark': p.dark[role.swatch], '--swatch-light': p.light[role.swatch] } as CSSProperties
+                const swatch = (
+                  own ? { '--swatch-dark': own, '--swatch-light': own } : { '--swatch-dark': p.dark[role.swatch], '--swatch-light': p.light[role.swatch] }
+                ) as CSSProperties
                 return (
                   <button
                     key={p.id}
@@ -56,7 +69,7 @@ export function SettingsColours({ palette, onChange }: Props) {
                     onClick={() => onChange(role.id, p.id)}
                   >
                     <span className="palette-swatch" style={swatch} aria-hidden="true" />
-                    {t(p.labelKey)}
+                    {own ? t('palette.preset.themeOwn') : t(p.labelKey)}
                   </button>
                 )
               })}

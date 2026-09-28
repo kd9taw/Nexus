@@ -66,6 +66,7 @@ import { foldRetiredWantedList } from './features/watchlistFold'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
+import { useSkin } from './useSkin'
 import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
@@ -280,6 +281,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const spotsRead = useRemoteCollection('spots')
   const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
   const [theme, setTheme, themeChoice] = useTheme()
+  // The built-in themes (Settings ▸ Appearance ▸ Theme): App is the one writer of `data-skin`,
+  // and Settings is handed the theme and the setter, the same way it gets the theme.
+  const [skin, setSkin] = useSkin(theme)
   // The contrast axis: field mode (outdoor/POTA) and the standing high-contrast preference
   // (#215). Both set data-contrast on <html>; only field mode is handed to useScale, because
   // only it carries the larger auto-fit. Global — facts about the station, like the theme.
@@ -3042,6 +3046,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onRerunWizard={() => setShowWizard(true)}
             theme={themeChoice}
             onThemeChange={setTheme}
+            skin={skin}
+            onSkinChange={setSkin}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}

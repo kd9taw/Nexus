@@ -16,6 +16,7 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FeaturesApi } from '../useFeatures'
 import { EN } from '../i18n'
 import { DEFAULT_SELECTION, PALETTE_ROLES, type PaletteRoleId, type PaletteSelection } from '../features/paletteRoles'
+import { SKINS, type SkinId } from '../features/skins'
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -54,6 +55,7 @@ const E = EN as unknown as Record<string, string>
 function renderPanel(props: {
   palette?: PaletteSelection
   onPaletteChange?: (role: PaletteRoleId, presetId: string) => void
+  skin?: SkinId | null
 }) {
   return render(
     <SettingsPanel
@@ -140,6 +142,24 @@ describe('Settings ▸ Appearance ▸ Colours', () => {
         expect(sw.style.getPropertyValue('--swatch-dark'), `${r.id}=${r.presets[i].id}`).toBe(r.presets[i].dark[r.swatch])
         expect(sw.style.getPropertyValue('--swatch-light'), `${r.id}=${r.presets[i].id}`).toBe(r.presets[i].light[r.swatch])
       })
+    }
+  })
+
+  it('on a built-in theme, the Accent and Readout defaults are the theme’s own colour, and the signal rows are as they are', async () => {
+    for (const x of SKINS) {
+      renderPanel({ palette: { ...DEFAULT_SELECTION, readout: 'amber' }, onPaletteChange: () => {}, skin: x.id })
+      const s = await section()
+      for (const r of PALETTE_ROLES) {
+        const first = within(group(s, r.id)).getAllByRole('button')[0]
+        const sw = first.querySelector('.palette-swatch') as HTMLElement
+        const retuned = r.id === 'accent' || r.id === 'readout'
+        expect(first.textContent, `${x.id} ${r.id}`).toBe(retuned ? E['palette.preset.themeOwn'] : E[r.presets[0].labelKey])
+        expect(sw.style.getPropertyValue('--swatch-dark'), `${x.id} ${r.id}`).toBe(retuned ? x.day[r.swatch] : r.presets[0].dark[r.swatch])
+        expect(sw.style.getPropertyValue('--swatch-light'), `${x.id} ${r.id}`).toBe(retuned ? x.day[r.swatch] : r.presets[0].light[r.swatch])
+      }
+      // The operator's own pick still shows as picked, and the other presets keep their names.
+      expect(within(group(s, 'readout')).getByRole('button', { name: E['palette.preset.amber'] }).getAttribute('aria-pressed')).toBe('true')
+      cleanup()
     }
   })
 

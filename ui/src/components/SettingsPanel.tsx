@@ -194,6 +194,7 @@ import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
+import { skinOf, type SkinId } from '../features/skins'
 import type { NightChoice } from '../useNight'
 import type { Motion } from '../useMotion'
 import { FT_PALETTE_SCOPE, getWaterfallPalette, setWaterfallPalette } from '../waterfallPalette'
@@ -269,6 +270,10 @@ interface Props {
    * hosts/tests without theme wiring render the tab unchanged. */
   theme?: ThemeChoice
   onThemeChange?: (t: ThemeChoice) => void
+  /** The built-in theme painting on `theme` (features/skins.ts), null for the standard one, and its
+   *  setter: owned by App's `useSkin`. Optional like the theme. */
+  skin?: SkinId | null
+  onSkinChange?: (id: SkinId | null) => void
   /** #215: Field mode — maximum contrast plus larger type (`useFieldMode`). It shipped as a
    *  chip in the top bar only, which is the other half of why the operator who asked for a
    *  high-contrast, large-text setting could not find one: the two halves of the answer were
@@ -1003,6 +1008,8 @@ export function SettingsPanel({
   onRerunWizard,
   theme,
   onThemeChange,
+  skin = null,
+  onSkinChange,
   fieldMode = false,
   onFieldModeChange,
   highContrast = false,
@@ -1112,6 +1119,7 @@ export function SettingsPanel({
       logbookGlobe,
     }
     if (theme) a.theme = theme
+    if (onSkinChange) a.skin = skin
     if (onHighContrastChange) a.highContrast = highContrast
     if (onNightChange) a.night = night
     if (textSize) a.textSize = textSize
@@ -1121,6 +1129,13 @@ export function SettingsPanel({
   }
   const restoreAppearance = (a: Partial<Appearance>) => {
     if (a.theme) onThemeChange?.(a.theme)
+    // A built-in theme paints only on its base, so the base comes with it whatever the file's
+    // theme says; null is the standard theme. A backup from before the themes has no `skin`.
+    if (a.skin !== undefined && onSkinChange) {
+      const s = skinOf(a.skin)
+      if (s) onThemeChange?.(s.base)
+      onSkinChange(s?.id ?? null)
+    }
     if (a.highContrast !== undefined) onHighContrastChange?.(a.highContrast)
     if (a.night) onNightChange?.(a.night)
     if (a.textSize) onTextSizeChange?.(a.textSize)
@@ -3969,7 +3984,7 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-colours">
             <legend>{t('settings.colours.legend')}</legend>
             <span className="settings-hint">{t('settings.colours.hint')}</span>
-            <SettingsColours palette={palette} onChange={onPaletteChange} />
+            <SettingsColours palette={palette} skin={skin} onChange={onPaletteChange} />
           </fieldset>
           )}
 

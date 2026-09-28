@@ -8,7 +8,9 @@ import { useTextSize } from './useTextSize'
 import { useDensity } from './useDensity'
 import { useTheme } from './useTheme'
 import { useNight } from './useNight'
+import { useSkin } from './useSkin'
 import { PALETTE_ROLES, attrValueOf } from './features/paletteRoles'
+import { SKINS } from './features/skins'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -442,5 +444,77 @@ describe('index.html preseed: Night', () => {
       runPreseed()
       expect(root.getAttribute('data-night'), stored).toBeNull()
     }
+  })
+})
+
+describe('index.html preseed: the built-in themes', () => {
+  // The first-paint copy of useSkin (Settings ▸ Appearance ▸ Theme): `data-skin` for a theme the
+  // table knows, and only while the page is that theme's base; the standard themes are NO
+  // attribute. Without it every launch on a theme flashes the standard colours first, and a theme
+  // seeded on the wrong base would paint that page's wells in its own colours. The seed carries its
+  // own copy of the ids (it runs before any module loads), so it is compared to the hook's own
+  // answer for every theme, an id no theme has, and none, on every stored theme and OS setting.
+  const QUERY = '(prefers-color-scheme: dark)'
+  const root = document.documentElement
+  const os = (setting: 'dark' | 'light') => {
+    window.matchMedia = ((q: string) => ({
+      matches: q === QUERY && setting === 'dark',
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+  }
+  const reset = () => {
+    root.removeAttribute('data-skin')
+    root.removeAttribute('data-theme')
+  }
+  beforeEach(reset)
+
+  it('seeds exactly the attribute useSkin writes, theme by theme, for every stored theme and OS setting', () => {
+    const bad: string[] = []
+    for (const stored of [...SKINS.map((x) => x.id), 'no-such-theme', null]) {
+      for (const theme of [null, 'dark', 'light', 'system']) {
+        for (const setting of ['dark', 'light'] as const) {
+          const seed = () => {
+            localStorage.clear()
+            if (stored !== null) localStorage.setItem('nexus-skin', stored)
+            if (theme !== null) localStorage.setItem('tempo-theme', theme)
+            reset()
+          }
+          os(setting)
+          seed()
+          setWin(1366, 768)
+          runPreseed()
+          const seeded = root.getAttribute('data-skin')
+          seed()
+          const hook = renderHook(() => {
+            const [painted] = useTheme()
+            return useSkin(painted)
+          })
+          const written = root.getAttribute('data-skin')
+          hook.unmount()
+          if (seeded !== written) bad.push(`skin=${stored} theme=${theme} os=${setting}: seed ${JSON.stringify(seeded)} ≠ hook ${JSON.stringify(written)}`)
+        }
+      }
+    }
+    delete (window as { matchMedia?: unknown }).matchMedia
+    reset()
+    expect(bad).toEqual([])
+  })
+
+  it('seeds a theme on its own base and never on the other (the case parity could share a bug with), and the zoom stays put', () => {
+    for (const x of SKINS) {
+      for (const theme of ['dark', 'light'] as const) {
+        localStorage.clear()
+        localStorage.setItem('nexus-skin', x.id)
+        localStorage.setItem('tempo-theme', theme)
+        reset()
+        setWin(1366, 768)
+        runPreseed()
+        expect(root.getAttribute('data-skin'), `${x.id} on ${theme}`).toBe(theme === x.base ? x.id : null)
+        expect(root.style.getPropertyValue('--ui-zoom'), `${x.id} on ${theme}`).toBe(String(fitScale(1366, 768) / 100))
+      }
+    }
+    reset()
   })
 })
