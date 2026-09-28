@@ -21750,8 +21750,13 @@ button.sat-chip:disabled {
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
-/* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. */
+/* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. It never
+   shrinks: as a default flex item it gave its own 8 px to an overfull column (thinning to
+   ~5 px under a scope dragged to its ceiling), and PaneSeam's measured ceiling, taken with
+   the strip at a basis no box can take, read the divider's height too high
+   (cockpit-shells.test.ts). */
 .pane-splitter.horizontal {
+  flex: 0 0 auto;
   cursor: row-resize;
   width: auto;
   height: 8px;
