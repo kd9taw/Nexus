@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { SKINS } from './features/skins'
 import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, cwScopeSideSign, zoomRange, zoomWindow, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS, WATERFALL_PALETTES } from './waterfall'
 import { sampleLut } from './colormaps'
 
@@ -518,6 +519,41 @@ describe('resolveColormap at night (Settings ▸ Appearance ▸ Workspace ▸ Ni
     expect(resolveColormap('auto', 'dark', false)).toBe('inferno')
     expect(resolveColormap('auto', 'light', false)).toBe('cividis')
     expect(resolveColormap('auto', 'light')).toBe('cividis')
+  })
+})
+
+describe('resolveColormap on a built-in theme (Settings ▸ Appearance ▸ Theme)', () => {
+  // Operator pick of 2026-09-27, "Yes, on Auto": an Auto waterfall or scope paints the theme's own
+  // palette (features/skins.ts). Night still turns Auto Amber CRT, on every theme, and a palette
+  // picked by name is a choice that no theme and no Night ever overrides.
+  it('Auto is the theme’s own palette, by day, on every theme', () => {
+    for (const s of SKINS) expect(resolveColormap('auto', s.base, false, s.id), s.id).toBe(s.waterfall)
+    expect(resolveColormap('auto', 'dark', false, 'amber-lcd')).toBe('amber-crt')
+    expect(resolveColormap('auto', 'dark', false, 'green-lcd')).toBe('sdr-green')
+    expect(resolveColormap('auto', 'light', false, 'paper')).toBe('cividis')
+  })
+
+  it('every theme’s palette is one the pickers offer by name', () => {
+    const offered = WATERFALL_PALETTES.map((p) => p.value).filter((v) => v !== 'auto')
+    for (const s of SKINS) expect(offered, s.id).toContain(s.waterfall)
+  })
+
+  it('Night still turns Auto Amber CRT, on every theme', () => {
+    for (const s of SKINS) expect(resolveColormap('auto', s.base, true, s.id), s.id).toBe('amber-crt')
+  })
+
+  it('never changes a palette picked by name, on any theme, by day or at night', () => {
+    for (const s of SKINS) {
+      for (const p of WATERFALL_PALETTES.filter((x) => x.value !== 'auto')) {
+        for (const night of [false, true]) expect(resolveColormap(p.value, s.base, night, s.id), `${s.id} ${p.value}`).toBe(p.value)
+      }
+    }
+  })
+
+  it('a stale value falls back like Auto; no theme, or one this build does not have, is the standard map', () => {
+    expect(resolveColormap('no-such-map', 'dark', false, 'blue-vfd')).toBe('blue')
+    expect(resolveColormap('auto', 'dark', false, null)).toBe('inferno')
+    expect(resolveColormap('auto', 'light', false, 'no-such-theme')).toBe('cividis')
   })
 })
 

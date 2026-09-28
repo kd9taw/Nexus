@@ -19,7 +19,7 @@
 // suite asserts the SHELL's structure, not the panes' behaviour, which keeps it honest
 // about what it can see in jsdom (no layout; widths are stubbed like useRegionCols.test).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS } from '../features/panelState'
@@ -687,5 +687,63 @@ describe('PhoneCockpit TX meters are pinned, not flashed', () => {
     expect(meters()!.textContent).toContain('2.5:1')
     expect(meters()!.classList.contains('idle')).toBe(true)
     expect(meters()!.textContent).not.toContain('readings appear on transmit')
+  })
+})
+
+// ── THE SCOPE DIVIDER (layout L1, PaneSeam) ─────────────────────────────────────────────────
+// The scope's height divider must be reachable from the keyboard and say where it stands. jsdom
+// lays nothing out, so the shell gets a size before the cockpit mounts; with no --vh-eff and a
+// 16 px font the sheet's clamps resolve to 8em = 128 px and 0.45 · 768 = 345.6 px.
+describe('the scope divider answers the keyboard (PaneSeam)', () => {
+  function layOut(boxes: Record<string, { top?: number; left?: number; width?: number; height?: number }>) {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      for (const [sel, b] of Object.entries(boxes)) {
+        if (!this.matches(sel)) continue
+        const { top = 0, left = 0, width = 800, height = 0 } = b
+        return { top, left, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect
+      }
+      return real.call(this)
+    })
+  }
+  const shell = () => document.querySelector<HTMLElement>('main.phone-cockpit')!
+  const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => el.getAttribute(a))
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.style.removeProperty('--vh-eff')
+    document.documentElement.style.removeProperty('--ui-zoom')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('focusable, announces its height in CSS px, and steps, jumps and resets', () => {
+    layOut({ 'main.phone-cockpit': { height: 1000 } })
+    renderCockpit()
+    const sep = screen.getByRole('separator', { name: 'scope height' })
+    expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
+    expect(aria(sep)).toEqual(['220', '128', '346'])
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(shell().style.getPropertyValue('--ph-scope-h')).toBe(`${(236 / 1000) * 100}%`)
+    expect(localStorage.getItem('nexus.split.phone.scope')).toBe(String((236 / 1000) * 100))
+    fireEvent.keyDown(sep, { key: 'ArrowDown', shiftKey: true })
+    expect(sep.getAttribute('aria-valuenow')).toBe('300')
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('346')
+    fireEvent.keyDown(sep, { key: 'Home' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('128')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(shell().style.getPropertyValue('--ph-scope-h')).toBe('22%')
+    expect(localStorage.getItem('nexus.split.phone.scope')).toBe('22')
+  })
+
+  it('a height stored by an earlier build is restored, clamped against this window, and kept', () => {
+    localStorage.setItem('nexus.split.phone.scope', '30')
+    layOut({ 'main.phone-cockpit': { height: 1000 } })
+    const first = renderCockpit()
+    expect(shell().style.getPropertyValue('--ph-scope-h')).toBe('30%')
+    first.unmount()
+    localStorage.setItem('nexus.split.phone.scope', '75')
+    renderCockpit()
+    expect(screen.getByRole('separator', { name: 'scope height' }).getAttribute('aria-valuenow')).toBe('346')
+    expect(localStorage.getItem('nexus.split.phone.scope'), 'the clamp is apply-side only').toBe('75')
   })
 })

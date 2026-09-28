@@ -3304,7 +3304,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
           </button>
         )}
         {onPopOut && !remote && (
-          <button className="pane-popout" onClick={onPopOut} title={t('sat.head.popOut.title')}>⧉</button>
+          <button className="sat-chip quiet" onClick={onPopOut} title={t('sat.head.popOut.title')}>⧉</button>
         )}
         {/* THE SEED NOTICE. The app starred birds on the operator's behalf, so
             it says so — a silent mutation of their ★ set would be the app

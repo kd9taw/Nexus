@@ -41,6 +41,7 @@ import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { usePaletteKey } from '../usePaletteRoles'
 import { useNightActive } from '../useNight'
+import { useSkinActive } from '../useSkin'
 
 /** The legend's unit — relative dB, the scale WSJT-X uses. A unit, not a word. */
 const DBR = 'dBr'
@@ -324,8 +325,10 @@ export function Waterfall({
   // Settings ▸ Appearance ▸ Colours moves --rx (OK / green) without touching the theme, and Night
   // retunes the well's ground and ink; both move this key.
   const colourRoles = usePaletteKey()
-  // Night: an Auto palette resolves to Amber CRT after dark (`resolveColormap`).
+  // Night: an Auto palette resolves to Amber CRT after dark, and on a built-in theme to the
+  // theme's own palette (`resolveColormap`).
   const night = useNightActive()
+  const skin = useSkinActive()
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
   const cursorsRef = useRef(cursors)
@@ -337,7 +340,7 @@ export function Waterfall({
   const viewLoRef = useRef(view.lo)
   const viewHiRef = useRef(view.hi)
   // pre-baked colormap LUT (256×RGBA) for the render hot path; rebuilt on palette/theme/night.
-  const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night)))
+  const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
   // live legend readout (updated directly, no React re-render at 8 Hz)
   const dbLabelRef = useRef<HTMLSpanElement>(null)
   // Retained waterfall DATA (not pixels): every row survives with its own frequency frame,
@@ -389,11 +392,11 @@ export function Waterfall({
   // so it changes atomically with the legend gradient (a sync useMemo below) on
   // a theme switch — no frame where the legend and the canvas colormap disagree.
   useLayoutEffect(() => {
-    lutRef.current = bakeLut(resolveColormap(palette, theme, night))
+    lutRef.current = bakeLut(resolveColormap(palette, theme, night, skin))
     // Recolor the ACCUMULATED history in the new palette — the old pixel-scroll canvas
     // could only affect rows painted after the switch.
     rebuildRef.current?.()
-  }, [palette, theme, night])
+  }, [palette, theme, night, skin])
   // …and the overlay's inks are read afresh on the next frame after a theme switch or a colour-role
   // pick, before paint for the same reason: the markers must never lag the sign they agree with.
   useLayoutEffect(() => {
@@ -415,7 +418,7 @@ export function Waterfall({
 
   // Legend gradient (weak→strong, bottom→top) for the active colormap.
   const legendGradient = useMemo(() => {
-    const name = resolveColormap(palette, theme, night)
+    const name = resolveColormap(palette, theme, night, skin)
     const stops: string[] = []
     const N = 8
     for (let i = 0; i <= N; i++) {
@@ -423,7 +426,7 @@ export function Waterfall({
       stops.push(`rgb(${r},${g},${b}) ${Math.round((i / N) * 100)}%`)
     }
     return `linear-gradient(to top, ${stops.join(', ')})`
-  }, [palette, theme, night])
+  }, [palette, theme, night, skin])
 
   useEffect(() => {
     const canvas = canvasRef.current

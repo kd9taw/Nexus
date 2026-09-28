@@ -13,6 +13,7 @@ import { SettingsPanel } from './SettingsPanel'
 import { ConfirmHost } from '../confirm'
 import type { FeaturesApi } from '../useFeatures'
 import { DEFAULT_SELECTION } from '../features/paletteRoles'
+import type { SkinId } from '../features/skins'
 import { LOGBOOK_GLOBE_KEY } from '../features/logbookGlobe'
 import { FT_PALETTE_SCOPE, WF_PALETTE_KEY } from '../waterfallPalette'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -68,6 +69,7 @@ const STATION = `{
 function setters() {
   return {
     setTheme: vi.fn(),
+    setSkin: vi.fn(),
     setHighContrast: vi.fn(),
     setNight: vi.fn(),
     setTextSize: vi.fn(),
@@ -81,7 +83,7 @@ function setters() {
 }
 type Setters = ReturnType<typeof setters>
 
-function renderPanel(s: Setters) {
+function renderPanel(s: Setters, look: { theme?: 'system' | 'dark' | 'light'; skin?: SkinId | null } = {}) {
   return render(
     <>
       <SettingsPanel
@@ -98,8 +100,10 @@ function renderPanel(s: Setters) {
         onTextSizeChange={s.setTextSize}
         onResetLayout={() => {}}
         features={features}
-        theme="system"
+        theme={look.theme ?? 'system'}
         onThemeChange={s.setTheme}
+        skin={look.skin ?? null}
+        onSkinChange={s.setSkin}
         fieldMode
         onFieldModeChange={s.setFieldMode}
         highContrast
@@ -171,6 +175,7 @@ describe('Backup & reset carries the appearance', () => {
     expect(saved.settings).toEqual({ mycall: 'KD9TAW' })
     expect(saved.appearance).toEqual({
       theme: 'system',
+      skin: null,
       highContrast: true,
       night: 'auto',
       textSize: 'large',
@@ -190,6 +195,7 @@ describe('Backup & reset carries the appearance', () => {
       ...JSON.parse(STATION),
       appearance: {
         theme: 'light',
+        skin: 'paper',
         highContrast: false,
         night: 'on',
         textSize: 'larger',
@@ -205,6 +211,7 @@ describe('Backup & reset carries the appearance', () => {
     await restore(file, container)
     expect(api.get('importSettingsBundle')).toHaveBeenCalledWith(file)
     await waitFor(() => expect(s.setTheme).toHaveBeenCalledWith('light'))
+    expect(s.setSkin).toHaveBeenCalledWith('paper')
     expect(s.setHighContrast).toHaveBeenCalledWith(false)
     expect(s.setNight).toHaveBeenCalledWith('on')
     expect(s.setTextSize).toHaveBeenCalledWith('larger')
@@ -220,6 +227,34 @@ describe('Backup & reset carries the appearance', () => {
     expect(s.setFieldMode).not.toHaveBeenCalled()
     expect(s.setScaleMode).not.toHaveBeenCalled()
     expect(s.setScaleCap).not.toHaveBeenCalled()
+  })
+
+  it('a built-in theme travels with its base: backed up as it paints, restored on it, and null brings the standard theme back', async () => {
+    renderPanel(setters(), { theme: 'dark', skin: 'amber-lcd' })
+    fireEvent.click(await screen.findByRole('button', { name: EN['settings.transmit.backup.action'] }))
+    await waitFor(() => expect(api.get('saveTextToDownloads')).toHaveBeenCalled())
+    const saved = JSON.parse(api.get('saveTextToDownloads').mock.calls[0][1] as string)
+    expect({ theme: saved.appearance.theme, skin: saved.appearance.skin }).toEqual({ theme: 'dark', skin: 'amber-lcd' })
+    cleanup()
+
+    // A file whose theme disagrees with its built-in theme's base (hand-edited, say) still paints the
+    // built-in theme: the base comes with it, applied after the file's own theme.
+    let s = setters()
+    api.get('importSettingsBundle').mockResolvedValueOnce({ settings: defaultSettings })
+    const odd = JSON.stringify({ ...JSON.parse(STATION), appearance: { theme: 'light', skin: 'nebula' } })
+    let { container } = renderPanel(s)
+    await restore(odd, container)
+    await waitFor(() => expect(s.setSkin).toHaveBeenCalledWith('nebula'))
+    expect(s.setTheme.mock.calls).toEqual([['light'], ['dark']])
+    cleanup()
+
+    s = setters()
+    api.get('importSettingsBundle').mockResolvedValueOnce({ settings: defaultSettings })
+    const standard = JSON.stringify({ ...JSON.parse(STATION), appearance: { theme: 'dark', skin: null } })
+    ;({ container } = renderPanel(s, { theme: 'dark', skin: 'slate' }))
+    await restore(standard, container)
+    await waitFor(() => expect(s.setSkin).toHaveBeenCalledWith(null))
+    expect(s.setTheme.mock.calls).toEqual([['dark']])
   })
 
   it('a backup from before this restores the station and leaves the look alone', async () => {

@@ -183,6 +183,7 @@ import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { resolveTarget } from '../settings/registry'
+import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -194,6 +195,7 @@ import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
+import { skinOf, type SkinId } from '../features/skins'
 import type { NightChoice } from '../useNight'
 import type { Motion } from '../useMotion'
 import { FT_PALETTE_SCOPE, getWaterfallPalette, setWaterfallPalette } from '../waterfallPalette'
@@ -269,6 +271,10 @@ interface Props {
    * hosts/tests without theme wiring render the tab unchanged. */
   theme?: ThemeChoice
   onThemeChange?: (t: ThemeChoice) => void
+  /** The built-in theme painting on `theme` (features/skins.ts), null for the standard one, and its
+   *  setter: owned by App's `useSkin`. Optional like the theme. */
+  skin?: SkinId | null
+  onSkinChange?: (id: SkinId | null) => void
   /** #215: Field mode — maximum contrast plus larger type (`useFieldMode`). It shipped as a
    *  chip in the top bar only, which is the other half of why the operator who asked for a
    *  high-contrast, large-text setting could not find one: the two halves of the answer were
@@ -1003,6 +1009,8 @@ export function SettingsPanel({
   onRerunWizard,
   theme,
   onThemeChange,
+  skin = null,
+  onSkinChange,
   fieldMode = false,
   onFieldModeChange,
   highContrast = false,
@@ -1112,6 +1120,7 @@ export function SettingsPanel({
       logbookGlobe,
     }
     if (theme) a.theme = theme
+    if (onSkinChange) a.skin = skin
     if (onHighContrastChange) a.highContrast = highContrast
     if (onNightChange) a.night = night
     if (textSize) a.textSize = textSize
@@ -1121,6 +1130,13 @@ export function SettingsPanel({
   }
   const restoreAppearance = (a: Partial<Appearance>) => {
     if (a.theme) onThemeChange?.(a.theme)
+    // A built-in theme paints only on its base, so the base comes with it whatever the file's
+    // theme says; null is the standard theme. A backup from before the themes has no `skin`.
+    if (a.skin !== undefined && onSkinChange) {
+      const s = skinOf(a.skin)
+      if (s) onThemeChange?.(s.base)
+      onSkinChange(s?.id ?? null)
+    }
     if (a.highContrast !== undefined) onHighContrastChange?.(a.highContrast)
     if (a.night) onNightChange?.(a.night)
     if (a.textSize) onTextSizeChange?.(a.textSize)
@@ -2555,6 +2571,22 @@ export function SettingsPanel({
     )
   }
 
+  // Every save of the form: what the operator changed since the form loaded or last saved, over the
+  // settings the backend holds now (settings/patch.ts). The form holds EVERY field, as it was when
+  // Settings opened, so saving it whole wrote each one the operator had not touched back over
+  // whatever had changed since: "use one radio" in the launch picker, a seat swap in the pop-out
+  // scoreboard, the dial the rig had been tuned to (which the radio loop then commands).
+  //
+  // One exception: a form describing a radio other than the one being operated NOW — a switch it
+  // has not caught up with yet. Its flat rig fields describe its own radio, the live ones the other
+  // radio, and the backend folds a payload's flat fields into the radio its `activeRadio` names, so
+  // a mix would stamp one radio's ports onto the other. That form goes whole, as it always did, and
+  // the backend's own rule for a form that is not about the active radio applies.
+  const saveForm = (payload: NonNullable<typeof form>) => {
+    const changes = changedSince(savedRef.current, payload)
+    return patchSettings((live) => (live.activeRadio === payload.activeRadio ? changes : payload))
+  }
+
   // Persist the rig form to the radio it actually describes.
   //
   // The backend contract is that a settings payload's `activeRadio` names the radio whose
@@ -2589,7 +2621,7 @@ export function SettingsPanel({
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
       // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
       // cannot be stamped onto the one being operated (the 2026-07-25 report).
-      await setSettings({
+      await saveForm({
         ...withActiveRadioConfig(next),
         mycall: next.mycall.trim().toUpperCase(),
       })
@@ -2602,7 +2634,7 @@ export function SettingsPanel({
         }),
       )
     } else {
-      await setSettings({ ...next, mycall: next.mycall.trim().toUpperCase() })
+      await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() })
     }
   }
 
@@ -2756,7 +2788,7 @@ export function SettingsPanel({
     // username change resets the sync cursor). Mirrors how Test CAT saves first.
     // This is a station-wide save, so it must not carry the rig form's radio fields.
     const r = await withErrorToast(async () => {
-      await setSettings({
+      await saveForm({
         ...withActiveRadioConfig(form),
         mycall: form.mycall.trim().toUpperCase(),
       })
@@ -2817,7 +2849,7 @@ export function SettingsPanel({
     // backend reads SAVED settings; a username change resets the cursor).
     // Station-wide save: must not carry the rig form's radio fields (see onSyncLotw).
     const r = await withErrorToast(async () => {
-      await setSettings({
+      await saveForm({
         ...withActiveRadioConfig(form),
         mycall: form.mycall.trim().toUpperCase(),
       })
@@ -3819,11 +3851,12 @@ export function SettingsPanel({
             {/* Theme lives in Settings, not the top bar (operator, 2026-08-10): Light/Dark/System
                 is a set-once preference, and the bar keeps only the Field quick toggle. Three
                 cards, each with a one-line personality (ThemeSwitcher.tsx), across the section's
-                width rather than squeezed into one grid column. */}
+                width rather than squeezed into one grid column, then the ten built-in themes
+                in two groups (operator, 2026-09-27: "All ten"). */}
             {theme && onThemeChange && (
               <div className="settings-field settings-theme-field">
                 <span className="settings-label">{t('settings.workspace.theme.label')}</span>
-                <ThemeSwitcher theme={theme} onChange={onThemeChange} />
+                <ThemeSwitcher theme={theme} skin={skin} onChange={onThemeChange} onSkinChange={onSkinChange} />
                 <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
               </div>
             )}
@@ -3969,7 +4002,7 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-colours">
             <legend>{t('settings.colours.legend')}</legend>
             <span className="settings-hint">{t('settings.colours.hint')}</span>
-            <SettingsColours palette={palette} onChange={onPaletteChange} />
+            <SettingsColours palette={palette} skin={skin} onChange={onPaletteChange} />
           </fieldset>
           )}
 
