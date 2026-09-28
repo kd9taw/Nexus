@@ -84,6 +84,31 @@ impl Vault for MemoryVault {
         self.values.lock().unwrap().remove("state");
         Ok(())
     }
+    fn pins(&self) -> Result<Option<vault::Pins>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get("pins")
+            .and_then(|v| serde_json::from_str(v).ok()))
+    }
+    fn save_pins(&self, pins: &vault::Pins) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert("pins".into(), serde_json::to_string(pins).unwrap());
+        Ok(())
+    }
+    fn remove_pins(&self) -> Result<(), &'static str> {
+        self.values.lock().unwrap().remove("pins");
+        Ok(())
+    }
 }
 
 #[test]
@@ -1326,6 +1351,7 @@ async fn fake_cloud() -> FakeCloud {
                     request.extend_from_slice(&chunk[..n]);
                 }
                 let lifetime = head.contains("\r\nx-nexus-device-lifetime: 1\r\n");
+                let keys = head.contains("\r\nx-nexus-device-key: 1\r\n");
                 let (status, body) = if head.contains("/enroll ") {
                     let enrollment = json!({"id":STATION,"proof":"a".repeat(64),
                         "code":"0123456789abcdef","expiresAt":now_ms() + 600000});
@@ -1355,14 +1381,29 @@ async fn fake_cloud() -> FakeCloud {
                             device.remove("renewsUntil");
                         }
                     }
+                    if !keys {
+                        // The device key (A5), likewise only to a Nexus that asks.
+                        for device in listed["devices"].as_array_mut().unwrap() {
+                            device.as_object_mut().unwrap().remove("publicKey");
+                        }
+                    }
                     ("200 OK", listed.to_string())
                 } else if head.contains("/native/approve-device ") {
-                    // The service writes a new approval, and with it the approval generation.
-                    *served.lock().unwrap() = if lifetime {
+                    // The service writes a new approval, and with it the approval generation. The
+                    // browser's device key (A5) is the browser's, and approving leaves it as it is.
+                    let key = serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .ok()
+                        .and_then(|l| l["devices"][0]["publicKey"].as_str().map(str::to_string));
+                    let mut approved: serde_json::Value = serde_json::from_str(&if lifetime {
                         device_list_at(1, APPROVED_UNTIL, 2)
                     } else {
                         device_list(1, APPROVED_UNTIL)
-                    };
+                    })
+                    .unwrap();
+                    if let Some(key) = key {
+                        approved["devices"][0]["publicKey"] = key.into();
+                    }
+                    *served.lock().unwrap() = approved.to_string();
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke-device ") {
                     // A revoked browser's expiry becomes "now", so the service stops listing it.
@@ -1631,6 +1672,7 @@ async fn approve(service: &Service, transmit: bool) -> Status {
             device_id: BROWSER.into(),
             approve: true,
             transmit,
+            key: None,
         })
         .await
         .unwrap()
@@ -1731,6 +1773,7 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
                     device_id: BROWSER.into(),
                     approve: false,
                     transmit: false,
+                    key: None,
                 })
                 .await
                 .unwrap();
@@ -2269,6 +2312,8 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         expires_at: u64::MAX,
         generation: None,
         renews_until: None,
+        public_key: None,
+        key: None,
     });
     assert!(matches!(
         service.action(grant()).await,
@@ -2468,4 +2513,320 @@ async fn refusing_cloud(status: &'static str, body: &'static str) -> String {
         }
     });
     origin
+}
+
+// ---- The device key (security test A5) --------------------------------------------------------------
+//
+// The operator pins a browser's device key when they approve it at the radio: the SHA-256 of the key
+// the station showed, and only if the service still lists that key once it has approved. A pin is
+// the approval's, not a permission's: it outlives the switches, take over, Turn off and a restart,
+// and revoking the browser removes it. The pins have their own vault entry (operator ruling D6,
+// 2026-09-28), so the state record an older Nexus reads keeps the shape it has always had.
+
+use super::stream::tests::DeviceKey;
+
+/// A browser the service lists as waiting for approval, with its device key.
+fn pending_keyed_browser(cloud: &FakeCloud, public_key: &str) {
+    let mut listed: serde_json::Value =
+        serde_json::from_str(&device_list(0, APPROVED_UNTIL - 1)).unwrap();
+    listed["devices"][0]["publicKey"] = public_key.into();
+    *cloud.devices.lock().unwrap() = listed.to_string();
+}
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+/// Approve the browser here, with the key the operator was shown beside it.
+async fn approve_shown(service: &Service, shown: Option<String>, transmit: bool) -> Status {
+    service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: true,
+            transmit,
+            key: shown,
+        })
+        .await
+        .unwrap()
+}
+fn pinned(service: &Service) -> Option<[u8; 32]> {
+    service.control.lock().unwrap().remembered.pinned(BROWSER)
+}
+
+/// ★ A5: approving a browser pins the key the station showed beside it, and only that key: a key
+/// that changed between the showing and the approval (the service lists another) pins nothing, and
+/// neither does an approval with no key shown. The browser is approved either way.
+#[tokio::test(flavor = "multi_thread")]
+async fn a5_approving_a_browser_pins_the_key_it_was_shown_and_only_that_key() {
+    for case in [
+        "positive control: the key shown",
+        "another key shown",
+        "no key shown",
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = paired_vault(&cloud.origin);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let service = launch(&cloud, &vault, &engine);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        service.action(Action::Enable {}).await.unwrap();
+        let key = DeviceKey::new();
+        let fingerprint = hex(&key.pin());
+        pending_keyed_browser(&cloud, &key.public_key);
+        let listed = service.action(Action::Refresh {}).await.unwrap();
+        assert_eq!(
+            listed.devices[0].key.as_deref(),
+            Some(fingerprint.as_str()),
+            "{case}: the station shows the listed key"
+        );
+        assert!(
+            listed.pinned_devices.is_empty(),
+            "{case}: pinned before approval"
+        );
+        let shown = if case.starts_with("positive") {
+            Some(fingerprint.clone())
+        } else if case.starts_with("another") {
+            Some(hex(&DeviceKey::new().pin()))
+        } else {
+            None
+        };
+        let status = approve_shown(&service, shown, false).await;
+        assert_eq!(
+            status.station_permissions,
+            [BROWSER],
+            "{case}: approved either way"
+        );
+        let pin = case.starts_with("positive");
+        let expected: &[&str] = if pin { &[BROWSER] } else { &[] };
+        assert_eq!(status.pinned_devices, expected, "{case}");
+        assert_eq!(
+            pinned(&service),
+            pin.then(|| key.pin()),
+            "{case}: what a stream offer is held to"
+        );
+        settle().await;
+        assert_eq!(
+            vault
+                .pins()
+                .unwrap()
+                .and_then(|p| p.keys.get(BROWSER).cloned()),
+            pin.then(|| fingerprint.clone()),
+            "{case}: the pins entry"
+        );
+    }
+}
+
+/// ★ A5: a pin outlives the switches, take over, Turn off and a restart (it is the approval's), and
+/// revoking the browser removes it, from the station and from the vault.
+#[tokio::test(flavor = "multi_thread")]
+async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revoking_removes_it() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let key = DeviceKey::new();
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    pending_keyed_browser(&cloud, &key.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&key.pin())), false).await;
+    assert_eq!(pinned(&service), Some(key.pin()), "premise: pinned");
+    for allow in [false, true] {
+        service
+            .action(Action::StationPermission {
+                device_id: BROWSER.into(),
+                allow,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(pinned(&service), Some(key.pin()), "a switch moved the pin");
+    service.action(Action::TakeOverLogging {}).await.unwrap();
+    assert_eq!(pinned(&service), Some(key.pin()), "take over moved the pin");
+    service.action(Action::Disable {}).await.unwrap();
+    settle().await;
+    drop(service);
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert_eq!(
+        pinned(&service),
+        Some(key.pin()),
+        "the pin did not survive Turn off and a restart"
+    );
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        listed.pinned_devices,
+        [BROWSER],
+        "shown pinned after the restart"
+    );
+    service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(pinned(&service), None, "revoking left the pin");
+    settle().await;
+    assert!(
+        vault.pins().unwrap().is_none(),
+        "revoking left the pins entry"
+    );
+}
+
+/// ★ Operator ruling D6 (2026-09-28): the operator moves between the stream test build and normal
+/// builds, and a pin must not cost an older Nexus its record. The state record this build writes,
+/// with a pin made, is read by the previous build's schema (its `State`, copied here as it stood
+/// before the pins) with every grant intact; the pin sits in its own entry, which that build never
+/// reads. CONTROL: the same record with the pin written into it is unreadable to that schema.
+#[tokio::test(flavor = "multi_thread")]
+async fn a5_the_state_record_with_a_pin_made_is_still_read_by_the_previous_build() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PreviousBinding {
+        origin: String,
+        station_id: String,
+        account_id: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PreviousGrant {
+        device_id: String,
+        expires_at: u64,
+        #[serde(default)]
+        generation: Option<u64>,
+        logging: bool,
+        control: bool,
+        #[serde(default)]
+        transmit: bool,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct PreviousState {
+        #[allow(dead_code)]
+        binding: PreviousBinding,
+        enabled: bool,
+        grants: Vec<PreviousGrant>,
+    }
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let key = DeviceKey::new();
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    pending_keyed_browser(&cloud, &key.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&key.pin())), true).await;
+    settle().await;
+    let values = vault.values.lock().unwrap().clone();
+    assert!(values.contains_key("pins"), "premise: a pin was made");
+    let written = values.get("state").expect("a state record");
+    let read: PreviousState =
+        serde_json::from_str(written).expect("the previous build cannot read this build's record");
+    assert!(read.enabled);
+    let grant = read
+        .grants
+        .iter()
+        .find(|g| g.device_id == BROWSER)
+        .expect("the grant");
+    assert!(
+        grant.logging && grant.control && grant.transmit,
+        "a grant lost"
+    );
+    let mut inside: serde_json::Value = serde_json::from_str(written).unwrap();
+    inside["pins"] = json!({ BROWSER: hex(&key.pin()) });
+    assert!(
+        serde_json::from_value::<PreviousState>(inside).is_err(),
+        "control: a pin inside the record would be unreadable"
+    );
+}
+
+/// The pins entry fits the smallest OS credential blob (Windows: 2560 bytes of UTF-16) with a pin
+/// for every browser the service lists.
+#[test]
+fn a5_a_full_pins_record_fits_the_windows_credential_blob() {
+    let keys = (0..MAX_REMEMBERED)
+        .map(|i| (format!("10000000-0000-4000-8000-{i:012}"), "f".repeat(64)))
+        .collect();
+    let pins = vault::Pins {
+        binding: Binding {
+            origin: REMOTE_ORIGIN.into(),
+            station_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+        },
+        keys,
+    };
+    let bytes = serde_json::to_string(&pins).unwrap().encode_utf16().count() * 2;
+    assert!(bytes <= 2560, "{bytes} bytes");
+}
+
+/// A5: a listed key that is not the shape of a P-256 key is no key: it shows nothing and pins
+/// nothing, and the rest of the list stands. CONTROL: a real key is shown.
+#[tokio::test(flavor = "multi_thread")]
+async fn a5_a_listed_key_that_is_not_a_p256_key_shows_and_pins_nothing() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let key = DeviceKey::new();
+    let prefix = tempo_stream::protocol::P256_SPKI_PREFIX_HEX.len();
+    // The point's tag says "compressed", which no P-256 SPKI the page sends carries.
+    let not_a_key = format!(
+        "{}05{}",
+        &key.public_key[..prefix],
+        &key.public_key[prefix + 2..]
+    );
+    pending_keyed_browser(&cloud, &not_a_key);
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(listed.devices.len(), 1, "the list stands");
+    assert_eq!(listed.devices[0].key, None);
+    pending_keyed_browser(&cloud, &key.public_key);
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(listed.devices[0].key, Some(hex(&key.pin())), "control");
+}
+
+/// ★ A5, operator ruling D5 (2026-09-28): a browser that comes back with a new key (it lost the one
+/// it had) keeps its approval and its pin, and the station shows it unpinned, with the new key, so
+/// the operator can approve it again; until then its stream is refused, since the pin still holds
+/// the old key. Approving again with the new key shown pins that. CONTROL: before the change it is
+/// shown pinned.
+#[tokio::test(flavor = "multi_thread")]
+async fn a5_a_browser_that_changed_its_key_is_shown_unpinned_until_approved_again() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let (old, new) = (DeviceKey::new(), DeviceKey::new());
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    pending_keyed_browser(&cloud, &old.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    let approved = approve_shown(&service, Some(hex(&old.pin())), false).await;
+    assert_eq!(approved.pinned_devices, [BROWSER], "control: pinned");
+    let mut listed: serde_json::Value =
+        serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
+    listed["devices"][0]["publicKey"] = new.public_key.clone().into();
+    *cloud.devices.lock().unwrap() = listed.to_string();
+    let changed = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(changed.devices[0].approved, 1, "still approved");
+    assert_eq!(
+        changed.devices[0].key,
+        Some(hex(&new.pin())),
+        "the new key is shown"
+    );
+    assert!(
+        changed.pinned_devices.is_empty(),
+        "shown pinned with a key it does not hold"
+    );
+    assert_eq!(
+        pinned(&service),
+        Some(old.pin()),
+        "the pin still holds the old key"
+    );
+    let again = approve_shown(&service, Some(hex(&new.pin())), false).await;
+    assert_eq!(again.pinned_devices, [BROWSER]);
+    assert_eq!(pinned(&service), Some(new.pin()));
 }

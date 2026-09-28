@@ -94,6 +94,9 @@ impl Client {
             // the generation to it and renew the browser approvals it gives. A service without the
             // browser approval lifetime ignores the header and answers exactly as before.
             .header("x-nexus-device-lifetime", "1")
+            // This Nexus pins browsers' device keys (A5), so the service may list each browser's
+            // key to it. A service without them ignores the header.
+            .header("x-nexus-device-key", "1")
             .json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
@@ -506,6 +509,19 @@ where
     // leaves through the one writer, like everything else.
     let mut stream_lane = super::stream::StreamLane::default();
     let (stream_out, mut stream_in) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // A5: what an offer is held to, from the operator's own record: this pairing's station id, and
+    // the device keys pinned at the radio, read at each admission so a pin or revoke made since
+    // this socket opened counts.
+    let station_id = status
+        .control
+        .lock()
+        .map_err(|_| "serviceUnavailable")?
+        .remembered
+        .binding
+        .as_ref()
+        .map(|binding| binding.station_id.clone())
+        .unwrap_or_default();
+    let pins = status.control.clone();
     let stream_station = super::stream::Station {
         authority: operation_connection.authority.clone(),
         engine: engine.clone(),
@@ -513,6 +529,10 @@ where
         host: feeds.stream.clone(),
         #[cfg(feature = "radio")]
         audio: feeds.audio.clone(),
+        station_id,
+        pinned: std::sync::Arc::new(move |device: &str| {
+            pins.lock().ok()?.remembered.pinned(device)
+        }),
     };
     let result: Result<(), &'static str> = async { loop {
         tokio::select! {

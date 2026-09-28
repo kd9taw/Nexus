@@ -158,7 +158,7 @@ fn lower_hex(text: &str, chars: usize) -> bool {
 
 /// The shape of a device key: a P-256 SPKI with an uncompressed point. Whether the point is on the
 /// curve is the station's verification to find out, not the parser's.
-fn device_key(text: &str) -> bool {
+pub fn device_key(text: &str) -> bool {
     lower_hex(text, DEVICE_KEY_HEX_CHARS)
         && text.starts_with(P256_SPKI_PREFIX_HEX)
         && text[P256_SPKI_PREFIX_HEX.len()..].starts_with("04")

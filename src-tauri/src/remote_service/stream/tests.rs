@@ -2,11 +2,68 @@
 //! WebRTC session (the offer answered, DTLS, no LAN address) is tested in `tempo_stream::session`
 //! on Windows; everything here runs on every platform.
 use super::*;
-use std::sync::Mutex;
+use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+use std::sync::{Mutex, OnceLock};
 
 const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
 const SESSION: &str = "20000000-0000-4000-8000-000000000001";
+const STATION: &str = "30000000-0000-4000-8000-000000000001";
 const PRESS: &str = "10000000-0000-4000-8000-00000000000a";
+
+/// A browser's device key (A5), made for the test run and never written down: the page's
+/// non-extractable WebCrypto key, played by ring.
+pub(in crate::remote_service) struct DeviceKey {
+    pair: EcdsaKeyPair,
+    /// SPKI, lowercase hex, as the page sends it.
+    pub public_key: String,
+}
+
+impl DeviceKey {
+    pub fn new() -> Self {
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+            .unwrap();
+        let point: String = pair
+            .public_key()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Self {
+            public_key: format!("{}{point}", protocol::P256_SPKI_PREFIX_HEX),
+            pair,
+        }
+    }
+
+    /// What the station pins for it: SHA-256 of its SPKI.
+    pub fn pin(&self) -> [u8; 32] {
+        digest(&SHA256, &protocol::hex_bytes(&self.public_key).unwrap())
+            .as_ref()
+            .try_into()
+            .unwrap()
+    }
+
+    /// Its signature over `sdp`'s fingerprint and the three ids, made the way the page makes it.
+    pub fn sign(&self, sdp: &str, station: &str, device: &str, session: &str) -> String {
+        let fingerprint = protocol::offer_fingerprint(sdp).unwrap();
+        let hashed: [u8; 32] = digest(&SHA256, &fingerprint).as_ref().try_into().unwrap();
+        let signed = protocol::offer_binding(&hashed, station, device, session);
+        self.pair
+            .sign(&SystemRandom::new(), &signed)
+            .unwrap()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+/// The key every fixture's browser holds and every fixture's station pinned for it.
+fn key() -> &'static DeviceKey {
+    static KEY: OnceLock<DeviceKey> = OnceLock::new();
+    KEY.get_or_init(DeviceKey::new)
+}
 
 fn id() -> String {
     super::super::transport::random_secret().unwrap()[..32]
@@ -84,6 +141,9 @@ fn fixture(now: Instant) -> Fixture {
             },
             #[cfg(feature = "radio")]
             audio: None,
+            station_id: STATION.into(),
+            // The operator approved this browser at the radio, and pinned its key (A5).
+            pinned: Arc::new(|device: &str| (device == DEVICE).then(|| key().pin())),
         },
         lease: acquired["leaseId"].as_str().unwrap().to_string(),
         delivered,
@@ -101,13 +161,25 @@ fn contract_offer() -> String {
         .to_string()
 }
 
+/// The page's offer, signed by the fixture browser's key for this station, device and session.
 fn offer(lease: &str) -> Offer {
+    let sdp = contract_offer();
     Offer {
         session: SESSION.into(),
         device: DEVICE.into(),
         lease: lease.into(),
-        sdp: contract_offer(),
+        public_key: Some(key().public_key.clone()),
+        signature: Some(key().sign(&sdp, STATION, DEVICE, SESSION)),
+        sdp,
     }
+}
+
+/// A streamed session whose page's certificate was the one it signed (A5 after DTLS): where the
+/// tests of S7 to S11 start. A5's own tests start from `Streaming::new`.
+fn verified_stream(f: &Fixture, now: Instant) -> Streaming {
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    streaming.verified = true;
+    streaming
 }
 
 /// What the platform answers once everything the station checks has passed: a session on
@@ -161,7 +233,7 @@ fn an_offer_without_control_or_a_live_lease_is_refused_first() {
 fn revoking_the_device_ends_a_running_stream() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     let tick = now + RECHECK;
     assert!(
         streaming.still_admitted(tick),
@@ -226,7 +298,7 @@ fn a_stale_picture_renews_the_lease_and_not_presence() {
     for fresh in [false, true] {
         let t0 = Instant::now();
         let f = fixture(t0);
-        let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+        let mut streaming = verified_stream(&f, t0);
         // Connected: presence from the moment the session is live.
         streaming.presence.renew(&f.station, &streaming.offer, t0);
         assert!(streaming.presence.live(t0), "premise: presence installed");
@@ -272,7 +344,7 @@ fn a_stale_picture_renews_the_lease_and_not_presence() {
 fn a_stop_keeps_presence_and_a_release_ends_it() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     streaming.presence.renew(&f.station, &streaming.offer, now);
     tempo_app::engine::engine_lock(&f.station.engine).halt_tx();
     assert!(streaming.presence.live(now), "a local stop ended presence");
@@ -311,7 +383,7 @@ fn click() -> Vec<u8> {
 fn input_is_delivered_only_while_presence_is_live() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     streaming.control(&click(), |_| true, now);
     assert!(
         f.delivered.lock().unwrap().is_empty(),
@@ -339,7 +411,7 @@ fn input_is_delivered_only_while_presence_is_live() {
 fn a_lapse_of_presence_resets_the_window_once() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     let resets = || {
         f.delivered
             .lock()
@@ -375,7 +447,7 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
     let now = Instant::now();
     let f = fixture(now);
     tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     let hold = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":0}}"#);
     streaming.ptt(hold.as_bytes(), now);
     tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
@@ -415,7 +487,7 @@ fn a_held_ptt_is_taken_only_while_presence_is_live() {
 fn state_and_stop_answer_as_they_do_on_the_relay() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     let (answer, _) = streaming.control(
         &serde_json::to_vec(&serde_json::json!({"type":"state","requestId":id()})).unwrap(),
         |_| true,
@@ -445,7 +517,7 @@ fn state_and_stop_answer_as_they_do_on_the_relay() {
 fn the_contract_messages_are_taken_and_a_malformed_one_is_dropped() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     let (answer, released) = streaming.control(b"{not json", |_| true, now);
     assert!(answer.is_none() && !released);
     let file: Value = serde_json::from_str(include_str!(
@@ -491,7 +563,7 @@ fn running_lane() -> (StreamLane, mpsc::Receiver<Signal>) {
 fn the_relays_stream_end_ends_presence_and_halts_a_transmission() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     streaming.presence.renew(&f.station, &streaming.offer, now);
     {
         let mut e = tempo_app::engine::engine_lock(&f.station.engine);
@@ -538,7 +610,7 @@ fn the_relays_stream_end_ends_presence_and_halts_a_transmission() {
 fn a_held_set_reaches_the_window_only_while_presence_is_live() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     let held = br#"{"type":"held","keys":["Space"],"buttons":1,"seq":3}"#;
     streaming.ptt(held, now);
     assert!(f.delivered.lock().unwrap().is_empty(), "delivered blind");
@@ -576,7 +648,7 @@ fn a_socket_heartbeat_keeps_the_lease_and_not_presence() {
     for fresh_on_control in [false, true] {
         let t0 = Instant::now();
         let f = fixture(t0);
-        let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+        let mut streaming = verified_stream(&f, t0);
         streaming.presence.renew(&f.station, &streaming.offer, t0);
         keyed(&f);
         let t1 = t0 + Duration::from_secs(3);
@@ -622,7 +694,7 @@ fn a_socket_heartbeat_keeps_the_lease_and_not_presence() {
 fn blind_input_is_refused_and_a_blind_stop_still_stops() {
     let now = Instant::now();
     let f = fixture(now);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let mut streaming = verified_stream(&f, now);
     keyed(&f);
     streaming.control(&click(), |_| true, now);
     assert!(
@@ -650,7 +722,7 @@ fn blind_input_is_refused_and_a_blind_stop_still_stops() {
 fn a_stop_after_the_lease_lapsed_still_stops() {
     let t0 = Instant::now();
     let f = fixture(t0);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+    let mut streaming = verified_stream(&f, t0);
     keyed(&f);
     let later = t0 + Duration::from_secs(8);
     assert!(
@@ -720,7 +792,7 @@ fn a_controller_without_the_transmit_tick_is_admitted() {
 fn a_lapsed_lease_ends_presence() {
     let t0 = Instant::now();
     let f = fixture(t0);
-    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), t0);
+    let mut streaming = verified_stream(&f, t0);
     streaming.presence.renew(&f.station, &streaming.offer, t0);
     keyed(&f);
     // Four seconds in, presence alone is renewed (no heartbeat, so the lease is not): it is capped
@@ -740,5 +812,217 @@ fn a_lapsed_lease_ends_presence() {
     assert!(
         !streaming.presence.live(after),
         "presence renewed with no lease"
+    );
+}
+
+// ----- A5: the offer is the approved browser's own, and so is the certificate it connects with -----
+
+/// The fixture offer, carrying `signer`'s key and its signature made for `ids` (station, device,
+/// session).
+fn signed_by(f: &Fixture, signer: &DeviceKey, ids: (&str, &str, &str)) -> Offer {
+    let mut offer = offer(&f.lease);
+    offer.public_key = Some(signer.public_key.clone());
+    offer.signature = Some(signer.sign(&offer.sdp, ids.0, ids.1, ids.2));
+    offer
+}
+
+const ELSEWHERE: &str = "40000000-0000-4000-8000-000000000001";
+
+/// ★ A5's positive control: the offer the pinned key signed for this station, browser and session
+/// is admitted; what is left is the platform's own answer.
+#[test]
+fn a5_the_correctly_signed_offer_is_admitted() {
+    let now = Instant::now();
+    let f = fixture(now);
+    assert_eq!(
+        admit(
+            &f.station,
+            &signed_by(&f, key(), (STATION, DEVICE, SESSION)),
+            now
+        ),
+        passed()
+    );
+}
+
+/// ★ A5: a signature from any key but the one the operator pinned is refused at admission: another
+/// key's own offer, and the pinned key's public half carrying another key's signature. CONTROL: the
+/// pinned key's own offer.
+#[test]
+fn a5_a_signature_from_a_different_key_is_refused() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let other = DeviceKey::new();
+    assert_eq!(
+        admit(
+            &f.station,
+            &signed_by(&f, &other, (STATION, DEVICE, SESSION)),
+            now
+        ),
+        Err(StreamReason::DeviceKeyMismatch)
+    );
+    let mut borrowed = signed_by(&f, &other, (STATION, DEVICE, SESSION));
+    borrowed.public_key = Some(key().public_key.clone());
+    assert_eq!(
+        admit(&f.station, &borrowed, now),
+        Err(StreamReason::DeviceKeyMismatch)
+    );
+    assert_eq!(
+        admit(
+            &f.station,
+            &signed_by(&f, key(), (STATION, DEVICE, SESSION)),
+            now
+        ),
+        passed(),
+        "control"
+    );
+}
+
+/// ★ A5: the pinned key's own, correct signature, made for another session, another browser or
+/// another station, is refused: a signature is good for the one offer it was made for.
+#[test]
+fn a5_a_correct_signature_over_another_session_device_or_station_is_refused() {
+    let now = Instant::now();
+    let f = fixture(now);
+    for ids in [
+        (STATION, DEVICE, ELSEWHERE),
+        (STATION, ELSEWHERE, SESSION),
+        (ELSEWHERE, DEVICE, SESSION),
+    ] {
+        assert_eq!(
+            admit(&f.station, &signed_by(&f, key(), ids), now),
+            Err(StreamReason::DeviceKeyMismatch),
+            "{ids:?}"
+        );
+    }
+    assert_eq!(
+        admit(
+            &f.station,
+            &signed_by(&f, key(), (STATION, DEVICE, SESSION)),
+            now
+        ),
+        passed(),
+        "control"
+    );
+}
+
+/// ★ A5: an offer whose DTLS fingerprint is not the one its signature covers is refused: whoever
+/// swaps in a certificate of their own cannot keep the browser's signature.
+#[test]
+fn a5_an_offer_whose_fingerprint_differs_from_the_signed_one_is_refused() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut swapped = signed_by(&f, key(), (STATION, DEVICE, SESSION));
+    let signed = protocol::offer_fingerprint(&swapped.sdp).unwrap();
+    let line = swapped
+        .sdp
+        .lines()
+        .find(|l| l.starts_with("a=fingerprint:sha-256 "))
+        .unwrap()
+        .to_string();
+    let flipped: Vec<String> = signed.iter().map(|b| format!("{:02X}", b ^ 0xff)).collect();
+    swapped.sdp = swapped.sdp.replace(
+        &line,
+        &format!("a=fingerprint:sha-256 {}", flipped.join(":")),
+    );
+    assert!(
+        protocol::offer_fingerprint(&swapped.sdp).is_some_and(|moved| moved != signed),
+        "premise: every section's fingerprint moved"
+    );
+    assert_eq!(
+        admit(&f.station, &swapped, now),
+        Err(StreamReason::DeviceKeyMismatch)
+    );
+}
+
+/// ★ A5: a browser the operator has no pinned key for (approved before the key existed) is refused
+/// by name, `deviceNotPinned`, signed or not, so the page can say "approve this browser again at
+/// the radio". A pinned browser's unsigned offer is a key that does not match.
+#[test]
+fn a5_a_browser_with_no_pinned_key_is_refused_by_name() {
+    let now = Instant::now();
+    let mut f = fixture(now);
+    let mut unsigned = offer(&f.lease);
+    unsigned.public_key = None;
+    unsigned.signature = None;
+    assert_eq!(
+        admit(&f.station, &unsigned, now),
+        Err(StreamReason::DeviceKeyMismatch)
+    );
+    f.station.pinned = Arc::new(|_: &str| None);
+    assert_eq!(
+        admit(&f.station, &offer(&f.lease), now),
+        Err(StreamReason::DeviceNotPinned)
+    );
+    assert_eq!(
+        admit(&f.station, &unsigned, now),
+        Err(StreamReason::DeviceNotPinned)
+    );
+}
+
+/// ★ A5 after DTLS: a page whose DTLS presents a certificate other than the one it signed (or none)
+/// is refused at `connected`, which the session loop turns into the end of the session. Before
+/// that, and after it, nothing it sends on `control` or `ptt` is taken, even with presence forced
+/// live. CONTROL: the signed certificate connects, and the same click and hold are taken.
+#[test]
+fn a5_after_dtls_a_mismatched_certificate_ends_the_session_before_any_input_or_ptt() {
+    let now = Instant::now();
+    let f = fixture(now);
+    tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
+    let signed = protocol::offer_fingerprint(&offer(&f.lease).sdp).unwrap();
+    let mut other = signed;
+    other[0] ^= 0xff;
+    let hold = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":0}}"#);
+    for presented in [Some(other), None] {
+        let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+        assert_eq!(
+            streaming.connected(presented, now),
+            Err(StreamReason::DeviceKeyMismatch)
+        );
+        assert!(
+            !streaming.presence.live(now),
+            "presence for a page not checked"
+        );
+        // Presence forced live, as if something renewed it anyway: still nothing is taken.
+        streaming.presence.renew(&f.station, &streaming.offer, now);
+        assert!(streaming.presence.live(now), "premise: presence live");
+        let (answer, _) = streaming.control(&click(), |_| true, now);
+        assert!(answer.is_none());
+        let (answer, _) = streaming.control(&heartbeat(&f.lease, Some(1)), |_| true, now);
+        assert!(
+            answer.is_none(),
+            "a heartbeat answered for a page not checked"
+        );
+        streaming.ptt(hold.as_bytes(), now);
+        tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
+        assert!(
+            f.delivered.lock().unwrap().is_empty(),
+            "input from a page not checked"
+        );
+        assert!(
+            !tempo_app::engine::engine_lock(&f.station.engine).manual_ptt(),
+            "keyed by a page not checked"
+        );
+        assert!(
+            streaming.ptt_reports().is_empty(),
+            "a hold from a page not checked reached the PTT"
+        );
+    }
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert_eq!(streaming.connected(Some(signed), now), Ok(()), "control");
+    assert!(
+        streaming.presence.live(now),
+        "control: presence from the moment it connected"
+    );
+    streaming.control(&click(), |_| true, now);
+    assert_eq!(
+        f.delivered.lock().unwrap().len(),
+        1,
+        "control: the click is taken"
+    );
+    streaming.ptt(hold.as_bytes(), now);
+    tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(now);
+    assert!(
+        tempo_app::engine::engine_lock(&f.station.engine).manual_ptt(),
+        "control: the hold keys"
     );
 }

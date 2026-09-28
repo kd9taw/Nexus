@@ -401,6 +401,8 @@ export const JA: PartialCatalog = {
   "remote.browserRenewsUntil": "{{until}} UTC まで承認済み。このブラウザーから局を使うたびに延長されます（最長 {{limit}} UTC まで）。",
   "remote.browserApprovalEnding": "この承認は {{until}} UTC に終了します。引き続き使うには、ブラウザーを再度承認してください。",
   "remote.approveAgain": "再度承認",
+  "remote.browserKey": "キー {{key}}",
+  "remote.browserKeyNotPinned": "ここで再度承認するまで、このブラウザーではライブを開始できません。先に、このキーがブラウザーに表示されているキーと一致するか確認してください。",
 
   "monitor.measurementAge": "測定からの経過時間",
   "monitor.measuredAgo": "{{seconds}} 秒前に測定",

@@ -396,6 +396,8 @@ export const DE: PartialCatalog = {
   "remote.browserRenewsUntil": "Freigegeben bis {{until}} UTC. Solange die Station von diesem Browser aus genutzt wird, bleibt er freigegeben, längstens bis {{limit}} UTC.",
   "remote.browserApprovalEnding": "Diese Freigabe endet am {{until}} UTC. Gib den Browser erneut frei, um ihn zu behalten.",
   "remote.approveAgain": "Erneut freigeben",
+  "remote.browserKey": "Schlüssel {{key}}",
+  "remote.browserKeyNotPinned": "Dieser Browser kann erst streamen, wenn du ihn hier erneut freigibst. Prüfe vorher, ob dieser Schlüssel mit dem übereinstimmt, den der Browser anzeigt.",
 
   "monitor.measurementAge": "Alter der Messung",
   "monitor.measuredAgo": "Vor {{seconds}} s gemessen",

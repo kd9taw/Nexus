@@ -177,6 +177,49 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
   }
 })
 
+// A5 across the real service and the real station: the key a browser sends reaches the station as
+// its SHA-256 (the key itself never reaches the desktop page), approving with that key shown pins it,
+// and the pin survives a restart. The key is made here, at run time, and never written down.
+test('actual native A5: the station pins the device key it showed, and keeps it across a restart', { timeout: 60000 }, async () => {
+  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+  const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  try {
+    await probe.ready()
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'Device key bench' })
+    const stationId = begin.status.pairingId
+    await browser.post('pair/claim', { code: begin.status.pairingCode })
+    await browser.post('pair/confirm', { id: stationId })
+    await probe.send({ type: 'refresh' })
+    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })
+    assert.equal(paired.ok, true, paired.error)
+    const keyed = app.client(browser.jwt)
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+    const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey))
+    const fingerprint = Buffer.from(await crypto.subtle.digest('SHA-256', spki)).toString('hex')
+    const { value: requested, response } = await keyed.post(`stations/${stationId}/device`,
+      { name: 'Keyed browser', publicKey: Buffer.from(spki).toString('hex') })
+    keyed.setCookie(response.headers.get('set-cookie'))
+    const listed = await probe.send({ type: 'refresh' })
+    const shown = listed.status.devices.find(d => d.id === requested.deviceId)
+    assert.equal(shown?.key, fingerprint, 'the station shows the SHA-256 of the key the browser sent')
+    assert.equal('publicKey' in shown, false, 'the key itself never reaches the desktop page')
+    assert.deepEqual(listed.status.pinnedDevices, [], 'control: nothing pinned before the approval')
+    const approved = await probe.send({ type: 'device', deviceId: requested.deviceId, approve: true, key: fingerprint })
+    assert.equal(approved.ok, true, approved.error)
+    assert.deepEqual(approved.status.pinnedDevices, [requested.deviceId])
+    await delay(300)
+    await probe.send({ type: 'restart' })
+    let status
+    for (let i = 0; i < 50 && !status?.pinnedDevices?.includes(requested.deviceId); i++) {
+      status = (await probe.send({ type: 'refresh' })).status
+      if (!status?.pinnedDevices?.includes(requested.deviceId)) await delay(100)
+    }
+    assert.deepEqual(status.pinnedDevices, [requested.deviceId], 'the pin survived a restart')
+  } finally {
+    try { await probe.stop() } finally { await app.mf.dispose() }
+  }
+})
+
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })

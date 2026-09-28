@@ -487,6 +487,8 @@ export const EN = {
   "remote.browserRenewsUntil": "Approved until {{until}} UTC. Using the station from this browser keeps it approved, up to {{limit}} UTC.",
   "remote.browserApprovalEnding": "This approval ends {{until}} UTC. Approve the browser again to keep it.",
   "remote.approveAgain": "Approve again",
+  "remote.browserKey": "Key {{key}}",
+  "remote.browserKeyNotPinned": "This browser can’t stream until you approve it again here. First check this key matches the one the browser shows.",
 
   'monitor.title': 'Station monitor',
   'monitor.observer': 'Monitoring only',

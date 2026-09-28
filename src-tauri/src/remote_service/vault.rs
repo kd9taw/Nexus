@@ -13,11 +13,20 @@
 //! the 1.12.0 build, whose `Grant` has no such field; a record that holds it reads as unreadable
 //! there, which leaves Remote off. A remembered grant arms nothing: the TX-enable latch still starts
 //! off, and the browser still has to press TX On.
+//!
+//! A third entry holds the device keys the operator pinned at the radio (security test A5): per
+//! browser, the SHA-256 of the public key it signs its stream offers with. It is its OWN entry, not
+//! a field on the state entry, because that record is `deny_unknown_fields` too: a pin there would
+//! make every older Nexus read the whole record as unreadable and leave Remote off with nothing
+//! restored, and the operator moves between builds. An older Nexus never reads this entry at all.
+//! It is bound to its pairing like the state entry, so a leftover from another pairing pins nothing.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const SERVICE: &str = "org.hamradiotools.nexus.remote";
 const ACCOUNT: &str = "pairing";
 const STATE: &str = "state";
+const PINS: &str = "pins";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -69,6 +78,15 @@ pub struct State {
     pub enabled: bool,
     pub grants: Vec<Grant>,
 }
+/// The device keys pinned for exactly one pairing: browser id to the SHA-256 of its device key's
+/// SPKI, as lowercase hex. A map, and short keys, because the record has to fit the smallest OS
+/// credential blob (Windows, 2560 bytes of UTF-16) with a pin for every browser the service lists.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Pins {
+    pub binding: Binding,
+    pub keys: BTreeMap<String, String>,
+}
 
 pub trait Vault: Send + Sync {
     fn binding(&self) -> Result<Option<Binding>, &'static str>;
@@ -79,6 +97,9 @@ pub trait Vault: Send + Sync {
     fn state(&self) -> Result<Option<State>, &'static str>;
     fn save_state(&self, state: &State) -> Result<(), &'static str>;
     fn remove_state(&self) -> Result<(), &'static str>;
+    fn pins(&self) -> Result<Option<Pins>, &'static str>;
+    fn save_pins(&self, pins: &Pins) -> Result<(), &'static str>;
+    fn remove_pins(&self) -> Result<(), &'static str>;
 }
 
 pub struct SystemVault;
@@ -156,6 +177,26 @@ impl Vault for SystemVault {
     }
     fn remove_state(&self) -> Result<(), &'static str> {
         match entry(STATE)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn pins(&self) -> Result<Option<Pins>, &'static str> {
+        match entry(PINS)?.get_password() {
+            // Unreadable pins pin nothing: every browser is approved again before it streams.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_pins(&self, pins: &Pins) -> Result<(), &'static str> {
+        let value = serde_json::to_string(pins).map_err(|_| "credentialStoreUnavailable")?;
+        entry(PINS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_pins(&self) -> Result<(), &'static str> {
+        match entry(PINS)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }

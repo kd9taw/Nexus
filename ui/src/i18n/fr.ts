@@ -411,6 +411,8 @@ export const FR: PartialCatalog = {
   "remote.browserRenewsUntil": "Autorisé jusqu’au {{until}} UTC. Tant que la station est utilisée depuis ce navigateur, il reste autorisé, au plus tard jusqu’au {{limit}} UTC.",
   "remote.browserApprovalEnding": "Cette autorisation se termine le {{until}} UTC. Autorisez à nouveau le navigateur pour le garder.",
   "remote.approveAgain": "Autoriser à nouveau",
+  "remote.browserKey": "Clé {{key}}",
+  "remote.browserKeyNotPinned": "Ce navigateur ne peut pas lancer le direct tant que vous ne l’avez pas autorisé à nouveau ici. Vérifiez d’abord que cette clé correspond à celle qu’affiche le navigateur.",
 
   "monitor.measurementAge": "Ancienneté de la mesure",
   "monitor.measuredAgo": "Mesuré il y a {{seconds}} s",

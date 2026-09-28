@@ -9,10 +9,19 @@
 //!
 //! - **Admission (security test A3): [`admit`], before anything of the session exists.** The
 //!   audio lane's rule, one definition in the operations authority: the operator's local control
-//!   grant plus this browser's own live lease. Then the operator's switch, then the offer check
-//!   and the platform. Only after all of them does the station open a socket, and only after that
-//!   does a WebRTC session exist. It is asked again every second while the stream runs, so a
-//!   lapsed lease or a revoked device ends it.
+//!   grant plus this browser's own live lease. Then the operator's switch, then the device key
+//!   (A5), then the offer check and the platform. Only after all of them does the station open a
+//!   socket, and only after that does a WebRTC session exist. It is asked again every second while
+//!   the stream runs, so a lapsed lease or a revoked device ends it.
+//! - **The browser's own device key (security test A5): [`verify`], then [`Streaming::connected`].**
+//!   The relay stamps the device and session on every signal, so without this a relay could offer
+//!   in any granted browser's name (security review M1). The operator pinned this browser's key
+//!   (SHA-256 of its SPKI) when they approved it at the radio; the offer must carry that key and
+//!   its signature over SHA-256 of the offer's DTLS fingerprint and the station's, device's and
+//!   session's ids. A browser with no pin is refused `deviceNotPinned`; anything else that fails,
+//!   an unsigned offer included, `deviceKeyMismatch`. Once DTLS is up, the certificate the page
+//!   actually presented must be the one it signed, or the session ends there: before presence, and
+//!   before any input or PTT is taken.
 //! - **Transmit presence (S8) and a fresh picture (S9): [`Presence`].** Minted by the operations
 //!   authority when the session connects and on every heartbeat whose picture is fresh, held by
 //!   the engine, which stops every transmission at the station when it lapses. A heartbeat with a
@@ -37,7 +46,9 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ring::digest::{digest, SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
+use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_FIXED};
 use serde_json::Value;
 use tempo_app::remote_control::ptt_hold::{HoldEnd, PttHold};
 use tempo_app::remote_control::transmit::TransmitPermit;
@@ -83,6 +94,10 @@ pub struct Host {
     pub window: Option<WindowHandle>,
 }
 
+/// The device key the operator pinned for a browser when they approved it at the radio (A5), as
+/// the SHA-256 of its SPKI, or `None` when there is none. Read at admission, never cached.
+pub type PinnedKeys = Arc<dyn Fn(&str) -> Option<[u8; 32]> + Send + Sync>;
+
 /// What one session needs from the station.
 #[derive(Clone)]
 pub(super) struct Station {
@@ -94,6 +109,9 @@ pub(super) struct Station {
     pub host: Host,
     #[cfg(feature = "radio")]
     pub audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
+    /// The station's own id, as its pairing holds it: one of the ids a browser signs (A5).
+    pub station_id: String,
+    pub pinned: PinnedKeys,
 }
 
 /// An offer, and the identity the relay stamped on it.
@@ -103,6 +121,10 @@ pub(super) struct Offer {
     pub device: String,
     pub lease: String,
     pub sdp: String,
+    /// The browser's device key (SPKI, lowercase hex) and its signature over this offer (A5), as
+    /// the page sent them: both or neither, which the parser has already held it to.
+    pub public_key: Option<String>,
+    pub signature: Option<String>,
 }
 
 /// Everything that must hold before the station opens a socket for an offer, in order.
@@ -131,7 +153,42 @@ pub(super) fn admit(station: &Station, offer: &Offer, now: Instant) -> Result<()
     if !enabled {
         return Err(StreamReason::StreamDisabled);
     }
+    verify(station, offer)?;
     Session::precheck(&offer.sdp).map_err(|refusal| refusal.reason())
+}
+
+/// A5 at admission: the offer is signed by the device key the operator pinned for this browser at
+/// the radio, over SHA-256 of the offer's DTLS fingerprint and the station's, device's and
+/// session's ids (the contract's README). The device and session are the relay's stamp, the station
+/// id this station's own: a signature made for any other session, browser or station is refused.
+fn verify(station: &Station, offer: &Offer) -> Result<(), StreamReason> {
+    let pinned = (station.pinned)(&offer.device).ok_or(StreamReason::DeviceNotPinned)?;
+    let mismatch = StreamReason::DeviceKeyMismatch;
+    let (Some(key), Some(signature)) = (offer.public_key.as_deref(), offer.signature.as_deref())
+    else {
+        return Err(mismatch);
+    };
+    let key = protocol::hex_bytes(key).ok_or(mismatch)?;
+    let signature = protocol::hex_bytes(signature).ok_or(mismatch)?;
+    if digest(&SHA256, &key).as_ref() != pinned {
+        return Err(mismatch);
+    }
+    let fingerprint = protocol::offer_fingerprint(&offer.sdp).ok_or(StreamReason::InvalidOffer)?;
+    let fingerprint: [u8; 32] = digest(&SHA256, &fingerprint)
+        .as_ref()
+        .try_into()
+        .map_err(|_| mismatch)?;
+    let signed = protocol::offer_binding(
+        &fingerprint,
+        &station.station_id,
+        &offer.device,
+        &offer.session,
+    );
+    // An SPKI ends with the uncompressed point, which is what ring verifies against.
+    let point = key.get(key.len().saturating_sub(65)..).ok_or(mismatch)?;
+    UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, point)
+        .verify(&signed, &signature)
+        .map_err(|_| mismatch)
 }
 
 /// A message to the relay about one session, or nothing if it would break a bound.
@@ -182,8 +239,12 @@ impl StreamLane {
             return state(&session, false, Some(StreamReason::InvalidOffer));
         }
         match payload {
-            // The device key's signature (A5) is checked at admission; until then it rides along.
-            BrowserSignal::Offer { sdp, .. } => {
+            // The device key and its signature (A5) are checked at admission, on the session thread.
+            BrowserSignal::Offer {
+                sdp,
+                public_key,
+                signature,
+            } => {
                 if self.live.is_some() {
                     return state(&session, false, Some(StreamReason::StreamInUse));
                 }
@@ -193,6 +254,8 @@ impl StreamLane {
                     device,
                     lease,
                     sdp,
+                    public_key,
+                    signature,
                 };
                 let station = station.clone();
                 let to_relay = to_relay.clone();
@@ -317,6 +380,9 @@ pub(super) struct Streaming {
     /// Was presence live at the last look? Its lapse is when the window lets go of anything the
     /// streamed operator was holding down.
     was_live: bool,
+    /// A5: the page's DTLS certificate is the one its offer was signed over. Until it is, nothing
+    /// on `control` or `ptt` is taken.
+    verified: bool,
     #[cfg(feature = "radio")]
     audio: super::audio::AudioLane,
 }
@@ -329,9 +395,28 @@ impl Streaming {
             presence: Presence::default(),
             checked: now,
             was_live: false,
+            verified: false,
             #[cfg(feature = "radio")]
             audio: super::audio::AudioLane::unaddressed(),
         }
+    }
+
+    /// The session is connected: DTLS is up. `remote` is the certificate fingerprint the page's
+    /// DTLS actually presented. A5's second half: it must be the one the page signed, or the session
+    /// ends here, before presence and before anything on `control` or `ptt` is taken. Then S8:
+    /// presence from the moment the session is live.
+    pub fn connected(
+        &mut self,
+        remote: Option<[u8; 32]>,
+        now: Instant,
+    ) -> Result<(), StreamReason> {
+        let signed = protocol::offer_fingerprint(&self.offer.sdp);
+        if signed.is_none() || remote != signed {
+            return Err(StreamReason::DeviceKeyMismatch);
+        }
+        self.verified = true;
+        self.presence.renew(&self.station, &self.offer, now);
+        Ok(())
     }
 
     /// Once per lapse of presence, the window's `reset`: a button or key a blind operator was
@@ -371,6 +456,10 @@ impl Streaming {
         let Ok(message) = protocol::parse_control(bytes) else {
             return (None, false);
         };
+        // A5: nothing from a page whose certificate has not been checked.
+        if !self.verified {
+            return (None, false);
+        }
         match message {
             ControlIn::State { request_id } => {
                 let result = self.handle(
@@ -450,6 +539,10 @@ impl Streaming {
         let Ok(message) = protocol::parse_ptt(bytes) else {
             return;
         };
+        // A5: nothing from a page whose certificate has not been checked.
+        if !self.verified {
+            return;
+        }
         match message {
             PttIn::PttHold { hold_id, .. } => {
                 if self.presence.live(now) {
@@ -732,8 +825,12 @@ fn run(
         for event in session.take_events() {
             match event {
                 SessionEvent::Connected => {
-                    // S8: presence from the moment the session is live.
-                    streaming.presence.renew(&station, &streaming.offer, now);
+                    // A5, then S8: the page's certificate is the one it signed, and presence from
+                    // the moment the session is live.
+                    if let Err(reason) = streaming.connected(session.remote_fingerprint(), now) {
+                        session.close(reason, now);
+                        continue;
+                    }
                     // S1, S2: the picture starts with the session. No picture, no stream.
                     video = tempo_stream::video::Video::start(window).ok();
                     if video.is_none() {
@@ -826,4 +923,4 @@ fn run(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
