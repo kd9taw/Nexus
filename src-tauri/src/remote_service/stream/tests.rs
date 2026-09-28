@@ -664,6 +664,85 @@ fn the_pages_microphone_keys_only_an_armed_over() {
     );
 }
 
+/// The page is told what the station's microphone over is doing (`micState`), when it changes and
+/// only then: armed by the press, keyed by the voice, and its end with why. Nothing is said about
+/// an over from before the session.
+#[cfg(feature = "radio")]
+#[test]
+fn the_page_is_told_what_the_microphone_over_does() {
+    let now = Instant::now();
+    let f = fixture(now);
+    tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    assert_eq!(
+        streaming.mic_state(),
+        None,
+        "told of an over that does not exist"
+    );
+    let told = |streaming: &mut Streaming| -> Value {
+        serde_json::from_str(
+            &streaming
+                .mic_state()
+                .expect("a change the page was not told of"),
+        )
+        .unwrap()
+    };
+    let poll = |at: Instant| {
+        let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+        e.poll_remote_transmit(at);
+        e.poll_mic(at, 40.0, 0)
+    };
+    let hold = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":0}}"#);
+    streaming.ptt(hold.as_bytes(), now);
+    poll(now);
+    assert_eq!(
+        told(&mut streaming),
+        serde_json::json!({"type":"micState","armed":true,"keyed":false,"noPowerOut":false})
+    );
+    assert_eq!(streaming.mic_state(), None, "told twice of one change");
+    streaming.mic(&tempo_stream::session::MicPacket {
+        seq: 1,
+        rtp: 960,
+        clock_hz: 48_000,
+        arrived: now,
+        payload: vec![0xF8, 0xFF, 0xFE],
+    });
+    poll(now + Duration::from_millis(20));
+    assert_eq!(told(&mut streaming)["keyed"], true, "the key was not told");
+    let release = format!(r#"{{"type":"pttRelease","holdId":"{PRESS}","seq":1}}"#);
+    streaming.ptt(release.as_bytes(), now);
+    poll(now + Duration::from_millis(40));
+    assert_eq!(
+        told(&mut streaming),
+        serde_json::json!({"type":"micState","armed":false,"keyed":false,"noPowerOut":false,"ended":"released"})
+    );
+}
+
+/// Every way an over ends reaches the page under its own name: the page's caption for each is
+/// different (the audio design's §7), so two ends told as one would say the wrong thing.
+#[test]
+fn every_end_of_an_over_reaches_the_page_under_its_own_name() {
+    use tempo_app::mic::MicEnded as Engine;
+    for why in [
+        Engine::Released,
+        Engine::Stopped,
+        Engine::AudioGap,
+        Engine::Presence,
+        Engine::Ceiling,
+        Engine::Watchdog,
+        Engine::RouteChanged,
+    ] {
+        let name = format!("{why:?}");
+        let camel = name[..1].to_lowercase() + &name[1..];
+        assert_eq!(
+            serde_json::to_value(wire_ended(why)).unwrap(),
+            Value::String(camel),
+            "{why:?}"
+        );
+    }
+}
+
 /// The page's `held` set reaches the window as it came, and only while presence is live: it is
 /// input. CONTROL: the same message with presence live is delivered.
 #[test]

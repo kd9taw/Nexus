@@ -5,7 +5,7 @@ import { StreamView } from './StreamView'
 import type { HostedConnection } from './client'
 import type { OperationState } from './operation-protocol'
 import type { OperationView } from './operation-client'
-import { ANSWER, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { ANSWER, CHANNEL, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
@@ -29,8 +29,8 @@ afterEach(() => {
   delete (HTMLVideoElement.prototype as { cancelVideoFrameCallback?: unknown }).cancelVideoFrameCallback
 })
 
-function view(initial: Partial<OperationView>) {
-  const h = harness()
+function view(initial: Partial<OperationView>, options: Parameters<typeof harness>[0] = {}) {
+  const h = harness(options)
   let snapshot = { supported: true, state: null, fresh: false, connected: true, busy: false, stopAvailable: false,
     stopSending: false, stopAccepted: false, ...initial } as OperationView
   const listeners = new Set<() => void>()
@@ -51,6 +51,9 @@ function view(initial: Partial<OperationView>) {
   return {
     // `h.peer` is a getter over the peers made so far; spreading would freeze it at none.
     link: h.link, peers: h.peers, signals: h.signals, get peer() { return h.peer }, tick: h.tick, operations, connection, video,
+    micAsks: h.micAsks, micTracks: h.micTracks,
+    /** The station's word on its microphone over, as the contract carries it. */
+    station: (name: string) => act(() => { h.peer.channel('control').deliver(byName(CHANNEL.controlStationToBrowser, name)) }),
     set: (next: Partial<OperationView>) => act(() => { snapshot = { ...snapshot, ...next }; for (const f of listeners) f() }),
     /** Answer, open the channels and present a frame: the stream is live. */
     async live() {
@@ -348,4 +351,137 @@ it('A5: says in plain words why the station refused this browser\'s key, and wha
     expect(screen.getAllByText(new RegExp(words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length, reason).toBeGreaterThan(0)
     cleanup()
   }
+})
+
+// ── The microphone (S6; the operator's rulings R1 "Arms your mic" and R2 "State it + warn") ─────────
+
+const USB_NOTE = 'The rig must take its SSB audio from USB (its menu for the transmit audio source). Most radios come set to the front microphone, and then an over sends the shack\'s microphone instead of you.'
+const NO_POWER = 'The rig shows no power out while your voice is arriving. Set its SSB audio source to USB (its menu for the transmit audio source).'
+const NEEDED = 'PTT is held but your microphone is off, so nothing is transmitted. Turn the microphone on to talk.'
+const ARMED = "mic armed, no audio yet (a held PTT keys nothing until the operator's voice arrives)"
+const KEYED = "mic keyed by the operator's voice"
+const KEYED_NO_POWER = 'mic keyed, and the rig reports no power out (display only)'
+
+it('the microphone is off until the operator turns it on; only then does the browser ask, and that is where the page says the rig must take USB audio', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const mic = screen.getByRole('button', { name: 'Mic off' })
+  expect(mic.getAttribute('aria-pressed')).toBe('false')
+  expect(v.micAsks, 'the browser was asked before the operator turned the microphone on').toEqual([])
+  expect(screen.queryByText(USB_NOTE)).toBeNull()
+  await act(async () => { fireEvent.click(mic); await Promise.resolve() })
+  expect(v.micAsks).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Mic on' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByText(USB_NOTE)).toBeTruthy()
+  // Off again: the track stops, and the note goes with it.
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic on' })); await Promise.resolve() })
+  expect(v.micTracks[0].stopped).toBe(true)
+  expect(screen.queryByText(USB_NOTE)).toBeNull()
+})
+
+it('R1: a press with the microphone off keys nothing, and the page says why; CONTROL: with it on, or nothing armed, nothing is said', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  // The station armed an over (this page's Hold PTT, or Space or the cockpit's PTT through the picture).
+  v.station(ARMED)
+  expect(screen.getByText(NEEDED)).toBeTruthy()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic off' })); await Promise.resolve() })
+  expect(screen.queryByText(NEEDED), 'the microphone is on: nothing is missing').toBeNull()
+  // And with the microphone off but nothing armed, nothing is missing either.
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mic on' })); await Promise.resolve() })
+  v.station('mic over ended: released')
+  expect(screen.queryByText(NEEDED)).toBeNull()
+})
+
+it('R2: the station seeing no power out while the voice arrives is said, DISPLAY ONLY; CONTROL: an over with power out says nothing', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  v.station(KEYED)
+  expect(screen.queryByText(NO_POWER)).toBeNull()
+  const sent = v.peer.channel('ptt').sent.length + v.peer.channel('control').sent.length
+  v.station(KEYED_NO_POWER)
+  expect(screen.getByText(NO_POWER)).toBeTruthy()
+  expect(v.peer.channel('ptt').sent.length + v.peer.channel('control').sent.length, 'the warning sent something').toBe(sent)
+  // The over ends; the warning goes with it.
+  v.station('mic over ended: released')
+  expect(screen.queryByText(NO_POWER)).toBeNull()
+})
+
+it('§7: an over the station ended is explained in words; one the operator let go of or stopped is not', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  for (const [why, text] of [
+    ['audioGap', 'Your audio stopped arriving, so the transmission stopped.'],
+    ['presence', 'Control was lost, so the transmission stopped.'],
+    ['ceiling', 'The transmission ended at its 10-minute limit. Press PTT again to carry on.'],
+    ['watchdog', 'The TX watchdog stopped the transmission.'],
+    ['routeChanged', "The station's audio changed, so the transmission stopped. Press PTT again."],
+  ]) {
+    v.station(`mic over ended: ${why}`)
+    expect(screen.getByText(text).getAttribute('role'), why).toBe('alert')
+  }
+  for (const why of ['released', 'stopped']) {
+    v.station(`mic over ended: ${why}`)
+    expect(screen.queryByRole('list', { name: 'Microphone' }), why).toBeNull()
+  }
+  // A new over clears the last one's caption.
+  v.station('mic over ended: audioGap')
+  v.station(ARMED)
+  expect(screen.queryByText('Your audio stopped arriving, so the transmission stopped.')).toBeNull()
+})
+
+it('M9: the station\'s audio is muted, not ducked, while the operator\'s own over is on the air, and comes back when it ends', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const mute = vi.spyOn(v.link.audio, 'setMuted')
+  const ptt = screen.getByRole('button', { name: 'Hold PTT' })
+  fireEvent.pointerDown(ptt, { button: 0 })
+  expect(last(mute.mock.calls)).toEqual([true])
+  fireEvent.pointerUp(ptt)
+  expect(last(mute.mock.calls)).toEqual([false])
+  // An over keyed from the picture (the cockpit's own PTT) mutes too, by the station's word.
+  v.station(KEYED)
+  expect(last(mute.mock.calls)).toEqual([true])
+  v.station('mic over ended: audioGap')
+  expect(last(mute.mock.calls)).toEqual([false])
+})
+
+it('M11: nine minutes into a run of overs the page says to identify, and once more when the stream ends; CONTROL: a short over is not prompted', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+  try {
+    const DUE = 'Time to give your call sign.', END = 'Remember to give your call sign at the end of the contact.'
+    const v = view(controlling)
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await v.live()
+    // CONTROL: a 30-second over and then listening: never prompted.
+    v.station(KEYED)
+    act(() => { vi.advanceTimersByTime(30_000) })
+    v.station('mic over ended: released')
+    act(() => { vi.advanceTimersByTime(9 * 60_000) })
+    expect(screen.queryByText(DUE)).toBeNull()
+    // A run: on the air again within the run, and past nine minutes from its start the prompt shows.
+    v.station(KEYED)
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(screen.getByText(DUE)).toBeTruthy()
+    // It shows for thirty seconds, and keys nothing.
+    act(() => { vi.advanceTimersByTime(31_000) })
+    expect(screen.queryByText(DUE)).toBeNull()
+    v.station('mic over ended: released')
+    // The stream ends with that run in it: the last prompt.
+    fireEvent.click(screen.getByRole('button', { name: 'End the stream' }))
+    expect(screen.getByText(END)).toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+it('M11 control: a stream with no over in it ends with no prompt', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  fireEvent.click(screen.getByRole('button', { name: 'End the stream' }))
+  expect(screen.queryByText('Remember to give your call sign at the end of the contact.')).toBeNull()
 })

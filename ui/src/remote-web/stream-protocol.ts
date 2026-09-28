@@ -255,6 +255,35 @@ export function parsePttState(raw: unknown): PttState {
   return value as PttState
 }
 
+/** Why the station's microphone over ended (the contract's `micState.ended`). */
+export const MIC_ENDED = ['released', 'stopped', 'audioGap', 'presence', 'ceiling', 'watchdog', 'routeChanged'] as const
+export type MicEnded = (typeof MIC_ENDED)[number]
+/** The station's microphone over: armed by a press, keyed by the operator's voice (a held PTT with
+ *  no voice keys nothing), `noPowerOut` (display only: the voice arrives and the rig reports no power
+ *  out), and on the message that reports an over's end, why it ended. */
+export type MicState = { type: 'micState'; armed: boolean; keyed: boolean; noPowerOut: boolean; ended?: MicEnded }
+export function parseMicState(raw: unknown): MicState {
+  const has = !!raw && typeof raw === 'object' && 'ended' in (raw as object)
+  const value = fields(raw, ['type', 'armed', 'keyed', 'noPowerOut', ...(has ? ['ended'] : [])])
+  if (value.type !== 'micState' || typeof value.armed !== 'boolean' || typeof value.keyed !== 'boolean'
+    || typeof value.noPowerOut !== 'boolean') throw Error('invalidStream')
+  if (has && !MIC_ENDED.includes(value.ended as MicEnded)) throw Error('invalidStream')
+  return value as MicState
+}
+
+/** The page's microphone, as the audio design asks (§4.7): no echo cancellation, no noise
+ *  suppression and no automatic gain - AGC pumps the level and wrecks ALC discipline, and NS is
+ *  trained on speech and chews tones - one channel at 48 kHz. Browsers may ignore these, so the
+ *  track's own settings are read back afterwards and the operator is told (`micProcessing`). */
+export const MIC_CONSTRAINTS = {
+  echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, sampleRate: 48000,
+} as const
+/** M6 over WebRTC: the page's held PTT and held keys travel on `ptt`; when that channel's send
+ *  queue stays over this for STREAM_UPLINK_STALL_MS, the uplink has backed up and the page lets go
+ *  of the over itself, and says so. The station's own 200 ms audio gap is the guarantee. */
+export const STREAM_UPLINK_BUDGET_BYTES = 2048
+export const STREAM_UPLINK_STALL_MS = 200
+
 /** Modifier bits on every input event. */
 export const MOD_SHIFT = 1, MOD_CTRL = 2, MOD_ALT = 4, MOD_META = 8
 /** Input is a DOM-level description of what the operator did over the picture, never an OS event.

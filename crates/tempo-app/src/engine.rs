@@ -2495,6 +2495,10 @@ pub struct Engine {
     mic_presence: Option<crate::remote_control::transmit::TransmitPermit>,
     /// One-shot microphone abort: the loop flushes the output ring + unkeys, then clears it.
     mic_abort: bool,
+    /// Why the next drop of the over happens, when a caller knows better than "a stop".
+    mic_end: Option<crate::mic::MicEnded>,
+    /// Why the last over ended, for the page, until the next arm.
+    mic_ended: Option<crate::mic::MicEnded>,
     /// The no-power warning's evidence for the current over (display only): the rig reported
     /// power out, or reported ~0 while the operator's voice was arriving.
     mic_rf_seen: bool,
@@ -4818,6 +4822,8 @@ impl Engine {
             mic_feed: None,
             mic_presence: None,
             mic_abort: false,
+            mic_end: None,
+            mic_ended: None,
             mic_rf_seen: false,
             mic_zero_seen: false,
             sat_tune: None,

@@ -176,12 +176,45 @@ pub enum Refused {
     Full,
 }
 
+/// Why an over ended, as the operator is told (the audio design's §7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicEnded {
+    /// The operator let go.
+    Released,
+    /// A stop at the station, TX turned off, leaving Phone, a tune, or the licence.
+    Stopped,
+    /// No audio for [`MicMode::gap_ms`] (M2).
+    AudioGap,
+    /// The stream's transmit presence lapsed (M7).
+    Presence,
+    /// The per-over ceiling (C1).
+    Ceiling,
+    /// The wall-clock TX watchdog (C2).
+    Watchdog,
+    /// The transmit route changed under the over (G7).
+    RouteChanged,
+}
+
+/// The over as the stream shows it to the page. Published by the engine, read by the stream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MicStatus {
+    /// An over is armed (or keyed).
+    pub armed: bool,
+    /// The operator's audio has keyed the rig.
+    pub keyed: bool,
+    /// Display only: voice for two seconds, and the rig reports no power out.
+    pub no_power_out: bool,
+    /// Why the last over ended, until the next one is armed.
+    pub ended: Option<MicEnded>,
+}
+
 #[derive(Default)]
 struct FeedState {
     open: bool,
     epoch: u64,
     frames: VecDeque<MicFrame>,
     last_seq: Option<u64>,
+    status: MicStatus,
 }
 
 /// The page's microphone, between the stream (which decodes it) and the radio loop (which plays
@@ -227,6 +260,16 @@ impl MicFeed {
     /// Whether an over is armed to take audio.
     pub fn is_open(&self) -> bool {
         self.state().open
+    }
+
+    /// The over as the engine last published it, for the page.
+    pub fn status(&self) -> MicStatus {
+        self.state().status
+    }
+
+    /// Publish the over's state for the page (the engine does, whenever it may have changed).
+    pub(crate) fn publish(&self, status: MicStatus) {
+        self.state().status = status;
     }
 
     /// An over was armed: take audio from now on, starting empty.

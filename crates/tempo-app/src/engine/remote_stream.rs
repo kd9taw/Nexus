@@ -84,6 +84,10 @@ impl Engine {
             "tx",
             "remote stream presence lapsed: stopping every transmission at the station",
         );
+        // The halt ends a microphone over too; the page is told it was presence (M7).
+        if self.mic_armed() {
+            self.mic_end = Some(crate::mic::MicEnded::Presence);
+        }
         self.halt_tx();
         true
     }
@@ -100,7 +104,13 @@ impl Engine {
                 if on {
                     self.arm_remote_mic(now)
                 } else {
-                    self.drop_mic_latch();
+                    // The press ended (released, or its holds stopped arriving), or it is no
+                    // longer admitted here (presence, Phone).
+                    self.drop_mic_latch_for(if may_key {
+                        crate::mic::MicEnded::Released
+                    } else {
+                        crate::mic::MicEnded::Stopped
+                    });
                     false
                 }
             });

@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
   and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
   or let the picture freeze, and it lets go. In Phone the space bar over the picture is push-to-talk
-  as it is at the shack, and a space typed into a Nexus field still types. Anything you hold down
+  for your own microphone, and a space typed into a Nexus field still types. Anything you hold down
   over the picture, a key or a mouse button, is let go at the shack within a fifth of a second if
   the connection drops. While the picture is frozen Nexus takes no clicks or keys from the browser,
   and Stop TX still works. A band or mode list you open from the browser opens inside the Nexus
@@ -44,8 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaving Phone each end it at once, and no over lasts longer than 10 minutes. Voice that arrives
   late is dropped, never played late. The rig must take its SSB audio from USB (the menu that
   sets the transmit audio source for voice); on most radios the factory setting is the front
-  microphone, and then an over keys the rig on the shack's microphone instead of yours. The
-  browser's microphone control is not in this build yet.
+  microphone, and then an over keys the rig on the shack's microphone instead of yours; the page
+  says so when the rig shows no power out while your voice is arriving. On the stream page the
+  microphone is off until you press its button, and only then does the browser ask for it. The
+  space bar over the picture and the Phone cockpit's PTT clicked through it arm the same over as
+  the page's own PTT: from Remote they never key the shack's microphone, and Lock does not work.
+  The station's audio in your browser is muted while you are on the air, the page says why an over
+  ended when the station ended it, and it reminds you to give your call sign before each ten
+  minutes of a run of overs is up.
 - **Remote: a stream only starts for the browser you approved.** Each browser now holds its own key,
   which never leaves it. The Remote page shows it under the station ("This browser's key"), and
   Nexus at the shack shows the same one beside the browser: check that they match when you approve

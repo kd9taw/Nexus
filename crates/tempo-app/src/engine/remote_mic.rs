@@ -10,6 +10,14 @@
 //! with no audio (G6): either gap unkeys. An armed over with no audio keys nothing, however long
 //! the hold is kept up.
 //!
+//! A press of the Phone cockpit's own PTT made through the stream's picture (Space over it, or its
+//! button) arms THE SAME over, and its release ends it ([`Engine::release_remote_mic`]): the
+//! operator's ruling "Arms your mic". That press is bounded by the stream's held-input dead-man
+//! instead of the page's hold, and by every rule below.
+//!
+//! What the page is shown of the over (`micState`) is published to the feed by each tick of a live
+//! over and by its end ([`MicStatus`]).
+//!
 //! ## Where each stop reaches it
 //!
 //! Every end goes through [`Engine::drop_mic_latch`]: the feed closes first (its epoch moves, M12),
@@ -35,7 +43,7 @@ use super::{now_unix_millis, now_unix_secs};
 /// How much of the operator's voice must have arrived, with the rig reporting no power, before the
 /// no-power warning is believed: two seconds, the same settle as the loop's own zero-power watch.
 const MIC_NO_POWER_AFTER_MS: u64 = 2_000;
-use crate::mic::{MicDrop, MicFeed, MicGates, MicTick, MIC};
+use crate::mic::{MicDrop, MicEnded, MicFeed, MicGates, MicStatus, MicTick, MIC};
 use crate::settings::OperatingMode;
 use std::time::Instant;
 
@@ -75,10 +83,17 @@ impl Engine {
         self.mic_presence = Some(presence);
         self.mic_rf_seen = false;
         self.mic_zero_seen = false;
+        self.mic_ended = None;
         // Pressing PTT is an operator action, like a send: the unattended-transmit clock restarts
         // here, and the over is measured from its key.
         self.reset_tx_watchdog();
         true
+    }
+
+    /// The Phone cockpit let go of a press it armed through the stream's picture: the over ends,
+    /// as the page's own PTT's does when it is let go.
+    pub fn release_remote_mic(&mut self) {
+        self.drop_mic_latch_for(MicEnded::Released);
     }
 
     /// Whether a microphone over is armed or keyed.
@@ -100,8 +115,33 @@ impl Engine {
             feed.close();
         }
         self.mic_presence = None;
+        let why = self.mic_end.take().unwrap_or(MicEnded::Stopped);
+        let was_active = self.mic.active();
         if self.mic.drop_latch() {
             self.mic_abort = true;
+        }
+        if was_active {
+            self.mic_ended = Some(why);
+            self.publish_mic_status();
+        }
+    }
+
+    /// [`Self::drop_mic_latch`], saying why for the page.
+    pub(super) fn drop_mic_latch_for(&mut self, why: MicEnded) {
+        self.mic_end = Some(why);
+        self.drop_mic_latch();
+    }
+
+    /// The over as the page is shown it (`micState`), published to the stream's feed: by every
+    /// tick of a live over ([`Self::poll_mic`]), and by its end, after which no tick runs.
+    fn publish_mic_status(&self) {
+        if let Some(feed) = &self.mic_feed {
+            feed.publish(MicStatus {
+                armed: self.mic.active(),
+                keyed: self.mic.keyed(),
+                no_power_out: self.mic_no_power_out(),
+                ended: self.mic_ended,
+            });
         }
     }
 
@@ -182,7 +222,14 @@ impl Engine {
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
             }
-            self.drop_mic_latch();
+            self.drop_mic_latch_for(match why {
+                MicDrop::GateDown => MicEnded::Stopped,
+                MicDrop::Presence => MicEnded::Presence,
+                MicDrop::DeviceChanged => MicEnded::RouteChanged,
+                MicDrop::Ceiling => MicEnded::Ceiling,
+                MicDrop::Watchdog => MicEnded::Watchdog,
+                MicDrop::AudioGap => MicEnded::AudioGap,
+            });
             // An unexplained unkey reads as a fault: say why.
             tempo_core::applog::info(
                 "tx",
@@ -200,6 +247,7 @@ impl Engine {
                 ),
             );
         }
+        self.publish_mic_status();
         res.tick
     }
 }
@@ -567,12 +615,18 @@ mod tests {
     /// reading, and no voice arriving each leave it down.
     #[test]
     fn the_no_power_warning_needs_voice_a_zero_reading_and_no_power() {
+        // What the page is shown after the loop's next tick.
+        let shown = |s: &mut Scene| {
+            s.tick(2_200);
+            s.feed.status().no_power_out
+        };
         let mut s = fed(0.5, 2_200);
         s.e.observe_rig_tx_meters(None, None, Some(0.0), None);
         assert!(
             s.e.mic_no_power_out(),
             "voice for 2 s, the rig at 0 W, and no warning"
         );
+        assert!(shown(&mut s), "the page was not shown the warning");
         assert!(
             s.e.mic_keyed(),
             "the warning changed the over: it is display only"
@@ -587,21 +641,162 @@ mod tests {
             !s.e.mic_no_power_out(),
             "warned on a rig that reported power"
         );
+        assert!(
+            !shown(&mut s),
+            "the page was shown a warning for a rig with power out"
+        );
 
         // A rig that reports no power reading never warns.
         let mut s = fed(0.5, 2_200);
         s.e.observe_rig_tx_meters(Some(1.2), None, None, None);
         assert!(!s.e.mic_no_power_out(), "warned with no power reading");
+        assert!(
+            !shown(&mut s),
+            "the page was shown a warning with no power reading"
+        );
 
         // No voice arriving (the operator holding PTT in silence): no warning, whatever the meter.
         let mut s = fed(0.0, 2_200);
         s.e.observe_rig_tx_meters(None, None, Some(0.0), None);
         assert!(!s.e.mic_no_power_out(), "warned with no voice arriving");
+        assert!(
+            !shown(&mut s),
+            "the page was shown a warning with no voice arriving"
+        );
 
         // …and not before two seconds of voice.
         let mut s = fed(0.5, 1_000);
         s.e.observe_rig_tx_meters(None, None, Some(0.0), None);
         assert!(!s.e.mic_no_power_out(), "warned after one second of voice");
+    }
+
+    // ── What the page is shown (micState) ─────────────────────────────────────────────────────
+
+    /// The over as the page is shown it: armed, then keyed by the voice, then its end and why.
+    /// Each end names its own cause, so the page can say the right thing (design §7).
+    #[test]
+    fn the_page_is_shown_the_over_and_why_it_ended() {
+        use crate::mic::{MicEnded, MicStatus};
+        let status = |armed, keyed, ended| MicStatus {
+            armed,
+            keyed,
+            no_power_out: false,
+            ended,
+        };
+        // The voice stops: the audio gap.
+        let mut s = scene();
+        s.held_tick(0);
+        assert_eq!(
+            s.feed.status(),
+            status(true, false, None),
+            "the arm was not shown"
+        );
+        s.feed.push(frame(0, s.at(0))).unwrap();
+        s.tick(0);
+        assert_eq!(
+            s.feed.status(),
+            status(true, true, None),
+            "the key was not shown"
+        );
+        let mut n = 20;
+        while s.e.mic_armed() && n < 1_000 {
+            s.hold.hold(PRESS, s.at(n));
+            s.tick(n);
+            n += 20;
+        }
+        assert_eq!(
+            s.feed.status(),
+            status(false, false, Some(MicEnded::AudioGap))
+        );
+        // The station ends the old press on its next tick; the page's next press is a new one,
+        // and it clears the last end.
+        s.tick(n);
+        s.hold
+            .hold("10000000-0000-4000-8000-00000000000b", s.at(n + 20));
+        s.tick(n + 20);
+        assert_eq!(
+            s.feed.status(),
+            status(true, false, None),
+            "a new arm kept the old end"
+        );
+
+        for (name, end, why) in [
+            ("the cockpit let go", 0, MicEnded::Released),
+            ("Stop TX at the shack", 1, MicEnded::Stopped),
+            ("presence lapsed", 2, MicEnded::Presence),
+            ("TX Off", 3, MicEnded::Stopped),
+        ] {
+            let mut s = scene();
+            s.key();
+            match end {
+                0 => s.e.release_remote_mic(),
+                1 => s.e.halt_tx(),
+                2 => {
+                    s.presence.revoke();
+                    s.e.poll_remote_transmit(s.at(20));
+                }
+                _ => s.e.set_tx_enabled(false),
+            }
+            assert_eq!(s.feed.status(), status(false, false, Some(why)), "{name}");
+            assert!(
+                s.e.take_mic_abort(),
+                "{name}: the keyed over ended without its abort"
+            );
+        }
+    }
+
+    /// ★ The operator's ruling "Arms your mic": a press of the Phone cockpit's PTT made through the
+    /// stream's picture arms THE SAME over as the page's own PTT, with no page press behind it, and
+    /// it is held by the press alone: the page's hold does not drop it for being absent, only the
+    /// voice keys it, it never keys the shack's own microphone, and the cockpit's release ends it.
+    /// CONTROL: the microphone's own rules still end it, here the audio gap.
+    #[test]
+    fn a_press_through_the_picture_arms_the_same_over_and_its_release_ends_it() {
+        use crate::mic::MicEnded;
+        let mut s = scene();
+        assert!(
+            s.e.arm_remote_mic(s.at(0)),
+            "the cockpit's press did not arm"
+        );
+        for n in 0..10u64 {
+            assert_eq!(
+                s.tick(20 * n),
+                MicTick::Armed,
+                "tick {n}: armed, and nothing keys"
+            );
+        }
+        assert!(
+            !s.e.manual_ptt(),
+            "a streamed press keyed the shack's own microphone"
+        );
+        let mut n = 200;
+        for k in 0..10u64 {
+            s.feed.push(frame(k, s.at(n))).unwrap();
+            s.tick(n);
+            n += 20;
+        }
+        assert!(s.e.mic_keyed(), "the voice did not key it");
+        s.e.release_remote_mic();
+        assert!(!s.e.mic_armed(), "the cockpit's release left the over up");
+        assert!(
+            s.e.take_mic_abort(),
+            "the keyed over ended without its abort"
+        );
+        assert_eq!(s.feed.status().ended, Some(MicEnded::Released));
+
+        // CONTROL: the same press, and the voice stops: the audio gap ends it (G6).
+        let mut s = scene();
+        assert!(s.e.arm_remote_mic(s.at(0)));
+        s.feed.push(frame(0, s.at(0))).unwrap();
+        assert_eq!(s.tick(0), MicTick::Key);
+        let mut n = 20;
+        while s.e.mic_armed() && n < 1_000 {
+            s.tick(n);
+            n += 20;
+        }
+        assert!(!s.e.mic_armed(), "the audio gap did not end it");
+        assert!(n <= 260, "ended only at {n} ms");
+        assert_eq!(s.feed.status().ended, Some(MicEnded::AudioGap));
     }
 
     /// Pressing PTT is an operator action: the watchdog's clock restarts at the arm.

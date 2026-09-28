@@ -23,6 +23,9 @@
 /* Held PTT and the station's own TX reading use the transmit colour, with the ▲ glyph beside it. */
 .remote-button.remote-stream-ptt[aria-pressed='true'] { color: var(--bg); background: var(--tx); border-color: var(--tx); }
 .remote-stream-tx { padding: 2px 8px; border: 1px solid var(--tx); border-radius: var(--radius-sm); color: var(--tx); font-weight: 800; font-size: var(--fs-body); }
+/* The microphone, on: the accent, never the transmit colour - a microphone that is on is not on the
+   air (PTT arms, the voice keys). */
+.remote-button.remote-stream-mic[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
 
 /* The picture fills the region and keeps its shape; the bars around it are the stage's own colour.
    `position: relative` so the placeholder and the stalled notice sit over it, never beside it. */
@@ -40,6 +43,19 @@
   padding: 6px 12px; border: 1px solid var(--alert-warning); border-radius: var(--radius-sm);
   color: var(--text); background: var(--bg-elev); font-size: var(--fs-body); text-align: center; pointer-events: none;
 }
+
+/* The microphone's notes, at the foot of the picture. They never take a click from it: the picture
+   under them is still Nexus, and still operated. */
+.remote-stream-notes {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-direction: column; align-items: center;
+  gap: 6px; margin: 0; padding: 0; list-style: none; pointer-events: none;
+}
+.remote-stream-note {
+  max-width: 100%; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); background: var(--bg-elev); font-size: var(--fs-body); text-align: center; overflow-wrap: anywhere;
+}
+.remote-stream-note[data-tone='warn'] { border-color: var(--alert-warning); }
+.remote-stream-identify { color: var(--text-dim); font-size: var(--fs-body); }
 
 [data-viewport='xs'] .remote-stream-header { padding: 6px 8px; }
 [data-viewport='xs'] .remote-stream-status { flex-basis: 100%; }

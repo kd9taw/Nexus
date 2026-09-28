@@ -20,14 +20,29 @@
 // under a fresh hold id per press; the station ends the over when it has heard nothing for 200 ms,
 // so a lost key-up or a dropped link cannot leave the rig keyed. Every key and button held on the
 // picture is re-asserted the same way (`held`), and Nexus's window lets go of whatever stops being
-// re-asserted: a Space held in Phone keys PTT through the cockpit's own handler, and is bounded so.
+// re-asserted: a Space held in Phone arms the microphone through the cockpit's own handler, and is
+// bounded so.
+//
+// THE MICROPHONE (S6, the audio design's M1). A held PTT ARMS an over at the station and the
+// operator's voice keys it: a press with the microphone off keys nothing. The page offers an audio
+// line it only ever sends, Opus only, with no track on it until the operator turns the microphone
+// on - so the browser asks for nothing and sends nothing before that. Once on, the voice goes for
+// as long as the page has focus (a blurred window stops it, M8) and the station takes it only
+// while an over is armed (M5: no voice activation, ever). What the station's over is doing comes
+// back as `micState`.
 import { AudioLink, browserAudio, type AudioEnvironment } from './audio-listen'
 import {
-  STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS, STREAM_HELD_REASSERT_MS,
-  STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, parseHeld, parsePttState, parseReceivedMessage,
-  parseStreamInput, secureAnswer,
-  type BrowserStreamPayload, type OfferSignature, type StreamInput, type StreamWheel,
+  MIC_CONSTRAINTS, STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS,
+  STREAM_HELD_REASSERT_MS, STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, STREAM_UPLINK_BUDGET_BYTES,
+  STREAM_UPLINK_STALL_MS, parseHeld, parseMicState, parsePttState, parseReceivedMessage, parseStreamInput, secureAnswer,
+  type BrowserStreamPayload, type MicEnded, type OfferSignature, type StreamInput, type StreamWheel,
 } from './stream-protocol'
+
+/** The page's microphone. `asking` is the browser's permission prompt; `denied` and `unavailable`
+ *  are ends the operator is told about. */
+export type MicPhase = 'off' | 'asking' | 'on' | 'denied' | 'unavailable'
+/** What the station says its microphone over is doing (`micState`). */
+export type StationMic = { armed: boolean; keyed: boolean; noPowerOut: boolean; ended: MicEnded | null }
 
 /** What the operator is shown. Each is a different thing to do about it. */
 export type StreamPhase =
@@ -53,6 +68,15 @@ export type StreamView = {
   /** The station's word, on the last heartbeat reply, on whether it holds transmit presence for this
    *  session. Null until it has said. */
   presence: boolean | null
+  /** The page's microphone. */
+  mic: MicPhase
+  /** The browser kept processing on the microphone (echo cancellation, noise suppression or
+   *  automatic gain) although the page asked it not to. */
+  micProcessing: boolean
+  /** The station's microphone over, or null until it has said anything this stream. */
+  station: StationMic | null
+  /** The page let go of the over because its uplink backed up (M6), until the backlog clears. */
+  uplinkStalled: boolean
 }
 
 /** Stop, addressed as the station's own Stop is: its boot, the lease the token was issued under, and
@@ -70,12 +94,15 @@ export type ChannelLike = {
   onclose: (() => void) | null
   onmessage: ((event: { data: unknown }) => void) | null
 }
-export type TransceiverLike = { setCodecPreferences?: (codecs: CodecLike[]) => void }
+export type SenderLike = { replaceTrack: (track: unknown) => Promise<void> }
+export type TransceiverLike = { setCodecPreferences?: (codecs: CodecLike[]) => void; sender?: SenderLike }
+/** The microphone's track, as far as this link needs it. */
+export type MicTrackLike = { enabled: boolean; stop: () => void; getSettings?: () => Record<string, unknown> }
 export type CodecLike = { mimeType: string; clockRate: number; channels?: number; sdpFmtpLine?: string }
 export type CandidateLike = { candidate: string; sdpMid: string | null }
 export type ReceiverLike = { getSynchronizationSources?: () => { rtpTimestamp?: number }[] }
 export type PeerLike = {
-  addTransceiver: (kind: 'video', init: { direction: 'recvonly' }) => TransceiverLike
+  addTransceiver: (kind: 'video' | 'audio', init: { direction: 'recvonly' | 'sendonly' }) => TransceiverLike
   createDataChannel: (label: string, init: { ordered: boolean; maxRetransmits?: number }) => ChannelLike
   createOffer: () => Promise<{ type: string; sdp?: string }>
   setLocalDescription: (description: { type: string; sdp?: string }) => Promise<void>
@@ -100,6 +127,11 @@ export type StreamEnvironment = {
   /** The browser's VP8 codec entries (with the retransmission format that goes with them), or null
    *  where the browser cannot say - the offer then carries its defaults and the station picks VP8. */
   videoCodecs: () => CodecLike[] | null
+  /** The browser's Opus entry, or null where it cannot say. */
+  audioCodecs?: () => CodecLike[] | null
+  /** The microphone, asked for with the audio design's settings. Called only when the operator
+   *  turns the microphone on, so the browser's permission prompt appears then and never before. */
+  microphone?: (constraints: typeof MIC_CONSTRAINTS) => Promise<MicTrackLike>
   /** Wraps a lone track in a stream when the station's answer names none. */
   mediaStream: (track: unknown) => unknown
   audio: AudioEnvironment
@@ -112,6 +144,8 @@ export type StreamEnvironment = {
    *  leave them out; the real browser always has both. */
   document?: { readonly visibilityState: string; addEventListener: (type: string, f: () => void) => void; removeEventListener: (type: string, f: () => void) => void }
   window?: { addEventListener: (type: string, f: () => void) => void; removeEventListener: (type: string, f: () => void) => void }
+  /** Whether this page has the focus now (a microphone turned on sends only while it does). */
+  hasFocus?: () => boolean
 }
 
 /** One ICE server, no credentials: a direct connection first (the operator's pick, "Direct first,
@@ -122,7 +156,10 @@ export const STREAM_ICE_SERVERS = [{ urls: 'stun:stun.cloudflare.com:3478' }]
  *  is dropped rather than queued. Stop and a release are sent past it, always. */
 const CONTROL_BUDGET_BYTES = 16 * 1024
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-const OFF: StreamView = { phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null }
+const OFF: StreamView = {
+  phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null,
+  mic: 'off', micProcessing: false, station: null, uplinkStalled: false,
+}
 
 export class StreamLink {
   private view: StreamView = OFF
@@ -159,6 +196,13 @@ export class StreamLink {
   private closed = false
   /** Removes the hidden/pagehide/blur listeners; set while a stream is running. */
   private unwatchPage: (() => void) | undefined
+  /** The microphone's line and, while it is on, its track. */
+  private micSender: SenderLike | null = null
+  private micTrack: MicTrackLike | null = null
+  /** Whether the page has the focus: a microphone that is on sends only while it does (M8). */
+  private focused = true
+  /** Since when the `ptt` channel's send queue has stood over its budget (M6), or null. */
+  private backedUpSince: number | null = null
   /** Listening, from the `audio` channel. The existing WebCodecs player, unchanged: no NetEq. The
    *  station sends receive audio for the whole stream and the page is muted until the operator asks,
    *  so "listen" never leaves this page: it starts the player, and replays the station's last word
@@ -212,6 +256,12 @@ export class StreamLink {
       // knows is several times the size for nothing.
       const vp8 = this.env.videoCodecs()
       if (vp8?.length && transceiver.setCodecPreferences) transceiver.setCodecPreferences(vp8)
+      // The microphone's line (S6): sent only, Opus only (the station decodes nothing else), and
+      // empty until the operator turns the microphone on.
+      const mic = peer.addTransceiver('audio', { direction: 'sendonly' })
+      const opus = this.env.audioCodecs?.()
+      if (opus?.length && mic.setCodecPreferences) mic.setCodecPreferences(opus)
+      this.micSender = mic.sender ?? null
       const channel = (spec: { label: string; ordered: boolean; maxRetransmits?: number }) =>
         peer.createDataChannel(spec.label, { ordered: spec.ordered, ...(spec.maxRetransmits === undefined ? {} : { maxRetransmits: spec.maxRetransmits }) })
       this.channels = { control: channel(STREAM_CHANNELS.control), ptt: channel(STREAM_CHANNELS.ptt), audio: channel(STREAM_CHANNELS.audio) }
@@ -284,6 +334,29 @@ export class StreamLink {
     if (!target || control?.readyState !== 'open') return false
     try { control.send(JSON.stringify({ type: 'stopTransmit', requestId: this.env.uuid(), ...target })); return true }
     catch { return false }
+  }
+
+  /** Turn the page's microphone on or off. On is the only place the browser is asked for it, so its
+   *  permission prompt appears when the operator asks and at no other time. Off stops the track,
+   *  and the browser's own microphone indicator goes out with it. */
+  async setMic(on: boolean): Promise<void> {
+    if (!on) { this.micOff(); this.set({ mic: 'off', micProcessing: false }); return }
+    if (this.view.mic === 'asking' || this.view.mic === 'on') return
+    const sender = this.micSender, ask = this.env.microphone
+    if (!sender || !ask) { this.set({ mic: 'unavailable' }); return }
+    this.set({ mic: 'asking' })
+    let track: MicTrackLike
+    try { track = await ask(MIC_CONSTRAINTS) } catch { if (this.micSender === sender) this.set({ mic: 'denied' }); return }
+    // The stream ended, or the operator turned it off again, while the browser asked.
+    if (this.micSender !== sender || !this.micAsking()) { try { track.stop() } catch { /* already stopped */ } return }
+    this.micTrack = track
+    track.enabled = this.focused && !this.view.uplinkStalled
+    // A request that "succeeded" proves nothing: some browsers keep the processing on and say so
+    // only here. The operator is told; the audio still goes, because refusing it would be worse.
+    const settings = track.getSettings?.() ?? {}
+    const processing = settings.echoCancellation === true || settings.noiseSuppression === true || settings.autoGainControl === true
+    try { await sender.replaceTrack(track) } catch { this.micOff(); this.set({ mic: 'unavailable' }); return }
+    this.set({ mic: 'on', micProcessing: processing })
   }
 
   /** PTT pressed: a fresh hold id, re-asserted every STREAM_PTT_REASSERT_MS until released. The
@@ -391,6 +464,12 @@ export class StreamLink {
       else if (!state.keyed) this.set({ keyed: false })
       return
     }
+    if (message.type === 'micState') {
+      let state
+      try { state = parseMicState(message) } catch { return }
+      this.set({ station: { armed: state.armed, keyed: state.keyed, noPowerOut: state.noPowerOut, ended: state.ended ?? null } })
+      return
+    }
     if (message.type === 'operationResponse' && typeof message.requestId === 'string' && this.heartbeats.delete(message.requestId)) {
       // A refusal (the lease went) is presence lost; a value carries the station's own word.
       this.set({ presence: 'error' in message ? false : message.presence === true })
@@ -406,15 +485,57 @@ export class StreamLink {
     const doc = this.env.document, win = this.env.window
     const hidden = () => { if (doc?.visibilityState === 'hidden') this.end('streamHidden') }
     const leaving = () => this.end('streamHidden')
-    const blurred = () => this.releasePtt()
+    // M8: a window that loses focus lets go of PTT and stops its microphone; getting it back lets
+    // the microphone send again (the operator presses PTT again to talk).
+    const blurred = () => { this.releasePtt(); this.focus(false) }
+    const focused = () => this.focus(true)
+    this.focused = this.env.hasFocus?.() ?? true
     doc?.addEventListener('visibilitychange', hidden)
     win?.addEventListener('pagehide', leaving)
     win?.addEventListener('blur', blurred)
+    win?.addEventListener('focus', focused)
     this.unwatchPage = () => {
       doc?.removeEventListener('visibilitychange', hidden)
       win?.removeEventListener('pagehide', leaving)
       win?.removeEventListener('blur', blurred)
+      win?.removeEventListener('focus', focused)
     }
+  }
+  private focus(focused: boolean): void {
+    this.focused = focused
+    if (this.micTrack) this.micTrack.enabled = focused && !this.view.uplinkStalled
+  }
+  /** Read fresh: the browser's prompt is awaited, and the operator may have turned it off meanwhile. */
+  private micAsking(): boolean { return this.view.mic === 'asking' }
+  private micOff(): void {
+    const track = this.micTrack
+    this.micTrack = null
+    if (this.micSender) void this.micSender.replaceTrack(null).catch(() => {})
+    try { track?.stop() } catch { /* already stopped */ }
+  }
+  /** M6 over WebRTC. Every re-assertion of the over (a hold, the held keys) is a send on `ptt`; a
+   *  send queue that stays over its budget for STREAM_UPLINK_STALL_MS means the uplink has backed
+   *  up, and the voice queued behind it would reach the air late if it reached it at all. The page
+   *  lets go of the over and stops its microphone, and says so, until the queue drains. The
+   *  station's own 200 ms gap does not rely on any of this. */
+  private uplinkBackedUp(): boolean {
+    const ptt = this.channels?.ptt
+    if (!ptt || ptt.bufferedAmount <= STREAM_UPLINK_BUDGET_BYTES) {
+      this.backedUpSince = null
+      if (this.view.uplinkStalled) { this.set({ uplinkStalled: false }); if (this.micTrack) this.micTrack.enabled = this.focused }
+      return false
+    }
+    const now = this.env.now()
+    this.backedUpSince ??= now
+    if (now - this.backedUpSince < STREAM_UPLINK_STALL_MS) return false
+    if (!this.view.uplinkStalled) {
+      this.set({ uplinkStalled: true })
+      if (this.micTrack) this.micTrack.enabled = false
+      this.releasePtt()
+      this.heldSet = null
+      clearInterval(this.heldTimer); this.heldTimer = undefined
+    }
+    return true
   }
 
   private bindVideo(): void {
@@ -468,11 +589,13 @@ export class StreamLink {
     }
   }
   private sendHold(): void {
+    if (this.uplinkBackedUp()) return
     const press = this.press
     if (!press || !this.sendPtt({ type: 'pttHold', holdId: press.holdId, seq: press.seq })) { this.releasePtt(); return }
     press.seq = Math.min(press.seq + 1, 0xffffffff)
   }
   private sendHeld(): void {
+    if (this.uplinkBackedUp()) return
     const set = this.heldSet
     if (!set) return
     const message = { type: 'held', keys: set.keys, buttons: set.buttons, seq: this.heldSeq }
@@ -536,6 +659,7 @@ export class StreamLink {
     clearTimeout(this.flushTimer); this.flushTimer = undefined
     this.pendingMove = null; this.pendingWheel = null
     this.heartbeats.clear(); this.audioState = null
+    this.micOff(); this.micSender = null; this.backedUpSince = null
     this.audio.disconnected()
     const peer = this.peer, channels = this.channels
     this.peer = null; this.channels = null; this.media = null; this.receiver = null; this.frame = null
@@ -571,10 +695,22 @@ export function browserStream(): StreamEnvironment {
       // for a keyframe; without VP8 there is nothing to prefer and the browser keeps its defaults.
       return vp8.length ? [...vp8, ...codecs.filter(codec => codec.mimeType.toLowerCase() === 'video/rtx')] : null
     },
+    audioCodecs: () => {
+      const codecs = typeof RTCRtpSender !== 'undefined' ? RTCRtpSender.getCapabilities?.('audio')?.codecs : undefined
+      const opus = codecs?.filter(codec => codec.mimeType.toLowerCase() === 'audio/opus')
+      return opus?.length ? opus : null
+    },
+    microphone: async constraints => {
+      const media = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false })
+      const [track] = media.getAudioTracks()
+      if (!track) throw Error('noMicrophone')
+      return track as unknown as MicTrackLike
+    },
     mediaStream: track => new MediaStream([track as MediaStreamTrack]),
     audio: browserAudio(),
     uuid: () => crypto.randomUUID(),
     document: typeof document === 'undefined' ? undefined : document,
     window: typeof window === 'undefined' ? undefined : window,
+    hasFocus: () => typeof document === 'undefined' || document.hasFocus(),
   }
 }

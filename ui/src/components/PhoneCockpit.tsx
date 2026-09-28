@@ -62,6 +62,8 @@ import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
+  armStreamMic,
+  releaseStreamMic,
   setRfPower,
   setScopeSpan,
   setYaesuScopeMode,
@@ -79,6 +81,7 @@ import {
   setMonitorGain,
 } from '../api'
 import { pushToast } from '../toast'
+import { isStreamInput } from '../remote-native/stream-input'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { latestOnly } from '../remote-web/latest-only'
 import { RotorStrip } from './RotorStrip'
@@ -1022,6 +1025,25 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // reads the CURRENT TX-allowed privilege state through key() — not whatever existed when bound.
   const snapRef = useRef(snap)
   snapRef.current = snap
+  // A PRESS THROUGH THE REMOTE STREAM ARMS THE STREAMED OPERATOR'S MICROPHONE, never `set_ptt`
+  // (the operator's ruling "Arms your mic", 2026-09-27). `set_ptt` keys the rig on its own
+  // modulation source, which on SSB is the SHACK's microphone: the voice of an empty room, for
+  // the one operator who is not in it. The press is told apart by the stream dispatcher's mark
+  // (`isStreamInput`), true only while it is dispatching; the over it arms is keyed by their
+  // audio alone (the audio design's M1), and the page says so when their microphone is off.
+  // `micArmed` is whether THIS cockpit armed one; its release follows the arm in order (`micCall`),
+  // because the two are separate commands and a release that overtook its arm would leave an over
+  // armed with nobody holding it.
+  const micArmed = useRef(false)
+  const micChain = useRef<Promise<unknown>>(Promise.resolve())
+  const micCall = (call: () => Promise<unknown>) => {
+    micChain.current = micChain.current.then(call).catch(() => {})
+  }
+  const releaseMic = () => {
+    if (!micArmed.current) return
+    micArmed.current = false
+    micCall(releaseStreamMic)
+  }
   const key = (on: boolean) => {
     if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
@@ -1058,8 +1080,30 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         .catch(() => {})
       return
     }
+    if (on && isStreamInput()) {
+      // Lock refuses it: no hands-free microphone over from Remote (the audio design's M5). The
+      // Lock box itself stays operable, so a Lock left on at the shack can be unticked from here.
+      if (lock) {
+        pushToast(t('phone.tx.remoteLock'), 'info', 4000)
+        return
+      }
+      setKeyed(true)
+      micArmed.current = true
+      micCall(() =>
+        armStreamMic().then((armed) => {
+          // Refused at the station (another transmitter owner, presence gone): nothing is held.
+          if (!armed && micArmed.current) {
+            micArmed.current = false
+            setKeyed(false)
+          }
+        }),
+      )
+      return
+    }
     setKeyed(on)
     void setPtt(on)
+    // A release from either side lets go of both: the shack's key and the streamed over.
+    if (!on) releaseMic()
   }
   const onPttDown = () => {
     if (!control) return
@@ -1140,6 +1184,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
       void setPtt(false) // safety: never leave the rig keyed on unmount
+      releaseMic()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lock])
