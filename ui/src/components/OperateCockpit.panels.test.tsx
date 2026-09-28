@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
 import { TX_METERS_WHEN } from './TxMeters'
 import type { AppSnapshot } from '../types'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
+import { seamShares } from '../features/panelState'
 
 // The waterfall paints to a canvas jsdom does not implement, and it polls the spectrum
 // on a timer — stub it. The point of these cases is whether it MOUNTS at all.
@@ -321,3 +322,99 @@ describe('a directed CQ survives the after-logging DX clear', () => {
   })
 })
 
+
+// ── THE DIVIDERS (layout L1, PaneSeam) ──────────────────────────────────────────────────────
+// Operate has three: the waterfall's height, and one pane seam per layout — Band Activity /
+// Rx Frequency in Roster, the Rx-Frequency column / Stations in Classic. Each must be reachable
+// from the keyboard and say where it stands, not only drag. jsdom lays nothing out, so each case
+// gives the boxes it needs a size (CSS px at zoom 1) before the cockpit mounts.
+describe('Operate dividers answer the keyboard (PaneSeam)', () => {
+  function layOut(boxes: Record<string, { top?: number; left?: number; width?: number; height?: number }>) {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      for (const [sel, b] of Object.entries(boxes)) {
+        if (!this.matches(sel)) continue
+        const { top = 0, left = 0, width = 800, height = 0 } = b
+        return { top, left, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect
+      }
+      return real.call(this)
+    })
+  }
+  const body = () => document.querySelector<HTMLElement>('.cockpit-body')!
+  const key = (el: HTMLElement, k: string, shiftKey = false) => fireEvent.keyDown(el, { key: k, shiftKey })
+  beforeEach(() => localStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
+
+  it('the waterfall height: focusable, announces its value in CSS px, and steps, jumps and resets', () => {
+    layOut({ '.cockpit-body': { height: 600 } })
+    renderCockpit({})
+    const sep = screen.getByRole('separator', { name: 'waterfall height' })
+    expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
+    // 22 % of a 600 px body, inside the declared 88–420 px.
+    expect([sep.getAttribute('aria-valuenow'), sep.getAttribute('aria-valuemin'), sep.getAttribute('aria-valuemax')]).toEqual(['132', '88', '420'])
+    key(sep, 'ArrowDown')
+    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe(`${(148 / 600) * 100}%`)
+    expect(localStorage.getItem('nexus.split.operate.waterfall')).toBe(String((148 / 600) * 100))
+    expect(sep.getAttribute('aria-valuenow')).toBe('148')
+    key(sep, 'ArrowUp', true)
+    expect(sep.getAttribute('aria-valuenow')).toBe('88') // 148 − 64 = 84, floored at 88
+    key(sep, 'End')
+    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('70%') // 420 of 600
+    key(sep, 'Home')
+    expect(sep.getAttribute('aria-valuenow')).toBe('88')
+    key(sep, 'Backspace')
+    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('22%')
+    expect(localStorage.getItem('nexus.split.operate.waterfall')).toBe('22')
+    key(sep, 'End')
+    fireEvent.doubleClick(sep)
+    expect(body().style.getPropertyValue('--cockpit-wf-h'), 'a double-click puts the default back').toBe('22%')
+  })
+
+  it('a waterfall height stored by an earlier build opens where it was left — clamped, and the stored value kept', () => {
+    localStorage.setItem('nexus.split.operate.waterfall', '30')
+    layOut({ '.cockpit-body': { height: 600 } })
+    const first = renderCockpit({})
+    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('30%')
+    expect(screen.getByRole('separator', { name: 'waterfall height' }).getAttribute('aria-valuenow')).toBe('180')
+    first.unmount()
+    // A value legal on some taller window: applied at the cap here, and never rewritten.
+    localStorage.setItem('nexus.split.operate.waterfall', '90')
+    renderCockpit({})
+    expect(body().style.getPropertyValue('--cockpit-wf-h')).toBe('70%')
+    expect(localStorage.getItem('nexus.split.operate.waterfall')).toBe('90')
+  })
+
+  it('Roster: the Band Activity / Rx Frequency seam steps the shares from where the panes ARE, and resets to stock', () => {
+    // 300 : 200 on screen — the stock 1.6 : 1 shares are CSS defaults the record never saw, so the
+    // step has to start from the measured split, not from the record's 1 : 1.
+    layOut({ '.cockpit-decodes-side': { top: 100, height: 300 }, '.cockpit-rxfreq': { top: 408, height: 200 } })
+    const { panels } = renderCockpit({}, 'roster')
+    const sep = screen.getByRole('separator', { name: 'Band Activity / Rx Frequency' })
+    expect(sep.tabIndex).toBe(0)
+    expect([sep.getAttribute('aria-valuenow'), sep.getAttribute('aria-valuemin'), sep.getAttribute('aria-valuemax')]).toEqual(['60', '8', '93'])
+    key(sep, 'ArrowDown')
+    const [a, b] = seamShares(0.6 + 0.05)
+    expect(panels.setShares).toHaveBeenLastCalledWith({ bandActivity: a, rxfreq: b })
+    key(sep, 'ArrowLeft') // across the axis: not this divider's key
+    expect(panels.setShares).toHaveBeenCalledTimes(1)
+    key(sep, 'Backspace')
+    expect(panels.setShares, 'reset clears the pair back to the sheet defaults').toHaveBeenLastCalledWith({ bandActivity: null, rxfreq: null })
+  })
+
+  it('Classic: the Rx-Frequency column / Stations seam steps on the horizontal arrows and resets to stock', () => {
+    layOut({ '.cockpit-qsocol': { left: 400, width: 500, height: 400 }, '.cockpit-side': { left: 908, width: 300, height: 400 } })
+    const { panels } = renderCockpit({}, 'classic')
+    const sep = screen.getByRole('separator', { name: 'Rx Frequency column / Stations roster' })
+    expect(sep.tabIndex).toBe(0)
+    expect(sep.getAttribute('aria-orientation')).toBe('vertical')
+    expect(sep.getAttribute('aria-valuenow')).toBe('63') // 500 of 800
+    key(sep, 'ArrowRight')
+    const [a, b] = seamShares(0.625 + 0.05)
+    expect(panels.setShares).toHaveBeenLastCalledWith({ txmsgs: a, stations: b })
+    key(sep, 'End')
+    const [ea, eb] = seamShares(1)
+    expect(panels.setShares).toHaveBeenLastCalledWith({ txmsgs: ea, stations: eb })
+    fireEvent.doubleClick(sep)
+    expect(panels.setShares).toHaveBeenLastCalledWith({ txmsgs: null, stations: null })
+  })
+})

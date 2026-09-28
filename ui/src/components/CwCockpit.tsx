@@ -31,7 +31,8 @@ import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
-import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
+import { PaneSeam } from './PaneSeam'
+import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import {
   panelHost,
@@ -611,8 +612,6 @@ export function CwCockpit({
   // exactly when the operator wants to re-read a callsign that just scrolled
   // off. Pinned follows the copy; scrolled-up reading is never yanked.
   const decodePin = usePinnedScroll<HTMLDivElement>()
-  // Cockpit root: the scope-height splitter measures + writes its CSS var here.
-  const cockpitRef = useRef<HTMLElement>(null)
   // Decode sensitivity for the internal pitch decoder (now WPM-estimation + AI-off
   // fallback only — the slider left with the classic pane; the stored value still applies).
   const sensitivityRef = useRef<number>(
@@ -1453,7 +1452,7 @@ export function CwCockpit({
   )
 
   return (
-    <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef}>
+    <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -1801,10 +1800,10 @@ export function CwCockpit({
           interactive={details && (control || scopeClick.allowed) && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
         />
       </section>
-      {details && <Splitter
+      {details && <PaneSeam
         axis="y"
         varName="--cw-scope-h"
-        target={cockpitRef}
+        strip={scopeRef}
         storageKey="nexus.split.cw.scope"
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}

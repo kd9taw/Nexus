@@ -67,13 +67,13 @@ export function CockpitPaneFrame({
   fit?: 'content'
   /** Fill share among fill siblings, default 1 (CW gives DECODE 3). Ignored with fit. */
   weight?: number
-  /** The OPERATOR'S share for a fill pane that a SplitterSeam splits (the panel record's
+  /** The OPERATOR'S share for a fill pane that a PaneSeam splits (the panel record's
    *  `share`) — `weight`, carried as `--pane-share` on the frame itself so the seam can repaint
    *  it live mid-drag, and so the record's value (React's) is what stands after a release, a
    *  Reset or an Undo. Still a typed number from the host, never a size the pane declares.
    *  Omitted ⇒ `weight` alone, inline, exactly as before. Ignored with fit. */
   share?: number
-  /** The frame's own box, for a SplitterSeam to measure and repaint. Omitted ⇒ no ref. */
+  /** The frame's own box, for a PaneSeam to measure and repaint. Omitted ⇒ no ref. */
   paneRef?: Ref<HTMLElement>
   /** Tear this pane off into its own window (open_panel_window). Omitted ⇒ no button. */
   onPopOut?: () => void

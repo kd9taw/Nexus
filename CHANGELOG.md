@@ -146,6 +146,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   land, sea and coastlines take the theme's colours too; the light themes keep the usual dark map.
   Pick Light, Dark or System to go back. The theme is remembered per computer, and your backup carries it with the rest of
   the look.
+- **Every divider you can drag now also works from the keyboard.** This covers the dividers
+  under the scope in Phone and CW and under the waterfall in Operate, the one between Band
+  Activity and Rx Frequency (Roster) or between the Rx Frequency column and the Stations list
+  (Classic) in Operate, the one between Spots and Needed in Phone, and the two beside
+  Tempo's conversation. Tab reaches each divider, and a thin accent ring shows which one has
+  the keyboard. The arrow keys move it (hold Shift for a bigger step). Home and End take it to
+  either end, and Backspace or a double-click puts it back to where it started. A screen reader
+  says each divider's name and its position. The layouts you have saved open exactly where you
+  left them.
 
 ### Changed
 
@@ -347,6 +356,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (KE7G/P and KF7XYZ/P) are no longer taken for the same one. Clicking a station also tells your
   own call apart the same way, so an operator signing VE7/ followed by their call can work other
   VE7/ stations.
+- **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
+  divider could be dragged past the height the screen can actually give the scope. The extra
+  distance was dead: dragging back up moved nothing until the pointer had come all the way
+  back. Operate's waterfall divider did the same near its limit. In CW the divider jumped
+  ahead of the pointer as soon as you dragged it. Each of these dividers now stops exactly
+  where the scope or waterfall stops, and follows the pointer at any UI scale. The Tempo
+  dividers now follow the pointer when the UI scale is not 100 %. A saved scope or waterfall
+  height is fitted to the window whenever the window changes size, and when you first open
+  Operate after starting Nexus in another section.
+- **Tempo's side panels no longer squeeze the conversation out.** Panel widths saved on a wide
+  monitor, or panels dragged wide on a big window that was then made smaller, could leave the
+  conversation between the stations list and the waterfall with no width at all. The two
+  panels now always leave it at least 360 pixels, about a phone's width. When they have to
+  give way, the panel you moved last keeps its width. A double-click on one of these dividers
+  now resets only that panel; Reset layout still resets both.
 
 ### Corrections to 1.15.0
 

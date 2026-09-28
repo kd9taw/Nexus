@@ -130,7 +130,7 @@ word in, and use only that word in the CSV.
 | antenna | 30 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
 | cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 19 / 10 | The movable boxes inside a cockpit. | |
+| pane / panel | 18 / 11 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
 | exchange | 15 | The contest exchange. | |
