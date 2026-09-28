@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StreamLink } from './stream-link'
 import type { AudioEnvironment } from './audio-listen'
 import { parseHeld, parseReceivedMessage, parseStreamInput, secureAnswer } from './stream-protocol'
-import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, OFFER_SIGNATURE, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
 const TARGET = { stationBootId: stopCase.stationBootId as string, leaseId: LEASE, transmitEpoch: stopCase.transmitEpoch as string }
@@ -21,9 +21,41 @@ it('A3: without a lease it creates nothing and sends nothing; with one it offers
   // message it would put on the socket is exactly the contract's offer.
   await h.link.start(LEASE)
   expect(h.peers).toHaveLength(1)
-  expect(h.signals).toEqual([{ payload: { kind: 'offer', sdp: OFFER }, leaseId: LEASE }])
+  expect(h.signals).toEqual([{ payload: { kind: 'offer', sdp: OFFER, ...OFFER_SIGNATURE }, leaseId: LEASE }])
   expect({ type: 'streamSignal', leaseId: LEASE, payload: h.signals[0].payload }).toEqual(byName(SIGNAL.browserToRoom, 'offer'))
   expect(h.link.getSnapshot().phase).toBe('connecting')
+})
+
+it('A5: signs its offer with the device key when it can, and offers unsigned when it cannot - the station says why', async () => {
+  const signed = byName(SIGNAL.browserToRoom, 'offer'), unsigned = byName(SIGNAL.browserToRoom, 'offer from a browser without a device key (the station refuses it at admission)')
+  for (const [what, sign] of [['no device key at all', false], ['a key that cannot sign', async () => null], ['a signer that fails', async () => { throw Error('no key') }]] as const) {
+    const h = harness({ sign })
+    await h.link.start(LEASE)
+    expect({ type: 'streamSignal', leaseId: LEASE, payload: h.signals[0].payload }, what).toEqual(unsigned)
+    expect(h.link.getSnapshot().phase, what).toBe('connecting')
+  }
+  // What it signs is the offer it sends.
+  const seen: string[] = []
+  const h = harness({ sign: async () => { seen.push('signed'); return OFFER_SIGNATURE } })
+  await h.link.start(LEASE)
+  expect(seen).toEqual(['signed'])
+  expect({ type: 'streamSignal', leaseId: LEASE, payload: h.signals[0].payload }).toEqual(signed)
+})
+
+it('A5: a candidate found while the offer is being signed waits for it, so the station never hears one first', async () => {
+  let release: (value: { publicKey: string; signature: string }) => void = () => {}
+  const h = harness({ sign: () => new Promise(resolve => { release = resolve }) })
+  const starting = h.link.start(LEASE)
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+  const reflexive = byName(SIGNAL.browserToRoom, 'candidate (reflexive)').payload as { candidate: string; sdpMid: string }
+  h.peer.onicecandidate?.({ candidate: { candidate: reflexive.candidate, sdpMid: reflexive.sdpMid } })
+  expect(h.signals, 'nothing before the offer').toEqual([])
+  release(OFFER_SIGNATURE)
+  await starting
+  expect(h.signals.map(s => s.payload.kind)).toEqual(['offer', 'candidate'])
+  // And once the offer is out, a candidate goes at once.
+  h.peer.onicecandidate?.({ candidate: { candidate: reflexive.candidate, sdpMid: reflexive.sdpMid } })
+  expect(h.signals.map(s => s.payload.kind)).toEqual(['offer', 'candidate', 'candidate'])
 })
 
 it('offers VP8-only receive video and the contract\'s three channels, each with its own delivery', async () => {

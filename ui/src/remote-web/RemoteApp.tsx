@@ -1,10 +1,12 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { MonitorApp } from '../remote-monitor/MonitorApp'
 import { BrowserClient, HostedConnection, RemoteError } from './client'
 import { FeedWatch } from './FeedWatch'
 import { StreamView } from './StreamView'
+import { deviceKey } from './device-key'
+import { shortFingerprint } from './stream-protocol'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
 import './remote.css'
@@ -52,6 +54,10 @@ export function RemoteApp() {
   // other into edit mode. null means nobody is renaming.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
+  // A5: this browser's device key for each station it has a device on, by station: its fingerprint,
+  // shown beside the browser for the operator to compare with Nexus at the shack.
+  const [keys, setKeys] = useState<Record<string, string>>({})
+  const registered = useRef(new Set<string>())
 
   useEffect(() => {
     let active = true
@@ -81,6 +87,27 @@ export function RemoteApp() {
     return () => { active = false; clearInterval(interval) }
   }, [client, !!session, connection])
   useEffect(() => () => { connection?.stop() }, [connection])
+  // A5: the key is made the first time a station needs it (a browser approved before keys has none
+  // yet), and the service is sent it whenever it holds another or none: the station can only pin the
+  // key the service lists. Sending it leaves the approval alone; a key the station has not pinned is
+  // approved again at the radio. Silent: a refusal (an ended trial) leaves the stream refused by name.
+  useEffect(() => {
+    if (!client || !session) return
+    let active = true
+    for (const station of session.stations) {
+      const device = station.device
+      if (!device) continue
+      void deviceKey(station.id).then(async key => {
+        if (!active || !key) return
+        setKeys(current => current[station.id] === key.fingerprint ? current : { ...current, [station.id]: key.fingerprint })
+        const attempt = `${station.id}:${key.publicKey}`
+        if (device.publicKey === key.publicKey || registered.current.has(attempt)) return
+        registered.current.add(attempt)
+        await client.post(`stations/${station.id}/device`, { name: device.name, publicKey: key.publicKey }).catch(() => {})
+      })
+    }
+    return () => { active = false }
+  }, [client, session])
 
   async function act(work: () => Promise<void>) {
     if (busy) return
@@ -96,7 +123,10 @@ export function RemoteApp() {
   function open(stationId: string, application: boolean, stream: string | null = null) {
     // The stream rides the application socket: its signalling and the lease it is offered under
     // travel there.
-    const next = new HostedConnection(client!, stationId, application || stream !== null)
+    // A5: the stream's offer is signed with this browser's key for the station.
+    const device = session?.stations.find(station => station.id === stationId)?.device
+    const next = new HostedConnection(client!, stationId, application || stream !== null, undefined,
+      device ? { id: device.id, key: () => deviceKey(stationId) } : undefined)
     // A refused ticket is final: the trial ended mid-session, the station or this browser was
     // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
     // unavailable… check that Nexus is running", which blamed the shack. Go back to the account
@@ -265,6 +295,7 @@ export function RemoteApp() {
               : t('remote.thisBrowserApprovedUntil', { until: utcDate(station.device.expires_at) })}</p>}
             {station.device.expires_at !== undefined && (station.device.renewsUntil ?? station.device.expires_at) - session.serverNow <= APPROVAL_WARNING_MS &&
               <p className="rm-warning">{t('remote.thisBrowserApprovalEnding', { until: utcDate(station.device.renewsUntil ?? station.device.expires_at) })}</p>}
+            {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })}</p>}
             <div className="remote-actions">
             <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => open(station.id, true)}>{t('remote.openNexus')}</button>
             <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false)}>{t('remote.observe')}</button>
@@ -274,8 +305,15 @@ export function RemoteApp() {
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
               await client?.post(`stations/${station.id}/forget-device`); await refresh()
             })}>{t('remote.forgetBrowser')}</button>
-          </div></> : station.device ? <p role="status">{t('remote.awaitDevice')} <code>{station.device.id.slice(-6)}</code></p> : <form onSubmit={event => {
-            event.preventDefault(); void act(async () => { await client?.post(`stations/${station.id}/device`, { name: deviceName }); await refresh() })
+          </div></> : station.device ? <>
+            <p role="status">{t('remote.awaitDevice')} <code>{station.device.id.slice(-6)}</code></p>
+            {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })} {t('remote.thisBrowserKeyCheck')}</p>}
+          </> : <form onSubmit={event => {
+            // A5: the device is created with this browser's key, the one it will sign its streams with.
+            event.preventDefault(); void act(async () => {
+              const key = await deviceKey(station.id)
+              await client?.post(`stations/${station.id}/device`, { name: deviceName, ...(key ? { publicKey: key.publicKey } : {}) }); await refresh()
+            })
           }}>
             <label>{t('remote.browserName')}<input value={deviceName} maxLength={48} required onChange={event => setDeviceName(event.target.value)} /></label>
             <button className="remote-button remote-button--primary" disabled={busy || !entitled || !deviceName.trim()}>{t('remote.requestApproval')}</button>
@@ -317,7 +355,9 @@ export function RemoteApp() {
                 {/* Through act(), like every other service call here: outside it a refused attach
                     showed nothing at all and the rejection went unhandled. */}
                 <button type="button" className="remote-button remote-button--primary" disabled={busy} onClick={() => void act(async () => {
-                  await client?.post('pair/confirm', { id: session.pending!.id }); await refresh()
+                  // A5: the browser this confirm approves brings its key; the station is the enrollment.
+                  const key = await deviceKey(session.pending!.id)
+                  await client?.post('pair/confirm', { id: session.pending!.id, ...(key ? { publicKey: key.publicKey } : {}) }); await refresh()
                 })}>{t('remote.confirmAttach')}</button>
               </>}
           <p>{t('remote.accountMatch')} <code>{session.accountId}</code></p>

@@ -31,19 +31,24 @@ export const STREAM_CANDIDATE_CHARS = 512
 const MID = /^[A-Za-z0-9_-]{1,32}$/
 
 /** Why a stream is not running, in the station's words and the relay's (the contract's README). A
- *  page refuses anything else. The station sends the first seven, and `remoteOff` when it ends a
- *  stream the relay ended with `streamEnd` (Remote switched off by hand mid-stream); the relay says
- *  `streamUnavailable` for a station that never advertised the lane, and `serviceAccessExpired` and
- *  `tryLater` for refusals of its own, which the station never sends. */
+ *  page refuses anything else. The station sends the first seven, `remoteOff` when it ends a stream
+ *  the relay ended with `streamEnd` (Remote switched off by hand mid-stream), and the device-key
+ *  refusals (A5): `deviceNotPinned` for a browser it pinned no key for, `deviceKeyMismatch` for an
+ *  offer not signed by the pinned key; the relay says `streamUnavailable` for a station that never
+ *  advertised the lane, and `serviceAccessExpired` and `tryLater` for refusals of its own, which the
+ *  station never sends. */
 export const STREAM_STATE_REASONS = [
   'notController', 'streamDisabled', 'streamUnavailable', 'streamInUse', 'invalidOffer', 'connectionFailed', 'streamClosed',
-  'remoteOff', 'serviceAccessExpired', 'tryLater',
+  'remoteOff', 'deviceNotPinned', 'deviceKeyMismatch', 'serviceAccessExpired', 'tryLater',
 ] as const
 export type StreamStateReason = (typeof STREAM_STATE_REASONS)[number]
 
 export type StreamCandidate = { kind: 'candidate'; candidate: string; sdpMid: string }
-/** Page -> station. */
-export type BrowserStreamPayload = { kind: 'offer'; sdp: string } | StreamCandidate | { kind: 'close' }
+/** An offer's device-key binding (A5): the browser's public key and its signature, together. */
+export type OfferSignature = { publicKey: string; signature: string }
+/** Page -> station. An offer is signed with the browser's device key, or not at all (a page from
+ *  before the key): the station refuses an unsigned one at admission, by name. */
+export type BrowserStreamPayload = ({ kind: 'offer'; sdp: string } & (OfferSignature | Record<never, never>)) | StreamCandidate | { kind: 'close' }
 /** Station -> page. */
 export type StationStreamPayload = { kind: 'answer'; sdp: string } | StreamCandidate
 /** What the page sends. `leaseId` is its claim to station control; the station re-checks it
@@ -88,7 +93,14 @@ function kind(raw: unknown): string {
 
 export function parseBrowserPayload(raw: unknown): BrowserStreamPayload {
   const which = kind(raw)
-  if (which === 'offer') return { kind: 'offer', sdp: sdp(fields(raw, ['kind', 'sdp']).sdp) }
+  if (which === 'offer') {
+    // Signed, with both, or unsigned, with neither: never one without the other.
+    const signed = 'publicKey' in (raw as object) || 'signature' in (raw as object)
+    const v = fields(raw, signed ? ['kind', 'sdp', 'publicKey', 'signature'] : ['kind', 'sdp'])
+    if (!signed) return { kind: 'offer', sdp: sdp(v.sdp) }
+    if (!deviceKey(v.publicKey) || !lowerHex(v.signature, STREAM_SIGNATURE_HEX_CHARS)) throw Error('invalidStream')
+    return { kind: 'offer', sdp: sdp(v.sdp), publicKey: v.publicKey, signature: v.signature }
+  }
   if (which === 'candidate') return candidate(raw)
   if (which === 'close') { fields(raw, ['kind']); return { kind: 'close' } }
   throw Error('invalidStream')
@@ -131,6 +143,55 @@ export function parseReceivedMessage(raw: unknown): ReceivedStreamMessage {
   const value = fields(raw, ['type', 'payload'])
   if (value.type !== 'streamSignal') throw Error('invalidStream')
   return { type: 'streamSignal', payload: parseStationPayload(value.payload) }
+}
+
+// ── The device-key binding (A5) ───────────────────────────────────────────────────────────────────
+// The contract's README says what each of these is. The page signs its offer with a non-extractable
+// P-256 key; the station checks the signature against the key it pinned when the operator approved
+// this browser at the radio. These are the shapes and the signed bytes; the cryptography is WebCrypto's.
+
+/** A device key: the SPKI DER of a P-256 public key, as lowercase hex. */
+export const STREAM_DEVICE_KEY_HEX_CHARS = 182
+export const P256_SPKI_PREFIX_HEX = '3059301306072a8648ce3d020106082a8648ce3d030107034200'
+/** An offer's signature: ECDSA P-256 over SHA-256, IEEE P1363 r||s (64 bytes), as lowercase hex. */
+export const STREAM_SIGNATURE_HEX_CHARS = 128
+/** What the signed bytes begin with, so a signature made for this is never one for anything else. */
+export const OFFER_BINDING_LABEL = 'nexus-stream-offer/1'
+
+function lowerHex(value: unknown, chars: number): value is string {
+  return typeof value === 'string' && value.length === chars && /^[0-9a-f]*$/.test(value)
+}
+function deviceKey(value: unknown): value is string {
+  return lowerHex(value, STREAM_DEVICE_KEY_HEX_CHARS) && value.startsWith(`${P256_SPKI_PREFIX_HEX}04`)
+}
+export function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+}
+/** The offer's DTLS certificate fingerprint: the 32 bytes of its `a=fingerprint:sha-256` value, which
+ *  every such line must carry alike (a browser writes one per media section). Null when there is
+ *  none, when they disagree, or when one is not 32 colon-separated hex bytes. */
+export function offerFingerprint(description: string): Uint8Array | null {
+  let found: string | null = null
+  for (const line of description.split(/\r\n|\n/)) {
+    const value = line.trim().match(/^a=fingerprint:(\S+) (.+)$/)
+    if (!value || value[1].toLowerCase() !== 'sha-256') continue
+    const digest = value[2].trim().toLowerCase()
+    if (!/^[0-9a-f]{2}(:[0-9a-f]{2}){31}$/.test(digest)) return null
+    if (found !== null && found !== digest) return null
+    found = digest
+  }
+  return found === null ? null : Uint8Array.from(found.split(':'), pair => parseInt(pair, 16))
+}
+/** A device key's fingerprint (SHA-256 of its SPKI, lowercase hex) as both ends show it beside the
+ *  browser's name, for the operator to compare: its first eight bytes, four groups of four. */
+export function shortFingerprint(fingerprint: string): string {
+  return (fingerprint.slice(0, 16).toUpperCase().match(/.{1,4}/g) ?? []).join(' ')
+}
+/** The bytes an offer's signature covers: the label, SHA-256 of the fingerprint (the caller hashes),
+ *  and the station, device and session ids as the relay stamps them - 160 bytes. */
+export function offerBinding(fingerprintDigest: Uint8Array, stationId: string, deviceId: string, sessionId: string): Uint8Array {
+  const text = new TextEncoder()
+  return new Uint8Array([...text.encode(OFFER_BINDING_LABEL), ...fingerprintDigest, ...text.encode(stationId), ...text.encode(deviceId), ...text.encode(sessionId)])
 }
 
 /** Every media section's transport a stream may use, per the contract: SRTP keyed by DTLS for the

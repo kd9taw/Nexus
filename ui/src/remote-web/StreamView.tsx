@@ -145,6 +145,9 @@ function ended(reason: string | null): string {
     : reason === 'streamDisabled' ? t('remote.stream.ended.disabled')
     : reason === 'streamInUse' ? t('remote.stream.ended.inUse')
     : reason === 'invalidOffer' ? t('remote.stream.ended.invalidOffer')
+    // A5: the station holds the offer to this browser's key, as pinned when it was approved there.
+    : reason === 'deviceNotPinned' ? t('remote.stream.ended.notPinned')
+    : reason === 'deviceKeyMismatch' ? t('remote.stream.ended.keyChanged')
     : reason === 'insecureAnswer' ? t('remote.stream.ended.insecure')
     : reason === 'streamUnsupported' ? t('remote.stream.ended.unsupported')
     : reason === 'streamHidden' ? t('remote.stream.ended.hidden')

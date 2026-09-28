@@ -13,6 +13,7 @@ import { APPLICATION_MAX_BYTES } from './application-protocol'
 import { AudioLink, browserAudio } from './audio-listen'
 import { StreamLink, browserStream, type StreamEnvironment } from './stream-link'
 import { STREAM_SIGNAL_BYTES } from './stream-protocol'
+import { signOffer, type DeviceKey } from './device-key'
 
 export type AccountSession = {
   accountId: string
@@ -24,7 +25,9 @@ export type AccountSession = {
   /** `expires_at` is when this browser's approval ends unless it is used again; `renewsUntil` is the end
    *  that use cannot move, or null for an approval that never renews. */
   stations: { id: string; name: string; device: { id: string; name: string; approved: number
-    generation?: number; expires_at?: number; renewsUntil?: number | null } | null }[]
+    generation?: number; expires_at?: number; renewsUntil?: number | null
+    /** A5: the device key the service holds for this browser (SPKI hex), or null. */
+    publicKey?: string | null } | null }[]
   /** A code this account has claimed that the shack has not approved yet, or null. Durable on the
    *  server, so the waiting-for-approval state survives a reload instead of living in component
    *  state that a refresh throws away. Never carries the pairing credentials. */
@@ -234,8 +237,11 @@ export class HostedConnection {
    *  without this the page kept showing a workspace that could never come back. */
   onRefused: ((error: RemoteError) => void) | null = null
 
+  /** `device` is this browser's device for the station, and its key (A5): the stream's offer is
+   *  signed with it for this session. Without one the offer goes unsigned and the station refuses it
+   *  by name. */
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false,
-    streamEnvironment: StreamEnvironment = browserStream()) {
+    streamEnvironment: StreamEnvironment = browserStream(), device?: { id: string; key: () => Promise<DeviceKey | null> }) {
     this.application = new ApplicationClient(message => {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
@@ -260,7 +266,12 @@ export class HostedConnection {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN
         || this.socket.bufferedAmount + new TextEncoder().encode(text).length > STREAM_SIGNAL_BYTES) throw new RemoteError(503)
       this.socket.send(text)
-    }, streamEnvironment)
+    }, { ...streamEnvironment, signOffer: streamEnvironment.signOffer ?? (device && (async sdp => {
+      // The session this offer is made in: the relay stamps its id on the offer, and the station
+      // checks the signature against it.
+      const key = await device.key(), sessionId = this.sessionId
+      return key && sessionId ? signOffer(key, sdp, stationId, device.id, sessionId) : null
+    })) })
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)

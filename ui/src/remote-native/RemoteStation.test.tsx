@@ -216,6 +216,48 @@ it('shows each browser approval expiry, and warns and offers approval again in i
   expect(within(phone).getByRole('button', { name: 'Revoke browser approval' })).toBeTruthy()
 })
 
+// A5: the operator compares the browser's key with the one the browser shows, and approving pins the
+// key the station showed. The fingerprints here are random hex of the right shape, not keys.
+it('shows each browser key beside its name, approves with the key shown, and asks again for a key not pinned here', async () => {
+  const day = 86400000, now = Date.now()
+  const fingerprint = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
+  const short = (hex: string) => hex.slice(0, 16).toUpperCase().match(/.{4}/g)!.join(' ')
+  const waiting = crypto.randomUUID(), unpinned = crypto.randomUUID(), pinned = crypto.randomUUID(), keyless = crypto.randomUUID()
+  const keys = { [waiting]: fingerprint(), [unpinned]: fingerprint(), [pinned]: fingerprint() }
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
+    devices: [
+      { id: waiting, name: 'New browser', approved: 0, expiresAt: now + 600000, key: keys[waiting] },
+      // Approved before keys, or back with a new key: the service lists a key this station has not pinned.
+      { id: unpinned, name: 'Laptop', approved: 1, expiresAt: now + 30 * day, generation: 2, renewsUntil: now + 80 * day, key: keys[unpinned] },
+      { id: pinned, name: 'Phone', approved: 1, expiresAt: now + 30 * day, generation: 2, renewsUntil: now + 80 * day, key: keys[pinned] },
+      // No key listed yet: nothing to pin, so nothing to ask.
+      { id: keyless, name: 'Tablet', approved: 1, expiresAt: now + 30 * day, generation: 2, renewsUntil: now + 80 * day },
+    ], pinnedDevices: [pinned] }
+  const actions: RemoteStationAction[] = []
+  const invoke = async (command: string, input?: unknown) => {
+    if (command === 'get_remote_station_status') return status
+    if (command !== 'remote_station_action') throw new Error('unexpectedCommand')
+    actions.push((input as { action: RemoteStationAction }).action)
+    return status
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  for (const id of [waiting, unpinned, pinned]) expect((await card(id)).textContent).toContain(`Key ${short(keys[id])}`)
+  expect((await card(keyless)).textContent).not.toContain('Key ')
+  const notice = 'can’t stream until you approve it again here'
+  expect((await card(unpinned)).textContent).toContain(notice)
+  for (const id of [pinned, keyless]) {
+    expect((await card(id)).textContent).not.toContain(notice)
+    expect(within(await card(id)).queryByRole('button', { name: 'Approve again' })).toBeNull()
+  }
+  fireEvent.click(within(await card(waiting)).getByRole('button', { name: 'Approve browser' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: keys[waiting] }))
+  fireEvent.click(within(await card(unpinned)).getByRole('button', { name: 'Approve again' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: unpinned, approve: true, transmit: false, key: keys[unpinned] }))
+})
+
 function offerHarness(options: { failLaunchAtLogin?: boolean } = {}) {
   const settings = { launchAtLogin: false, remoteAutostartOfferAnswered: false }
   let status: RemoteStationStatus = { phase: 'disabled', origin: 'https://remote-staging.hamradiotools.io',

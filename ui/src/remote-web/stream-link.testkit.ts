@@ -21,6 +21,8 @@ export const byName = (list: ContractCase[], name: string): Record<string, unkno
 /** The contract's own lease, offer and answer: what a page and str0m actually exchange. */
 export const LEASE = byName(SIGNAL.browserToRoom, 'offer').leaseId as string
 export const OFFER = (byName(SIGNAL.browserToRoom, 'offer').payload as { sdp: string }).sdp
+/** The contract's signed offer's key and signature: placeholders of the right shape, not key material. */
+export const OFFER_SIGNATURE = (({ publicKey, signature }) => ({ publicKey, signature }))(byName(SIGNAL.browserToRoom, 'offer').payload as { publicKey: string; signature: string })
 export const ANSWER = (byName(SIGNAL.roomToBrowser, 'answer').payload as { sdp: string }).sdp
 export const FINGERPRINT = ANSWER.split('\r\n').find(line => line.startsWith('a=fingerprint:'))!
 export const last = <T,>(items: readonly T[]): T | undefined => items[items.length - 1]
@@ -78,7 +80,7 @@ export const silentAudio: AudioEnvironment = {
   context: () => Promise.resolve({ sampleRate: 48000, push: () => {}, reset: () => {}, close: () => Promise.resolve() }),
   decoder: () => ({ configure: () => {}, decode: () => {}, close: () => {} }),
 }
-export function harness(options: { codecs?: boolean; peerThrows?: boolean } = {}) {
+export function harness(options: { codecs?: boolean; peerThrows?: boolean; sign?: false | (() => Promise<{ publicKey: string; signature: string } | null>) } = {}) {
   let clock = 1000
   const peers: FakePeer[] = []
   const signals: { payload: BrowserStreamPayload; leaseId: string }[] = []
@@ -90,6 +92,8 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean } = {}
     mediaStream: track => ({ wrapped: track }),
     audio: silentAudio,
     uuid: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
+    // A5: signs as the contract's offer is signed, unless a test asks otherwise.
+    signOffer: options.sign === false ? undefined : options.sign ?? (async () => OFFER_SIGNATURE),
   }
   const link = new StreamLink((payload, leaseId) => signals.push({ payload, leaseId }), env)
   const video = new FakeVideo()

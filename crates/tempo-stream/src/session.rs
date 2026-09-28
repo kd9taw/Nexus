@@ -31,9 +31,10 @@
 //!   handed out.
 //! - **The page's certificate must match its offer.** str0m verifies the peer's DTLS certificate
 //!   against the offer's fingerprint by default; [`Session::accept`] asserts that default rather than
-//!   assuming it. The device-key binding (security test A5, a later piece) signs that same
-//!   fingerprint, read with [`crate::offer::fingerprint`], and its check slots in between admission
-//!   and `accept`.
+//!   assuming it. The device-key binding (security test A5) signs that same fingerprint, read with
+//!   [`crate::protocol::offer_fingerprint`]: the station checks the signature at admission, before
+//!   `accept`, and once DTLS is up holds [`Session::remote_fingerprint`], the certificate the page
+//!   actually presented, against the one it signed.
 //! - **Control must be reliable and ordered.** A `control` channel opened any other way is not used:
 //!   a Stop that the channel is allowed to drop is not a Stop.
 use std::net::SocketAddr;
@@ -365,6 +366,18 @@ impl Session {
         self.connected && !self.closed
     }
 
+    /// The SHA-256 fingerprint of the certificate the page's DTLS actually presented, once the
+    /// handshake has one: what A5 holds against the fingerprint the page signed. `None` before
+    /// that, and for any other hash.
+    pub fn remote_fingerprint(&mut self) -> Option<[u8; 32]> {
+        let api = self.rtc.direct_api();
+        let fingerprint = api.remote_dtls_fingerprint()?;
+        if !fingerprint.hash_func.eq_ignore_ascii_case("sha-256") {
+            return None;
+        }
+        fingerprint.bytes.as_slice().try_into().ok()
+    }
+
     pub fn is_closed(&self) -> bool {
         self.closed
     }
@@ -686,6 +699,29 @@ mod tests {
                 eprintln!("page events: {:?}", page.events);
             }
             (page, station, answer, line, mid)
+        }
+
+        /// A5, after DTLS: the station reads the certificate the page actually presented, which is
+        /// the page's own (the one its offer carries and it signed). CONTROL: before DTLS there is
+        /// no certificate to read.
+        #[test]
+        fn the_page_certificate_is_read_once_dtls_is_up() {
+            let now = Instant::now();
+            let (_page, offer, _pending) = page(now);
+            let (mut unconnected, _) = Session::accept(&offer, BASE.parse().unwrap(), now).unwrap();
+            assert_eq!(
+                unconnected.remote_fingerprint(),
+                None,
+                "no certificate before DTLS"
+            );
+            let mut now = now;
+            let (mut page, mut station, _, _) = connect(&mut now);
+            assert!(station.is_connected(), "the session never connected");
+            let presented = page.rtc.direct_api().local_dtls_fingerprint().bytes.clone();
+            assert_eq!(
+                station.remote_fingerprint().map(|f| f.to_vec()),
+                Some(presented)
+            );
         }
 
         /// ★ A3's positive control: the same offer that admission refuses without a lease is

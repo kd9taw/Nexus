@@ -831,6 +831,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(offers.length,1,'one offer, under the lease the station issued')
         const heldLease=await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c)return c.operations.getSnapshot().state?.leaseId;f=f.return}return null})()`)
         assert.equal(offers[0].leaseId,heldLease,'A3: the offer carries the lease this browser holds')
+        // A5 in real Chrome: the offer carries the key this browser made and registered with its device,
+        // and a signature over the offer's own DTLS fingerprint and the ids the relay stamps. The station's
+        // check is Rust's (ring); this proves the page's half end to end, against the signed bytes built
+        // again here from the contract's README. The private half is a non-extractable key in IndexedDB.
+        const signed=offers[0].payload
+        assert.equal(signed.publicKey,(await app.db.prepare('SELECT public_key FROM devices WHERE id=?').bind(device.id).first()).public_key,'A5: the offer carries the key this browser registered with its device')
+        const fingerprint=signed.sdp.split('\r\n').find(line=>line.startsWith('a=fingerprint:sha-256 ')).slice(22).split(':').map(pair=>parseInt(pair,16))
+        const hashed=new Uint8Array(await crypto.subtle.digest('SHA-256',Uint8Array.from(fingerprint)))
+        const bound=session=>Uint8Array.from([...new TextEncoder().encode('nexus-stream-offer/1'),...hashed,...new TextEncoder().encode(pair.stationId+device.id+session)])
+        const verifyKey=await crypto.subtle.importKey('spki',Buffer.from(signed.publicKey,'hex'),{name:'ECDSA',namedCurve:'P-256'},false,['verify'])
+        const verifies=session=>crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},verifyKey,Buffer.from(signed.signature,'hex'),bound(session))
+        assert.equal(await verifies(offers[0].sessionId),true,'A5: the signature verifies for this station, device and session')
+        assert.equal(await verifies(crypto.randomUUID()),false,'control: it does not verify for another session')
+        assert.deepEqual(await evaluate(`new Promise(done=>{const open=indexedDB.open('nexus-remote-device-keys');open.onsuccess=()=>{const got=open.result.transaction('keys').objectStore('keys').get(${JSON.stringify(pair.stationId)});got.onsuccess=()=>done({type:got.result?.privateKey?.type,extractable:got.result?.privateKey?.extractable})}})`),{type:'private',extractable:false},'A5: the private half is a non-extractable key in IndexedDB')
         // S9: the heartbeat names the frame the page actually presented, in the station's RTP clock.
         await untilShack(`__shack.received.control.some(m=>m.type==='heartbeat'&&Number.isInteger(m.decodedFrameAt))`)
         assert.deepEqual(await atShack(`Object.keys(__shack.received.control.find(m=>m.type==='heartbeat')).sort()`),['decodedFrameAt','leaseId','requestId','type'])

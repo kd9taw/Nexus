@@ -40,7 +40,11 @@ Signalling rides the relay sockets that already exist. The page offers and the s
 
 Payloads carry `kind`:
 
-- page → station: `offer { sdp }`, `candidate { candidate, sdpMid }`, `close {}`.
+- page → station: `offer { sdp, publicKey, signature }`, `candidate { candidate, sdpMid }`,
+  `close {}`. The offer is signed with the browser's device key (A5, below). `publicKey` and
+  `signature` come together or not at all: an offer without them parses (a page from before the
+  device key), and the station refuses it at admission, by name, rather than at its parser, which
+  would close the whole control socket.
 - station → page: `answer { sdp }`, `candidate { candidate, sdpMid }`.
 
 `leaseId` is the page's claim to station control. The station admits an offer only for a
@@ -50,8 +54,9 @@ before any WebRTC state exists. A lapsed lease or a revoked device ends the stre
 `streamState.reason` is one of a fixed set, and a page must refuse anything else:
 
 - from the station: `notController`, `streamDisabled`, `streamUnavailable`, `streamInUse`,
-  `invalidOffer`, `connectionFailed`, `streamClosed`, and `remoteOff` when it is ending a stream
-  the relay ended (below);
+  `invalidOffer`, `connectionFailed`, `streamClosed`, `remoteOff` when it is ending a stream
+  the relay ended (below), and the two device-key refusals `deviceNotPinned` and
+  `deviceKeyMismatch` (A5, below);
 - from the relay alone, which the station never sends: `serviceAccessExpired` (the account's
   command entitlement has lapsed: the relay holds the offer) and `tryLater` (the page is over the
   relay's signalling budget).
@@ -68,6 +73,58 @@ transmission halts on the radio loop's next poll, tears the session down, and se
 `streamState` with the same reason. A `streamEnd` for a session that is not streaming changes
 nothing.
 
+### Binding a stream to the approved browser (A5)
+
+The relay stamps `sessionId` and `deviceId`, so on its word alone a compromised relay could offer
+a stream as any approved browser. The offer is therefore signed by the browser itself, with a key
+the station pinned when the operator approved that browser at the radio.
+
+- **The key.** Each browser holds one ECDSA P-256 key pair per station, made with WebCrypto when it
+  first needs it: when it confirms a pairing, asks the station for approval, or finds itself
+  approved with no key. The private key is non-extractable and never leaves the browser
+  (it lives in IndexedDB as a `CryptoKey`). `publicKey` is the public half as its SPKI DER, in
+  lowercase hex: always **182** characters, the fixed P-256 prefix
+  `3059301306072a8648ce3d020106082a8648ce3d030107034200` then `04` and the 64-byte point.
+- **The pin.** The station pins `SHA-256(SPKI DER)` for that browser when the operator approves it
+  at the radio, and both ends show the same short form of it beside the browser's name: its first
+  8 bytes as four groups of four uppercase hex digits (`3F2A 9C1B 77E0 4D12`). That comparison is
+  the human check that the key the station pins is the browser's own and not one the service
+  substituted.
+- **The signature.** `signature` is ECDSA P-256 with SHA-256 over these 160 bytes, as the IEEE
+  P1363 `r‖s` WebCrypto produces (64 bytes), in lowercase hex (**128** characters):
+
+      "nexus-stream-offer/1" (20 bytes of ASCII)
+      ‖ SHA-256(fp)          (32 bytes)
+      ‖ stationId ‖ deviceId ‖ sessionId   (each the 36-character lowercase UUID)
+
+  `fp` is the offer's own DTLS certificate fingerprint: the 32 bytes of its `a=fingerprint:sha-256`
+  value. Every such line in the offer must carry the same value (a browser writes one per media
+  section); an offer whose lines disagree is `invalidOffer`. The ids are the ones the relay stamps
+  and the station's own; the page learns its `sessionId` from the socket's `session` message.
+- **What the station checks, at admission, before any WebRTC state exists:** that it pinned a key
+  for this browser (else `deviceNotPinned`: a browser approved before keys existed is approved
+  again at the radio, once); that the offer is signed, that `SHA-256(publicKey)` is that pin and
+  that the signature holds (else `deviceKeyMismatch`). **After the DTLS handshake:** that the
+  certificate the page presented has the signed fingerprint (else the session ends
+  `deviceKeyMismatch` before any input or PTT is admitted).
+- **The key's way to the station** (outside these files; the service's device routes): the page
+  sends `publicKey` in its device request's body (`POST stations/:id/device`, beside `name`), and in
+  its pairing confirm (`POST pair/confirm`, beside `id`), which the approval gives the browser it
+  approves. The service checks it is a P-256 point and stores it. A browser already approved sends
+  its key the same way (a browser approved before keys existed, or one whose key changed). The
+  service stores it and leaves the approval alone. The station's pin still holds the old key or
+  none, so it refuses that browser's streams until the operator approves it again at the radio.
+  `native/devices` lists each browser's `publicKey`, or `null` for one that has none, only to a
+  station that sends `x-nexus-device-key: 1`. An older Nexus parses that list with
+  `deny_unknown_fields`, so it must never see the field. The pairing approval's `device` carries
+  it by name.
+- **Order.** The page holds its candidates while it signs the offer and sends them straight after
+  it, so the relay forwards one session's signals in the order they were sent. An offer that waits
+  on the service's entitlement check holds back the candidates behind it.
+
+The fixtures carry the shape only: their `publicKey` has the right prefix and length but is not a
+point on the curve, and their `signature` is not a signature. No key material is in these files.
+
 ### Bounds
 
 - The station's control socket closes on any frame over 8,192 bytes, which would drop the whole
@@ -76,7 +133,8 @@ nothing.
   video transceiver to VP8 (`setCodecPreferences`), and the mic transceiver to Opus when it
   exists.
 - An SDP is at most **6,144 bytes**; a candidate string at most **512**; `sdpMid` at most 32
-  characters from `[A-Za-z0-9_-]`.
+  characters from `[A-Za-z0-9_-]`; an offer's `publicKey` exactly 182 and its `signature` exactly
+  128 lowercase hex characters.
 - The station refuses an offer that is not DTLS-SRTP (no `a=fingerprint:sha-256`, or any media
   line on a profile other than `UDP/TLS/RTP/SAVPF` or `UDP/DTLS/SCTP`), that has no VP8 video
   line the page can receive, or that has no data channel. It answers `invalidOffer`.

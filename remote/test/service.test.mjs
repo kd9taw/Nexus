@@ -781,6 +781,112 @@ test('renewal never touches an older Nexus approval or a waiting browser; re-app
   assert.ok(revoked.expires_at <= Date.now() && revoked.generation === again.generation + 1)
 })
 
+// The browser's device key (security review M1; the stream's A5). The page holds a non-extractable
+// ECDSA P-256 key and sends only its public half, as SPKI in hex, when it asks for a device or
+// confirms a pairing. The station pins its SHA-256 when the operator approves the browser at the
+// radio; this side stores it, lists it to a Nexus that asks, and refuses anything that is not a
+// P-256 point. Every key here is made at run time and never written down.
+const DEVICE_KEY = { 'x-nexus-device-key': '1' }
+const P256_SPKI_PREFIX = '3059301306072a8648ce3d020106082a8648ce3d030107034200'
+const publicHex = async curve => {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: curve }, false, ['sign', 'verify'])
+  return Buffer.from(await crypto.subtle.exportKey('spki', pair.publicKey)).toString('hex')
+}
+const storedKey = async id => (await app.db.prepare('SELECT public_key FROM devices WHERE id=?').bind(id).first()).public_key
+test('A5: a device key must be a P-256 point; a valid one is stored, and listed only to a Nexus that asks', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const key = await publicHex('P-256')
+  assert.equal(key.length, 182)
+  // Refused, and nothing is created: not hex, uppercase, a byte short, a byte long, a point that is
+  // not on the curve (the shape is right, the curve check is what refuses it), the wrong curve, and
+  // not a string at all. Then one far too large to read.
+  const refused = ['', 'zz', key.toUpperCase(), key.slice(0, -2), `${key}00`, `${P256_SPKI_PREFIX}04${'01'.repeat(64)}`,
+    await publicHex('P-384'), 42, null]
+  for (const publicKey of refused) {
+    const { value } = await pair.browser.post(`${path}/device`, { name: 'Refused browser', publicKey }, 400)
+    assert.equal(value.error, 'invalidRequest', String(publicKey))
+  }
+  await pair.browser.post(`${path}/device`, { name: 'Refused browser', publicKey: 'a'.repeat(5000) }, 413)
+  assert.equal((await app.db.prepare("SELECT COUNT(*) AS n FROM devices WHERE name='Refused browser'").first()).n, 0)
+
+  // CONTROL: a real P-256 key is stored with the device it was sent with.
+  const { value: created, response } = await pair.browser.post(`${path}/device`, { name: 'Keyed browser', publicKey: key })
+  pair.browser.setCookie(response.headers.get('set-cookie'))
+  assert.equal(await storedKey(created.deviceId), key)
+  const listed = async headers => (await pair.native.post(`${path}/native/devices`, {}, 200, headers)).value.devices
+    .find(d => d.id === created.deviceId)
+  // A Nexus that asks sees it, alongside the lifetime fields when it asks for those too.
+  assert.equal((await listed(DEVICE_KEY)).publicKey, key)
+  assert.deepEqual(Object.keys(await listed({ ...LIFETIME, ...DEVICE_KEY })).sort(),
+    ['approved', 'expiresAt', 'generation', 'id', 'name', 'publicKey', 'renewsUntil'])
+  // One that does not never does: 1.13 and older parse this list with deny_unknown_fields.
+  assert.deepEqual(Object.keys(await listed({})).sort(), ['approved', 'expiresAt', 'id', 'name'])
+  assert.deepEqual(Object.keys(await listed(LIFETIME)).sort(), ['approved', 'expiresAt', 'generation', 'id', 'name', 'renewsUntil'])
+  // The page reads its own key back, to know the service holds the one it signs with.
+  const { value: session } = await pair.browser.post('session')
+  assert.equal(session.stations.find(s => s.id === pair.stationId).device.publicKey, key)
+})
+
+test('A5: a browser approved before it had a key registers one, and a new key replaces it without touching the approval', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const deviceId = await app.approved(pair)
+  const before = await deviceRow(deviceId)
+  assert.equal(before.approved, 1)
+  assert.equal(await storedKey(deviceId), null, 'approved the way every browser was before the key')
+  const key = await publicHex('P-256')
+  const { value } = await pair.browser.post(`${path}/device`, { name: 'Not a rename', publicKey: key })
+  assert.deepEqual(value, { deviceId, approved: true })
+  assert.equal(await storedKey(deviceId), key)
+  assert.deepEqual(await deviceRow(deviceId), before, 'the approval, its generation and its lifetime are untouched')
+  // A browser that lost its stored key comes back with a new one. The station's pin, not this row,
+  // decides whether it can stream: the operator approves it again at the radio.
+  const next = await publicHex('P-256')
+  await pair.browser.post(`${path}/device`, { name: 'Not a rename', publicKey: next })
+  assert.equal(await storedKey(deviceId), next)
+  assert.deepEqual(await deviceRow(deviceId), before)
+  // A refused key changes nothing, and a page that sends none (the old page) leaves the key alone.
+  await pair.browser.post(`${path}/device`, { name: 'Not a rename', publicKey: `${P256_SPKI_PREFIX}04${'01'.repeat(64)}` }, 400)
+  await pair.browser.post(`${path}/device`, { name: 'Not a rename' })
+  assert.equal(await storedKey(deviceId), next)
+  // Someone else's browser, holding no credential for this device, cannot put a key on it.
+  const other = app.client(pair.browser.jwt)
+  const { value: theirs } = await other.post(`${path}/device`, { name: 'Other browser', publicKey: key })
+  assert.notEqual(theirs.deviceId, deviceId)
+  assert.equal(await storedKey(deviceId), next)
+})
+
+test('A5: the browser that confirms a pairing brings its key, and it moves with the approval', async () => {
+  const browser = await app.owner(), desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Keyed pairing' })
+  await browser.post('pair/claim', { code: enrollment.code })
+  // A malformed key refuses the confirm, which then confirms nothing.
+  await browser.post('pair/confirm', { id: enrollment.id, publicKey: 'zz' }, 400)
+  assert.equal((await app.db.prepare('SELECT confirmed FROM enrollments WHERE id=?').bind(enrollment.id).first()).confirmed, 0)
+  const key = await publicHex('P-256')
+  const { response } = await browser.post('pair/confirm', { id: enrollment.id, publicKey: key })
+  browser.setCookie(response.headers.get('set-cookie'))
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const { value: approved } = await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential }, 200, DEVICE_KEY)
+  assert.equal(approved.device.publicKey, key, 'the station learns the key with the browser the pairing approved')
+  assert.equal(await storedKey(approved.device.id), key)
+  const native = app.client(null, '', credential)
+  const { value: listed } = await native.post(`stations/${enrollment.id}/native/devices`, {}, 200, DEVICE_KEY)
+  assert.equal(listed.devices.find(d => d.id === approved.device.id).publicKey, key)
+
+  // Confirming again moves the approval to the browser that confirmed last, and the key moves with
+  // it: one that sent none (the old page) leaves the approved browser with no key, never the other's.
+  const later = app.client()
+  const { value: second } = await later.post('enroll', { name: 'Moved pairing' })
+  const account = await app.owner()
+  await account.post('pair/claim', { code: second.code })
+  await account.post('pair/confirm', { id: second.id, publicKey: key })
+  await account.post('pair/confirm', { id: second.id })
+  const again = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const { value: moved } = await later.post('enroll/approve', { id: second.id, proof: second.proof, credential: again }, 200, DEVICE_KEY)
+  assert.equal(moved.device.publicKey, null)
+  assert.equal(await storedKey(moved.device.id), null)
+})
+
 test('one-use tickets, real observation sockets, ACK backpressure and hibernation restoration', async () => {
   const pair = await app.paired(), live = await admitted(pair)
   await pair.browser.open(pair.stationId, live.ticket.ticket, 401)
@@ -2228,7 +2334,7 @@ test('the stream lane carries the contract\'s signals both ways, with the identi
   const pair = await app.paired()
   const live = await admitted(pair, 1, STREAM_HEADERS)
   const leaseId = crypto.randomUUID()
-  for (const name of ['offer', 'candidate (reflexive)', 'candidate (mDNS host; the station ignores what it cannot resolve)', 'close']) {
+  for (const name of ['offer', 'offer from a browser without a device key (the station refuses it at admission)', 'candidate (reflexive)', 'candidate (mDNS host; the station ignores what it cannot resolve)', 'close']) {
     live.browser.send(pageSignal(name, leaseId))
     const routed = await live.station.take(typed('streamSignal'))
     assert.deepEqual(routed, { ...streamCase('roomToStation', name), sessionId: live.session.sessionId, deviceId: live.deviceId, leaseId },
@@ -2245,6 +2351,27 @@ test('the stream lane carries the contract\'s signals both ways, with the identi
   assert.equal((await live.browser.take(typed('streamState'))).reason, 'streamClosed', 'the other session\'s refusal was never delivered here')
   assert.equal(live.station.closed, false)
   assert.equal(live.browser.closed, false)
+})
+
+// The relay keeps one session's signals in the order the page sent them. An offer waits on a fresh
+// reading of the account's entitlement (a D1 read) before it is forwarded, and a candidate sent right
+// behind it must not overtake it meanwhile: a station meets a candidate before the offer it belongs
+// to and drops it. The page sends its held candidates straight after its offer (it holds them while it
+// signs the offer, A5), so this is the order every real negotiation arrives in.
+test('the stream lane keeps a session\'s signals in order: a candidate never overtakes its offer', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, STREAM_HEADERS)
+  const leaseId = crypto.randomUUID()
+  for (let round = 0; round < 3; round++) {
+    // The last reading is older than the command lane's budget again, so this offer waits on D1.
+    await settleEntitlement(live)
+    live.browser.send(pageSignal('offer', leaseId))
+    live.browser.send(pageSignal('candidate (reflexive)', leaseId))
+    const first = await live.station.take(typed('streamSignal'))
+    const second = await live.station.take(typed('streamSignal'))
+    assert.deepEqual([first.payload.kind, second.payload.kind], ['offer', 'candidate'], `round ${round}`)
+  }
+  live.browser.close(); live.station.close()
 })
 
 test('a station that never advertised the stream lane is not handed a signal, and stays up', async () => {
