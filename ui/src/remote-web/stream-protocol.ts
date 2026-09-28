@@ -195,9 +195,19 @@ export type StreamWheel = { type: 'wheel'; x: number; y: number; deltaX: number;
 export type StreamKey = { type: 'key'; action: 'down' | 'up'; key: string; code: string; modifiers: number; repeat: boolean }
 export type StreamText = { type: 'text'; text: string }
 export type StreamInput = StreamPointer | StreamWheel | StreamKey | StreamText
-/** What reaches Nexus's own window: the admitted input, and `reset` when a stream ends or its
- *  presence lapses, which releases anything still held down. */
-export type WebviewInput = StreamInput | { type: 'reset' }
+/** What the page holds down over the picture, re-asserted on `ptt` every STREAM_HELD_REASSERT_MS
+ *  while anything is (the lead's dead-man ruling): each key by its DOM `code`, and the pointer
+ *  buttons as the same mask a pointer event carries. Nexus's window lets go of whatever stops being
+ *  re-asserted for STREAM_HELD_GAP_MS - the held PTT's own numbers (S7) - so nothing held over the
+ *  stream, a Space that keys PTT in Phone included, outlives a dead link by more than that. It never
+ *  presses anything. `seq` counts up from 0 per stream, so an overtaken one is known and ignored. */
+export type StreamHeld = { type: 'held'; keys: string[]; buttons: number; seq: number }
+export const STREAM_HELD_REASSERT_MS = STREAM_PTT_REASSERT_MS
+export const STREAM_HELD_GAP_MS = STREAM_PTT_GAP_MS
+export const STREAM_HELD_KEYS = 16
+/** What reaches Nexus's own window: the admitted input, the page's re-assertion of what it holds,
+ *  and `reset` when a stream ends or its presence lapses, which releases anything still held down. */
+export type WebviewInput = StreamInput | StreamHeld | { type: 'reset' }
 
 const unit = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
 const within = (value: unknown, low: number, high: number): value is number => Number.isSafeInteger(value) && (value as number) >= low && (value as number) <= high
@@ -232,7 +242,15 @@ export function parseStreamInput(raw: unknown): StreamInput {
   }
   throw Error('invalidStream')
 }
+export function parseHeld(raw: unknown): StreamHeld {
+  const v = fields(raw, ['type', 'keys', 'buttons', 'seq'])
+  if (v.type !== 'held' || !Array.isArray(v.keys) || v.keys.length > STREAM_HELD_KEYS || new Set(v.keys).size !== v.keys.length
+    || !v.keys.every(code => typeof code === 'string' && /^[A-Za-z0-9]{1,32}$/.test(code))
+    || !within(v.buttons, 0, 31) || !within(v.seq, 0, 0xffffffff)) throw Error('invalidStream')
+  return v as StreamHeld
+}
 export function parseWebviewInput(raw: unknown): WebviewInput {
   if (raw && typeof raw === 'object' && (raw as Record<string, unknown>).type === 'reset') { fields(raw, ['type']); return { type: 'reset' } }
+  if (raw && typeof raw === 'object' && (raw as Record<string, unknown>).type === 'held') return parseHeld(raw)
   return parseStreamInput(raw)
 }

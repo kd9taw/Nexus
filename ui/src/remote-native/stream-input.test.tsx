@@ -24,6 +24,9 @@ const bridge = () => (dispatcher = new StreamInputDispatcher(window))
 const pointer = (action: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'pointer', action, x: 0.5, y: 0.5, button: action === 'move' ? -1 : 0, buttons: action === 'down' || action === 'move' ? 1 : 0, modifiers: 0, pointerType: 'mouse', clicks: action === 'move' ? 0 : 1, ...extra })
 const key = (action: 'down' | 'up', keyValue: string, code: string, modifiers = 0) => ({ type: 'key', action, key: keyValue, code, modifiers, repeat: false })
+/** The page's re-assertion of what it holds down over the picture (the lead's dead-man ruling). */
+const held = (keys: string[], buttons: number, seq: number) => ({ type: 'held', keys, buttons, seq })
+const SPACE_DOWN = "key down, Space, the Phone cockpit's PTT key", SPACE_UP = 'key up'
 const click = (d: StreamInputDispatcher, extra: Record<string, unknown> = {}) => { d.handle(pointer('down', extra)); d.handle(pointer('up', extra)) }
 const box = (el: Element, rect: { left: number; top: number; width: number; height: number }) => {
   el.getBoundingClientRect = () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON: () => ({}) })
@@ -274,6 +277,108 @@ it('reset releases what the stream was holding: Space comes up, the button comes
     expect(windowKeys.slice(2)).toEqual(['keydown Space', 'keyup Space'])
     expect(onClick).not.toHaveBeenCalled()
   } finally { window.removeEventListener('keydown', listen); window.removeEventListener('keyup', listen) }
+})
+
+// THE DEAD-MAN (the lead's ruling): whatever the stream holds down here is a re-asserted state. The
+// page re-asserts the held set every 100 ms; anything not re-asserted for 200 ms comes up, as `reset`
+// would let it go. So a Space held over the stream in Phone - which keys PTT through the cockpit's own
+// window handler - cannot outlive a dead link by more than 200 ms.
+function windowKeys(): { keys: string[]; stop: () => void } {
+  const keys: string[] = []
+  const listen = (event: KeyboardEvent) => keys.push(`${event.type} ${event.code}`)
+  window.addEventListener('keydown', listen); window.addEventListener('keyup', listen)
+  return { keys, stop: () => { window.removeEventListener('keydown', listen); window.removeEventListener('keyup', listen) } }
+}
+
+it('THE DEAD-MAN: a key held over the stream stays down while re-asserted every 100 ms, and comes up 200 ms after they stop', () => {
+  vi.useFakeTimers()
+  const w = windowKeys()
+  try {
+    const d = bridge()
+    d.handle(byName(SPACE_DOWN))
+    for (let seq = 0; seq < 10; seq++) { vi.advanceTimersByTime(100); d.handle(held(['Space'], 0, seq)) }
+    expect(w.keys, 'held for a second, re-asserted the whole time').toEqual(['keydown Space'])
+    // The page goes quiet. Not a moment early...
+    vi.advanceTimersByTime(199)
+    expect(w.keys).toEqual(['keydown Space'])
+    // ...and not a moment late: the Phone cockpit's own key-up handler unkeys on this.
+    vi.advanceTimersByTime(1)
+    expect(w.keys).toEqual(['keydown Space', 'keyup Space'])
+  } finally { w.stop(); vi.useRealTimers() }
+})
+
+it('THE DEAD-MAN: a key comes up exactly once - its own key-up and then silence, or the dead-man and then a late key-up', () => {
+  vi.useFakeTimers()
+  const w = windowKeys()
+  try {
+    const d = bridge()
+    d.handle(byName(SPACE_DOWN))
+    d.handle(held(['Space'], 0, 0))
+    d.handle(byName(SPACE_UP))
+    vi.advanceTimersByTime(1000)
+    expect(w.keys, 'released by the page, then the re-assertions stop').toEqual(['keydown Space', 'keyup Space'])
+    // The other order: the link went quiet, the dead-man let go, and then the page's key-up got through.
+    d.handle(byName(SPACE_DOWN))
+    vi.advanceTimersByTime(200)
+    d.handle(byName(SPACE_UP))
+    expect(w.keys.slice(2)).toEqual(['keydown Space', 'keyup Space'])
+  } finally { w.stop(); vi.useRealTimers() }
+})
+
+it('THE DEAD-MAN: a button held over the stream stays pressed while re-asserted, and is released without a click 200 ms after they stop', () => {
+  vi.useFakeTimers()
+  try {
+    const events: string[] = [], onClick = vi.fn()
+    render(<button onClick={onClick} onPointerDown={event => events.push(`down ${event.buttons}`)} onPointerUp={() => events.push('up')}
+      onPointerMove={event => events.push(`move ${event.buttons}`)}>PTT</button>)
+    under = screen.getByRole('button', { name: 'PTT' })
+    const d = bridge()
+    d.handle(pointer('down'))
+    d.handle(pointer('move'))
+    for (let seq = 0; seq < 10; seq++) { vi.advanceTimersByTime(100); d.handle(held([], 1, seq)) }
+    expect(events).toEqual(['down 1', 'move 1'])
+    vi.advanceTimersByTime(199)
+    expect(events).toEqual(['down 1', 'move 1'])
+    vi.advanceTimersByTime(1)
+    expect(events).toEqual(['down 1', 'move 1', 'up'])
+    // Let go is let go: a drag that carries on moves no pressed button, and the page's own late release
+    // is neither a second release nor a click.
+    d.handle(pointer('move'))
+    d.handle(pointer('up'))
+    expect(events).toEqual(['down 1', 'move 1', 'up', 'move 0'])
+    expect(onClick).not.toHaveBeenCalled()
+  } finally { vi.useRealTimers() }
+})
+
+it('THE DEAD-MAN: a re-assertion only keeps what is held - it presses nothing, and a stale one keeps nothing', () => {
+  vi.useFakeTimers()
+  const w = windowKeys()
+  try {
+    const pressed = vi.fn()
+    render(<button onPointerDown={pressed}>Tune</button>)
+    under = screen.getByRole('button', { name: 'Tune' })
+    const d = bridge()
+    d.handle(held(['Space', 'KeyA'], 1, 0))
+    expect(w.keys, 'nothing is pressed by a re-assertion').toEqual([])
+    expect(pressed).not.toHaveBeenCalled()
+    d.handle(byName(SPACE_DOWN))
+    vi.advanceTimersByTime(150)
+    d.handle(held(['Space'], 0, 5))
+    vi.advanceTimersByTime(150)
+    // Overtaken on the unordered channel: older than the one already seen, so it extends nothing.
+    d.handle(held(['Space'], 0, 3))
+    vi.advanceTimersByTime(49)
+    expect(w.keys).toEqual(['keydown Space'])
+    vi.advanceTimersByTime(1)
+    expect(w.keys, '200 ms after the newest re-assertion, not the stale one').toEqual(['keydown Space', 'keyup Space'])
+    // A reset starts the count again, for the next stream.
+    d.handle({ type: 'reset' })
+    d.handle(byName(SPACE_DOWN))
+    vi.advanceTimersByTime(150)
+    d.handle(held(['Space'], 0, 0))
+    vi.advanceTimersByTime(150)
+    expect(w.keys.slice(2), 'seq 0 after a reset keeps it').toEqual(['keydown Space'])
+  } finally { w.stop(); vi.useRealTimers() }
 })
 
 it('listens only through the event bridge, on the contract\'s event, and undoes everything when removed', async () => {

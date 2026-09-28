@@ -22,7 +22,21 @@
 // ⚠️ WHAT GOES DOWN COMES UP. A key or button held here when a stream ends would stay held: Space is
 // the Phone cockpit's push-to-talk key. `reset` - which the station sends when a stream ends or its
 // transmit presence lapses - releases everything this module is holding.
-import { MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, parseWebviewInput, type StreamKey, type StreamPointer, type StreamWheel } from '../remote-web/stream-protocol'
+//
+// ⛔ AND IT COMES UP WITHIN 200 MS OF THE PAGE GOING QUIET (the lead's dead-man ruling). A key or a
+// button held over the stream is a STATE the page re-asserts every 100 ms (`held`, on the stream's
+// unreliable `ptt` channel), never a down/up pair trusted to complete: whatever is held here and
+// not re-asserted for STREAM_HELD_GAP_MS comes up, with its key-up or pointer-up and no click, as
+// `reset` lets it go. Space travels as a key, and the Phone cockpit's own handler decides whether it
+// keys PTT (Phone, control, Lock off, not in a field); held, it is bounded here like any key -
+// the held PTT's own 200 ms (S7) - where `reset` alone would have left it keyed until presence
+// lapsed. A re-assertion only keeps what is held and never presses anything; one overtaken on the
+// unordered channel (its `seq` not above the last seen) keeps nothing; and a release for something
+// already let go is dropped, so nothing comes up twice.
+import {
+  MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, STREAM_HELD_GAP_MS, parseWebviewInput,
+  type StreamHeld, type StreamKey, type StreamPointer, type StreamWheel,
+} from '../remote-web/stream-protocol'
 
 export const STREAM_INPUT_EVENT = 'remote-stream-input'
 /** The one pointer the stream drives. Real pointers get small ids from the browser (1 is the mouse). */
@@ -49,6 +63,11 @@ export class StreamInputDispatcher {
   private range: HTMLInputElement | null = null
   private picker: { select: HTMLSelectElement; list: HTMLElement } | null = null
   private unpatch: (() => void) | null = null
+  /** The dead-man: when each held key, and the held button, comes up unless re-asserted first. */
+  private keyDeadlines = new Map<string, ReturnType<typeof setTimeout>>()
+  private pointerDeadline: ReturnType<typeof setTimeout> | undefined
+  /** The newest re-assertion seen this stream. */
+  private heldSeq: number | null = null
 
   constructor(private readonly win: Win) { this.patchCapture() }
 
@@ -60,6 +79,7 @@ export class StreamInputDispatcher {
     else if (input.type === 'pointer') this.pointer(input)
     else if (input.type === 'wheel') this.wheel(input)
     else if (input.type === 'key') this.key(input)
+    else if (input.type === 'held') this.heldAgain(input)
     else this.insert(this.focused(), input.text, 'insertText')
   }
 
@@ -69,16 +89,41 @@ export class StreamInputDispatcher {
     // Forced releases: each key comes up, and none of them presses anything on the way.
     for (const held of [...this.keys.values()]) this.key({ ...held, action: 'up', repeat: false }, true)
     this.keys.clear(); this.keyDowns.clear()
-    if (this.pressed || this.buttons) {
-      const target = this.captured ?? this.pressed?.target ?? this.doc.documentElement
-      const init = this.pointerInit({ x: this.last.x, y: this.last.y, button: this.pressed?.button ?? 0, buttons: 0, modifiers: 0, pointerType: 'mouse', clicks: 0 })
-      this.fire(target, 'pointerup', init, 'pointer')
-      this.fire(target, 'mouseup', init)
-      this.endRange()
-      this.release()
-      this.pressed = null; this.buttons = 0
-    }
+    this.letGoOfPointer()
     this.closePicker()
+    this.heldSeq = null
+  }
+
+  /** A held button released as `reset` releases it: where it is, with no click. */
+  private letGoOfPointer(): void {
+    clearTimeout(this.pointerDeadline); this.pointerDeadline = undefined
+    if (!this.pressed && !this.buttons) return
+    const target = this.captured ?? this.pressed?.target ?? this.doc.documentElement
+    const init = this.pointerInit({ x: this.last.x, y: this.last.y, button: this.pressed?.button ?? 0, buttons: 0, modifiers: 0, pointerType: 'mouse', clicks: 0 })
+    this.fire(target, 'pointerup', init, 'pointer')
+    this.fire(target, 'mouseup', init)
+    this.endRange()
+    this.release()
+    this.pressed = null; this.buttons = 0
+  }
+
+  /** The page still holds these: each keeps its deadline another STREAM_HELD_GAP_MS. */
+  private heldAgain(held: StreamHeld): void {
+    if (this.heldSeq !== null && held.seq <= this.heldSeq) return
+    this.heldSeq = held.seq
+    for (const code of held.keys) if (this.keys.has(code)) this.keepKey(code)
+    if (held.buttons && this.pressed) this.keepPointer()
+  }
+  private keepKey(id: string): void {
+    clearTimeout(this.keyDeadlines.get(id))
+    this.keyDeadlines.set(id, setTimeout(() => {
+      const held = this.keys.get(id)
+      if (held) this.key({ ...held, action: 'up', repeat: false }, true)
+    }, STREAM_HELD_GAP_MS))
+  }
+  private keepPointer(): void {
+    clearTimeout(this.pointerDeadline)
+    this.pointerDeadline = setTimeout(() => this.letGoOfPointer(), STREAM_HELD_GAP_MS)
   }
 
   dispose(): void { this.reset(); this.unpatch?.(); this.unpatch = null }
@@ -110,12 +155,14 @@ export class StreamInputDispatcher {
 
   private pointer(p: StreamPointer): void {
     this.last = { x: p.x, y: p.y }
-    const init = this.pointerInit(p)
+    // A drag after the dead-man let go of its button moves no pressed button here, whatever the page thinks.
+    const init = this.pointerInit(p.action === 'move' && !this.pressed ? { ...p, buttons: 0 } : p)
     const target = this.captured ?? this.at(p.x, p.y)
     if (!this.captured) this.hoverTo(target, init)
     if (p.action === 'move') {
       this.fire(target, 'pointermove', init, 'pointer')
       this.fire(target, 'mousemove', init)
+      if (this.pressed && p.buttons) this.keepPointer()
       if (this.range && p.buttons) this.dragRange(this.range, init.clientX!)
       return
     }
@@ -123,12 +170,15 @@ export class StreamInputDispatcher {
       if (this.picker && !this.picker.list.contains(target)) this.closePicker()
       this.buttons = p.buttons
       this.pressed = { target, button: p.button }
+      this.keepPointer()
       const pointerAllowed = this.fire(target, 'pointerdown', init, 'pointer')
       const mouseAllowed = pointerAllowed ? this.fire(target, 'mousedown', init) : true
       if (mouseAllowed && p.button === 0) this.pressDefault(target, init.clientX!)
       return
     }
-    // up or cancel
+    // up or cancel: only of a press this window still holds - the dead-man's release was the release.
+    if (!this.pressed) return
+    clearTimeout(this.pointerDeadline); this.pointerDeadline = undefined
     this.buttons = p.buttons
     if (p.action === 'cancel') {
       this.fire(target, 'pointercancel', init, 'pointer')
@@ -203,7 +253,10 @@ export class StreamInputDispatcher {
   /** `forced` is a release the station asked for (`reset`): the key comes up and nothing is pressed. */
   private key(k: StreamKey, forced = false): void {
     const id = k.code || k.key
-    if (k.action === 'down') this.keys.set(id, k); else this.keys.delete(id)
+    // A key-up only for a key still held here: one the dead-man let go of has had its key-up.
+    if (k.action === 'up' && !this.keys.has(id)) return
+    if (k.action === 'down') { this.keys.set(id, k); this.keepKey(id) }
+    else { this.keys.delete(id); clearTimeout(this.keyDeadlines.get(id)); this.keyDeadlines.delete(id) }
     const target = this.focused()
     const init: KeyboardEventInit = { bubbles: true, cancelable: true, composed: true, key: k.key, code: k.code, repeat: k.repeat, ...modifiers(k.modifiers) }
     const allowed = this.fire(target, k.action === 'down' ? 'keydown' : 'keyup', init, 'key')
