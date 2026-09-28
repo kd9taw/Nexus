@@ -543,6 +543,55 @@ fn the_relays_stream_end_ends_presence_and_halts_a_transmission() {
     );
 }
 
+/// S6 end to end on the station: a packet of the page's microphone is decoded on the session's
+/// thread and reaches the engine, where the first one after the press keys the over (M1). A packet
+/// that arrives before the press goes nowhere (M5): the over it would have keyed does not exist yet.
+#[cfg(feature = "radio")]
+#[test]
+fn the_pages_microphone_keys_only_an_armed_over() {
+    use tempo_app::mic::MicTick;
+    let now = Instant::now();
+    let f = fixture(now);
+    tempo_app::engine::engine_lock(&f.station.engine).set_operating_mode("phone", false);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    // 20 ms of Opus silence (CELT, fullband): what a browser sends between words.
+    let packet = |seq: u64| tempo_stream::session::MicPacket {
+        seq,
+        rtp: 960 * seq,
+        clock_hz: 48_000,
+        arrived: now,
+        payload: vec![0xF8, 0xFF, 0xFE],
+    };
+    let poll = |at: Instant| {
+        let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+        e.poll_remote_transmit(at);
+        e.poll_mic(at, 40.0, 0)
+    };
+    // Before any press: the packet goes nowhere, and nothing is armed to key.
+    streaming.mic(&packet(1));
+    assert_eq!(
+        poll(now),
+        MicTick::Idle,
+        "audio with no press did something"
+    );
+    // The press arms; the packet that came before it is gone.
+    let hold = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":0}}"#);
+    streaming.ptt(hold.as_bytes(), now);
+    assert_eq!(
+        poll(now),
+        MicTick::Armed,
+        "a press with no new audio did something"
+    );
+    // The page's next packet keys it.
+    streaming.mic(&packet(2));
+    assert_eq!(
+        poll(now + Duration::from_millis(20)),
+        MicTick::Key,
+        "the page's audio did not key the armed over"
+    );
+}
+
 /// The page's `held` set reaches the window as it came, and only while presence is live: it is
 /// input. CONTROL: the same message with presence live is delivered.
 #[test]

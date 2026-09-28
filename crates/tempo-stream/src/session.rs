@@ -1,5 +1,6 @@
 //! One streamed session, the station's side: a WebRTC peer (str0m) that answers the page's offer,
-//! sends the Nexus window as VP8, and carries the three data channels of the contract.
+//! sends the Nexus window as VP8, receives the page's microphone as Opus, and carries the three
+//! data channels of the contract.
 //!
 //! Sans-I/O like str0m itself. The caller owns the UDP socket and the clock: it feeds packets and
 //! timeouts in, sends what [`Session::take_transmits`] hands back, reacts to
@@ -14,8 +15,11 @@
 //! - **Windows only, today.** The approved crypto backend is Windows CNG. Elsewhere
 //!   [`Session::accept`] refuses [`Refusal::Unavailable`] before it reaches str0m's builder, which
 //!   would panic for want of a provider.
-//! - **VP8 only, and only the station sends video.** The codec list is cleared to VP8; the page's
-//!   microphone is a later piece.
+//! - **VP8 out, Opus in, and nothing else.** The codec list is cleared to VP8 (the station's
+//!   picture) and Opus (the page's microphone, plan S6: an audio line the page sends and the
+//!   station receives). The microphone's packets are handed on as they arrived
+//!   ([`SessionEvent::Mic`]), undecoded and unjudged: what may reach a transmitter, and when, is
+//!   `tempo_app::mic`'s to decide, and the session keys nothing.
 //! - **No LAN address leaves the shack (A8).** The only candidate the station ever signals is the
 //!   server-reflexive address a STUN server reported ([`Session::add_reflexive`]), whose `raddr`
 //!   str0m writes as `0.0.0.0 0`. str0m does need the socket's own (host) address as a local
@@ -75,6 +79,21 @@ pub enum Lane {
     Audio,
 }
 
+/// One packet of the page's microphone, as it arrived.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MicPacket {
+    /// The RTP sequence number, extended by the transport so it never wraps.
+    pub seq: u64,
+    /// The RTP timestamp, extended, on the track's clock.
+    pub rtp: u64,
+    /// The track's clock rate: 48 kHz, as WebRTC signals every Opus track.
+    pub clock_hz: u32,
+    /// When the packet reached the station's socket.
+    pub arrived: Instant,
+    /// One Opus packet.
+    pub payload: Vec<u8>,
+}
+
 /// What happened in the session since the caller last asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -88,6 +107,8 @@ pub enum SessionEvent {
     AudioClosed,
     /// The page asked for a keyframe.
     KeyframeRequest,
+    /// A packet of the page's microphone.
+    Mic(MicPacket),
     /// The session is over. Nothing more will come out of it.
     Closed(StreamReason),
 }
@@ -106,6 +127,8 @@ pub struct Session {
     /// The first bundled media id, which trickled candidates name.
     mid: String,
     video: Option<(Mid, Pt)>,
+    /// The page's microphone: the audio line it sends and the station receives.
+    mic: Option<Mid>,
     control: Option<ChannelId>,
     ptt: Option<ChannelId>,
     audio: Option<ChannelId>,
@@ -151,6 +174,8 @@ impl Session {
         let config = Rtc::builder()
             .clear_codecs()
             .enable_vp8(true)
+            // The page's microphone (S6). No RED: the page sends plain Opus.
+            .enable_opus(true, false)
             .set_ice_lite(false);
         // The peer's certificate is checked against its offer's fingerprint. str0m's default, and
         // the lock A4 and A5 stand on, so it is asserted rather than assumed.
@@ -184,6 +209,7 @@ impl Session {
             base,
             mid,
             video: None,
+            mic: None,
             control: None,
             ptt: None,
             audio: None,
@@ -407,6 +433,20 @@ impl Session {
                     self.video = Some((media.mid, pt));
                 }
             }
+            Event::MediaAdded(media)
+                if media.kind == MediaKind::Audio && media.direction.is_receiving() =>
+            {
+                self.mic = Some(media.mid);
+            }
+            Event::MediaData(data) if Some(data.mid) == self.mic => {
+                self.events.push(SessionEvent::Mic(MicPacket {
+                    seq: **data.seq_range.end(),
+                    rtp: data.time.numer(),
+                    clock_hz: data.time.denom(),
+                    arrived: data.network_time,
+                    payload: data.data.to_vec(),
+                }));
+            }
             Event::ChannelOpen(id, label) => self.open(id, &label),
             Event::ChannelData(data) => {
                 let lane = if Some(data.id) == self.control {
@@ -515,10 +555,22 @@ mod tests {
         /// A page the way the contract describes it: VP8 video it receives, and the three
         /// channels with their reliability.
         fn page(now: Instant) -> (Page, String, SdpPendingOffer) {
-            let mut rtc = Rtc::builder().clear_codecs().enable_vp8(true).build(now);
+            let (page, offer, pending, _) = page_with(now, false);
+            (page, offer, pending)
+        }
+
+        /// The same page, and with `mic` its microphone too: an Opus line it sends (S6).
+        fn page_with(now: Instant, mic: bool) -> (Page, String, SdpPendingOffer, Option<Mid>) {
+            let mut rtc = Rtc::builder()
+                .clear_codecs()
+                .enable_vp8(true)
+                .enable_opus(mic, false)
+                .build(now);
             rtc.add_local_candidate(Candidate::host(PAGE.parse().unwrap(), "udp").unwrap());
             let mut change = rtc.sdp_api();
             change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+            let mic = mic
+                .then(|| change.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None));
             change.add_channel_with_config(ChannelConfig {
                 label: CONTROL_CHANNEL.into(),
                 ..ChannelConfig::default()
@@ -538,7 +590,7 @@ mod tests {
                 outbox: Vec::new(),
             };
             page.drain();
-            (page, offer.to_sdp_string(), pending)
+            (page, offer.to_sdp_string(), pending, mic)
         }
 
         struct Page {
@@ -595,7 +647,16 @@ mod tests {
 
         /// Accept, answer, trickle both ways, and run until connected.
         fn connect(now: &mut Instant) -> (Page, Session, String, String) {
-            let (mut page, offer, pending) = page(*now);
+            let (page, station, answer, line, _) = connect_with(now, false);
+            (page, station, answer, line)
+        }
+
+        /// The same, for a page with its microphone on or off.
+        fn connect_with(
+            now: &mut Instant,
+            mic: bool,
+        ) -> (Page, Session, String, String, Option<Mid>) {
+            let (mut page, offer, pending, mid) = page_with(*now, mic);
             let (mut station, answer) = Session::accept(&offer, BASE.parse().unwrap(), *now)
                 .expect("an admitted, valid offer is answered");
             page.rtc
@@ -624,7 +685,7 @@ mod tests {
                 eprintln!("station events: {:?}", station.take_events());
                 eprintln!("page events: {:?}", page.events);
             }
-            (page, station, answer, line)
+            (page, station, answer, line, mid)
         }
 
         /// ★ A3's positive control: the same offer that admission refuses without a lease is
@@ -695,6 +756,94 @@ mod tests {
                 "control: no host candidate in {leaky}"
             );
             assert!(crate::lan::leaks(&leaky));
+        }
+
+        /// ★ S6: the page's microphone is answered as an Opus line the station RECEIVES, and its
+        /// packets come out of the session as they went in: every one, in order, on the 48 kHz
+        /// clock, byte for byte. CONTROL: a page with its microphone off gets no audio line and
+        /// yields no packet.
+        #[test]
+        fn the_pages_microphone_arrives_as_its_opus_packets() {
+            use str0m::media::Frequency;
+            for mic in [true, false] {
+                let mut now = Instant::now();
+                let (mut page, mut station, answer, _, mid) = connect_with(&mut now, mic);
+                assert!(station.is_connected(), "mic {mic}: never connected");
+                let audio = answer.lines().find(|l| l.starts_with("m=audio"));
+                assert_eq!(audio.is_some(), mic, "mic {mic}: {answer}");
+                if mic {
+                    assert!(
+                        answer.contains("a=recvonly"),
+                        "the station would send audio: {answer}"
+                    );
+                    assert!(
+                        answer.to_ascii_lowercase().contains("opus/48000/2"),
+                        "{answer}"
+                    );
+                }
+                station.take_events();
+                let mut sent = Vec::new();
+                if let Some(mid) = mid {
+                    let pt = page
+                        .rtc
+                        .writer(mid)
+                        .expect("the page's microphone line")
+                        .payload_params()
+                        .find(|p| p.spec().codec == Codec::Opus)
+                        .expect("Opus was negotiated")
+                        .pt();
+                    for k in 0..5u64 {
+                        // A browser's 20 ms silence frame, marked so each packet is its own.
+                        let payload = vec![0xF8, 0xFF, 0xFE, k as u8];
+                        page.rtc
+                            .writer(mid)
+                            .unwrap()
+                            .write(
+                                pt,
+                                now,
+                                MediaTime::new(960 * k, Frequency::FORTY_EIGHT_KHZ),
+                                payload.clone(),
+                            )
+                            .unwrap();
+                        page.drain();
+                        sent.push(payload);
+                        run(&mut page, &mut station, &mut now, Duration::from_millis(20));
+                    }
+                }
+                run(
+                    &mut page,
+                    &mut station,
+                    &mut now,
+                    Duration::from_millis(200),
+                );
+                let got: Vec<MicPacket> = station
+                    .take_events()
+                    .into_iter()
+                    .filter_map(|e| match e {
+                        SessionEvent::Mic(p) => Some(p),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    got.len(),
+                    sent.len(),
+                    "mic {mic}: {} packets for {} sent",
+                    got.len(),
+                    sent.len()
+                );
+                for (i, (p, payload)) in got.iter().zip(&sent).enumerate() {
+                    assert_eq!(&p.payload, payload, "packet {i} changed on the way");
+                    assert_eq!(p.clock_hz, 48_000);
+                    if i > 0 {
+                        assert_eq!(p.seq, got[i - 1].seq + 1, "packet {i} out of sequence");
+                        assert_eq!(
+                            p.rtp - got[i - 1].rtp,
+                            960,
+                            "packet {i} off the 20 ms clock"
+                        );
+                    }
+                }
+            }
         }
 
         /// The data channels carry what the contract says: the page's control message arrives as
