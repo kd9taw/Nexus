@@ -22,11 +22,11 @@ import sys
 from collections import Counter, defaultdict
 
 # ── What the kit shipped, so a missing row can be detected without a second file ───────────
-EXPECTED_ROWS = 5146
-EXPECTED_KEYS_SHA = 'da249334b9faccd241dbf3c5913fe2c9c5b715d702ed781b5c85818d51d6fb4b'
-EXPECTED_ENGLISH_SHA = 'efa49b618abf4375410f1c83bc3f028e815bbded576266690347932295b1aeda'
-EXPECTED_DNT_SHA = '3f1ada6d9559d2caa1ec1fcdb8694d1c155ab636f057d9d9bd34db17c01401ed'
-EXPECTED_TIERS = {1: 580, 2: 313, 3: 836, 4: 379, 5: 2284, 6: 754}
+EXPECTED_ROWS = 5169
+EXPECTED_KEYS_SHA = 'c161fbb8459cc4652d76042a27beca745578845256d8ab8a6de1dddc1a523836'
+EXPECTED_ENGLISH_SHA = '6a04af50a1df5da8aa4c47d0972de75116f2f49c3e440d2284b4bb3a88b7635e'
+EXPECTED_DNT_SHA = 'd010a08c9172aede64e42b811aa69b10cbefb9e538d2ecd07ad1faa6839c062e'
+EXPECTED_TIERS = {1: 602, 2: 313, 3: 836, 4: 380, 5: 2284, 6: 754}
 COLUMNS = ['priority', 'key', 'english', 'portuguese', 'do_not_translate', 'notes']
 
 RE_PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
