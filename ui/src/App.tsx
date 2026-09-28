@@ -86,7 +86,8 @@ import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alert
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
+import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
+import { PaneSeam } from './components/PaneSeam'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
@@ -322,8 +323,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
-  const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
-  const layoutRef = useRef<HTMLElement>(null)
+  const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
+    usePaneWidths(scale)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
@@ -2716,37 +2717,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     />
   )
 
-  // Pane resize: dragging a splitter writes the rail-width CSS var directly each
-  // frame (no React re-render), then commits (clamp + persist) on pointer-up.
-  // One Pointer-Events path covers mouse, touch, and pen.
-  const startResize =
-    (side: 'left' | 'right') => (e: React.PointerEvent<HTMLDivElement>) => {
-      const el = layoutRef.current
-      if (!el) return
-      e.preventDefault()
-      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-      const rect = el.getBoundingClientRect()
-      const GAP = 12 // .layout padding; keeps the rail edge under the pointer
-      const root = document.documentElement.style
-      document.body.classList.add('resizing')
-      const widthFor = (clientX: number) =>
-        side === 'right' ? rect.right - GAP - clientX : clientX - rect.left - GAP
-      const move = (ev: PointerEvent) => {
-        const w = widthFor(ev.clientX)
-        root.setProperty(side === 'right' ? '--right-rail-w' : '--left-rail-w', `${
-          side === 'right' ? clampRight(w) : clampLeft(w)
-        }px`)
-      }
-      const up = (ev: PointerEvent) => {
-        if (side === 'right') commitRight(widthFor(ev.clientX))
-        else commitLeft(widthFor(ev.clientX))
-        window.removeEventListener('pointermove', move)
-        window.removeEventListener('pointerup', up)
-        document.body.classList.remove('resizing')
-      }
-      window.addEventListener('pointermove', move)
-      window.addEventListener('pointerup', up)
-    }
+  // The rail dividers (PaneSeam): a drag paints the rail-width CSS var on <html> directly each
+  // frame (no React re-render), then commits (clamp + persist) once, on release; the arrows,
+  // Home/End and Backspace do the same from the keyboard.
+  const paintRail = (name: '--left-rail-w' | '--right-rail-w') => (px: number) =>
+    document.documentElement.style.setProperty(name, `${px}px`)
 
   const waterfallRail = (
     <aside className="right-rail panel">
@@ -2783,29 +2758,34 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // only narrows on the sm/xs collapse. (This used to claim a `data-layout`
   // top-strip alternative — there was no writer and no CSS behind it.)
   const threePane = (center: JSX.Element, header?: JSX.Element) => (
-    <main
-      className={`layout${header ? ' has-tempo-header' : ''}`}
-      data-three-pane
-      ref={layoutRef}
-    >
+    <main className={`layout${header ? ' has-tempo-header' : ''}`} data-three-pane>
       {header && <div className="grid-header">{header}</div>}
       <div className="grid-stations">{stationsPanel}</div>
-      <div
-        className="pane-splitter left"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('shell.rail.stations.aria')}
-        onPointerDown={startResize('left')}
-        onDoubleClick={resetWidths}
+      <PaneSeam
+        axis="x"
+        className="left"
+        label={t('shell.rail.stations.label')}
+        value={leftW}
+        min={LEFT_MIN}
+        max={leftMax}
+        grows={1}
+        onPaint={paintRail('--left-rail-w')}
+        onCommit={commitLeft}
+        onReset={resetLeft}
       />
       <div className="grid-center">{center}</div>
-      <div
-        className="pane-splitter right"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('shell.rail.waterfall.aria')}
-        onPointerDown={startResize('right')}
-        onDoubleClick={resetWidths}
+      {/* This divider is the waterfall rail's LEFT edge: moving it left widens the rail. */}
+      <PaneSeam
+        axis="x"
+        className="right"
+        label={t('shell.rail.waterfall.label')}
+        value={rightW}
+        min={RIGHT_MIN}
+        max={rightMax}
+        grows={-1}
+        onPaint={paintRail('--right-rail-w')}
+        onCommit={commitRight}
+        onReset={resetRight}
       />
       <div className="grid-waterfall">{waterfallRail}</div>
     </main>

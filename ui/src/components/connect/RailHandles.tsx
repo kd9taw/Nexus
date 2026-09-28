@@ -1,9 +1,10 @@
 // Connect's rail handles (close + resize, 2026-09-13): the separators that size the two pane
 // rails and split each rail between its two panes — "make the map bigger".
 //
-// Same discipline as Splitter / SplitterSeam: a pointer drag paints CSS variables LIVE (no
-// React render per move — the map is a sibling of every rail) and commits once on release. It
-// differs from both in two ways the brief required:
+// Same discipline as PaneSeam, the one divider these handles were the first instance of: a pointer
+// drag paints CSS variables LIVE (no React render per move — the map is a sibling of every rail)
+// and commits once on release. Two things the brief required here, and PaneSeam now does for
+// every divider:
 //   · both handles are FOCUSABLE `role="separator"`s with arrow-key steps, Home/End and a
 //     double-click reset — a resize only a mouse can reach is not accessible;
 //   · a stored width is CLAMPED against the current box on load, on every resize of the grid,
@@ -17,7 +18,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from 'react'
 import { t } from '../../i18n'
-import { elZoom } from '../Splitter'
+import { elZoom } from '../PaneSeam'
 import { MIN_SHARE, seamShares } from '../../features/panelState'
 import {
   RAIL_MAX,

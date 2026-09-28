@@ -47,7 +47,7 @@ describe('CockpitPaneFrame', () => {
   })
 
   it('an operator-dragged share rides as --pane-share ON the frame, so a seam can repaint it live', () => {
-    // SplitterSeam paints a custom property on the two panes it splits, mid-drag, and the
+    // A PaneSeam paints a custom property on the two panes it splits, mid-drag, and the
     // record's value lands on the next render. A literal weight in the flex (the default
     // branch above) cannot be repainted that way, so a frame that is split by a seam carries
     // its share as a property of its own — still a PLACEMENT input, typed and numeric, never

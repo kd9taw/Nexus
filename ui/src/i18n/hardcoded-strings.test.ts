@@ -375,8 +375,7 @@ const MIGRATED = [
   'features/skins.ts',
   'components/PalettePicker.tsx',
   'components/Toasts.tsx',
-  'components/Splitter.tsx',
-  'components/SplitterSeam.tsx',
+  // Splitter.tsx and SplitterSeam.tsx sat here until PaneSeam replaced both (layout L1).
   'components/PaneSeam.tsx',
   'components/LinkPill.tsx',
   'components/panes/CockpitPaneFrame.tsx',

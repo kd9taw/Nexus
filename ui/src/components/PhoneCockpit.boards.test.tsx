@@ -520,6 +520,28 @@ describe('the divider between the two panes', () => {
     expect(pane('spots')!.style.getPropertyValue('--pane-share')).toBe(String(a))
     expect(pane('needed')!.style.getPropertyValue('--pane-share')).toBe(String(b))
   })
+
+  it('answers the keyboard from where the panes are, and Backspace puts the stock split back (PaneSeam)', async () => {
+    render(<Live />)
+    fireEvent.click(box(/^Spots$/))
+    fireEvent.click(box(/^Needed$/))
+    const region = document.querySelector('.cockpit-panes')!
+    Object.defineProperty(region, 'clientWidth', { configurable: true, get: () => 1200 })
+    act(() => fire!())
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    box2(pane('spots')!, 100, 300)
+    box2(pane('needed')!, 310, 500)
+    const sep = screen.getByRole('separator', { name: /Spots \/ Needed/ })
+    expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
+    // 200 : 190 on screen, so the step starts from there — one arrow, one committed step.
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    const [a, b] = seamShares(200 / 390 + 0.05)
+    expect(record().share).toEqual({ spots: a, needed: b })
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(record().share, 'reset leaves no share of its own behind').toEqual({})
+  })
 })
 
 describe('working a spot from the pane', () => {

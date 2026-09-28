@@ -256,7 +256,7 @@ describe('the Classic lower region is the three-column decode-first grid', () =>
             'min-content floor that can force horizontal blow-out (the pre-overhaul bug class)',
         ).toBe(true)
       }
-      // The column seam (SplitterSeam axis='x') paints --op-col-a/--op-col-b on the
+      // The column seam (a PaneSeam, axis='x') paints --op-col-a/--op-col-b on the
       // grid. A template that stops consuming them makes the operator's drag silently
       // dead — the exact dead-fix mechanism this guard style exists to catch.
       expect(win!.value).toContain('var(--op-col-a')

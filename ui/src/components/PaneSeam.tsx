@@ -171,13 +171,15 @@ function SeamHandle(h: HandleProps) {
 export interface StripSeamProps {
   /** 'y' = the divider drags a HEIGHT (row-resize); 'x' drags a width. */
   axis: SeamAxis
-  /** CSS variable the divider drives, e.g. "--cockpit-wf-h": a % of `target`. */
+  /** CSS variable the divider drives, e.g. "--cockpit-wf-h": a % of the strip's container. */
   varName: string
-  /** The flex container the variable is set on and its % resolves against. Scoped to it rather
-   *  than to <html>, so a divider in a detached window (or a kept-alive host) resizes its own
-   *  strip and never a twin in another window. */
-  target: RefObject<HTMLElement | null>
-  /** The strip being sized — measured for the range the layout honours. */
+  /** The strip being sized. Its PARENT is the flex container its % basis resolves against, so
+   *  that is where the variable is set and the box measured — per instance, not on <html>, so a
+   *  divider in a detached window (or a kept-alive host) resizes its own strip and never a twin
+   *  in another window. The strip comes BEFORE its divider in the tree (the divider sits after
+   *  what it sizes), which is also what makes its ref ready when the divider mounts: a
+   *  component's layout effects run before an ANCESTOR's ref is attached, never a preceding
+   *  sibling's. */
   strip: RefObject<HTMLElement | null>
   /** localStorage key (nexus.split.<section>.<id>). PER-SURFACE — scoped here rather than at the
    *  call sites, so a split can never be shared between a window and a pop-out with a different
@@ -257,7 +259,8 @@ interface StripBox {
   hi: number
 }
 
-function StripSeam({ axis, varName, target, strip, storageKey, min, max, defaultPct, label }: StripSeamProps) {
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label }: StripSeamProps) {
+  const container = () => strip.current?.parentElement ?? null
   // The operator's PREFERENCE as stored. A re-clamp never writes it.
   const pref = useRef<number | null>(null)
   if (pref.current === null) pref.current = parseSplitPct(surfaceGet(storageKey)) ?? defaultPct
@@ -266,7 +269,7 @@ function StripSeam({ axis, varName, target, strip, storageKey, min, max, default
   const [view, setView] = useState<{ px: number; lo: number; hi: number } | null>(null)
 
   const box = (): StripBox | null => {
-    const el = target.current
+    const el = container()
     if (!el) return null
     const z = elZoom(el)
     const span = contentSpan(el, axis, z)
@@ -274,8 +277,7 @@ function StripSeam({ axis, varName, target, strip, storageKey, min, max, default
     const g = splitGeom(el, z)
     let lo = resolveClamp(min, g)
     let hi = Math.min(resolveClamp(max, g), 0.9 * span)
-    const s = strip.current
-    const honoured = s ? honouredRange(s, el, varName, axis, z) : null
+    const honoured = honouredRange(strip.current!, el, varName, axis, z)
     if (honoured) {
       lo = Math.max(lo, honoured[0])
       hi = Math.min(hi, honoured[1])
@@ -303,7 +305,7 @@ function StripSeam({ axis, varName, target, strip, storageKey, min, max, default
     if (!b) {
       // Hidden (a keep-alive host's 0×0): the stored % raw, as Splitter's mount did. The next real
       // box is re-fitted before it paints.
-      target.current?.style.setProperty(varName, `${pref.current}%`)
+      container()?.style.setProperty(varName, `${pref.current}%`)
       painted.current = pref.current!
       return
     }
@@ -316,12 +318,12 @@ function StripSeam({ axis, varName, target, strip, storageKey, min, max, default
   // a kept-alive host shown again (it mounted at 0×0, where nothing could be clamped).
   useLayoutEffect(() => {
     fitRef.current()
-    const el = target.current
+    const el = strip.current?.parentElement
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => fitRef.current())
     ro.observe(el)
     return () => ro.disconnect()
-  }, [target])
+  }, [strip])
 
   const commit = (px: number) => {
     const b = box()
@@ -417,10 +419,13 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
     cancelAnimationFrame(later.current)
     later.current = requestAnimationFrame(() => setMeasured(measure()))
   }, [measure])
-  // Measured before first paint, on every window resize (where a column's floor can start or stop
-  // binding), and after each commit (below). A ratio needs no clamp against the box: the record's
+  // Measured once the commit is done, on every window resize (where a column's floor can start or
+  // stop binding), and after each commit of the divider's own (below). Not in a layout effect: the
+  // pane after the divider (Rx Frequency under its seam, Classic's Stations aside) has no ref yet
+  // while the divider's layout effects run. Only the announced value waits for it — a key or a
+  // drag measures at the moment it acts. A ratio needs no clamp against the box: the record's
   // shares are clamped on load (coercePanelLayout) and on every write (seamShares).
-  useLayoutEffect(() => {
+  useEffect(() => {
     setMeasured(measure())
     window.addEventListener('resize', remeasure)
     return () => {

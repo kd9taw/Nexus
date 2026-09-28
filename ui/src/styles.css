@@ -5023,8 +5023,9 @@ h2 {
   min-width: 0;
 }
 
-/* Draggable pane splitters. Pointer-driven (mouse/touch/pen); they write the
-   --left-rail-w / --right-rail-w CSS vars live during a drag. */
+/* The pane dividers (components/PaneSeam.tsx). Dragged (mouse/touch/pen) or moved from the
+   keyboard (arrows, Home/End, Backspace); the rail ones write the --left-rail-w /
+   --right-rail-w CSS vars live during a drag. */
 .pane-splitter {
   cursor: col-resize;
   width: 8px;
@@ -5043,8 +5044,15 @@ h2 {
   grid-area: split;
 }
 .pane-splitter:hover,
+.pane-splitter:focus-visible,
 body.resizing .pane-splitter {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* A focused divider shows where the keys will act. The ring is drawn inside the box, so a
+   neighbour cannot clip it (the .connect-sep pattern). */
+.pane-splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 body.resizing {
   cursor: col-resize;
@@ -16053,8 +16061,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* Waterfall: a SHORT full-width strip (a glance tool), not a tall column — the
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
-  /* Height is operator-resizable (the Splitter under it drives --cockpit-wf-h and
-     clamps 88–420 px); 22% stays the untouched default. `flex-shrink:1` + no px
+  /* Height is operator-resizable (the PaneSeam under it drives --cockpit-wf-h and
+     clamps 88–420 px, and to what this rule honours); 22% stays the untouched default. `flex-shrink:1` + no px
      floor + a max lets it YIELD on short windows instead of starving the lists
      below — the fit-scale keeps it a comfortable size at normal sizes. */
   flex: 0 1 var(--cockpit-wf-h, 22%);
@@ -16097,7 +16105,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    the promoted Rx-Frequency column (decode pane + Tx1–Tx6 machine) | the Stations
    roster. The WSJT-X pair takes ~75% of the width; every track is minmax so no
    min-content floor can force horizontal blow-out. Columns 2/3 consume the
-   --op-col-a/-b fr tokens the column seam (SplitterSeam axis='x') paints on this
+   --op-col-a/-b fr tokens the column seam (a PaneSeam, axis='x') paints on this
    container, so the operator tunes the pair/roster balance by drag; undragged,
    the 0.95fr/0.72fr defaults apply. Tighter 8px gap (density pass). */
 .cockpit-lower.classic {
@@ -16471,7 +16479,7 @@ button.cq-skiptx1.on {
   flex-direction: column;
   gap: var(--space-2);
 }
-/* Column seam (SplitterSeam axis='x'): a full-height grab line over the 8px grid
+/* Column seam (a PaneSeam, axis='x'): a full-height grab line over the 8px grid
    gap between the pair column and the roster. Drags paint --op-col-a/-b on the
    grid container; commit persists via panels.setShares (clamped on load). */
 .cockpit-qsocol > .pane-splitter.col-seam {
@@ -21708,7 +21716,7 @@ button.sat-chip:disabled {
   flex: 1;
 }
 
-/* --- Operator-resizable sub-panels (Splitter.tsx) --- */
+/* --- Operator-resizable sub-panels (PaneSeam.tsx) --- */
 /* Per-cockpit scope heights: scoped vars so dragging one cockpit's scope never
    resizes the other (they share .ph-scope-panel). The splitter clamps 100–420 px. */
 .cw-cockpit .ph-scope-panel {
@@ -21750,7 +21758,7 @@ button.sat-chip:disabled {
   margin: calc(var(--space-1) * -1) 0;
   align-self: stretch;
 }
-/* Sibling-seam variant (SplitterSeam): the grab line BETWEEN two share-driven flex panes in
+/* Sibling-seam variant (a PaneSeam split): the grab line BETWEEN two share-driven flex panes in
    a column. Fixed — never grows or shrinks, so it stays a clean divider while the panes it
    splits do the flexing. */
 .pane-splitter.seam {

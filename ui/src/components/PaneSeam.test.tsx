@@ -71,7 +71,6 @@ describe('a STRIP divider', () => {
       <PaneSeam
         axis="y"
         varName="--h"
-        target={{ current: target }}
         strip={{ current: strip }}
         storageKey="nexus.split.test.h"
         min={100}

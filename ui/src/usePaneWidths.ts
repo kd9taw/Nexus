@@ -21,15 +21,21 @@ function effWidth(): number {
   return window.innerWidth / zoom
 }
 
+/** The widest each rail may be in this window — the ceilings its divider announces. */
+function rightMax(): number {
+  return Math.round(effWidth() * 0.6)
+}
+function leftMax(): number {
+  return Math.round(effWidth() * 0.4)
+}
+
 /** Clamp the right (waterfall) rail width: ≥ RIGHT_MIN, ≤ 60% of the effective width. */
 export function clampRight(px: number): number {
-  const max = Math.round(effWidth() * 0.6)
-  return Math.max(RIGHT_MIN, Math.min(max, px))
+  return Math.max(RIGHT_MIN, Math.min(rightMax(), px))
 }
 /** Clamp the left (stations) rail width: ≥ LEFT_MIN, ≤ 40% of the effective width. */
 export function clampLeft(px: number): number {
-  const max = Math.round(effWidth() * 0.4)
-  return Math.max(LEFT_MIN, Math.min(max, px))
+  return Math.max(LEFT_MIN, Math.min(leftMax(), px))
 }
 
 /** First-run / reset rail widths proportional to the screen (clamped), so a fresh
@@ -72,6 +78,8 @@ export function usePaneWidths(scale?: number) {
   }
   const [rightW, setRightW] = useState(() => clampRight(prefRef.current!.right))
   const [leftW, setLeftW] = useState(() => clampLeft(prefRef.current!.left))
+  // The ceilings, re-read at the same moments as the clamps above (they move together).
+  const [maxW, setMaxW] = useState(() => ({ right: rightMax(), left: leftMax() }))
 
   // Publish ONLY. These effects used to also persist, which re-anchored whatever was
   // published on every mount — a stale over-wide value never self-healed, and clamping
@@ -92,6 +100,9 @@ export function usePaneWidths(scale?: number) {
     const apply = () => {
       setRightW(clampRight(prefRef.current!.right))
       setLeftW(clampLeft(prefRef.current!.left))
+      const right = rightMax()
+      const left = leftMax()
+      setMaxW((m) => (m.right === right && m.left === left ? m : { right, left }))
     }
     const onResize = () => {
       cancelAnimationFrame(raf)
@@ -117,16 +128,34 @@ export function usePaneWidths(scale?: number) {
     surfaceSet(KEY_LEFT, String(w))
     setLeftW(w)
   }, [])
-  const resetWidths = useCallback(() => {
+  // One rail back to its default (its divider's double-click / Backspace); the other rail stays.
+  const resetRight = useCallback(() => {
     const r = defaultRight()
-    const l = defaultLeft()
     prefRef.current!.right = r
-    prefRef.current!.left = l
     surfaceSet(KEY_RIGHT, String(r))
-    surfaceSet(KEY_LEFT, String(l))
     setRightW(r)
+  }, [])
+  const resetLeft = useCallback(() => {
+    const l = defaultLeft()
+    prefRef.current!.left = l
+    surfaceSet(KEY_LEFT, String(l))
     setLeftW(l)
   }, [])
+  // Both (Reset layout).
+  const resetWidths = useCallback(() => {
+    resetRight()
+    resetLeft()
+  }, [resetRight, resetLeft])
 
-  return { rightW, leftW, commitRight, commitLeft, resetWidths }
+  return {
+    rightW,
+    leftW,
+    rightMax: maxW.right,
+    leftMax: maxW.left,
+    commitRight,
+    commitLeft,
+    resetRight,
+    resetLeft,
+    resetWidths,
+  }
 }

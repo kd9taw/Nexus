@@ -6,7 +6,7 @@ import {
   SCOPE_SPLIT_MAX,
   SCOPE_SPLIT_MIN,
   type SplitClamp,
-} from './components/Splitter'
+} from './features/paneSeam'
 
 // Guards the DEFICIT VALVE (2026-07-30 layout assessment, mechanism C1/C2): every
 // non-Operate cockpit shell must resolve to `overflow-y: auto` so a genuine vertical
@@ -1061,17 +1061,17 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
   ]
   const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX }
 
-  /** The `<Splitter …/>` that drives `varName`, as prop → source expression. */
+  /** The `<PaneSeam …/>` that drives `varName`, as prop → source expression. */
   function splitterProps(src: string, varName: string): Record<string, string> {
     const at = src.indexOf(`varName="${varName}"`)
-    expect(at, `no <Splitter varName="${varName}" …> in the source`).toBeGreaterThan(-1)
-    const el = src.slice(src.lastIndexOf('<Splitter', at), src.indexOf('/>', at))
+    expect(at, `no <PaneSeam varName="${varName}" …> in the source`).toBeGreaterThan(-1)
+    const el = src.slice(src.lastIndexOf('<PaneSeam', at), src.indexOf('/>', at))
     const out: Record<string, string> = {}
     for (const m of el.matchAll(/(\w+)=\{([^{}]*)\}/g)) out[m[1]] = m[2].trim()
     return out
   }
 
-  /** Resolve a declared clamp to CSS px the way Splitter.tsx does: an exported
+  /** Resolve a declared clamp to CSS px the way PaneSeam does: an exported
    *  SplitClamp by name, else a px literal. */
   function declaredPx(expr: string | undefined, g: Geom): number | null {
     if (expr === undefined) return null
@@ -1111,7 +1111,7 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
               `${prop}: ${sheet!.value} }\` honours ${want}px at font ${g.fontPx}px / --vh-eff ` +
               `${g.vhEff}px. The ${Math.abs(got! - want!).toFixed(1)}px of disagreement is DEAD ` +
               'TRAVEL at that end of the drag — declare the clamp in the sheet\'s own units ' +
-              '(SCOPE_SPLIT_MIN / SCOPE_SPLIT_MAX in Splitter.tsx).',
+              '(SCOPE_SPLIT_MIN / SCOPE_SPLIT_MAX in features/paneSeam.ts).',
           ).toBeCloseTo(want!, 6)
         }
       })

@@ -332,7 +332,7 @@ const INDIRECT: Record<string, string[]> = {
   // unscoped layout key — which no test could catch, since its literal would not be in the
   // classification either.
   'features/paneLayout.ts:spec': [],
-  'components/Splitter.tsx:storageKey': [
+  'components/PaneSeam.tsx:storageKey': [
     'nexus.split.operate.waterfall',
     'nexus.split.cw.scope',
     'nexus.split.phone.scope',

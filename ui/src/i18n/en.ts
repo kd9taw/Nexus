@@ -9253,8 +9253,8 @@ export const EN = {
   // themselves live in the cockpits and move with them.
   'shell.tx.announce.on': 'Transmitting',
   'shell.tx.announce.off': 'Receiving',
-  'shell.rail.stations.aria': 'Resize stations panel (double-click to reset)',
-  'shell.rail.waterfall.aria': 'Resize waterfall pane (double-click to reset)',
+  'shell.rail.stations.label': 'stations panel width',
+  'shell.rail.waterfall.label': 'waterfall panel width',
   'shell.bandActivity.title': 'Band Activity — heard on the band',
   'shell.roam.aria': 'Roam settings',
   'shell.roam.close.aria': 'Close Roam settings',
@@ -9613,11 +9613,10 @@ export const EN = {
   'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
 
   // ── Drag handles ────────────────────────────────────────────────────────────────────
-  // One entry for both handles (`Splitter` sizes a panel, `SplitterSeam` splits two): the
-  // tooltip makes the same statement about the same gesture, and `{{label}}` — the
-  // separator's accessible name — is what says which handle it is.
+  // One entry for every divider (PaneSeam: a strip's height, the split between two panes, a
+  // rail's width): the tooltip makes the same statement about the same gestures, and
+  // `{{label}}` — the separator's accessible name — is what says which divider it is.
   'paneSeam.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click or press Backspace to reset.',
-  'splitter.title': 'Drag to resize ({{label}})',
 
   // ── The theme cards ─────────────────────────────────────────────────────────────────
   // Each card: the theme's name, and under it a one-line personality in radio terms. The

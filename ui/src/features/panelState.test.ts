@@ -279,6 +279,18 @@ describe('share (seam resize)', () => {
     expect(result.current.shareOf('rxfreq')).toBe(1)
   })
 
+  it('setShares with null clears a pane back to its stock share, in the same ONE undoable step', () => {
+    // A divider's reset: the stock split is a SHEET default the record never holds, so the only
+    // way back to it is for the record to hold nothing for the pair.
+    const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
+    act(() => result.current.setShares({ bandActivity: 1.4, rxfreq: 0.6, stations: 1.2 }))
+    act(() => result.current.setShares({ bandActivity: null, rxfreq: null }))
+    expect(result.current.layout.share).toEqual({ stations: 1.2 })
+    expect(JSON.parse(localStorage.getItem(KEY)!).share).toEqual({ stations: 1.2 })
+    act(() => result.current.undo())
+    expect(result.current.layout.share).toEqual({ bandActivity: 1.4, rxfreq: 0.6, stations: 1.2 })
+  })
+
   it('reset clears shares back to default', () => {
     const { result } = renderHook(() => usePanelLayout(OPERATE_PANELS))
     act(() => result.current.setShare('rxfreq', 1.8))
