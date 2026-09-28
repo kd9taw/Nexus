@@ -11,7 +11,13 @@ import { runtime, roomStatus } from './runtime.mjs'
 import { recallReference, recallAdif } from './recall-reference.mjs'
 import { insightsReference, insightsAdif } from './insights-reference.mjs'
 
-for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`actual cloud ${tier} QSO exchange finishes with durable ${prompt ? 'confirmed' : 'current'} logging`, { timeout: 90000 }, async () => {
+// REMOVAL STAGE 3 (the change plan's §4.4): the Worker no longer forwards the old page's application
+// lanes or its command path, so the tests that drive a real station through them cannot pass. They are
+// kept, skipped by name, until stage 4 deletes them with that code. What the product still uses of the
+// same path (pairing, the monitor, the lease and Stop) is proven by the tests below them.
+const retiredWithTheOldPage = { skip: 'removal stage 3: the old page\'s application lanes and command path are no longer forwarded; deleted in stage 4' }
+
+for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`actual cloud ${tier} QSO exchange finishes with durable ${prompt ? 'confirmed' : 'current'} logging`, { timeout: 90000, ...retiredWithTheOldPage }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
   const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
   let socket
@@ -255,6 +261,85 @@ test('actual native A5: approving the pairing pins the key the confirming browse
   }
 })
 
+// REMOVAL STAGE 3 across the real service and the real station: what the Remote page still uses of the
+// station's path. Pairing, the monitor's observation, the lease and Stop the stream takes on the
+// operation lane, the command path refused by name before it reaches the station, then disable and
+// forget. The retired tests above carried these steps among the old page's; this keeps them proven.
+test('actual native monitor, lease and Stop through workerd, with the old command path refused before the station', { timeout: 60000 }, async () => {
+  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+  const app = await runtime(), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  let socket
+  try {
+    await probe.ready()
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'Monitor bench' })
+    const stationId = begin.status.pairingId
+    await browser.post('pair/claim', { code: begin.status.pairingCode })
+    const { response } = await browser.post('pair/confirm', { id: stationId })
+    browser.setCookie(response.headers.get('set-cookie'))
+    await probe.send({ type: 'refresh' })
+    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })
+    assert.equal(paired.ok, true, paired.error)
+    const { value: device } = await browser.post(`stations/${stationId}/device`, { name: 'Not asked for' })
+    assert.equal(device.approved, true, 'the pairing browser was approved with the station')
+    for (let i = 0; i < 50; i++) {
+      const { status } = await probe.send({ type: 'status' })
+      if (status.stationPermissions?.includes(device.deviceId) && status.loggingPermissions?.includes(device.deviceId)) break
+      await delay(100)
+    }
+    const namespace = await app.mf.getDurableObjectNamespace('STATIONS'), room = namespace.get(namespace.idFromName(stationId))
+    for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
+    assert.equal((await roomStatus(room)).online, true)
+    // The monitor: the real station's observation reaches the page.
+    const { value: ticket } = await browser.post(`stations/${stationId}/ticket`)
+    socket = await browser.open(stationId, ticket.ticket)
+    await socket.take(value => value.type === 'session')
+    const first = await socket.take(value => value.type === 'observation')
+    assert.equal(first.frame.source, 'native')
+    socket.ackObservations()
+    // The stream's lease and Stop, on the operation lane, answered by the real station.
+    const operation = async request => {
+      await delay(270)
+      const sent = { requestId: crypto.randomUUID(), ...request }
+      socket.send({ type: 'operationRequest', operationVersion: 4, request: sent })
+      return (await socket.take(value => value.type === 'operationResponse' && value.requestId === sent.requestId))
+    }
+    let state = (await operation({ type: 'state' })).value
+    assert.equal(state.phase, 'available', 'the approval allowed this browser')
+    state = (await operation({ type: 'acquire', stationBootId: state.stationBootId })).value
+    assert.equal(state.phase, 'controlling')
+    state = (await operation({ type: 'heartbeat', leaseId: state.leaseId })).value
+    assert.equal(state.phase, 'controlling')
+    const stopped = await operation({ type: 'stopTransmit', stationBootId: state.stationBootId, leaseId: state.leaseId, transmitEpoch: state.transmitEpoch })
+    assert.deepEqual(stopped.value, { stop: 'accepted' })
+    // The old command path is refused by name, and the station never sees it: nothing is logged. The
+    // request is one the station would apply if asked (a whole record, a fresh command window, a browser
+    // the approval allowed to log): through the previous Worker this exact request comes back `applied`
+    // and the station's log holds one QSO, so the count below can tell a refusal from a write.
+    assert.deepEqual(await probe.send({ type: 'seedLogging' }), { count: 0, adif: '', txEnabled: false })
+    const fresh = (await operation({ type: 'heartbeat', leaseId: state.leaseId })).value
+    const logged = await operation({ type: 'logManual', stationBootId: fresh.stationBootId, leaseId: fresh.leaseId,
+      expectedRevision: fresh.revision, commandWindowId: fresh.commandWindowId, clientSequence: fresh.nextSequence,
+      record: { call: 'W1AW', grid: 'FN31', country: null, state: null, band: '20m', freqMhz: 14.25, mode: 'SSB', rstSent: '59', rstRcvd: '57',
+        name: null, qth: null, comment: null, notes: null, whenUnix: Math.floor(Date.now() / 1000), confirmed: false, awardConfirmed: false } })
+    assert.equal(logged.error, 'stationUnsupported')
+    assert.equal((await probe.send({ type: 'loggingEvidence' })).count, 0, 'the refused command never reached the station')
+    const released = await operation({ type: 'release', leaseId: state.leaseId })
+    assert.equal(released.value?.phase, 'available')
+    // Turning Remote off at the shack ends the page's session; forgetting the pairing ends the station.
+    assert.equal((await probe.send({ type: 'disable' })).ok, true)
+    await socket.take(value => value.type === 'closed')
+    const restarted = await probe.send({ type: 'restart' })
+    assert.equal(restarted.status.stationId, stationId)
+    assert.equal(restarted.status.phase, 'disabled')
+    const forgotten = await probe.send({ type: 'forget' })
+    assert.equal(forgotten.ok, true, JSON.stringify(forgotten))
+    assert.equal((await app.db.prepare('SELECT enabled FROM stations WHERE id=?').bind(stationId).first()).enabled, 0)
+  } finally {
+    socket?.close()
+    try { await probe.stop() } finally { await app.mf.dispose() }
+  }
+})
+
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
@@ -301,7 +386,7 @@ async function nativeProbe(binary, origin) {
   }
 }
 
-test('actual native controller pairs, stores authority, publishes real DTOs, disables and revokes through workerd', { timeout: 60000 }, async () => {
+test('actual native controller pairs, stores authority, publishes real DTOs, disables and revokes through workerd', { timeout: 60000, ...retiredWithTheOldPage }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY, 'run npm run test:native to build the actual native probe')
   const app = await runtime()
   const probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
@@ -813,7 +898,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 // it on the live client's own 30 s wall clock, which puts the budget on the GAP between renewals
 // (measured max 30.3 s against 60 s) instead of on the length of the block, so adding operations
 // here no longer walks toward that cliff. The node clock above still bounds the whole run.
-for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
+for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:operationVersion>=4?180000:60000,...retiredWithTheOldPage},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket

@@ -15,6 +15,11 @@ const sample = () => {
   return frame
 }
 const type = name => value => value?.type === name
+// REMOVAL STAGE 3 (the change plan's §4.4): the Worker no longer forwards the old page's application
+// lanes or its command path, so the tests that prove that forwarding cannot pass, and prove nothing the
+// product still does. They are kept, skipped by name, until stage 4 deletes them with the code they
+// cover. What survives of them (Stop, the lease, reads under a lapsed entitlement) is proven below.
+const retiredWithTheOldPage = { skip: 'removal stage 3: the old page\'s application lanes and command path are no longer forwarded; deleted in stage 4' }
 const applicationSample = (requestId, command = 'get_snapshot') => ({ type: 'applicationResult', requestId, command,
   revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL' }, removed: [] })
 
@@ -54,7 +59,7 @@ test('a retired service announces where Remote moved, then refuses new pairings,
     })
   })
 
-test('station lookups require all extensions, preserve v14 refusal and survive hibernation', async () => {
+test('station lookups require all extensions, preserve v14 refusal and survive hibernation', retiredWithTheOldPage, async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
   assert.equal(config.applicationVersion, 17)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
@@ -84,7 +89,7 @@ test('station lookups require all extensions, preserve v14 refusal and survive h
     live.browser.close(); live.station.close()
   }
 })
-test('rare-DX alerts require all extensions, leave a v15 station untouched and survive hibernation', async () => {
+test('rare-DX alerts require all extensions, leave a v15 station untouched and survive hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1', 'x-nexus-application-alerts-version':'1' }
@@ -111,7 +116,7 @@ test('rare-DX alerts require all extensions, leave a v15 station untouched and s
     live.browser.close(); live.station.close()
   }
 })
-test('the rotator heading requires all extensions and leaves a v16 station untouched', async () => {
+test('the rotator heading requires all extensions and leaves a v16 station untouched', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1', 'x-nexus-application-alerts-version':'1', 'x-nexus-application-rotator-version':'1' }
@@ -138,7 +143,7 @@ test('the rotator heading requires all extensions and leaves a v16 station untou
     live.browser.close(); live.station.close()
   }
 })
-test('full-log insights require the complete extension advertisement and survive room hibernation', async () => {
+test('full-log insights require the complete extension advertisement and survive room hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1', 'x-nexus-application-insights-version': '1' }
   for (const [missing, expected] of [[null, 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
@@ -173,7 +178,7 @@ async function admitted(pair, applicationVersion = 0, extensions = {}) {
   const session = await browser.take(type('session'))
   return { station, browser, deviceId, session, ticket }
 }
-test('configuration requires all extensions, preserves v13 refusal and survive hibernation', async () => {
+test('configuration requires all extensions, preserves v13 refusal and survive hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1' }
@@ -199,7 +204,7 @@ test('configuration requires all extensions, preserves v13 refusal and survive h
     live.browser.close(); live.station.close()
   }
 })
-test('navigation requires all extensions, preserves v12 refusal and survive hibernation', async () => {
+test('navigation requires all extensions, preserves v12 refusal and survive hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1' }
@@ -225,7 +230,7 @@ test('navigation requires all extensions, preserves v12 refusal and survive hibe
     live.browser.close(); live.station.close()
   }
 })
-test('SSTV and APRS require all extensions, preserve v11 refusal and survive hibernation', async () => {
+test('SSTV and APRS require all extensions, preserve v11 refusal and survive hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1' }
@@ -251,7 +256,7 @@ test('SSTV and APRS require all extensions, preserve v11 refusal and survive hib
     live.browser.close(); live.station.close()
   }
 })
-test('JS8 requires all extensions, preserves v10 refusal and survives hibernation', async () => {
+test('JS8 requires all extensions, preserves v10 refusal and survives hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1' }
@@ -277,7 +282,7 @@ test('JS8 requires all extensions, preserves v10 refusal and survives hibernatio
     live.browser.close(); live.station.close()
   }
 })
-test('Field Day requires all extensions, preserves v9 refusal and survives hibernation', async () => {
+test('Field Day requires all extensions, preserves v9 refusal and survives hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1' }
@@ -303,7 +308,7 @@ test('Field Day requires all extensions, preserves v9 refusal and survives hiber
     live.browser.close(); live.station.close()
   }
 })
-test('POTA/SOTA requires all extensions, preserves v8 refusal and survives hibernation', async () => {
+test('POTA/SOTA requires all extensions, preserves v8 refusal and survives hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1' }
@@ -329,7 +334,7 @@ test('POTA/SOTA requires all extensions, preserves v8 refusal and survives hiber
     live.browser.close(); live.station.close()
   }
 })
-test('Memories requires all extensions, preserves v7 refusal and survives hibernation', async () => {
+test('Memories requires all extensions, preserves v7 refusal and survives hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1' }
@@ -355,7 +360,7 @@ test('Memories requires all extensions, preserves v7 refusal and survives hibern
     live.browser.close(); live.station.close()
   }
 })
-test('DXpeditions requires all extensions, preserves v6 refusal and survives hibernation', async () => {
+test('DXpeditions requires all extensions, preserves v6 refusal and survives hibernation', retiredWithTheOldPage, async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1' }
@@ -388,7 +393,7 @@ async function publish(station, sequence) {
   return frame
 }
 
-test('application reads use approved sockets, survive hibernation and retain observer-only authority', async () => {
+test('application reads use approved sockets, survive hibernation and retain observer-only authority', retiredWithTheOldPage, async () => {
   const pair = await app.paired(), live = await admitted(pair, 1)
   live.browser.send({ type: 'applicationHello' })
   const capabilities = await live.browser.take(type('applicationCapabilities'))
@@ -431,7 +436,7 @@ test('an older station advertises an update requirement and continues its valid 
   live.browser.close(); live.station.close()
 })
 
-test('v2 subscriptions share native samples across approved browsers and recover full bases after hibernation', async () => {
+test('v2 subscriptions share native samples across approved browsers and recover full bases after hibernation', retiredWithTheOldPage, async () => {
   const pair = await app.paired(), live = await admitted(pair, 2)
   const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
   const second = await pair.browser.open(pair.stationId, ticket.ticket)
@@ -474,7 +479,7 @@ test('v2 subscriptions share native samples across approved browsers and recover
   live.browser.close(); second.close(); live.station.close()
 })
 
-test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
+test('keyboard observation needs the complete native advertisement and survives room hibernation', retiredWithTheOldPage, async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
   assert.equal(config.applicationVersion, 17)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
@@ -1129,7 +1134,7 @@ test('manual operations retain only routing authority across hibernation and pre
  }
 })
 
-test('expanded operations preserve legacy clients, minimum peer versions and hibernating command routes', async () => {
+test('expanded operations preserve legacy clients, minimum peer versions and hibernating command routes', retiredWithTheOldPage, async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
   assert.equal(config.operationVersion, 2, 'old browsers must keep their original advertisement')
   assert.equal(config.operationMaxVersion, 3)
@@ -1191,7 +1196,9 @@ test('expanded operations preserve legacy clients, minimum peer versions and hib
   }
 })
 
-test('FT Stop crosses the real relay alongside pending operations and survives hibernation', async () => {
+// Removal stage 3 took the pending command out of this test (the command path is retired); the Stop and
+// the lease beside it are what the stream sends on this lane.
+test('Stop crosses the real relay alongside a pending heartbeat and survives hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
   assert.equal(config.operationFtVersion, 1)
   assert.equal(config.operationMaxVersion, 3)
@@ -1200,14 +1207,11 @@ test('FT Stop crosses the real relay alongside pending operations and survives h
   })
   const boot = crypto.randomUUID(), lease = crypto.randomUUID(), sessionId = live.session.sessionId
   const send = request => live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
-  const command = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: boot, leaseId: lease,
-    expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1,
-    context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }, action: { action: 'decoder.clear', receiver: 'cw' } }
-  send(command)
-  assert.equal((await live.station.take(type('operationRequest'))).operationVersion, 4)
   const heartbeat = { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId: lease }
   send(heartbeat)
-  assert.equal((await live.station.take(type('operationRequest'))).request.type, 'heartbeat')
+  const beat = await live.station.take(type('operationRequest'))
+  assert.equal(beat.request.type, 'heartbeat')
+  assert.equal(beat.operationVersion, 4)
   const stop = { type: 'stopTransmit', requestId: crypto.randomUUID(), stationBootId: boot, leaseId: lease, transmitEpoch: '000000000000002a' }
   send(stop)
   const routed = await live.station.take(type('operationRequest'))
@@ -1218,9 +1222,6 @@ test('FT Stop crosses the real relay alongside pending operations and survives h
   await app.evict(pair.stationId)
   live.station.send({ type: 'operationResponse', sessionId, requestId: stop.requestId, value: { stop: 'accepted' } })
   assert.deepEqual((await live.browser.take(type('operationResponse'))).value, { stop: 'accepted' })
-  live.station.send({ type: 'operationResponse', sessionId, requestId: command.requestId,
-    value: { operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: 'receiverState' } })
-  assert.equal((await live.browser.take(type('operationResponse'))).requestId, command.requestId)
   live.station.send({ type: 'operationResponse', sessionId, requestId: heartbeat.requestId,
     value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId: lease, revision: 2,
       commandWindowId: crypto.randomUUID(), nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002b' } })
@@ -1229,7 +1230,7 @@ test('FT Stop crosses the real relay alongside pending operations and survives h
   live.browser.close(); live.station.close()
 })
 
-test('a pushed control outcome (operation v5) crosses the real relay, and only from a station that advertised it', async () => {
+test('a pushed control outcome (operation v5) crosses the real relay, and only from a station that advertised it', retiredWithTheOldPage, async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
   assert.equal(config.operationPushVersion, 1)
   const context = { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }
@@ -1268,7 +1269,7 @@ test('a pushed control outcome (operation v5) crosses the real relay, and only f
   legacy.browser.close()
 })
 
-test('a log change crosses the real relay only at v4, survives hibernation, and old stations never see one', async () => {
+test('a log change crosses the real relay only at v4, survives hibernation, and old stations never see one', retiredWithTheOldPage, async () => {
   const target = { call: 'W1AW', whenUnix: 1788940800, key: 'a'.repeat(64) }
   const change = () => ({ type: 'logChange', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
     expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, change: { kind: 'delete', target } })
@@ -1305,7 +1306,7 @@ test('a log change crosses the real relay only at v4, survives hibernation, and 
   live.browser.close(); live.station.close()
 })
 
-test('an activation export crosses the real relay only at v4, as a read, and a whole chunk reaches the page', async () => {
+test('an activation export crosses the real relay only at v4, as a read, and a whole chunk reaches the page', retiredWithTheOldPage, async () => {
   const read = () => ({ type: 'activationExport', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
     selection: { reference: 'US-1234', dayStartUnix: 1788912000, callsign: 'W9XYZ' }, index: 0 })
   // A station that predates operation v4 cannot parse one: the relay refuses before its wire.
@@ -1337,7 +1338,7 @@ test('an activation export crosses the real relay only at v4, as a read, and a w
   live.browser.close(); live.station.close()
 })
 
-test('a settings change crosses the real relay at v4, and a page naming a setting off the list is closed before the station sees it', async () => {
+test('a settings change crosses the real relay at v4, and a page naming a setting off the list is closed before the station sees it', retiredWithTheOldPage, async () => {
   const change = values => ({ type: 'logChange', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
     expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, change: { kind: 'settings', revision: 'a'.repeat(64), values } })
   const pair = await app.paired(), live = await admitted(pair, 1, {
@@ -2139,7 +2140,7 @@ async function commandReachesStation(live, request = stationCommand()) {
   return true
 }
 
-test('a revoked entitlement stops commands at the relay, and a live one does not', async () => {
+test('a revoked entitlement stops commands at the relay, and a live one does not', retiredWithTheOldPage, async () => {
   const pair = await app.paired()
   const live = await admitted(pair, 1, OPERATION_HEADERS)
 
@@ -2168,17 +2169,22 @@ test('a revoked entitlement stops commands at the relay, and a live one does not
   live.browser.close(); live.station.close()
 })
 
-test('an expired entitlement stops commands, while Stop and reads still reach the station', async () => {
+// Removal stage 3 retired the command this test used to gate; what an expired account is refused now is
+// starting a stream, which is starting to command the station.
+test('an expired entitlement refuses a stream offer, while Stop and reads still reach the station', async () => {
   const pair = await app.paired()
-  const live = await admitted(pair, 1, OPERATION_HEADERS)
-  assert.equal(await commandReachesStation(live), true, 'control: entitled, and commanding')
+  const live = await admitted(pair, 1, { ...OPERATION_HEADERS, ...STREAM_HEADERS })
+  live.browser.send(pageSignal('offer'))
+  assert.equal((await live.station.take(typed('streamSignal'))).payload.kind, 'offer', 'control: entitled, an offer reaches the station')
 
   // Not disabled - simply out of time, which is what a trial or a subscription does on its own.
   await app.db.prepare('UPDATE trials SET enabled=1,expires_at=? WHERE account_id=?')
     .bind(Date.now() - 1000, pair.browser.accountId).run()
   await settleEntitlement(live)
-  assert.equal(await commandReachesStation(live), false, 'an expired account must not command the radio')
-  assert.equal((await live.browser.take(type('operationResponse'))).error, 'stationUnavailable')
+  live.browser.send(pageSignal('offer'))
+  assert.deepEqual(await live.browser.take(typed('streamState')), { type: 'streamState', streaming: false, reason: 'serviceAccessExpired' },
+    'an expired account must not start commanding the station')
+  assert.equal(await reached(live, typed('streamSignal')), false)
 
   // WHAT A LAPSED SESSION MAY STILL DO, and both are deliberate.
   // A READ, because `state` is where the stationBootId, leaseId and transmitEpoch a Stop is
@@ -2206,7 +2212,7 @@ test('an expired entitlement stops commands, while Stop and reads still reach th
   live.browser.close(); live.station.close()
 })
 
-test('a command whose entitlement lapses survives hibernation as a refusal, not as a hole', async () => {
+test('a command whose entitlement lapses survives hibernation as a refusal, not as a hole', retiredWithTheOldPage, async () => {
   const pair = await app.paired()
   const live = await admitted(pair, 1, OPERATION_HEADERS)
   assert.equal(await commandReachesStation(live), true, 'control: entitled before the eviction')
@@ -2498,5 +2504,95 @@ test('a revoked entitlement refuses a stream offer at the relay, and a live one 
   await app.db.prepare('UPDATE trials SET enabled=1,expires_at=? WHERE account_id=?').bind(Date.now() + 3600000, pair.browser.accountId).run()
   await settleEntitlement(live)
   assert.equal(await offerReachesStation(), true, 'and a reinstated account can stream again')
+  live.browser.close(); live.station.close()
+})
+
+// --- removal stage 3: the old page's lanes are retired ------------------------------------------------
+// The change plan's §4.4, stage 3 (the operator's picks, 2026-09-27: the old page "Remove entirely",
+// "Now, alongside the PoC"): the Remote page watches or streams a station and nothing else, so the
+// Worker stops offering and forwarding the old page's lanes - the application lane, and the operation
+// lane's command path. The lease (state, acquire, heartbeat, release) and Stop still travel on the
+// operation lane: the stream takes its lease and sends its Stop there. Stations are untouched; they are
+// simply not asked.
+const EVERY_APPLICATION_EXTENSION = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
+  'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1', 'x-nexus-application-insights-version': '1',
+  'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1',
+  'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version': '1',
+  'x-nexus-application-navigation-version': '1', 'x-nexus-application-configuration-version': '1', 'x-nexus-application-lookups-version': '1',
+  'x-nexus-application-alerts-version': '1', 'x-nexus-application-rotator-version': '1' }
+const reached = (live, predicate, ms = 500) => live.station.take(predicate, ms).then(() => true, () => false)
+
+test('removal stage 3: /config no longer offers the application lane; the lease, audio and the stream still are', async () => {
+  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal('applicationVersion' in config, false, 'the application lane is not offered to the page')
+  // CONTROL: what the stream and the monitor use is advertised exactly as before.
+  assert.deepEqual([config.operationVersion, config.operationMaxVersion, config.operationFtVersion, config.audioVersion, config.streamVersion],
+    [2, 3, 1, 1, 1])
+})
+
+test('removal stage 3: the relay answers the old page\'s application lane itself, and forwards none of it', async () => {
+  const pair = await app.paired()
+  // A station that offers every application extension: before stage 3 this page and station negotiated v17.
+  const live = await admitted(pair, 1, { ...EVERY_APPLICATION_EXTENSION, ...OPERATION_HEADERS, ...STREAM_HEADERS })
+  live.browser.send({ type: 'applicationHello', version: 17 })
+  const capabilities = await live.browser.take(type('applicationCapabilities'))
+  assert.equal(capabilities.version, 0, 'no station is offered to the page on this lane')
+  assert.equal(capabilities.commands.length, 0)
+  const requestId = crypto.randomUUID()
+  live.browser.send({ type: 'applicationRead', requestId, command: 'get_snapshot', revision: null })
+  assert.deepEqual(await live.browser.take(type('applicationError')), { type: 'applicationError', requestId, error: 'stationUpdateRequired' })
+  // The oldest page (a v1 hello, no subscription) sent its reads to the station one by one: before stage
+  // 3 this read reached the station, so the check below can tell a relay that answers from one that asks.
+  const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
+  const oldest = await pair.browser.open(pair.stationId, ticket.ticket)
+  await oldest.take(type('session'))
+  oldest.send({ type: 'applicationHello' })
+  assert.equal((await oldest.take(type('applicationCapabilities'))).version, 0)
+  const read = crypto.randomUUID()
+  oldest.send({ type: 'applicationRead', requestId: read, command: 'get_snapshot', revision: null })
+  assert.deepEqual(await oldest.take(type('applicationError')), { type: 'applicationError', requestId: read, error: 'stationUpdateRequired' })
+  assert.equal(await reached(live, value => String(value?.type).startsWith('application')), false, 'nothing of the lane reached the station')
+  // CONTROL, on the same socket: the stream's signalling and the lease lane still reach the station.
+  live.browser.send(pageSignal('offer'))
+  assert.equal((await live.station.take(typed('streamSignal'))).payload.kind, 'offer')
+  await controlRoundTrip(live)
+  assert.equal(live.browser.closed, false)
+  assert.equal(oldest.closed, false)
+  oldest.close(); live.browser.close(); live.station.close()
+})
+
+test('removal stage 3: the relay refuses the old command path by name, and still carries the lease and Stop', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, { ...OPERATION_HEADERS, 'x-nexus-operation-push-version': '1' })
+  const send = request => live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+  const id = () => crypto.randomUUID()
+  const retired = [
+    stationCommand(),
+    { type: 'logManual', requestId: id() },
+    { type: 'logChange', requestId: id() },
+    { type: 'activationExport', requestId: id(), stationBootId: id(), leaseId: id(), selection: null, index: 0 },
+    { type: 'programExport', requestId: id() },
+    { type: 'result', requestId: id(), operationId: id() },
+  ]
+  for (const request of retired) {
+    send(request)
+    assert.deepEqual(await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId),
+      { type: 'operationResponse', requestId: request.requestId, error: 'stationUnsupported' }, request.type)
+  }
+  assert.equal(await reached(live, value => value.type === 'operationRequest'), false, 'none of them reached the station')
+  assert.equal(live.browser.closed, false, 'and the page keeps its socket')
+  // CONTROL: the lease and Stop still reach the station, on the same socket.
+  const boot = id(), leaseId = id()
+  for (const request of [{ type: 'state', requestId: id() }, { type: 'acquire', requestId: id(), stationBootId: boot },
+    { type: 'heartbeat', requestId: id(), leaseId }, { type: 'stopTransmit', requestId: id(), stationBootId: boot, leaseId, transmitEpoch: '000000000000002a' },
+    { type: 'release', requestId: id(), leaseId }]) {
+    send(request)
+    const routed = await live.station.take(value => value.type === 'operationRequest' && value.request.requestId === request.requestId)
+    assert.equal(routed.request.type, request.type)
+    live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: request.requestId,
+      value: request.type === 'stopTransmit' ? { stop: 'accepted' } : { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2,
+        commandWindowId: id(), nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a' } })
+    await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId)
+  }
   live.browser.close(); live.station.close()
 })
