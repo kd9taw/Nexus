@@ -5777,6 +5777,7 @@ export const ES: PartialCatalog = {
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.work.ready": "▶ {{call}} — {{mode}} {{band}}, listo para anotar",
   "shell.work.started": "▶ Trabajando a {{call}} — transmitiendo tu indicativo",
+  "paneSeam.title": "Arrastra, o usa las flechas, para redimensionar ({{label}}). Doble clic o Retroceso para restablecer.",
   "splitter.title": "Arrastra para redimensionar ({{label}})",
   "spots.beacon.ncdxf": "Baliza NCDXF — unidireccional, no se puede trabajar",
   "spots.beacon.w1aw": "Boletín de W1AW — unidireccional, no se puede trabajar",

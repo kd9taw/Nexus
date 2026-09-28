@@ -5892,6 +5892,7 @@ export const JA: PartialCatalog = {
   "pane.popOut.title": "このパネルを別ウィンドウで開きます(セカンドモニター用)",
   "pane.hide.aria": "{{title}}を非表示",
   "pane.hide.title": "このパネルを非表示にします(⊞ パネルメニューから復元できます)",
+  "paneSeam.title": "ドラッグまたは矢印キーでサイズ変更({{label}})。ダブルクリックまたはBackspaceキーでリセット。",
   "splitter.title": "ドラッグでサイズ変更({{label}})",
   "theme.aria": "テーマ",
   "theme.light.label": "ライト",

@@ -377,6 +377,7 @@ const MIGRATED = [
   'components/Toasts.tsx',
   'components/Splitter.tsx',
   'components/SplitterSeam.tsx',
+  'components/PaneSeam.tsx',
   'components/LinkPill.tsx',
   'components/panes/CockpitPaneFrame.tsx',
   'features/profiles.ts',

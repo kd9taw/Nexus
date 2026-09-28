@@ -9616,6 +9616,7 @@ export const EN = {
   // One entry for both handles (`Splitter` sizes a panel, `SplitterSeam` splits two): the
   // tooltip makes the same statement about the same gesture, and `{{label}}` — the
   // separator's accessible name — is what says which handle it is.
+  'paneSeam.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click or press Backspace to reset.',
   'splitter.title': 'Drag to resize ({{label}})',
 
   // ── The theme cards ─────────────────────────────────────────────────────────────────

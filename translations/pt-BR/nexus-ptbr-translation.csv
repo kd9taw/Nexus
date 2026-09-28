@@ -260,6 +260,7 @@
 "1","panels.undo.title","Put the layout back the way it was before the last change","","",""
 "1","panels.reset","Reset layout","","",""
 "1","panels.reset.title","Show every panel again (the stock layout)","","",""
+"1","paneSeam.title","Drag, or use the arrow keys, to resize ({{label}}). Double-click or press Backspace to reset.","","{{label}}","Tooltip on every divider that resizes part of a screen: the scope and waterfall heights, the split between two panes, the side panels. {{label}} is that divider's own name, such as ""scope height"". Backspace is the key that deletes to the left: use the name a Brazilian keyboard gives it."
 "1","splitter.title","Drag to resize ({{label}})","","{{label}}",""
 "1","detached.connecting","Connecting to the radio…","","",""
 "1","detached.fieldDay.inactive","Field Day isn’t active.","","Field Day",""

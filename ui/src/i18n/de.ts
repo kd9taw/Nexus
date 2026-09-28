@@ -5886,6 +5886,7 @@ export const DE: PartialCatalog = {
   "pane.popOut.title": "Diesen Bereich in einem eigenen Fenster öffnen (für einen zweiten Monitor)",
   "pane.hide.aria": "{{title}} ausblenden",
   "pane.hide.title": "Diesen Bereich ausblenden (über das Menü ⊞ Bereiche zurückholen)",
+  "paneSeam.title": "Ziehen oder mit den Pfeiltasten die Größe ändern ({{label}}). Doppelklick oder Rücktaste setzt zurück.",
   "splitter.title": "Zum Ändern der Größe ziehen ({{label}})",
   "theme.aria": "Design",
   "theme.light.label": "Hell",
