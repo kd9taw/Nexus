@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program. Nothing streams until you press **Start the stream**, and only with station control
   allowed for that browser at the radio. **Stop TX** stays at the top of the page the whole time
   and reaches the station by two routes at once. **Hold PTT** keys only while you hold it: let go,
-  or let the picture freeze, and it lets go. A band or mode list you open from the browser opens
-  inside the Nexus window, so you can see it and pick from it. Switching to another tab ends the
-  stream; press **Start the stream** again when you are back.
+  or let the picture freeze, and it lets go. In Phone the space bar over the picture is push-to-talk
+  as it is at the shack, and a space typed into a Nexus field still types. While the picture is
+  frozen Nexus takes no clicks or keys from the browser, and Stop TX still works. A band or mode
+  list you open from the browser opens inside the Nexus window, so you can see it and pick from it.
+  Switching to another tab ends the stream; press **Start the stream** again when you are back.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
