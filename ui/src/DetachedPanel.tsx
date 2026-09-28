@@ -94,6 +94,7 @@ import { readEnabledModes } from './useFeatures'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
+import { useSkin } from './useSkin'
 import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
@@ -208,6 +209,8 @@ function DetachedShell({ className, children }: { className?: string; children?:
 
 function DetachedPanelBody({ panel }: { panel: string }) {
   const [theme] = useTheme()
+  // The built-in theme rides on the theme: this document's own writer of `data-skin`.
+  useSkin(theme)
   // Pop-outs follow the contrast axis: a separate document re-applies the attribute itself,
   // the same way it mirrors the theme — outdoors, and an operator's eyes, are facts about the
   // station, not about a window. Only `fieldMode` reaches useScale; high contrast on its own

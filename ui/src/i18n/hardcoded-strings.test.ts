@@ -372,6 +372,7 @@ const MIGRATED = [
   'components/TempoHeader.tsx',
   'components/PanelsMenu.tsx',
   'components/ThemeSwitcher.tsx',
+  'features/skins.ts',
   'components/PalettePicker.tsx',
   'components/Toasts.tsx',
   'components/Splitter.tsx',

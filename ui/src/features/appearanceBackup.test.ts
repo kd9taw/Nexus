@@ -33,6 +33,7 @@ const STATION = `{
 
 const FULL: Appearance = {
   theme: 'light',
+  skin: 'paper',
   highContrast: true,
   night: 'auto',
   textSize: 'larger',
@@ -75,7 +76,7 @@ describe('the backup carries the appearance', () => {
     const section = JSON.parse(withAppearance(STATION, FULL)).appearance
     expect(Object.keys(section).sort()).toEqual(
       ['colours', 'density', 'ftWaterfallPalette', 'highContrast', 'logbookGlobe', 'motion', 'night',
-        'textSize', 'theme', 'waterfallPalette'],
+        'skin', 'textSize', 'theme', 'waterfallPalette'],
     )
   })
 })
@@ -90,6 +91,7 @@ describe('a restore reads it back', () => {
       ...JSON.parse(STATION),
       appearance: {
         theme: 'amber', // retired in 0.8.0
+        skin: 'amber', // a theme this build does not have
         highContrast: 'yes',
         night: 'auto',
         textSize: 'huge',
@@ -108,6 +110,15 @@ describe('a restore reads it back', () => {
       colours: { readout: 'green' },
       ftWaterfallPalette: 'grayscale',
     })
+  })
+
+  it('a built-in theme comes back, and so does "the standard theme" (null); a backup without one says nothing about it', () => {
+    expect(appearanceIn(withAppearance(STATION, { theme: 'dark', skin: 'amber-lcd' }))).toEqual({ theme: 'dark', skin: 'amber-lcd' })
+    expect(appearanceIn(withAppearance(STATION, { theme: 'dark', skin: null }))).toEqual({ theme: 'dark', skin: null })
+    expect(appearanceIn(withAppearance(STATION, { theme: 'dark' }))).toEqual({ theme: 'dark' })
+    for (const skin of ['Amber-LCD', 42, true, {}]) {
+      expect(appearanceIn(JSON.stringify({ ...JSON.parse(STATION), appearance: { theme: 'dark', skin } })), String(skin)).toEqual({ theme: 'dark' })
+    }
   })
 
   it('a palette the curated list no longer offers, but the app still paints, comes back', () => {

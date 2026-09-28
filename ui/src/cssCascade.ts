@@ -25,8 +25,16 @@
 // theme is on, so each of the four base modes has a night twin — `dark-night`, `light-night`,
 // `dark-night-high`, `light-night-high` — and the colour-role sets ride on those too. `dayOf`
 // names a night mode's twin with Night off, which is what "night changed this" is measured from.
+//
+// THEMES (2026-09-27, features/skins.ts) are one more attribute, `data-skin='<id>'`, carried the
+// way a role preset is: `dark-night skin=lagoon accent=violet`. A skin applies only on its own
+// base theme, so its modes are that base's four. SKIN_MODES sweeps every skin in each of them,
+// bare and under every PALETTE_SETS entry (styles-skins.test.ts walks it). MODES carries only the
+// themes that are the WORST CASE for their base (SENTINEL_SKINS), in their base modes, so every
+// guard that walks MODES also walks the themes without multiplying its runtime by eleven.
 
 import { PALETTE_ROLES } from './features/paletteRoles'
+import { SKINS, type SkinId } from './features/skins'
 
 export interface Decl {
   prop: string
@@ -48,7 +56,8 @@ export type BaseMode =
   | 'light-night'
   | 'dark-night-high'
   | 'light-night-high'
-/** A base mode, optionally followed by colour-role presets: `dark accent=blue readout=amber`. */
+/** A base mode, optionally followed by colour-role presets and a theme: `dark accent=blue readout=amber`,
+ *  `light-night skin=paper`. */
 export type Mode = BaseMode | `${BaseMode} ${string}`
 export const BASE_MODES = [
   'dark',
@@ -78,9 +87,47 @@ export const PALETTE_SETS: readonly string[] = (() => {
   )
 })()
 
+/** The base modes a skin can be on: its own base theme's four. */
+export const skinBaseModes = (id: SkinId): BaseMode[] => {
+  const base = SKINS.find((s) => s.id === id)!.base
+  return BASE_MODES.filter((b) => b.startsWith(base))
+}
+
+/** Every skin in each of its base modes, bare and under every colour-role set. */
+export const SKIN_MODES: readonly Mode[] = SKINS.flatMap((s) =>
+  ['', ...PALETTE_SETS.map((set) => ` ${set}`)].flatMap((set) =>
+    skinBaseModes(s.id).map((b): Mode => `${b} skin=${s.id}${set}`),
+  ),
+)
+
+/**
+ * The themes MODES carries: for each base, the theme with the lightest (dark base) or darkest
+ * (light base) value of each surface the sheet letters on. Lettering is lighter than a dark
+ * theme's surfaces and darker than a light theme's — a cut-out's page-coloured letters included —
+ * so every contrast only falls as a surface moves toward its ink, and a component that reads on
+ * these themes reads on every other. Picked from the table, so a new theme that is a worse case
+ * joins the sweep the day it lands: today Slate (the page) and Lagoon (the panel and both raised
+ * surfaces) on dark, and Silver on light.
+ */
+export const SENTINEL_SKINS: readonly SkinId[] = (() => {
+  const worst = new Set<SkinId>()
+  for (const base of ['dark', 'light'] as const) {
+    const skins = SKINS.filter((s) => s.base === base)
+    for (const t of ['--bg', '--panel', '--bg-elev', '--bg-elev-2']) {
+      const y = (s: (typeof skins)[number]) => luminance(parseHex(s.day[t])!)
+      worst.add(skins.reduce((a, b) => ((base === 'dark' ? y(b) > y(a) : y(b) < y(a)) ? b : a)).id)
+    }
+  }
+  return SKINS.map((s) => s.id).filter((id) => worst.has(id))
+})()
+
+/** Each of those themes in its base's four modes. */
+export const SENTINEL_MODES: readonly Mode[] = SENTINEL_SKINS.flatMap((id) => skinBaseModes(id).map((b): Mode => `${b} skin=${id}`))
+
 export const MODES: readonly Mode[] = [
   ...BASE_MODES,
   ...PALETTE_SETS.flatMap((set) => BASE_MODES.map((b): Mode => `${b} ${set}`)),
+  ...SENTINEL_MODES,
 ]
 
 export const baseOf = (m: Mode): BaseMode => m.split(' ')[0] as BaseMode
@@ -116,7 +163,8 @@ function rootAttrsOf(m: Mode): readonly string[] {
     const attrs = [`[data-theme='${baseTheme(m)}']`]
     if (isHigh(m)) attrs.push(`[data-contrast='high']`)
     if (isNight(m)) attrs.push(`[data-night='1']`)
-    for (const [role, preset] of Object.entries(rolesOf(m))) attrs.push(`[data-${role}='${preset}']`)
+    // A preset or a theme also satisfies its attribute's bare presence (`[data-skin] .x`).
+    for (const [role, preset] of Object.entries(rolesOf(m))) attrs.push(`[data-${role}='${preset}']`, `[data-${role}]`)
     ROOT_ATTRS.set(m, (out = attrs))
   }
   return out

@@ -19,8 +19,9 @@
 // integer past 2^53 and rewrite `1.0` as `1`. `withAppearance` checks the splice parses back to the
 // same bundle plus the section, and refuses rather than save a file it did not mean to write.
 //
-// WHAT IS IN IT: the look — the theme choice, High contrast, Night (Off / On / Auto), text size,
-// density, motion, the five colour roles, the two waterfall palettes and the Logbook globe.
+// WHAT IS IN IT: the look — the theme choice and the built-in theme riding on it (`skin`, null for
+// the standard one), High contrast, Night (Off / On / Auto), text size, density, motion, the five
+// colour roles, the two waterfall palettes and the Logbook globe.
 // WHAT IS NOT, deliberately: FIELD MODE, a situation rather than a preference (useFieldMode.ts:
 // "a backup restoring 'outdoors' onto an indoor session would be wrong more often than right"),
 // and UI SCALE, a fact about this computer's screen, per window and clamped to its monitor.
@@ -36,9 +37,13 @@ import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
 import { WATERFALL_PALETTES } from '../waterfall'
 import { PALETTE_ROLES, type PaletteRoleId } from './paletteRoles'
+import { skinOf, type SkinId } from './skins'
 
 export interface Appearance {
   theme: ThemeChoice
+  /** The built-in theme on `theme` (features/skins.ts), or null for the standard one. A backup
+   *  from before the themes has none, and restores without touching the theme on screen. */
+  skin: SkinId | null
   highContrast: boolean
   night: NightChoice
   textSize: TextSize
@@ -92,6 +97,7 @@ export function appearanceIn(bundle: string): Partial<Appearance> | null {
   const r = raw as Record<string, unknown>
   const out: Partial<Appearance> = {}
   if (oneOf(THEMES, r.theme)) out.theme = r.theme
+  if (r.skin === null || (typeof r.skin === 'string' && skinOf(r.skin))) out.skin = r.skin as SkinId | null
   if (typeof r.highContrast === 'boolean') out.highContrast = r.highContrast
   if (oneOf(NIGHTS, r.night)) out.night = r.night
   if (oneOf(TEXT_SIZES, r.textSize)) out.textSize = r.textSize

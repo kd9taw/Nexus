@@ -29,6 +29,11 @@
 // own face in every mode. The chains carry the real parent where the components name one; the
 // `.cw-macro` rule is the same wherever the key sits, and the one ancestor-scoped rule in its
 // family (`.rtty-macros .cw-macro:disabled`) sets only opacity.
+//
+// THE BUILT-IN THEMES (features/skins.ts): the sweeps also walk the themes MODES carries as the
+// worst case of each base (SENTINEL_MODES). The overlay remove's red read 4.2–4.4:1 on the Slate
+// and Lagoon themes' raised surfaces, showing through its transparent face, so its face is the
+// panel's colour now.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -39,6 +44,7 @@ import { StationControlContext } from '../stationAccess'
 import type { Station } from '../types'
 import {
   BASE_MODES,
+  SENTINEL_MODES,
   chainOf,
   contrast,
   expandWith,
@@ -68,6 +74,8 @@ const withDisabled = (rules: Rule[]) =>
 const RULES = withDisabled(parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')))
 
 const TEXT_MIN = 4.5
+/** The standard modes, and the built-in themes MODES carries as the worst case of each base. */
+const SWEPT: readonly Mode[] = [...BASE_MODES, ...SENTINEL_MODES]
 /** What these controls' hosts sit on. */
 const BACKDROPS = ['--bg', '--panel', '--bg-elev'] as const
 
@@ -104,7 +112,7 @@ const BORDER = ['border', 'border-color', 'border-top-color'] as const
 function leftToTheBrowser(rules: Rule[], controls: Control[]): string[] {
   const out = new Set<string>()
   for (const c of controls) {
-    for (const mode of BASE_MODES) {
+    for (const mode of SWEPT) {
       for (const [what, props] of [['face', FACE], ['ink', ['color']], ['border', BORDER]] as const) {
         if (!win(rules, mode, c.chain, ...props)) out.add(`${c.name}: the browser draws its ${what}`)
       }
@@ -117,7 +125,7 @@ function leftToTheBrowser(rules: Rule[], controls: Control[]): string[] {
 function unreadable(rules: Rule[], controls: Control[]): string[] {
   const out: string[] = []
   for (const c of controls.filter((x) => !x.disabled)) {
-    for (const mode of BASE_MODES) {
+    for (const mode of SWEPT) {
       const tokens = tokensFor(rules, mode, c.chain)
       const face = win(rules, mode, c.chain, ...FACE)
       const ink = win(rules, mode, c.chain, 'color')
@@ -233,5 +241,14 @@ describe('the three mixed controls paint their own face', () => {
     expect(left.some((m) => m.startsWith('Setup health') && m.endsWith('its face')), left.join('\n')).toBe(true)
     expect(left).toContain('Operate roster Spot: the browser draws its face')
     expect(left).toContain('SSTV overlay remove: the browser draws its face')
+  })
+
+  it('FIRES: the overlay remove with the raised compose box showing through again is caught on a theme', () => {
+    const showThrough = RULES.map((r) =>
+      r.selector === '.sstv-ov-remove' ? { ...r, decls: r.decls.map((d) => (d.prop === 'background' ? { ...d, value: 'transparent' } : d)) } : r,
+    )
+    const found = unreadable(showThrough, [OVERLAY_REMOVE])
+    expect(found.some((m) => m.startsWith('SSTV overlay remove dark skin=lagoon on --bg-elev')), found.join('\n')).toBe(true)
+    expect(found.some((m) => / (dark|light)(-\S+)? on /.test(m)), 'a standard theme reads either way').toBe(false)
   })
 })
