@@ -34,14 +34,34 @@
 // worst case of each base (SENTINEL_MODES). The overlay remove's red read 4.2–4.4:1 on the Slate
 // and Lagoon themes' raised surfaces, showing through its transparent face, so its face is the
 // panel's colour now.
+//
+// THE FULLY NATIVE THREE (2026-09-28, operator: "Restyle POTA's Start/Download and Satellites' ⧉
+// in Nexus's own button look"). The census's readable-but-native list: POTA's Start and Download
+// and the Satellites header's ⧉ had no rule at all, so after the root rule they followed the theme
+// in the browser's own look, a grey face in a raised border beside Nexus's outlined buttons. Each
+// now wears the class of the Nexus button beside it: Start and Download the park list's Import
+// buttons', the ⧉ the header's refresh chip's (a pop-out's own class parks it at the far right and
+// grows the header at the 1024 floor). Start and Download keep `.pota-act-start`, the handle the
+// Remote views' guards look for. Start is disabled until a park is typed, the state the operator
+// meets first, so it has to look disabled once the browser no longer greys it. The sweep reads
+// every button those two views render, so a new one left to the browser there is caught too.
+//
+// THE WATCH LIST × (Settings ▸ Spots & Alerts), found by the same night's census: the overlay
+// remove's pattern exactly, `--state-weak` on the browser's face, 1.57:1 in the dark theme. It
+// exists only for an entry in the list, and the census's fixture list was empty, so this guard
+// seeds two.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, screen, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SetupHealth } from './SetupHealth'
 import { OperateRoster } from './OperateRoster'
+import { PotaSotaView } from './PotaSotaView'
+import { SatellitesView } from './SatellitesView'
+import { WatchlistPanel } from './WatchlistPanel'
 import { StationControlContext } from '../stationAccess'
-import type { Station } from '../types'
+import { t } from '../i18n'
+import type { AppSnapshot, Station } from '../types'
 import {
   BASE_MODES,
   SENTINEL_MODES,
@@ -59,10 +79,24 @@ import {
   type Rule,
 } from '../cssCascade'
 
+/** What the POTA/SOTA and Satellites views ask the backend for as they mount. */
+const views = vi.hoisted(() => ({
+  getActivation: vi.fn(async (): Promise<unknown> => null),
+  getOtaSpots: vi.fn(async () => []),
+  parksCount: vi.fn(async () => 0),
+  huntedParksCount: vi.fn(async () => 0),
+  getSatellites: vi.fn(async () => null),
+  getSatPassNeeds: vi.fn(async () => []),
+  getSatTrackStatus: vi.fn(async () => null),
+  getSatTransponder: vi.fn(async () => null),
+  getSettings: vi.fn(async () => ({ mygrid: 'EN52' })),
+}))
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api')>()),
   getDeclination: vi.fn(async () => 0),
+  ...views,
 }))
+vi.mock('./MapView', () => ({ MapView: () => null }))
 afterEach(cleanup)
 
 const sheet = (name: string) =>
@@ -99,7 +133,8 @@ const win = (rules: Rule[], mode: Mode, chain: El[], ...props: string[]) =>
   once(rules, `w|${mode}|${keyOf(chain)}|${props.join()}`, () => winnerAt(rules, mode, chain, ...props))
 const tokensFor = (rules: Rule[], mode: Mode, chain: El[]) => once(rules, `t|${mode}|${keyOf(chain)}`, () => tokensAt(rules, mode, chain))
 const colour = (tokens: Map<string, string>, value: string, backdrop: Rgb): Rgb => {
-  const c = toRgb(expandWith(tokens, value), backdrop)
+  // `background: none` is a transparent face, as `transparent` is.
+  const c = toRgb(expandWith(tokens, value === 'none' ? 'transparent' : value), backdrop)
   if (!c) throw new Error(`not a colour: "${value}" → "${expandWith(tokens, value)}"`)
   return c
 }
@@ -250,5 +285,132 @@ describe('the three mixed controls paint their own face', () => {
     const found = unreadable(showThrough, [OVERLAY_REMOVE])
     expect(found.some((m) => m.startsWith('SSTV overlay remove dark skin=lagoon on --bg-elev')), found.join('\n')).toBe(true)
     expect(found.some((m) => / (dark|light)(-\S+)? on /.test(m)), 'a standard theme reads either way').toBe(false)
+  })
+})
+
+// ── The fully native three (PotaSotaView.tsx, SatellitesView.tsx) ──────────────────────────────
+
+const POTA_SNAP = { hunt: null, radio: { dialMhz: 14.285 } } as unknown as AppSnapshot
+const SATS_SNAP = {
+  mycall: 'W9XYZ', mygrid: 'EN52', hunt: null, fieldDay: null, link: { tier: 'TempoFast' },
+  radio: { dialMhz: 145.8, band: '2m', catOk: true, transmitting: false, txEnabled: false, txAllowed: true },
+} as unknown as AppSnapshot
+
+/** Every button the POTA/SOTA view renders, with no activation (Start) and with one running (Spot
+ *  me, Stop), and every button in the Satellites header, read off the rendered DOM. */
+async function viewButtons(): Promise<Control[]> {
+  const out: Control[] = []
+  const take = (root: ParentNode, where: string) => {
+    for (const b of root.querySelectorAll<HTMLButtonElement>('button')) {
+      const name = b.getAttribute('aria-label') || b.textContent?.trim() || b.title
+      out.push({ name: `${where} "${name}"${b.disabled ? ' (disabled)' : ''}`, chain: chainOf(b), disabled: b.disabled })
+    }
+  }
+  for (const activation of [null, { program: 'POTA', reference: 'US-0001', qsoCount: 3 }]) {
+    views.getActivation.mockResolvedValue(activation)
+    const r = render(<PotaSotaView snap={POTA_SNAP} />)
+    await screen.findByRole('button', { name: activation ? t('ota.selfSpot.button') : t('ota.activation.start') })
+    take(r.container, 'POTA')
+    cleanup()
+  }
+  const r = render(<SatellitesView snap={SATS_SNAP} onPopOut={() => {}} />)
+  const head = await waitFor(() => {
+    const h = r.container.querySelector('.sats-head')
+    if (!h?.querySelector('button')) throw new Error('the Satellites header has no buttons yet')
+    return h
+  })
+  take(head, 'Satellites header')
+  cleanup()
+  // Both POTA renders carry the park list, so its buttons come twice.
+  return [...new Map(out.map((c) => [`${c.name}|${keyOf(c.chain)}`, c])).values()]
+}
+
+/** Every disabled control that looks exactly like its enabled self: the browser greys a disabled
+ *  button only while it paints the button, so a Nexus face has to say it. */
+const disabledLooksEnabled = (rules: Rule[], controls: Control[]) =>
+  controls.filter((c) => c.disabled && Number(win(rules, 'light', c.chain, 'opacity')?.value ?? 1) >= 1).map((c) => c.name)
+
+describe('POTA’s Start and Download and the Satellites ⧉ wear Nexus’s own look', () => {
+  let buttons: Control[] = []
+  it('renders Start, Download and the ⧉, and Start disabled with no park typed (the sweep cannot silently empty out)', async () => {
+    buttons = await viewButtons()
+    const names = buttons.map((b) => b.name)
+    expect(names).toEqual(expect.arrayContaining([
+      `POTA "${t('ota.activation.start')}" (disabled)`,
+      `POTA "${t('ota.parks.download')}"`,
+      `POTA "${t('ota.selfSpot.button')}"`,
+      `Satellites header "⧉"`,
+    ]))
+  })
+
+  it('no button in the POTA view or the Satellites header is left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, buttons)).toEqual([])
+  })
+
+  it('each reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, buttons)).toEqual([])
+  })
+
+  it('a disabled one looks disabled', () => {
+    expect(disabledLooksEnabled(RULES, buttons)).toEqual([])
+  })
+
+  it('FIRES: the three as they shipped, classed for no rule, are caught', () => {
+    const shipped = buttons
+      .filter((b) => /"(Start|Download|⧉)"/.test(b.name))
+      .map((b) => {
+        const last = b.chain[b.chain.length - 1]
+        const cls = last.classes.includes('pota-act-start') ? ['pota-act-start'] : ['pane-popout']
+        return { ...b, chain: [...b.chain.slice(0, -1), { ...last, classes: cls }] }
+      })
+    expect(shipped.length).toBe(3)
+    const left = leftToTheBrowser(RULES, shipped)
+    for (const b of shipped) expect(left, left.join('\n')).toContain(`${b.name}: the browser draws its face`)
+  })
+
+  it('FIRES: a disabled Start that looks enabled is caught', () => {
+    const noDim = RULES.filter((r) => r.selector !== '.pota-parklist-import[disabled]')
+    expect(noDim.length, 'the rule under test is not in the sheet').toBe(RULES.length - 1)
+    expect(disabledLooksEnabled(noDim, buttons)).toContain(`POTA "${t('ota.activation.start')}" (disabled)`)
+  })
+})
+
+// ── The watch list × (WatchlistPanel.tsx) ──────────────────────────────────────────────────────
+
+/** The × on each entry of a watch list holding two, read off the rendered DOM. */
+function watchlistRemoves(): Control[] {
+  localStorage.setItem('nexus.watchlist', JSON.stringify([
+    { id: 'call-VP8-a1', kind: 'call', value: 'VP8*' },
+    { id: 'grid-FN31-b2', kind: 'grid', value: 'FN31', cqOnly: true },
+  ]))
+  const r = render(<WatchlistPanel />)
+  const out = [...r.container.querySelectorAll<HTMLButtonElement>('button.watchlist-remove')].map((b) => ({
+    name: `Watch list × "${b.getAttribute('aria-label')}"`,
+    chain: chainOf(b),
+  }))
+  cleanup()
+  localStorage.removeItem('nexus.watchlist')
+  return out
+}
+
+describe('the watch list × paints its own face', () => {
+  it('renders a × for each entry (a guard over an empty list is inert)', () => {
+    expect(watchlistRemoves().length).toBe(2)
+  })
+
+  it('it is not left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, watchlistRemoves())).toEqual([])
+  })
+
+  it('it reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, watchlistRemoves())).toEqual([])
+  })
+
+  it('FIRES: the × as it shipped, the red on the browser\'s face, is caught', () => {
+    const shipped = RULES.map((r) =>
+      r.selector === '.watchlist-remove' ? { ...r, decls: r.decls.filter((d) => !/^(background|border)/.test(d.prop)) } : r,
+    )
+    const left = leftToTheBrowser(shipped, watchlistRemoves())
+    expect(left.some((m) => m.endsWith('the browser draws its face')), left.join('\n')).toBe(true)
   })
 })

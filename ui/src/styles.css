@@ -4633,9 +4633,9 @@ body.resizing-row {
   --band-open: #49d9b9;
 }
 [data-theme='light'][data-ok='teal'] {
-  --snr-strong: #007e68;
-  --rx: #007e68;
-  --band-open: #007e68;
+  --snr-strong: #167469;
+  --rx: #167469;
+  --band-open: #167469;
 }
 [data-theme='dark'][data-ok='mint'],
 [data-ok='mint'] .well {
@@ -4644,9 +4644,9 @@ body.resizing-row {
   --band-open: #84eeb3;
 }
 [data-theme='light'][data-ok='mint'] {
-  --snr-strong: #0d8557;
-  --rx: #0d8557;
-  --band-open: #0d8557;
+  --snr-strong: #1b8662;
+  --rx: #1b8662;
+  --band-open: #1b8662;
 }
 
 /* Amber */
@@ -8974,9 +8974,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text);
   cursor: pointer;
 }
-.pota-parklist-import:hover {
+.pota-parklist-import:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Start and Download wear this look too. Start is disabled until a park is typed, and the browser
+   greyed it only while it drew the button itself. */
+.pota-parklist-import:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 /* Persistent Sent/Rcvd captions on the two RST boxes — the placeholders were hidden behind the
    default "59", so the send vs receive side was unlabeled. */
@@ -12278,7 +12284,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--state-weak);
   font-size: calc(16px * var(--text-scale));
   line-height: 1;
-  padding: 0 var(--space-1);
+  /* A face of its own, as the SSTV overlay's remove has: the browser's grey read 1.57:1 under this
+     red in the dark theme. The same box as the browser's 2px border (1px of it moves into the
+     padding), on the panel's colour, where the red clears 4.5:1 in every theme. */
+  padding: 1px calc(var(--space-1) + 1px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 .watchlist-remove:hover {
   color: #fff;

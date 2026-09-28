@@ -616,7 +616,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="button" className="pota-act-start" onClick={() => void handleStartActivation()} disabled={!actRef.trim()}>
+            <button type="button" className="pota-act-start pota-parklist-import" onClick={() => void handleStartActivation()} disabled={!actRef.trim()}>
               {t('ota.activation.start')}
             </button>
           </>
@@ -632,7 +632,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         </span>
         {observed && <span className="pota-parklist-status">{t('ota.hunted.have', { formatted: huntedN.toLocaleString() })}</span>}
         {!observed && <>
-        <button type="button" className="pota-act-start" onClick={() => void handleDownloadParks()} disabled={parkBusy}>
+        <button type="button" className="pota-act-start pota-parklist-import" onClick={() => void handleDownloadParks()} disabled={parkBusy}>
           {parkBusy ? '…' : parkN > 0 ? t('ota.parks.update') : t('ota.parks.download')}
         </button>
         <button type="button" className="pota-parklist-import" onClick={() => fileRef.current?.click()} disabled={parkBusy}>

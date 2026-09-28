@@ -175,6 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme. It is now a deeper gold in the dark theme and a duller, brass-like gold in the light
   theme, clearly apart from both in each, and it still passes the same readability checks as the
   others. Amber and Yellow look exactly as before, and nothing changes unless you picked Gold.
+- **Teal and Mint no longer look alike in the light theme.** In Settings ▸ Appearance ▸ Colours,
+  the OK / green choices Teal and Mint were almost the same colour in the light theme, and Mint was
+  close to Green as well. Teal is now a deeper, slightly bluer teal there and Mint a touch lighter,
+  so the three greens are clearly apart, and they pass the same readability checks as before, on
+  every built-in theme too. Teal still stays furthest from the reds for a red-green colour-blind
+  operator. The dark theme is unchanged, and nothing changes unless you picked Teal or Mint.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.
@@ -273,6 +279,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the theme you picked. With Nexus in the light theme on a computer set to dark, or the other way
   round, some of their words could not be read. They now follow Nexus's theme. Nothing changes
   when your computer's setting matches the theme, which it always does with the System theme.
+- **POTA's Start and Download and the Satellites ⧉ look like the rest of Nexus.** They were still
+  plain grey browser buttons with a raised edge beside Nexus's own buttons. Start and Download now
+  match the Import buttons next to them, and Start still looks greyed out until you type a park
+  reference. The Satellites ⧉, which opens Satellites in its own window, matches the refresh chip
+  beside it and stays where it was.
+- **The watch list's × can be read in the dark theme.** In Settings ▸ Spots & Alerts, the red ×
+  that removes a watch-list entry sat on a grey box drawn by the browser, and in the dark theme it
+  could hardly be seen. It now sits on the panel's colour, like the SSTV overlay's remove, and reads
+  clearly in both themes and on every built-in theme.
 - **Keys that could go blank now always show their words.** SSTV's manual-receive Start, the
   SSTV picture viewer's Previous, Next and Save, JS8's station queries, inbox Read and Delete,
   Cancel and Drop, and the Remote page's Refresh, retry and SSTV Save keys took the colour of
