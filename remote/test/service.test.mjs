@@ -2228,7 +2228,7 @@ test('the stream lane carries the contract\'s signals both ways, with the identi
   const pair = await app.paired()
   const live = await admitted(pair, 1, STREAM_HEADERS)
   const leaseId = crypto.randomUUID()
-  for (const name of ['offer', 'candidate (reflexive)', 'candidate (mDNS host; the station ignores what it cannot resolve)', 'close']) {
+  for (const name of ['offer', 'offer from a browser without a device key (the station refuses it at admission)', 'candidate (reflexive)', 'candidate (mDNS host; the station ignores what it cannot resolve)', 'close']) {
     live.browser.send(pageSignal(name, leaseId))
     const routed = await live.station.take(typed('streamSignal'))
     assert.deepEqual(routed, { ...streamCase('roomToStation', name), sessionId: live.session.sessionId, deviceId: live.deviceId, leaseId },

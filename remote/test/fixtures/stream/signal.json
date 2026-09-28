@@ -7,6 +7,19 @@
         "leaseId": "10000000-0000-4000-8000-000000000003",
         "payload": {
           "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d0301070342000401010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+          "signature": "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "name": "offer from a browser without a device key (the station refuses it at admission)",
+      "message": {
+        "type": "streamSignal",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
           "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
         }
       }
@@ -49,6 +62,21 @@
   "roomToStation": [
     {
       "name": "offer",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d0301070342000401010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+          "signature": "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "name": "offer from a browser without a device key (the station refuses it at admission)",
       "message": {
         "type": "streamSignal",
         "sessionId": "10000000-0000-4000-8000-000000000001",
@@ -204,6 +232,24 @@
         "streaming": false,
         "reason": "remoteOff"
       }
+    },
+    {
+      "name": "refused: deviceNotPinned",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "deviceNotPinned"
+      }
+    },
+    {
+      "name": "refused: deviceKeyMismatch",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "deviceKeyMismatch"
+      }
     }
   ],
   "roomToBrowser": [
@@ -297,6 +343,22 @@
         "type": "streamState",
         "streaming": false,
         "reason": "remoteOff"
+      }
+    },
+    {
+      "name": "refused: deviceNotPinned",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "deviceNotPinned"
+      }
+    },
+    {
+      "name": "refused: deviceKeyMismatch",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "deviceKeyMismatch"
       }
     }
   ],
@@ -428,6 +490,82 @@
         "sessionId": "10000000-0000-4000-8000-000000000001",
         "reason": "remoteOff",
         "extra": 1
+      }
+    }
+  ],
+  "roomToStationOutOfBounds": [
+    {
+      "name": "an offer with a publicKey and no signature",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d0301070342000401010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "name": "an offer whose publicKey is not a P-256 key",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d0301080342000401010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+          "signature": "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "name": "an offer whose publicKey is longer than a P-256 key",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200040101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+          "signature": "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "name": "an offer whose signature is not 64 bytes",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d0301070342000401010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+          "signature": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "name": "an offer whose signature is not lowercase hex",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n",
+          "publicKey": "3059301306072a8648ce3d020106082a8648ce3d0301070342000401010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+          "signature": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+        }
       }
     }
   ],

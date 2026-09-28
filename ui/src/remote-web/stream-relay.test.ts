@@ -50,8 +50,11 @@ it('hands the page exactly what the contract names for every station message, wi
 it('refuses, and closes the page for, every malformed signal the contract lists - never forwarding one', () => {
   // The station's refused cases, as a page would have to send them: without the stamps the relay
   // itself writes. "no deviceId" is not among them - the missing stamp is the relay's to add.
-  const refusedByShape = signal.roomToStationRefused.filter(c => c.name !== 'no deviceId')
-  expect(refusedByShape.length).toBeGreaterThanOrEqual(7)
+  // With them, the offers whose device key or signature is out of bounds (A5): the station would take
+  // them past its parser and answer invalidOffer, and the relay, which checks the same shapes, never
+  // hands them over at all.
+  const refusedByShape = [...signal.roomToStationRefused.filter(c => c.name !== 'no deviceId'), ...signal.roomToStationOutOfBounds]
+  expect(refusedByShape.length).toBeGreaterThanOrEqual(12)
   for (const refused of refusedByShape) {
     const { sessionId: _s, deviceId: _d, ...asSent } = structuredClone(refused.message)
     const { station, browser, relay } = setup()

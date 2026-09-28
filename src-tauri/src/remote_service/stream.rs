@@ -182,7 +182,8 @@ impl StreamLane {
             return state(&session, false, Some(StreamReason::InvalidOffer));
         }
         match payload {
-            BrowserSignal::Offer { sdp } => {
+            // The device key's signature (A5) is checked at admission; until then it rides along.
+            BrowserSignal::Offer { sdp, .. } => {
                 if self.live.is_some() {
                     return state(&session, false, Some(StreamReason::StreamInUse));
                 }

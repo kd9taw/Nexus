@@ -14,6 +14,14 @@
 //! both; the `parse_*` functions here do exactly that, and nothing else in the station reads these
 //! messages any other way.
 //!
+//! ## The offer is signed by the browser (A5)
+//!
+//! An offer carries the browser's device key and its signature over [`offer_binding`], so a relay
+//! that stamps another browser's `deviceId` cannot offer a stream as that browser. The station
+//! checks both against the key it pinned when the operator approved the browser at the radio (the
+//! README's A5 section). This file holds the shapes and the bytes that are signed; the station's
+//! admission does the cryptography.
+//!
 //! ## No wall clock crosses the boundary
 //!
 //! `decodedFrameAt` is the station's own video RTP timestamp, echoed back, never the page's clock.
@@ -51,6 +59,14 @@ pub const VIDEO_CLOCK_HZ: u64 = 90_000;
 /// The longest the station goes without sending a video frame, so that a still window never reads
 /// as a stale picture.
 pub const STILL_FRAME_MS: u64 = 500;
+/// A browser's device key: the SPKI DER of a P-256 ECDSA public key, as lowercase hex.
+pub const DEVICE_KEY_HEX_CHARS: usize = 182;
+/// Every P-256 SPKI begins with these bytes (the algorithm and the curve), then `04` and the point.
+pub const P256_SPKI_PREFIX_HEX: &str = "3059301306072a8648ce3d020106082a8648ce3d030107034200";
+/// An offer's signature: ECDSA P-256 over SHA-256, IEEE P1363 `r‖s` (64 bytes), as lowercase hex.
+pub const SIGNATURE_HEX_CHARS: usize = 128;
+/// What the signed bytes begin with, so a signature made for this can never be taken for another.
+pub const OFFER_BINDING_LABEL: &[u8] = b"nexus-stream-offer/1";
 /// The data-channel labels, which the page creates and the station recognises.
 pub const CONTROL_CHANNEL: &str = "control";
 pub const PTT_CHANNEL: &str = "ptt";
@@ -133,6 +149,80 @@ fn sdp(text: &str) -> bool {
             .any(|c| c.is_control() && c != '\r' && c != '\n')
 }
 
+fn lower_hex(text: &str, chars: usize) -> bool {
+    text.len() == chars
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The shape of a device key: a P-256 SPKI with an uncompressed point. Whether the point is on the
+/// curve is the station's verification to find out, not the parser's.
+fn device_key(text: &str) -> bool {
+    lower_hex(text, DEVICE_KEY_HEX_CHARS)
+        && text.starts_with(P256_SPKI_PREFIX_HEX)
+        && text[P256_SPKI_PREFIX_HEX.len()..].starts_with("04")
+}
+
+/// Hex to bytes. `None` for anything but pairs of hex digits.
+pub fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// The offer's DTLS certificate fingerprint: the 32 bytes of its `a=fingerprint:sha-256` value.
+/// Every such line must carry the same value (a browser writes one per media section): `None` when
+/// there is none, when they disagree, or when one is not 32 colon-separated hex bytes.
+pub fn offer_fingerprint(sdp: &str) -> Option<[u8; 32]> {
+    let mut found: Option<[u8; 32]> = None;
+    for line in sdp.lines() {
+        let Some(value) = line.trim().strip_prefix("a=fingerprint:") else {
+            continue;
+        };
+        let (hash, digest) = value.split_once(' ')?;
+        if !hash.eq_ignore_ascii_case("sha-256") {
+            continue;
+        }
+        let bytes: Vec<u8> = digest
+            .trim()
+            .split(':')
+            .map(|pair| {
+                (pair.len() == 2)
+                    .then(|| u8::from_str_radix(pair, 16).ok())
+                    .flatten()
+            })
+            .collect::<Option<_>>()?;
+        let bytes: [u8; 32] = bytes.try_into().ok()?;
+        if found.is_some_and(|seen| seen != bytes) {
+            return None;
+        }
+        found = Some(bytes);
+    }
+    found
+}
+
+/// The bytes an offer's `signature` covers (the README's A5 section): the label, `SHA-256(fp)`
+/// (the caller hashes; this crate has no hash), and the three ids as the relay stamps them.
+pub fn offer_binding(
+    fingerprint_digest: &[u8; 32],
+    station_id: &str,
+    device_id: &str,
+    session_id: &str,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(OFFER_BINDING_LABEL.len() + 32 + 3 * 36);
+    bytes.extend_from_slice(OFFER_BINDING_LABEL);
+    bytes.extend_from_slice(fingerprint_digest);
+    for id in [station_id, device_id, session_id] {
+        bytes.extend_from_slice(id.as_bytes());
+    }
+    bytes
+}
+
 // ---------------------------------------------------------------------------------------------
 // Signalling: over the relay sockets that already exist.
 // ---------------------------------------------------------------------------------------------
@@ -143,6 +233,14 @@ fn sdp(text: &str) -> bool {
 pub enum BrowserSignal {
     Offer {
         sdp: String,
+        /// The browser's device key ([`DEVICE_KEY_HEX_CHARS`]); the station pinned its SHA-256.
+        /// With `signature`, or neither: an unsigned offer parses, and admission refuses it by
+        /// name instead of the parser closing the whole control socket over it.
+        #[serde(rename = "publicKey", default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
+        /// Its signature over [`offer_binding`] ([`SIGNATURE_HEX_CHARS`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     Candidate {
         candidate: String,
@@ -157,7 +255,20 @@ pub enum BrowserSignal {
 impl Validate for BrowserSignal {
     fn valid(&self) -> bool {
         match self {
-            Self::Offer { sdp: text } => sdp(text),
+            Self::Offer {
+                sdp: text,
+                public_key,
+                signature,
+            } => {
+                sdp(text)
+                    && match (public_key, signature) {
+                        (Some(key), Some(signature)) => {
+                            device_key(key) && lower_hex(signature, SIGNATURE_HEX_CHARS)
+                        }
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
             Self::Candidate {
                 candidate: line,
                 sdp_mid: mid,
@@ -215,6 +326,12 @@ pub enum StreamReason {
     /// Remote access was switched off, and the relay ended the stream (`streamEnd`). The station
     /// echoes the reason in its last `streamState`.
     RemoteOff,
+    /// The station pinned no device key for this browser: it was approved before keys existed, and
+    /// is approved again at the radio, once (A5).
+    DeviceNotPinned,
+    /// The offer's key is not the pinned one or its signature does not hold, or the certificate the
+    /// page presented after DTLS is not the one it signed (A5).
+    DeviceKeyMismatch,
     /// Relay-originated: the account's command entitlement has lapsed. The relay refuses an offer
     /// with it, or ends a running stream with it. The station never sends it of its own accord.
     ServiceAccessExpired,
@@ -767,10 +884,10 @@ mod tests {
 
     #[test]
     fn every_signalling_case_round_trips_on_its_hop() {
-        assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 4);
-        assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 4);
-        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 11);
-        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 11);
+        assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 5);
+        assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 5);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 13);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 13);
         // The relay's own: it ends a station's stream, and it answers a page by itself.
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStationEnd"), 2);
         assert_eq!(
@@ -783,6 +900,78 @@ mod tests {
     fn the_station_refuses_every_malformed_relay_message() {
         refused::<RoomToStation>(SIGNAL, "roomToStationRefused");
         refused::<RoomToPage>(SIGNAL, "pageRefused");
+    }
+
+    /// A5's shapes: an offer's key and signature are parsed, then held to their bounds. These are
+    /// well-formed JSON, so they reach the bounds (the station answers `invalidOffer`), and the
+    /// structural cases (a missing key or signature) never get past serde.
+    #[test]
+    fn an_offer_key_or_signature_out_of_bounds_is_refused_after_it_parses() {
+        let bounds = cases(SIGNAL, "roomToStationOutOfBounds");
+        assert_eq!(bounds.len(), 5);
+        for (name, message) in bounds {
+            let parsed: RoomToStation = serde_json::from_value(message)
+                .unwrap_or_else(|e| panic!("{name}: premise, it parses: {e}"));
+            assert!(
+                !parsed.valid(),
+                "{name}: within bounds, and must be refused"
+            );
+        }
+        // Control: the signed and the unsigned offer are both within bounds (admission decides).
+        for (name, message) in cases(SIGNAL, "roomToStation") {
+            let parsed: RoomToStation = serde_json::from_value(message).unwrap();
+            assert!(parsed.valid(), "{name}");
+        }
+    }
+
+    /// The signed bytes, laid out as the README says: 20 + 32 + 3 × 36.
+    #[test]
+    fn the_offer_binding_is_the_label_the_digest_and_the_three_ids() {
+        let digest = [7u8; 32];
+        let station = "10000000-0000-4000-8000-00000000000a";
+        let device = "10000000-0000-4000-8000-000000000002";
+        let session = "10000000-0000-4000-8000-000000000001";
+        let bytes = offer_binding(&digest, station, device, session);
+        assert_eq!(bytes.len(), 160);
+        assert_eq!(&bytes[..20], b"nexus-stream-offer/1");
+        assert_eq!(&bytes[20..52], &digest);
+        assert_eq!(&bytes[52..88], station.as_bytes());
+        assert_eq!(&bytes[88..124], device.as_bytes());
+        assert_eq!(&bytes[124..], session.as_bytes());
+        // Control: another session is other bytes, so a signature for one is not one for another.
+        assert_ne!(bytes, offer_binding(&digest, station, device, station));
+    }
+
+    /// The offer's fingerprint: one value, however many sections carry it.
+    #[test]
+    fn the_offer_fingerprint_is_its_one_sha256_value() {
+        let offer = cases(SIGNAL, "browserToRoom")
+            .into_iter()
+            .find(|(name, _)| name == "offer")
+            .unwrap()
+            .1;
+        let sdp = offer["payload"]["sdp"].as_str().unwrap();
+        assert!(
+            sdp.matches("a=fingerprint:sha-256").count() >= 2,
+            "premise: one per media section"
+        );
+        let expected =
+            hex_bytes("0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9").unwrap();
+        assert_eq!(offer_fingerprint(sdp).unwrap().to_vec(), expected);
+        // Two certificates in one offer: there is no one fingerprint to sign.
+        let first = "a=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9";
+        let other = first.replace("0A:1B", "0A:1C");
+        assert_eq!(offer_fingerprint(&sdp.replacen(first, &other, 1)), None);
+        // None, and not a short or a guessed one.
+        assert_eq!(
+            offer_fingerprint(&sdp.replace(first, "a=fingerprint:sha-1 0A:1B")),
+            None
+        );
+        assert_eq!(
+            offer_fingerprint(&sdp.replace(first, "a=fingerprint:sha-256 0A:1B")),
+            None
+        );
+        assert_eq!(offer_fingerprint("v=0\r\n"), None);
     }
 
     /// The relay stamps and strips; it never rewrites. So each hop's cases are the other hop's plus

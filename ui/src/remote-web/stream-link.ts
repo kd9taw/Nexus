@@ -26,7 +26,7 @@ import {
   STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS, STREAM_HELD_REASSERT_MS,
   STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, parseHeld, parsePttState, parseReceivedMessage,
   parseStreamInput, secureAnswer,
-  type BrowserStreamPayload, type StreamInput, type StreamWheel,
+  type BrowserStreamPayload, type OfferSignature, type StreamInput, type StreamWheel,
 } from './stream-protocol'
 
 /** What the operator is shown. Each is a different thing to do about it. */
@@ -104,6 +104,10 @@ export type StreamEnvironment = {
   mediaStream: (track: unknown) => unknown
   audio: AudioEnvironment
   uuid: () => string
+  /** A5: this browser's signature over the offer (the contract's README), from its device key for
+   *  this station, or null when it cannot sign. Absent, the offer goes unsigned; the station then
+   *  refuses it by name, and never at its parser. */
+  signOffer?: (sdp: string) => Promise<OfferSignature | null>
   /** Where "this tab is hidden" and "this window lost focus" come from. Optional so a test can
    *  leave them out; the real browser always has both. */
   document?: { readonly visibilityState: string; addEventListener: (type: string, f: () => void) => void; removeEventListener: (type: string, f: () => void) => void }
@@ -127,6 +131,9 @@ export class StreamLink {
   private channels: { control: ChannelLike; ptt: ChannelLike; audio: ChannelLike } | null = null
   private lease: string | null = null
   private answered = false
+  /** This browser's own candidates, held until its offer has gone: signing it (A5) is a wait, and the
+   *  station can only use a candidate for an offer it already has. Null once the offer is sent. */
+  private unsent: { kind: 'candidate'; candidate: string; sdpMid: string }[] | null = []
   private pendingCandidates: CandidateLike[] = []
   private video: VideoLike | null = null
   private media: unknown = null
@@ -186,7 +193,8 @@ export class StreamLink {
       // The contract carries no end-of-candidates marker, and every browser candidate names its media.
       const c = event.candidate
       if (this.peer !== peer || !c?.candidate || !c.sdpMid) return
-      this.tell({ kind: 'candidate', candidate: c.candidate, sdpMid: c.sdpMid })
+      const candidate = { kind: 'candidate' as const, candidate: c.candidate, sdpMid: c.sdpMid }
+      if (this.unsent) { if (this.unsent.length < 64) this.unsent.push(candidate) } else this.tell(candidate)
     }
     peer.ontrack = event => {
       if (this.peer !== peer) return
@@ -213,9 +221,18 @@ export class StreamLink {
       await peer.setLocalDescription(offer)
       if (this.peer !== peer) return
       const sdp = offer.sdp ?? ''
+      if (!sdp.startsWith('v=0\r\n')) { this.end('streamUnsupported', false); return }
+      // A5: signed with this browser's device key for this station when it can be; an offer it
+      // cannot sign still goes, and the station says why it will not stream (deviceNotPinned or
+      // deviceKeyMismatch), which is what the operator needs to hear.
+      const signed = this.env.signOffer ? await this.env.signOffer(sdp).catch(() => null) : null
+      if (this.peer !== peer) return
       // An offer the socket would not take is an end, never a stream left waiting for an answer
       // that cannot come.
-      if (!sdp.startsWith('v=0\r\n') || !this.tell({ kind: 'offer', sdp })) this.end('streamUnsupported', false)
+      if (!this.tell(signed ? { kind: 'offer', sdp, ...signed } : { kind: 'offer', sdp })) { this.end('streamUnsupported', false); return }
+      const held = this.unsent ?? []
+      this.unsent = null
+      for (const candidate of held) this.tell(candidate)
     } catch { if (this.peer === peer) this.end('streamUnsupported') }
   }
 
@@ -522,7 +539,7 @@ export class StreamLink {
     this.audio.disconnected()
     const peer = this.peer, channels = this.channels
     this.peer = null; this.channels = null; this.media = null; this.receiver = null; this.frame = null
-    this.answered = false; this.pendingCandidates = []
+    this.answered = false; this.pendingCandidates = []; this.unsent = []
     if (this.video) { if (this.frameHandle !== null) this.video.cancelVideoFrameCallback?.(this.frameHandle); this.frameHandle = null; this.video.srcObject = null }
     if (channels) for (const channel of [channels.control, channels.ptt, channels.audio]) {
       channel.onopen = null; channel.onclose = null; channel.onmessage = null
