@@ -107,8 +107,8 @@ permission back. Without any of these it can watch the station but not change it
   It also needs station controls, and it goes through the normal TX switch and TX
   watchdog. Allowing it arms nothing: whenever Nexus starts, the TX switch is off until
   the browser presses TX On. If the browser goes away the station stops transmitting
-  within five seconds, and **Revoke transmission permission** stops it at once. No other
-  mode transmits remotely.
+  within five seconds, and **Revoke transmission permission** stops it at once. Without
+  the stream below, no other mode transmits remotely.
 
 **Stream this window to an approved browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
@@ -117,7 +117,8 @@ window is sent: a dialog that opens outside it, such as a file picker, is not, a
 minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
 anything else on this computer. While a browser is attached, every transmission at the
 station stops within five seconds if its connection drops, and within seven if its picture
-freezes.
+freezes. In Phone, the browser can talk on the rig with its own microphone; see
+[Talk from Remote](phone.md#talk-from-remote).
 
 **How long a browser stays approved.** An approval lasts 30 days, and each time that browser
 opens the station it moves on to 30 days from then, up to 90 days after you approved it here.
