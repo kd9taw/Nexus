@@ -72,7 +72,7 @@ import {
   type Rule,
 } from './cssCascade'
 import { PALETTE_ROLES, isLockedToken, type PaletteRole } from './features/paletteRoles'
-import { SKINS, SKIN_TOKENS, type Skin } from './features/skins'
+import { MAP_TOKENS, SKINS, SKIN_TOKENS, STANDARD_MAP, type Skin } from './features/skins'
 
 const blank = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const read = (name: string) => readFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), 'utf8')
@@ -363,7 +363,7 @@ function blockProblems(rules: Rule[]): string[] {
       }
       for (const d of rule.decls) {
         if (isLockedToken(d.prop)) bad.push(`${rule.selector} { ${d.prop} } — a LOCKED colour`)
-        else if (!SKIN_TOKENS.includes(d.prop)) bad.push(`${rule.selector} { ${d.prop} } — not a theme's token`)
+        else if (!SKIN_TOKENS.includes(d.prop) && !(MAP_TOKENS as readonly string[]).includes(d.prop)) bad.push(`${rule.selector} { ${d.prop} } — not a theme's token`)
       }
     }
   }
@@ -530,6 +530,27 @@ describe('lettering on a role-colour fill', () => {
   })
 })
 
+// ── The map's basemap (MapView bakes it from these tokens) ───────────────────────────────────
+
+/** What the sheet gives each basemap token at <html> in `mode`, where it is not what `want` says. */
+function mapProblems(rules: Rule[], mode: Mode, want: Readonly<Record<string, string>>): string[] {
+  const tk = tokensIn(rules, mode, 'root')
+  return MAP_TOKENS.filter((t) => valueOf(tk, t) !== want[t]).map((t) => `${mode}: ${t} paints "${valueOf(tk, t)}", wanted ${want[t]}`)
+}
+
+describe('the map basemap is a theme’s, and every mode declares all of it', () => {
+  it('the standard basemap is declared in both themes, in every standard mode and colour-role set', () => {
+    // Both themes declare it (the layout contract), with one value: the basemap is dark in both.
+    const standard = [...BASE_MODES, ...PALETTE_SETS.flatMap((set) => BASE_MODES.map((b): Mode => `${b} ${set}`))]
+    expect(standard.flatMap((m) => mapProblems(RULES, m, STANDARD_MAP))).toEqual([])
+  })
+
+  it.each(SKINS.map((s) => [s.id, s] as const))('%s paints its own basemap (a dark theme) or the standard one (a light theme), in every mode', (_n, s) => {
+    expect(s.base === 'dark' ? Object.keys(s.map ?? {}).sort() : s.map, s.id).toEqual(s.base === 'dark' ? [...MAP_TOKENS].sort() : undefined)
+    expect(modesOf(s.id, s.base).flatMap((m) => mapProblems(RULES, m, s.map ?? STANDARD_MAP))).toEqual([])
+  })
+})
+
 // ── Positive controls: each check can say no ────────────────────────────────────────────────
 
 /** The real sheet with `css` where the themes sit (after them, so it wins their ties). */
@@ -578,6 +599,12 @@ describe('the checks fire', () => {
   it('a Night that does not dim the accent is refused', () => {
     const rules = spliced(`[data-theme='dark'][data-night='1'][data-skin='amber-lcd'] { --accent: #e9dcc3; }`)
     expect(keysOf(floorProblems(rules, 'amber-lcd', 'dark'))).toContain('night --accent dimmer')
+  })
+
+  it('a mode missing a basemap token, or a theme painting another theme’s, is caught', () => {
+    const rules = parseRules(blank(RAW).replace(/--map-rim:[^;]*;/g, '') + '\n' + PANES)
+    expect(mapProblems(rules, 'dark', STANDARD_MAP)).toEqual(['dark: --map-rim paints "", wanted #2a4254'])
+    expect(mapProblems(RULES, 'dark skin=lagoon', SKINS.find((x) => x.id === 'slate')!.map!).length).toBeGreaterThan(0)
   })
 
   it('an accent fill its own ink cannot be read on is refused', () => {

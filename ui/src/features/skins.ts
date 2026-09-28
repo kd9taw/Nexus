@@ -26,7 +26,8 @@
 //     clears it.
 //
 // WHAT A SKIN MAY DECLARE: `SKIN_TOKENS` — the surfaces, the three inks, the accent family, the
-// frequency readout and the display-well trio. NEVER a locked colour (the TX red and the ON AIR
+// frequency readout and the display-well trio — and, on a dark skin, the map's basemap
+// (`MAP_TOKENS`, in its day block; a light skin keeps the standard, dark one). NEVER a locked colour (the TX red and the ON AIR
 // sign, the critical orange, the status and need sets) and never an OK, Amber or Cyan role token:
 // the signal colours stay the theme's, so every colour-role preset holds on every skin.
 //
@@ -94,6 +95,9 @@ export interface Skin {
   night: SkinValues
   /** A light skin's display wells at night. */
   nightWell?: SkinValues
+  /** A dark skin's map basemap (MAP_TOKENS), in its day block and so at night too. A light
+   *  skin keeps the standard one: the basemap is dark in every theme. */
+  map?: SkinValues
 }
 
 /** The tokens a skin may declare, and the only ones. */
@@ -120,6 +124,34 @@ export const SKIN_TOKENS: readonly string[] = [
   '--well-grid',
 ]
 
+/** The map's basemap: the tokens MapView bakes its land, sea, coasts, borders and globe from. */
+export const MAP_TOKENS = [
+  '--map-ocean',
+  '--map-land',
+  '--map-land-globe',
+  '--map-coast',
+  '--map-state',
+  '--map-rim',
+  '--map-ocean-lit',
+  '--map-ocean-deep',
+] as const
+export type MapToken = (typeof MAP_TOKENS)[number]
+
+/** The standard basemap, in both standard themes and on a light built-in theme: a map should read
+ *  as a MAP (filled land and sea), not a wireframe, and this one is deliberately theme-agnostic
+ *  and dark (like HamClock or Geochron), so it looks intentional in any theme. MapView also paints
+ *  it where no sheet is loaded. */
+export const STANDARD_MAP: Readonly<Record<MapToken, string>> = {
+  '--map-ocean': '#0f2334', // deep sea
+  '--map-land': '#364a3c', // muted continental green (the flat World and AEQD maps)
+  '--map-land-globe': '#1c2b2a', // a darker landmass on the globe, a moody night-earth, so the spots and arcs are what pop
+  '--map-coast': '#6f8a98', // coastlines and borders, visible but quiet
+  '--map-state': '#4d6675', // US state borders, quieter than the coast and still readable
+  '--map-rim': '#2a4254', // the globe's edge (AEQD reads as a sphere)
+  '--map-ocean-lit': '#1c4a66', // the globe's lit ocean, toward the light
+  '--map-ocean-deep': '#06101c', // the globe's limb, its dark edge
+}
+
 /** The gallery's order: the rig looks, then the modern ones. */
 export const SKINS: readonly Skin[] = [
   {
@@ -145,6 +177,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#d9ad48', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#332c23',
     },
+    map: {
+      '--map-ocean': '#171310',
+      '--map-land': '#3a3122',
+      '--map-land-globe': '#241e14',
+      '--map-coast': '#8a7a55',
+      '--map-state': '#5f5440',
+      '--map-rim': '#3a3020',
+      '--map-ocean-lit': '#2a241a',
+      '--map-ocean-deep': '#0a0806',
+    },
   },
   {
     id: 'green-lcd',
@@ -169,6 +211,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#62c77b', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#312a21',
     },
+    map: {
+      '--map-ocean': '#0c1410',
+      '--map-land': '#22382a',
+      '--map-land-globe': '#152419',
+      '--map-coast': '#6f9a7a',
+      '--map-state': '#4a6b55',
+      '--map-rim': '#24382a',
+      '--map-ocean-lit': '#173226',
+      '--map-ocean-deep': '#060a08',
+    },
   },
   {
     id: 'blue-vfd',
@@ -192,6 +244,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-mine': '#193b76', '--bubble-mine-text': '#bbc3cf', '--bubble-theirs': '#191410',
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#6aa4d9', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#3c352c',
+    },
+    map: {
+      '--map-ocean': '#0b1a33',
+      '--map-land': '#2a3a55',
+      '--map-land-globe': '#182640',
+      '--map-coast': '#7f97bd',
+      '--map-state': '#546b8f',
+      '--map-rim': '#263a5e',
+      '--map-ocean-lit': '#1a3660',
+      '--map-ocean-deep': '#05091a',
     },
   },
   {
@@ -245,6 +307,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#42a7c7', '--well-bg': '#000000', '--well-ink': '#bfb4a5',
       '--well-grid': '#29231c',
     },
+    map: {
+      '--map-ocean': '#05070c',
+      '--map-land': '#1a1f24',
+      '--map-land-globe': '#111518',
+      '--map-coast': '#5a6570',
+      '--map-state': '#3d464f',
+      '--map-rim': '#1e242b',
+      '--map-ocean-lit': '#0f1a26',
+      '--map-ocean-deep': '#000000',
+    },
   },
   {
     id: 'slate',
@@ -268,6 +340,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-mine': '#275968', '--bubble-mine-text': '#bfc8cb', '--bubble-theirs': '#191410',
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#3dabd2', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#443c33',
+    },
+    map: {
+      '--map-ocean': '#1b2330',
+      '--map-land': '#3a4656',
+      '--map-land-globe': '#26303d',
+      '--map-coast': '#8797aa',
+      '--map-state': '#5c6d82',
+      '--map-rim': '#3a4656',
+      '--map-ocean-lit': '#283a4f',
+      '--map-ocean-deep': '#0f141b',
     },
   },
   {
@@ -293,6 +375,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#37bbc3', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#474037',
     },
+    map: {
+      '--map-ocean': '#04303a',
+      '--map-land': '#1e4a3d',
+      '--map-land-globe': '#123328',
+      '--map-coast': '#6fa39a',
+      '--map-state': '#4d7a72',
+      '--map-rim': '#1a5560',
+      '--map-ocean-lit': '#0f4a56',
+      '--map-ocean-deep': '#001318',
+    },
   },
   {
     id: 'ember',
@@ -317,6 +409,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#d9ad48', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#3e362e',
     },
+    map: {
+      '--map-ocean': '#1f1b18',
+      '--map-land': '#4a3d2f',
+      '--map-land-globe': '#2e261e',
+      '--map-coast': '#a08a6a',
+      '--map-state': '#6f5f4c',
+      '--map-rim': '#4a3f37',
+      '--map-ocean-lit': '#33291f',
+      '--map-ocean-deep': '#0f0c0a',
+    },
   },
   {
     id: 'nebula',
@@ -340,6 +442,16 @@ export const SKINS: readonly Skin[] = [
       '--bubble-mine': '#403461', '--bubble-mine-text': '#c6c4cf', '--bubble-theirs': '#191410',
       '--bubble-theirs-text': '#bfb4a5', '--readout': '#9e80d0', '--well-bg': '#090604', '--well-ink': '#bfb4a5',
       '--well-grid': '#423a32',
+    },
+    map: {
+      '--map-ocean': '#1a1730',
+      '--map-land': '#3a3255',
+      '--map-land-globe': '#26213d',
+      '--map-coast': '#8c7fc0',
+      '--map-state': '#5f568a',
+      '--map-rim': '#47415f',
+      '--map-ocean-lit': '#2b2652',
+      '--map-ocean-deep': '#0c0a18',
     },
   },
   {

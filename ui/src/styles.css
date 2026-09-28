@@ -3656,7 +3656,8 @@ body.resizing-row {
    surfaces". A theme is an axis over a BASE, never a third `data-theme`: `data-skin='<id>'` sits on
    <html> beside its base's own `data-theme`, so every [data-theme] component rule in this sheet
    still applies, and it is ABSENT for Dark, Light and System. A theme retunes the surfaces, the
-   three inks, the accent family, the frequency readout and the display-well trio. It never
+   three inks, the accent family, the frequency readout and the display-well trio, and a dark
+   theme also brings the map's basemap (MAP BASEMAP, below, is the standard one). It never
    declares a locked colour (TX and the ON AIR sign, the critical orange, the status and need
    sets) or an OK, Amber or Cyan role colour: the signal colours stay the base theme's.
 
@@ -3700,6 +3701,14 @@ body.resizing-row {
   --well-bg: #0c0a07;
   --well-ink: #f0e6d2;
   --well-grid: #3d3424;
+  --map-ocean: #171310;
+  --map-land: #3a3122;
+  --map-land-globe: #241e14;
+  --map-coast: #8a7a55;
+  --map-state: #5f5440;
+  --map-rim: #3a3020;
+  --map-ocean-lit: #2a241a;
+  --map-ocean-deep: #0a0806;
 }
 [data-theme='dark'][data-night='1'][data-skin='amber-lcd'],
 [data-night='1'][data-skin='amber-lcd'] .well {
@@ -3747,6 +3756,14 @@ body.resizing-row {
   --well-bg: #070a08;
   --well-ink: #dfeadf;
   --well-grid: #26382b;
+  --map-ocean: #0c1410;
+  --map-land: #22382a;
+  --map-land-globe: #152419;
+  --map-coast: #6f9a7a;
+  --map-state: #4a6b55;
+  --map-rim: #24382a;
+  --map-ocean-lit: #173226;
+  --map-ocean-deep: #060a08;
 }
 [data-theme='dark'][data-night='1'][data-skin='green-lcd'],
 [data-night='1'][data-skin='green-lcd'] .well {
@@ -3794,6 +3811,14 @@ body.resizing-row {
   --well-bg: #06090f;
   --well-ink: #e6eefc;
   --well-grid: #2a3f66;
+  --map-ocean: #0b1a33;
+  --map-land: #2a3a55;
+  --map-land-globe: #182640;
+  --map-coast: #7f97bd;
+  --map-state: #546b8f;
+  --map-rim: #263a5e;
+  --map-ocean-lit: #1a3660;
+  --map-ocean-deep: #05091a;
 }
 [data-theme='dark'][data-night='1'][data-skin='blue-vfd'],
 [data-night='1'][data-skin='blue-vfd'] .well {
@@ -3892,6 +3917,14 @@ body.resizing-row {
   --well-bg: #000000;
   --well-ink: #ececf1;
   --well-grid: #2a2a33;
+  --map-ocean: #05070c;
+  --map-land: #1a1f24;
+  --map-land-globe: #111518;
+  --map-coast: #5a6570;
+  --map-state: #3d464f;
+  --map-rim: #1e242b;
+  --map-ocean-lit: #0f1a26;
+  --map-ocean-deep: #000000;
 }
 [data-theme='dark'][data-night='1'][data-skin='midnight'],
 [data-night='1'][data-skin='midnight'] .well {
@@ -3939,6 +3972,14 @@ body.resizing-row {
   --well-bg: #14181f;
   --well-ink: #e5ebf3;
   --well-grid: #3f4859;
+  --map-ocean: #1b2330;
+  --map-land: #3a4656;
+  --map-land-globe: #26303d;
+  --map-coast: #8797aa;
+  --map-state: #5c6d82;
+  --map-rim: #3a4656;
+  --map-ocean-lit: #283a4f;
+  --map-ocean-deep: #0f141b;
 }
 [data-theme='dark'][data-night='1'][data-skin='slate'],
 [data-night='1'][data-skin='slate'] .well {
@@ -3986,6 +4027,14 @@ body.resizing-row {
   --well-bg: #001a20;
   --well-ink: #e3eeeb;
   --well-grid: #1a5560;
+  --map-ocean: #04303a;
+  --map-land: #1e4a3d;
+  --map-land-globe: #123328;
+  --map-coast: #6fa39a;
+  --map-state: #4d7a72;
+  --map-rim: #1a5560;
+  --map-ocean-lit: #0f4a56;
+  --map-ocean-deep: #001318;
 }
 [data-theme='dark'][data-night='1'][data-skin='lagoon'],
 [data-night='1'][data-skin='lagoon'] .well {
@@ -4033,6 +4082,14 @@ body.resizing-row {
   --well-bg: #1a1613;
   --well-ink: #efe3d0;
   --well-grid: #4a3f37;
+  --map-ocean: #1f1b18;
+  --map-land: #4a3d2f;
+  --map-land-globe: #2e261e;
+  --map-coast: #a08a6a;
+  --map-state: #6f5f4c;
+  --map-rim: #4a3f37;
+  --map-ocean-lit: #33291f;
+  --map-ocean-deep: #0f0c0a;
 }
 [data-theme='dark'][data-night='1'][data-skin='ember'],
 [data-night='1'][data-skin='ember'] .well {
@@ -4080,6 +4137,14 @@ body.resizing-row {
   --well-bg: #16151e;
   --well-ink: #eee9fb;
   --well-grid: #47415f;
+  --map-ocean: #1a1730;
+  --map-land: #3a3255;
+  --map-land-globe: #26213d;
+  --map-coast: #8c7fc0;
+  --map-state: #5f568a;
+  --map-rim: #47415f;
+  --map-ocean-lit: #2b2652;
+  --map-ocean-deep: #0c0a18;
 }
 [data-theme='dark'][data-night='1'][data-skin='nebula'],
 [data-night='1'][data-skin='nebula'] .well {
@@ -4378,6 +4443,35 @@ body.resizing-row {
 .well {
   background-color: var(--well-bg);
   color: var(--well-ink);
+}
+
+/* ---- MAP BASEMAP: the map's land and sea (MapView.tsx; features/skins.ts STANDARD_MAP) -------
+   The map bakes its basemap from these tokens: the sea, the land (darker on the globe), the
+   coastlines, the US state borders, the globe's rim and its lit and deep ocean. The standard
+   basemap is dark in BOTH themes on purpose (a map should read as a map, as HamClock's and
+   Geochron's do), so both themes declare the same values, per the layout contract. A dark
+   built-in theme brings its own in its THEMES block; a light one keeps these. Plain hexes: the
+   canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
+:root,
+[data-theme='dark'] {
+  --map-ocean: #0f2334;
+  --map-land: #364a3c;
+  --map-land-globe: #1c2b2a;
+  --map-coast: #6f8a98;
+  --map-state: #4d6675;
+  --map-rim: #2a4254;
+  --map-ocean-lit: #1c4a66;
+  --map-ocean-deep: #06101c;
+}
+[data-theme='light'] {
+  --map-ocean: #0f2334;
+  --map-land: #364a3c;
+  --map-land-globe: #1c2b2a;
+  --map-coast: #6f8a98;
+  --map-state: #4d6675;
+  --map-rim: #2a4254;
+  --map-ocean-lit: #1c4a66;
+  --map-ocean-deep: #06101c;
 }
 
 /* ---- COLOUR ROLES: the operator's picks (Settings ▸ Appearance ▸ Colours) ------------------

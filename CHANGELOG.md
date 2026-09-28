@@ -142,8 +142,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   board is lettered in the theme's text colour, with the band's colour on its border or underline,
   as in Light. A waterfall or scope on the **Auto** palette takes the theme's own palette (Amber
   CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue VFD, Cividis on Paper…); Night still
-  turns it Amber CRT, and a palette you picked by name never changes. Pick Light, Dark or System
-  to go back. The theme is remembered per computer, and your backup carries it with the rest of
+  turns it Amber CRT, and a palette you picked by name never changes. On a dark theme the map's
+  land, sea and coastlines take the theme's colours too; the light themes keep the usual dark map.
+  Pick Light, Dark or System to go back. The theme is remembered per computer, and your backup carries it with the rest of
   the look.
 
 ### Changed

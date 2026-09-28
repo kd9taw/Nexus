@@ -103,6 +103,7 @@ import { modeClassOf } from '../features/needs'
 import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
+import { STANDARD_MAP, type MapToken } from '../features/skins'
 // Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
 // downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
 import reliefUrl from '../assets/earth-relief.webp'
@@ -490,20 +491,14 @@ const PATH_SP = 'SP'
 const PATH_LP = 'LP'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
-// wireframe. Deliberately theme-agnostic and dark (like HamClock/Geochron), so it
-// looks intentional in any UI theme. Tuned for the dark dashboard.
-const MAP_OCEAN = '#0f2334' // deep sea
-const MAP_LAND = '#364a3c' // muted continental green (flat World/AEQD maps)
-const MAP_LAND_GLOBE = '#1c2b2a' // darker landmass on the globe — a moody night-earth so
-// the colored spots + arcs are what pop (the cover-photo look, minus the busy city lights)
-const MAP_COAST = '#6f8a98' // coastline / borders, visible but quiet
-const MAP_STATE = '#4d6675' // US state interior borders — quieter than coast, still readable
-const MAP_RIM = '#2a4254' // the globe's edge (AEQD reads as a sphere)
-// Globe (orthographic) 3D shading: a lit ocean highlight toward the top-left light
-// source, deepening to a dark limb, plus an atmospheric rim glow and a star field —
-// turns the flat disc into a planet floating in space without any WebGL.
-const MAP_OCEAN_LIT = '#1c4a66' // lit ocean highlight (toward the light source)
-const MAP_OCEAN_DEEP = '#06101c' // sphere limb (dark edge)
+// wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
+// basemap (features/skins.ts STANDARD_MAP) is deliberately theme-agnostic and dark (like
+// HamClock/Geochron), so it looks intentional in any UI theme, and a dark built-in theme brings
+// its own. Read at bake like every other token here; STANDARD_MAP is also what paints where no
+// sheet is loaded. Globe (orthographic) 3D shading: a lit ocean highlight toward the top-left
+// light source, deepening to a dark limb, plus an atmospheric rim glow and a star field — turns
+// the flat disc into a planet floating in space without any WebGL.
+const mapInk = (token: MapToken) => cssVar(token, STANDARD_MAP[token])
 const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
 /** ⭐ MARKER HALO — how "brighter" is done WITHOUT touching the colour scheme.
  *  A band-coloured dot competes with whatever it lands on: a 40 m blue dot on the deep-sea
@@ -512,7 +507,7 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  Saturating the palette would fix that by changing the colours the operator said they like;
  *  a dark outline fixes it by raising the CONTRAST STEP at the marker's edge, so every dot
  *  keeps its exact hue and reads against land, sea, relief raster and greyline alike. Darker
- *  than MAP_OCEAN_DEEP so it separates even from the globe's own limb. */
+ *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb. */
 const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
 
 /** ⭐ MARKER SCALE — one factor, derived from the canvas, applied to every station/spot/park/
@@ -625,10 +620,10 @@ const cssVarCache = new Map<string, string>()
 export function invalidateCssVarCache(): void {
   cssVarCache.clear()
 }
-function cssVar(name: string): string {
+function cssVar(name: string, fallback = '#888'): string {
   const hit = cssVarCache.get(name)
   if (hit !== undefined) return hit
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
   cssVarCache.set(name, v)
   return v
 }
@@ -759,7 +754,8 @@ export function MapView({
   })
   // The colour roles (Settings ▸ Appearance ▸ Colours) move --accent and the SNR greens/ambers
   // this map paints; a draw dependency like `theme`, so a new pick repaints with fresh tokens.
-  // The base map reads none of them, so its cache stays keyed as it was.
+  // The key also moves with Night and with a built-in theme, which retune the base map's own
+  // tokens (a dark theme's basemap, the grid's --border-soft), so the base cache is keyed on it too.
   const colourRoles = usePaletteKey()
   // Opening-pulse tick: the main nowMs clock is a 60 s greyline tick, far too
   // coarse to animate the heat pulse (it froze the sine). Run a 1 s tick ONLY
@@ -1396,8 +1392,9 @@ export function MapView({
     const c = showQth ? project(proj, myQth ?? me) : null
 
     // ⭐ THE BASE MAP IS CACHED. Everything from the space backdrop to the coverage fill changes only
-    // with the VIEW (projection, pan/zoom/spin, size, device scale, QTH), the theme and those layers'
-    // own toggles — never with a decode, a spot, the 1 s pulse or a hover. Re-projecting every
+    // with the VIEW (projection, pan/zoom/spin, size, device scale, QTH), the theme (a built-in
+    // theme and Night included) and those layers' own toggles — never with a decode, a spot, the 1 s
+    // pulse or a hover. Re-projecting every
     // country outline, state border and graticule line for each of those redraws was most of the
     // 2-D map's idle cost, so it is drawn once into an offscreen canvas of the same device size and
     // blitted. Everything that follows (APRS onward) still draws live, in the same order as before.
@@ -1448,15 +1445,15 @@ export function MapView({
           gcy,
           gR * 1.02,
         )
-        sea.addColorStop(0, MAP_OCEAN_LIT)
-        sea.addColorStop(0.55, MAP_OCEAN)
-        sea.addColorStop(1, MAP_OCEAN_DEEP)
+        sea.addColorStop(0, mapInk('--map-ocean-lit'))
+        sea.addColorStop(0.55, mapInk('--map-ocean'))
+        sea.addColorStop(1, mapInk('--map-ocean-deep'))
         ctx.fillStyle = sea
       } else {
-        ctx.fillStyle = MAP_OCEAN
+        ctx.fillStyle = mapInk('--map-ocean')
       }
       ctx.fill()
-      ctx.strokeStyle = MAP_RIM
+      ctx.strokeStyle = mapInk('--map-rim')
       ctx.lineWidth = 1
       ctx.stroke()
 
@@ -1476,7 +1473,7 @@ export function MapView({
           ctx.globalAlpha = layers.coast.opacity * 0.5
           ctx.beginPath()
           path(basemap())
-          ctx.strokeStyle = MAP_COAST
+          ctx.strokeStyle = mapInk('--map-coast')
           ctx.lineWidth = 0.5
           ctx.stroke()
           ctx.globalAlpha = 1
@@ -1485,11 +1482,11 @@ export function MapView({
         // Filled-vector land (the AEQD beam map, or World with relief off).
         ctx.beginPath()
         path(basemap())
-        ctx.fillStyle = isGlobe ? MAP_LAND_GLOBE : MAP_LAND
+        ctx.fillStyle = mapInk(isGlobe ? '--map-land-globe' : '--map-land')
         ctx.fill()
         if (layers.coast.visible) {
           ctx.globalAlpha = layers.coast.opacity
-          ctx.strokeStyle = MAP_COAST
+          ctx.strokeStyle = mapInk('--map-coast')
           ctx.lineWidth = 0.6
           ctx.stroke()
           ctx.globalAlpha = 1
@@ -1502,7 +1499,7 @@ export function MapView({
         ctx.globalAlpha = layers.states.opacity
         ctx.beginPath()
         path(usStateBorders())
-        ctx.strokeStyle = MAP_STATE
+        ctx.strokeStyle = mapInk('--map-state')
         ctx.lineWidth = 0.5
         ctx.stroke()
         ctx.globalAlpha = 1
@@ -1613,7 +1610,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, me, theme, reliefReady, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, me, theme, colourRoles, reliefReady, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
