@@ -285,8 +285,14 @@ const OK: PaletteRole = {
   presets: [
     { id: 'green', labelKey: 'palette.preset.green', dark: okValues('#69d98d'), light: okValues('#007f35') },
     // Bluish green: further from the reds for a red-green colour-blind operator.
-    { id: 'teal', labelKey: 'palette.preset.teal', dark: okValues('#49d9b9'), light: okValues('#007e68') },
-    { id: 'mint', labelKey: 'palette.preset.mint', dark: okValues('#84eeb3'), light: okValues('#0d8557') },
+    // Teal and Mint were #007e68 and #0d8557 in the light theme, ΔE 0.039 apart and Mint 0.044 from
+    // Green, and looked alike (operator, 2026-09-28: "pull the Teal and Mint accents apart in the
+    // light theme"). Now every pair is at least 0.060 apart there: Teal deeper and a little bluer,
+    // keeping its distance from the reds to a colour-blind eye; Mint a little lighter and bluer, the
+    // lightest of the three, as it is in the dark theme. It can go no lighter: the white lettering on
+    // a confirmed journey cell reads 4.53:1 on it. The dark values are unchanged.
+    { id: 'teal', labelKey: 'palette.preset.teal', dark: okValues('#49d9b9'), light: okValues('#167469') },
+    { id: 'mint', labelKey: 'palette.preset.mint', dark: okValues('#84eeb3'), light: okValues('#1b8662') },
   ],
 }
 

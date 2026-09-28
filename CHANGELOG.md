@@ -175,6 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme. It is now a deeper gold in the dark theme and a duller, brass-like gold in the light
   theme, clearly apart from both in each, and it still passes the same readability checks as the
   others. Amber and Yellow look exactly as before, and nothing changes unless you picked Gold.
+- **Teal and Mint no longer look alike in the light theme.** In Settings ▸ Appearance ▸ Colours,
+  the OK / green choices Teal and Mint were almost the same colour in the light theme, and Mint was
+  close to Green as well. Teal is now a deeper, slightly bluer teal there and Mint a touch lighter,
+  so the three greens are clearly apart, and they pass the same readability checks as before, on
+  every built-in theme too. Teal still stays furthest from the reds for a red-green colour-blind
+  operator. The dark theme is unchanged, and nothing changes unless you picked Teal or Mint.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.

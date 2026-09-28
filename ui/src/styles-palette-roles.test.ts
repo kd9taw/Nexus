@@ -34,6 +34,10 @@
 //     Yellow in the light one, and looked like them (operator, 2026-09-27: "Make them distinct").
 //     The floor is just under Amber and Yellow's own 0.043 in the light theme, the closest pair
 //     nobody flagged, which the pick kept byte-identical.
+//   · OK's presets ≥ 0.055 apart: Teal sat 0.039 from Mint in the light theme, and Mint 0.044 from
+//     Green, and they looked alike (operator, 2026-09-28: "pull the Teal and Mint accents apart in
+//     the light theme"). The floor is just under Green and Teal's own 0.059 in the dark theme, the
+//     closest pair nobody flagged, which the pick kept byte-identical.
 //
 // EVERY PRESET CLEARS EVERY FLOOR, THE DEFAULTS INCLUDED. Until 2026-09-27 the light theme's
 // default accent and readout, #0d8ecf (the colour they had always had), read 3.3–3.6:1 as
@@ -83,6 +87,7 @@ const PENDING_DE = 0.1
 const OK_AMBER_DE = 0.12
 const PRESET_DE = 0.06
 const AMBER_PRESET_DE = 0.04
+const OK_PRESET_DE = 0.055
 /** One 8-bit step in the green channel moves a mid-tone's contrast by about this much. */
 const ROUNDING = 0.05
 
@@ -381,8 +386,8 @@ describe('OK and amber stay apart for every pair of presets', () => {
 
 /** Every pair of `r`'s presets, measured on what the sheet paints, in every mode and scope. Held
  *  for the accent and the readout, the roles whose default was darkened toward Blue, and for Amber
- *  at its own floor (see the header). OK and Cyan are not held: their closest pairs today are
- *  Teal and Mint in the light theme, 0.039, and Sky and Cyan there, 0.056. */
+ *  and OK at their own floors (see the header). Cyan is not held: its closest pair today is Sky
+ *  and Cyan in the light theme, 0.056. */
 function apartProblems(rules: Rule[], r: PaletteRole, min = PRESET_DE): string[] {
   const out: string[] = []
   for (const base of BASE_MODES) {
@@ -408,6 +413,12 @@ describe('the accent and readout presets stay apart from each other', () => {
 describe('Amber, Gold and Yellow stay apart from each other', () => {
   it('in every mode, at <html> and inside a well', () => {
     expect(apartProblems(RULES, role('amber'), AMBER_PRESET_DE)).toEqual([])
+  })
+})
+
+describe('Green, Teal and Mint stay apart from each other', () => {
+  it('in every mode, at <html> and inside a well', () => {
+    expect(apartProblems(RULES, role('ok'), OK_PRESET_DE)).toEqual([])
   })
 })
 
@@ -587,6 +598,16 @@ describe('the checks fire', () => {
     expect(found.some((m) => m.startsWith('amber amber/gold dark root:')), found.join('\n')).toBe(true)
     expect(found.some((m) => m.startsWith('amber amber/gold light root:')), found.join('\n')).toBe(true)
     expect(found.some((m) => m.startsWith('amber gold/yellow light root:')), found.join('\n')).toBe(true)
+  })
+
+  it('the Teal and Mint that looked alike are caught at OK’s floor', () => {
+    // The light values Teal and Mint shipped with until 2026-09-28, laid back over the sheet's.
+    const rules = withBlock(`
+      [data-theme='light'][data-ok='teal'] { --snr-strong: #007e68; --rx: #007e68; --band-open: #007e68; }
+      [data-theme='light'][data-ok='mint'] { --snr-strong: #0d8557; --rx: #0d8557; --band-open: #0d8557; }`)
+    const found = apartProblems(rules, role('ok'), OK_PRESET_DE)
+    expect(found.some((m) => m.startsWith('ok teal/mint light root:')), found.join('\n')).toBe(true)
+    expect(found.some((m) => m.startsWith('ok green/mint light root:')), found.join('\n')).toBe(true)
   })
 
   it('a fill made worse than today is caught', () => {

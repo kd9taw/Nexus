@@ -4633,9 +4633,9 @@ body.resizing-row {
   --band-open: #49d9b9;
 }
 [data-theme='light'][data-ok='teal'] {
-  --snr-strong: #007e68;
-  --rx: #007e68;
-  --band-open: #007e68;
+  --snr-strong: #167469;
+  --rx: #167469;
+  --band-open: #167469;
 }
 [data-theme='dark'][data-ok='mint'],
 [data-ok='mint'] .well {
@@ -4644,9 +4644,9 @@ body.resizing-row {
   --band-open: #84eeb3;
 }
 [data-theme='light'][data-ok='mint'] {
-  --snr-strong: #0d8557;
-  --rx: #0d8557;
-  --band-open: #0d8557;
+  --snr-strong: #1b8662;
+  --rx: #1b8662;
+  --band-open: #1b8662;
 }
 
 /* Amber */
