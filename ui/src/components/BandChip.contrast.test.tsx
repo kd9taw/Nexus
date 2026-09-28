@@ -28,6 +28,12 @@
 // and the board's name, which has no border, on an underline. In the dark theme both keep the
 // palette exactly, violets included (the lift above is the chip's alone), and the globe's own
 // drawing is not touched.
+//
+// THE BUILT-IN THEMES (features/skins.ts) take the light treatment in all four hosts: the palette
+// reads as lettering only on the standard dark theme's surfaces, and on the lighter raised surfaces
+// of four dark themes it fell to 3.7–4.4:1. The sweeps below walk the standard modes and the
+// themes MODES carries as the worst case of each base (SENTINEL_MODES), so a theme whose surfaces
+// a band name cannot read on is caught here whichever it is.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -39,6 +45,7 @@ import { FdBandOccupancy } from './ContestView'
 import { BAND_COLOR } from '../bandColors'
 import {
   BASE_MODES,
+  SENTINEL_MODES,
   baseTheme,
   chainOf,
   contrast,
@@ -86,6 +93,10 @@ const sheet = (name: string) =>
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
 
 const TEXT_MIN = 4.5
+/** The standard modes and the worst-case themes' (see the header). */
+const SWEPT: readonly Mode[] = [...BASE_MODES, ...SENTINEL_MODES]
+/** Where a band name takes the theme's ink: the light theme, and every built-in theme. */
+const THEME_INKED: readonly Mode[] = [...BASE_MODES.filter((m) => baseTheme(m) === 'light'), ...SENTINEL_MODES]
 /** The two surfaces the chip is drawn on (see the header). */
 const SURFACES = ['--bg', '--bg-elev'] as const
 const BANDS = Object.keys(BAND_COLOR)
@@ -162,7 +173,7 @@ function letteringOf(rules: Rule[], chip: Lettered, mode: Mode): Rgb {
 }
 
 /** Every chip × mode × surface where the band name reads under 4.5:1. */
-function unreadable(rules: Rule[], chips: Lettered[], modes: readonly Mode[] = BASE_MODES): string[] {
+function unreadable(rules: Rule[], chips: Lettered[], modes: readonly Mode[] = SWEPT): string[] {
   const out: string[] = []
   for (const chip of chips) {
     for (const mode of modes) {
@@ -209,25 +220,25 @@ describe("the band chip's band name reads, in every theme", () => {
     }
   })
 
-  it('in the light theme the band name takes the theme text colour', () => {
-    const light = BASE_MODES.filter((m) => baseTheme(m) === 'light')
+  it('in the light theme and on every built-in theme the band name takes the theme text colour', () => {
     for (const chip of chips) {
-      for (const mode of light) {
+      for (const mode of THEME_INKED) {
         const text = rgbOfStyle(expandWith(cascadeOf(RULES, mode, chip.chain).tokens, 'var(--text)'))
         expect(hex(letteringOf(RULES, chip, mode)), `${chip.host} ${chip.band} ${mode}`).toBe(hex(text))
       }
     }
   })
 
-  it('FIRES: the palette as lettering, with no light rule, is caught in both themes', () => {
+  it('FIRES: the palette as lettering, with no light or theme rule, is caught in both themes and on a theme', () => {
     // The shipped state before this change: the inline band colour everywhere.
     const palette = chips.map((c) => ({ ...c, ink: rgbOfStyle(BAND_COLOR[c.band]) }))
-    const noLightRule = RULES.filter((r) => !(r.selector.includes("[data-theme='light']") && /band-menu-trigger|freq-control\.full/.test(r.selector)))
+    const noLightRule = RULES.filter((r) => !(/\[data-theme='light'\]|\[data-skin\]/.test(r.selector) && /band-menu-trigger|freq-control\.full/.test(r.selector)))
     const found = unreadable(noLightRule, palette)
     expect(found.some((m) => m.startsWith('FrequencyControl 20m light:')), 'light 20m').toBe(true)
     expect(found.some((m) => m.startsWith('BandPicker 15m light-high:')), 'light-high 15m').toBe(true)
     expect(found.some((m) => m.startsWith('FrequencyControl 2200m dark:')), 'dark 2200m').toBe(true)
     expect(found.some((m) => m.startsWith('BandPicker 20m dark:')), 'dark 20m passes, so it is not reported').toBe(false)
+    expect(found.some((m) => m.startsWith('FrequencyControl 80m dark skin=lagoon:')), 'Lagoon 80m').toBe(true)
   })
 })
 
@@ -290,26 +301,27 @@ describe('the same band name on the Logbook globe and the Field Day board', () =
   const light = BASE_MODES.filter((m) => baseTheme(m) === 'light')
   const dark = BASE_MODES.filter((m) => baseTheme(m) === 'dark')
   const onBoard = (n: Name) => n.host.startsWith('FdBandOccupancy')
+  const inked = (mode: Mode) => THEME_INKED.includes(mode)
 
   it('renders a name for every band, on the globe select and both boards (the census cannot silently empty out)', () => {
     expect(names).toHaveLength(BANDS.length * 3)
   })
 
-  it('in the light theme every band name takes the theme text colour, and clears 4.5:1 on both surfaces', () => {
+  it('in the light theme and on every built-in theme every band name takes the theme text colour, and clears 4.5:1 on both surfaces', () => {
     for (const n of names) {
-      for (const mode of light) {
+      for (const mode of THEME_INKED) {
         const text = rgbOfStyle(expandWith(cascadeOf(RULES, mode, n.chain).tokens, 'var(--text)'))
         expect(hex(letteringOf(RULES, n, mode)), `${n.host} ${n.band} ${mode}`).toBe(hex(text))
       }
     }
-    expect(unreadable(RULES, names, light)).toEqual([])
+    expect(unreadable(RULES, names, THEME_INKED)).toEqual([])
   })
 
-  it("the band's colour stays on the select's border and the board name's underline, drawn in the light theme only", () => {
+  it("the band's colour stays on the select's border and the board name's underline, drawn wherever the name takes the theme's ink", () => {
     for (const n of names) expect(n.marker && hex(rgbOfStyle(n.marker)), `${n.host} ${n.band}`).toBe(BAND_COLOR[n.band])
     for (const n of names.filter(onBoard)) {
-      for (const mode of BASE_MODES) {
-        expect(underlineOf(RULES, mode, n.chain), `${n.host} ${n.band} ${mode}`).toBe(baseTheme(mode) === 'light' ? 'underline' : 'none')
+      for (const mode of SWEPT) {
+        expect(underlineOf(RULES, mode, n.chain), `${n.host} ${n.band} ${mode}`).toBe(inked(mode) ? 'underline' : 'none')
       }
     }
   })
@@ -342,11 +354,12 @@ describe('the same band name on the Logbook globe and the Field Day board', () =
     }
   })
 
-  it('FIRES: without the light rule these names letter in the palette, and the light theme catches them', () => {
-    const noLightRule = RULES.filter((r) => !(r.selector.includes("[data-theme='light']") && /qso-globe-band-pick|data-band-ink/.test(r.selector)))
-    const found = unreadable(noLightRule, names, light)
+  it('FIRES: without the light and theme rule these names letter in the palette, and the sweep catches them', () => {
+    const noLightRule = RULES.filter((r) => !(/\[data-theme='light'\]|\[data-skin\]/.test(r.selector) && /qso-globe-band-pick|data-band-ink/.test(r.selector)))
+    const found = unreadable(noLightRule, names, THEME_INKED)
     expect(found.some((m) => m.startsWith('QsoGlobe 20m light:')), 'globe 20m light').toBe(true)
     expect(found.some((m) => m.startsWith('FdBandOccupancy(big) 15m light-high:')), 'board 15m light-high').toBe(true)
     expect(found.some((m) => m.startsWith('FdBandOccupancy 6m light-night:')), 'board 6m light-night').toBe(true)
+    expect(found.some((m) => m.startsWith('QsoGlobe 80m dark skin=lagoon:')), 'globe 80m Lagoon').toBe(true)
   })
 })

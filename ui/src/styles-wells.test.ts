@@ -39,6 +39,7 @@ import {
   isNight,
   parseRules,
   rgbHex as hex,
+  rolesOf,
   rootTokensFrom,
   toRgb,
   tokensAt,
@@ -47,6 +48,7 @@ import {
   type Mode,
   type Rgb,
 } from './cssCascade'
+import { SKINS } from './features/skins'
 import type { AppSnapshot, RadioStatus } from './types'
 
 vi.mock('./api', () => ({
@@ -78,9 +80,18 @@ const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')
 const ROOT = Object.fromEntries(MODES.map((m) => [m, rootTokensFrom(RULES, m)])) as Record<Mode, Map<string, string>>
 const rootValue = (mode: Mode, token: string) => expandWith(ROOT[mode], `var(${token})`).trim()
 
+/** The built-in theme (features/skins.ts) a mode carries, if any. */
+const skinOf = (mode: Mode) => SKINS.find((s) => s.id === rolesOf(mode).skin)
 /** Which palette a well must show in `mode`: always the DARK theme, at the mode's contrast and
- *  with the mode's colour-role presets (a well shows a preset's dark value in either theme). */
-const darkTwin = (mode: Mode): Mode => mode.replace(/^light/, 'dark') as Mode
+ *  with the mode's colour-role presets (a well shows a preset's dark value in either theme). A
+ *  dark built-in theme IS a dark theme, so its wells are itself; a light one's are the standard
+ *  dark palette, less the accent and readout it gives them (`ownInWell`). */
+const darkTwin = (mode: Mode): Mode => {
+  const dark = mode.replace(/^light/, 'dark')
+  return (skinOf(mode)?.base === 'light' ? dark.replace(/ skin=[\w-]+/, '') : dark) as Mode
+}
+/** What a light theme paints in its wells itself, held to its table by styles-skins.test.ts. */
+const ownInWell = (mode: Mode): string[] => Object.keys(skinOf(mode)?.well ?? {})
 
 /** The status inks the scope must re-declare. `--state-*` are listed alongside `--snr-*`
  *  because the aliases are computed on <html>: a descendant that re-declares only the target
@@ -127,14 +138,19 @@ describe('the well tokens', () => {
   it.each(WELL)('%s is declared, with one value in every mode of each Night setting', (tok) => {
     // One value in both themes, at every contrast and under every colour role: a well looks the
     // same wherever the operator is. Night dims the wells with the room (styles.css NIGHT), so
-    // there are exactly two values, the day one and the night one.
-    for (const night of [false, true]) {
-      const modes = MODES.filter((m) => isNight(m) === night)
-      const values = modes.map((m) => rootValue(m, tok))
-      expect(values[0], `${tok} is not declared`).not.toBe('')
-      for (const [i, m] of modes.entries()) {
-        expect(ROOT[m].has(tok), `${tok} resolves in no ${m} block`).toBe(true)
-        expect(values[i], `${tok} differs in ${m}`).toBe(values[0])
+    // there are exactly two values, the day one and the night one. A dark built-in theme's wells
+    // are the theme, so it has its own two (styles-skins.test.ts holds them to its table); a light
+    // one's are the standard ones.
+    const groupOf = (m: Mode) => (skinOf(m)?.base === 'dark' ? skinOf(m)!.id : '')
+    for (const group of new Set(MODES.map(groupOf))) {
+      for (const night of [false, true]) {
+        const modes = MODES.filter((m) => isNight(m) === night && groupOf(m) === group)
+        const values = modes.map((m) => rootValue(m, tok))
+        expect(values[0], `${tok} is not declared`).not.toBe('')
+        for (const [i, m] of modes.entries()) {
+          expect(ROOT[m].has(tok), `${tok} resolves in no ${m} block`).toBe(true)
+          expect(values[i], `${tok} differs in ${m}`).toBe(values[0])
+        }
       }
     }
   })
@@ -371,7 +387,8 @@ describe('a well is the dark theme, in every mode (the join holds)', () => {
     const { display } = rendered(i)
     const tokens = tokensOf(mode, display)
     const twin = darkTwin(mode)
-    const off = ISLAND.filter((tok) => expandWith(tokens, `var(${tok})`).trim() !== rootValue(twin, tok)).map(
+    const own = ownInWell(mode)
+    const off = ISLAND.filter((tok) => !own.includes(tok) && expandWith(tokens, `var(${tok})`).trim() !== rootValue(twin, tok)).map(
       (tok) => `${tok}: ${expandWith(tokens, `var(${tok})`).trim()} (the ${twin} theme says ${rootValue(twin, tok)})`,
     )
     expect(off, `${i.name} in ${mode} is not the ${twin} palette:\n${off.join('\n')}`).toEqual([])
