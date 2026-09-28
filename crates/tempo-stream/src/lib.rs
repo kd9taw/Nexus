@@ -8,4 +8,12 @@
 //! - [`protocol`] — the wire contract with the relay and the page. Its fixtures, and the prose that
 //!   defines each field, live in `remote/test/fixtures/stream/`, where the relay and the page test
 //!   against the same files.
+//! - [`offer`] — what a page's offer must be before the station answers it: DTLS-SRTP only.
+//! - [`frame_clock`] — how old the picture the page last showed is, on the station's own clock.
+//! - [`lan`] — the last check that no LAN address leaves the shack.
+//! - [`stun`] — the one binding request that learns the station's reflexive address.
+pub mod frame_clock;
+pub mod lan;
+pub mod offer;
 pub mod protocol;
+pub mod stun;
