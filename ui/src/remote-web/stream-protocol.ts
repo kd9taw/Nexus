@@ -170,7 +170,7 @@ export function toHex(bytes: Uint8Array): string {
 /** The offer's DTLS certificate fingerprint: the 32 bytes of its `a=fingerprint:sha-256` value, which
  *  every such line must carry alike (a browser writes one per media section). Null when there is
  *  none, when they disagree, or when one is not 32 colon-separated hex bytes. */
-export function offerFingerprint(description: string): Uint8Array<ArrayBuffer> | null {
+export function offerFingerprint(description: string): Uint8Array | null {
   let found: string | null = null
   for (const line of description.split(/\r\n|\n/)) {
     const value = line.trim().match(/^a=fingerprint:(\S+) (.+)$/)
@@ -189,7 +189,7 @@ export function shortFingerprint(fingerprint: string): string {
 }
 /** The bytes an offer's signature covers: the label, SHA-256 of the fingerprint (the caller hashes),
  *  and the station, device and session ids as the relay stamps them - 160 bytes. */
-export function offerBinding(fingerprintDigest: Uint8Array, stationId: string, deviceId: string, sessionId: string): Uint8Array<ArrayBuffer> {
+export function offerBinding(fingerprintDigest: Uint8Array, stationId: string, deviceId: string, sessionId: string): Uint8Array {
   const text = new TextEncoder()
   return new Uint8Array([...text.encode(OFFER_BINDING_LABEL), ...fingerprintDigest, ...text.encode(stationId), ...text.encode(deviceId), ...text.encode(sessionId)])
 }
