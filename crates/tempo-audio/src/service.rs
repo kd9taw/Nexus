@@ -24409,7 +24409,7 @@ mod tests {
         /// One 20 ms tick: the page re-asserts its hold every 100 ms and, when `audio`, sends a
         /// frame; then the loop steps.
         fn tick(&mut self, t: f64, audio: bool) {
-            if (t as u64) % 100 == 0 {
+            if (t as u64).is_multiple_of(100) {
                 self.hold.hold(MIC_PRESS, self.mono(t));
             }
             if audio {
@@ -24481,7 +24481,7 @@ mod tests {
             "the pre-roll carried audio"
         );
         assert!(
-            played[pre_roll..].iter().any(|&x| x == 0.5),
+            played[pre_roll..].contains(&0.5),
             "the operator's voice never followed"
         );
     }

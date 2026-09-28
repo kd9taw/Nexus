@@ -342,7 +342,7 @@ mod tests {
         s.key();
         for k in 1..=50u64 {
             let n = 20 * k;
-            if n % 100 == 0 {
+            if n.is_multiple_of(100) {
                 s.hold.hold(PRESS, s.at(n));
             }
             s.feed.push(frame(k, s.at(n))).unwrap();

@@ -755,7 +755,7 @@ mod tests {
             panic!("the keying frame was never played: {:?}", res.tick);
         };
         assert!(
-            voice.iter().any(|&s| s == 0.5),
+            voice.contains(&0.5),
             "the keying frame's audio did not follow the pre-roll"
         );
     }
@@ -909,12 +909,9 @@ mod tests {
         if let MicTick::Samples(s) = latch.tick(up(t0 + ms(800)), vec![late], PLENTY).tick {
             out.extend(s);
         }
+        assert!(out.contains(&marker), "an in-time frame was not played");
         assert!(
-            out.iter().any(|&s| s == marker),
-            "an in-time frame was not played"
-        );
-        assert!(
-            !out.iter().any(|&s| s == late_marker),
+            !out.contains(&late_marker),
             "a late frame was played after its moment"
         );
     }
