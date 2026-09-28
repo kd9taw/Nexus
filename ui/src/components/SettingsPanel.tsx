@@ -183,6 +183,7 @@ import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { resolveTarget } from '../settings/registry'
+import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -2570,6 +2571,22 @@ export function SettingsPanel({
     )
   }
 
+  // Every save of the form: what the operator changed since the form loaded or last saved, over the
+  // settings the backend holds now (settings/patch.ts). The form holds EVERY field, as it was when
+  // Settings opened, so saving it whole wrote each one the operator had not touched back over
+  // whatever had changed since: "use one radio" in the launch picker, a seat swap in the pop-out
+  // scoreboard, the dial the rig had been tuned to (which the radio loop then commands).
+  //
+  // One exception: a form describing a radio other than the one being operated NOW — a switch it
+  // has not caught up with yet. Its flat rig fields describe its own radio, the live ones the other
+  // radio, and the backend folds a payload's flat fields into the radio its `activeRadio` names, so
+  // a mix would stamp one radio's ports onto the other. That form goes whole, as it always did, and
+  // the backend's own rule for a form that is not about the active radio applies.
+  const saveForm = (payload: NonNullable<typeof form>) => {
+    const changes = changedSince(savedRef.current, payload)
+    return patchSettings((live) => (live.activeRadio === payload.activeRadio ? changes : payload))
+  }
+
   // Persist the rig form to the radio it actually describes.
   //
   // The backend contract is that a settings payload's `activeRadio` names the radio whose
@@ -2604,7 +2621,7 @@ export function SettingsPanel({
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
       // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
       // cannot be stamped onto the one being operated (the 2026-07-25 report).
-      await setSettings({
+      await saveForm({
         ...withActiveRadioConfig(next),
         mycall: next.mycall.trim().toUpperCase(),
       })
@@ -2617,7 +2634,7 @@ export function SettingsPanel({
         }),
       )
     } else {
-      await setSettings({ ...next, mycall: next.mycall.trim().toUpperCase() })
+      await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() })
     }
   }
 
@@ -2771,7 +2788,7 @@ export function SettingsPanel({
     // username change resets the sync cursor). Mirrors how Test CAT saves first.
     // This is a station-wide save, so it must not carry the rig form's radio fields.
     const r = await withErrorToast(async () => {
-      await setSettings({
+      await saveForm({
         ...withActiveRadioConfig(form),
         mycall: form.mycall.trim().toUpperCase(),
       })
@@ -2832,7 +2849,7 @@ export function SettingsPanel({
     // backend reads SAVED settings; a username change resets the cursor).
     // Station-wide save: must not carry the rig form's radio fields (see onSyncLotw).
     const r = await withErrorToast(async () => {
-      await setSettings({
+      await saveForm({
         ...withActiveRadioConfig(form),
         mycall: form.mycall.trim().toUpperCase(),
       })

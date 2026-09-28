@@ -30207,6 +30207,43 @@ mod tests {
         assert_eq!(e.settings().wanted_calls, vec!["VP8*".to_string()]);
     }
 
+    /// ⚠️ **A FORM SAVE'S TUNE IS THE TUNE**, which is why no surface may save a copy of the
+    /// settings it has been holding (`ui/src/settings/patch.ts`). The dial, band and sideband are
+    /// not one-writer fields like those above: Settings ▸ Station's frequency control is saved
+    /// through the form, so a payload about the radio being operated is adopted as its tune, and
+    /// the radio loop pushes a dial that differs from the rig's (`service.rs`, `dial !=
+    /// last_dial`). A copy read before a knob QSY and saved after it put the rig back where it
+    /// was; the Contest view's scoring chips, the CW macro-set switch and the Settings form's own
+    /// Save all did that. The UI now saves a surface's own fields over a fresh read, and this pins
+    /// the half of the contract that makes a stale copy a retune.
+    #[test]
+    fn a_form_save_carrying_an_older_tune_takes_the_station_back_to_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_rig_freq(14_025_000);
+        // A surface's copy, read while the rig was on 20 m.
+        let held = e.settings().clone();
+        // The operator turns the knob to 40 m, and the loop reads it back.
+        e.observe_rig_freq(7_030_000);
+        assert_eq!(
+            (e.settings().dial_hz(), e.settings().band.as_str()),
+            (7_030_000, "40m"),
+            "premise: the engine follows the knob"
+        );
+
+        // A save built on the settings as they are now keeps the knob's tune.
+        let fresh = e.settings().clone();
+        e.apply_settings(fresh);
+        assert_eq!(e.settings().dial_hz(), 7_030_000);
+
+        // The copy from before the knob moved, saved now: its tune is adopted, and it is the
+        // dial the radio loop reads next.
+        e.apply_settings(held);
+        assert_eq!(
+            (e.settings().dial_hz(), e.settings().band.as_str()),
+            (14_025_000, "20m")
+        );
+    }
+
     /// The watch list is the DESKTOP's, sent whole (operator 2026-09-24: "watched counts as
     /// needed"): the engine holds what it was last sent, and no settings payload — a form save,
     /// a restore — reaches it, because it is not a setting at all.

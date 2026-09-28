@@ -238,6 +238,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings file but not in the window you went on to operate in, so the next setting you changed
   there turned it back on, and the picker returned at the next launch. The window now keeps the
   choice too.
+- **Saving in one place no longer undoes a change made in another.** The Contest view's bonus and
+  power chips, switching CW macro sets, and Save in Settings each saved a copy of every setting,
+  taken when that screen opened. Whatever had changed since, anywhere else, went back: "use one
+  radio" turned simultaneous radios on again, a seat swap made in the pop-out scoreboard was undone,
+  and the radio was sent back to the frequency it was on when the screen opened. Each now saves only
+  what you changed there, over the settings as they are at that moment.
 - **The band chip's band name is readable in the light theme.** The band chip (the top bar, the
   cockpit headers, Phone's and CW's band picker, and Settings ▸ Station) spelled the band name in
   the band's own colour, which barely shows on a light background: 20m's green read about 1.5:1.
