@@ -460,7 +460,7 @@ it('plays receive audio from the audio channel through the existing player, mute
 it('a refusal the station already sent is what the operator hears about when they ask to listen', async () => {
   const h = harness()
   await h.live()
-  h.peer.channel('audio').deliver(byName(CHANNEL.audioStationToBrowser, 'audio refused'))
+  h.peer.channel('audio').deliver(byName(CHANNEL.audioStationToBrowser, 'audio refused (a station from before the shared encoder, with a browser already listening)'))
   h.link.audio.listen(LEASE)
   await vi.advanceTimersByTimeAsync(0)
   expect(h.link.audio.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'audioInUse' })

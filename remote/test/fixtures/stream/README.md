@@ -158,9 +158,12 @@ shown, and one audio line it sends, for its microphone. The station identifies t
 **Receive audio** has no request. The station starts sending it when the `audio` channel opens
 and stops when it closes, so it flows for the whole stream: `audioRx` bundles, and `audioState`
 when listening starts or ends. When the station cannot listen it says so at once with
-`audioState { listening: false, reason }`: `audioInUse` (another listener holds the receive audio)
-or `audioUnavailable`. The page's Listen control is local: it plays or drops what arrives, muted
-until the operator unmutes.
+`audioState { listening: false, reason }`: `audioUnavailable`. A current station never sends
+`audioInUse` here: Listen on the relay's lane and every stream hear the station through its one
+encoder, and a stream's own lane only ever serves that stream's session. A station from before
+that shared encoder sent `audioInUse` when a browser was already listening on the Remote page;
+the value stays in the contract so that station's message still parses. The page's Listen
+control is local: it plays or drops what arrives, muted until the operator unmutes.
 
 **Operation requests** on `control` are today's JSON operation requests, byte for byte, with one
 addition: `heartbeat` carries `decodedFrameAt`. The station stamps the session and device from
