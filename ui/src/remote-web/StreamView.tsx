@@ -5,8 +5,9 @@ import { initialState, startMonitor } from '../remote-monitor/session'
 import { AudioListen } from './AudioListen'
 import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
+import { IdReminder } from './id-reminder'
 import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
-import type { StopTarget } from './stream-link'
+import type { StopTarget, StreamView as LinkView } from './stream-link'
 import type { StreamKey, StreamPointer } from './stream-protocol'
 import '../remote-monitor/monitor.css'
 import './remote.css'
@@ -74,6 +75,12 @@ export function StreamView({ connection, station, disconnect, signOut }: {
     if (ops.stopAvailable) void operations.stopTransmit().catch(() => {})
   }
   const status = statusLine(ops.connected, state?.phase ?? null, stream.phase, stream.reason, wanted)
+  // M9: receive audio is MUTED, not ducked, while the operator's own over may be on the air. Derived
+  // on every change - this page holding PTT, the station saying its over is keyed, or the observed
+  // rig keyed - so it lets go on every way an over ends and can never stick.
+  const onAir = stream.ptt || stream.station?.keyed === true || keyed === true
+  useEffect(() => { link.audio.setMuted(onAir) }, [onAir, link])
+  const identify = useIdReminder(running, stream.station?.keyed === true)
 
   return <div className="app remote-monitor-app remote-stream-app" data-stream-phase={stream.phase}>
     <header className="rm-header remote-stream-header">
@@ -102,6 +109,13 @@ export function StreamView({ connection, station, disconnect, signOut }: {
           onKeyDown={event => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); link.holdPtt() } }}
           onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); link.releasePtt() } }}
           onContextMenu={event => event.preventDefault()}>{t('remote.stream.ptt')}</button>}
+        {/* The microphone: OFF until the operator turns it on, and only then does the browser ask.
+            PTT arms an over and the voice keys it, so it works with either PTT, this page's or the
+            cockpit's through the picture. */}
+        {stream.control && <button type="button" className="remote-button remote-stream-mic" aria-pressed={stream.mic === 'on'}
+          disabled={stream.mic === 'asking'} title={t('remote.stream.mic.title')}
+          onClick={() => void link.setMic(stream.mic !== 'on')}>
+          {stream.mic === 'on' ? t('remote.stream.mic.on') : t('remote.stream.mic.off')}</button>}
         {running && <button type="button" className="remote-button" onClick={end}>{t('remote.stream.end')}</button>}
         <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
         <button type="button" className="remote-button remote-button--quiet" onClick={signOut}>{t('remote.signOut')}</button>
@@ -113,13 +127,76 @@ export function StreamView({ connection, station, disconnect, signOut }: {
       {/* The station's own word, on its last heartbeat reply: it is not holding transmit presence for
           this browser, whatever the picture here looks like (its clock says the picture is late). */}
       {stream.phase === 'live' && stream.presence === false && <p className="remote-stream-stalled" role="alert">{t('remote.stream.noPresence')}</p>}
+      {running && <MicNotes stream={stream} identify={identify} />}
       {stream.phase !== 'live' && stream.phase !== 'stalled' && <div className="remote-stream-placeholder">
         <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
+        {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
         {!running && (state?.phase === 'available' || state?.phase === 'controlling') &&
           <button type="button" className="remote-button remote-button--primary" disabled={wanted || ops.busy} onClick={start}>{t('remote.stream.start')}</button>}
       </div>}
     </main>
   </div>
+}
+
+/** What the microphone is doing, in a stack of notes at the foot of the picture that never takes a
+ *  click from it. The station's word on its over comes first: why an over ended (the audio design's
+ *  §7), the rig showing no power while the voice arrives (display only, the operator's ruling "State
+ *  it + warn"), a press with the microphone off (it keys nothing: the ruling "Arms your mic"). */
+function MicNotes({ stream, identify }: { stream: LinkView; identify: 'due' | 'end' | null }) {
+  const notes: { key: string; text: string; warn?: boolean }[] = []
+  const station = stream.station
+  if (stream.uplinkStalled) notes.push({ key: 'uplink', text: t('remote.stream.mic.uplink'), warn: true })
+  if (station?.noPowerOut) notes.push({ key: 'noPower', text: t('remote.stream.mic.noPower'), warn: true })
+  if (station?.armed && stream.mic !== 'on') notes.push({ key: 'needed', text: t('remote.stream.mic.needed'), warn: true })
+  if (!station?.armed && station?.ended) {
+    const why = endedNote(station.ended)
+    if (why) notes.push({ key: `ended-${station.ended}`, text: why, warn: true })
+  }
+  if (stream.mic === 'denied') notes.push({ key: 'denied', text: t('remote.stream.mic.denied'), warn: true })
+  if (stream.mic === 'unavailable') notes.push({ key: 'unavailable', text: t('remote.stream.mic.unavailable'), warn: true })
+  if (stream.mic === 'on' && stream.micProcessing) notes.push({ key: 'processing', text: t('remote.stream.mic.processing') })
+  // The operator's ruling "State it + warn": said where the microphone is turned on.
+  if (stream.mic === 'on') notes.push({ key: 'usb', text: t('remote.stream.mic.usb') })
+  if (identify === 'due') notes.push({ key: 'identify', text: t('remote.stream.id.due') })
+  if (!notes.length) return null
+  return <ul className="remote-stream-notes" aria-label={t('remote.stream.mic.notes')}>
+    {notes.map(note => <li key={note.key} className="remote-stream-note" data-tone={note.warn ? 'warn' : undefined}
+      role={note.warn ? 'alert' : 'status'}>{note.text}</li>)}
+  </ul>
+}
+function endedNote(ended: string): string | null {
+  return ended === 'audioGap' ? t('remote.stream.mic.ended.audioGap')
+    : ended === 'presence' ? t('remote.stream.mic.ended.presence')
+    : ended === 'ceiling' ? t('remote.stream.mic.ended.ceiling')
+    : ended === 'watchdog' ? t('remote.stream.mic.ended.watchdog')
+    : ended === 'routeChanged' ? t('remote.stream.mic.ended.routeChanged')
+    // Let go, or stopped at the station: the operator knows, or the station's own reading says so.
+    : null
+}
+
+/** M11: the ID reminder, display only. `due` while a prompt stands (thirty seconds), `end` once the
+ *  stream has ended with a run of overs in it, `null` otherwise. */
+function useIdReminder(running: boolean, keyed: boolean): 'due' | 'end' | null {
+  const reminder = useRef<IdReminder | null>(null)
+  reminder.current ??= new IdReminder()
+  const onAir = useRef(keyed)
+  onAir.current = keyed
+  const [due, setDue] = useState(false)
+  const [end, setEnd] = useState(false)
+  useEffect(() => {
+    if (!running) return
+    setEnd(false)
+    const look = () => { if (reminder.current!.observe(Date.now(), onAir.current)) setDue(true) }
+    look()
+    const timer = setInterval(look, 1000)
+    return () => { clearInterval(timer); if (reminder.current!.end()) setEnd(true); setDue(false) }
+  }, [running])
+  useEffect(() => {
+    if (!due) return
+    const hide = setTimeout(() => setDue(false), 30_000)
+    return () => clearTimeout(hide)
+  }, [due])
+  return due ? 'due' : end ? 'end' : null
 }
 
 /** One sentence for where things stand. Written out rather than looked up in a map: the catalog's

@@ -18,6 +18,7 @@ function harness(options: { supported?: boolean; contextRate?: number } = {}) {
   const pushed: Float32Array[] = []
   const resets: number[] = []
   const decoded: Uint8Array[] = []
+  const mutes: boolean[] = []
   const closes = { decoder: 0, playback: 0 }
   let handlers: { output: (f: DecodedFrame) => void; error: () => void } | null = null
   const rate = options.contextRate ?? 48000
@@ -31,6 +32,7 @@ function harness(options: { supported?: boolean; contextRate?: number } = {}) {
       push: samples => { pushed.push(samples) },
       reset: () => { resets.push(clock) },
       close: () => { closes.playback++; return Promise.resolve() },
+      mute: muted => { mutes.push(muted) },
     }),
     decoder: h => {
       handlers = h
@@ -48,7 +50,7 @@ function harness(options: { supported?: boolean; contextRate?: number } = {}) {
   }
   const link = new AudioLink(message => sent.push(message as Record<string, unknown>), env)
   return {
-    link, sent, pushed, resets, decoded, closes,
+    link, sent, pushed, resets, decoded, closes, mutes,
     advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms) },
     hide: () => { visibilityState = 'hidden'; for (const f of listeners.visibility) f() },
     // Opus ALWAYS decodes at 48 kHz whatever the output device runs at, which is the
@@ -109,6 +111,21 @@ it('goes live on the first audio and back to off when released', async () => {
   expect(h.link.getSnapshot().phase).toBe('off')
   expect(h.sent[h.sent.length - 1]).toMatchObject({ type: 'audioListen', listening: false })
   expect(h.closes).toEqual({ decoder: 1, playback: 1 })
+})
+
+it('M9: mutes the output while the operator\'s own over is on the air, keeps what is buffered, and lets go', async () => {
+  const h = harness()
+  // Muted before there is any output: applied the moment it opens.
+  h.link.setMuted(true)
+  h.link.listen(LEASE)
+  await settle()
+  expect(h.mutes).toEqual([true])
+  h.link.setMuted(true)
+  expect(h.mutes, 'the same word twice is one change').toEqual([true])
+  h.link.setMuted(false)
+  expect(h.mutes).toEqual([true, false])
+  // A mute is not a flush: flushing would be a dropout when the over ends.
+  expect(h.resets).toEqual([])
 })
 
 it('surfaces a sequence gap as concealment the operator can see, never as silence', async () => {

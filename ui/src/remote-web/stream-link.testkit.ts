@@ -39,9 +39,25 @@ export class FakeChannel implements ChannelLike {
   deliver(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }) }
   types() { return this.sent.map(m => m.type) }
 }
+/** The microphone's line: what it is sending now (null before the operator turns it on). */
+export class FakeSender {
+  track: unknown = null
+  replaced: unknown[] = []
+  replaceTrack(track: unknown) { this.track = track; this.replaced.push(track); return Promise.resolve() }
+}
+/** The microphone as the browser hands it over: its settings, and whether it was stopped. */
+export class FakeMicTrack {
+  enabled = true
+  stopped = false
+  constructor(readonly settings: Record<string, unknown> = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }) {}
+  stop() { this.stopped = true }
+  getSettings() { return this.settings }
+}
 export class FakePeer implements PeerLike {
   transceivers: { kind: string; direction: string }[] = []
   preferences: unknown = null
+  micPreferences: unknown = null
+  mic = new FakeSender()
   channels = new Map<string, FakeChannel>()
   local: unknown = null
   remote: { type: string; sdp: string } | null = null
@@ -51,8 +67,9 @@ export class FakePeer implements PeerLike {
   onicecandidate: PeerLike['onicecandidate'] = null
   ontrack: PeerLike['ontrack'] = null
   onconnectionstatechange: PeerLike['onconnectionstatechange'] = null
-  addTransceiver(kind: 'video', init: { direction: 'recvonly' }) {
+  addTransceiver(kind: 'video' | 'audio', init: { direction: 'recvonly' | 'sendonly' }) {
     this.transceivers.push({ kind, direction: init.direction })
+    if (kind === 'audio') return { setCodecPreferences: (codecs: unknown) => { this.micPreferences = codecs }, sender: this.mic }
     return { setCodecPreferences: (codecs: unknown) => { this.preferences = codecs } }
   }
   createDataChannel(label: string, init: { ordered: boolean; maxRetransmits?: number }) {
@@ -78,15 +95,26 @@ export const silentAudio: AudioEnvironment = {
   context: () => Promise.resolve({ sampleRate: 48000, push: () => {}, reset: () => {}, close: () => Promise.resolve() }),
   decoder: () => ({ configure: () => {}, decode: () => {}, close: () => {} }),
 }
-export function harness(options: { codecs?: boolean; peerThrows?: boolean } = {}) {
+export function harness(options: { codecs?: boolean; peerThrows?: boolean; microphone?: 'granted' | 'denied' | 'none'; micSettings?: Record<string, unknown> } = {}) {
   let clock = 1000
   const peers: FakePeer[] = []
   const signals: { payload: BrowserStreamPayload; leaseId: string }[] = []
+  /** Every time the page asked the browser for the microphone, with what it asked for. */
+  const micAsks: unknown[] = []
+  const micTracks: FakeMicTrack[] = []
   let ids = 0
   const env: StreamEnvironment = {
     now: () => clock,
     peer: () => { if (options.peerThrows) throw Error('no WebRTC'); const p = new FakePeer(); peers.push(p); return p },
     videoCodecs: () => options.codecs === false ? null : [{ mimeType: 'video/VP8', clockRate: 90000 }],
+    audioCodecs: () => options.codecs === false ? null : [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2, sdpFmtpLine: 'minptime=10;useinbandfec=1' }],
+    microphone: options.microphone === 'none' ? undefined : constraints => {
+      micAsks.push(constraints)
+      if (options.microphone === 'denied') return Promise.reject(Error('NotAllowedError'))
+      const track = new FakeMicTrack(options.micSettings)
+      micTracks.push(track)
+      return Promise.resolve(track)
+    },
     mediaStream: track => ({ wrapped: track }),
     audio: silentAudio,
     uuid: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
@@ -95,7 +123,7 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean } = {}
   const video = new FakeVideo()
   link.attachVideo(video)
   return {
-    link, env, peers, signals, video,
+    link, env, peers, signals, video, micAsks, micTracks,
     get peer() { return peers[peers.length - 1] },
     advance: (ms: number) => { clock += ms; vi.advanceTimersByTime(ms) },
     /** Move the link's clock only, for tests on real timers. */

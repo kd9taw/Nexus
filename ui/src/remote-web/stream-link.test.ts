@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { StreamLink } from './stream-link'
 import type { AudioEnvironment } from './audio-listen'
-import { parseHeld, parseReceivedMessage, parseStreamInput, secureAnswer } from './stream-protocol'
+import {
+  MIC_CONSTRAINTS, MIC_ENDED, STREAM_UPLINK_BUDGET_BYTES, parseHeld, parseMicState, parseReceivedMessage, parseStreamInput,
+  secureAnswer,
+} from './stream-protocol'
 import { ANSWER, CHANNEL, FINGERPRINT, LEASE, OFFER, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const stopCase = byName(CHANNEL.controlBrowserToStation, 'stopTransmit')
@@ -26,11 +29,15 @@ it('A3: without a lease it creates nothing and sends nothing; with one it offers
   expect(h.link.getSnapshot().phase).toBe('connecting')
 })
 
-it('offers VP8-only receive video and the contract\'s three channels, each with its own delivery', async () => {
+it('offers VP8-only receive video, a microphone line it only sends, and the contract\'s three channels', async () => {
   const h = harness()
   await h.link.start(LEASE)
-  expect(h.peer.transceivers).toEqual([{ kind: 'video', direction: 'recvonly' }])
+  expect(h.peer.transceivers).toEqual([{ kind: 'video', direction: 'recvonly' }, { kind: 'audio', direction: 'sendonly' }])
   expect(h.peer.preferences).toEqual([{ mimeType: 'video/VP8', clockRate: 90000 }])
+  // S6: Opus only - the station decodes nothing else - and nothing on it until the operator asks.
+  expect(h.peer.micPreferences).toEqual([expect.objectContaining({ mimeType: 'audio/opus', clockRate: 48000 })])
+  expect(h.peer.mic.replaced, 'the microphone line carried something before the operator asked').toEqual([])
+  expect(h.micAsks, 'the browser was asked for the microphone at the start').toEqual([])
   expect([...h.peer.channels.keys()]).toEqual(['control', 'ptt', 'audio'])
   expect(h.peer.channel('control').init).toEqual({ ordered: true })
   expect(h.peer.channel('ptt').init).toEqual({ ordered: false, maxRetransmits: 0 })
@@ -389,7 +396,8 @@ it('an operator\'s own close tells the station, lets go of PTT, and returns to i
   h.link.close()
   expect(last(h.signals)?.payload).toEqual({ kind: 'close' })
   expect(last(ptt.sent)).toMatchObject({ type: 'pttRelease' })
-  expect(h.link.getSnapshot()).toEqual({ phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null })
+  expect(h.link.getSnapshot()).toEqual({ phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null,
+    mic: 'off', micProcessing: false, station: null, uplinkStalled: false })
   expect(h.video.srcObject).toBeNull()
   const sent = control.sent.length + ptt.sent.length
   h.advance(5000)
@@ -465,4 +473,123 @@ it('ends the stream when the tab hides or the page is left, and only lets go of 
   page.fire('blur')
   expect(h.link.getSnapshot()).toMatchObject({ phase: 'live', ptt: false })
   expect(last(h.peer.channel('ptt').sent)).toMatchObject({ type: 'pttRelease' })
+})
+
+// ── The microphone (S6, the audio design's §4.7 and M6/M8, the operator's rulings R1 and R2) ────────
+
+it('the microphone is off until the operator turns it on, and only then is the browser asked, with the design\'s settings', async () => {
+  const h = harness()
+  await h.live()
+  expect(h.micAsks, 'asked before the operator turned it on').toEqual([])
+  expect(h.link.getSnapshot().mic).toBe('off')
+  await h.link.setMic(true)
+  expect(h.micAsks).toEqual([MIC_CONSTRAINTS])
+  expect(MIC_CONSTRAINTS).toMatchObject({ echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 })
+  expect(h.peer.mic.track, 'the track is not on the microphone line').toBe(h.micTracks[0])
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'on', micProcessing: false })
+  // Off takes it off the line and stops it, so the browser's microphone indicator goes out.
+  await h.link.setMic(false)
+  expect(h.peer.mic.track).toBeNull()
+  expect(h.micTracks[0].stopped).toBe(true)
+  expect(h.link.getSnapshot().mic).toBe('off')
+})
+
+it('a microphone the browser refuses is said, and nothing is sent', async () => {
+  const h = harness({ microphone: 'denied' })
+  await h.live()
+  await h.link.setMic(true)
+  expect(h.link.getSnapshot().mic).toBe('denied')
+  expect(h.peer.mic.replaced).toEqual([])
+  // A browser with no way to capture at all says so too.
+  const none = harness({ microphone: 'none' })
+  await none.live()
+  await none.link.setMic(true)
+  expect(none.link.getSnapshot().mic).toBe('unavailable')
+})
+
+it('§4.7: processing the browser kept on despite the ask is said; CONTROL: none kept on, nothing said', async () => {
+  const h = harness({ micSettings: { echoCancellation: false, noiseSuppression: true, autoGainControl: false } })
+  await h.live()
+  await h.link.setMic(true)
+  expect(h.link.getSnapshot()).toMatchObject({ mic: 'on', micProcessing: true })
+  const clean = harness()
+  await clean.live()
+  await clean.link.setMic(true)
+  expect(clean.link.getSnapshot()).toMatchObject({ mic: 'on', micProcessing: false })
+})
+
+it('the stream ending stops the microphone and takes it off the line', async () => {
+  const h = harness()
+  await h.live()
+  await h.link.setMic(true)
+  h.link.close()
+  expect(h.micTracks[0].stopped).toBe(true)
+  expect(h.peer.mic.track).toBeNull()
+  expect(h.link.getSnapshot().mic).toBe('off')
+})
+
+it('M8: a window that loses focus lets go of PTT and stops the microphone; focus back, it sends again', async () => {
+  const h = harness()
+  const listeners = new Map<string, () => void>()
+  h.env.window = { addEventListener: (type, f) => { listeners.set(type, f) }, removeEventListener: type => { listeners.delete(type) } }
+  await h.live()
+  await h.link.setMic(true)
+  h.link.holdPtt()
+  expect(h.link.getSnapshot().ptt).toBe(true)
+  expect(h.micTracks[0].enabled).toBe(true)
+  listeners.get('blur')!()
+  expect(h.link.getSnapshot().ptt, 'the blur kept PTT held').toBe(false)
+  expect(h.micTracks[0].enabled, 'the blur left the microphone sending').toBe(false)
+  listeners.get('focus')!()
+  expect(h.micTracks[0].enabled, 'focus back and the microphone stays silent').toBe(true)
+})
+
+it('M6: an uplink that backs up lets go of the over within 250 ms and stops the microphone, and says so', async () => {
+  const h = harness()
+  await h.live()
+  await h.link.setMic(true)
+  h.link.holdPtt()
+  const ptt = h.peer.channel('ptt')
+  // CONTROL: a backlog shorter than the stall does not release.
+  ptt.bufferedAmount = STREAM_UPLINK_BUDGET_BYTES + 1
+  h.advance(100)
+  ptt.bufferedAmount = 0
+  h.advance(100)
+  expect(h.link.getSnapshot()).toMatchObject({ ptt: true, uplinkStalled: false })
+  // Now it stays backed up.
+  ptt.bufferedAmount = STREAM_UPLINK_BUDGET_BYTES + 1
+  h.advance(100); h.advance(100); h.advance(100)
+  expect(h.link.getSnapshot()).toMatchObject({ ptt: false, uplinkStalled: true })
+  expect(h.micTracks[0].enabled, 'the backed-up page kept sending its microphone').toBe(false)
+  expect(last(ptt.sent)?.type, 'the release was not tried').toBe('pttRelease')
+  // Drained: the next press clears the stall and the microphone sends again.
+  ptt.bufferedAmount = 0
+  h.link.holdPtt()
+  expect(h.link.getSnapshot()).toMatchObject({ ptt: true, uplinkStalled: false })
+  expect(h.micTracks[0].enabled).toBe(true)
+})
+
+it('shows the station\'s microphone over as the contract carries it, and refuses anything else', async () => {
+  const h = harness()
+  await h.live()
+  const control = h.peer.channel('control')
+  control.deliver(byName(CHANNEL.controlStationToBrowser, "mic armed, no audio yet (a held PTT keys nothing until the operator's voice arrives)"))
+  expect(h.link.getSnapshot().station).toEqual({ armed: true, keyed: false, noPowerOut: false, ended: null })
+  control.deliver(byName(CHANNEL.controlStationToBrowser, 'mic keyed, and the rig reports no power out (display only)'))
+  expect(h.link.getSnapshot().station).toEqual({ armed: true, keyed: true, noPowerOut: true, ended: null })
+  for (const why of MIC_ENDED) {
+    control.deliver(byName(CHANNEL.controlStationToBrowser, `mic over ended: ${why}`))
+    expect(h.link.getSnapshot().station).toEqual({ armed: false, keyed: false, noPowerOut: false, ended: why })
+  }
+  // Outside the contract: ignored, never guessed at.
+  for (const bad of [
+    { type: 'micState', armed: true, keyed: false, noPowerOut: false, ended: 'nonsense' },
+    { type: 'micState', armed: true, keyed: false },
+    { type: 'micState', armed: 'yes', keyed: false, noPowerOut: false },
+    { type: 'micState', armed: true, keyed: false, noPowerOut: false, extra: 1 },
+  ]) {
+    expect(() => parseMicState(bad)).toThrow()
+    control.deliver(bad)
+    expect(h.link.getSnapshot().station?.ended, JSON.stringify(bad)).toBe('routeChanged')
+  }
 })
