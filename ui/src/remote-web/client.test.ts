@@ -544,3 +544,18 @@ it('tells the page once when a ticket is refused, and not for a failure it will 
   expect(refused).toHaveBeenCalledTimes(1)
   remote.stop()
 })
+
+// The stream's messages share the observe socket. Both kinds the relay delivers - a signal and the
+// station's state - reach the stream, and neither is ever read as a malformed observation: that
+// closes the socket, and the station's lease goes with it (found by the compiled-browser stream run).
+it('routes both of the stream\'s message kinds to the stream and keeps the socket', async () => {
+  const { remote, socket } = await connection(true, 4)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  const seen: unknown[] = []
+  remote.stream.receive = raw => { seen.push(raw) }
+  socket.receive({ type: 'streamState', streaming: true })
+  socket.receive({ type: 'streamSignal', payload: { kind: 'candidate', candidate: 'candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0', sdpMid: '0' } })
+  expect(socket.readyState, 'the socket stays open').toBe(1)
+  expect(seen.map(m => (m as { type: string }).type)).toEqual(['streamState', 'streamSignal'])
+  remote.stop()
+})
