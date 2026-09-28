@@ -80,7 +80,8 @@ a stream as any approved browser. The offer is therefore signed by the browser i
 the station pinned when the operator approved that browser at the radio.
 
 - **The key.** Each browser holds one ECDSA P-256 key pair per station, made with WebCrypto when it
-  asks that station for approval. The private key is non-extractable and never leaves the browser
+  first needs it: when it confirms a pairing, asks the station for approval, or finds itself
+  approved with no key. The private key is non-extractable and never leaves the browser
   (it lives in IndexedDB as a `CryptoKey`). `publicKey` is the public half as its SPKI DER, in
   lowercase hex: always **182** characters, the fixed P-256 prefix
   `3059301306072a8648ce3d020106082a8648ce3d030107034200` then `04` and the 64-byte point.
@@ -107,11 +108,19 @@ the station pinned when the operator approved that browser at the radio.
   certificate the page presented has the signed fingerprint (else the session ends
   `deviceKeyMismatch` before any input or PTT is admitted).
 - **The key's way to the station** (outside these files; the service's device routes): the page
-  sends `publicKey` in its device request's body (`POST stations/:id/device`, beside `name`); the
-  service checks it is a P-256 point and stores it, and a changed key costs the browser its
-  approval. `native/devices` lists each browser's `publicKey`, or `null` for one that has none,
-  only to a station that sends `x-nexus-device-key: 1` (an older Nexus parses that list with
-  `deny_unknown_fields`, so it must never see the field).
+  sends `publicKey` in its device request's body (`POST stations/:id/device`, beside `name`), and in
+  its pairing confirm (`POST pair/confirm`, beside `id`), which the approval gives the browser it
+  approves. The service checks it is a P-256 point and stores it. A browser already approved sends
+  its key the same way (a browser approved before keys existed, or one whose key changed). The
+  service stores it and leaves the approval alone. The station's pin still holds the old key or
+  none, so it refuses that browser's streams until the operator approves it again at the radio.
+  `native/devices` lists each browser's `publicKey`, or `null` for one that has none, only to a
+  station that sends `x-nexus-device-key: 1`. An older Nexus parses that list with
+  `deny_unknown_fields`, so it must never see the field. The pairing approval's `device` carries
+  it by name.
+- **Order.** The page holds its candidates while it signs the offer and sends them straight after
+  it, so the relay forwards one session's signals in the order they were sent. An offer that waits
+  on the service's entitlement check holds back the candidates behind it.
 
 The fixtures carry the shape only: their `publicKey` has the right prefix and length but is not a
 point on the curve, and their `signature` is not a signature. No key material is in these files.

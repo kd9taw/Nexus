@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, so you can see it and pick from it. Switching to another tab ends the stream; press
   **Start the stream** again when you are back. If Remote access is switched off for your account
   while you stream, the stream ends within about two seconds and the page says why.
+- **Remote: a stream only starts for the browser you approved.** Each browser now holds its own key,
+  which never leaves it. The Remote page shows it under the station ("This browser's key"), and
+  Nexus at the shack shows the same one beside the browser: check that they match when you approve
+  it. The station starts a stream only for that browser, on that key. A browser approved before
+  this update must be approved once more in Nexus at the shack before it can stream. So must a
+  browser whose key changed, for example after its site data was cleared. The page says which.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

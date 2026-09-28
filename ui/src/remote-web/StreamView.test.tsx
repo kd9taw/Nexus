@@ -332,3 +332,20 @@ it('a stream the station ended stays ended: nothing is re-offered until the oper
   await act(async () => { await Promise.resolve() })
   expect(v.peers).toHaveLength(2)
 })
+
+// A5: the station holds the offer to the key it pinned for this browser. Both refusals are ones the
+// operator fixes at the radio, once, and the page says so in plain words (ruling D5 for the changed key).
+it('A5: says in plain words why the station refused this browser\'s key, and what to do at the radio', async () => {
+  for (const [reason, words] of [
+    ['deviceNotPinned', 'Approve this browser again in Nexus at the shack, once, before it can stream.'],
+    ['deviceKeyMismatch', 'This browser’s key has changed, so approve it again in Nexus at the shack before streaming.'],
+  ] as const) {
+    const v = view(controlling)
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await act(async () => { await Promise.resolve() })
+    act(() => { v.link.receive(byName(SIGNAL.roomToBrowser, `refused: ${reason}`)) })
+    expect(v.link.getSnapshot()).toMatchObject({ phase: 'ended', reason })
+    expect(screen.getAllByText(new RegExp(words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length, reason).toBeGreaterThan(0)
+    cleanup()
+  }
+})
