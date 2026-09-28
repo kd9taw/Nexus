@@ -447,11 +447,12 @@ export function LogEntry({
   // POTA/SOTA park of the station worked (ota.their_*). Prefilled from a hunted spot; editable.
   const [logParkProgram, setLogParkProgram] = useState('POTA')
   const [logParkRef, setLogParkRef] = useState('')
-  // WHOSE park the box holds: the base call it was set for. The hunted activator's for a prefill;
-  // the call in the box for one the operator typed or picked ('' when there was no call yet).
-  // Written wherever a park goes INTO the box and read only while one is there, so a clear leaves
-  // it alone. See the prefill below for why the value alone cannot say.
-  const parkForRef = useRef('')
+  // WHOSE park the box holds, and whether a hunt put it there. A prefill is bound to the hunted
+  // activator (`hunt: true`); a park the operator typed or picked is bound to the call in the box
+  // (`hunt: false`, and `call: ''` when there was no call yet). Written wherever a park goes INTO
+  // the box and read only while one is there, so a clear leaves it alone. See the prefill below
+  // for why the value alone cannot say.
+  const parkForRef = useRef({ call: '', hunt: false })
   // Local park-directory suggestions (POTA only) as the operator types the reference.
   const [parkHits, setParkHits] = useState<Park[]>([])
   const [parkPicked, setParkPicked] = useState(false)
@@ -653,29 +654,39 @@ export function LogEntry({
   // operator's "why are some parks filled and not others": a hunt that lands a render after the
   // call finds the box already cleared, and fills). With no callbook answer nothing clears the box
   // at all, and the first park stayed, differing from the hunt, so it would have been logged as
-  // one the operator typed. So an override is a park bound to THIS call, or typed before there
-  // was one (`parkForRef`), never merely a value that differs from the hunt.
+  // one the operator typed. So an override is a park the operator TYPED for this call, or typed
+  // before there was one (`parkForRef`), never merely a value that differs from the hunt. A park
+  // an earlier hunt put there is never one: the same activator re-spotted at another park takes
+  // the new park, where the earlier prefill used to hold the box and go out as a typed park.
+  //
+  // ⚠️ A HUNTED PARK LEAVES WITH ITS STATION. Once the call in the box is not the station a hunt
+  // bound the park to, the park goes, whatever the pending hunt now is (another activator's, or
+  // none) and whether or not a lookup ran. It used to go only when it equalled the CURRENT hunt,
+  // so with the hunt moved on and no callbook, a hand-typed third call was logged at the first
+  // activator's park. A park the operator typed never leaves this way: finishing a half-typed
+  // call (`W1XY` → `W1XYZ`) keeps it. Its binding still matters, to the override above: a park
+  // typed for W1XYZ does not stop the prefill when KE7G's spot is clicked next.
   useEffect(() => {
     const h = snap.hunt
-    if (!h?.reference) return
     const call = logCall.trim()
-    const callMatches = call !== '' && sameCall(h.call, call)
     const shown = logParkRef.trim().toUpperCase()
-    const huntRef = h.reference.trim().toUpperCase()
+    const huntRef = h?.reference?.trim().toUpperCase() ?? ''
     const bound = parkForRef.current
-    const override = shown !== '' && shown !== huntRef && (bound === '' || bound === baseCall(call))
-    if (callMatches || call === '') {
+    if (h?.reference && (call === '' || sameCall(h.call, call))) {
       // Prefill (or keep) the hunted park, unless the box holds the operator's own park for this
       // call, so a manual override survives. `parkPicked` suppresses the search dropdown.
+      const override =
+        shown !== '' && shown !== huntRef && !bound.hunt && (bound.call === '' || bound.call === baseCall(call))
       if (!override) {
         setParkPicked(true)
         setLogParkProgram(h.program)
         setLogParkRef(h.reference)
-        parkForRef.current = baseCall(h.call)
+        parkForRef.current = { call: baseCall(h.call), hunt: true }
       }
-    } else if (shown === huntRef) {
-      // Call changed to a NON-matching one: the engine's auto-tag won't apply the park to this
-      // call, so drop the prefill rather than SHOW a park that won't be logged.
+    } else if (shown !== '' && (shown === huntRef || (bound.hunt && call !== '' && !sameCall(bound.call, call)))) {
+      // The call in the box is not the hunted station: drop the pending hunt's own prefill, and a
+      // park an earlier hunt bound to another station, rather than SHOW (and log) a park that is
+      // not this call's.
       setLogParkRef('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1907,7 +1918,7 @@ export function LogEntry({
             value={logParkRef}
             onChange={(e) => {
               setLogParkRef(e.target.value.toUpperCase())
-              parkForRef.current = baseCall(logCall)
+              parkForRef.current = { call: baseCall(logCall), hunt: false }
             }}
             onKeyDown={onEnter}
             onBlur={() => window.setTimeout(() => setParkHits([]), 150)}
@@ -1930,7 +1941,7 @@ export function LogEntry({
                       e.preventDefault() // pick before the input's onBlur clears the list
                       setParkPicked(true)
                       setLogParkRef(p.reference)
-                      parkForRef.current = baseCall(logCall)
+                      parkForRef.current = { call: baseCall(logCall), hunt: false }
                       setParkHits([])
                     }}
                   >

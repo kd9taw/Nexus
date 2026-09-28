@@ -161,6 +161,99 @@ describe('the hunted park fills the strip for every activator clicked', () => {
   })
 })
 
+// A HUNTED PARK LEAVES WITH ITS STATION. A park a hunt put in the box belongs to that activator.
+// Once the operator types another station's call, the park goes, whatever the pending hunt now is
+// (another activator's, or none) and whether or not a callbook lookup ran. It used to stay unless
+// it equalled the CURRENT hunt: with the hunt moved on and no callbook, it went out on the typed
+// station's contact as a park the operator had typed. A park the operator typed is theirs and never
+// leaves this way, so finishing a half-typed call keeps it.
+describe('a hunted park leaves with its station', () => {
+  const callBox = () => document.querySelector('input.le-call') as HTMLInputElement
+  const loggedPark = () => (mockedLog.mock.calls[0][0] as { call: string; ota?: { theirRef?: string } })
+
+  it('drops it when the operator types another call after the hunt moved to a third station', async () => {
+    const view = render(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(park().value).toBe('US-3216'))
+    // The pending hunt moves to another activator without the call changing (a hunt set from the
+    // map, the pop-out or another window): KE7G's park is still right for KE7G.
+    view.rerender(strip(VA4ADM, { call: 'KE7G', ts: 1 }))
+    await settle()
+    expect(park().value, 'fixture: the park still belongs to the call in the box').toBe('US-3216')
+    fireEvent.change(callBox(), { target: { value: 'w1xyz' } })
+    await settle()
+    // Soft, so a red run also reaches the logged record below: the box and the log are both claims.
+    expect.soft(park().value, 'KE7G’s park stayed on W1XYZ').toBe('')
+    fireEvent.click(logButton())
+    await waitFor(() => expect(mockedLog).toHaveBeenCalledTimes(1))
+    expect(loggedPark().call).toBe('W1XYZ')
+    expect(loggedPark().ota?.theirRef, 'W1XYZ was logged at KE7G’s park').toBeUndefined()
+  })
+
+  it('drops it when the hunt is gone', async () => {
+    const view = render(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(park().value).toBe('US-3216'))
+    // The pend expired, or another strip logged KE7G and consumed it.
+    view.rerender(strip(null, { call: 'KE7G', ts: 1 }))
+    await settle()
+    fireEvent.change(callBox(), { target: { value: 'w1xyz' } })
+    await settle()
+    // Soft, so a red run also reaches the logged record below: the box and the log are both claims.
+    expect.soft(park().value, 'KE7G’s park stayed on W1XYZ').toBe('')
+    fireEvent.click(logButton())
+    await waitFor(() => expect(mockedLog).toHaveBeenCalledTimes(1))
+    expect(loggedPark().ota?.theirRef, 'W1XYZ was logged at KE7G’s park').toBeUndefined()
+  })
+
+  // THE CONTROL: this one always worked, because the park equalled the pending hunt.
+  it('drops it with KE7G’s own hunt still pending', async () => {
+    render(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(park().value).toBe('US-3216'))
+    fireEvent.change(callBox(), { target: { value: 'w1xyz' } })
+    await settle()
+    expect(park().value).toBe('')
+  })
+
+  // With the hunt gone, the call is compared with the station the park is bound to, not with a
+  // hunt, so this is the case that proves the comparison is the base call's.
+  it('keeps it when the same station’s call only gains a /P, with the hunt gone', async () => {
+    const view = render(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(park().value).toBe('US-3216'))
+    view.rerender(strip(null, { call: 'KE7G', ts: 1 }))
+    await settle()
+    fireEvent.change(callBox(), { target: { value: 'ke7g/p' } })
+    await settle()
+    expect(park().value, 'the same station under a /P lost its park').toBe('US-3216')
+    fireEvent.change(callBox(), { target: { value: 'w1xyz' } })
+    await settle()
+    expect(park().value).toBe('')
+  })
+
+  // THE OTHER CONTROL: a park the operator typed is theirs, and a call finished mid-edit keeps it.
+  it('keeps a park the operator typed while the call is still being typed', async () => {
+    render(strip(KE7G, null))
+    await settle()
+    fireEvent.change(callBox(), { target: { value: 'w1xy' } })
+    await settle()
+    fireEvent.change(park(), { target: { value: 'us-1234' } })
+    fireEvent.change(callBox(), { target: { value: 'w1xyz' } })
+    await settle()
+    expect(park().value, 'the typed park was dropped when the call was finished').toBe('US-1234')
+    fireEvent.click(logButton())
+    await waitFor(() => expect(mockedLog).toHaveBeenCalledTimes(1))
+    expect(loggedPark().ota?.theirRef).toBe('US-1234')
+  })
+
+  it('follows the same activator to the new park it is spotted at', async () => {
+    const view = render(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(park().value).toBe('US-3216'))
+    // KE7G re-spotted at another park, and clicked: the box follows the click. The earlier
+    // prefill is the machine's, not an override, and left in place it went out as a typed park.
+    view.rerender(strip({ ...KE7G, reference: 'US-3217' }, { call: 'KE7G', ts: 2 }))
+    await settle()
+    expect(park().value, 'the earlier prefill held the box against the new spot').toBe('US-3217')
+  })
+})
+
 describe('one station under a portable prefix or suffix, as the engine matches it', () => {
   it('fills the park when the spot says KE7G/P and the log says KE7G', async () => {
     render(strip({ ...KE7G, call: 'KE7G/P' }, { call: 'KE7G', ts: 1 }))
