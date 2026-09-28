@@ -844,6 +844,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await untilShack(`__shack.received.control.some(m=>m.type==='pointer'&&m.action==='up')`)
         const [down]=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='down')`)
         assert.ok(Math.abs(down.x-0.5)<0.02&&Math.abs(down.y-0.5)<0.02,'the press lands at the centre of the frame: '+JSON.stringify(down))
+        // A click is a click at the shack: Chrome's pointer events carry no click count (detail 0), and a
+        // press and release sent with none would reach Nexus as a release that clicks nothing.
+        const [up]=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up')`)
+        assert.deepEqual([down.clicks,up.clicks],[1,1],'one click, counted on the press and its release')
         assert.equal(await evaluate(`document.activeElement?.classList.contains('remote-stream-video')`),true,'pressing the picture focuses it')
         await typeKey('a','KeyA','a')
         await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.key==='a'&&m.action==='up')`)

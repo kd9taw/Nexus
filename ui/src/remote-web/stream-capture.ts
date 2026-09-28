@@ -42,16 +42,33 @@ function edgePoint(box: PictureBox, clientX: number, clientY: number): { x: numb
   return { x: clamp((clientX - picture.x) / picture.width), y: clamp((clientY - picture.y) / picture.height) }
 }
 
-type PointerLike = Modifiers & { clientX: number; clientY: number; button: number; buttons: number; detail: number; pointerType?: string }
-/** One pointer event on the picture. `clicks` carries the browser's own click count, so a double
- *  click at the shack is a double click and not two singles; a move carries none. `clamp` pins a
- *  point outside the picture to its edge instead of dropping it. */
-export function pointerMessage(action: StreamPointer['action'], box: PictureBox, event: PointerLike, clamp = false): StreamPointer | null {
+type PointerLike = Modifiers & { clientX: number; clientY: number; button: number; buttons: number; pointerType?: string }
+/** One pointer event on the picture. `clicks` is the press's click count (ClickCount), so a double
+ *  click at the shack is a double click and not two singles; a move carries none, and a release
+ *  with none clicks nothing there. `clamp` pins a point outside the picture to its edge instead of
+ *  dropping it. */
+export function pointerMessage(action: StreamPointer['action'], box: PictureBox, event: PointerLike, clamp = false, clicks = 0): StreamPointer | null {
   const point = framePoint(box, event.clientX, event.clientY) ?? (clamp ? edgePoint(box, event.clientX, event.clientY) : null)
   if (!point) return null
   const pointerType = event.pointerType === 'touch' || event.pointerType === 'pen' ? event.pointerType : 'mouse'
   return { type: 'pointer', action, x: point.x, y: point.y, button: Math.max(-1, Math.min(4, event.button)), buttons: event.buttons & 31,
-    modifiers: modifiers(event), pointerType, clicks: action === 'move' ? 0 : Math.max(0, Math.min(3, event.detail | 0)) }
+    modifiers: modifiers(event), pointerType, clicks: action === 'move' ? 0 : Math.max(0, Math.min(3, clicks | 0)) }
+}
+
+/** The click count of a press, counted here because a pointer event does not carry one: Chrome's
+ *  pointerdown and pointerup say `detail` 0 whatever the count, and a release sent with 0 clicks
+ *  nothing at the shack. Counted as the browser counts its mouse events - a press within 500 ms and
+ *  4 px of the last one, with the same button, is the next click of a double or triple click - and
+ *  never past the contract's 3. */
+export class ClickCount {
+  private last: { at: number; x: number; y: number; button: number; count: number } | null = null
+  press(event: { timeStamp: number; clientX: number; clientY: number; button: number }): number {
+    const last = this.last
+    const count = last && event.timeStamp - last.at <= 500 && Math.abs(event.clientX - last.x) <= 4 && Math.abs(event.clientY - last.y) <= 4
+      && event.button === last.button ? Math.min(3, last.count + 1) : 1
+    this.last = { at: event.timeStamp, x: event.clientX, y: event.clientY, button: event.button, count }
+    return count
+  }
 }
 
 /** One wheel event on the picture, in the browser's own delta mode: the dispatcher in Nexus's window

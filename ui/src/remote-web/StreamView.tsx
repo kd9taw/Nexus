@@ -5,7 +5,7 @@ import { initialState, startMonitor } from '../remote-monitor/session'
 import { AudioListen } from './AudioListen'
 import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
-import { HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
+import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
 import type { StopTarget } from './stream-link'
 import type { StreamKey, StreamPointer } from './stream-protocol'
 import '../remote-monitor/monitor.css'
@@ -167,8 +167,12 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       return { left: r.left, top: r.top, width: r.width, height: r.height, videoWidth: element.videoWidth, videoHeight: element.videoHeight }
     }
     const send = (message: StreamPointer | StreamKey | null) => { if (message) link.input(held.note(message)) }
+    // The press's click count, which its release carries too: a click at the shack is a click.
+    const count = new ClickCount()
+    let clicks = 0
     const down = (event: PointerEvent) => {
-      const message = pointerMessage('down', box(), event)
+      clicks = count.press(event)
+      const message = pointerMessage('down', box(), event, false, clicks)
       if (!message) return
       event.preventDefault()
       element.focus({ preventScroll: true })
@@ -177,7 +181,7 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
     }
     // A drag may run past the picture's edge, and is pinned to it; a plain hover outside is not sent.
     const move = (event: PointerEvent) => send(pointerMessage('move', box(), event, held.dragging))
-    const up = (event: PointerEvent) => { if (held.dragging) send(pointerMessage('up', box(), event, true)) }
+    const up = (event: PointerEvent) => { if (held.dragging) send(pointerMessage('up', box(), event, true, clicks)) }
     const cancel = (event: PointerEvent) => { if (held.dragging) send(pointerMessage('cancel', box(), event, true)) }
     // A paste on the picture is committed text for the field focused at the shack.
     const paste = (event: ClipboardEvent) => {

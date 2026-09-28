@@ -1,13 +1,13 @@
 import { expect, it } from 'vitest'
-import { HeldInput, framePoint, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
+import { ClickCount, HeldInput, framePoint, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
 import { parseStreamInput } from './stream-protocol'
 
 // A 16:9 picture laid out in a 1600x1000 box: `object-fit: contain` shows it 1600x900, with a 50 px
 // bar above and below it that is part of the element and none of the frame.
 const BOX: PictureBox = { left: 0, top: 100, width: 1600, height: 1000, videoWidth: 1920, videoHeight: 1080 }
 const none = { shiftKey: false, ctrlKey: false, altKey: false, metaKey: false }
-const at = (clientX: number, clientY: number, extra: Partial<{ button: number; buttons: number; detail: number; pointerType: string }> = {}) =>
-  ({ ...none, clientX, clientY, button: 0, buttons: 1, detail: 1, ...extra })
+const at = (clientX: number, clientY: number, extra: Partial<{ button: number; buttons: number; pointerType: string }> = {}) =>
+  ({ ...none, clientX, clientY, button: 0, buttons: 1, ...extra })
 
 it('maps a point on the picture to the frame, and a point on the bars around it to nothing', () => {
   expect(framePoint(BOX, 800, 600)).toEqual({ x: 0.5, y: 0.5 })
@@ -29,16 +29,27 @@ it('pins a drag or its release to the picture\'s edge, and only when asked', () 
 })
 
 it('builds each input in exactly the contract\'s shape', () => {
-  const down = pointerMessage('down', BOX, at(800, 600, { detail: 2, pointerType: 'pen' }))!
+  const down = pointerMessage('down', BOX, at(800, 600, { pointerType: 'pen' }), false, 2)!
   expect(down).toEqual({ type: 'pointer', action: 'down', x: 0.5, y: 0.5, button: 0, buttons: 1, modifiers: 0, pointerType: 'pen', clicks: 2 })
   // A move carries no click count, and an unknown pointer type is a mouse.
-  expect(pointerMessage('move', BOX, at(800, 600, { button: -1, pointerType: 'stylus' }))).toMatchObject({ button: -1, clicks: 0, pointerType: 'mouse' })
+  expect(pointerMessage('move', BOX, at(800, 600, { button: -1, pointerType: 'stylus' }), false, 2)).toMatchObject({ button: -1, clicks: 0, pointerType: 'mouse' })
   const wheel = wheelMessage(BOX, { ...none, ctrlKey: true, clientX: 800, clientY: 600, deltaX: 0, deltaY: 3, deltaMode: 1 })!
   expect(wheel).toEqual({ type: 'wheel', x: 0.5, y: 0.5, deltaX: 0, deltaY: 3, deltaMode: 1, modifiers: 2 })
   expect(wheelMessage(BOX, { ...none, clientX: 800, clientY: 600, deltaX: 0, deltaY: 1e9, deltaMode: 0 })!.deltaY).toBe(10_000)
   expect(keyMessage('down', { ...none, shiftKey: true, key: 'W', code: 'KeyW', repeat: false }))
     .toEqual({ type: 'key', action: 'down', key: 'W', code: 'KeyW', modifiers: 1, repeat: false })
   for (const message of [down, wheel]) expect(() => parseStreamInput(message)).not.toThrow()
+})
+
+it('counts clicks as the browser does for its mouse events: the same spot, the same button, within 500 ms', () => {
+  const count = new ClickCount()
+  const press = (timeStamp: number, clientX = 100, clientY = 100, button = 0) => count.press({ timeStamp, clientX, clientY, button })
+  expect([press(0), press(200), press(400), press(600)], 'single, double, triple, and no further than the contract').toEqual([1, 2, 3, 3])
+  expect(press(1200), 'too late: a first click again').toBe(1)
+  expect(press(1300, 110), 'too far').toBe(1)
+  expect(press(1400, 110, 100, 2), 'another button').toBe(1)
+  // Control: close enough in both.
+  expect(press(1500, 112, 97, 2)).toBe(2)
 })
 
 it('keeps Tab and composition input on the page', () => {

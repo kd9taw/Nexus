@@ -199,6 +199,25 @@ it('A2 (the page\'s half): only input aimed at the focused picture is sent; the 
   expect(input.sent).toHaveLength(2)
 })
 
+it('a click on the picture is a click at the shack, counted here: a pointer event carries no click count', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control')
+  const presses = () => control.sent.filter(m => m.type === 'pointer').map(m => `${m.action} ${m.clicks}`)
+  // As Chrome sends them: pointerdown and pointerup with `detail` 0, whatever the click count.
+  const click = (x: number) => {
+    v.video.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: x, clientY: 550, button: 0, buttons: 1, detail: 0 }))
+    v.video.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: x, clientY: 550, button: 0, buttons: 0, detail: 0 }))
+  }
+  click(800)
+  click(801)
+  expect(presses(), 'a click, then the second click of a double click').toEqual(['down 1', 'up 1', 'down 2', 'up 2'])
+  // Control: a press somewhere else is a first click again.
+  click(1200)
+  expect(presses().slice(4)).toEqual(['down 1', 'up 1'])
+})
+
 it('releases at the shack whatever it pressed there when the picture loses focus', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
