@@ -7,13 +7,27 @@
 //!
 //! ## An idle station encodes nothing, and that is structural
 //!
-//! [`AudioLane`] holds no encoder until a browser asks to listen. The encoder IS the
+//! No encoder exists until a browser asks to listen. The encoder IS the
 //! subscription — `ReceiveEncoder::start` takes the feed's single reader — and the feed
 //! copies no samples at all while it has no reader. So the cost of this whole path on a
 //! station nobody is listening to is zero, not "small": there is no timer to fire, no
 //! buffer to fill and no copy to make. `idle_station_encodes_nothing` asserts it against
 //! the real feed, with the control that a started lane does produce bytes on the same
 //! instrument.
+//!
+//! ## One encoder, every listener (plan P5)
+//!
+//! A browser Listening on the relay's lane and a streamed page's `audio` channel hear the
+//! station at once. The feed still has one reader, and it belongs to [`ReceiveFanout`]: the
+//! station's one encoder, which encodes each 20 ms frame ONCE and hands a copy to every
+//! listener subscribed to it ([`Subscription`]). The first listener to arrive starts it and
+//! the last to leave stops it, so the idle rule above is unchanged.
+//!
+//! Each listener has its own backlog, bounded by [`MAX_PENDING_FRAMES`]. The encoder runs
+//! when any listener polls, and a listener that stops taking frames (a stalled page, a
+//! thread that is behind) loses ITS OWN oldest frames as a sequence gap; nobody else waits
+//! for it or loses anything by it. A source change or a codec failure ends every listener,
+//! each told once, and a listener's close or lease lapse removes only that listener.
 //!
 //! ## Only a controlling browser may listen
 //!
@@ -45,7 +59,8 @@
 //! authority and no microphone; it reads one bounded copy of already-captured receive
 //! audio. The microphone direction is a separate batch behind its own grant.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -70,11 +85,186 @@ const RECHECK: Duration = Duration::from_secs(1);
 /// kind of claim that stays true until it quietly does not.
 pub const MAX_MESSAGE_BYTES: usize = 1024;
 
+/// The station's one receive-audio encoder, shared by every listener (plan P5): the relay's
+/// Listen lane and each stream's `audio` channel. One per station, built beside the feed.
+pub struct ReceiveFanout {
+    feed: Arc<ReceiveAudioFeed>,
+    state: Mutex<Fanout>,
+}
+
+#[derive(Default)]
+struct Fanout {
+    /// The feed's one reader, encoding each frame once for everyone. `None` while nobody
+    /// listens, which is what keeps an idle station at zero cost.
+    encoder: Option<ReceiveEncoder>,
+    next: u64,
+    sinks: Vec<Sink>,
+}
+
+/// One listener's share of the encoder's output.
+struct Sink {
+    id: u64,
+    /// Frames encoded since this listener last took them. Bounded by [`MAX_PENDING_FRAMES`]:
+    /// a listener that stops taking loses its own oldest frames, never anyone else's.
+    frames: VecDeque<EncodedFrame>,
+    /// Frames this listener lost to that bound, handed over with its next take.
+    dropped: u64,
+    /// The encoder ended under this listener, and why. Terminal for it; told once.
+    ended: Option<&'static str>,
+}
+
+/// A listener's place on the fan-out. Dropping it leaves, and the last to leave releases the
+/// feed's reader: the station goes back to encoding nothing.
+pub struct Subscription {
+    fanout: Arc<ReceiveFanout>,
+    id: u64,
+}
+
+/// What one take produced for one listener.
+struct Taken {
+    frames: Vec<EncodedFrame>,
+    /// Frames this listener lost to its own bound since its last take.
+    dropped: u64,
+}
+
+impl ReceiveFanout {
+    pub fn new(feed: Arc<ReceiveAudioFeed>) -> Arc<Self> {
+        Arc::new(Self {
+            feed,
+            state: Mutex::new(Fanout::default()),
+        })
+    }
+
+    /// A poisoned lock still holds a coherent state: queues and counters, nothing half-done
+    /// that a listener could be harmed by.
+    fn state(&self) -> std::sync::MutexGuard<'_, Fanout> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Join. The first listener starts the encoder (it takes the feed's reader); a later one
+    /// shares it, from its next frame.
+    fn subscribe(self: &Arc<Self>) -> Result<Subscription, &'static str> {
+        let mut state = self.state();
+        if state.encoder.is_none() {
+            let source = self.feed.describe().ok_or("audioUnavailable")?.source;
+            state.encoder =
+                Some(
+                    ReceiveEncoder::start(&self.feed, source).map_err(|error| match error {
+                        EncodeError::Feed(ReceiveError::InUse) => "audioInUse",
+                        EncodeError::Feed(_) => "audioUnavailable",
+                        _ => "audioUnavailable",
+                    })?,
+                );
+        }
+        state.next += 1;
+        let id = state.next;
+        state.sinks.push(Sink {
+            id,
+            frames: VecDeque::with_capacity(MAX_PENDING_FRAMES),
+            dropped: 0,
+            ended: None,
+        });
+        Ok(Subscription {
+            fanout: self.clone(),
+            id,
+        })
+    }
+
+    /// Frames encoded so far by the live encoder. Zero while nobody listens.
+    #[cfg(test)]
+    fn frames_encoded(&self) -> u32 {
+        self.state()
+            .encoder
+            .as_ref()
+            .map_or(0, ReceiveEncoder::frames_encoded)
+    }
+}
+
+impl Fanout {
+    /// Encode whatever the feed holds, once, and give every live listener its copy.
+    fn pump(&mut self, now: Instant) {
+        let Some(encoder) = self.encoder.as_mut() else {
+            return;
+        };
+        match encoder.poll(now) {
+            Ok(frames) => {
+                for frame in frames {
+                    for sink in self.sinks.iter_mut().filter(|sink| sink.ended.is_none()) {
+                        if sink.frames.len() >= MAX_PENDING_FRAMES {
+                            sink.frames.pop_front();
+                            sink.dropped += 1;
+                        }
+                        sink.frames.push_back(frame.clone());
+                    }
+                }
+            }
+            // Every way the feed can end a live reader is a real END for every listener: the
+            // capture source was replaced or closed (see `AudioLane::poll`). libopus refusing,
+            // or 2^32 frames, is terminal for the encoder, so for all of them too. The encoder
+            // goes now, so the next listener to arrive starts a fresh one on the new source.
+            Err(error) => {
+                let reason = match error {
+                    EncodeError::Feed(_) => "sourceChanged",
+                    EncodeError::Codec(_) | EncodeError::SequenceExhausted => "audioUnavailable",
+                };
+                self.encoder = None;
+                for sink in &mut self.sinks {
+                    sink.ended.get_or_insert(reason);
+                    sink.frames.clear();
+                }
+            }
+        }
+    }
+}
+
+impl Subscription {
+    /// Run the encoder (once, for everyone) and take this listener's frames.
+    fn take(&self, now: Instant) -> Result<Taken, &'static str> {
+        let mut state = self.fanout.state();
+        state.pump(now);
+        let sink = state
+            .sinks
+            .iter_mut()
+            .find(|sink| sink.id == self.id)
+            .ok_or("audioUnavailable")?;
+        if let Some(reason) = sink.ended {
+            return Err(reason);
+        }
+        Ok(Taken {
+            frames: sink.frames.drain(..).collect(),
+            dropped: std::mem::take(&mut sink.dropped),
+        })
+    }
+
+    /// Payload bytes the shared encoder has produced.
+    #[cfg(test)]
+    fn encoded_bytes(&self) -> u64 {
+        self.fanout
+            .state()
+            .encoder
+            .as_ref()
+            .map_or(0, ReceiveEncoder::encoded_bytes)
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        let mut state = self.fanout.state();
+        state.sinks.retain(|sink| sink.id != self.id);
+        // The last listener gone: dropping the encoder retires the feed's reader, which puts
+        // the feed back to copying nothing.
+        if state.sinks.is_empty() {
+            state.encoder = None;
+        }
+    }
+}
+
 struct Listener {
     session: String,
     device: String,
     lease: String,
-    encoder: ReceiveEncoder,
+    /// This listener's share of the station's one encoder.
+    audio: Subscription,
     /// Whole frames waiting for a bundle. Bounded by [`MAX_PENDING_FRAMES`].
     pending: Vec<EncodedFrame>,
     checked_at: Instant,
@@ -138,18 +328,20 @@ impl AudioLane {
     pub fn encoded_bytes(&self) -> u64 {
         self.listener
             .as_ref()
-            .map_or(0, |l| l.encoder.encoded_bytes())
+            .map_or(0, |l| l.audio.encoded_bytes())
     }
 
-    /// Subscribe to the feed for `session`. The caller has already established that this
-    /// browser may listen; this refuses only what the audio path itself can refuse.
+    /// Subscribe to the station's receive audio for `session`. The caller has already
+    /// established that this browser may listen; this refuses only what the audio path
+    /// itself can refuse.
     ///
-    /// One listener per station in v1. The feed has a single reader, so admitting a
-    /// second browser would silently end the first one's stream — so the second is told
-    /// `audioInUse` and the first is not disturbed.
+    /// One listener per lane: the relay's lane feeds the browser that holds the lease, and a
+    /// stream's lane feeds its own page. A second browser on the same lane is told
+    /// `audioInUse` and the first is not disturbed. Lanes do not exclude each other: every
+    /// lane hears the station through the one [`ReceiveFanout`].
     pub fn start(
         &mut self,
-        feed: &Arc<ReceiveAudioFeed>,
+        fanout: &Arc<ReceiveFanout>,
         session: &str,
         device: &str,
         lease: &str,
@@ -164,17 +356,12 @@ impl AudioLane {
                 Err("audioInUse")
             };
         }
-        let source = feed.describe().ok_or("audioUnavailable")?.source;
-        let encoder = ReceiveEncoder::start(feed, source).map_err(|error| match error {
-            EncodeError::Feed(ReceiveError::InUse) => "audioInUse",
-            EncodeError::Feed(_) => "audioUnavailable",
-            _ => "audioUnavailable",
-        })?;
+        let audio = fanout.subscribe()?;
         self.listener = Some(Listener {
             session: session.to_owned(),
             device: device.to_owned(),
             lease: lease.to_owned(),
-            encoder,
+            audio,
             pending: Vec::with_capacity(MAX_PENDING_FRAMES),
             checked_at: now,
         });
@@ -192,8 +379,9 @@ impl AudioLane {
         if !matches {
             return None;
         }
-        // Dropping the encoder retires the feed's reader, which puts the feed back to
-        // copying nothing. Nothing else has to be told.
+        // Dropping the subscription leaves the fan-out; the last listener to leave retires
+        // the feed's reader, which puts the feed back to copying nothing. Nothing else has to
+        // be told, and no other listener notices.
         self.listener.take().map(|l| l.session)
     }
 
@@ -208,32 +396,29 @@ impl AudioLane {
         let Some(live) = self.listener.as_mut() else {
             return Pump::default();
         };
-        match live.encoder.poll(now) {
-            Ok(frames) => live.pending.extend(frames),
+        match live.audio.take(now) {
+            Ok(taken) => {
+                live.pending.extend(taken.frames);
+                // Lost to this listener's own bound on the fan-out: a gap it hears, like any drop.
+                self.dropped += taken.dropped;
+            }
             // Every way the feed can end a live reader is a real END, not a gap: the
             // capture source was replaced or closed, so the sample rate and the epoch
-            // have both moved on. Reporting it as a gap would let an operator carry on
-            // believing they were still hearing the same receiver, which is the one
-            // confusion this whole lane's failure vocabulary exists to prevent.
+            // have both moved on (`sourceChanged`). Reporting it as a gap would let an
+            // operator carry on believing they were still hearing the same receiver, which
+            // is the one confusion this whole lane's failure vocabulary exists to prevent.
             //
             // The feed does not distinguish `Ended` from `SourceChanged` on a read (it
             // returns `Ended` for both once a reader is retired), and nothing here needs
             // it to: the distinction that matters to a listener is end-versus-gap, and
-            // both of these are the end.
-            Err(EncodeError::Feed(_)) => {
+            // both of these are the end. libopus refusing, or 2^32 frames, is terminal for
+            // the encoder too (`audioUnavailable`), and not something a listener can do
+            // anything about beyond being told.
+            Err(reason) => {
                 self.listener = None;
                 return Pump {
                     message: None,
-                    ended: Some("sourceChanged"),
-                };
-            }
-            // libopus refused, or 2^32 frames went by. Terminal for this encoder, and
-            // not something a listener can do anything about beyond being told.
-            Err(EncodeError::Codec(_) | EncodeError::SequenceExhausted) => {
-                self.listener = None;
-                return Pump {
-                    message: None,
-                    ended: Some("audioUnavailable"),
+                    ended: Some(reason),
                 };
             }
         }

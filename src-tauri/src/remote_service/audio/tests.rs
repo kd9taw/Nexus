@@ -71,8 +71,9 @@ fn idle_station_encodes_nothing() {
     // The control, on the same instrument. Everything above must be false once a
     // browser is actually listening, or the assertions prove nothing about idleness.
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+    lane.start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     let (messages, _) = run(&mut lane, &feed, 100, true);
     assert!(
@@ -89,8 +90,9 @@ fn idle_station_encodes_nothing() {
 #[test]
 fn a_bundle_carries_three_stated_frames_inside_the_shared_byte_bound() {
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+    lane.start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     let (messages, _) = run(&mut lane, &feed, 60, true);
     assert!(
@@ -138,8 +140,9 @@ fn a_bundle_carries_three_stated_frames_inside_the_shared_byte_bound() {
 #[test]
 fn a_browser_that_cannot_keep_up_loses_audio_instead_of_growing_the_station() {
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+    lane.start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     // 600 ticks is twelve seconds of audio into a socket that never becomes writable.
     let (messages, ended) = run(&mut lane, &feed, 600, false);
@@ -165,9 +168,10 @@ fn a_browser_that_cannot_keep_up_loses_audio_instead_of_growing_the_station() {
     // The control: the identical run against a writable socket DOES deliver, so the
     // emptiness above is backpressure and not a lane that never produces anything.
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut writable = AudioLane::default();
     writable
-        .start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+        .start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     let (delivered, _) = run(&mut writable, &feed, 600, true);
     assert!(
@@ -181,8 +185,9 @@ fn a_browser_that_cannot_keep_up_loses_audio_instead_of_growing_the_station() {
 #[test]
 fn a_drop_skips_the_sequence_so_the_listener_hears_a_gap_rather_than_a_rewrite() {
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+    lane.start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     let base = Instant::now();
     let mut seqs = Vec::new();
@@ -210,11 +215,12 @@ fn a_drop_skips_the_sequence_so_the_listener_hears_a_gap_rather_than_a_rewrite()
 #[test]
 fn a_second_browser_is_refused_and_the_first_keeps_streaming() {
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
     let now = Instant::now();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, now).unwrap();
+    lane.start(&station, SESSION, DEVICE, LEASE, now).unwrap();
     assert_eq!(
-        lane.start(&feed.feed, OTHER, DEVICE, LEASE, now),
+        lane.start(&station, OTHER, DEVICE, LEASE, now),
         Err("audioInUse")
     );
     assert_eq!(
@@ -228,14 +234,15 @@ fn a_second_browser_is_refused_and_the_first_keeps_streaming() {
     assert!(messages.iter().all(|m| m.contains(SESSION)));
     // Re-asking for the session that is already listening is not an error: a browser
     // may repeat itself after a reconnect, and refusing would strand it.
-    assert!(lane.start(&feed.feed, SESSION, DEVICE, LEASE, now).is_ok());
+    assert!(lane.start(&station, SESSION, DEVICE, LEASE, now).is_ok());
 }
 
 #[test]
 fn stopping_releases_the_feed_so_the_station_goes_back_to_encoding_nothing() {
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+    lane.start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     run(&mut lane, &feed, 30, true);
     // Another session's stop must not end this one's audio.
@@ -256,8 +263,9 @@ fn stopping_releases_the_feed_so_the_station_goes_back_to_encoding_nothing() {
 #[test]
 fn a_capture_device_change_ends_the_stream_and_is_never_reported_as_a_gap() {
     let mut feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+    lane.start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .unwrap();
     run(&mut lane, &feed, 30, true);
     feed.restart(24_000);
@@ -270,17 +278,17 @@ fn a_capture_device_change_ends_the_stream_and_is_never_reported_as_a_gap() {
     // And the new source is free for a fresh subscription, which is how listening
     // resumes: a new encoder against the new rate, never the old one spliced on.
     assert!(lane
-        .start(&feed.feed, SESSION, DEVICE, LEASE, Instant::now())
+        .start(&station, SESSION, DEVICE, LEASE, Instant::now())
         .is_ok());
 }
 
 #[test]
 fn losing_control_stops_the_audio_but_a_busy_authority_does_not() {
     let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
     let mut lane = AudioLane::default();
     let base = Instant::now();
-    lane.start(&feed.feed, SESSION, DEVICE, LEASE, base)
-        .unwrap();
+    lane.start(&station, SESSION, DEVICE, LEASE, base).unwrap();
     // Inside the re-check cadence: nothing is asked and nothing changes.
     assert_eq!(
         lane.recheck(base + Duration::from_millis(100), |_, _, _| Err(
@@ -356,4 +364,295 @@ fn every_refusal_this_lane_can_produce_is_one_the_browser_knows() {
     assert_eq!(shared_reason("audioInUse"), "audioInUse");
     assert_eq!(shared_reason("notController"), "notController");
     assert_eq!(shared_reason("remoteBusy"), "audioUnavailable");
+}
+
+// ── P5: one encoder, every listener (the Listen lane and each stream's `audio` channel) ────────
+
+/// The sequence number of a bundle.
+fn seq(message: &str) -> u64 {
+    serde_json::from_str::<Value>(message).unwrap()["seq"]
+        .as_u64()
+        .unwrap()
+}
+
+/// Every step between consecutive bundles is exactly one bundle: nothing was lost.
+fn dense(seqs: &[u64]) -> bool {
+    seqs.windows(2).all(|w| w[1] - w[0] == BUNDLE_FRAMES as u64)
+}
+
+/// ★ P5: a browser Listening on the relay's lane and a streamed page's `audio` channel hear the
+/// station at once, every frame, from one encoding. Failing first: before the fan-out the
+/// stream's start was refused `audioInUse` while the Listen lane held the feed's one reader.
+#[test]
+fn two_listeners_at_once_both_hear_every_frame() {
+    let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
+    let mut listen = AudioLane::default();
+    let mut stream = AudioLane::unaddressed();
+    let now = Instant::now();
+    listen.start(&station, SESSION, DEVICE, LEASE, now).unwrap();
+    assert_eq!(
+        stream.start(&station, SESSION, DEVICE, LEASE, now),
+        Ok(()),
+        "the stream could not listen while the Listen lane was"
+    );
+    let base = Instant::now();
+    let (mut heard, mut streamed) = (Vec::new(), Vec::new());
+    for k in 0..60 {
+        let at = base + Duration::from_millis(FRAME_MS * k as u64);
+        feed.publish(at, &tone(TICK, k * TICK));
+        heard.extend(listen.poll(at, true).message);
+        streamed.extend(stream.poll(at, true).message);
+    }
+    assert!(heard.len() >= 15, "only {} bundles", heard.len());
+    // The same frames, byte for byte: one encoding, two copies.
+    let frames = |messages: &[String]| -> Vec<(u64, String)> {
+        messages
+            .iter()
+            .map(|m| {
+                let value: Value = serde_json::from_str(m).unwrap();
+                (seq(m), value["payload"].as_str().unwrap().to_owned())
+            })
+            .collect()
+    };
+    assert_eq!(
+        frames(&heard),
+        frames(&streamed),
+        "the two listeners heard different audio"
+    );
+    let seqs: Vec<u64> = heard.iter().map(|m| seq(m)).collect();
+    assert!(dense(&seqs), "a frame went missing: {seqs:?}");
+    assert_eq!(listen.dropped() + stream.dropped(), 0);
+    // Each in its own form: the relay's bundles are addressed, the stream's are not.
+    assert!(heard.iter().all(|m| m.contains(SESSION)));
+    assert!(streamed.iter().all(|m| !m.contains("sessionId")));
+}
+
+/// ★ P5: a listener that falls behind (its thread stalls for two seconds) loses only ITS OWN
+/// frames, as a gap, with its backlog bounded, and the other gets every frame at the same tick it
+/// would alone. Both ways round: the stream stalled under the Listen lane, and the Listen lane
+/// (the first to arrive) stalled under the stream. CONTROL: the identical run with the other alone.
+#[test]
+fn a_stalled_listener_neither_delays_nor_drops_the_others_frames() {
+    // The Listen lane (0) and a stream's lane (1) on one station, the lanes in `started` listening
+    // and `stalled` (if any) taking nothing from tick 20 to 120. What each lane heard, as
+    // (tick, seq), what each lost, and the largest backlog any listener held.
+    type Heard = Vec<(usize, u64)>;
+    let run = |started: &[usize], stalled: Option<usize>| -> (Vec<Heard>, Vec<u64>, usize) {
+        let feed = DetachedFeed::new(RATE);
+        let station = ReceiveFanout::new(feed.feed.clone());
+        let mut all = [AudioLane::default(), AudioLane::unaddressed()];
+        let now = Instant::now();
+        for &i in started {
+            all[i].start(&station, SESSION, DEVICE, LEASE, now).unwrap();
+        }
+        let base = Instant::now();
+        let (mut heard, mut backlog) = (vec![Vec::new(), Vec::new()], 0);
+        for k in 0..150 {
+            let at = base + Duration::from_millis(FRAME_MS * k as u64);
+            feed.publish(at, &tone(TICK, k * TICK));
+            for &i in started {
+                if stalled == Some(i) && (20..120).contains(&k) {
+                    continue;
+                }
+                if let Some(message) = all[i].poll(at, true).message {
+                    heard[i].push((k, seq(&message)));
+                }
+            }
+            let state = station.state();
+            backlog = backlog.max(
+                state
+                    .sinks
+                    .iter()
+                    .map(|s| s.frames.len())
+                    .max()
+                    .unwrap_or(0),
+            );
+        }
+        (heard, all.iter().map(AudioLane::dropped).collect(), backlog)
+    };
+    for (stalled, other) in [(1, 0), (0, 1)] {
+        let (heard, lost, backlog) = run(&[0, 1], Some(stalled));
+        // CONTROL: the other lane alone, the same run.
+        let (alone, _, _) = run(&[other], None);
+        assert_eq!(
+            lost[other], 0,
+            "lane {other} lost frames to the stalled lane {stalled}"
+        );
+        assert_eq!(
+            heard[other], alone[other],
+            "the stalled lane {stalled} changed when or what lane {other} heard"
+        );
+        let seqs: Vec<u64> = heard[other].iter().map(|(_, s)| *s).collect();
+        assert!(dense(&seqs));
+        // The stalled one lost its own oldest frames, heard as a gap, and held no more than its bound.
+        assert!(lost[stalled] > 0, "the stalled lane {stalled} lost nothing");
+        let gapped: Vec<u64> = heard[stalled].iter().map(|(_, s)| *s).collect();
+        assert!(
+            !dense(&gapped),
+            "the stalled lane's audio has no gap: {gapped:?}"
+        );
+        assert!(
+            backlog <= MAX_PENDING_FRAMES,
+            "a listener's backlog reached {backlog} frames"
+        );
+    }
+}
+
+/// ★ P5: one encode per frame, whatever the number of listeners. Measured over one second of
+/// audio with 0, 1, 2 and 3 listeners (the Listen lane and two streams' channels).
+#[test]
+fn one_encode_per_frame_whatever_the_listener_count() {
+    let mut encodes = Vec::new();
+    for listeners in 0..=3 {
+        let feed = DetachedFeed::new(RATE);
+        let station = ReceiveFanout::new(feed.feed.clone());
+        let mut lanes: Vec<AudioLane> = (0..listeners)
+            .map(|i| {
+                if i == 0 {
+                    AudioLane::default()
+                } else {
+                    AudioLane::unaddressed()
+                }
+            })
+            .collect();
+        let now = Instant::now();
+        for lane in &mut lanes {
+            lane.start(&station, SESSION, DEVICE, LEASE, now).unwrap();
+        }
+        let base = Instant::now();
+        let mut bundles = vec![0; listeners];
+        for k in 0..50 {
+            let at = base + Duration::from_millis(FRAME_MS * k as u64);
+            feed.publish(at, &tone(TICK, k * TICK));
+            for (i, lane) in lanes.iter_mut().enumerate() {
+                bundles[i] += usize::from(lane.poll(at, true).message.is_some());
+            }
+        }
+        encodes.push(station.frames_encoded());
+        // Every listener got every bundle of that one encoding.
+        assert!(bundles.iter().all(|&b| b == bundles[0]), "{bundles:?}");
+    }
+    println!("encodes in one second of audio, by listener count 0..=3: {encodes:?}");
+    assert_eq!(encodes[0], 0, "the station encoded with nobody listening");
+    assert!(
+        (45..=50).contains(&encodes[1]),
+        "one listener: {} encodes in a second of audio",
+        encodes[1]
+    );
+    assert_eq!(encodes[2], encodes[1], "two listeners encoded twice");
+    assert_eq!(
+        encodes[3], encodes[1],
+        "three listeners encoded more than once"
+    );
+}
+
+/// ★ P5: one listener leaving (its page closed its channel) or losing its lease does not disturb
+/// the other, and the reader is released only when the last one is gone. CONTROL: while one
+/// listener remains, the reader is still held.
+#[test]
+fn a_listener_that_leaves_or_loses_its_lease_does_not_disturb_the_others() {
+    let feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
+    let mut listen = AudioLane::default();
+    let mut stream = AudioLane::unaddressed();
+    let base = Instant::now();
+    listen
+        .start(&station, SESSION, DEVICE, LEASE, base)
+        .unwrap();
+    stream
+        .start(&station, SESSION, DEVICE, LEASE, base)
+        .unwrap();
+    let (mut heard, mut streamed) = (Vec::new(), Vec::new());
+    // One tick of the station: a frame published, then each lane polled as its loop does.
+    let tick = |k: usize, listen: &mut AudioLane, stream: &mut AudioLane| {
+        let at = base + Duration::from_millis(FRAME_MS * k as u64);
+        feed.publish(at, &tone(TICK, k * TICK));
+        let heard = listen.poll(at, true);
+        assert_eq!(heard.ended, None, "the Listen lane was ended at tick {k}");
+        let streamed = stream.poll(at, true);
+        assert_eq!(streamed.ended, None, "the stream was ended at tick {k}");
+        (
+            heard.message.map(|m| seq(&m)),
+            streamed.message.map(|m| seq(&m)),
+        )
+    };
+    for k in 0..30 {
+        let (a, b) = tick(k, &mut listen, &mut stream);
+        heard.extend(a);
+        streamed.extend(b);
+    }
+    // The stream's page closes its audio channel. The Listen lane carries on without a gap.
+    stream.stop(None);
+    assert!(listen.listening());
+    assert!(
+        matches!(feed.feed.subscribe(feed.source()), Err(ReceiveError::InUse)),
+        "control: the reader went while a listener remained"
+    );
+    for k in 30..60 {
+        heard.extend(tick(k, &mut listen, &mut stream).0);
+    }
+    assert!(dense(&heard), "the other's leaving cost a frame: {heard:?}");
+    // A new stream joins mid-way, from the encoder's next frame; then the Listen lane's lease
+    // lapses. The stream carries on without a gap.
+    stream
+        .start(&station, SESSION, DEVICE, LEASE, base)
+        .unwrap();
+    streamed.clear();
+    for k in 60..90 {
+        streamed.extend(tick(k, &mut listen, &mut stream).1);
+    }
+    assert_eq!(
+        listen.recheck(base + RECHECK * 3, |_, _, _| Err("notController")),
+        Some("notController")
+    );
+    assert!(!listen.listening());
+    for k in 90..120 {
+        streamed.extend(tick(k, &mut listen, &mut stream).1);
+    }
+    assert!(stream.listening());
+    assert!(
+        dense(&streamed),
+        "the other's lease lapse cost a frame: {streamed:?}"
+    );
+    // The last one gone: the station goes back to encoding nothing.
+    stream.stop(None);
+    assert!(
+        feed.feed.subscribe(feed.source()).is_ok(),
+        "the reader outlived the last listener"
+    );
+}
+
+/// ★ P5: a capture source change ends EVERY listener, each told once as `sourceChanged`, never
+/// a gap; and a listener that starts again gets a fresh encoder on the new source.
+#[test]
+fn a_source_change_ends_every_listener_and_each_is_told_once() {
+    let mut feed = DetachedFeed::new(RATE);
+    let station = ReceiveFanout::new(feed.feed.clone());
+    let mut listen = AudioLane::default();
+    let mut stream = AudioLane::unaddressed();
+    let now = Instant::now();
+    listen.start(&station, SESSION, DEVICE, LEASE, now).unwrap();
+    stream.start(&station, SESSION, DEVICE, LEASE, now).unwrap();
+    run(&mut listen, &feed, 10, true);
+    feed.restart(24_000);
+    let at = Instant::now();
+    assert_eq!(listen.poll(at, true).ended, Some("sourceChanged"));
+    assert_eq!(stream.poll(at, true).ended, Some("sourceChanged"));
+    assert!(!listen.listening() && !stream.listening());
+    assert_eq!(listen.poll(at, true).ended, None, "told twice");
+    assert_eq!(stream.poll(at, true).ended, None, "told twice");
+    assert!(
+        feed.feed.subscribe(feed.source()).is_ok(),
+        "a reader was left on the old source"
+    );
+    // Listening again starts on the new source.
+    stream.start(&station, SESSION, DEVICE, LEASE, at).unwrap();
+    let (messages, ended) = run(&mut stream, &feed, 30, true);
+    assert_eq!(ended, None);
+    assert!(!messages.is_empty(), "no audio from the new source");
+    assert_eq!(
+        serde_json::from_str::<Value>(&messages[0]).unwrap()["epoch"],
+        "0000000000000002"
+    );
 }
