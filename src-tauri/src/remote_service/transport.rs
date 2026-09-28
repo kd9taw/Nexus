@@ -212,6 +212,14 @@ enum ServerMessage {
         lease_id: String,
         payload: tempo_stream::protocol::BrowserSignal,
     },
+    /// The relay ends a session's stream: Remote access was switched off (operator decision
+    /// 2026-09-27, "within about 2 s"), or another reason from the contract's closed set. Sent,
+    /// like `streamSignal`, only to a station that advertised the stream.
+    StreamEnd {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        reason: tempo_stream::protocol::StreamReason,
+    },
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -538,6 +546,10 @@ where
                             if let Some(data) = stream_lane.signal(&stream_station, &stream_out, (session_id, device_id, lease_id), payload) {
                                 outbound.send(Message::Text(data.into()))?;
                             }
+                        },
+                        ServerMessage::StreamEnd{session_id,reason}=>{
+                            if !identifier(&session_id){return Err("invalidResponse")}
+                            stream_lane.end(&stream_station, &session_id, reason);
                         },
                         ServerMessage::AudioListen{session_id,device_id,listening,lease_id}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
@@ -892,6 +904,7 @@ mod server_message_schema {
             json!({"type":"watch","enabled":true,"requestId":ID}),
             json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID}),
             json!({"type":"streamSignal","sessionId":ID,"deviceId":ID,"leaseId":ID,"payload":{"kind":"close"}}),
+            json!({"type":"streamEnd","sessionId":ID,"reason":"remoteOff"}),
         ]
     }
 
@@ -1042,6 +1055,11 @@ mod server_message_schema {
         "lease_id: String,",
         "payload: tempo_stream::protocol::BrowserSignal,",
         "},",
+        "StreamEnd {",
+        "#[serde(rename = \"sessionId\")]",
+        "session_id: String,",
+        "reason: tempo_stream::protocol::StreamReason,",
+        "},",
         "}",
         "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]",
         "pub struct Request {",
@@ -1146,6 +1164,9 @@ mod server_message_schema {
         "operationRequest.operationVersion: optional",
         "operationRequest.request: required",
         "operationRequest.sessionId: required",
+        "streamEnd.<unknown key>: refused",
+        "streamEnd.reason: required",
+        "streamEnd.sessionId: required",
         "streamSignal.<unknown key>: refused",
         "streamSignal.deviceId: required",
         "streamSignal.leaseId: required",
@@ -1203,18 +1224,19 @@ mod server_message_schema {
 
     /// Remote as a stream's relay messages, read by the station's own parser from the contract
     /// fixtures the relay and the page test against: every case the relay may send is taken, and
-    /// every case it must never send is refused. `streamSignal` joined this snapshot on purpose
-    /// (2026-09-27): a relay sends it only to a station that advertised the stream, so no older
-    /// station ever meets it.
+    /// every case it must never send is refused. `streamSignal` and `streamEnd` joined this
+    /// snapshot on purpose (2026-09-27): a relay sends them only to a station that advertised the
+    /// stream, so no older station ever meets them.
     #[test]
     fn the_stream_contract_is_what_the_parser_takes() {
         let file: Value = serde_json::from_str(include_str!(
             "../../../remote/test/fixtures/stream/signal.json"
         ))
         .unwrap();
-        let taken = file["roomToStation"].as_array().unwrap();
-        assert!(taken.len() >= 4, "premise: the fixtures were found");
-        for case in taken {
+        let mut taken = file["roomToStation"].as_array().unwrap().clone();
+        taken.extend(file["roomToStationEnd"].as_array().unwrap().iter().cloned());
+        assert!(taken.len() >= 6, "premise: the fixtures were found");
+        for case in &taken {
             assert!(accepts(&case["message"]), "refused: {}", case["name"]);
         }
         for case in file["roomToStationRefused"].as_array().unwrap() {

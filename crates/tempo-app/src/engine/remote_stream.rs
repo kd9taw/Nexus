@@ -259,12 +259,38 @@ mod tests {
         let (mut e, _transmit, _presence, t0) = attached();
         start(&mut e, Kind::Ft);
         e.halt_tx();
+        // The Stop stops at once, not at the presence deadline: nothing waits on presence.
+        stopped(&mut e, Kind::Ft);
         assert!(e.remote_presence_live(t0), "a stop ended presence");
-        let _ = e.take_slot_tx_abort();
         // The operator starts again, and the heartbeats stop.
         start(&mut e, Kind::PhonePtt);
         assert!(e.poll_remote_transmit(t0 + PRESENCE));
         stopped(&mut e, Kind::PhonePtt);
+    }
+
+    /// ★ S8 (a), the lead's ruling: a local arm in the middle of the session (Call CQ's own arm, the
+    /// one every streamed click is) leaves EVERY kind of transmission covered. For each kind:
+    /// presence is attached, the operator arms locally a second in, starts the transmission, and
+    /// the heartbeats stop; the station halts at the deadline, up at 4.999 s and down at 5.000 s.
+    /// The plan's shared slot failed exactly here: `set_tx_enabled(true)` clears the FT permit.
+    #[test]
+    fn a_local_arm_mid_session_leaves_every_kind_covered() {
+        for kind in KINDS {
+            let (mut e, _transmit, _presence, t0) = attached();
+            // A second in, the local arm (what Call CQ, and every streamed click, performs).
+            e.set_tx_enabled(true);
+            assert!(e.remote_presence_live(t0 + Duration::from_secs(1)));
+            start(&mut e, kind);
+            assert!(
+                !e.poll_remote_transmit(t0 + PRESENCE - Duration::from_millis(1)),
+                "{kind:?}: halted before the deadline"
+            );
+            assert!(
+                e.poll_remote_transmit(t0 + PRESENCE),
+                "{kind:?}: a local arm left the transmission uncovered"
+            );
+            stopped(&mut e, kind);
+        }
     }
 
     /// A fresh heartbeat renews presence; one that does not come lets it lapse.
@@ -317,9 +343,28 @@ mod tests {
     /// stream attached is untouched by any of this.
     #[test]
     fn presence_grants_nothing() {
-        let (e, _transmit, _presence, t0) = attached();
+        let (mut e, _transmit, presence, t0) = attached();
         assert!(!e.tx_enabled(), "holding presence armed TX");
         assert!(!e.manual_ptt());
+        // S8 (b): renewing it, again and again, arms nothing, keys nothing and starts nothing.
+        for s in 1..=4u64 {
+            let at = t0 + Duration::from_secs(s);
+            assert!(e.hold_remote_presence(presence.permit(at + PRESENCE).unwrap(), at));
+            assert!(!e.poll_remote_transmit(at));
+        }
+        assert!(!e.tx_enabled(), "a renewal armed TX");
+        assert!(!e.manual_ptt(), "a renewal keyed");
+        assert!(!e.tuning() && !e.rtty_latched() && !e.psk_latched());
+        assert!(e.voice_tx.is_none() && e.cw_queue.is_empty());
+        // Nor does a live presence let a refused key through: with TX off, the PTT verb refuses.
+        // (Switching to Phone arms TX, as a local click does; the operator then turns it off.)
+        e.set_operating_mode("phone", false);
+        e.set_tx_enabled(false);
+        e.set_ptt(true);
+        assert!(
+            !e.manual_ptt(),
+            "presence keyed a transmitter that TX-off refuses"
+        );
         let mut native = Engine::new("W9XYZ", "EN52", 0);
         start(&mut native, Kind::PhonePtt);
         assert!(!native.poll_remote_transmit(t0 + Duration::from_secs(3600)));

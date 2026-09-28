@@ -126,7 +126,7 @@
       }
     },
     {
-      "name": "key down, Space, the Phone cockpit's PTT key",
+      "name": "key down, Space (an ordinary key: the window's own handlers decide what it does)",
       "message": {
         "type": "key",
         "action": "down",
@@ -137,7 +137,7 @@
       }
     },
     {
-      "name": "key up",
+      "name": "key up, Space",
       "message": {
         "type": "key",
         "action": "up",
@@ -375,6 +375,47 @@
         "type": "pttRelease",
         "holdId": "10000000-0000-4000-8000-000000000009",
         "seq": 18
+      }
+    },
+    {
+      "name": "held: a key",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Space"
+        ],
+        "buttons": 0,
+        "seq": 17
+      }
+    },
+    {
+      "name": "held: a pointer button only",
+      "message": {
+        "type": "held",
+        "keys": [],
+        "buttons": 1,
+        "seq": 18
+      }
+    },
+    {
+      "name": "held: keys and a button",
+      "message": {
+        "type": "held",
+        "keys": [
+          "ShiftLeft",
+          "KeyF"
+        ],
+        "buttons": 1,
+        "seq": 19
+      }
+    },
+    {
+      "name": "held: nothing (the set just emptied)",
+      "message": {
+        "type": "held",
+        "keys": [],
+        "buttons": 0,
+        "seq": 20
       }
     }
   ],
@@ -622,6 +663,107 @@
       "message": {
         "type": "state",
         "requestId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "name": "held without seq",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Space"
+        ],
+        "buttons": 0
+      }
+    },
+    {
+      "name": "held with a seq beyond 32 bits",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Space"
+        ],
+        "buttons": 0,
+        "seq": 4294967296
+      }
+    },
+    {
+      "name": "held with a key that is not a DOM code",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Key A"
+        ],
+        "buttons": 0,
+        "seq": 1
+      }
+    },
+    {
+      "name": "held with an empty key",
+      "message": {
+        "type": "held",
+        "keys": [
+          ""
+        ],
+        "buttons": 0,
+        "seq": 1
+      }
+    },
+    {
+      "name": "held with seventeen keys",
+      "message": {
+        "type": "held",
+        "keys": [
+          "KeyA",
+          "KeyB",
+          "KeyC",
+          "KeyD",
+          "KeyE",
+          "KeyF",
+          "KeyG",
+          "KeyH",
+          "KeyI",
+          "KeyJ",
+          "KeyK",
+          "KeyL",
+          "KeyM",
+          "KeyN",
+          "KeyO",
+          "KeyP",
+          "KeyQ"
+        ],
+        "buttons": 0,
+        "seq": 1
+      }
+    },
+    {
+      "name": "held with a key twice",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Space",
+          "Space"
+        ],
+        "buttons": 0,
+        "seq": 1
+      }
+    },
+    {
+      "name": "held with buttons out of range",
+      "message": {
+        "type": "held",
+        "keys": [],
+        "buttons": 32,
+        "seq": 1
+      }
+    },
+    {
+      "name": "held with an unknown key",
+      "message": {
+        "type": "held",
+        "keys": [],
+        "buttons": 0,
+        "seq": 1,
+        "extra": 1
       }
     }
   ]

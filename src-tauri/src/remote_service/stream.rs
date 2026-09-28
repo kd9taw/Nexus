@@ -144,9 +144,11 @@ fn state(session: &str, streaming: bool, reason: Option<StreamReason>) -> Option
     .to_wire()
 }
 
+#[derive(Debug, PartialEq)]
 enum Signal {
     Candidate(String),
-    Close,
+    /// The session ends, and why: the page closed it, or the relay ended it.
+    Close(StreamReason),
 }
 
 struct Live {
@@ -224,7 +226,18 @@ impl StreamLane {
     /// The relay says this session is gone, or the page closed its stream: the stream ends.
     pub fn session_gone(&mut self, session: &str) {
         if let Some(live) = self.live.as_ref().filter(|l| l.session == session) {
-            let _ = live.signals.send(Signal::Close);
+            let _ = live.signals.send(Signal::Close(StreamReason::StreamClosed));
+        }
+    }
+
+    /// The relay ended this session's stream (`streamEnd`: Remote access switched off, operator
+    /// decision 2026-09-27, "within about 2 s"). Its transmit presence ends HERE, on the relay's
+    /// own thread and at once, so the radio loop halts on its next poll whatever the session thread
+    /// is doing; the session thread is then told to tear the rest down, with the relay's reason.
+    pub fn end(&mut self, station: &Station, session: &str, reason: StreamReason) {
+        if let Some(live) = self.live.as_ref().filter(|l| l.session == session) {
+            station.authority.end_stream_presence();
+            let _ = live.signals.send(Signal::Close(reason));
         }
     }
 }
@@ -430,7 +443,8 @@ impl Streaming {
         }
     }
 
-    /// A message on `ptt` (S7). A hold is taken only while presence is live; a release always.
+    /// A message on `ptt` (S7). A hold, and the page's `held` set, are taken only while presence
+    /// is live; a release always.
     pub fn ptt(&mut self, bytes: &[u8], now: Instant) {
         let Ok(message) = protocol::parse_ptt(bytes) else {
             return;
@@ -442,6 +456,15 @@ impl Streaming {
                 }
             }
             PttIn::PttRelease { hold_id, .. } => self.station.host.ptt.release(&hold_id),
+            // The page's held keys and buttons, re-asserted, to the window: input, so only while
+            // presence is live (a lapse sends `reset` anyway).
+            PttIn::Held(held) => {
+                if self.presence.live(now) {
+                    if let Some(deliver) = &self.station.host.input {
+                        deliver(&WebviewInput::Held(held));
+                    }
+                }
+            }
         }
     }
 
@@ -691,7 +714,11 @@ fn run(
                 Ok(Signal::Candidate(line)) => {
                     session.add_remote_candidate(&line, now);
                 }
-                Ok(Signal::Close) | Err(TryRecvError::Disconnected) => {
+                Ok(Signal::Close(reason)) => {
+                    session.close(reason, now);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
                     session.close(StreamReason::StreamClosed, now);
                     break;
                 }
