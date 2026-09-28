@@ -163,7 +163,13 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       const r = element.getBoundingClientRect()
       return { left: r.left, top: r.top, width: r.width, height: r.height, videoWidth: element.videoWidth, videoHeight: element.videoHeight }
     }
-    const send = (message: StreamPointer | StreamKey | null) => { if (message) link.input(held.note(message)) }
+    // Every press and release goes as itself, and what is left held is re-asserted (the dead-man).
+    const send = (message: StreamPointer | StreamKey | null) => {
+      if (!message) return
+      link.input(held.note(message))
+      const now = held.held()
+      link.holdInput(now.keys, now.buttons)
+    }
     // The press's click count, which its release carries too: a click at the shack is a click.
     const count = new ClickCount()
     let clicks = 0
@@ -200,7 +206,10 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       send(message)
     }
     const keydown = key('down'), keyup = key('up')
-    const release = () => { for (const message of held.releaseAll()) link.input(message) }
+    const release = () => {
+      for (const message of held.releaseAll()) link.input(message)
+      link.holdInput([], 0)
+    }
     const menu = (event: Event) => event.preventDefault()
     element.addEventListener('pointerdown', down)
     element.addEventListener('pointermove', move)
@@ -210,10 +219,13 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
     element.addEventListener('keydown', keydown)
     element.addEventListener('keyup', keyup)
     element.addEventListener('blur', release)
+    // The browser window losing focus sends the key-ups of what is held here to another program.
+    window.addEventListener('blur', release)
     element.addEventListener('contextmenu', menu)
     element.addEventListener('paste', paste)
     return () => {
       release()
+      window.removeEventListener('blur', release)
       element.removeEventListener('pointerdown', down)
       element.removeEventListener('pointermove', move)
       element.removeEventListener('pointerup', up)

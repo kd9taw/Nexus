@@ -263,6 +263,46 @@ it('blind means no authority: a frozen picture sends no input, and lets go of wh
   expect(last(input())).toMatchObject({ type: 'key', action: 'down', key: 'a' })
 })
 
+it('THE DEAD-MAN, the page\'s half: what is held on the picture is re-asserted on ptt every 100 ms, and no longer once let go', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = v.peer.channel('ptt')
+  const helds = () => ptt.sent.filter(m => m.type === 'held')
+  const wait = (ms: number) => act(async () => { await new Promise(resolve => setTimeout(resolve, ms)) })
+  v.video.focus()
+  // A Space held on the picture: sent as the key it is, and re-asserted as held, at once and every 100 ms.
+  fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
+  expect(helds()).toEqual([{ type: 'held', keys: ['Space'], buttons: 0, seq: 0 }])
+  await wait(250)
+  expect(helds().length, 'at once, then every 100 ms').toBeGreaterThanOrEqual(3)
+  expect(helds().map(m => m.seq), 'counting up').toEqual(helds().map((_, i) => i))
+  // A button pressed too: the set grows, at once.
+  v.video.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 1 }))
+  expect(last(helds())).toMatchObject({ keys: ['Space'], buttons: 1 })
+  fireEvent.keyUp(v.video, { key: ' ', code: 'Space' })
+  expect(last(helds())).toMatchObject({ keys: [], buttons: 1 })
+  // Nothing held, nothing re-asserted: the shack's window has had every release.
+  v.video.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 0 }))
+  const sent = helds().length
+  await wait(250)
+  expect(helds()).toHaveLength(sent)
+})
+
+it('lets go of what the picture holds when the browser window loses focus: its key-ups will go elsewhere', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control'), ptt = v.peer.channel('ptt')
+  v.video.focus()
+  fireEvent.keyDown(v.video, { key: 'Shift', code: 'ShiftLeft', shiftKey: true })
+  act(() => { window.dispatchEvent(new Event('blur')) })
+  expect(last(control.sent)).toMatchObject({ type: 'key', action: 'up', code: 'ShiftLeft' })
+  const sent = ptt.sent.filter(m => m.type === 'held').length
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)) })
+  expect(ptt.sent.filter(m => m.type === 'held'), 'no longer re-asserted').toHaveLength(sent)
+})
+
 it('holds PTT while the button is held, and lets go when it is released', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))

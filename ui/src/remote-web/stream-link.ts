@@ -18,11 +18,14 @@
 //
 // A HELD KEY IS A STATE, NEVER A PAIR (S7). While PTT is held the page re-asserts it every 100 ms,
 // under a fresh hold id per press; the station ends the over when it has heard nothing for 200 ms,
-// so a lost key-up or a dropped link cannot leave the rig keyed.
+// so a lost key-up or a dropped link cannot leave the rig keyed. Every key and button held on the
+// picture is re-asserted the same way (`held`), and Nexus's window lets go of whatever stops being
+// re-asserted: a Space held in Phone keys PTT through the cockpit's own handler, and is bounded so.
 import { AudioLink, browserAudio, type AudioEnvironment } from './audio-listen'
 import {
-  STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_INPUT_FLUSH_MS,
-  STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, parsePttState, parseReceivedMessage, parseStreamInput, secureAnswer,
+  STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS, STREAM_HELD_REASSERT_MS,
+  STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, parseHeld, parsePttState, parseReceivedMessage,
+  parseStreamInput, secureAnswer,
   type BrowserStreamPayload, type StreamInput, type StreamWheel,
 } from './stream-protocol'
 
@@ -137,6 +140,10 @@ export class StreamLink {
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private watch: ReturnType<typeof setInterval> | undefined
   private hold: ReturnType<typeof setInterval> | undefined
+  /** What the picture holds down at the shack, its re-assertion timer, and the stream's count. */
+  private heldSet: { keys: string[]; buttons: number } | null = null
+  private heldTimer: ReturnType<typeof setInterval> | undefined
+  private heldSeq = 0
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private pendingMove: StreamInput | null = null
   private pendingWheel: StreamWheel | null = null
@@ -169,6 +176,7 @@ export class StreamLink {
     if (this.view.phase === 'connecting' || this.view.phase === 'live' || this.view.phase === 'stalled') return
     this.teardown()
     this.lease = leaseId
+    this.heldSeq = 0
     this.set({ ...OFF, phase: 'connecting' })
     this.watchPage()
     let peer: PeerLike
@@ -280,6 +288,19 @@ export class StreamLink {
     if (!this.view.ptt && !press) return
     this.set({ ptt: false })
     if (press) this.sendPtt({ type: 'pttRelease', holdId: press.holdId, seq: press.seq })
+  }
+
+  /** What the picture holds down at the shack now: re-asserted on `ptt` at once when it changes and
+   *  every STREAM_HELD_REASSERT_MS while anything is, and not at all when nothing is. Nexus's window
+   *  lets go of whatever stops being re-asserted (the dead-man), so this is what keeps a held key
+   *  held there - and all that does. */
+  holdInput(keys: string[], buttons: number): void {
+    const next = keys.length || buttons ? { keys: keys.slice(0, STREAM_HELD_KEYS), buttons } : null
+    const changed = JSON.stringify(next) !== JSON.stringify(this.heldSet)
+    this.heldSet = next
+    if (!next) { clearInterval(this.heldTimer); this.heldTimer = undefined; return }
+    if (changed) this.sendHeld()
+    if (this.heldTimer === undefined) this.heldTimer = setInterval(() => this.sendHeld(), STREAM_HELD_REASSERT_MS)
   }
 
   /** One input event for Nexus's window. Moves and wheel deltas are coalesced to ~60 Hz; a press, a
@@ -434,6 +455,13 @@ export class StreamLink {
     if (!press || !this.sendPtt({ type: 'pttHold', holdId: press.holdId, seq: press.seq })) { this.releasePtt(); return }
     press.seq = Math.min(press.seq + 1, 0xffffffff)
   }
+  private sendHeld(): void {
+    const set = this.heldSet
+    if (!set) return
+    const message = { type: 'held', keys: set.keys, buttons: set.buttons, seq: this.heldSeq }
+    try { parseHeld(message) } catch { return }
+    if (this.sendPtt(message)) this.heldSeq = Math.min(this.heldSeq + 1, 0xffffffff)
+  }
   private sendPtt(message: object): boolean {
     const ptt = this.channels?.ptt
     if (ptt?.readyState !== 'open') return false
@@ -487,6 +515,7 @@ export class StreamLink {
     clearInterval(this.watch); this.watch = undefined
     // Let go of PTT on the channel while it is still there to carry the release.
     this.releasePtt()
+    clearInterval(this.heldTimer); this.heldTimer = undefined; this.heldSet = null
     clearTimeout(this.flushTimer); this.flushTimer = undefined
     this.pendingMove = null; this.pendingWheel = null
     this.heartbeats.clear(); this.audioState = null

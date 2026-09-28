@@ -68,6 +68,18 @@ it('sends a paste as one line of committed text, within the contract\'s 256 char
   expect(() => parseStreamInput(textMessage('a'.repeat(300))!)).not.toThrow()
 })
 
+it('says what is held as the page re-asserts it: keys by their code, and the pointer\'s buttons', () => {
+  const held = new HeldInput()
+  expect(held.held()).toEqual({ keys: [], buttons: 0 })
+  held.note(keyMessage('down', { ...none, key: ' ', code: 'Space', repeat: false })!)
+  held.note(keyMessage('down', { ...none, key: 'q', code: '', repeat: false })!)
+  held.note(pointerMessage('down', BOX, at(800, 600, { button: 2, buttons: 2 }))!)
+  expect(held.held(), 'a key with no code is never re-asserted').toEqual({ keys: ['Space'], buttons: 2 })
+  held.note(keyMessage('up', { ...none, key: ' ', code: 'Space', repeat: false })!)
+  held.note(pointerMessage('up', BOX, at(800, 600, { button: 2, buttons: 0 }))!)
+  expect(held.held()).toEqual({ keys: [], buttons: 0 })
+})
+
 it('remembers what is held and releases exactly that: keys, and the press with its own button', () => {
   const held = new HeldInput()
   held.note(keyMessage('down', { ...none, key: ' ', code: 'Space', repeat: false })!)

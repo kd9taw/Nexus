@@ -246,6 +246,39 @@ it('S7: a blind picture lets go of PTT, and no hold is possible without an open 
   expect(live.peer.channel('ptt').sent.filter(m => m.type === 'pttHold')).toHaveLength(count)
 })
 
+it('THE DEAD-MAN: re-asserts what the picture holds every 100 ms on ptt, from 0 each stream, and nothing once let go', async () => {
+  const h = harness()
+  await h.live()
+  const ptt = h.peer.channel('ptt'), control = h.peer.channel('control')
+  const helds = () => ptt.sent.filter(m => m.type === 'held')
+  h.link.holdInput(['Space'], 0)
+  expect(helds()).toEqual([{ type: 'held', keys: ['Space'], buttons: 0, seq: 0 }])
+  for (let i = 0; i < 5; i++) { h.video.present(3000 + i); h.advance(100) }
+  expect(helds().map(m => m.seq)).toEqual([0, 1, 2, 3, 4, 5])
+  // A change goes at once; the same set again does not.
+  h.link.holdInput(['Space'], 1)
+  h.link.holdInput(['Space'], 1)
+  expect(helds().slice(6)).toEqual([{ type: 'held', keys: ['Space'], buttons: 1, seq: 6 }])
+  // Never past the contract's 16 keys, and never on `control`.
+  h.link.holdInput(Array.from({ length: 20 }, (_, i) => `Key${String.fromCharCode(65 + i)}`), 0)
+  expect(last(helds())!.keys).toHaveLength(16)
+  expect(control.sent.filter(m => m.type === 'held')).toEqual([])
+  // Nothing held: nothing sent.
+  h.link.holdInput([], 0)
+  const count = helds().length
+  h.advance(1000)
+  expect(helds()).toHaveLength(count)
+  // A new stream counts from 0 again, and an ended one stops re-asserting.
+  h.link.holdInput(['KeyA'], 0)
+  h.link.close()
+  const ended = ptt.sent.length
+  h.advance(500)
+  expect(ptt.sent).toHaveLength(ended)
+  await h.live()
+  h.link.holdInput(['KeyA'], 0)
+  expect(h.peer.channel('ptt').sent).toEqual([{ type: 'held', keys: ['KeyA'], buttons: 0, seq: 0 }])
+})
+
 it('sends Stop in the contract\'s shape on the control channel, past every budget', async () => {
   const h = harness()
   expect(h.link.stopTransmit(TARGET)).toBe(false)

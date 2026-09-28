@@ -119,6 +119,11 @@ export class HeldInput {
   }
   /** Is a button held on the picture right now? Only then may a drag go past its edge. */
   get dragging(): boolean { return this.pointer !== null }
+  /** What is held right now, as the page re-asserts it: each key by its code (a key without one is
+   *  never re-asserted, so the shack lets it go at the gap), and the pointer's buttons. */
+  held(): { keys: string[]; buttons: number } {
+    return { keys: [...this.keys.values()].map(key => key.code).filter(code => code !== ''), buttons: this.pointer?.buttons ?? 0 }
+  }
   /** Everything still held, as the releases that end it, and forget it all. */
   releaseAll(): (StreamKey | StreamPointer)[] {
     const releases: (StreamKey | StreamPointer)[] = [...this.keys.values()].map(key => ({ ...key, action: 'up' as const, repeat: false }))
