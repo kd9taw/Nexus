@@ -246,36 +246,6 @@ it('S7: a blind picture lets go of PTT, and no hold is possible without an open 
   expect(live.peer.channel('ptt').sent.filter(m => m.type === 'pttHold')).toHaveLength(count)
 })
 
-it('keeps the station\'s word on whether Space is its PTT key, and drops it at each input that could move focus', async () => {
-  const h = harness()
-  await h.live()
-  const control = h.peer.channel('control')
-  const word = () => h.link.getSnapshot().pttKey
-  expect(word(), 'nothing said yet: Space is no PTT key').toBe(false)
-  control.deliver({ type: 'pttKey', armed: true })
-  expect(word()).toBe(true)
-  // Anything but the contract's shape changes nothing.
-  for (const bad of [{ type: 'pttKey', armed: 'yes' }, { type: 'pttKey' }, { type: 'pttKey', armed: false, extra: 1 }]) control.deliver(bad)
-  expect(word()).toBe(true)
-  // A move or a wheel moves no focus at the shack.
-  h.link.input({ type: 'pointer', action: 'move', x: 0.5, y: 0.5, button: -1, buttons: 0, modifiers: 0, pointerType: 'mouse', clicks: 0 })
-  h.link.input({ type: 'wheel', x: 0.5, y: 0.5, deltaX: 0, deltaY: 10, deltaMode: 0, modifiers: 0 })
-  expect(word()).toBe(true)
-  // A press might put focus in a field there, where Space is typing: no PTT key until the station answers.
-  h.link.input({ type: 'pointer', action: 'down', x: 0.5, y: 0.5, button: 0, buttons: 1, modifiers: 0, pointerType: 'mouse', clicks: 1 })
-  expect(word()).toBe(false)
-  control.deliver({ type: 'pttKey', armed: true })
-  h.link.input({ type: 'key', action: 'down', key: 'Enter', code: 'Enter', modifiers: 0, repeat: false })
-  expect(word()).toBe(false)
-  control.deliver({ type: 'pttKey', armed: true })
-  h.link.input({ type: 'text', text: 'W1AW' })
-  expect(word()).toBe(false)
-  // And it ends with the stream.
-  control.deliver({ type: 'pttKey', armed: true })
-  h.link.close()
-  expect(word()).toBe(false)
-})
-
 it('sends Stop in the contract\'s shape on the control channel, past every budget', async () => {
   const h = harness()
   expect(h.link.stopTransmit(TARGET)).toBe(false)
@@ -366,7 +336,7 @@ it('an operator\'s own close tells the station, lets go of PTT, and returns to i
   h.link.close()
   expect(last(h.signals)?.payload).toEqual({ kind: 'close' })
   expect(last(ptt.sent)).toMatchObject({ type: 'pttRelease' })
-  expect(h.link.getSnapshot()).toEqual({ phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null, pttKey: false })
+  expect(h.link.getSnapshot()).toEqual({ phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null })
   expect(h.video.srcObject).toBeNull()
   const sent = control.sent.length + ptt.sent.length
   h.advance(5000)

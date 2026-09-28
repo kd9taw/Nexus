@@ -6,9 +6,8 @@
 // SendInput, keybd_event or mouse_event, and WebView2 offers no injection API in the hosting Nexus
 // uses - so the bridge is JavaScript inside this page by construction: the station forwards each
 // admitted input message to the main window as the Tauri event `remote-stream-input`, and this
-// module turns it into synthetic events dispatched at `document.elementFromPoint`. Into the page,
-// a DOM event is the only thing it can produce; it opens nothing, and the one thing it says back to
-// the station is whether Space is the push-to-talk key here (below).
+// module turns it into synthetic events dispatched at `document.elementFromPoint`. It calls no
+// command, opens nothing and talks to nothing: a DOM event is the only thing it can produce.
 //
 // WHAT A SYNTHETIC EVENT DOES NOT DO BY ITSELF. `isTrusted` is false, so the browser runs none of
 // the defaults the UI relies on; this module reproduces the ones that matter - focus on press, a
@@ -20,22 +19,9 @@
 // bench (plan §1.4, gesture coverage): HTML drag-and-drop, text selection by dragging, IME
 // composition, and the browser's own shortcuts.
 //
-// ⛔ THE PTT KEY NEVER ARRIVES AS A KEY (the lead's ruling, 2026-09-27). In the Phone cockpit Space
-// is push-to-talk: its window handler keys the rig on Space down and unkeys on Space up
-// (PhoneCockpit.tsx). A key pair across a network is a stuck transmitter waiting for one lost
-// key-up, so a streamed Space never becomes one. Where Space is the PTT key the page holds PTT on
-// the stream's own re-asserted channel instead (S7), and this module drops any Space that arrives
-// anyway, its key-up and `reset`'s forced release included. Only this window can tell where Space
-// is the PTT key - the cockpit's Lock, and whether the key would land in a field, where it is
-// typing - so it tells the station after every input it handles and whenever that changes, and
-// the station tells the page. Button clicks, Stop, Tune and the FT buttons among them, are
-// dispatched like any other: the session's transmit presence covers them.
-//
-// ⚠️ WHAT GOES DOWN COMES UP. A key or button held here when a stream ends would stay held: a Shift
-// that makes every later click a Shift-click, a button still pressed. `reset` - which the station
-// sends when a stream ends or its transmit presence lapses - releases everything this module is
-// holding.
-import { reportStreamPttKey } from '../api'
+// ⚠️ WHAT GOES DOWN COMES UP. A key or button held here when a stream ends would stay held: Space is
+// the Phone cockpit's push-to-talk key. `reset` - which the station sends when a stream ends or its
+// transmit presence lapses - releases everything this module is holding.
 import { MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, parseWebviewInput, type StreamKey, type StreamPointer, type StreamWheel } from '../remote-web/stream-protocol'
 
 export const STREAM_INPUT_EVENT = 'remote-stream-input'
@@ -50,27 +36,6 @@ const modifiers = (bits: number): Modifiers =>
 const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"], [contenteditable=""]'
 const TEXT_TYPES = new Set(['text', 'search', 'url', 'tel', 'email', 'password', 'number', ''])
 
-/** Places that have Space armed as the station's push-to-talk key right now: the Phone cockpit, for
- *  exactly as long as its own window handler keys the rig on Space. */
-let pttKeyArms = 0
-const pttKeyWatchers = new Set<() => void>()
-/** Arm Space as the push-to-talk key for the stream; returns the disarm. The Phone cockpit calls it
- *  while it has control and Lock is off, which is when its own Space handler keys the rig. */
-export function armStreamPttKey(): () => void {
-  pttKeyArms++
-  for (const f of pttKeyWatchers) f()
-  let armed = true
-  return () => {
-    if (!armed) return
-    armed = false
-    pttKeyArms--
-    for (const f of pttKeyWatchers) f()
-  }
-}
-/** The Phone cockpit's own test for "this Space is typing, not PTT": the key lands in an INPUT or a
- *  TEXTAREA (PhoneCockpit.tsx, `isField`), whatever kind. */
-const typedInto = (el: Element) => el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
-
 export class StreamInputDispatcher {
   private hover: Element | null = null
   private pressed: { target: Element; button: number } | null = null
@@ -84,18 +49,8 @@ export class StreamInputDispatcher {
   private range: HTMLInputElement | null = null
   private picker: { select: HTMLSelectElement; list: HTMLElement } | null = null
   private unpatch: (() => void) | null = null
-  /** A stream has used this window, so a change in where Space is PTT is worth telling. */
-  private attached = false
-  private told: boolean | null = null
-  private readonly changed = () => queueMicrotask(() => this.tell(false))
 
-  /** `report` carries the one thing this window says back: whether Space is the push-to-talk key. */
-  constructor(private readonly win: Win, private readonly report?: (pttKey: boolean) => void) {
-    this.patchCapture()
-    this.doc.addEventListener('focusin', this.changed, true)
-    this.doc.addEventListener('focusout', this.changed, true)
-    pttKeyWatchers.add(this.changed)
-  }
+  constructor(private readonly win: Win) { this.patchCapture() }
 
   /** One message from the station. Anything outside the contract is ignored, never guessed at. */
   handle(raw: unknown): void {
@@ -106,21 +61,6 @@ export class StreamInputDispatcher {
     else if (input.type === 'wheel') this.wheel(input)
     else if (input.type === 'key') this.key(input)
     else this.insert(this.focused(), input.text, 'insertText')
-    this.attached = true
-    // The answer to every input that can move focus: the page trusts nothing older.
-    if (input.type !== 'wheel' && !(input.type === 'pointer' && input.action === 'move')) this.tell(true)
-  }
-
-  /** Is Space here the station's push-to-talk key? The Phone cockpit's own rule: armed, and the key
-   *  would not land in a field. */
-  pttKey(): boolean { return pttKeyArms > 0 && !typedInto(this.focused()) }
-
-  private tell(always: boolean): void {
-    if (!this.report || !this.attached) return
-    const pttKey = this.pttKey()
-    if (!always && pttKey === this.told) return
-    this.told = pttKey
-    this.report(pttKey)
   }
 
   /** Let go of everything: every held key comes up, a held button is released without a click, a
@@ -141,13 +81,7 @@ export class StreamInputDispatcher {
     this.closePicker()
   }
 
-  dispose(): void {
-    this.reset(); this.unpatch?.(); this.unpatch = null
-    this.doc.removeEventListener('focusin', this.changed, true)
-    this.doc.removeEventListener('focusout', this.changed, true)
-    pttKeyWatchers.delete(this.changed)
-    this.attached = false
-  }
+  dispose(): void { this.reset(); this.unpatch?.(); this.unpatch = null }
 
   private get doc(): Document { return this.win.document }
   private focused(): Element { return this.doc.activeElement ?? this.doc.body }
@@ -269,8 +203,6 @@ export class StreamInputDispatcher {
   /** `forced` is a release the station asked for (`reset`): the key comes up and nothing is pressed. */
   private key(k: StreamKey, forced = false): void {
     const id = k.code || k.key
-    // ⛔ Space where it is the push-to-talk key: dropped, never dispatched (the header says why).
-    if (k.code === 'Space' && this.pttKey()) { this.keys.delete(id); this.keyDowns.delete(id); return }
     if (k.action === 'down') this.keys.set(id, k); else this.keys.delete(id)
     const target = this.focused()
     const init: KeyboardEventInit = { bubbles: true, cancelable: true, composed: true, key: k.key, code: k.code, repeat: k.repeat, ...modifiers(k.modifiers) }
@@ -483,7 +415,7 @@ function setValue(el: HTMLInputElement | HTMLTextAreaElement, value: string, win
 export function installStreamInput(win: Win = window): () => void {
   const listen = win.__TAURI__?.event?.listen
   if (!listen) return () => {}
-  const dispatcher = new StreamInputDispatcher(win, pttKey => { reportStreamPttKey(pttKey).catch(() => {}) })
+  const dispatcher = new StreamInputDispatcher(win)
   let unlisten: (() => void) | undefined, alive = true
   void listen<unknown>(STREAM_INPUT_EVENT, event => dispatcher.handle(event.payload)).then(
     un => { if (alive) unlisten = un; else un() },

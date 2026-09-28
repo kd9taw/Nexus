@@ -98,10 +98,10 @@ export function textMessage(text: string): StreamText | null {
 }
 
 /** What this page has pressed at the shack and not yet released. A key or button that went DOWN
- *  in Nexus's window has to come UP there too, whatever happens here: a key-up this page never saw -
- *  focus moved while it was held - would otherwise leave a Shift or a button held at the shack. So
- *  every release the page did not see is sent the moment the picture loses focus. (The PTT key is
- *  never among them: it is held on its own channel, never sent as a key.) */
+ *  in Nexus's window has to come UP there too, whatever happens here: Space is the Phone cockpit's
+ *  push-to-talk key, and a key-up this page never saw - focus moved while it was held - would
+ *  otherwise leave the rig keyed until the station's own backstops caught it. So every release the
+ *  page did not see is sent the moment the picture loses focus. */
 export class HeldInput {
   private keys = new Map<string, StreamKey>()
   private pointer: StreamPointer | null = null

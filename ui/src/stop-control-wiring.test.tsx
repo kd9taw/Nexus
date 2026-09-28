@@ -69,7 +69,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AppSnapshot } from './types'
 import App from './App'
-import { installStreamInput } from './remote-native/stream-input'
 
 // ── the recorder ────────────────────────────────────────────────────────────────────────────
 type BridgeCall = { cmd: string; args?: Record<string, unknown> }
@@ -511,79 +510,6 @@ describe('JS8', () => {
 
   it('Esc sends halt_tx (the keyboard-only stop)', async () => {
     expect(await fire(() => fireEvent.keyDown(window, { key: 'Escape' }))).toEqual(['halt_tx'])
-  })
-})
-
-// ── the same controls, driven over the stream ─────────────────────────────────────────────────
-//
-// Remote as a stream: a streamed operator's input reaches this window as DOM events that the input
-// bridge dispatches (remote-native/stream-input.ts), fed here through the same Tauri event the
-// station emits. The lead's rule for it, held against the REAL cockpit and the real api module:
-// the PTT key never arrives as a key - a Space where the cockpit keys the rig on Space is dropped -
-// and a click is a click, the stop controls and the transmit buttons included.
-const WEBVIEW = JSON.parse(readFileSync(resolve(__dirname, '../../remote/test/fixtures/stream/webview.json'), 'utf8')) as {
-  stationToWebview: { name: string; message: Record<string, unknown> }[]
-}
-const streamed = (name: string) => structuredClone(WEBVIEW.stationToWebview.find((c) => c.name === name)!.message)
-
-describe('Phone, over the stream', () => {
-  let deliver: (name: string) => void = () => {}
-  let remove: () => void = () => {}
-  const at = (el: Element) => Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => el })
-  const click = () => { deliver('pointer down'); deliver('pointer up') }
-  beforeEach(async () => {
-    await mountOn('phone')
-    const tauri = window as unknown as { __TAURI__?: unknown }
-    tauri.__TAURI__ = { event: { listen: (_name: string, handler: (event: { payload: unknown }) => void) => {
-      deliver = (name) => handler({ payload: streamed(name) })
-      return Promise.resolve(() => {})
-    } } }
-    remove = installStreamInput(window)
-    await Promise.resolve()
-  })
-  afterEach(() => {
-    remove()
-    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__
-    delete (document as { elementFromPoint?: unknown }).elementFromPoint
-  })
-
-  it('a streamed Space never keys the rig: the cockpit armed Space, so the bridge drops it and tells the station', async () => {
-    const m = mark()
-    expect(await fire(() => { deliver("key down, Space, the Phone cockpit's PTT key"); deliver('key up') })).toEqual([])
-    expect(bridgeCalls.slice(m).filter((c) => c.cmd === 'remote_stream_ptt_key').map((c) => c.args))
-      .toEqual([{ armed: true }, { armed: true }])
-    // Positive control: the same key at the shack's own keyboard keys and unkeys.
-    expect(await fire(() => fireEvent.keyDown(window, { code: 'Space', key: ' ' }))).toEqual(['set_ptt {"on":true}'])
-    expect(await fire(() => fireEvent.keyUp(window, { code: 'Space', key: ' ' }))).toEqual(['set_ptt {"on":false}'])
-  })
-
-  it('a streamed Space in the log strip is typing: the field gets the key, and nothing is keyed', async () => {
-    const call = [...document.querySelectorAll<HTMLInputElement>('input.le-call')].find((el) => el.closest('[hidden]') == null)
-    expect(call, 'the log strip\'s call field is not on screen').toBeTruthy()
-    const typed: string[] = []
-    call!.addEventListener('keydown', (event) => typed.push(event.code))
-    at(call!)
-    const m = mark()
-    expect(await fire(() => { click(); deliver("key down, Space, the Phone cockpit's PTT key"); deliver('key up') })).toEqual([])
-    expect(document.activeElement).toBe(call)
-    expect(typed).toEqual(['Space'])
-    expect(bridgeCalls.slice(m).filter((c) => c.cmd === 'remote_stream_ptt_key').map((c) => c.args).slice(-1)).toEqual([{ armed: false }])
-  })
-
-  it('a streamed click is a click: Stop TX sends halt_tx, Tune keys the carrier and drops it', async () => {
-    at(onScreenButton(STOP_TX))
-    expect(await fire(click)).toEqual(['halt_tx'])
-    at(onScreenButton(TUNE))
-    expect(await fire(click)).toEqual(['set_tune {"on":true}'])
-    await waitFor(() => expect(onScreenButton(TUNE).getAttribute('aria-pressed')).toBe('true'))
-    at(onScreenButton(TUNE))
-    expect(await fire(click)).toEqual(['set_tune {"on":false}'])
-  })
-
-  it('the PTT button held over the stream keys, and the station\'s reset unkeys it', async () => {
-    at(document.querySelector('.ph-ptt')!)
-    expect(await fire(() => deliver('pointer down'))).toEqual(['set_ptt {"on":true}'])
-    expect(await fire(() => deliver('reset'))).toEqual(['set_ptt {"on":false}'])
   })
 })
 

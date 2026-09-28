@@ -4,13 +4,12 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { useState } from 'react'
 import { cleanup, render, screen, within } from '@testing-library/react'
-import { armStreamPttKey, installStreamInput, STREAM_INPUT_EVENT, STREAM_POINTER_ID, StreamInputDispatcher } from './stream-input'
+import { installStreamInput, STREAM_INPUT_EVENT, STREAM_POINTER_ID, StreamInputDispatcher } from './stream-input'
 
 // THE CONTRACT: what the station hands this window, from the files its Rust side is tested against.
 type Case = { name: string; message: Record<string, unknown> }
 const WEBVIEW = JSON.parse(readFileSync(resolve(process.cwd(), '../remote/test/fixtures/stream/webview.json'), 'utf8')) as Record<string, Case[]>
 const byName = (name: string) => structuredClone(WEBVIEW.stationToWebview.find(c => c.name === name)!.message)
-const SPACE_DOWN = "key down, Space, the Phone cockpit's PTT key", SPACE_UP = 'key up'
 
 // jsdom never lays out: `elementFromPoint` does not exist and every box is empty. Each test says
 // which element sits under the pointer, and gives the elements it measures a box.
@@ -142,7 +141,7 @@ it('presses a focused button with Space on key-up, unless the page cancelled the
   button.focus()
   d.handle(key('up', ' ', 'Space'))
   expect(onClick).toHaveBeenCalledTimes(1)
-  // A window handler that takes Space for itself cancels the key-down.
+  // A window handler that takes Space for itself (the Phone cockpit's PTT) cancels the key-down.
   const take = (event: KeyboardEvent) => { if (event.code === 'Space') event.preventDefault() }
   window.addEventListener('keydown', take)
   try {
@@ -250,98 +249,38 @@ it('fires enter and leave as the pointer moves from one control to another', () 
   expect(log).toEqual(['enter A', 'leave A', 'enter B'])
 })
 
-it('reset releases what the stream was holding: a held key comes up, the button comes up, and no click fires', () => {
+it('reset releases what the stream was holding: Space comes up, the button comes up, and no click fires', () => {
   const windowKeys: string[] = [], onClick = vi.fn()
   const listen = (event: KeyboardEvent) => windowKeys.push(`${event.type} ${event.code}`)
   window.addEventListener('keydown', listen); window.addEventListener('keyup', listen)
   try {
-    render(<button onClick={onClick}>Tune</button>)
-    under = screen.getByRole('button', { name: 'Tune' })
+    render(<button onClick={onClick}>PTT</button>)
+    under = screen.getByRole('button', { name: 'PTT' })
     const d = bridge()
-    // A Shift left down would make every later click at the shack a Shift-click.
-    d.handle(key('down', 'Shift', 'ShiftLeft', 1))
+    // The Phone cockpit keys on Space down and unkeys on Space up, both on the window.
+    d.handle(byName("key down, Space, the Phone cockpit's PTT key"))
     d.handle(pointer('down'))
     d.handle({ type: 'reset' })
-    expect(windowKeys).toEqual(['keydown ShiftLeft', 'keyup ShiftLeft'])
+    expect(windowKeys).toEqual(['keydown Space', 'keyup Space'])
     expect(onClick, 'a released press is not a click').not.toHaveBeenCalled()
     // Control: nothing left to release, so a second reset sends nothing.
     d.handle({ type: 'reset' })
     expect(windowKeys).toHaveLength(2)
-    // Space held ON the button when the stream ends (an ordinary key: nothing here has it as
-    // push-to-talk): the press is abandoned, as a browser abandons it when the window loses focus
-    // mid-press - it never becomes a click.
-    screen.getByRole('button', { name: 'Tune' }).focus()
-    d.handle(byName(SPACE_DOWN))
+    // Space held ON the button when the stream ends: the press is abandoned, as a browser abandons it
+    // when the window loses focus mid-press - it never becomes a click.
+    screen.getByRole('button', { name: 'PTT' }).focus()
+    d.handle(byName("key down, Space, the Phone cockpit's PTT key"))
     d.handle({ type: 'reset' })
     expect(windowKeys.slice(2)).toEqual(['keydown Space', 'keyup Space'])
     expect(onClick).not.toHaveBeenCalled()
   } finally { window.removeEventListener('keydown', listen); window.removeEventListener('keyup', listen) }
 })
 
-it('THE PTT KEY NEVER ARRIVES AS A KEY: where Space is push-to-talk, no Space key event is dispatched, however it comes', () => {
-  const windowKeys: string[] = []
-  const listen = (event: KeyboardEvent) => windowKeys.push(`${event.type} ${event.code}`)
-  window.addEventListener('keydown', listen); window.addEventListener('keyup', listen)
-  // What the Phone cockpit does while its own window handler keys the rig on Space.
-  const disarm = armStreamPttKey()
-  try {
-    const d = bridge()
-    d.handle(byName(SPACE_DOWN)); d.handle(byName(SPACE_UP))
-    d.handle({ ...byName(SPACE_DOWN), modifiers: 1 })
-    d.handle({ type: 'reset' })
-    expect(windowKeys, 'each of these would have keyed the rig through the cockpit').toEqual([])
-    // Positive control: in a field Space is typing, and the same messages type a space there.
-    const field = document.body.appendChild(document.createElement('input'))
-    field.focus()
-    d.handle(byName(SPACE_DOWN)); d.handle(byName(SPACE_UP))
-    expect(windowKeys).toEqual(['keydown Space', 'keyup Space'])
-    expect(field.value).toBe(' ')
-    // And disarmed (Lock on, or another cockpit) Space is an ordinary key everywhere.
-    disarm()
-    field.blur()
-    d.handle(byName(SPACE_DOWN)); d.handle(byName(SPACE_UP))
-    expect(windowKeys.slice(2)).toEqual(['keydown Space', 'keyup Space'])
-  } finally { disarm(); window.removeEventListener('keydown', listen); window.removeEventListener('keyup', listen) }
-})
-
-it('tells the station whether Space is push-to-talk here: after every input it handles, and on a change once a stream has used it', async () => {
-  const told: boolean[] = []
-  const d = (dispatcher = new StreamInputDispatcher(window, pttKey => told.push(pttKey)))
-  const disarm = armStreamPttKey()
-  try {
-    await Promise.resolve()
-    expect(told, 'no stream has used this window yet: nothing to tell').toEqual([])
-    const field = document.body.appendChild(document.createElement('input'))
-    under = field
-    d.handle(pointer('down'))
-    expect(told, 'the press put focus in a field, where Space is typing').toEqual([false])
-    d.handle(pointer('move'))
-    d.handle(byName('wheel'))
-    expect(told, 'a move or a wheel moves no focus, and is not answered').toEqual([false])
-    d.handle(pointer('up'))
-    expect(told, 'every other input is answered, changed or not').toEqual([false, false])
-    // Changes on their own: focus leaves the field; then the cockpit's Lock goes on.
-    field.blur()
-    await Promise.resolve()
-    expect(told).toEqual([false, false, true])
-    disarm()
-    await Promise.resolve()
-    expect(told).toEqual([false, false, true, false])
-    // A focus change that changes nothing is not told.
-    document.body.appendChild(document.createElement('button')).focus()
-    await Promise.resolve()
-    expect(told).toHaveLength(4)
-    d.handle({ type: 'reset' })
-    expect(told, 'a reset is answered too, so the page learns where it starts').toEqual([false, false, true, false, false])
-  } finally { disarm() }
-})
-
-it('listens only through the event bridge, on the contract\'s event, answers only on its one command, and undoes everything when removed', async () => {
+it('listens only through the event bridge, on the contract\'s event, and undoes everything when removed', async () => {
   expect(installStreamInput(window)).toBeTypeOf('function')
-  const handlers = new Map<string, (event: { payload: unknown }) => void>(), unlisten = vi.fn(), invoke = vi.fn(async () => null)
-  const tauri = window as unknown as { __TAURI__?: unknown; __TAURI_INTERNALS__?: unknown }
+  const handlers = new Map<string, (event: { payload: unknown }) => void>(), unlisten = vi.fn()
+  const tauri = window as unknown as { __TAURI__?: unknown }
   tauri.__TAURI__ = { event: { listen: (name: string, handler: (event: { payload: unknown }) => void) => { handlers.set(name, handler); return Promise.resolve(unlisten) } } }
-  tauri.__TAURI_INTERNALS__ = { invoke }
   try {
     const remove = installStreamInput(window)
     await Promise.resolve()
@@ -352,10 +291,8 @@ it('listens only through the event bridge, on the contract\'s event, answers onl
     handlers.get(STREAM_INPUT_EVENT)!({ payload: pointer('down') })
     handlers.get(STREAM_INPUT_EVENT)!({ payload: pointer('up') })
     expect(onClick).toHaveBeenCalledTimes(1)
-    expect(invoke.mock.calls, 'one answer per input, on the one command, and nothing else').toEqual([
-      ['remote_stream_ptt_key', { armed: false }], ['remote_stream_ptt_key', { armed: false }]])
     remove()
     expect(unlisten).toHaveBeenCalledTimes(1)
     expect((Element.prototype as { setPointerCapture?: unknown }).setPointerCapture, 'the capture patch is gone with it').toBeUndefined()
-  } finally { delete tauri.__TAURI__; delete tauri.__TAURI_INTERNALS__ }
+  } finally { delete tauri.__TAURI__ }
 })

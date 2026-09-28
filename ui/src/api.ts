@@ -198,9 +198,6 @@ export async function getRemoteMonitorFrame(): Promise<unknown> {
 export function publishRemoteMemoryBank(generation: string, bank: string | null): Promise<boolean> { return invoke('publish_remote_memory_bank', { generation, bank }) }
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
 export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
-/** Remote as a stream: whether Space is the push-to-talk key in this window now. The station hands it
- *  to the streaming page, which holds PTT for a Space only on this word (remote-native/stream-input.ts). */
-export function reportStreamPttKey(pttKey: boolean): Promise<void> { return invoke('remote_stream_ptt_key', { armed: pttKey }) }
 
 export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')
