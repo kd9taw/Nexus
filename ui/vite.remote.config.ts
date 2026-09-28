@@ -1,5 +1,7 @@
-// Hosted account entry and the existing Nexus workspace. Native APIs stay behind
-// the explicitly installed, restricted Remote transport; no global Tauri shim.
+// Hosted account entry: the Remote page's monitor and stream. Removal stage 3 stopped
+// mounting the old Nexus workspace, so it is no longer bundled; its code stays in the
+// tree until stage 4. Native APIs stay behind the explicitly installed, restricted
+// Remote transport; no global Tauri shim.
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'node:fs'

@@ -657,15 +657,17 @@ test('artifact verification rejects changed bytes, unlisted files, symlinks and 
   await verifyArtifact(scratch, ids.revision)
 })
 
-test('the hosted Nexus artifact carries its reviewed map assets and bundled dependency notices', async () => {
-  const directory = join(scratch, 'remote/staging-artifact/assets')
-  const files = Object.keys(artifact.manifest.files)
-  for (const stem of ['earth-night', 'earth-relief', 'cqzones']) {
-    assert.ok(files.some(name => name.startsWith(`assets/assets/${stem}-`)), 'existing Nexus map assets must travel in the artifact')
-  }
-  const notices = await readFile(join(directory, 'remote-licenses.txt'), 'utf8')
-  for (const name of ['react 18.3.1', '@radix-ui/react-dialog', 'three ', 'react-globe.gl', 'Copyright (c) 2024 HB9HIL', 'Copyright (c) 2022 WorkOS']) {
-    assert.ok(notices.includes(name), `bundled notice must cover ${name}`)
+// REMOVAL STAGE 3 (the change plan's §4.4): the Remote page no longer mounts the old workspace, so the
+// hosted build no longer bundles it or what only it used: the map panes' assets (earth-night,
+// earth-relief, cqzones), the globe (three, react-globe.gl) and the Radix dialogs. Their bundled notices
+// go with them, because `ui/remote-licenses.ts` lists only the packages in the hosted chunks, so the
+// assertions on them retire with the workspace. What the page still bundles still carries its notice,
+// matched as the bundled list's own `name version` line: NOTICE's prose names packages too, and a
+// substring match was satisfied by that prose for packages the build had dropped.
+test('the hosted Nexus artifact carries the notices of what it bundles', async () => {
+  const notices = await readFile(join(scratch, 'remote/staging-artifact/assets/remote-licenses.txt'), 'utf8')
+  for (const name of ['react 18.3.1', 'react-dom 18.3.1', '@auth0/auth0-spa-js 2.24.1']) {
+    assert.ok(notices.includes(`\n${name}\n`), `bundled notice must cover ${name}`)
   }
 })
 

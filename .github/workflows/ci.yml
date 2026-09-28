@@ -434,9 +434,11 @@ jobs:
   # versions plus 11 feature scenarios, each doing PKCE, local device approval,
   # observation and viewport checks — and node:test runs tests within a file in series.
   #
-  # REMOVAL STAGE 3 (the change plan's §4.4) retired the 26 that drove the old workspace,
-  # which the Remote page no longer offers: the suite is `monitor` and `stream` now
-  # (remote/test/browser.test.mjs lists what retired), a few minutes in ONE shard. The
+  # REMOVAL STAGE 3 (the change plan's §4.4) retired the 27 that drove the old workspace,
+  # which the Remote page no longer offers (every scenario but `stream`): the suite is
+  # `stream` and a new `monitor` scenario now (sign-in, pairing, device approval and the
+  # observer view at every layout, the first half of each retired one;
+  # remote/test/browser.test.mjs lists what retired), a few minutes in ONE shard. The
   # matrix stays so the shard guard below keeps meaning something if it ever grows again.
   #
   # The count is stated LITERALLY below and must equal the matrix length. `strategy.job-total`
