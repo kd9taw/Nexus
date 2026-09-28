@@ -143,6 +143,32 @@ it('THE STOP LINE: Stop TX is on screen in every state, enabled whenever a path 
   expect(stopButton().disabled).toBe(true)
 })
 
+it('Stop, outside the picture, still reaches the station when the picture is frozen and after the lease has lapsed', async () => {
+  const v = view({ ...controlling, stopAvailable: true })
+  const stop = () => screen.getByRole('button', { name: 'Stop TX' }) as HTMLButtonElement
+  expect(stop().closest('.remote-stream-stage'), 'Stop is not part of the picture').toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control')
+  const stops = () => control.sent.filter(m => m.type === 'stopTransmit')
+  // Blind: no new frame for longer than the limit. The station no longer lets this browser key
+  // anything, and Stop still goes both ways.
+  v.tick(2500)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+  expect(v.link.getSnapshot().phase).toBe('stalled')
+  fireEvent.click(stop())
+  expect(stops()).toEqual([expect.objectContaining({ stationBootId: BOOT, leaseId: LEASE, transmitEpoch: EPOCH })])
+  expect(v.operations.stopTransmit).toHaveBeenCalledTimes(1)
+  // The lease lapses. The stream goes with it, but the station still issues this browser its stop
+  // token, and the socket carries the Stop on it.
+  v.set({ state: state('available', { transmitEpoch: EPOCH }) })
+  expect(v.link.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'notController' })
+  expect(stop().disabled).toBe(false)
+  fireEvent.click(stop())
+  expect(v.operations.stopTransmit).toHaveBeenCalledTimes(2)
+  expect(stops(), 'the dead stream carried nothing more').toHaveLength(1)
+})
+
 it('A2 (the page\'s half): only input aimed at the focused picture is sent; the rest of the page sends nothing', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
