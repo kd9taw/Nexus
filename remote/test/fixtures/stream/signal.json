@@ -109,7 +109,7 @@
         "sessionId": "10000000-0000-4000-8000-000000000001",
         "payload": {
           "kind": "answer",
-          "sdp": "v=0\r\no=str0m-3940214468 1966436405 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=fingerprint:sha-256 F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A:F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A\r\na=ice-options:trickle\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:0\r\na=sendonly\r\na=msid:nexus video\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc-group:FID 1135462385 3027416283\r\na=ssrc:1135462385 cname:nexus\r\na=ssrc:3027416283 cname:nexus\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+          "sdp": "v=0\r\no=str0m-0.24.0 4389733109591419431 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS u1EFEIkbR3zlQzckgmuCzd2oxM3Pht\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendonly\r\na=msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=rtcp-mux\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc:1337055881 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:1337055881 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc:3730304321 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:3730304321 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc-group:FID 1337055881 3730304321\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
         }
       }
     },
@@ -120,7 +120,7 @@
         "sessionId": "10000000-0000-4000-8000-000000000001",
         "payload": {
           "kind": "candidate",
-          "candidate": "candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0",
+          "candidate": "candidate:fffe7f645f9a30b0ac4977cf 1 udp 1686109951 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0 ufrag cgyb7Q0Lvq0tP3Ko",
           "sdpMid": "0"
         }
       }
@@ -194,6 +194,15 @@
         "sessionId": "10000000-0000-4000-8000-000000000001",
         "streaming": false,
         "reason": "streamClosed"
+      }
+    },
+    {
+      "name": "refused: remoteOff",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "remoteOff"
       }
     }
   ],
@@ -204,7 +213,7 @@
         "type": "streamSignal",
         "payload": {
           "kind": "answer",
-          "sdp": "v=0\r\no=str0m-3940214468 1966436405 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=fingerprint:sha-256 F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A:F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A\r\na=ice-options:trickle\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:0\r\na=sendonly\r\na=msid:nexus video\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc-group:FID 1135462385 3027416283\r\na=ssrc:1135462385 cname:nexus\r\na=ssrc:3027416283 cname:nexus\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+          "sdp": "v=0\r\no=str0m-0.24.0 4389733109591419431 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS u1EFEIkbR3zlQzckgmuCzd2oxM3Pht\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendonly\r\na=msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=rtcp-mux\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc:1337055881 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:1337055881 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc:3730304321 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:3730304321 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc-group:FID 1337055881 3730304321\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
         }
       }
     },
@@ -214,7 +223,7 @@
         "type": "streamSignal",
         "payload": {
           "kind": "candidate",
-          "candidate": "candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0",
+          "candidate": "candidate:fffe7f645f9a30b0ac4977cf 1 udp 1686109951 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0 ufrag cgyb7Q0Lvq0tP3Ko",
           "sdpMid": "0"
         }
       }
@@ -280,6 +289,14 @@
         "type": "streamState",
         "streaming": false,
         "reason": "streamClosed"
+      }
+    },
+    {
+      "name": "refused: remoteOff",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "remoteOff"
       }
     }
   ],
@@ -319,7 +336,7 @@
         "leaseId": "10000000-0000-4000-8000-000000000003",
         "payload": {
           "kind": "answer",
-          "sdp": "v=0\r\no=str0m-3940214468 1966436405 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=fingerprint:sha-256 F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A:F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A\r\na=ice-options:trickle\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:0\r\na=sendonly\r\na=msid:nexus video\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc-group:FID 1135462385 3027416283\r\na=ssrc:1135462385 cname:nexus\r\na=ssrc:3027416283 cname:nexus\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+          "sdp": "v=0\r\no=str0m-0.24.0 4389733109591419431 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS u1EFEIkbR3zlQzckgmuCzd2oxM3Pht\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendonly\r\na=msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=rtcp-mux\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc:1337055881 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:1337055881 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc:3730304321 cname:cSysUejg1pTtSt5FYBFb\r\na=ssrc:3730304321 msid:u1EFEIkbR3zlQzckgmuCzd2oxM3Pht Sgpi0YzdktJMYdA7KFjLyDJMDkAcvE\r\na=ssrc-group:FID 1337055881 3730304321\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:cgyb7Q0Lvq0tP3Ko\r\na=ice-pwd:cpqoykX6uTqEeBMlZ6Qz6j\r\na=ice-options:trickle\r\na=fingerprint:sha-256 62:5A:22:2B:44:8F:84:AE:4D:B0:95:EE:01:31:E0:A0:52:C3:42:9E:82:96:E2:BC:23:3F:3D:1A:99:C0:A8:30\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
         }
       }
     },
@@ -380,6 +397,81 @@
         "payload": {
           "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
         }
+      }
+    },
+    {
+      "name": "streamEnd without sessionId",
+      "message": {
+        "type": "streamEnd",
+        "reason": "remoteOff"
+      }
+    },
+    {
+      "name": "streamEnd without a reason",
+      "message": {
+        "type": "streamEnd",
+        "sessionId": "10000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "name": "streamEnd with a reason outside the vocabulary",
+      "message": {
+        "type": "streamEnd",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "reason": "somethingElse"
+      }
+    },
+    {
+      "name": "streamEnd with an unknown key",
+      "message": {
+        "type": "streamEnd",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "reason": "remoteOff",
+        "extra": 1
+      }
+    }
+  ],
+  "roomToStationEnd": [
+    {
+      "name": "Remote access switched off",
+      "message": {
+        "type": "streamEnd",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "reason": "remoteOff"
+      }
+    },
+    {
+      "name": "command entitlement lapsed",
+      "message": {
+        "type": "streamEnd",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "reason": "serviceAccessExpired"
+      }
+    }
+  ],
+  "roomToBrowserFromRelay": [
+    {
+      "name": "the station does not stream (it never advertised the header)",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "streamUnavailable"
+      }
+    },
+    {
+      "name": "command entitlement lapsed",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "serviceAccessExpired"
+      }
+    },
+    {
+      "name": "over the signalling budget",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "tryLater"
       }
     }
   ],

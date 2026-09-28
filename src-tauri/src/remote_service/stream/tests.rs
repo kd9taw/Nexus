@@ -457,3 +457,98 @@ fn the_contract_messages_are_taken_and_a_malformed_one_is_dropped() {
         assert!(protocol::parse_control(&bytes).is_ok(), "{}", case["name"]);
     }
 }
+
+// ----- The relay ends a stream: Remote access switched off -----
+
+/// A running stream's lane, as `StreamLane::signal` leaves it: a session thread waiting on its
+/// inbox. The stand-in thread hands back the first signal it gets.
+fn running_lane() -> (StreamLane, mpsc::Receiver<Signal>) {
+    let (signals, inbox) = mpsc::channel::<Signal>();
+    let (seen, told) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        if let Ok(signal) = inbox.recv() {
+            let _ = seen.send(signal);
+        }
+    });
+    let lane = StreamLane {
+        live: Some(Live {
+            session: SESSION.into(),
+            signals,
+            thread,
+        }),
+    };
+    (lane, told)
+}
+
+/// ★ Remote access switched off mid-stream (operator, 2026-09-27: "Within about 2 s
+/// (Recommended)", offered as "The relay tells the station to end that stream immediately"). The
+/// relay's `streamEnd` ends the session's transmit presence on the relay's own thread, at once,
+/// so a transmission halts on the radio loop's next poll whatever the session thread is doing,
+/// and the session thread is told to tear down with the relay's reason. CONTROL: until the
+/// message arrives the same transmission is not halted; and a `streamEnd` for another session
+/// ends nothing.
+#[test]
+fn the_relays_stream_end_ends_presence_and_halts_a_transmission() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    {
+        let mut e = tempo_app::engine::engine_lock(&f.station.engine);
+        e.set_operating_mode("phone", false);
+        e.set_ptt(true);
+        assert!(e.manual_ptt(), "premise: keyed");
+    }
+    let tick = now + Duration::from_millis(20);
+    assert!(
+        !tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(tick),
+        "control: halted before the relay said anything"
+    );
+    let (mut lane, told) = running_lane();
+    // Another session's end touches nothing.
+    lane.end(
+        &f.station,
+        "20000000-0000-4000-8000-000000000009",
+        StreamReason::RemoteOff,
+    );
+    assert!(
+        streaming.presence.live(tick),
+        "another session's end ended presence"
+    );
+    lane.end(&f.station, SESSION, StreamReason::RemoteOff);
+    assert!(
+        !streaming.presence.live(tick),
+        "presence outlived the relay's streamEnd"
+    );
+    assert!(
+        tempo_app::engine::engine_lock(&f.station.engine).poll_remote_transmit(tick),
+        "the station did not halt on the relay's streamEnd"
+    );
+    assert!(!tempo_app::engine::engine_lock(&f.station.engine).manual_ptt());
+    assert_eq!(
+        told.recv_timeout(Duration::from_secs(1)),
+        Ok(Signal::Close(StreamReason::RemoteOff)),
+        "the session thread was not told to end, with the relay's reason"
+    );
+}
+
+/// The page's `held` set reaches the window as it came, and only while presence is live: it is
+/// input. CONTROL: the same message with presence live is delivered.
+#[test]
+fn a_held_set_reaches_the_window_only_while_presence_is_live() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let held = br#"{"type":"held","keys":["Space"],"buttons":1,"seq":3}"#;
+    streaming.ptt(held, now);
+    assert!(f.delivered.lock().unwrap().is_empty(), "delivered blind");
+    streaming.presence.renew(&f.station, &streaming.offer, now);
+    streaming.ptt(held, now);
+    let delivered = f.delivered.lock().unwrap().clone();
+    assert_eq!(delivered.len(), 1, "control: delivered with presence");
+    assert_eq!(
+        serde_json::to_value(&delivered[0]).unwrap(),
+        serde_json::from_slice::<Value>(held).unwrap(),
+        "the window got something other than what the page sent"
+    );
+}

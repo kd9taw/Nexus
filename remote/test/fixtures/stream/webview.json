@@ -83,7 +83,7 @@
       }
     },
     {
-      "name": "key down, Space, the Phone cockpit's PTT key",
+      "name": "key down, Space (an ordinary key: the window's own handlers decide what it does)",
       "message": {
         "type": "key",
         "action": "down",
@@ -94,7 +94,7 @@
       }
     },
     {
-      "name": "key up",
+      "name": "key up, Space",
       "message": {
         "type": "key",
         "action": "up",
@@ -120,6 +120,18 @@
       "message": {
         "type": "text",
         "text": "W1AW"
+      }
+    },
+    {
+      "name": "held: keys and a button",
+      "message": {
+        "type": "held",
+        "keys": [
+          "ShiftLeft",
+          "KeyF"
+        ],
+        "buttons": 1,
+        "seq": 19
       }
     },
     {
@@ -157,6 +169,18 @@
         "modifiers": 0,
         "pointerType": "mouse",
         "clicks": 1
+      }
+    },
+    {
+      "name": "held with a key twice",
+      "message": {
+        "type": "held",
+        "keys": [
+          "Space",
+          "Space"
+        ],
+        "buttons": 0,
+        "seq": 1
       }
     }
   ]
