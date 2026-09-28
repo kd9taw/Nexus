@@ -91,6 +91,8 @@ const TX_VERBS = new Set([
   'sstv_stop',
   'stop_voice',
   'atu_tune',
+  'arm_stream_mic',
+  'release_stream_mic',
 ])
 
 /** Every transmit-path command since `mark`, rendered as `cmd` or `cmd {"key":value}` — the
@@ -235,6 +237,9 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
   if (/^(get_sstv_state|sstv_)/.test(cmd)) return sstvState
   if (/^(get_js8_state|js8_)/.test(cmd)) return js8State
   if (/^(cw_decode|get_cw_state)$/.test(cmd)) return cwDecodeResult
+  // A press through the stream arms the streamed operator's microphone over: the station armed it.
+  if (cmd === 'arm_stream_mic') return true
+  if (cmd === 'release_stream_mic') return null
   if (cmd === 'get_awards') return { achievements: [] }
   if (cmd === 'get_journey') return { firsts: [], feats: [], ladders: [] }
   if (cmd === 'app_version') return '0.0.0-test'
@@ -519,9 +524,12 @@ describe('JS8', () => {
 // Remote as a stream: a streamed operator's input reaches this window as DOM events that the input
 // bridge dispatches (remote-native/stream-input.ts), fed here through the Tauri event the station
 // emits. Held against the REAL cockpit and the real api module, the lead's rules for it: a key or a
-// click travels as itself and the cockpit decides what it means (a Space outside a field keys PTT,
-// in a field it types); and whatever the stream holds down is a re-asserted state that comes up
+// click travels as itself and the cockpit decides what it means (a Space outside a field is PTT, in
+// a field it types); and whatever the stream holds down is a re-asserted state that comes up
 // within 200 ms of the page going quiet (the dead-man), with the station's `reset` as the backstop.
+// A PTT press made this way ARMS the streamed operator's microphone over, never `set_ptt`, which
+// would key the rig on the shack's own microphone (the operator's ruling "Arms your mic"); its
+// release lets go of both.
 const WEBVIEW = JSON.parse(readFileSync(resolve(__dirname, '../../remote/test/fixtures/stream/webview.json'), 'utf8')) as {
   stationToWebview: { name: string; message: Record<string, unknown> }[]
 }
@@ -545,9 +553,11 @@ describe('Phone, over the stream', () => {
     for (let t = 0; t < ms; t += 100) { send({ type: 'held', keys, buttons, seq: seq++ }); last = performance.now(); await pause(100) }
     return last
   }
-  /** Wait for the unkey after the page went quiet, and say how long after its last re-assertion. */
+  /** A streamed press, and its release: the microphone over armed, then both let go. */
+  const ARMED = ['arm_stream_mic'], RELEASED = ['arm_stream_mic', 'set_ptt {"on":false}', 'release_stream_mic']
+  /** Wait for the release after the page went quiet, and say how long after its last re-assertion. */
   const unkeyedAfter = async (m: number, quiet: number): Promise<number> => {
-    await waitFor(() => expect(firedSince(m)).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}']))
+    await waitFor(() => expect(firedSince(m)).toEqual(RELEASED))
     return performance.now() - quiet
   }
   beforeEach(async () => {
@@ -567,11 +577,11 @@ describe('Phone, over the stream', () => {
     delete (document as { elementFromPoint?: unknown }).elementFromPoint
   })
 
-  it('a streamed Space keys PTT through the cockpit\'s own handler, stays keyed while re-asserted, and unkeys within 200 ms of the page going quiet', async () => {
+  it('a streamed Space arms the microphone over through the cockpit\'s own handler, never set_ptt, stays armed while re-asserted, and is released within 200 ms of the page going quiet', async () => {
     const m = mark()
     deliver(SPACE_DOWN)
     const quiet = await reassert(['Space'], 0, 600)
-    expect(firedSince(m), 'keyed, and held for 600 ms: still keyed').toEqual(['set_ptt {"on":true}'])
+    expect(firedSince(m), 'armed, and held for 600 ms: still armed, and never the shack\'s key').toEqual(ARMED)
     expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
   })
 
@@ -600,18 +610,21 @@ describe('Phone, over the stream', () => {
     expect(await fire(click)).toEqual(['set_tune {"on":false}'])
   })
 
-  it('the PTT button held over the stream keys, stays keyed while re-asserted, and unkeys within 200 ms of the page going quiet; reset unkeys it too', async () => {
+  it('the PTT button held over the stream arms the microphone over, never set_ptt, stays armed while re-asserted, and is released within 200 ms of the page going quiet; reset releases it too', async () => {
     at(document.querySelector('.ph-ptt')!)
     const m = mark()
     deliver('pointer down')
     const quiet = await reassert([], 1, 600)
-    expect(firedSince(m), 'keyed, and held for 600 ms: still keyed').toEqual(['set_ptt {"on":true}'])
+    expect(firedSince(m), 'armed, and held for 600 ms: still armed, and never the shack\'s key').toEqual(ARMED)
     expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
-    // The backstop: a stream's end or a lapse of presence releases it at once.
+    // The backstop: a stream's end or a lapse of presence releases it at once. The shack's key is
+    // let go in the same dispatch; the over's arm and then its release follow on the cockpit's
+    // chain, in that order, so the release can never overtake the arm it ends.
     const again = mark()
     deliver('pointer down')
     send({ type: 'reset' })
-    expect(firedSince(again)).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}'])
+    expect(firedSince(again)).toEqual(['set_ptt {"on":false}'])
+    await waitFor(() => expect(firedSince(again)).toEqual(['set_ptt {"on":false}', 'arm_stream_mic', 'release_stream_mic']))
   })
 })
 
@@ -641,6 +654,8 @@ describe('every command this file sends exists in the Rust command surface', () 
     psk_stop: [],
     sstv_stop: [],
     stop_voice: [],
+    arm_stream_mic: [],
+    release_stream_mic: [],
   }
 
   for (const [cmd, args] of Object.entries(WIRE)) {
