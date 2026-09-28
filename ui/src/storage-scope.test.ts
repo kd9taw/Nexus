@@ -85,6 +85,9 @@ export const PER_SURFACE = [
   'nexus.waterfall.flow',
   'nexus.waterfall.zoom',
   'tempo-left-rail-w',
+  // Which Tempo rail the operator set last — the one that keeps its width when the pair must give
+  // (usePaneWidths.fitRails). A statement about THIS window's two widths, like them.
+  'tempo-rail-last',
   'tempo-right-rail-w',
 ]
 

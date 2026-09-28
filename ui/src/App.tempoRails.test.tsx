@@ -6,9 +6,10 @@
 // screen-reader operator could not resize either rail.
 //
 // The widths are App's own (usePaneWidths publishes them on <html>), so this mounts the real App
-// on the Tempo view rather than the divider alone. The UI scale is pinned to 100 % so the rails'
-// ceilings are plain numbers: jsdom's window is 1024 px wide, so the stations rail runs 220–410 px
-// (≤ 40 %) and the waterfall rail 260–614 px (≤ 60 %).
+// on the Tempo view rather than the divider alone. The window is 1920 px and the UI scale pinned to
+// 100 %, so the numbers are plain: the stations rail runs 220–768 px (≤ 40 %), the waterfall rail
+// 260–1152 px (≤ 60 %), both start at their defaults (346 / 422), and the two together share
+// 1920 − 160 − 360 = 1400 px, so the conversation between them never drops below 360 (L1-1).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor, fireEvent } from '@testing-library/react'
 import type { AppSnapshot } from './types'
@@ -101,7 +102,7 @@ beforeEach(() => {
   localStorage.clear()
   html.style.removeProperty('--left-rail-w')
   html.style.removeProperty('--right-rail-w')
-  Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true })
+  Object.defineProperty(window, 'innerWidth', { value: 1920, configurable: true, writable: true })
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
@@ -136,32 +137,45 @@ describe('the Tempo rail dividers answer the keyboard (PaneSeam)', () => {
     expect(sep('right').tabIndex, 'a divider only a mouse can reach').toBe(0)
     expect(sep('left').getAttribute('aria-label')).toBe('stations panel width')
     expect(sep('right').getAttribute('aria-label')).toBe('waterfall panel width')
-    expect(aria(sep('left'))).toEqual(['220', '220', '410'])
-    expect(aria(sep('right'))).toEqual(['260', '260', '614'])
+    // Each ceiling is its own share of the window or the room beside the other rail, whichever is less.
+    expect(aria(sep('left'))).toEqual(['346', '220', '768'])
+    expect(aria(sep('right'))).toEqual(['422', '260', '1054'])
   })
 
   it('the arrow that points AWAY from a rail widens it — and the step is committed at once', async () => {
     await mountTempo()
     fireEvent.keyDown(sep('left'), { key: 'ArrowRight' })
-    expect(rail('left')).toBe('236px')
-    expect(localStorage.getItem('tempo-left-rail-w')).toBe('236')
-    expect(sep('left').getAttribute('aria-valuenow')).toBe('236')
+    expect(rail('left')).toBe('362px')
+    expect(localStorage.getItem('tempo-left-rail-w')).toBe('362')
+    expect(sep('left').getAttribute('aria-valuenow')).toBe('362')
     // The waterfall rail's divider is on its LEFT edge: ArrowLeft moves it left, which widens it.
     fireEvent.keyDown(sep('right'), { key: 'ArrowLeft', shiftKey: true })
-    expect(rail('right')).toBe('324px')
-    expect(localStorage.getItem('tempo-right-rail-w')).toBe('324')
+    expect(rail('right')).toBe('486px')
+    expect(localStorage.getItem('tempo-right-rail-w')).toBe('486')
     fireEvent.keyDown(sep('right'), { key: 'ArrowRight' })
-    expect(rail('right')).toBe('308px')
+    expect(rail('right')).toBe('470px')
   })
 
   it('Home and End go to each rail’s own floor and ceiling', async () => {
     await mountTempo()
     fireEvent.keyDown(sep('left'), { key: 'End' })
-    expect(rail('left')).toBe('410px')
+    expect(rail('left')).toBe('768px')
     fireEvent.keyDown(sep('left'), { key: 'Home' })
     expect(rail('left')).toBe('220px')
     fireEvent.keyDown(sep('right'), { key: 'End' })
-    expect(rail('right')).toBe('614px')
+    expect(rail('right')).toBe('1152px')
+  })
+
+  it('End on both rails stops where the conversation would drop below its floor (L1-1)', async () => {
+    await mountTempo()
+    fireEvent.keyDown(sep('left'), { key: 'End' })
+    fireEvent.keyDown(sep('right'), { key: 'End' })
+    // 768 + 632 = 1400: the conversation keeps exactly its 360 px.
+    expect([rail('left'), rail('right')]).toEqual(['768px', '632px'])
+    expect(sep('right').getAttribute('aria-valuemax'), 'the ceiling it announces is the room it has').toBe('632')
+    // …and the stations rail moving back gives the waterfall rail its room again.
+    fireEvent.keyDown(sep('left'), { key: 'Home' })
+    expect(sep('right').getAttribute('aria-valuemax')).toBe('1152')
   })
 
   it('Backspace or a double-click resets THAT rail only — the other keeps its width', async () => {
@@ -169,11 +183,11 @@ describe('the Tempo rail dividers answer the keyboard (PaneSeam)', () => {
     fireEvent.keyDown(sep('left'), { key: 'End' })
     fireEvent.keyDown(sep('right'), { key: 'End' })
     fireEvent.keyDown(sep('left'), { key: 'Backspace' })
-    expect(rail('left'), 'the stations rail is back at its default').toBe('220px')
-    expect(rail('right'), 'resetting one rail moved the other').toBe('614px')
+    expect(rail('left'), 'the stations rail is back at its default').toBe('346px')
+    expect(rail('right'), 'resetting one rail moved the other').toBe('632px')
     fireEvent.doubleClick(sep('right'))
-    expect(rail('right')).toBe('260px')
-    expect(rail('left')).toBe('220px')
+    expect(rail('right')).toBe('422px')
+    expect(rail('left')).toBe('346px')
   })
 
   it('widths stored by an earlier build are restored where they were left', async () => {
@@ -193,11 +207,11 @@ describe('the Tempo rail dividers answer the keyboard (PaneSeam)', () => {
     fireEvent.pointerDown(sep('left'), { clientX: 300, pointerId: 1, button: 0 })
     fireEvent.pointerMove(window, { clientX: 320, pointerId: 1 })
     fireEvent.pointerMove(window, { clientX: 340, pointerId: 1 })
-    expect(rail('left'), 'the drag did not paint the rail live').toBe('260px')
+    expect(rail('left'), 'the drag did not paint the rail live').toBe('386px')
     expect(railWrites(), 'a move wrote the stored width').toBe(0)
     fireEvent.pointerUp(window, { clientX: 350, pointerId: 1 })
     expect(railWrites()).toBe(1)
-    expect(localStorage.getItem('tempo-left-rail-w')).toBe('270')
+    expect(localStorage.getItem('tempo-left-rail-w')).toBe('396')
     writes.mockRestore()
   })
 })

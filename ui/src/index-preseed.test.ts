@@ -11,6 +11,7 @@ import { useNight } from './useNight'
 import { useSkin } from './useSkin'
 import { PALETTE_ROLES, attrValueOf } from './features/paletteRoles'
 import { SKINS } from './features/skins'
+import { usePaneWidths } from './usePaneWidths'
 
 // index.html's pre-paint seed script, executed for real: it is the only thing standing
 // between launch and a first-paint flash, and it must mirror the React hooks EXACTLY
@@ -66,13 +67,90 @@ describe('index.html preseed', () => {
     expect(railVar('--right-rail-w')).toBe('260px')
   })
 
-  it('stored rail widths still replay clamped against THIS window (unchanged path)', () => {
+  it('stored rail widths still replay clamped against THIS window', () => {
     setWin(1366, 768) // fit 85 → ew ≈ 1607; 60% ceiling ≈ 964
     localStorage.setItem('tempo-right-rail-w', '2064') // legal on 3440, not here
     runPreseed()
-    expect(railVar('--right-rail-w')).toBe('964px')
+    // Its own ceiling is 964, but the pair shares ⌊1607 − 520⌋ = 1087 (the conversation keeps its
+    // 360): the stored rail keeps what it can, the stations rail its 220 floor.
+    expect(railVar('--right-rail-w')).toBe('867px')
+    expect(railVar('--left-rail-w')).toBe('220px')
     // Storage is never rewritten by the seed — the big-monitor preference survives.
     expect(localStorage.getItem('tempo-right-rail-w')).toBe('2064')
+  })
+
+  it('a stored PAIR from a wider window is seeded as a pair: the conversation is never squeezed (L1-1)', () => {
+    setWin(1366, 768)
+    localStorage.setItem('tempo-left-rail-w', '900')
+    localStorage.setItem('tempo-right-rail-w', '1400')
+    runPreseed()
+    // Alone, 643 + 964 = the whole window. As a pair, in proportion into 1087.
+    expect([railVar('--left-rail-w'), railVar('--right-rail-w')]).toEqual(['434px', '652px'])
+    localStorage.setItem('tempo-rail-last', 'right')
+    localStorage.setItem('tempo-left-rail-w', '700')
+    localStorage.setItem('tempo-right-rail-w', '699')
+    runPreseed()
+    // The rail set last keeps its width; the other gives way.
+    expect([railVar('--left-rail-w'), railVar('--right-rail-w')]).toEqual(['388px', '699px'])
+  })
+})
+
+// The rails are seeded by a COPY of usePaneWidths' fit (the seed runs before any module loads),
+// so the copy is held to the hook itself: for every window shape and every stored state —
+// nothing, one rail, a pair that fits, a pair that does not with and without a last-set rail,
+// junk — the widths the seed paints are the widths the hook then publishes. Any drift is a
+// first-paint jump, and a pair squeezed on frame one that the hook then fixes is still a flash.
+describe('index.html preseed: the Tempo rails, in lockstep with usePaneWidths', () => {
+  const WINDOWS: [number, number][] = [[1024, 768], [1280, 800], [1366, 768], [1600, 900], [1920, 1080], [2560, 1440], [3440, 1440]]
+  const STORED: Array<Record<string, string>> = [
+    {},
+    { 'tempo-left-rail-w': '300' },
+    { 'tempo-right-rail-w': '500' },
+    { 'tempo-left-rail-w': '250', 'tempo-right-rail-w': '280' },
+    { 'tempo-left-rail-w': '900', 'tempo-right-rail-w': '1400' },
+    { 'tempo-left-rail-w': '900', 'tempo-right-rail-w': '1400', 'tempo-rail-last': 'left' },
+    { 'tempo-left-rail-w': '900', 'tempo-right-rail-w': '1400', 'tempo-rail-last': 'right' },
+    { 'tempo-left-rail-w': '5000', 'tempo-right-rail-w': '5000', 'tempo-rail-last': 'left' },
+    { 'tempo-left-rail-w': '314.003', 'tempo-right-rail-w': '700.5', 'tempo-rail-last': 'right' },
+    { 'tempo-rail-last': 'right' },
+    { 'tempo-left-rail-w': 'junk', 'tempo-right-rail-w': '-5', 'tempo-rail-last': 'sideways' },
+  ]
+
+  it('seeds exactly the widths the hook publishes, for every window and every stored state', () => {
+    const bad: string[] = []
+    for (const [w, h] of WINDOWS) {
+      for (const stored of STORED) {
+        const seed = () => {
+          localStorage.clear()
+          for (const [k, v] of Object.entries(stored)) localStorage.setItem(k, v)
+          document.documentElement.removeAttribute('style')
+          window.history.replaceState(null, '', '/')
+          setWin(w, h)
+        }
+        seed()
+        runPreseed()
+        const seeded = [railVar('--left-rail-w'), railVar('--right-rail-w')]
+        const zoom = document.documentElement.style.getPropertyValue('--ui-zoom')
+        seed()
+        document.documentElement.style.setProperty('--ui-zoom', zoom) // what the seed left for React
+        const hook = renderHook(() => usePaneWidths())
+        const published = [railVar('--left-rail-w'), railVar('--right-rail-w')]
+        hook.unmount()
+        if (JSON.stringify(seeded) !== JSON.stringify(published))
+          bad.push(`${w}×${h} ${JSON.stringify(stored)}: seed ${seeded} ≠ hook ${published}`)
+      }
+    }
+    expect(bad).toEqual([])
+  })
+
+  it('the parity above can fail: a seed that ignored the pair would not match (the positive control)', () => {
+    // The squeezed pair is the case that separates a pair-aware seed from the old per-rail one:
+    // per rail it would be 643 / 964 here, and the hook publishes 434 / 652.
+    localStorage.setItem('tempo-left-rail-w', '900')
+    localStorage.setItem('tempo-right-rail-w', '1400')
+    setWin(1366, 768)
+    runPreseed()
+    expect([railVar('--left-rail-w'), railVar('--right-rail-w')]).not.toEqual(['643px', '964px'])
   })
 })
 
