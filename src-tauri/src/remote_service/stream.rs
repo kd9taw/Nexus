@@ -329,10 +329,14 @@ pub(super) struct Streaming {
     /// from packet to packet. `None` if libopus would not start one, and then the audio is dropped.
     #[cfg(feature = "radio")]
     mic: Option<tempo_audio::mic_decode::MicDecoder>,
+    /// The microphone over as the page was last told it (`micState`), so it is told of changes only.
+    mic_told: tempo_app::mic::MicStatus,
 }
 
 impl Streaming {
     pub fn new(station: Station, offer: Offer, now: Instant) -> Self {
+        // Whatever the over was before this session is not this page's to hear about.
+        let mic_told = station.host.mic.status();
         Self {
             station,
             offer,
@@ -343,7 +347,24 @@ impl Streaming {
             audio: super::audio::AudioLane::unaddressed(),
             #[cfg(feature = "radio")]
             mic: tempo_audio::mic_decode::MicDecoder::new().ok(),
+            mic_told,
         }
+    }
+
+    /// The microphone over's state for the page, when it has changed since the page was last told.
+    pub fn mic_state(&mut self) -> Option<String> {
+        let now = self.station.host.mic.status();
+        if now == self.mic_told {
+            return None;
+        }
+        self.mic_told = now;
+        serde_json::to_string(&ControlOut::MicState {
+            armed: now.armed,
+            keyed: now.keyed,
+            no_power_out: now.no_power_out,
+            ended: now.ended.map(wire_ended),
+        })
+        .ok()
     }
 
     /// A packet of the page's microphone (S6): decoded to the transmit route's rate and offered to
@@ -574,6 +595,22 @@ impl Streaming {
             ),
             None => pump.message,
         }
+    }
+}
+
+/// Why an over ended, in the contract's words: each end under its own name, so the page can say
+/// the right thing (the audio design's §7).
+fn wire_ended(why: tempo_app::mic::MicEnded) -> tempo_stream::protocol::MicEnded {
+    use tempo_app::mic::MicEnded as Engine;
+    use tempo_stream::protocol::MicEnded as Wire;
+    match why {
+        Engine::Released => Wire::Released,
+        Engine::Stopped => Wire::Stopped,
+        Engine::AudioGap => Wire::AudioGap,
+        Engine::Presence => Wire::Presence,
+        Engine::Ceiling => Wire::Ceiling,
+        Engine::Watchdog => Wire::Watchdog,
+        Engine::RouteChanged => Wire::RouteChanged,
     }
 }
 
@@ -814,6 +851,9 @@ fn run(
         streaming.watch_presence(now);
         for report in streaming.ptt_reports() {
             session.send(Lane::Control, &report, now);
+        }
+        if let Some(state) = streaming.mic_state() {
+            session.send(Lane::Control, &state, now);
         }
         #[cfg(feature = "radio")]
         if let Some(audio) = streaming.audio_due(now) {

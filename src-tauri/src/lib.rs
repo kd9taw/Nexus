@@ -16379,6 +16379,25 @@ fn set_ptt(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Stri
     Ok(eng.snapshot())
 }
 
+/// A press on the Phone cockpit's PTT made through the Remote stream's picture (Space over it, or
+/// its PTT button): it ARMS the streamed operator's microphone over, and only their voice keys it
+/// (the audio design's M1; the operator's ruling "Arms your mic"). The shack's own microphone is
+/// never keyed from here. Every gate the page's own PTT meets applies: presence, Phone, TX armed,
+/// the licence, one owner. Returns whether an over is armed.
+#[tauri::command(async)]
+fn arm_stream_mic(state: State<'_, SharedEngine>) -> Result<bool, String> {
+    let mut eng = engine_lock(&state);
+    Ok(eng.arm_remote_mic(std::time::Instant::now()))
+}
+
+/// The cockpit let go of a press it armed through the stream: the over ends now.
+#[tauri::command(async)]
+fn release_stream_mic(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let mut eng = engine_lock(&state);
+    eng.release_remote_mic();
+    Ok(())
+}
+
 /// Set RF output power as a 0.0–1.0 fraction; the radio loop applies it to the rig.
 #[tauri::command(async)]
 fn set_rf_power(state: State<'_, SharedEngine>, power: f32) -> Result<AppSnapshot, String> {
@@ -29500,6 +29519,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             stop_cw,
             set_cw_keyer,
             set_ptt,
+            arm_stream_mic,
+            release_stream_mic,
             set_rf_power,
             set_mic_gain,
             set_nr_level,
@@ -31190,6 +31211,43 @@ mod tests {
             list.lines().any(|l| l.trim() == "set_sub_level,"),
             "set_sub_level is not registered — the Sub strip would fail at runtime"
         );
+    }
+
+    /// A press made through the stream's picture reaches the microphone over only if both commands
+    /// the Phone cockpit invokes are DEFINED and REGISTERED, and they go through the engine's own
+    /// arm and release, never the desktop's PTT: a streamed press must not key the shack's own
+    /// microphone (the operator's ruling "Arms your mic").
+    #[test]
+    fn the_stream_mic_commands_are_registered_and_never_key_the_shack_mic() {
+        let src = include_str!("lib.rs");
+        for (name, verb) in [
+            ("arm_stream_mic", "arm_remote_mic("),
+            ("release_stream_mic", "release_remote_mic("),
+        ] {
+            let body = src
+                .split_once(&format!("\nfn {name}("))
+                .unwrap_or_else(|| panic!("{name} must exist"))
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            assert!(body.contains(verb), "{name} must go through Engine::{verb}");
+            assert!(
+                !body.contains("set_ptt("),
+                "{name} keys the shack's own microphone"
+            );
+            let list = src
+                .split_once("tauri::generate_handler![")
+                .expect("the handler list")
+                .1
+                .split_once("])")
+                .expect("the end of the handler list")
+                .0;
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered: a press through the picture would fail at runtime"
+            );
+        }
     }
 
     /// The RTTY view-entry auto-arm reaches the frontend only if the command is DEFINED and
