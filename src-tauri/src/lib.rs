@@ -29822,6 +29822,21 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .build(tauri::generate_context!())
 }
 
+/// The `main` window's operating-system handle, the one a streamed session captures.
+#[cfg(windows)]
+fn main_window_handle(app: &tauri::AppHandle) -> Option<isize> {
+    app.get_webview_window("main")?
+        .hwnd()
+        .ok()
+        .map(|hwnd| hwnd.0 as isize)
+}
+
+/// No window capture outside Windows yet: a stream is answered unavailable.
+#[cfg(not(windows))]
+fn main_window_handle(_: &tauri::AppHandle) -> Option<isize> {
+    None
+}
+
 /// The Remote service, built — and so started — once the launch has attached the log.
 ///
 /// Not in [`build_app`], because it goes to work as it is built: when Remote was on at the last
@@ -29847,6 +29862,12 @@ fn remote_service_for(
                 input.clone(),
             );
         });
+    // …and the picture is of that same window, and of nothing else (security test A1). Looked up
+    // when a stream is offered, not now: the window's handle is the operating system's, and this
+    // way a window that is not up yet, or is gone, reads as none instead of a stale handle.
+    let app = handle.clone();
+    let main_window: remote_service::stream::WindowHandle =
+        Arc::new(move || main_window_handle(&app));
     remote_service::Service::new(
         d.engine.clone(),
         publisher,
@@ -29881,6 +29902,7 @@ fn remote_service_for(
         remote_service::stream::Host {
             input: Some(input),
             ptt: Default::default(),
+            window: Some(main_window),
         },
     )
 }

@@ -28,6 +28,10 @@
 //!   this path.
 //! - **Receive audio (S5)** is the relay's own audio lane, unaddressed, on the `audio` channel:
 //!   the same encoder, the same bounds, the same "drop, never queue".
+//! - **The picture (S1, S2) is the main window's, and nothing else's (A1).** The application
+//!   resolves its `main` window's handle through [`Host::window`]; the station checks it can be
+//!   captured before it opens a socket, starts capturing when the session connects, and stops when
+//!   the session ends. `tempo_stream::video` does the capture and the encoding.
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
@@ -62,6 +66,10 @@ const OPERATION_VERSION: u8 = 4;
 /// Hands one admitted input to the station's own main window.
 pub type InputSink = Arc<dyn Fn(&WebviewInput) + Send + Sync>;
 
+/// The station's own main window, as the handle its capture is built from (Windows' `HWND`), if
+/// it has one right now.
+pub type WindowHandle = Arc<dyn Fn() -> Option<isize> + Send + Sync>;
+
 /// What the application gives the stream. Cheap to clone.
 #[derive(Clone, Default)]
 pub struct Host {
@@ -70,6 +78,9 @@ pub struct Host {
     pub input: Option<InputSink>,
     /// The held PTT the engine keys and releases. Installed into the engine when Remote is built.
     pub ptt: PttHold,
+    /// The one window a stream shows: the station's `main` window. `None` where there is none
+    /// (a test, or a build without a window), and then a stream is answered unavailable.
+    pub window: Option<WindowHandle>,
 }
 
 /// What one session needs from the station.
@@ -582,6 +593,21 @@ fn run(
         send(state(&session_id, false, Some(reason)));
         return;
     }
+    // The picture: the main window, and it must be capturable, before anything opens.
+    let Some(window) = station
+        .host
+        .window
+        .as_ref()
+        .and_then(|window| window())
+        .filter(|&window| tempo_stream::video::available(window))
+    else {
+        send(state(
+            &session_id,
+            false,
+            Some(StreamReason::StreamUnavailable),
+        ));
+        return;
+    };
     let Some((socket, mut reflexive)) = open_socket() else {
         send(state(
             &session_id,
@@ -614,6 +640,7 @@ fn run(
     );
     tempo_core::applog::info("remote", "stream: offer answered");
     let mut streaming = Streaming::new(station.clone(), offer, Instant::now());
+    let mut video: Option<tempo_stream::video::Video> = None;
     let mut ended = StreamReason::StreamClosed;
     let mut buf = vec![0u8; 2048];
     loop {
@@ -679,8 +706,14 @@ fn run(
                 SessionEvent::Connected => {
                     // S8: presence from the moment the session is live.
                     streaming.presence.renew(&station, &streaming.offer, now);
-                    send(state(&session_id, true, None));
-                    tempo_core::applog::info("remote", "stream: connected");
+                    // S1, S2: the picture starts with the session. No picture, no stream.
+                    video = tempo_stream::video::Video::start(window).ok();
+                    if video.is_none() {
+                        session.close(StreamReason::StreamUnavailable, now);
+                    } else {
+                        send(state(&session_id, true, None));
+                        tempo_core::applog::info("remote", "stream: connected");
+                    }
                 }
                 SessionEvent::Message(Lane::Control, bytes) => {
                     let (answer, released) =
@@ -705,7 +738,11 @@ fn run(
                     #[cfg(feature = "radio")]
                     streaming.audio.stop(None);
                 }
-                SessionEvent::KeyframeRequest => {}
+                SessionEvent::KeyframeRequest => {
+                    if let Some(video) = &video {
+                        video.request_keyframe();
+                    }
+                }
                 SessionEvent::Closed(reason) => ended = reason,
             }
         }
@@ -717,6 +754,19 @@ fn run(
         #[cfg(feature = "radio")]
         if let Some(audio) = streaming.audio_due(now) {
             session.send(Lane::Audio, &audio, now);
+        }
+        if let Some(picture) = &video {
+            for frame in picture.take() {
+                // A frame the transport could not take leaves the page's decoder without its
+                // reference: the next frame is a keyframe, as when the page asks for one.
+                if !session.send_video(now, frame.captured_at, &frame.data) {
+                    picture.request_keyframe();
+                }
+            }
+            // The window closed or the capture failed: the stream has nothing left to show.
+            if picture.ended() {
+                session.close(StreamReason::StreamUnavailable, now);
+            }
         }
         if !streaming.still_admitted(now) {
             session.close(StreamReason::NotController, now);
@@ -736,6 +786,7 @@ fn run(
     // The session is over, however it ended. Its presence goes (the engine halts on its next tick
     // if it held any), a held PTT is released, and the window lets go of anything still pressed.
     station.authority.end_stream_presence();
+    drop(video);
     station.host.ptt.end();
     if let Some(deliver) = &station.host.input {
         deliver(&WebviewInput::Reset {});

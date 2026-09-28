@@ -12,7 +12,8 @@
 #
 # Prereqs (Debian/Ubuntu pkg names) — the script checks and reports what's missing:
 #   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64
-#   cmake ninja-build nodejs npm  +  rustup  +  cc/make (to build FFTW)
+#   cmake ninja-build nodejs npm  +  rustup  +  cc/make (to build FFTW and libvpx)
+#   nasm (libvpx's x86 assembly)
 set -euo pipefail
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -29,6 +30,8 @@ export PATH="$HOME/.local/bin:$PATH"     # picks up a pip-installed ninja, if an
 TARGET=x86_64-pc-windows-gnu
 FFTW_VER=3.3.10
 export FFTW_MINGW_PREFIX="$REPO/target/fftw-mingw"   # read by ft1-sys/build.rs
+VPX_VER=1.17.0
+export VPX_MINGW_PREFIX="$REPO/target/vpx-mingw"     # read by crates/tempo-stream/build.rs
 
 GUI=1; MODEM_ONLY=0
 for a in "$@"; do
@@ -43,12 +46,12 @@ done
 # 1 — toolchain checks -------------------------------------------------------
 bold "1/5  Cross toolchain"
 miss=()
-for t in x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ x86_64-w64-mingw32-gfortran cmake; do
+for t in x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ x86_64-w64-mingw32-gfortran cmake nasm; do
   command -v "$t" >/dev/null || miss+=("$t")
 done
 command -v ninja >/dev/null || command -v make >/dev/null || miss+=("ninja-or-make")
 [ "${#miss[@]}" -eq 0 ] || die "missing: ${miss[*]}
-  Debian/Ubuntu: sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64 cmake ninja-build"
+  Debian/Ubuntu: sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64 cmake ninja-build nasm"
 command -v cargo >/dev/null || die "Rust not found — install from https://rustup.rs"
 rustup target list --installed 2>/dev/null | grep -qx "$TARGET" || { warn "adding Rust target $TARGET"; rustup target add "$TARGET"; }
 GEN=Ninja; command -v ninja >/dev/null || GEN="Unix Makefiles"
@@ -89,6 +92,51 @@ else
     make -j"$(nproc)" >/dev/null && make install >/dev/null )
   rm -rf "$tmp"
   [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] && ok "built → $FFTW_MINGW_PREFIX" || die "FFTW cross-build failed"
+fi
+
+# 2b — libvpx (the VP8 encoder of Remote as a stream) for MinGW (built once, cached) --
+bold "2b/5  libvpx (VP8 encoder) for MinGW"
+# Pinned exactly as FFTW above is, and for the same reason: this runs, then links into Nexus.exe,
+# inside the release step that holds the signing key. The hash is of the GitHub release archive
+# for the tag, and was confirmed against TWO independent packagers rather than recomputed from
+# what GitHub served: Homebrew's libvpx formula and FreeBSD ports' multimedia/libvpx distinfo
+# both publish this SHA-256 for v1.17.0 (FreeBSD also the size, 5670546 bytes). Bump the same
+# way: new VPX_VER, download over HTTPS, check the bytes against two packagers, THEN this line.
+#
+# What is built: the VP8 encoder only (no decoder, no VP9, no tools), realtime-only, static,
+# single-threaded (so no winpthread DLL), SIMD chosen at run time. The stamp file records the
+# version and hash, so a cached build of an older release is rebuilt rather than linked.
+vpx_sha256=1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a
+vpx_stamp="$VPX_MINGW_PREFIX/.nexus-libvpx"
+if [ -f "$VPX_MINGW_PREFIX/lib/libvpx.a" ] && [ "$(cat "$vpx_stamp" 2>/dev/null)" = "$VPX_VER $vpx_sha256" ]; then
+  ok "cached at $VPX_MINGW_PREFIX (libvpx $VPX_VER)"
+else
+  rm -rf "$VPX_MINGW_PREFIX"
+  VPX_LOG="$REPO/target/vpx-mingw-build.log"
+  mkdir -p "$REPO/target"
+  tmp="$(mktemp -d)"
+  if ! ( cd "$tmp"
+    url="https://github.com/webmproject/libvpx/archive/refs/tags/v${VPX_VER}.tar.gz"
+    (command -v curl >/dev/null && curl -fsSL -o libvpx.tgz "$url") || wget -qO libvpx.tgz "$url" \
+      || { echo "could not download $url"; exit 1; }
+    echo "$vpx_sha256  libvpx.tgz" | sha256sum -c - \
+      || { echo "libvpx checksum mismatch — refusing to build. Someone changed the bytes at $url."; exit 1; }
+    # One && chain: `set -e` does not reach inside an `if` condition.
+    tar xf libvpx.tgz && mkdir build && cd build \
+      && CROSS=x86_64-w64-mingw32- "../libvpx-${VPX_VER}/configure" --target=x86_64-win64-gcc \
+        --prefix="$VPX_MINGW_PREFIX" --as=nasm --enable-static --disable-shared \
+        --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+        --disable-install-docs --disable-install-bins --disable-install-srcs \
+        --disable-vp9 --disable-vp8-decoder --enable-vp8-encoder --enable-realtime-only \
+        --enable-runtime-cpu-detect --disable-multithread --disable-webm-io --disable-libyuv \
+      && make -j"$(nproc)" && make install ) >"$VPX_LOG" 2>&1; then
+    rm -rf "$tmp"
+    tail -n 40 "$VPX_LOG"; die "libvpx cross-build failed (last 40 lines of $VPX_LOG above)"
+  fi
+  rm -rf "$tmp"
+  [ -f "$VPX_MINGW_PREFIX/lib/libvpx.a" ] || die "libvpx cross-build produced no libvpx.a"
+  echo "$VPX_VER $vpx_sha256" > "$vpx_stamp"
+  ok "built → $VPX_MINGW_PREFIX (libvpx $VPX_VER)"
 fi
 
 # 3 — libtempo modem test exes (proves the native chain on Windows) ------------

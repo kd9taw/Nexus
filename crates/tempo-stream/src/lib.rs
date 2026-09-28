@@ -13,9 +13,11 @@
 //! - [`lan`] — the last check that no LAN address leaves the shack.
 //! - [`stun`] — the one binding request that learns the station's reflexive address.
 //! - [`session`] — one streamed session over WebRTC: answer, candidates, video, data channels.
+//! - [`video`] — the picture: the station's window, captured and encoded as VP8.
 pub mod frame_clock;
 pub mod lan;
 pub mod offer;
 pub mod protocol;
 pub mod session;
 pub mod stun;
+pub mod video;

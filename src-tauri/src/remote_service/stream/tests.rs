@@ -80,6 +80,7 @@ fn fixture(now: Instant) -> Fixture {
             host: Host {
                 input: Some(input),
                 ptt,
+                window: None,
             },
             #[cfg(feature = "radio")]
             audio: None,

@@ -23,3 +23,32 @@ serde_json = "1"
 # a dependency on every platform anyway, so the session code is compiled, linted and (for everything
 # that needs no `Rtc`) tested by CI's Linux jobs rather than only type-checked by windows-cross.
 str0m = { version = "0.24", default-features = false, features = ["wincrypto"] }
+# BGRA → I420 for the encoder (BSD-3-Clause OR Apache-2.0; the licence review's pick, NOTICE
+# "Streaming"). Pure Rust with runtime SIMD dispatch, and its tree is itself plus num-traits and
+# autocfg, both already in the workspace. On every platform, like str0m, so the conversion is
+# tested by CI's Linux jobs and not only type-checked by windows-cross.
+yuv = "0.8.19"
+
+# Window-only capture (S1), Windows Graphics Capture through windows-capture (MIT; licence-reviewed,
+# NOTICE "Streaming"). Its tree is the `windows` 0.62 family, rayon, parking_lot and thiserror, all
+# already in both lockfiles, so it adds only itself. `windows` is named here for the handful of
+# calls this crate makes itself (the client-area crop, minimized, thread priority and DPI); the version
+# and every feature listed are ones windows-capture already turns on, so nothing new is compiled.
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2.0.1"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# The VP8 encoder is libvpx (BSD-3-Clause + PATENTS), built from pinned source by
+# scripts/build-windows-cross.sh and linked statically through a small C shim (build.rs). No
+# binding crate: the shim is compiled against libvpx's own headers, so no struct layout is copied
+# into Rust by hand. `cc` is already in both lockfiles.
+[build-dependencies]
+cc = "1"
