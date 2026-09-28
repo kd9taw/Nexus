@@ -18,6 +18,7 @@ import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
 import type { AppSnapshot, Js8State } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
+import { JS8_PANELS, panelStorageKey, usePanelLayout } from '../features/panelState'
 
 const js8Fixture = (): Js8State => ({
   speed: 'normal',
@@ -312,5 +313,84 @@ describe('Esc is the keyboard stop — bound only while JS8 is the visible view'
       fireEvent.keyDown(window, { key: 'Escape' })
     })
     expect(haltTx).not.toHaveBeenCalled()
+  })
+})
+
+// ── THE COLUMN DIVIDERS (layout L2) ──────────────────────────────────────────────────────────
+// JS8's wiring of panes/RegionColumnSeams (the divider's own behaviour is tested there), including
+// the one state the other two cockpits do not have: two tracks with the log hidden, where the
+// second track holds Stations and Inbox and the width divider says so.
+describe('Js8Cockpit column dividers', () => {
+  let live: Set<() => void>
+  const resize = () => act(() => [...live].forEach((cb) => cb()))
+  beforeEach(() => {
+    live = new Set()
+    localStorage.clear()
+    globalThis.ResizeObserver = class {
+      cb: () => void
+      constructor(cb: () => void) {
+        this.cb = cb
+        live.add(cb)
+      }
+      observe() {}
+      disconnect() {
+        live.delete(this.cb)
+      }
+      unobserve() {}
+    } as unknown as typeof ResizeObserver
+  })
+  function Live() {
+    const panels = usePanelLayout(JS8_PANELS)
+    return <Js8Cockpit snap={snap} panels={panels} />
+  }
+  const dividers = (region: Element) =>
+    [...region.querySelectorAll(':scope > [role="separator"]')].map((s) => [
+      s.getAttribute('aria-label'),
+      [...s.classList].filter((c) => c.startsWith('cockpit-colseam-')).join(' '),
+    ])
+  async function mountLive() {
+    render(<Live />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    return document.querySelector('.cockpit-panes')!
+  }
+  async function tier(region: Element, width: number) {
+    stubWidth(region, width)
+    resize()
+    await frame()
+  }
+
+  it('none in the stacking tier; at two columns the log width; at three the split between activity and stations as well', async () => {
+    const region = await mountLive()
+    expect(dividers(region)).toEqual([])
+    await tier(region, 1200)
+    expect(dividers(region)).toEqual([['log column width', 'cockpit-colseam-2']])
+    await tier(region, 1800)
+    expect(dividers(region)).toEqual([
+      ['Activity column / Stations column', 'cockpit-colseam-2'],
+      ['log column width', 'cockpit-colseam-3'],
+    ])
+    await tier(region, 900)
+    expect(dividers(region)).toEqual([])
+  })
+
+  it('with the log hidden, two tracks are activity | stations and the width divider sizes the stations column', async () => {
+    localStorage.setItem(panelStorageKey('js8'), JSON.stringify({ v: 2, state: { log: 'removed' }, share: {} }))
+    const region = await mountLive()
+    await tier(region, 1800)
+    expect(region.getAttribute('data-cols')).toBe('2')
+    expect(dividers(region)).toEqual([['Stations column width', 'cockpit-colseam-2']])
+    const cols = region.querySelectorAll(':scope > .cockpit-col')
+    expect(cols[1].querySelector('[data-pane="stations"]'), 'the width divider is not over the stations column').not.toBeNull()
+  })
+
+  it('the widths stored in the JS8 record ride the region', async () => {
+    localStorage.setItem(panelStorageKey('js8'), JSON.stringify({ v: 2, state: {}, share: {}, cols: { a: 1.2, b: 0.8, log: 480 } }))
+    const region = (await mountLive()) as HTMLElement
+    expect(region.style.getPropertyValue('--cockpit-col-a')).toBe('1.2fr')
+    expect(region.style.getPropertyValue('--cockpit-col-b')).toBe('0.8fr')
+    expect(region.style.getPropertyValue('--cockpit-col-log')).toBe('min(480px, 50%)')
   })
 })

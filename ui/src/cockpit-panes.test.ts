@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { logColValue } from './features/paneColumns'
 
 // THE PANE-GRID STRUCTURAL SHEET (2026-07-30 layout assessment, design3 §3/§5).
 //
@@ -238,7 +239,7 @@ describe('every selector is flat (uniform specificity ⇒ no cascade war is poss
 describe('the fence: styles.css never names a structural class', () => {
   // The 19k-line sheet is where every previous override crept in. If it cannot name these
   // classes it cannot fight them — the isolation is the guarantee, not a convention.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts', 'cockpit-recall', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -523,16 +524,70 @@ describe('panes are sized by the grid, never by themselves', () => {
     // out"). A bare 44em max therefore made the log a constant 616px and left the feed
     // NARROWER than the form at region 1080–1244. The cap's max must stay
     // proportion-bounded: min(<em cap>, <percentage>).
+    //
+    // Since layout L2 the max is the operator's (`--cockpit-col-log`, the log column divider),
+    // so BOTH its values are held to it: the stock fallback the template carries, and the only
+    // value the divider ever writes (features/paneColumns.logColValue), at any width it could
+    // write — a narrow one, a wide one and one far past any window.
     for (const tier of [2, 3] as const) {
       const r = RULES.find((x) => x.selector === `.cockpit-panes[data-cols='${tier}']`)
       expect(r, `no .cockpit-panes[data-cols='${tier}'] rule`).toBeDefined()
       const cols = /grid-template-columns\s*:\s*([^;]+)/.exec(r!.body)?.[1].trim() ?? ''
+      const log = /minmax\(24em, var\(--cockpit-col-log, (min\(44em, \d+%\))\)\)\s*$/.exec(cols)
       expect(
-        cols,
-        `tier ${tier} log track is not proportion-bounded — its fixed max always pays out ` +
-          'in full before the feed track gets anything.',
-      ).toMatch(/minmax\(24em, min\(44em, \d+%\)\)\s*$/)
+        log,
+        `tier ${tier} log track is \`${cols}\`: not the 24em-floored track whose max is the log ` +
+          'divider\'s width with a proportion-bounded stock fallback.',
+      ).not.toBeNull()
     }
+    for (const px of [336, 900, 100_000]) {
+      expect(
+        logColValue(px),
+        'the log divider writes a width that is not capped by a share of the region — its fixed ' +
+          'max would pay out in full before the feed track gets anything.',
+      ).toMatch(/^min\(\d+px, (\d+)%\)$/)
+      expect(Number(/, (\d+)%\)$/.exec(logColValue(px))![1])).toBeLessThanOrEqual(50)
+    }
+  })
+
+  it('the column dividers’ tokens are read by the two- and three-track templates and nothing else', () => {
+    // The tokens ride INLINE on the region (RegionColumnSeams), so whatever rule reads one is the
+    // whole of what a divider can resize. Computed over every rule of both sheets.
+    const reads = (name: string) => [
+      ...RULES.filter((r) => r.body.includes(`var(${name}`)).map((r) => `cockpit-panes.css: ${r.selector}`),
+      ...STYLES_RULES.filter((r) => r.body.includes(`var(${name}`)).map((r) => `styles.css: ${r.selector}`),
+    ]
+    expect(reads('--cockpit-col-log')).toEqual([
+      "cockpit-panes.css: .cockpit-panes[data-cols='2']",
+      "cockpit-panes.css: .cockpit-panes[data-cols='3']",
+    ])
+    for (const t of ['--cockpit-col-a', '--cockpit-col-b']) {
+      expect(reads(t), `${t} is read outside the three-track template`).toEqual([
+        "cockpit-panes.css: .cockpit-panes[data-cols='3']",
+      ])
+    }
+    // And nothing DECLARES them in either sheet: the region's inline style is their only source,
+    // so the stacking tier (which reads none) is untouched by a stored width.
+    const declares = [...RULES, ...STYLES_RULES].filter((r) => /--cockpit-col-(a|b|log)\s*:/.test(r.body))
+    expect(declares.map((r) => r.selector)).toEqual([])
+  })
+
+  it('three columns: the feed columns keep a floor a dragged split cannot pass, and it always fits', () => {
+    // The divider between the two feed columns stops their shares at MIN_SHARE, 7.5 % of the
+    // pair — ~85 px at 1920×1080. The template floors both at 16em; that must never bind at the
+    // stock split and must always fit, with the log at its 50 % ceiling, in the narrowest region
+    // the tier is used at (classifyRegionCols: 1700 CSS px). Computed at the 14 px body font.
+    const r = RULES.find((x) => x.selector === ".cockpit-panes[data-cols='3']")!
+    const tracks = /grid-template-columns\s*:\s*minmax\((\d+)em, var\(--cockpit-col-a, ([\d.]+)fr\)\) minmax\((\d+)em, var\(--cockpit-col-b, ([\d.]+)fr\)\)/.exec(r.body)
+    expect(tracks, `the three-track template no longer floors both feed columns: ${r.body.trim()}`).not.toBeNull()
+    const [, aEm, aFr, bEm, bFr] = tracks!.map(Number) as unknown as [string, number, number, number, number]
+    const FONT = 14
+    const REGION = 1700
+    const GAP = 12
+    const stockLog = Math.min(44 * FONT, 0.4 * REGION)
+    const pair = REGION - stockLog - 2 * GAP
+    expect(pair * Math.min(aFr, bFr) / (aFr + bFr), 'the stock split already sits on a floor').toBeGreaterThan(Math.max(aEm, bEm) * FONT)
+    expect((aEm + bEm) * FONT + 0.5 * REGION + 2 * GAP, 'two floors and a log at its ceiling overrun the region').toBeLessThan(REGION)
   })
 
   it('the TX dock is pinned and unshrinkable (flex: 0 0 auto)', () => {

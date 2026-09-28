@@ -81,16 +81,24 @@ vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> })
 vi.mock('../remote-web/RemoteRecall', () => ({ RemoteRecallEntry: () => <div data-testid="recall-stub" /> }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
-/** The observed region's callback, so a test can fire a resize (useRegionCols.test's harness). */
+/** Fire a resize the way the browser does: to EVERY live observer. The region's (useRegionCols)
+ *  is no longer the only one — with the real panel record the log column's width divider
+ *  observes too (panes/RegionColumnSeams), and a harness that kept the last one constructed
+ *  fired the divider's instead of the region's. */
 let fire: (() => void) | null = null
 beforeEach(() => {
-  fire = null
+  const live = new Set<() => void>()
+  fire = () => [...live].forEach((cb) => cb())
   globalThis.ResizeObserver = class {
+    cb: () => void
     constructor(cb: () => void) {
-      fire = cb
+      this.cb = cb
+      live.add(cb)
     }
     observe() {}
-    disconnect() {}
+    disconnect() {
+      live.delete(this.cb)
+    }
     unobserve() {}
   } as unknown as typeof ResizeObserver
   Element.prototype.setPointerCapture = () => {}

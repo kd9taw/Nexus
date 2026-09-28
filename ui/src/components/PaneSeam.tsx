@@ -28,8 +28,9 @@
 //     the split as MEASURED on screen, because a pane's stock share is a sheet default the record
 //     never saw (Operate's Band Activity : Rx Frequency is 1.6 : 1). Reset clears the pair back to
 //     that default. The drag maps the pointer's place in the pair, the mapping SplitterSeam had.
-//   · VALUE (`value`): the host owns the size (App's Tempo rails, usePaneWidths). The divider
-//     steps, drags and resets it; the host clamps and stores.
+//   · VALUE (`value`): the host owns the size (App's Tempo rails, usePaneWidths; a grid cockpit's
+//     log column, panes/RegionColumnSeams). The divider steps, drags and resets it; the host
+//     clamps and stores.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Its own prose is the
 // tooltip; each divider's accessible name is its caller's `label`.
@@ -395,13 +396,16 @@ export interface SplitSeamProps {
   axis?: SeamAxis
   /** Grid-column mode: the container whose template consumes the fr tokens. */
   columnsOn?: RefObject<HTMLElement | null>
+  /** Classes that place this divider in its container, beside its own (a grid cockpit's column
+   *  divider rides the gap before its track: cockpit-panes.css `.cockpit-colseam`). */
+  className?: string
 }
 
 /** A pane never goes below MIN_SHARE, so the divider never leaves this span of the pair. */
 const SPLIT_LO = MIN_SHARE / 2
 const SPLIT_HI = 1 - MIN_SHARE / 2
 
-function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y', columnsOn }: SplitSeamProps) {
+function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y', columnsOn, className }: SplitSeamProps) {
   /** The split on screen: the first pane's fraction of the two, or null when nothing is laid out. */
   const measure = useCallback((): number | null => {
     const a = above.current
@@ -454,7 +458,7 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
 
   return (
     <SeamHandle
-      className={`pane-splitter ${axis === 'x' ? 'col-seam' : 'horizontal'} seam`}
+      className={`pane-splitter ${axis === 'x' ? 'col-seam' : 'horizontal'} seam${className ? ` ${className}` : ''}`}
       axis={axis}
       label={label}
       value={measured}
@@ -508,8 +512,9 @@ export interface ValueSeamProps {
   axis: SeamAxis
   /** The class that places this divider in its grid, beside `pane-splitter`. */
   className: string
-  /** The size it stands at, CSS px, and the host's clamps for it. */
-  value: number
+  /** The size it stands at, CSS px, and the host's clamps for it. null = nothing measurable (a
+   *  hidden box): no values are announced and only a reset acts. */
+  value: number | null
   min: number
   max: number
   /** +1: moving the divider down/right grows what it sizes; −1: moving it up/left does. */
@@ -520,11 +525,15 @@ export interface ValueSeamProps {
   onCommit: (v: number) => void
   /** This divider's default back. */
   onReset: () => void
+  /** A cancelled drag: put back exactly what was painted before it. Omitted ⇒ paint the size it
+   *  started at, which is right for a host that always paints a size (the Tempo rails) and wrong
+   *  for one whose default is NO value at all (a grid cockpit's log column). */
+  onCancel?: () => void
   /** Accessible name. */
   label: string
 }
 
-function ValueSeam({ axis, className, value, min, max, grows, onPaint, onCommit, onReset, label }: ValueSeamProps) {
+function ValueSeam({ axis, className, value, min, max, grows, onPaint, onCommit, onReset, onCancel, label }: ValueSeamProps) {
   // The floor wins a disagreement: a pane the operator cannot grab back is worse than a ceiling
   // overrun on a window below the supported minimum.
   const hi = Math.max(min, max)
@@ -543,13 +552,14 @@ function ValueSeam({ axis, className, value, min, max, grows, onPaint, onCommit,
       commit={(v) => onCommit(clampV(v))}
       reset={onReset}
       drag={(e) => {
+        if (value == null) return null
         // Relative to where the drag started, in CSS px.
         const z = elZoom(e.currentTarget)
         const p0 = axis === 'x' ? e.clientX : e.clientY
         return {
           at: (ev) => clampV(value + (grows * ((axis === 'x' ? ev.clientX : ev.clientY) - p0)) / z),
           paint: onPaint,
-          restore: () => onPaint(value),
+          restore: onCancel ?? (() => onPaint(value)),
         }
       }}
     />

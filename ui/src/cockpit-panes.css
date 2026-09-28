@@ -229,6 +229,11 @@
   min-width: 0;
   display: grid;
   gap: var(--space-3);
+  /* The containing block of the column dividers (`.cockpit-colseam` below), and of nothing else:
+     every pane frame already contains its own positioned content (`.pane-frame` carries a
+     backdrop-filter, which makes it the containing block of everything absolutely positioned
+     inside it), and a column holds only frames. */
+  position: relative;
   /* Safe fallback for a region that somehow has no state stamped yet (useRegionCols owns
      both attributes and stamps before first paint, but the failure direction must still be
      "scrolls", never "clips"). This IS the stacking behaviour; [data-flow='fill'] overrides
@@ -259,17 +264,32 @@
    cockpit-shells.test.ts). A bare 44em therefore made the log a CONSTANT 616px at every
    reachable width, and at region 1080–1244 the "wide" feed column came out NARROWER than
    the log form. Bounding the payout at 40% keeps the feed at ~60% of the region at every
-   2-col width; above region ~1540 the 44em arm takes over and the cap behaves as designed. */
+   2-col width; above region ~1540 the 44em arm takes over and the cap behaves as designed.
+
+   THE OPERATOR'S WIDTHS (layout L2). The column dividers (components/panes/RegionColumnSeams)
+   write three tokens INLINE on the region, as placement inputs exactly like a frame's flex, and
+   only these two templates read them: `--cockpit-col-log` (the log column's width), and at three
+   columns `--cockpit-col-a/-b` (the two feed columns' fr shares). Unset, each resolves to the
+   stock template. The log token is always written `min(<px>, 50%)`
+   (features/paneColumns.logColValue), so the §11.6 payout is still proportion-bounded — at half
+   the region at most — and the 24em floor stays the track's own: a width stored on a wide window
+   is clamped by the layout itself on load and on every resize. */
 .cockpit-panes[data-cols='2'] {
-  grid-template-columns: minmax(0, 1fr) minmax(24em, min(44em, 40%));
+  grid-template-columns: minmax(0, 1fr) minmax(24em, var(--cockpit-col-log, min(44em, 40%)));
 }
 
 /* THREE COLUMNS — ultrawide/fullscreen. The primary feed column gets 1.6fr so "prominent"
    means genuinely prominent; the aux column takes the rig/DSP panes; the log column keeps
    the SAME 44em cap, which is what ends the 3300px-wide text field. (Same min() spelling
-   as tier 2 for one vocabulary; at region ≥1700 the 40% arm never binds — 44em wins.) */
+   as tier 2 for one vocabulary; at region ≥1700 the 40% arm never binds — 44em wins.)
+
+   The two feed columns FLOOR AT 16em, which the stock split never reaches (at the tier's
+   narrowest region, 1700 px, the aux column is ~408 px) and a dragged one does: the divider
+   between them stops a pane's shares at MIN_SHARE, 7.5 % of the pair, which at 1920×1080 is
+   an ~85 px column of rig controls. The floors always fit: two of them, the log at its 50 %
+   ceiling and both gaps leave room at the tier's narrowest region. */
 .cockpit-panes[data-cols='3'] {
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(24em, min(44em, 40%));
+  grid-template-columns: minmax(16em, var(--cockpit-col-a, 1.6fr)) minmax(16em, var(--cockpit-col-b, 1fr)) minmax(24em, var(--cockpit-col-log, min(44em, 40%)));
 }
 
 /* ── THE FLOW, per measurement. These rules declare the vertical model — who scrolls, how
@@ -350,6 +370,29 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* THE COLUMN DIVIDERS (layout L2, components/panes/RegionColumnSeams). A divider between two
+   columns is an ABSOLUTELY POSITIONED child of the region, placed by `grid-column` on the track
+   AFTER it and pulled back over the gap before that track: the full height of the region, exactly
+   as wide as the gap, covering no pane. Not a grid child — an in-flow one would take a track or a
+   cell of its own (the Operate Classic seam's reasoning) — and not a column's child, because the
+   column scrolls and clips. An absolutely positioned grid child is placed by its grid lines and
+   takes no part in auto-placement, so the columns flow exactly as before.
+   Only the bounded flow renders one: at one track there is nothing to divide sideways. */
+.cockpit-colseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-3) / -2 - 6px);
+  width: 12px;
+  margin: 0;
+}
+.cockpit-colseam-2 {
+  grid-column: 2 / 3;
+}
+.cockpit-colseam-3 {
+  grid-column: 3 / 4;
 }
 
 /* TX DOCK — the STOP surface: PTT / abort / send, and nothing else. `flex: 0 0 auto` is load-bearing: the

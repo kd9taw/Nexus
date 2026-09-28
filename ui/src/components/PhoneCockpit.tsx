@@ -31,9 +31,11 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
+import { regionColsStyle } from '../features/paneColumns'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
@@ -1333,6 +1335,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // The divider between the two feeds measures and repaints their frames (PaneSeam).
   const spotsFrameRef = useRef<HTMLElement>(null)
   const neededFrameRef = useRef<HTMLElement>(null)
+  // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
+  const mainColRef = useRef<HTMLDivElement>(null)
+  const auxColRef = useRef<HTMLDivElement>(null)
+  const logColRef = useRef<HTMLDivElement>(null)
 
   // ── WHAT THIS RIG DRIVES, one boolean per control ────────────────────────────────────
   // Read through `reports`, so each one is "reporting now, or reported at some point this
@@ -2565,34 +2571,55 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           feeds says why). Spots is NOT that residual: the strips' slot stays in the leading
           column as a `null`, so it keeps its position among the children and React carries its
           fiber (and the board's scroll and focus) across the flip. Needed IS: it changes column,
-          like the strips, and its filters are stored. */}
-      <div className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`} ref={panesRef}>
+          like the strips, and its filters are stored.
+
+          THE COLUMN DIVIDERS (layout L2) ride the region after its columns, absolutely positioned
+          over the gaps, and move only the boundaries: every pane keeps its column and its key, so
+          nothing remounts. The widths they set are the tokens on the region's style, read by the
+          two- and three-track templates only. Not in the Remote contact presentation, whose one
+          track has no boundary to move. */}
+      <div
+        className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`}
+        ref={panesRef}
+        style={quick ? undefined : regionColsStyle(panels?.layout.cols)}
+      >
         {cols === 3 ? (
           <>
-            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
               {bandPane}
               {keyerPane}
               {null}
               {feedPanes}
             </div>
-            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux" ref={auxColRef}>
               {auxPanes}
               {neededPane}
             </div>
-            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">{logPane}</div>
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>{logPane}</div>
           </>
         ) : (
           <>
             {leadPresent && (
-              <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
+              <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
                 {bandPane}
                 {keyerPane}
                 {auxPanes}
                 {feedPanes}
               </div>
             )}
-            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">{logPane}</div>
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>{logPane}</div>
           </>
+        )}
+        {!quick && panels?.setCols && (
+          <RegionColumnSeams
+            region={panesRef}
+            cols={cols}
+            tracks={cols === 3 ? [mainColRef, auxColRef, logColRef] : [mainColRef, logColRef]}
+            stored={panels.layout.cols}
+            setCols={panels.setCols}
+            splitLabel={t('phone.seam.columns.label')}
+            widthLabel={t('pane.seam.logWidth.label')}
+          />
         )}
       </div>
 

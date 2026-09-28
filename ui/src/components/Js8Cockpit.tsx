@@ -15,6 +15,8 @@ import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { RegionColumnSeams } from './panes/RegionColumnSeams'
+import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { JS8_PANEL_IDS, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
@@ -405,6 +407,13 @@ export function Js8Cockpit({
   const logPresent = shown('log')
   const populated = [activityPresent, auxPresent, logPresent].filter(Boolean).length
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
+  // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
+  const mainColRef = useRef<HTMLDivElement>(null)
+  const auxColRef = useRef<HTMLDivElement>(null)
+  const logColRef = useRef<HTMLDivElement>(null)
+  // Two tracks with the log hidden are activity | stations + inbox: the second track is the
+  // stations column, and the width divider on its left edge says so.
+  const auxInLogTrack = cols === 2 && !logPresent
 
   const activityPin = usePinnedScroll<HTMLDivElement>()
   const units = useUnits()
@@ -956,29 +965,31 @@ export function Js8Cockpit({
       )}
 
       {/* THE PANE REGION — CW's keyed columns: the log column keeps its key across a 2↔3 flip so
-          the LogEntry never remounts mid-entry (the fix-round D1 rule). */}
-      <div className="cockpit-panes" ref={panesRef}>
+          the LogEntry never remounts mid-entry (the fix-round D1 rule). The column dividers
+          (layout L2) ride the region after its columns and move only the boundaries between
+          them — Phone's twin, which says why. */}
+      <div className="cockpit-panes" ref={panesRef} style={regionColsStyle(panels?.layout.cols)}>
         {cols === 3 ? (
           <>
-            <div className="cockpit-col" key="main">
+            <div className="cockpit-col" key="main" ref={mainColRef}>
               {activityPane}
               {offsetsPane}
             </div>
-            <div className="cockpit-col" key="aux">
+            <div className="cockpit-col" key="aux" ref={auxColRef}>
               {stationsPane}
               {inboxPane}
             </div>
-            <div className="cockpit-col" key="log">
+            <div className="cockpit-col" key="log" ref={logColRef}>
               {logPane}
             </div>
           </>
-        ) : cols === 2 && !logPresent ? (
+        ) : auxInLogTrack ? (
           <>
-            <div className="cockpit-col" key="main">
+            <div className="cockpit-col" key="main" ref={mainColRef}>
               {activityPane}
               {offsetsPane}
             </div>
-            <div className="cockpit-col" key="aux">
+            <div className="cockpit-col" key="aux" ref={auxColRef}>
               {stationsPane}
               {inboxPane}
             </div>
@@ -986,7 +997,7 @@ export function Js8Cockpit({
         ) : (
           <>
             {(activityPresent || auxPresent) && (
-              <div className="cockpit-col" key="main">
+              <div className="cockpit-col" key="main" ref={mainColRef}>
                 {activityPane}
                 {offsetsPane}
                 {stationsPane}
@@ -994,11 +1005,22 @@ export function Js8Cockpit({
               </div>
             )}
             {logPresent && (
-              <div className="cockpit-col" key="log">
+              <div className="cockpit-col" key="log" ref={logColRef}>
                 {logPane}
               </div>
             )}
           </>
+        )}
+        {panels?.setCols && (
+          <RegionColumnSeams
+            region={panesRef}
+            cols={cols}
+            tracks={cols === 3 ? [mainColRef, auxColRef, logColRef] : [mainColRef, auxInLogTrack ? auxColRef : logColRef]}
+            stored={panels.layout.cols}
+            setCols={panels.setCols}
+            splitLabel={t('js8.seam.columns.label')}
+            widthLabel={auxInLogTrack ? t('js8.seam.auxWidth.label') : t('pane.seam.logWidth.label')}
+          />
         )}
       </div>
 
