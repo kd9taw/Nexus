@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the connection drops. While the picture is frozen Nexus takes no clicks or keys from the browser,
   and Stop TX still works. A band or mode list you open from the browser opens inside the Nexus
   window, so you can see it and pick from it. Switching to another tab ends the stream; press
-  **Start the stream** again when you are back.
+  **Start the stream** again when you are back. If Remote access is switched off for your account
+  while you stream, the stream ends within about two seconds and the page says why.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
