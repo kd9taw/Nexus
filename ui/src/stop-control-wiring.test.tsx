@@ -536,14 +536,18 @@ describe('Phone, over the stream', () => {
   const deliver = (name: string) => send(streamed(name))
   const at = (el: Element) => Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => el })
   const click = () => { deliver('pointer down'); deliver('pointer up') }
-  /** The page re-asserting what it holds, every 50 ms (inside the 100 ms it promises) for `ms`. */
-  const reassert = async (keys: string[], buttons: number, ms: number) => {
-    for (let t = 0; t < ms; t += 50) { await pause(50); send({ type: 'held', keys, buttons, seq: seq++ }) }
+  /** The page re-asserting what it holds as the page does: at once, then (inside the 100 ms it
+   *  promises) every 50 ms, for `ms`. Returns when the last re-assertion went. Each wait is started
+   *  after a re-assertion, so however late the event loop runs, the next one is due before the
+   *  window's 200 ms deadline and is handled first. */
+  const reassert = async (keys: string[], buttons: number, ms: number): Promise<number> => {
+    let last = performance.now()
+    for (let t = 0; t < ms; t += 50) { send({ type: 'held', keys, buttons, seq: seq++ }); last = performance.now(); await pause(50) }
+    return last
   }
-  /** Wait for the unkey after the page went quiet, and say how long it took. */
-  const quietUntilUnkeyed = async (m: number): Promise<number> => {
-    const quiet = performance.now()
-    await waitFor(() => expect(firedSince(m)).toEqual(['set_ptt {"on":false}']))
+  /** Wait for the unkey after the page went quiet, and say how long after its last re-assertion. */
+  const unkeyedAfter = async (m: number, quiet: number): Promise<number> => {
+    await waitFor(() => expect(firedSince(m)).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}']))
     return performance.now() - quiet
   }
   beforeEach(async () => {
@@ -564,11 +568,11 @@ describe('Phone, over the stream', () => {
   })
 
   it('a streamed Space keys PTT through the cockpit\'s own handler, stays keyed while re-asserted, and unkeys within 200 ms of the page going quiet', async () => {
-    expect(await fire(() => deliver(SPACE_DOWN))).toEqual(['set_ptt {"on":true}'])
     const m = mark()
-    await reassert(['Space'], 0, 600)
-    expect(firedSince(m), 'held for 600 ms: still keyed').toEqual([])
-    expect(await quietUntilUnkeyed(m), 'not before the 200 ms are up').toBeGreaterThanOrEqual(150)
+    deliver(SPACE_DOWN)
+    const quiet = await reassert(['Space'], 0, 600)
+    expect(firedSince(m), 'keyed, and held for 600 ms: still keyed').toEqual(['set_ptt {"on":true}'])
+    expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
   })
 
   it('a streamed Space in the log strip is typing: the field gets the key, and nothing is keyed', async () => {
@@ -599,14 +603,16 @@ describe('Phone, over the stream', () => {
 
   it('the PTT button held over the stream keys, stays keyed while re-asserted, and unkeys within 200 ms of the page going quiet; reset unkeys it too', async () => {
     at(document.querySelector('.ph-ptt')!)
-    expect(await fire(() => deliver('pointer down'))).toEqual(['set_ptt {"on":true}'])
     const m = mark()
-    await reassert([], 1, 600)
-    expect(firedSince(m), 'held for 600 ms: still keyed').toEqual([])
-    expect(await quietUntilUnkeyed(m), 'not before the 200 ms are up').toBeGreaterThanOrEqual(150)
+    deliver('pointer down')
+    const quiet = await reassert([], 1, 600)
+    expect(firedSince(m), 'keyed, and held for 600 ms: still keyed').toEqual(['set_ptt {"on":true}'])
+    expect(await unkeyedAfter(m, quiet), 'not before the 200 ms are up').toBeGreaterThanOrEqual(195)
     // The backstop: a stream's end or a lapse of presence releases it at once.
-    expect(await fire(() => deliver('pointer down'))).toEqual(['set_ptt {"on":true}'])
-    expect(await fire(() => send({ type: 'reset' }))).toEqual(['set_ptt {"on":false}'])
+    const again = mark()
+    deliver('pointer down')
+    send({ type: 'reset' })
+    expect(firedSince(again)).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}'])
   })
 })
 
