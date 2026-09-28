@@ -926,6 +926,64 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`)
         for(let i=0;i<30&&!closes.length;i++)await sleep(100)
         assert.equal(closes.length,1,'the station is told the stream ended')
+        // "STILL THERE?" (the operator's picks "15 min + prompt" and "Only clicks, keys, PTT"), in real
+        // layout and real hit-testing. The stream starts again and this TEST puts a clock of its own on
+        // the page's idle watch; nothing in the product changes the fifteen minutes. At 15:00 the prompt
+        // is up with Stop TX where it was and reachable at every size; the prompt's own press reaches
+        // nothing at the shack; and unanswered at 16:00 the stream ends as End the stream ends it.
+        await click(button('Start the stream'))
+        await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='live'&&document.querySelector('.remote-stream-video')?.videoWidth>0`,20000)
+        assert.equal(offers.length,2,'a second offer, for the stream started again')
+        assert.equal(await evaluate(`(()=>{const e=document.querySelector('.app');let f=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))];while(f){const c=f.memoizedProps?.connection;if(c){window.__idleSkew=0;c.stream.idle.now=()=>performance.now()+window.__idleSkew;return true}f=f.return}return false})()`),true,'the test clock is on the idle watch')
+        const stopBox=()=>evaluate(`JSON.stringify([...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX').getBoundingClientRect())`)
+        const stopBefore=await stopBox()
+        await evaluate(`window.__idleSkew+=15*60000+1000;true`)
+        await until(`!!document.querySelector('.remote-stream-idle')`,5000)
+        assert.equal(await stopBox(),stopBefore,'the prompt moved Stop TX')
+        if(artifacts)for(const theme of ['dark','light']){await evaluate(`document.documentElement.dataset.theme='${theme}';true`);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`stream-still-there-${theme}.png`),Buffer.from(shot.data,'base64'))}
+        // THE STOP LINE while the prompt is up: Stop TX on screen and uncovered, and the prompt's button too.
+        for(const [w,h] of [[360,640],[390,844],[844,390],[1024,768],[1280,800],[1920,1080]])for(const theme of ['dark','light']){
+          await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false},session)
+          await evaluate(`document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'));true`)
+          await settledLayout()
+          const reach=await evaluate(`(()=>{const at=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(x,y))}},keep=document.querySelector('.remote-stream-idle button');return {stop:at([...document.querySelectorAll('button')].find(b=>b.textContent==='Stop TX')),keep:keep&&at(keep),docW:document.documentElement.scrollWidth,w:innerWidth}})()`)
+          assert.ok(reach.stop.inside&&reach.stop.hit&&reach.docW<=reach.w+1,`Stop TX reachable with the prompt up at ${w}x${h} ${theme}: ${JSON.stringify(reach)}`)
+          assert.ok(reach.keep?.inside&&reach.keep.hit,`the prompt's button reachable at ${w}x${h} ${theme}: ${JSON.stringify(reach)}`)
+        }
+        await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
+        await evaluate(`document.documentElement.dataset.theme='dark';window.dispatchEvent(new Event('resize'));true`)
+        await settledLayout()
+        assert.equal(await evaluate(`!!document.querySelector('.remote-stream-idle')`),true,'the sweep ran with the prompt up')
+        // The prompt's own press, dragged off it onto the picture before it is let go: none of it is a
+        // press, a release or a drag at the shack, and it answers the prompt.
+        const keep=await center('.remote-stream-idle button'),below={x:keep.x,y:keep.y+140}
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-video').contains(document.elementFromPoint(${below.x},${below.y}))`),true,'the drag ends over the picture')
+        const [controlBefore,pttBefore]=await atShack('[__shack.received.control.length,__shack.received.ptt.length]')
+        await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...keep,button:'left',buttons:1,clickCount:1},session)
+        await sleep(100)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseMoved',...below,button:'left',buttons:1},session)
+        await sleep(100)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...below,button:'left',buttons:0,clickCount:1},session)
+        await until(`!document.querySelector('.remote-stream-idle')`,3000)
+        await sleep(400)
+        const leaked=await atShack(`[...__shack.received.control.slice(${controlBefore}).filter(m=>m.type==='pointer'&&(m.action!=='move'||m.buttons!==0)),...__shack.received.ptt.slice(${pttBefore}).filter(m=>m.type==='held'&&m.buttons!==0)]`)
+        assert.deepEqual(leaked,[],'the prompt\'s own press reached nothing at the shack')
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-app')?.dataset.streamPhase`),'live','answered: the stream carries on')
+        // Unanswered: fifteen minutes on the prompt is back, and a minute after that the stream ends -
+        // the close on the signalling lane and control released, which is what End the stream sends.
+        const releases=()=>operationWire.filter(v=>v.direction==='out'&&v.type==='release').length
+        const releasesBefore=releases()
+        await evaluate(`window.__idleSkew+=15*60000+1000;true`)
+        await until(`!!document.querySelector('.remote-stream-idle')`,5000)
+        assert.equal(closes.length,1,'the prompt alone ends nothing')
+        await evaluate(`window.__idleSkew+=60000;true`)
+        await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`,5000)
+        for(let i=0;i<30&&closes.length<2;i++)await sleep(100)
+        assert.equal(closes.length,2,'unanswered, the station is told the stream ended')
+        for(let i=0;i<30&&releases()===releasesBefore;i++)await sleep(100)
+        assert.equal(releases(),releasesBefore+1,'and control is released')
+        assert.equal(loggingLease,null,'the station holds no lease for this browser')
+        assert.equal(await evaluate(`document.querySelector('.remote-stream-placeholder')?.textContent.includes('Nobody answered “Still there?”, so the stream ended.')`),true,'the page says why it ended')
         // POSITIVE CONTROL for the CSP listener above: a request the policy forbids is reported, so the
         // empty list really meant "nothing violated", not "nothing was listening".
         await evaluate(`fetch('https://example.invalid/').catch(()=>{});true`)
@@ -933,7 +991,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
-        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, "Still there?" at 15:00 with Stop TX unmoved and reachable at 12 layouts and its press reaching nothing at the shack, the idle end at 16:00 as close and release, no CSP violation`)
       }finally{
         shackLive=false
         await Promise.allSettled([signalling,trickle])

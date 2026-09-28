@@ -31,6 +31,7 @@
 // while an over is armed (M5: no voice activation, ever). What the station's over is doing comes
 // back as `micState`.
 import { AudioLink, browserAudio, type AudioEnvironment } from './audio-listen'
+import { IdleWatch } from './stream-idle'
 import {
   MIC_CONSTRAINTS, STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS,
   STREAM_HELD_REASSERT_MS, STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, STREAM_UPLINK_BUDGET_BYTES,
@@ -208,6 +209,10 @@ export class StreamLink {
    *  so "listen" never leaves this page: it starts the player, and replays the station's last word
    *  on audio so a refusal (another browser listening) reads as that and not as a stalled link. */
   readonly audio: AudioLink
+  /** How long since the operator last did anything on this stream, on this link's clock. It starts
+   *  with each stream, and every re-assertion of a held PTT or of what the picture holds counts, so
+   *  a press held down is never idle; the page adds its clicks and keys and decides what follows. */
+  readonly idle: IdleWatch
 
   constructor(private readonly signal: (payload: BrowserStreamPayload, leaseId: string) => void, private readonly env: StreamEnvironment) {
     this.audio = new AudioLink(message => {
@@ -215,6 +220,7 @@ export class StreamLink {
       const state = this.audioState
       if (state) queueMicrotask(() => this.audio.receive(state))
     }, env.audio)
+    this.idle = new IdleWatch(() => this.env.now())
   }
 
   subscribe = (f: () => void): (() => void) => { this.listeners.add(f); return () => { this.listeners.delete(f) } }
@@ -228,6 +234,7 @@ export class StreamLink {
     this.teardown()
     this.lease = leaseId
     this.heldSeq = 0
+    this.idle.active()
     this.set({ ...OFF, phase: 'connecting' })
     this.watchPage()
     let peer: PeerLike
@@ -593,6 +600,7 @@ export class StreamLink {
     const press = this.press
     if (!press || !this.sendPtt({ type: 'pttHold', holdId: press.holdId, seq: press.seq })) { this.releasePtt(); return }
     press.seq = Math.min(press.seq + 1, 0xffffffff)
+    this.idle.active()
   }
   private sendHeld(): void {
     if (this.uplinkBackedUp()) return
@@ -600,7 +608,10 @@ export class StreamLink {
     if (!set) return
     const message = { type: 'held', keys: set.keys, buttons: set.buttons, seq: this.heldSeq }
     try { parseHeld(message) } catch { return }
-    if (this.sendPtt(message)) this.heldSeq = Math.min(this.heldSeq + 1, 0xffffffff)
+    if (!this.sendPtt(message)) return
+    this.heldSeq = Math.min(this.heldSeq + 1, 0xffffffff)
+    // Held on the picture counts as held here: it may be the cockpit's own PTT (Space, or its button).
+    this.idle.active()
   }
   private sendPtt(message: object): boolean {
     const ptt = this.channels?.ptt
