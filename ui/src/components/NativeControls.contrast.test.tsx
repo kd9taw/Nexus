@@ -45,6 +45,11 @@
 // Remote views' guards look for. Start is disabled until a park is typed, the state the operator
 // meets first, so it has to look disabled once the browser no longer greys it. The sweep reads
 // every button those two views render, so a new one left to the browser there is caught too.
+//
+// THE WATCH LIST × (Settings ▸ Spots & Alerts), found by the same night's census: the overlay
+// remove's pattern exactly, `--state-weak` on the browser's face, 1.57:1 in the dark theme. It
+// exists only for an entry in the list, and the census's fixture list was empty, so this guard
+// seeds two.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -53,6 +58,7 @@ import { SetupHealth } from './SetupHealth'
 import { OperateRoster } from './OperateRoster'
 import { PotaSotaView } from './PotaSotaView'
 import { SatellitesView } from './SatellitesView'
+import { WatchlistPanel } from './WatchlistPanel'
 import { StationControlContext } from '../stationAccess'
 import { t } from '../i18n'
 import type { AppSnapshot, Station } from '../types'
@@ -366,5 +372,45 @@ describe('POTA’s Start and Download and the Satellites ⧉ wear Nexus’s own 
     const noDim = RULES.filter((r) => r.selector !== '.pota-parklist-import[disabled]')
     expect(noDim.length, 'the rule under test is not in the sheet').toBe(RULES.length - 1)
     expect(disabledLooksEnabled(noDim, buttons)).toContain(`POTA "${t('ota.activation.start')}" (disabled)`)
+  })
+})
+
+// ── The watch list × (WatchlistPanel.tsx) ──────────────────────────────────────────────────────
+
+/** The × on each entry of a watch list holding two, read off the rendered DOM. */
+function watchlistRemoves(): Control[] {
+  localStorage.setItem('nexus.watchlist', JSON.stringify([
+    { id: 'call-VP8-a1', kind: 'call', value: 'VP8*' },
+    { id: 'grid-FN31-b2', kind: 'grid', value: 'FN31', cqOnly: true },
+  ]))
+  const r = render(<WatchlistPanel />)
+  const out = [...r.container.querySelectorAll<HTMLButtonElement>('button.watchlist-remove')].map((b) => ({
+    name: `Watch list × "${b.getAttribute('aria-label')}"`,
+    chain: chainOf(b),
+  }))
+  cleanup()
+  localStorage.removeItem('nexus.watchlist')
+  return out
+}
+
+describe('the watch list × paints its own face', () => {
+  it('renders a × for each entry (a guard over an empty list is inert)', () => {
+    expect(watchlistRemoves().length).toBe(2)
+  })
+
+  it('it is not left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, watchlistRemoves())).toEqual([])
+  })
+
+  it('it reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, watchlistRemoves())).toEqual([])
+  })
+
+  it('FIRES: the × as it shipped, the red on the browser\'s face, is caught', () => {
+    const shipped = RULES.map((r) =>
+      r.selector === '.watchlist-remove' ? { ...r, decls: r.decls.filter((d) => !/^(background|border)/.test(d.prop)) } : r,
+    )
+    const left = leftToTheBrowser(shipped, watchlistRemoves())
+    expect(left.some((m) => m.endsWith('the browser draws its face')), left.join('\n')).toBe(true)
   })
 })

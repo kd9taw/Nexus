@@ -278,6 +278,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match the Import buttons next to them, and Start still looks greyed out until you type a park
   reference. The Satellites ⧉, which opens Satellites in its own window, matches the refresh chip
   beside it and stays where it was.
+- **The watch list's × can be read in the dark theme.** In Settings ▸ Spots & Alerts, the red ×
+  that removes a watch-list entry sat on a grey box drawn by the browser, and in the dark theme it
+  could hardly be seen. It now sits on the panel's colour, like the SSTV overlay's remove, and reads
+  clearly in both themes and on every built-in theme.
 - **Keys that could go blank now always show their words.** SSTV's manual-receive Start, the
   SSTV picture viewer's Previous, Next and Save, JS8's station queries, inbox Read and Delete,
   Cancel and Drop, and the Remote page's Refresh, retry and SSTV Save keys took the colour of
