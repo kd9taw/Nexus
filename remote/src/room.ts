@@ -56,6 +56,11 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   // must survive, and it rides the station's attachment.
   private stream = new StreamRelay()
   private streamVersions = new Map<WebSocket, number>()
+  // Per browser session, the stream signal still on its way: an offer waits on a D1 read, and the
+  // room takes the socket's next message meanwhile, so what the page sent after it waits behind it.
+  // The station gets one session's signals in the order they were sent, never a candidate before
+  // the offer it belongs to. Nothing to checkpoint: a hibernation drops the wait with the rest.
+  private streamOrder = new Map<string, Promise<void>>()
   private operationVersions = new Map<WebSocket,number>()
   // Per observer session, the command deadline from commandDeadline(). Checkpointed with the
   // browser's attachment so a hibernation does not hand a woken room an empty one.
@@ -267,13 +272,21 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     // entitlement freshness first - the one await on this lane, taken only for an offer.
     if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string' && parsed.type.startsWith('stream')) {
       if (attachment.role === 'station') { this.stream.receiveStation(parsed, Date.now()); return }
-      const offer = (parsed as { payload?: { kind?: unknown } }).payload?.kind === 'offer'
-      if (offer && await this.refreshEntitlement(attachment.sessionId, Date.now())) {
-        // The await yielded, and the socket may have gone meanwhile - as in the operation lane.
-        if (!this.peers.has(ws)) return
-        this.syncApplication(Date.now())
-      }
-      this.stream.receiveBrowser(attachment.sessionId, parsed, Date.now())
+      const sessionId = attachment.sessionId, before = this.streamOrder.get(sessionId)
+      const handled = (async () => {
+        if (before) await before
+        const offer = (parsed as { payload?: { kind?: unknown } }).payload?.kind === 'offer'
+        if (offer && await this.refreshEntitlement(sessionId, Date.now())) {
+          // The await yielded, and the socket may have gone meanwhile - as in the operation lane.
+          if (!this.peers.has(ws)) return
+          this.syncApplication(Date.now())
+        }
+        this.stream.receiveBrowser(sessionId, parsed, Date.now())
+      })()
+      const settled = handled.catch(() => {})
+      this.streamOrder.set(sessionId, settled)
+      try { await handled }
+      finally { if (this.streamOrder.get(sessionId) === settled) this.streamOrder.delete(sessionId) }
       return
     }
     // A pushed control outcome (operation v5) leaves no relay state behind it, so like audio it

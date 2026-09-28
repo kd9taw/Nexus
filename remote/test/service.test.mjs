@@ -2353,6 +2353,27 @@ test('the stream lane carries the contract\'s signals both ways, with the identi
   assert.equal(live.browser.closed, false)
 })
 
+// The relay keeps one session's signals in the order the page sent them. An offer waits on a fresh
+// reading of the account's entitlement (a D1 read) before it is forwarded, and a candidate sent right
+// behind it must not overtake it meanwhile: a station meets a candidate before the offer it belongs
+// to and drops it. The page sends its held candidates straight after its offer (it holds them while it
+// signs the offer, A5), so this is the order every real negotiation arrives in.
+test('the stream lane keeps a session\'s signals in order: a candidate never overtakes its offer', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, STREAM_HEADERS)
+  const leaseId = crypto.randomUUID()
+  for (let round = 0; round < 3; round++) {
+    // The last reading is older than the command lane's budget again, so this offer waits on D1.
+    await settleEntitlement(live)
+    live.browser.send(pageSignal('offer', leaseId))
+    live.browser.send(pageSignal('candidate (reflexive)', leaseId))
+    const first = await live.station.take(typed('streamSignal'))
+    const second = await live.station.take(typed('streamSignal'))
+    assert.deepEqual([first.payload.kind, second.payload.kind], ['offer', 'candidate'], `round ${round}`)
+  }
+  live.browser.close(); live.station.close()
+})
+
 test('a station that never advertised the stream lane is not handed a signal, and stays up', async () => {
   const pair = await app.paired()
   const live = await admitted(pair, 1, OPERATION_HEADERS)
