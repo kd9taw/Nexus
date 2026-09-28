@@ -28,6 +28,20 @@ pub enum OfferRefusal {
     NoVideo,
     /// No `webrtc-datachannel` line.
     NoDataChannel,
+    /// It passed the checks above but the WebRTC stack could not read or answer it.
+    Unparseable,
+}
+
+/// The offer's SHA-256 DTLS fingerprint, as written (`AB:CD:…`). The peer's certificate must match
+/// it, which the transport verifies, and it is what the device-key binding signs (security test
+/// A5): the seam that check reads.
+pub fn fingerprint(sdp: &str) -> Option<&str> {
+    sdp.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("a=fingerprint:")?;
+        let (hash, digest) = value.split_once(' ')?;
+        hash.eq_ignore_ascii_case("sha-256")
+            .then_some(digest.trim())
+    })
 }
 
 #[derive(Default)]
@@ -140,6 +154,22 @@ mod tests {
     #[test]
     fn the_contract_offer_is_accepted() {
         assert_eq!(check(&fixture_offer()), Ok(()));
+    }
+
+    #[test]
+    fn the_fingerprint_is_read_as_written() {
+        assert_eq!(
+            fingerprint(&fixture_offer()),
+            Some(
+                "0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9"
+            )
+        );
+        let sha1 = fixture_offer().replace("a=fingerprint:sha-256", "a=fingerprint:sha-1");
+        assert_eq!(
+            fingerprint(&sha1),
+            None,
+            "only a SHA-256 fingerprint is read"
+        );
     }
 
     /// ★ A4: a hand-built plain-RTP offer is refused, and so is every other non-DTLS profile.

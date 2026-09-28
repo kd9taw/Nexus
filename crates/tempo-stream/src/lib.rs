@@ -12,8 +12,10 @@
 //! - [`frame_clock`] — how old the picture the page last showed is, on the station's own clock.
 //! - [`lan`] — the last check that no LAN address leaves the shack.
 //! - [`stun`] — the one binding request that learns the station's reflexive address.
+//! - [`session`] — one streamed session over WebRTC: answer, candidates, video, data channels.
 pub mod frame_clock;
 pub mod lan;
 pub mod offer;
 pub mod protocol;
+pub mod session;
 pub mod stun;

@@ -1,11 +1,12 @@
 //! No LAN address leaves the shack (security acceptance test A8).
 //!
 //! The station advertises only server-reflexive candidates (and relay ones, once TURN exists):
-//! the address a STUN server saw, never the interface address behind the NAT. It never adds a host
-//! candidate to its WebRTC agent at all, and the transport writes a reflexive candidate's `raddr`
-//! as `0.0.0.0 0`. [`leaks`] is the last lock behind that: every SDP and candidate the station is
-//! about to send is read for a host candidate or a private, link-local, carrier-NAT or unique-local
-//! address, and a leak is never sent.
+//! the address a STUN server saw, never the interface address behind the NAT. Its WebRTC agent does
+//! hold the interface address, which it needs to use its own socket, but only from after the answer
+//! is written, and it is never signalled (see `session`); the transport writes a reflexive
+//! candidate's `raddr` as `0.0.0.0 0`. [`leaks`] is the last lock behind that: every SDP and
+//! candidate the station is about to send is read for a host candidate or a private, link-local,
+//! carrier-NAT or unique-local address, and a leak is never sent.
 use std::net::IpAddr;
 
 /// Is this an address that belongs to the shack's own network rather than the internet?
