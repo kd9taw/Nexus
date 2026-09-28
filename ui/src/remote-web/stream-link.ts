@@ -18,11 +18,12 @@
 //
 // A HELD KEY IS A STATE, NEVER A PAIR (S7). While PTT is held the page re-asserts it every 100 ms,
 // under a fresh hold id per press; the station ends the over when it has heard nothing for 200 ms,
-// so a lost key-up or a dropped link cannot leave the rig keyed.
+// so a lost key-up or a dropped link cannot leave the rig keyed. The PTT key itself (Space, where the
+// station says it is one) is held this way too, and never sent as a key.
 import { AudioLink, browserAudio, type AudioEnvironment } from './audio-listen'
 import {
   STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_INPUT_FLUSH_MS,
-  STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, parsePttState, parseReceivedMessage, parseStreamInput, secureAnswer,
+  STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, parsePttKey, parsePttState, parseReceivedMessage, parseStreamInput, secureAnswer,
   type BrowserStreamPayload, type StreamInput, type StreamWheel,
 } from './stream-protocol'
 
@@ -50,6 +51,10 @@ export type StreamView = {
   /** The station's word, on the last heartbeat reply, on whether it holds transmit presence for this
    *  session. Null until it has said. */
   presence: boolean | null
+  /** The station's word that Space on the picture is its push-to-talk key now. False until it says
+   *  so, and again from each input this page sends until it answers that input: a click can move
+   *  focus into a field at the shack, where Space is typing. */
+  pttKey: boolean
 }
 
 /** Stop, addressed as the station's own Stop is: its boot, the lease the token was issued under, and
@@ -115,7 +120,7 @@ export const STREAM_ICE_SERVERS = [{ urls: 'stun:stun.cloudflare.com:3478' }]
  *  is dropped rather than queued. Stop and a release are sent past it, always. */
 const CONTROL_BUDGET_BYTES = 16 * 1024
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-const OFF: StreamView = { phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null }
+const OFF: StreamView = { phase: 'idle', reason: null, control: false, ptt: false, keyed: false, presence: null, pttKey: false }
 
 export class StreamLink {
   private view: StreamView = OFF
@@ -300,6 +305,8 @@ export class StreamLink {
     }
     this.flushInput()
     this.sendInput(event, false)
+    // It may move focus at the shack; Space is no PTT key until the station answers it.
+    this.set({ pttKey: false })
   }
 
   /** End the stream at this browser's request. */
@@ -340,12 +347,17 @@ export class StreamLink {
   }
 
   /** The station's replies and reports on `control`: its answer to a heartbeat (with whether it
-   *  still holds presence), and the state of the current PTT press. Nothing else here is acted on. */
+   *  still holds presence), the state of the current PTT press, and whether Space is its PTT key.
+   *  Nothing else here is acted on. */
   private fromControl(data: unknown): void {
     if (typeof data !== 'string') return
     let message: Record<string, unknown>
     try { message = JSON.parse(data) as Record<string, unknown> } catch { return }
     if (!message || typeof message !== 'object') return
+    if (message.type === 'pttKey') {
+      try { this.set({ pttKey: parsePttKey(message).armed }) } catch { /* not the contract's: ignored */ }
+      return
+    }
     if (message.type === 'pttState') {
       let state
       try { state = parsePttState(message) } catch { return }

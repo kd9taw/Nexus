@@ -155,6 +155,9 @@ function ended(reason: string | null): string {
  *  was pressed through the picture is released through it when it loses focus or stops being live,
  *  so nothing is left held at the shack by a key-up this page never saw. */
 function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedConnection, active: boolean): void {
+  // Did the Space key now down go down as PTT? Then its key-up is never sent as a key either, even
+  // one that arrives after the picture lost focus and got it back.
+  const spacePtt = useRef(false)
   useEffect(() => {
     const element = video.current
     if (!element || !active) return
@@ -195,8 +198,29 @@ function useInput(video: RefObject<HTMLVideoElement | null>, connection: HostedC
       event.preventDefault()
       send(message)
     }
-    const keydown = key('down'), keyup = key('up')
-    const release = () => { for (const message of held.releaseAll()) link.input(message) }
+    const keyDown = key('down'), keyUp = key('up')
+    // ⛔ THE PTT KEY NEVER TRAVELS AS A KEY. Where the station says Space is its push-to-talk key, a
+    // Space press on the picture is a held PTT, re-asserted on the stream's own channel until the
+    // key comes up, and nothing at all on `control`. Anywhere else Space is a key like any other (a
+    // space typed into a field at the shack), and if the station's word was out of date Nexus's
+    // window drops it rather than key the rig. A press keeps the kind it started as.
+    const keydown = (event: KeyboardEvent) => {
+      if (event.code === 'Space' && !event.repeat) spacePtt.current = link.getSnapshot().pttKey
+      if (event.code === 'Space' && spacePtt.current) {
+        event.preventDefault()
+        if (!event.repeat) link.holdPtt()
+        return
+      }
+      keyDown(event)
+    }
+    const keyup = (event: KeyboardEvent) => {
+      if (event.code === 'Space' && spacePtt.current) { event.preventDefault(); spacePtt.current = false; link.releasePtt(); return }
+      keyUp(event)
+    }
+    const release = () => {
+      if (spacePtt.current) link.releasePtt()
+      for (const message of held.releaseAll()) link.input(message)
+    }
     const menu = (event: Event) => event.preventDefault()
     element.addEventListener('pointerdown', down)
     element.addEventListener('pointermove', move)

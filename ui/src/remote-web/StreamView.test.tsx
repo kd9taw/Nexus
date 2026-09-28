@@ -6,6 +6,7 @@ import type { HostedConnection } from './client'
 import type { OperationState } from './operation-protocol'
 import type { OperationView } from './operation-client'
 import { ANSWER, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { armStreamPttKey, StreamInputDispatcher } from '../remote-native/stream-input'
 
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
@@ -205,7 +206,8 @@ it('releases at the shack whatever it pressed there when the picture loses focus
   const control = v.peer.channel('control')
   const input = { get sent() { return control.sent.filter(m => m.type !== 'heartbeat') } }
   v.video.focus()
-  // Space is the Phone cockpit's push-to-talk key: a key-up this page never sees must not leave it down.
+  // A key held down at the shack (here a space into a field: the station has not said Space is its
+  // PTT key) must not stay down there because this page never saw its key-up.
   fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
   v.video.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 1 }))
   fireEvent.blur(v.video)
@@ -242,6 +244,85 @@ it('blind means no authority: a frozen picture sends no input, and lets go of wh
   expect(v.link.getSnapshot().phase).toBe('live')
   fireEvent.keyDown(v.video, { key: 'a', code: 'KeyA' })
   expect(last(input())).toMatchObject({ type: 'key', action: 'down', key: 'a' })
+})
+
+it('THE PTT KEY NEVER TRAVELS AS A KEY: a Space press over the stream is held PTT, and no Space key event reaches Nexus\'s window', async () => {
+  // Nexus's window at the shack, apart from this page: its own document, with the input bridge in it,
+  // and the Phone cockpit's Space armed (control, Lock off) as the cockpit arms it.
+  const frame = document.body.appendChild(document.createElement('iframe'))
+  const station = frame.contentWindow as Window & typeof globalThis
+  const keys: string[] = []
+  const listen = (event: KeyboardEvent) => keys.push(`${event.type} ${event.code}`)
+  station.addEventListener('keydown', listen); station.addEventListener('keyup', listen)
+  let under: Element = station.document.body
+  Object.defineProperty(station.document, 'elementFromPoint', { configurable: true, value: () => under })
+  const disarm = armStreamPttKey()
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control'), ptt = v.peer.channel('ptt')
+  // The station between them: the window's word goes to the page, the page's input to the window.
+  const bridge = new StreamInputDispatcher(station, armed => act(() => control.deliver({ type: 'pttKey', armed })))
+  const sentKeys = () => control.sent.filter(m => m.type === 'key')
+  const relay = () => { for (const m of control.sent.splice(0)) if (m.type !== 'heartbeat') bridge.handle(m) }
+  try {
+    // The reset a stream starts with: the window says where it stands.
+    bridge.handle({ type: 'reset' })
+    expect(v.link.getSnapshot().pttKey).toBe(true)
+    v.video.focus()
+    fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)) })
+    fireEvent.keyDown(v.video, { key: ' ', code: 'Space', repeat: true })
+    fireEvent.keyUp(v.video, { key: ' ', code: 'Space' })
+    const holds = ptt.sent.filter(m => m.type === 'pttHold')
+    expect(holds.length, 're-asserted while held').toBeGreaterThanOrEqual(3)
+    expect(new Set(holds.map(m => m.holdId)).size, 'one press, one hold id').toBe(1)
+    expect(last(ptt.sent)).toMatchObject({ type: 'pttRelease', holdId: holds[0].holdId })
+    expect(sentKeys(), 'the page sent no key for it').toEqual([])
+    relay()
+    expect(keys, 'and nothing dispatched a Space key event in Nexus\'s window').toEqual([])
+    // Positive control: a click puts focus in a field at the shack, the window says Space is typing
+    // there, and the same press goes as a key and is typed - nothing is held.
+    under = station.document.body.appendChild(station.document.createElement('input'))
+    v.video.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 1, detail: 1 }))
+    v.video.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 800, clientY: 550, button: 0, buttons: 0, detail: 1 }))
+    relay()
+    expect(v.link.getSnapshot().pttKey).toBe(false)
+    const held = ptt.sent.length
+    fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
+    fireEvent.keyUp(v.video, { key: ' ', code: 'Space' })
+    expect(sentKeys().map(m => m.action)).toEqual(['down', 'up'])
+    relay()
+    expect(keys).toEqual(['keydown Space', 'keyup Space'])
+    expect((under as HTMLInputElement).value).toBe(' ')
+    expect(ptt.sent, 'nothing held').toHaveLength(held)
+  } finally {
+    disarm(); bridge.dispose(); frame.remove()
+  }
+})
+
+it('a Space held as PTT lets go when the picture loses focus, and its key-up is never sent as a key', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control'), ptt = v.peer.channel('ptt')
+  const keys = () => control.sent.filter(m => m.type === 'key')
+  act(() => control.deliver({ type: 'pttKey', armed: true }))
+  v.video.focus()
+  fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
+  expect(v.link.getSnapshot().ptt).toBe(true)
+  fireEvent.blur(v.video)
+  expect(v.link.getSnapshot().ptt).toBe(false)
+  expect(last(ptt.sent)).toMatchObject({ type: 'pttRelease' })
+  // Focus comes back before the key does: that key-up belongs to the PTT press, and stays here.
+  v.video.focus()
+  fireEvent.keyUp(v.video, { key: ' ', code: 'Space' })
+  expect(keys()).toEqual([])
+  // Positive control: a new press is decided afresh - the station now says Space is typing there.
+  act(() => control.deliver({ type: 'pttKey', armed: false }))
+  fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
+  fireEvent.keyUp(v.video, { key: ' ', code: 'Space' })
+  expect(keys().map(m => m.action)).toEqual(['down', 'up'])
 })
 
 it('holds PTT while the button is held, and lets go when it is released', async () => {

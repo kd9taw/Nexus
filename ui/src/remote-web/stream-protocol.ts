@@ -186,6 +186,17 @@ export function parsePttState(raw: unknown): PttState {
   return value as PttState
 }
 
+/** The station's word on `control`: whether Space on the picture is its push-to-talk key right now.
+ *  Only Nexus's own window can tell (its cockpit, the cockpit's Lock, whether a field has focus), so
+ *  it says so after every input it handles and whenever it changes. The page holds PTT for a Space
+ *  only on this word; the PTT key never travels as a key. */
+export type PttKey = { type: 'pttKey'; armed: boolean }
+export function parsePttKey(raw: unknown): PttKey {
+  const value = fields(raw, ['type', 'armed'])
+  if (value.type !== 'pttKey' || typeof value.armed !== 'boolean') throw Error('invalidStream')
+  return value as PttKey
+}
+
 /** Modifier bits on every input event. */
 export const MOD_SHIFT = 1, MOD_CTRL = 2, MOD_ALT = 4, MOD_META = 8
 /** Input is a DOM-level description of what the operator did over the picture, never an OS event.
