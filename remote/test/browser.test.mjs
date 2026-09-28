@@ -864,8 +864,31 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const ptt=await atShack('__shack.received.ptt')
         const holds=ptt.filter(m=>m.type==='pttHold')
         assert.ok(holds.length>=3,'held for 450 ms: re-asserted about every 100 ms ('+holds.length+')')
-        assert.equal(new Set(ptt.map(m=>m.holdId)).size,1,'one press, one hold id')
+        assert.equal(new Set(ptt.filter(m=>m.type!=='held').map(m=>m.holdId)).size,1,'one press, one hold id')
         assert.deepEqual(holds.map(m=>m.seq),holds.map((_,i)=>i),'the sequence counts up from 0')
+        // THE DEAD-MAN, the page's half: a key held on the picture goes as itself and is re-asserted on
+        // ptt at once and every 100 ms while held, and not after; a button held on the picture likewise.
+        const helds=async()=>(await atShack('__shack.received.ptt')).filter(m=>m.type==='held')
+        const consecutive=list=>{const seqs=list.map(m=>m.seq).sort((a,b)=>a-b);return seqs.every((seq,i)=>seq===seqs[0]+i)}
+        await evaluate(`document.querySelector('.remote-stream-video').focus();true`)
+        let heldBefore=(await helds()).length
+        const space={key:' ',code:'Space',windowsVirtualKeyCode:32}
+        await browser.call('Input.dispatchKeyEvent',{type:'keyDown',text:' ',...space},session)
+        await sleep(450)
+        await browser.call('Input.dispatchKeyEvent',{type:'keyUp',...space},session)
+        await untilShack(`__shack.received.control.some(m=>m.type==='key'&&m.code==='Space'&&m.action==='up')`)
+        await sleep(300)
+        const keyHeld=(await helds()).slice(heldBefore)
+        assert.ok(keyHeld.length>=4&&keyHeld.length<=7&&keyHeld.every(m=>m.keys.join()==='Space'&&m.buttons===0)&&consecutive(keyHeld),'Space held 450 ms, then let go: re-asserted at once and every 100 ms, and not after ('+JSON.stringify(keyHeld)+')')
+        heldBefore=(await helds()).length
+        const point=await center('.remote-stream-video'),ups=await atShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up').length`)
+        await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
+        await sleep(450)
+        await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session)
+        await untilShack(`__shack.received.control.filter(m=>m.type==='pointer'&&m.action==='up').length>${ups}`)
+        await sleep(300)
+        const buttonHeld=(await helds()).slice(heldBefore)
+        assert.ok(buttonHeld.length>=4&&buttonHeld.length<=7&&buttonHeld.every(m=>m.keys.length===0&&m.buttons===1)&&consecutive(buttonHeld),'a button held 450 ms, then let go: re-asserted likewise ('+JSON.stringify(buttonHeld)+')')
         // THE STOP LINE, in real layout: Stop TX is on screen and nothing covers it, at every size.
         for(const [w,h] of [[360,640],[390,844],[844,390],[1024,768],[1280,800],[1920,1080]])for(const theme of ['dark','light']){
           await browser.call('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false},session)
@@ -896,7 +919,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
-        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
       }finally{
         shackLive=false
         await Promise.allSettled([signalling,trickle])
