@@ -834,7 +834,8 @@ jobs:
 
       # MinGW-w64 cross toolchain: gcc/g++/gfortran for the Fortran/C/C++ modem,
       # cmake/ninja to drive the libtempo CMake project, and a host build-essential
-      # (cc/make) to cross-build FFTW3f for MinGW.
+      # (cc/make) to cross-build FFTW3f for MinGW. nasm assembles libvpx's x86 code
+      # (Remote as a stream's VP8 encoder, built by the same script).
       - name: Install MinGW-w64 cross toolchain
         run: |
           sudo apt-get update
@@ -845,7 +846,8 @@ jobs:
             libboost-dev \
             cmake \
             ninja-build \
-            build-essential
+            build-essential \
+            nasm
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -867,13 +869,15 @@ jobs:
             target
             src-tauri/target
             target/fftw-mingw
+            target/vpx-mingw
           key: ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-wincross-
 
       # Cross-build FFTW3f for MinGW + the libtempo modem self-test exes (win_smoke,
       # roundtrip, …). Proves the native modem chain links for Windows and produces
-      # target/fftw-mingw, which tempo-fast-sys/build.rs reads on the src-tauri step below.
+      # target/fftw-mingw, which tempo-fast-sys/build.rs reads on the src-tauri step below,
+      # and target/vpx-mingw (the pinned libvpx), which tempo-stream/build.rs reads.
       - name: Cross-build FFTW + libtempo modem exes
         run: bash scripts/build-windows-cross.sh --no-gui
 
@@ -890,6 +894,7 @@ jobs:
       - name: Cross-compile src-tauri (x86_64-pc-windows-gnu)
         env:
           FFTW_MINGW_PREFIX: ${{ github.workspace }}/target/fftw-mingw
+          VPX_MINGW_PREFIX: ${{ github.workspace }}/target/vpx-mingw
           # This job proves COMPILE/LINK, not shipping: the gitignored DeepCW
           # model isn't staged here, and build.rs hard-fails a release-profile
           # radio build without it (the silent-lobotomy gate). Allow it HERE
@@ -906,6 +911,16 @@ jobs:
           --manifest-path src-tauri/Cargo.toml
           --target x86_64-pc-windows-gnu
           --features radio,custom-protocol
+
+      # Security test A2 (Remote as a stream, S11): nothing compiled into the Windows build
+      # injects operating-system input (SendInput, keybd_event, mouse_event), beyond the two
+      # reviewed Tauri callers the script names. It reads sources, not Nexus.exe: Tauri's own
+      # crates already import SendInput, so the binary cannot answer the question. The
+      # self-test plants calls first, so a clean result comes from a check shown to find one.
+      - name: No operating-system input injection (A2)
+        run: |
+          python3 scripts/check-no-input-injection.py --self-test
+          python3 scripts/check-no-input-injection.py
 
   # Job 5b — macOS compile check (fast feedback; the SHIPPING mac build lives in release.yml).
   #

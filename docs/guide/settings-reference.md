@@ -110,6 +110,15 @@ permission back. Without any of these it can watch the station but not change it
   within five seconds, and **Revoke transmission permission** stops it at once. No other
   mode transmits remotely.
 
+**Stream this window to an approved browser** is off by default, and on Windows only for
+now. With it on, a browser approved for station controls, while it holds control, can be
+shown this Nexus window and operate it, and hear the station's receive audio. Only this
+window is sent: a dialog that opens outside it, such as a file picker, is not, and a
+minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
+anything else on this computer. While a browser is attached, every transmission at the
+station stops within five seconds if its connection drops, and within seven if its picture
+freezes.
+
 **How long a browser stays approved.** An approval lasts 30 days, and each time that browser
 opens the station it moves on to 30 days from then, up to 90 days after you approved it here.
 Loading the page without opening the station does not count. Under each approved browser, Nexus

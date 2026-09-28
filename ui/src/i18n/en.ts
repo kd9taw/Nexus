@@ -5857,6 +5857,16 @@ export const EN = {
   'settings.transmit.parsecStop.status.unreadable':
     'Nexus cannot find or read Parsec\u2019s log (it looks for log.txt in %APPDATA%\\Parsec and %ProgramData%\\Parsec), so nothing will be stopped until it can.',
 
+  // Remote as a stream (TX sign-off 2026-09-27): off by default. "Stream" is the picture sent
+  // over the internet, never a radio transmission; the hint names what is sent, what input can
+  // reach, and the stop: five seconds after the connection drops, seven after the picture freezes
+  // (a picture older than two seconds renews nothing, then the five-second lapse). `Nexus` and
+  // `Windows` are tokens.
+  'settings.remoteStream.label': 'Stream this window to an approved browser',
+  'settings.remoteStream.hint':
+    'A browser you approved for station control, while it holds control, is shown this Nexus window and can operate it. Its clicks and keys reach Nexus only, never anything else on this computer. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a minimized window sends nothing. The stream is encrypted end to end. While a browser is connected, every transmission stops within five seconds if its connection drops, and within seven if its picture freezes.',
+  'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
+
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
   'settings.transmit.note':

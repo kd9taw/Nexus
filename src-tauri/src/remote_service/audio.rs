@@ -96,9 +96,21 @@ pub struct AudioLane {
     /// learns about these as sequence gaps, which is the only signal that matters.
     dropped: u64,
     bundles: u64,
+    /// The stream's lane, whose messages go straight to one page on its own data channel and
+    /// so carry no relay address: exactly the bundle the relay would deliver, which is what the
+    /// page's player parses (and it refuses a key it does not know).
+    unaddressed: bool,
 }
 
 impl AudioLane {
+    /// A lane for a streamed session's `audio` data channel.
+    pub fn unaddressed() -> Self {
+        Self {
+            unaddressed: true,
+            ..Self::default()
+        }
+    }
+
     /// True while a browser is being fed. Also the answer to "is this station encoding",
     /// because the encoder exists only inside a listener.
     pub fn listening(&self) -> bool {
@@ -241,7 +253,11 @@ impl AudioLane {
             self.dropped += frames.len() as u64;
             return Pump::default();
         }
-        let message = bundle(&live.session, &frames);
+        let message = if self.unaddressed {
+            bundle_value(&frames).to_string()
+        } else {
+            bundle(&live.session, &frames)
+        };
         // Never send what the far end is bound to refuse. A bundle over the shared bound
         // would close the socket at the relay, so it is dropped here as loss instead.
         if message.len() > MAX_MESSAGE_BYTES {
@@ -282,6 +298,11 @@ impl AudioLane {
 /// duration from a payload length; the epoch is the capture generation, formatted the
 /// same way `transmitEpoch` already is.
 fn bundle(session: &str, frames: &[EncodedFrame]) -> String {
+    state(session, bundle_value(frames))
+}
+
+/// The bundle itself, before any address.
+fn bundle_value(frames: &[EncodedFrame]) -> Value {
     let first = &frames[0];
     let mut payload = Vec::with_capacity(frames.iter().map(|f| f.packet.len() + 2).sum());
     for frame in frames {
@@ -291,18 +312,15 @@ fn bundle(session: &str, frames: &[EncodedFrame]) -> String {
         payload.extend_from_slice(&length.to_be_bytes());
         payload.extend_from_slice(&frame.packet);
     }
-    state(
-        session,
-        json!({
-            "type": "audioRx",
-            "seq": first.seq,
-            "epoch": format!("{:016x}", first.epoch),
-            "firstFrameMs": first.capture_ms,
-            "frameMs": first.frame_ms,
-            "count": frames.len(),
-            "payload": crate::b64_encode(&payload),
-        }),
-    )
+    json!({
+        "type": "audioRx",
+        "seq": first.seq,
+        "epoch": format!("{:016x}", first.epoch),
+        "firstFrameMs": first.capture_ms,
+        "frameMs": first.frame_ms,
+        "count": frames.len(),
+        "payload": crate::b64_encode(&payload),
+    })
 }
 
 /// Address a message to one browser. The relay strips this before delivery.
@@ -330,11 +348,16 @@ pub fn shared_reason(reason: &'static str) -> &'static str {
 /// shared vocabulary, never a message: a refusal string is attacker-adjacent input in
 /// the other direction and this side keeps the same discipline.
 pub fn audio_state(session: &str, listening: bool, reason: Option<&'static str>) -> String {
+    state(session, audio_state_value(listening, reason))
+}
+
+/// The same, unaddressed: for a streamed session's own `audio` channel.
+pub fn audio_state_value(listening: bool, reason: Option<&'static str>) -> Value {
     let mut value = json!({ "type": "audioState", "listening": listening });
     if let Some(reason) = reason {
         value["reason"] = json!(reason);
     }
-    state(session, value)
+    value
 }
 
 #[cfg(test)]

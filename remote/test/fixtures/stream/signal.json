@@ -1,0 +1,414 @@
+{
+  "browserToRoom": [
+    {
+      "name": "offer",
+      "message": {
+        "type": "streamSignal",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
+      "name": "candidate (reflexive)",
+      "message": {
+        "type": "streamSignal",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:842163049 1 udp 1677729535 198.51.100.23 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0 ufrag Hq7z network-cost 999",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "candidate (mDNS host; the station ignores what it cannot resolve)",
+      "message": {
+        "type": "streamSignal",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:3442447574 1 udp 2122260223 4d2a8f1e-8c1b-4f3a-9e2d-2c3b4a5d6e7f.local 54321 typ host generation 0 ufrag Hq7z network-id 1",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "close",
+      "message": {
+        "type": "streamSignal",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "close"
+        }
+      }
+    }
+  ],
+  "roomToStation": [
+    {
+      "name": "offer",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
+      "name": "candidate (reflexive)",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:842163049 1 udp 1677729535 198.51.100.23 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0 ufrag Hq7z network-cost 999",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "candidate (mDNS host; the station ignores what it cannot resolve)",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:3442447574 1 udp 2122260223 4d2a8f1e-8c1b-4f3a-9e2d-2c3b4a5d6e7f.local 54321 typ host generation 0 ufrag Hq7z network-id 1",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "close",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "close"
+        }
+      }
+    }
+  ],
+  "stationToRoom": [
+    {
+      "name": "answer",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "payload": {
+          "kind": "answer",
+          "sdp": "v=0\r\no=str0m-3940214468 1966436405 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=fingerprint:sha-256 F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A:F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A\r\na=ice-options:trickle\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:0\r\na=sendonly\r\na=msid:nexus video\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc-group:FID 1135462385 3027416283\r\na=ssrc:1135462385 cname:nexus\r\na=ssrc:3027416283 cname:nexus\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
+      "name": "candidate (reflexive; never host)",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "streaming",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": true
+      }
+    },
+    {
+      "name": "refused: notController",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "notController"
+      }
+    },
+    {
+      "name": "refused: streamDisabled",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "streamDisabled"
+      }
+    },
+    {
+      "name": "refused: streamUnavailable",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "streamUnavailable"
+      }
+    },
+    {
+      "name": "refused: streamInUse",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "streamInUse"
+      }
+    },
+    {
+      "name": "refused: invalidOffer",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "invalidOffer"
+      }
+    },
+    {
+      "name": "refused: connectionFailed",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "connectionFailed"
+      }
+    },
+    {
+      "name": "refused: streamClosed",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "streamClosed"
+      }
+    }
+  ],
+  "roomToBrowser": [
+    {
+      "name": "answer",
+      "message": {
+        "type": "streamSignal",
+        "payload": {
+          "kind": "answer",
+          "sdp": "v=0\r\no=str0m-3940214468 1966436405 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=fingerprint:sha-256 F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A:F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A\r\na=ice-options:trickle\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:0\r\na=sendonly\r\na=msid:nexus video\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc-group:FID 1135462385 3027416283\r\na=ssrc:1135462385 cname:nexus\r\na=ssrc:3027416283 cname:nexus\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
+      "name": "candidate (reflexive; never host)",
+      "message": {
+        "type": "streamSignal",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0",
+          "sdpMid": "0"
+        }
+      }
+    },
+    {
+      "name": "streaming",
+      "message": {
+        "type": "streamState",
+        "streaming": true
+      }
+    },
+    {
+      "name": "refused: notController",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "notController"
+      }
+    },
+    {
+      "name": "refused: streamDisabled",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "streamDisabled"
+      }
+    },
+    {
+      "name": "refused: streamUnavailable",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "streamUnavailable"
+      }
+    },
+    {
+      "name": "refused: streamInUse",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "streamInUse"
+      }
+    },
+    {
+      "name": "refused: invalidOffer",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "invalidOffer"
+      }
+    },
+    {
+      "name": "refused: connectionFailed",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "connectionFailed"
+      }
+    },
+    {
+      "name": "refused: streamClosed",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "streamClosed"
+      }
+    }
+  ],
+  "roomToStationRefused": [
+    {
+      "name": "an unknown envelope key",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "close"
+        },
+        "extra": 1
+      }
+    },
+    {
+      "name": "an unknown payload key",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "close",
+          "extra": 1
+        }
+      }
+    },
+    {
+      "name": "a payload kind only the station sends",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "answer",
+          "sdp": "v=0\r\no=str0m-3940214468 1966436405 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=fingerprint:sha-256 F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A:F9:E8:D7:C6:B5:A4:93:82:71:60:5F:4E:3D:2C:1B:0A\r\na=ice-options:trickle\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:0\r\na=sendonly\r\na=msid:nexus video\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\na=ssrc-group:FID 1135462385 3027416283\r\na=ssrc:1135462385 cname:nexus\r\na=ssrc:3027416283 cname:nexus\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:ZQ4r\r\na=ice-pwd:m3Nf8Kq2Wd7Lx1Pz5Vb9Tc4H\r\na=setup:passive\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    },
+    {
+      "name": "no leaseId",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "payload": {
+          "kind": "close"
+        }
+      }
+    },
+    {
+      "name": "no deviceId",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "close"
+        }
+      }
+    },
+    {
+      "name": "an offer with no sdp",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "offer"
+        }
+      }
+    },
+    {
+      "name": "a candidate with no sdpMid",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "kind": "candidate",
+          "candidate": "candidate:842163049 1 udp 1677729535 198.51.100.23 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0 ufrag Hq7z network-cost 999"
+        }
+      }
+    },
+    {
+      "name": "no payload kind",
+      "message": {
+        "type": "streamSignal",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "deviceId": "10000000-0000-4000-8000-000000000002",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "payload": {
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    }
+  ],
+  "pageRefused": [
+    {
+      "name": "a reason outside the vocabulary",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "somethingElse"
+      }
+    },
+    {
+      "name": "an unknown key",
+      "message": {
+        "type": "streamState",
+        "streaming": true,
+        "extra": 1
+      }
+    },
+    {
+      "name": "a payload kind only the page sends",
+      "message": {
+        "type": "streamSignal",
+        "payload": {
+          "kind": "offer",
+          "sdp": "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 97\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:0\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=recvonly\r\na=rtcp-mux\r\na=rtcp-rsize\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\na=rtcp-fb:96 nack\r\na=rtcp-fb:96 nack pli\r\na=rtpmap:97 rtx/90000\r\na=fmtp:97 apt=96\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:Hq7z\r\na=ice-pwd:4X7ZkP2qLm9TnB5vRc8WsY3d\r\na=ice-options:trickle\r\na=fingerprint:sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9\r\na=setup:actpass\r\na=mid:1\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n"
+        }
+      }
+    }
+  ]
+}

@@ -591,6 +591,86 @@ but not in `COPYING`), which is a second reason not to hand-write a summary of i
 > Broadcom Corporation:
 > https://datatracker.ietf.org/ipr/1526/
 
+### libvpx (VP8 encoder) — The WebM Project authors
+License: **BSD-3-Clause**, with Google's patent grant (PATENTS). <https://chromium.googlesource.com/webm/libvpx>
+
+Remote as a stream sends the station's Nexus window to the browser as VP8, encoded by **libvpx
+1.17.0**, statically linked into the Windows build. It is built from the release archive of the
+`v1.17.0` tag by `scripts/build-windows-cross.sh`, which refuses the archive unless its SHA-256
+matches the one pinned there; that hash was checked against two independent packagers (Homebrew's
+formula and FreeBSD ports), not taken from the download site. Only the VP8 encoder is built: no
+decoder, no VP9, no command-line tools, and libvpx's bundled libyuv, libwebm, googletest and
+nalloc are not compiled. Nexus calls it through a small C shim of its own
+(`crates/tempo-stream/src/video/vp8_shim.c`) and does not modify it. Other platforms do not link
+it yet.
+
+Per-file license check of what is compiled: 244 of the 245 libvpx source files in the build carry
+the WebM header ("Use of this source code is governed by a BSD-style license … An additional
+intellectual property rights grant can be found in the file PATENTS"). The 245th is
+`third_party/x86inc/x86inc.asm`, the x264 project's assembly macros, under the **ISC** license
+(© 2005-2019 x264 project); its notice is reproduced in `resources/stream/THIRD-PARTY.txt`. No
+GPL or LGPL code is compiled.
+
+The BSD license grants no patent rights; the patent position rests on Google's grant below and on
+the 2013 agreement between Google and MPEG LA covering VP8. LICENSE, verbatim:
+
+> Copyright (c) 2010, The WebM Project authors. All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are
+> met:
+>
+>   * Redistributions of source code must retain the above copyright
+>     notice, this list of conditions and the following disclaimer.
+>
+>   * Redistributions in binary form must reproduce the above copyright
+>     notice, this list of conditions and the following disclaimer in
+>     the documentation and/or other materials provided with the
+>     distribution.
+>
+>   * Neither the name of Google, nor the WebM Project, nor the names
+>     of its contributors may be used to endorse or promote products
+>     derived from this software without specific prior written
+>     permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+> HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+> SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+> LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+> DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+> (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+> OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+PATENTS, verbatim:
+
+> Additional IP Rights Grant (Patents)
+> ------------------------------------
+>
+> "These implementations" means the copyrightable works that implement the WebM
+> codecs distributed by Google as part of the WebM Project.
+>
+> Google hereby grants to you a perpetual, worldwide, non-exclusive, no-charge,
+> royalty-free, irrevocable (except as stated in this section) patent license to
+> make, have made, use, offer to sell, sell, import, transfer, and otherwise
+> run, modify and propagate the contents of these implementations of WebM, where
+> such license applies only to those patent claims, both currently owned by
+> Google and acquired in the future, licensable by Google that are necessarily
+> infringed by these implementations of WebM. This grant does not include claims
+> that would be infringed only as a consequence of further modification of these
+> implementations. If you or your agent or exclusive licensee institute or order
+> or agree to the institution of patent litigation or any other patent
+> enforcement activity against any entity (including a cross-claim or
+> counterclaim in a lawsuit) alleging that any of these implementations of WebM
+> or any code incorporated within any of these implementations of WebM
+> constitute direct or contributory patent infringement, or inducement of
+> patent infringement, then any patent rights granted to you under this License
+> for these implementations of WebM shall terminate as of the date such
+> litigation is filed.
+
 ### SQLite (bundled amalgamation) — D. Richard Hipp and the SQLite developers
 License: **public domain** — see below. <https://sqlite.org/>
 
@@ -769,6 +849,50 @@ Wrangler and Miniflare (<https://github.com/cloudflare/workers-sdk>) and `ws`
 <https://github.com/websockets/ws>) are development/test tools. Their npm packages
 are not shipped inside the browser or desktop app. Wrangler is MIT OR Apache-2.0;
 Miniflare is MIT. Their bundled dependencies retain their own inline notices.
+
+### Nexus Remote streaming
+
+The streamed Remote session (the station's own Nexus window over WebRTC, `crates/tempo-stream`)
+links **str0m 0.24.0** (MIT OR Apache-2.0, © 2022 Martin Algesten; authors Martin Algesten, Hugo
+Tunius and Davide Bertola; <https://github.com/algesten/str0m>), a Sans-I/O WebRTC implementation.
+It is built with its default features off and the `wincrypto` backend: DTLS runs on **dimpl 0.7.4**
+(MIT OR Apache-2.0, pure Rust, <https://github.com/algesten/dimpl>) and the cryptography on Windows
+CNG, an operating-system component Nexus does not ship, so no OpenSSL, aws-lc or ring comes with it.
+Data channels run on **sctp-proto 0.10.5** (MIT OR Apache-2.0, © 2021-2026 WebRTC.rs and 2026 Martin
+Algesten, <https://github.com/algesten/sctp-proto>). The other new crates are the str0m project's
+**str0m-proto 0.7.0**, **str0m-wincrypto 0.8.1** and **is 0.11.1**, plus **arrayvec 0.7.8** (© Ulrik
+Sverdrup), **base64ct 1.8.3** (© Steve Thomas and the RustCrypto Project Developers), **crc 3.4.0**
+(© crc-rs Developers) and **crc-catalog 2.5.0** (© Akhil Velagapudi), all MIT OR Apache-2.0.
+
+Said plainly, because the upstream files do not say it for us:
+
+- None of these crates carries per-file license headers, so each license rests on the crate's
+  metadata and root license files. str0m-proto, str0m-wincrypto and is ship no license file at
+  all; they are part of the str0m project and are taken as licensed under its LICENSE-MIT.
+- str0m states that its bandwidth estimator is ported from libWebRTC's GoogCC. libWebRTC is
+  BSD-3-Clause, "Copyright (c) 2011, The WebRTC project authors. All rights reserved." str0m does
+  not reproduce that notice, so Nexus does, verbatim, in the bundle below.
+- str0m's RTP packetizers share comments with webrtc-rs and Pion (both MIT), which suggests a
+  common lineage. That is an inference from the source, not an upstream statement.
+
+The picture itself is captured and converted by two more crates:
+
+- **windows-capture 2.0.1** (MIT, © 2023 NiiightmareXD, <https://github.com/NiiightmareXD/windows-capture>)
+  captures the Nexus window, and only that window, through Windows.Graphics.Capture, an
+  operating-system component Nexus does not ship. Windows builds only. None of its files carries a
+  license header, so its license rests on its `LICENCE` file. Its other dependencies (the
+  `windows` crate family, rayon, parking_lot, thiserror) were already in Nexus's tree.
+- **yuv 0.8.19** (BSD-3-Clause OR Apache-2.0, BSD-3-Clause elected; © Radzivon Bartoshyk,
+  <https://github.com/awxkee/yuvutils-rs>) converts each captured picture to the encoder's I420.
+  Every one of the 249 source files in the published crate carries the BSD-3-Clause header.
+
+The encoder, libvpx, is a linked native library and is covered under *Linked native libraries*
+above.
+
+The license texts travel in every installer as `resources/stream/THIRD-PARTY.txt`
+(`licenses/stream/THIRD-PARTY.txt` in this repository), with MIT elected where a crate offers MIT
+OR Apache-2.0, and BSD-3-Clause where it offers BSD-3-Clause OR Apache-2.0. libvpx's LICENSE and
+PATENTS are in the same file.
 
 ### Existing application dependencies
 
@@ -982,6 +1106,12 @@ The bundled and linked components combine into the GPLv3 whole:
 - Remote's MIT dependencies combine under GPLv3. The webpki-roots certificate
   data retains CDLA-Permissive-2.0, whose text accompanies that data. Remote
   does not change Nexus's GPL-3.0-only license or the existing DeepCW obligations.
+- The Remote stream's Rust crates (str0m and its dependencies, MIT OR Apache-2.0,
+  MIT elected; windows-capture, MIT; yuv, BSD-3-Clause elected), the BSD-3-Clause
+  libWebRTC notice carried for str0m's bandwidth estimator, and libvpx
+  (BSD-3-Clause, with its ISC-licensed x86inc.asm, and Google's patent grant)
+  combine one way into the GPLv3 whole, on the same reasoning as the other
+  permissive components above.
 
 Runtime data services (the "Runtime data services" section above) are **not
 bundled or linked** — the app merely queries them over the network — so their

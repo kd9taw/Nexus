@@ -472,6 +472,19 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   unmodified. Opus is an IETF standard (RFC 6716) available under royalty-free patent
   licences; libopus's neural extensions are not enabled (see **[NOTICE](NOTICE)** for the full
   attribution and why).
+- **[str0m](https://github.com/algesten/str0m)** (MIT OR Apache-2.0) — **Martin Algesten** and
+  contributors. The Remote stream's WebRTC transport, with DTLS on the pure-Rust
+  [dimpl](https://github.com/algesten/dimpl) and data channels on
+  [sctp-proto](https://github.com/algesten/sctp-proto); its bandwidth estimator is ported from
+  libWebRTC's GoogCC (BSD-3-Clause, © The WebRTC project authors). See **[NOTICE](NOTICE)**.
+- **[windows-capture](https://github.com/NiiightmareXD/windows-capture)** (MIT) —
+  **NiiightmareXD**. Captures the Nexus window, and only that window, for the Remote stream on
+  Windows.
+- **[yuv](https://github.com/awxkee/yuvutils-rs)** (BSD-3-Clause OR Apache-2.0) — **Radzivon
+  Bartoshyk**. Converts each captured picture for the video encoder.
+- **[libvpx](https://chromium.googlesource.com/webm/libvpx)** (BSD-3-Clause, with Google's patent
+  grant) — **The WebM Project authors**. The Remote stream's VP8 video encoder, statically linked
+  from a pinned, hash-checked source build. See **[NOTICE](NOTICE)**.
 - **[SQLite](https://sqlite.org/)** (public domain) — **D. Richard Hipp** and the SQLite
   developers. Nexus's logbook is stored in SQLite, statically linked through the
   [`rusqlite`](https://github.com/rusqlite/rusqlite) (MIT) and `libsqlite3-sys` (MIT) crates,

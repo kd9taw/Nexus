@@ -1,0 +1,628 @@
+{
+  "controlBrowserToStation": [
+    {
+      "name": "state",
+      "message": {
+        "type": "state",
+        "requestId": "10000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "name": "heartbeat with a decoded frame",
+      "message": {
+        "type": "heartbeat",
+        "requestId": "10000000-0000-4000-8000-000000000006",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "decodedFrameAt": 2862932736
+      }
+    },
+    {
+      "name": "heartbeat before the first decoded frame",
+      "message": {
+        "type": "heartbeat",
+        "requestId": "10000000-0000-4000-8000-000000000007",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "decodedFrameAt": null
+      }
+    },
+    {
+      "name": "release",
+      "message": {
+        "type": "release",
+        "requestId": "10000000-0000-4000-8000-000000000008",
+        "leaseId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "stopTransmit",
+      "message": {
+        "type": "stopTransmit",
+        "requestId": "10000000-0000-4000-8000-000000000005",
+        "stationBootId": "10000000-0000-4000-8000-000000000004",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "transmitEpoch": "0000000000000003"
+      }
+    },
+    {
+      "name": "pointer down",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 0.5,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer move (no button change)",
+      "message": {
+        "type": "pointer",
+        "action": "move",
+        "x": 0.5125,
+        "y": 0.2625,
+        "button": -1,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 0
+      }
+    },
+    {
+      "name": "pointer up",
+      "message": {
+        "type": "pointer",
+        "action": "up",
+        "x": 0.5125,
+        "y": 0.2625,
+        "button": 0,
+        "buttons": 0,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer down, second click of a double-click",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 0.5,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 2
+      }
+    },
+    {
+      "name": "touch cancel",
+      "message": {
+        "type": "pointer",
+        "action": "cancel",
+        "x": 0.25,
+        "y": 0.75,
+        "button": 0,
+        "buttons": 0,
+        "modifiers": 0,
+        "pointerType": "touch",
+        "clicks": 0
+      }
+    },
+    {
+      "name": "wheel",
+      "message": {
+        "type": "wheel",
+        "x": 0.3,
+        "y": 0.6,
+        "deltaX": 0,
+        "deltaY": 120,
+        "deltaMode": 0,
+        "modifiers": 0
+      }
+    },
+    {
+      "name": "key down, Space, the Phone cockpit's PTT key",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": " ",
+        "code": "Space",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "key up",
+      "message": {
+        "type": "key",
+        "action": "up",
+        "key": " ",
+        "code": "Space",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "key with modifiers",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": "F",
+        "code": "KeyF",
+        "modifiers": 3,
+        "repeat": false
+      }
+    },
+    {
+      "name": "committed text",
+      "message": {
+        "type": "text",
+        "text": "W1AW"
+      }
+    }
+  ],
+  "controlStationToBrowser": [
+    {
+      "name": "state reply",
+      "message": {
+        "type": "operationResponse",
+        "requestId": "10000000-0000-4000-8000-000000000005",
+        "value": {
+          "stationBootId": "10000000-0000-4000-8000-000000000004",
+          "allowed": true,
+          "phase": "controlling",
+          "leaseId": "10000000-0000-4000-8000-000000000003",
+          "revision": 7,
+          "commandWindowId": "10000000-0000-4000-8000-00000000000a",
+          "nextSequence": 1,
+          "leaseRemainingMs": 4870,
+          "actions": [
+            "log.manual"
+          ],
+          "txArmed": false,
+          "transmitEpoch": "0000000000000003",
+          "controls": {
+            "context": {
+              "radioId": 0,
+              "radioConnection": 12,
+              "ampConnection": null,
+              "ampReadSequence": null
+            },
+            "capabilities": [
+              "decoder",
+              "amplifier",
+              "frequency",
+              "mode",
+              "tier",
+              "settingsControl",
+              "postSpot",
+              "audioListen"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "heartbeat reply, presence held",
+      "message": {
+        "type": "operationResponse",
+        "requestId": "10000000-0000-4000-8000-000000000006",
+        "value": {
+          "stationBootId": "10000000-0000-4000-8000-000000000004",
+          "allowed": true,
+          "phase": "controlling",
+          "leaseId": "10000000-0000-4000-8000-000000000003",
+          "revision": 7,
+          "commandWindowId": "10000000-0000-4000-8000-00000000000a",
+          "nextSequence": 1,
+          "leaseRemainingMs": 4870,
+          "actions": [
+            "log.manual"
+          ],
+          "txArmed": false,
+          "transmitEpoch": "0000000000000003",
+          "controls": {
+            "context": {
+              "radioId": 0,
+              "radioConnection": 12,
+              "ampConnection": null,
+              "ampReadSequence": null
+            },
+            "capabilities": [
+              "decoder",
+              "amplifier",
+              "frequency",
+              "mode",
+              "tier",
+              "settingsControl",
+              "postSpot",
+              "audioListen"
+            ]
+          }
+        },
+        "presence": true
+      }
+    },
+    {
+      "name": "heartbeat reply, picture stale",
+      "message": {
+        "type": "operationResponse",
+        "requestId": "10000000-0000-4000-8000-000000000007",
+        "value": {
+          "stationBootId": "10000000-0000-4000-8000-000000000004",
+          "allowed": true,
+          "phase": "controlling",
+          "leaseId": "10000000-0000-4000-8000-000000000003",
+          "revision": 7,
+          "commandWindowId": "10000000-0000-4000-8000-00000000000a",
+          "nextSequence": 1,
+          "leaseRemainingMs": 4870,
+          "actions": [
+            "log.manual"
+          ],
+          "txArmed": false,
+          "transmitEpoch": "0000000000000003",
+          "controls": {
+            "context": {
+              "radioId": 0,
+              "radioConnection": 12,
+              "ampConnection": null,
+              "ampReadSequence": null
+            },
+            "capabilities": [
+              "decoder",
+              "amplifier",
+              "frequency",
+              "mode",
+              "tier",
+              "settingsControl",
+              "postSpot",
+              "audioListen"
+            ]
+          }
+        },
+        "presence": false
+      }
+    },
+    {
+      "name": "refusal",
+      "message": {
+        "type": "operationResponse",
+        "requestId": "10000000-0000-4000-8000-000000000008",
+        "error": "notController"
+      }
+    },
+    {
+      "name": "stop accepted",
+      "message": {
+        "type": "operationResponse",
+        "requestId": "10000000-0000-4000-8000-000000000005",
+        "value": {
+          "stop": "accepted"
+        }
+      }
+    },
+    {
+      "name": "ptt keyed",
+      "message": {
+        "type": "pttState",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "keyed": true
+      }
+    },
+    {
+      "name": "ptt ended: refused",
+      "message": {
+        "type": "pttState",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "keyed": false,
+        "reason": "refused"
+      }
+    },
+    {
+      "name": "ptt ended: lapsed",
+      "message": {
+        "type": "pttState",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "keyed": false,
+        "reason": "lapsed"
+      }
+    },
+    {
+      "name": "ptt ended: released",
+      "message": {
+        "type": "pttState",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "keyed": false,
+        "reason": "released"
+      }
+    },
+    {
+      "name": "ptt ended: stopped",
+      "message": {
+        "type": "pttState",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "keyed": false,
+        "reason": "stopped"
+      }
+    }
+  ],
+  "pttBrowserToStation": [
+    {
+      "name": "first hold of a press",
+      "message": {
+        "type": "pttHold",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "seq": 0
+      }
+    },
+    {
+      "name": "a later hold",
+      "message": {
+        "type": "pttHold",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "seq": 17
+      }
+    },
+    {
+      "name": "release",
+      "message": {
+        "type": "pttRelease",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "seq": 18
+      }
+    }
+  ],
+  "audioStationToBrowser": [
+    {
+      "name": "receive audio bundle (the relay's audioRx, unchanged)",
+      "message": {
+        "type": "audioRx",
+        "seq": 1234,
+        "epoch": "00000000000000a1",
+        "firstFrameMs": 98765,
+        "frameMs": 20,
+        "count": 3,
+        "payload": "AAIBAgADAwQFAAIGBw=="
+      }
+    },
+    {
+      "name": "audio started",
+      "message": {
+        "type": "audioState",
+        "listening": true
+      }
+    },
+    {
+      "name": "audio refused",
+      "message": {
+        "type": "audioState",
+        "listening": false,
+        "reason": "audioInUse"
+      }
+    }
+  ],
+  "controlRefused": [
+    {
+      "name": "heartbeat without decodedFrameAt (it is required, null before the first frame)",
+      "message": {
+        "type": "heartbeat",
+        "requestId": "10000000-0000-4000-8000-000000000006",
+        "leaseId": "10000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "name": "decodedFrameAt beyond 32 bits",
+      "message": {
+        "type": "heartbeat",
+        "requestId": "10000000-0000-4000-8000-000000000006",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "decodedFrameAt": 4294967296
+      }
+    },
+    {
+      "name": "decodedFrameAt negative",
+      "message": {
+        "type": "heartbeat",
+        "requestId": "10000000-0000-4000-8000-000000000006",
+        "leaseId": "10000000-0000-4000-8000-000000000003",
+        "decodedFrameAt": -1
+      }
+    },
+    {
+      "name": "an unknown key",
+      "message": {
+        "type": "state",
+        "requestId": "10000000-0000-4000-8000-000000000005",
+        "extra": 1
+      }
+    },
+    {
+      "name": "an operation the stream does not carry",
+      "message": {
+        "type": "acquire",
+        "requestId": "10000000-0000-4000-8000-000000000005",
+        "stationBootId": "10000000-0000-4000-8000-000000000004"
+      }
+    },
+    {
+      "name": "a message the station never accepts from a page",
+      "message": {
+        "type": "pttState",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "keyed": true
+      }
+    },
+    {
+      "name": "pointer outside the frame",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 1.5,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer coordinate not a number",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": "NaN",
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer button out of range",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 0.5,
+        "y": 0.25,
+        "button": 7,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "mouse",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "pointer type unknown",
+      "message": {
+        "type": "pointer",
+        "action": "down",
+        "x": 0.5,
+        "y": 0.25,
+        "button": 0,
+        "buttons": 1,
+        "modifiers": 0,
+        "pointerType": "stylus",
+        "clicks": 1
+      }
+    },
+    {
+      "name": "wheel delta out of range",
+      "message": {
+        "type": "wheel",
+        "x": 0.3,
+        "y": 0.6,
+        "deltaX": 0,
+        "deltaY": 100000,
+        "deltaMode": 0,
+        "modifiers": 0
+      }
+    },
+    {
+      "name": "modifier bits out of range",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": "a",
+        "code": "KeyA",
+        "modifiers": 16,
+        "repeat": false
+      }
+    },
+    {
+      "name": "key value too long",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "code": "KeyA",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "key value with a control character",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": "\u0007",
+        "code": "KeyG",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "code not a DOM code",
+      "message": {
+        "type": "key",
+        "action": "down",
+        "key": "a",
+        "code": "Key A",
+        "modifiers": 0,
+        "repeat": false
+      }
+    },
+    {
+      "name": "empty text",
+      "message": {
+        "type": "text",
+        "text": ""
+      }
+    },
+    {
+      "name": "text with a control character",
+      "message": {
+        "type": "text",
+        "text": "CQ\nCQ"
+      }
+    },
+    {
+      "name": "text too long",
+      "message": {
+        "type": "text",
+        "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "pttRefused": [
+    {
+      "name": "hold without holdId",
+      "message": {
+        "type": "pttHold",
+        "seq": 0
+      }
+    },
+    {
+      "name": "hold with a seq beyond 32 bits",
+      "message": {
+        "type": "pttHold",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "seq": 4294967296
+      }
+    },
+    {
+      "name": "an unknown key",
+      "message": {
+        "type": "pttHold",
+        "holdId": "10000000-0000-4000-8000-000000000009",
+        "seq": 0,
+        "extra": 1
+      }
+    },
+    {
+      "name": "an operation request on the ptt channel",
+      "message": {
+        "type": "state",
+        "requestId": "10000000-0000-4000-8000-000000000005"
+      }
+    }
+  ]
+}
