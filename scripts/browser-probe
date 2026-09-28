@@ -55,7 +55,8 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         the SCENARIOS table: 'v4'..'v17' for the application
                         versions, and 'operations', 'FT operating', 'quick layout',
                         'session layout', 'contact continuity', 'DX work',
-                        'radio selection', 'routed decoder', 'routed workspace'.
+                        'radio selection', 'routed decoder', 'routed workspace',
+                        'stream' (Remote as a stream, end to end in real Chrome).
                         Match by NAME, never by shard index — inserting an
                         application version renumbers every scenario after it.
   --shard <n>           run CI's shard <n> of 3 entire — all nine of its scenarios
