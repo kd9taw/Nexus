@@ -398,6 +398,7 @@ export const EN = {
   "remote.stream.permission": "Station control is off for this browser. Allow it in Nexus at the station (Settings → Station → Remote access), then start the stream.",
   "remote.stream.occupied": "Another browser controls the station. The stream can start once it lets go.",
   "remote.stream.ready": "Ready. Start the stream to see and operate Nexus at the shack.",
+  "remote.stream.display": "The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.",
   "remote.stream.starting": "Starting the stream…",
   "remote.stream.waitingForPicture": "Waiting for the station's picture…",
   "remote.stream.live": "Streaming Nexus at the shack",
@@ -421,6 +422,9 @@ export const EN = {
   "remote.stream.mic.ended.routeChanged": "The station's audio changed, so the transmission stopped. Press PTT again.",
   "remote.stream.id.due": "Time to give your call sign.",
   "remote.stream.id.end": "Remember to give your call sign at the end of the contact.",
+  "remote.stream.idle.prompt": "Still there? The stream ends in a minute unless you click.",
+  "remote.stream.idle.keep": "Keep streaming",
+  "remote.stream.idle.ended": "Nobody answered “Still there?”, so the stream ended.",
   "remote.stream.ended.notController": "The stream ended because station control was lost.",
   "remote.stream.ended.unavailable": "This station can't stream yet. Update Nexus at the shack and turn streaming on there.",
   "remote.stream.ended.accessExpired": "Your Remote access has ended, so the stream can't start.",
@@ -5921,6 +5925,8 @@ export const EN = {
   'settings.remoteStream.label': 'Stream this window to an approved browser',
   'settings.remoteStream.hint':
     'A browser you approved for station control, while it holds control, is shown this Nexus window and can operate it. Its clicks and keys reach Nexus only, never anything else on this computer. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a minimized window sends nothing. The stream is encrypted end to end. While a browser is connected, every transmission stops within five seconds if its connection drops, and within seven if its picture freezes.',
+  'settings.remoteStream.display':
+    'The stream is this window as Windows draws it on this computer, so keep Nexus open, and not minimized, while a browser streams it.',
   'settings.remoteStream.unavailable': 'Available on Windows only, for now.',
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and

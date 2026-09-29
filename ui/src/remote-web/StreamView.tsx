@@ -7,7 +7,7 @@ import type { HostedConnection } from './client'
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { ClickCount, HeldInput, keyMessage, pointerMessage, textMessage, wheelMessage, type PictureBox } from './stream-capture'
-import type { StopTarget, StreamView as LinkView } from './stream-link'
+import type { StopTarget, StreamLink, StreamView as LinkView } from './stream-link'
 import type { StreamKey, StreamPointer } from './stream-protocol'
 import '../remote-monitor/monitor.css'
 import './remote.css'
@@ -37,6 +37,8 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   const [observation, setObservation] = useState(initialState)
   useEffect(() => startMonitor(connection.source, setObservation), [connection.source])
   const [wanted, setWanted] = useState(false)
+  // The last stream ended because nobody answered "Still there?".
+  const [idled, setIdled] = useState(false)
   const video = useRef<HTMLVideoElement>(null)
 
   const state = ops.state
@@ -66,10 +68,13 @@ export function StreamView({ connection, station, disconnect, signOut }: {
 
   const start = () => {
     setWanted(true)
+    setIdled(false)
     // A refused acquire (someone else took control first) ends the request, so the button is live again.
     if (state?.phase === 'available') void operations.acquire().catch(() => setWanted(false))
   }
   const end = () => { setWanted(false); link.close(); void operations.release() }
+  // Unanswered, "Still there?" ends the stream as End the stream does, and says why afterwards.
+  const asking = useStillThere(running, link, () => { end(); setIdled(true) })
   const stopTx = () => {
     link.stopTransmit(target)
     if (ops.stopAvailable) void operations.stopTransmit().catch(() => {})
@@ -129,13 +134,72 @@ export function StreamView({ connection, station, disconnect, signOut }: {
       {stream.phase === 'live' && stream.presence === false && <p className="remote-stream-stalled" role="alert">{t('remote.stream.noPresence')}</p>}
       {running && <MicNotes stream={stream} identify={identify} />}
       {stream.phase !== 'live' && stream.phase !== 'stalled' && <div className="remote-stream-placeholder">
+        {!running && idled && <p role="note">{t('remote.stream.idle.ended')}</p>}
         <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
         {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
-        {!running && (state?.phase === 'available' || state?.phase === 'controlling') &&
-          <button type="button" className="remote-button remote-button--primary" disabled={wanted || ops.busy} onClick={start}>{t('remote.stream.start')}</button>}
+        {!running && (state?.phase === 'available' || state?.phase === 'controlling') && <>
+          <button type="button" className="remote-button remote-button--primary" disabled={wanted || ops.busy} onClick={start}>{t('remote.stream.start')}</button>
+          {/* What the stream needs at the shack, as far as the capture code shows it. */}
+          <p className="remote-stream-entry-note" role="note">{t('remote.stream.display')}</p>
+        </>}
+      </div>}
+      {/* "Still there?", over the picture and never over the header, so Stop TX stays where it is,
+          uncovered. A press anywhere on it stays its own until it is let go (the capture), so no part
+          of it lands on the picture and reaches Nexus. The button needs no handler: every click and
+          key on this page is the operator's answer (useStillThere). */}
+      {running && asking && <div className="remote-stream-idle"
+        onPointerDown={event => { try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* it is still pressed here */ } }}>
+        <p role="alert">{t('remote.stream.idle.prompt')}</p>
+        <button type="button" className="remote-button remote-button--primary">{t('remote.stream.idle.keep')}</button>
       </div>}
     </main>
   </div>
+}
+
+/** "Still there?" (the operator's pick, "15 min + prompt"): true while it is asked. Any click, key or
+ *  turn of the wheel on this page is the operator's, wherever it lands, and the link counts a held PTT; watching,
+ *  listening and the station transmitting are not. A press keeps the prompt up until it is let go.
+ *  Unanswered for a minute, `idle` runs. Each look reads the link's clock, every second and whenever
+ *  the tab is shown or hidden, so a tab whose timers are throttled still ends on its first look past
+ *  the minute, however few looks it had. */
+function useStillThere(running: boolean, link: StreamLink, idle: () => void): boolean {
+  const [asking, setAsking] = useState(false)
+  const ending = useRef(idle)
+  ending.current = idle
+  useEffect(() => {
+    if (!running) return
+    let done = false
+    const look = () => {
+      if (done) return
+      const state = link.idle.state()
+      if (state === 'end') { done = true; ending.current(); return }
+      setAsking(state === 'prompt')
+    }
+    const pressed = () => link.idle.active()
+    const input = () => { link.idle.active(); look() }
+    const timer = setInterval(look, 1000)
+    document.addEventListener('pointerdown', pressed, true)
+    document.addEventListener('pointerup', look, true)
+    document.addEventListener('pointercancel', look, true)
+    document.addEventListener('keydown', input, true)
+    // Assistive technology activates a control with a click alone, no press before it.
+    document.addEventListener('click', input, true)
+    // Tuning with the wheel is the operator at work (ruling B3).
+    document.addEventListener('wheel', input, { capture: true, passive: true })
+    document.addEventListener('visibilitychange', look)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('pointerdown', pressed, true)
+      document.removeEventListener('pointerup', look, true)
+      document.removeEventListener('pointercancel', look, true)
+      document.removeEventListener('keydown', input, true)
+      document.removeEventListener('click', input, true)
+      document.removeEventListener('wheel', input, true)
+      document.removeEventListener('visibilitychange', look)
+      setAsking(false)
+    }
+  }, [running, link])
+  return asking
 }
 
 /** What the microphone is doing, in a stack of notes at the foot of the picture that never takes a

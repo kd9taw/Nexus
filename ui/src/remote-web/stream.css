@@ -37,7 +37,8 @@
   padding: 16px; text-align: center; color: var(--text); background: var(--bg); font-size: calc(16px * var(--text-scale));
 }
 .remote-stream-placeholder p { margin: 0; max-width: 40em; overflow-wrap: anywhere; }
-.remote-stream-placeholder .remote-button--primary { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.remote-stream-placeholder .remote-button--primary,
+.remote-stream-idle .remote-button--primary { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 700; }
 .remote-stream-stalled {
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 16px); margin: 0;
   padding: 6px 12px; border: 1px solid var(--alert-warning); border-radius: var(--radius-sm);
@@ -55,7 +56,20 @@
   color: var(--text); background: var(--bg-elev); font-size: var(--fs-body); text-align: center; overflow-wrap: anywhere;
 }
 .remote-stream-note[data-tone='warn'] { border-color: var(--alert-warning); }
-.remote-stream-identify { color: var(--text-dim); font-size: var(--fs-body); }
+.remote-stream-identify,
+.remote-stream-entry-note { color: var(--text-dim); font-size: var(--fs-body); }
+
+/* "Still there?" (an idle stream), in the middle of the picture and never over the header, so Stop TX
+   stays where it is, uncovered. Unlike the notes it takes its own clicks: a press on it is the
+   answer, never a click at the shack. `max-content` so it is not shrunk to the half of the stage
+   that `left: 50%` leaves it. */
+.remote-stream-idle {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: max-content; max-width: calc(100% - 16px);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px;
+  padding: 12px 16px; border: 1px solid var(--alert-warning); border-radius: var(--radius-sm);
+  color: var(--text); background: var(--bg-elev); font-size: var(--fs-body); text-align: center;
+}
+.remote-stream-idle p { margin: 0; max-width: 32em; overflow-wrap: anywhere; }
 
 [data-viewport='xs'] .remote-stream-header { padding: 6px 8px; }
 [data-viewport='xs'] .remote-stream-status { flex-basis: 100%; }

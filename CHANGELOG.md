@@ -63,6 +63,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receive audio, and the other was told it was in use. The station now encodes its receive audio
   once and sends it to both. A browser that falls behind loses its own audio as a short gap and
   never delays or cuts the other's, and a station nobody listens to still encodes nothing.
+- **Remote as a stream: a stream nobody is using ends.** After 15 minutes with no click, key
+  press, turn of the mouse wheel or PTT from your browser, the stream page asks "Still there?".
+  Any click keeps the stream going for another 15 minutes. If nobody answers within a minute, the
+  stream ends the way **End the stream** ends it, and any transmission at the station stops within
+  five seconds. Watching the picture, listening and the station transmitting do not count, so an
+  FT8 sequence left running does not keep a stream open. A PTT held down counts for as long as it
+  is held. The question sits over the picture: **Stop TX** stays where it is and works the whole
+  time.
+- **Remote as a stream: what it needs at the shack, said where you start it.** Beside **Stream
+  this window to an approved browser** in Settings, and on the stream page beside **Start the
+  stream**, Nexus says that the stream is its window as Windows draws it at the shack, so Nexus
+  must stay open there and not minimized.
+- **Remote as a stream: the Phone PTT says Armed until your voice keys the rig.** Pressed through
+  the stream (its button, or the space bar over the picture), the Phone cockpit's PTT reads "Armed
+  — talk to transmit" while the over waits for your voice, and "ON AIR — release to stop" once your
+  voice has keyed the rig. It is the same stop control with the same name for screen readers, and
+  a press at the shack reads as before.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

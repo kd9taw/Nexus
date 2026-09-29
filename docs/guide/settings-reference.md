@@ -128,7 +128,8 @@ the last 7 days before that latest date, both warn you, and **Approve again** he
 approval. A new approval gives station controls and logging again, and FT8/FT4 transmit only if
 its box is ticked. Browsers approved by an earlier Nexus keep a fixed 30 days until approved again.
 
-No audio reaches the browser. **Revoke browser approval** removes one browser.
+While it holds station control, a browser can press **Listen** to hear the station's receive
+audio. **Revoke browser approval** removes one browser.
 **Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
 gives each still-approved browser back what it had, with the TX switch off. **End remote
 control and clear permissions** and **Revoke browser approval** clear permissions for good.

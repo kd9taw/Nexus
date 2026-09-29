@@ -537,7 +537,7 @@
       }
     },
     {
-      "name": "audio refused",
+      "name": "audio refused (a station from before the shared encoder, with a browser already listening)",
       "message": {
         "type": "audioState",
         "listening": false,

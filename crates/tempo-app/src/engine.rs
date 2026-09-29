@@ -19953,6 +19953,14 @@ contact yourself."
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
+        // What the Phone cockpit's PTT shows of a streamed microphone over; display only.
+        s.radio.stream_mic = if self.mic.keyed() {
+            Some(crate::dto::StreamMic::Keyed)
+        } else if self.mic.active() {
+            Some(crate::dto::StreamMic::Armed)
+        } else {
+            None
+        };
         s.radio.rig_keyed = self.rig_keyed;
         // HRD link: Some(true) delivered, Some(false) HRD unreachable (contacts queued),
         // None nothing sent yet. Only meaningful when HRD forwarding is on.

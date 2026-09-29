@@ -1445,6 +1445,10 @@ export interface RadioStatus {
    * (`transmitting` is set solely by the FT slot-TX path), so it is blind to manual PTT,
    * the voice keyer, CW, RTTY and SSTV. It let the dial move under a held mic key. */
   txBusyReason?: string | null
+  /** A streamed Remote operator's microphone over, null/absent without one: `armed` by their press
+   * and waiting for their voice, then `keyed` by it. DISPLAY ONLY — the Phone cockpit's PTT reads
+   * "Armed" for a press it made through the stream until this says `keyed`. */
+  streamMic?: 'armed' | 'keyed' | null
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */

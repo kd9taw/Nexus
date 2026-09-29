@@ -10,7 +10,8 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
 // reason only: THE PTT ROW, the pinned dock row this cockpit's stop line rests on, is still
 // written in English here — the button's four labels (which ARE the accessible name
-// components/stop-line.test.tsx matches), its three-armed tooltip, the Lock toggle that
+// components/stop-line.test.tsx matches; the fifth, "Armed — talk to transmit", shows while a
+// streamed press waits for the voice, named "ON AIR — release to stop"), its three-armed tooltip, the Lock toggle that
 // decides whether the Space bar is a stop at all, and the Field Day exchange chip that
 // shares the row. It moves in the transmit-path batch, with the stop-line sweeps re-run.
 // Everything else is in the catalog under `phone.*` — the refusal TOASTS that row raises
@@ -1119,6 +1120,23 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     if (!control) return
     if (!lock) key(false)
   }
+  // THE ARMED LABEL (the operator's pick "Show Armed until keyed", 2026-09-28). DISPLAY ONLY: the
+  // text changes and nothing else does. The accessible name stays the one the stop-line sweep finds,
+  // the colours stay the held ones, and a release still lets go of the over. A press made through
+  // the stream arms the over and the voice keys it, so it reads "Armed — talk to transmit" until the
+  // station reports the voice keyed (`streamMic`, on a snapshot up to 300 ms away). `micReported`
+  // tells "not reported yet" from "reported, then gone": an over that ended while the press is still
+  // held reads as it always did. `micArmed` can be read here because every change to it comes with
+  // a setKeyed in the same handler, so the render that follows sees it.
+  const streamMic = snap.radio.streamMic ?? null
+  const [micReported, setMicReported] = useState(false)
+  useEffect(() => {
+    if (!keyed) setMicReported(false)
+    else if (micArmed.current && streamMic !== null) setMicReported(true)
+  }, [keyed, streamMic])
+  const pttArmed =
+    keyed && snap.radio.txAllowed && snap.radio.txEnabled && micArmed.current &&
+    (streamMic === 'armed' || (streamMic === null && !micReported))
   const changePower = (pct: number) => {
     if (!control) return
     setPower(pct)
@@ -2806,6 +2824,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             snap.radio.txAllowed && !snap.radio.txEnabled ? ' txoff' : ''
           }`}
           aria-pressed={lock ? keyed : undefined}
+          // Armed reads differently and is still named what the held button always was.
+          aria-label={pttArmed ? 'ON AIR — release to stop' : undefined}
           onPointerDown={onPttDown}
           onPointerUp={onPttUp}
           onPointerLeave={onPttUp}
@@ -2840,7 +2860,9 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             : !snap.radio.txEnabled
               ? '■ TX OFF — CLICK TO ENABLE'
               : keyed
-                ? 'ON AIR — release to stop'
+                ? pttArmed
+                  ? 'Armed — talk to transmit'
+                  : 'ON AIR — release to stop'
                 : 'PUSH TO TALK'}
         </button>
         <label className="ph-lock" title="Hands-free: click PTT once to key, again to unkey">

@@ -5,6 +5,8 @@ import { StreamView } from './StreamView'
 import type { HostedConnection } from './client'
 import type { OperationState } from './operation-protocol'
 import type { OperationView } from './operation-client'
+import type { MonitorSource } from '../remote-monitor/session'
+import { fixtureSource } from '../remote-monitor/fixtureSource'
 import { ANSWER, CHANNEL, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
 
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
@@ -29,7 +31,7 @@ afterEach(() => {
   delete (HTMLVideoElement.prototype as { cancelVideoFrameCallback?: unknown }).cancelVideoFrameCallback
 })
 
-function view(initial: Partial<OperationView>, options: Parameters<typeof harness>[0] = {}) {
+function view(initial: Partial<OperationView>, options: Parameters<typeof harness>[0] = {}, source?: MonitorSource) {
   const h = harness(options)
   let snapshot = { supported: true, state: null, fresh: false, connected: true, busy: false, stopAvailable: false,
     stopSending: false, stopAccepted: false, ...initial } as OperationView
@@ -41,7 +43,7 @@ function view(initial: Partial<OperationView>, options: Parameters<typeof harnes
     release: vi.fn(async () => {}),
     stopTransmit: vi.fn(async () => ({ stop: 'accepted' })),
   }
-  const connection = { operations, stream: h.link, source: { id: 'fake', kind: 'native', read: () => Promise.reject(Error('none')) } } as unknown as HostedConnection
+  const connection = { operations, stream: h.link, source: source ?? { id: 'fake', kind: 'native', read: () => Promise.reject(Error('none')) } } as unknown as HostedConnection
   const utils = render(<StreamView connection={connection} station="Home" disconnect={() => {}} signOut={() => {}} />)
   const video = utils.container.querySelector('video')!
   // A 16:9 picture laid out at 1600×900, so every point on it maps to the frame one to one.
@@ -50,7 +52,7 @@ function view(initial: Partial<OperationView>, options: Parameters<typeof harnes
   video.getBoundingClientRect = () => ({ left: 0, top: 100, width: 1600, height: 900, right: 1600, bottom: 1000, x: 0, y: 100, toJSON: () => ({}) })
   return {
     // `h.peer` is a getter over the peers made so far; spreading would freeze it at none.
-    link: h.link, peers: h.peers, signals: h.signals, get peer() { return h.peer }, tick: h.tick, operations, connection, video,
+    link: h.link, peers: h.peers, signals: h.signals, get peer() { return h.peer }, tick: h.tick, advance: h.advance, operations, connection, video,
     micAsks: h.micAsks, micTracks: h.micTracks,
     /** The station's word on its microphone over, as the contract carries it. */
     station: (name: string) => act(() => { h.peer.channel('control').deliver(byName(CHANNEL.controlStationToBrowser, name)) }),
@@ -484,4 +486,283 @@ it('M11 control: a stream with no over in it ends with no prompt', async () => {
   await v.live()
   fireEvent.click(screen.getByRole('button', { name: 'End the stream' }))
   expect(screen.queryByText('Remember to give your call sign at the end of the contact.')).toBeNull()
+})
+
+// ── An idle stream (the operator's picks "15 min + prompt" and "Only clicks, keys, PTT") ───────────
+
+const MIN = 60_000
+const STILL_THERE = 'Still there? The stream ends in a minute unless you click.'
+const KEEP = 'Keep streaming'
+const IDLE_ENDED = 'Nobody answered “Still there?”, so the stream ended.'
+const idleTimers = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+const stillThere = () => screen.queryByText(STILL_THERE)
+const closes = (v: ReturnType<typeof view>) => v.signals.filter(s => s.payload.kind === 'close')
+let rtp = 90000
+/** The operator watching for `ms`: the page's timers and the link's clock run together, a frame
+ *  arrives every second (the waterfall always moves), and `each` runs once a second beside it. */
+function watching(v: ReturnType<typeof view>, ms: number, each?: () => void) {
+  for (let done = 0; done < ms; done += 1000) act(() => {
+    frames.get(v.video)?.(0, { rtpTimestamp: rtp += 90000 })
+    each?.()
+    v.advance(Math.min(1000, ms - done))
+  })
+}
+async function streaming(initial: Partial<OperationView> = controlling, source?: MonitorSource) {
+  const v = view(initial, {}, source)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  return v
+}
+
+it('IDLE: "Still there?" at 15:00 and not at 14:59; unanswered, the stream ends at 16:00 and not at 15:59, as End the stream ends it: the station is told, and control is released', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 15 * MIN - 1000)
+    expect(stillThere(), '14:59').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), '15:00').toBeTruthy()
+    expect(screen.getByRole('button', { name: KEEP })).toBeTruthy()
+    watching(v, MIN - 1000)
+    expect(v.link.getSnapshot().phase, '15:59: still streaming').toBe('live')
+    expect(closes(v), '15:59: the station has been told nothing').toEqual([])
+    expect(v.operations.release, '15:59: control is still held').not.toHaveBeenCalled()
+    const control = v.peer.channel('control')
+    const heartbeats = () => control.sent.filter(m => m.type === 'heartbeat').length
+    watching(v, 1000)
+    // 16:00, unanswered: what reaches the station is what End the stream sends - the close on the
+    // socket's signalling lane and the release of control - so its presence for this browser ends,
+    // and with it any transmission (S8).
+    expect(closes(v), '16:00: the station is told the stream is closed').toEqual([{ leaseId: LEASE, payload: { kind: 'close' } }])
+    expect(v.operations.release, '16:00: control is released').toHaveBeenCalledTimes(1)
+    expect(v.link.getSnapshot().phase).toBe('idle')
+    expect(v.peer.closed).toBe(true)
+    const sent = heartbeats()
+    watching(v, 5000)
+    expect(heartbeats(), 'no heartbeat renews anything after the end').toBe(sent)
+    expect(stillThere()).toBeNull()
+    expect(screen.getByText(IDLE_ENDED)).toBeTruthy()
+    // Starting again is the operator's to ask, and it clears the note.
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    expect(screen.queryByText(IDLE_ENDED)).toBeNull()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: a click anywhere on the page starts the fifteen minutes again', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 10 * MIN)
+    fireEvent.pointerDown(document.querySelector('header')!, { button: 0, buttons: 1 })
+    watching(v, 5 * MIN + 30_000)
+    expect(stillThere(), '15:30 from the start, when it would stand had the click not counted').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 9 * MIN + 29_000)
+    expect(stillThere(), 'fourteen fifty-nine after the click').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), 'fifteen after the click').toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: a key anywhere on the page starts the fifteen minutes again', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 10 * MIN)
+    fireEvent.keyDown(document.body, { key: 'a', code: 'KeyA' })
+    watching(v, 5 * MIN + 30_000)
+    expect(stillThere(), '15:30 from the start, when it would stand had the key not counted').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 9 * MIN + 29_000)
+    expect(stillThere(), 'fourteen fifty-nine after the key').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), 'fifteen after the key').toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: a turn of the mouse wheel on the picture starts the fifteen minutes again (ruling B3: tuning with the wheel is the operator at work)', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 10 * MIN)
+    v.video.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 800, clientY: 550, deltaY: 120 }))
+    watching(v, 5 * MIN + 30_000)
+    expect(stillThere(), '15:30 from the start, when it would stand had the wheel not counted').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 9 * MIN + 29_000)
+    expect(stillThere(), 'fourteen fifty-nine after the wheel').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), 'fifteen after the wheel').toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: a held PTT counts for as long as it is held - its re-assertions are activity - and the fifteen minutes start when it is let go', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, MIN)
+    const ptt = screen.getByRole('button', { name: 'Hold PTT' })
+    fireEvent.pointerDown(ptt, { button: 0 })
+    // Held for twenty minutes: were only the press counted, the prompt would stand at 15:00 into it.
+    watching(v, 15 * MIN + 30_000)
+    expect(stillThere(), '15:30 into the hold').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 4 * MIN + 30_000)
+    expect(v.peer.channel('ptt').sent.filter(m => m.type === 'pttHold').length, 'held, and re-asserted').toBeGreaterThan(10_000)
+    expect(stillThere(), 'twenty minutes into the hold').toBeNull()
+    fireEvent.pointerUp(ptt)
+    watching(v, 15 * MIN - 1000)
+    expect(stillThere(), 'fourteen fifty-nine after the release').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), 'fifteen after the release').toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: a key held on the picture counts the same way while held (it may be the cockpit\'s own PTT, Space)', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, MIN)
+    v.video.focus()
+    fireEvent.keyDown(v.video, { key: ' ', code: 'Space' })
+    watching(v, 15 * MIN + 30_000)
+    expect(stillThere(), '15:30 into the hold').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 4 * MIN + 30_000)
+    expect(stillThere(), 'twenty minutes into the hold').toBeNull()
+    fireEvent.keyUp(v.video, { key: ' ', code: 'Space' })
+    watching(v, 15 * MIN - 1000)
+    expect(stillThere(), 'fourteen fifty-nine after the release').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), 'fifteen after the release').toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
+/** A station whose rig is keyed - an FT sequence running there, say - as its monitor reports it. */
+function keyedStation(): MonitorSource {
+  const { source } = fixtureSource('spe')
+  return { ...source, read: async signal => {
+    const frame = await source.read(signal) as { station: { radio: { rigKeyed: boolean | null } } }
+    frame.station.radio.rigKeyed = true
+    return frame
+  } }
+}
+
+it('IDLE: watching, listening and the station transmitting do not count - a running FT sequence does not hold the stream open', async () => {
+  idleTimers()
+  try {
+    const v = await streaming(controlling, keyedStation())
+    await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve() })
+    expect(screen.getByText('▲ TX'), 'the station reports its rig keyed').toBeTruthy()
+    // Listening: the station's audio arrives the whole time.
+    const audio = v.peer.channel('audio')
+    const bundle = byName(CHANNEL.audioStationToBrowser, 'receive audio bundle (the relay\'s audioRx, unchanged)')
+    act(() => { v.link.audio.listen(LEASE); audio.deliver(byName(CHANNEL.audioStationToBrowser, 'audio started')) })
+    let n = 0
+    const listen = () => { n++; audio.deliver({ ...bundle, seq: (bundle.seq as number) + n, firstFrameMs: (bundle.firstFrameMs as number) + 60 * n }) }
+    watching(v, 15 * MIN - 1000, listen)
+    expect(v.link.audio.getSnapshot().phase, 'listening, with audio arriving').toBe('live')
+    expect(stillThere(), '14:59').toBeNull()
+    watching(v, 1000, listen)
+    expect(screen.getByText('▲ TX'), 'still keyed').toBeTruthy()
+    expect(stillThere(), '15:00 all the same').toBeTruthy()
+    watching(v, MIN, listen)
+    expect(v.operations.release, 'and the end at 16:00, keyed or not').toHaveBeenCalledTimes(1)
+    expect(closes(v)).toHaveLength(1)
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: the prompt\'s own click keeps the stream and starts the fifteen minutes again, and none of it reaches Nexus', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 15 * MIN)
+    const keep = screen.getByRole('button', { name: KEEP })
+    const input = () => v.peer.channel('control').sent.filter(m => m.type !== 'heartbeat')
+    const sent = input().length
+    // A mouse's click, over the middle of the picture: down, up, click. The prompt stays up while it is
+    // pressed, so no part of the press can land on the picture under it.
+    fireEvent.pointerDown(keep, { button: 0, buttons: 1, clientX: 800, clientY: 550 })
+    expect(stillThere(), 'still up while pressed').toBeTruthy()
+    fireEvent.pointerUp(keep, { button: 0, buttons: 0, clientX: 800, clientY: 550 })
+    fireEvent.click(keep, { clientX: 800, clientY: 550 })
+    expect(stillThere(), 'answered').toBeNull()
+    expect(input(), 'nothing of the click reached Nexus').toHaveLength(sent)
+    expect(v.peer.channel('ptt').sent.filter(m => m.type === 'held'), 'nor was anything held there').toEqual([])
+    watching(v, 15 * MIN - 1000)
+    expect(stillThere(), 'fifteen minutes run from the answer').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 1000)
+    expect(stillThere()).toBeTruthy()
+    // Assistive technology activates a button with a click alone, and that keeps it too.
+    fireEvent.click(screen.getByRole('button', { name: KEEP }))
+    expect(stillThere()).toBeNull()
+    watching(v, 2 * MIN)
+    expect(v.operations.release).not.toHaveBeenCalled()
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE, a background tab: its timers throttled to one a minute, the clock still runs, and the stream ends at the first look after 16:00 - by 17:00 at the latest', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    // Chrome's throttling of a hidden tab: its timers run about once a minute. The link's clock runs
+    // on; each minute only one second's worth of the page's timers fires.
+    let at = 0
+    while (v.link.getSnapshot().phase !== 'idle' && at < 30 * MIN) { v.tick(59_000); act(() => { v.advance(1000) }); at += MIN }
+    expect(at, 'ended by 17:00 at the latest').toBeLessThanOrEqual(17 * MIN)
+    expect(at, 'and not before 16:00').toBeGreaterThanOrEqual(16 * MIN)
+    expect(v.operations.release).toHaveBeenCalledTimes(1)
+    expect(closes(v)).toHaveLength(1)
+  } finally { vi.useRealTimers() }
+})
+
+it('IDLE: the tab being shown again is a look of its own - with no tick at all, a stream idle past 16:00 ends then', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    v.tick(16 * MIN + 30_000)
+    expect(v.operations.release, 'no look yet').not.toHaveBeenCalled()
+    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(v.operations.release).toHaveBeenCalledTimes(1)
+    expect(closes(v)).toHaveLength(1)
+  } finally { vi.useRealTimers() }
+})
+
+it('THE STOP LINE while "Still there?" is up: Stop TX is where it was, as enabled as it was, outside the prompt and the picture, and still reaches the station both ways', async () => {
+  idleTimers()
+  try {
+    const v = await streaming({ ...controlling, stopAvailable: true })
+    const stop = () => screen.getByRole('button', { name: 'Stop TX' }) as HTMLButtonElement
+    const header = document.querySelector('header')!.innerHTML
+    expect(stop().disabled).toBe(false)
+    watching(v, 15 * MIN)
+    expect(stillThere()).toBeTruthy()
+    expect(stop().disabled, 'as enabled as before').toBe(false)
+    expect(document.querySelector('header')!.innerHTML, 'the header, Stop TX in it, is untouched by the prompt').toBe(header)
+    expect(stop().closest('.remote-stream-idle'), 'Stop is no part of the prompt').toBeNull()
+    expect(stop().closest('.remote-stream-stage'), 'nor of the picture').toBeNull()
+    fireEvent.click(stop())
+    expect(last(v.peer.channel('control').sent)).toMatchObject({ type: 'stopTransmit', stationBootId: BOOT, leaseId: LEASE, transmitEpoch: EPOCH })
+    expect(v.operations.stopTransmit).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})
+
+// ── The display note (P7: "Full desktop needs a display at the shack", as far as it is verified) ─
+
+const STREAM_DISPLAY = 'The stream is the Nexus window as Windows draws it at the shack, so Nexus there must stay open, and not minimized.'
+
+it('the stream\'s entry says, beside Start the stream, that Nexus at the shack must stay open and not minimized; CONTROL: not while it streams, nor with no stream to start', async () => {
+  const v = view(controlling)
+  const note = () => screen.queryByText(STREAM_DISPLAY)
+  expect(note(), 'on the entry').toBeTruthy()
+  expect(note()!.closest('.remote-stream-placeholder')?.contains(screen.getByRole('button', { name: 'Start the stream' })) ?? false, 'beside Start').toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  expect(note(), 'streaming: the picture is the answer').toBeNull()
+  cleanup()
+  // Another browser has control: nothing can be started here, and there is nothing to prepare for.
+  view({ state: state('occupied'), fresh: true })
+  expect(screen.queryByRole('button', { name: 'Start the stream' })).toBeNull()
+  expect(note(), 'with another browser in control').toBeNull()
 })
