@@ -7754,9 +7754,6 @@ export const EN = {
 
   'operate.header.map.label': 'Map',
   'operate.header.map.title': 'Open the POTA activity map in its own window',
-  'operate.header.rail.label': 'Rail left',
-  'operate.header.rail.title':
-    'Put the side rail on the left: Stations in Classic, Band Activity and Rx Frequency in Roster',
 
   'operate.header.spot.aria': 'Spot a callsign to the DX cluster',
   'operate.header.spot.title':
@@ -7776,6 +7773,8 @@ export const EN = {
   'operate.seam.stationsDecodes.label': 'Stations roster / Band Activity',
   'operate.seam.rosterRail.label': 'Call Roster / side rail',
   'operate.seam.railRoster.label': 'Side rail / Call Roster',
+  'operate.panels.railLeft.label': 'Side rail on the left',
+  'operate.panels.railLeft.note': 'Stations in Classic; Band Activity and Rx Frequency in Roster',
 
   // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
   // built rather than at import (the registry-by-getter rule, batch 3).

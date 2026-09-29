@@ -112,9 +112,9 @@ interface Props {
   /** Back to the stock layout: every panel at its default (docked, or hidden for a pane the
    *  cockpit ships hidden). */
   onReset: () => void
-  /** A view's own controls above the entries — Connect's layout presets. The view owns their
-   *  words and their effect; this menu only gives them the place the operator already looks.
-   *  No cockpit passes one, so no stop-line census changes: nothing here reaches a transmitter. */
+  /** A view's own controls above the entries — Connect's layout presets, Operate's rail side
+   *  (layout L5). The view owns their words and their effect; this menu only gives them the place
+   *  the operator already looks. Neither reaches a transmitter, so no stop-line census changes. */
   lead?: ReactNode
 }
 

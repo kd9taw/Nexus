@@ -485,8 +485,9 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
       />,
     )
     const grid = document.querySelector<HTMLElement>('.cockpit-lower.classic')!
-    expect(grid.style.getPropertyValue('--op-col-a')).toBe('1.4fr')
-    expect(grid.style.getPropertyValue('--op-col-b')).toBe('0.6fr')
+    // The same proportions that build painted (1.15 : 1.4 : 0.6), in the sheet's whole fr.
+    expect(parseFloat(grid.style.getPropertyValue('--op-col-a'))).toBeCloseTo(140, 9)
+    expect(parseFloat(grid.style.getPropertyValue('--op-col-b'))).toBeCloseTo(60, 9)
     expect(grid.style.getPropertyValue('--op-col-ba'), 'Band Activity is left to the sheet, as that build left it').toBe('')
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Rx Frequency column / Stations roster' }), { key: 'ArrowRight' })
     const stored = vi.mocked(panels.setCols!).mock.lastCall![0] as { a: number; b: number }
@@ -590,17 +591,25 @@ describe('Operate Classic: the Rx Frequency / Tx1–Tx6 divider (layout L5)', ()
 describe('Operate: the rail on the left (layout L5)', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => vi.restoreAllMocks())
-  const toggle = () => screen.getByRole('button', { name: 'Rail left' })
+  /** ⊞ Panels ▸ Side rail on the left: the menu opened, its checkbox. (In the header it wrapped
+   *  the row at 1024×768 and took 44 px from the decode lists: measured in Chrome.) */
+  const toggle = () => {
+    const btn = screen.getByRole('button', { name: /Panels/ })
+    if (btn.getAttribute('aria-expanded') !== 'true') fireEvent.click(btn)
+    return screen.getByRole('checkbox', { name: 'Side rail on the left' }) as HTMLInputElement
+  }
   const grid = () => document.querySelector<HTMLElement>('.cockpit-lower')!
 
-  it('is a pressed-state toggle in the header, remembered per surface, moving the rail by CSS alone', () => {
+  it('is a checkbox at the top of ⊞ Panels, remembered per surface, moving the rail by CSS alone', () => {
     renderCockpit({}, 'classic')
-    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+    expect(toggle().checked).toBe(false)
+    expect(toggle().getAttribute('aria-describedby'), 'the line saying what the rail holds').toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Rail/ }), 'a header control wraps the header at 1024').toBeNull()
     expect(grid().hasAttribute('data-rail')).toBe(false)
     const aside = document.querySelector('aside.cockpit-side')!
     const decodes = document.querySelector('.cockpit-decodes')!
     fireEvent.click(toggle())
-    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+    expect(toggle().checked).toBe(true)
     expect(grid().getAttribute('data-rail')).toBe('left')
     expect(localStorage.getItem('nexus.operate.railSide')).toBe('left')
     // No reparent, no remount: the same nodes, in the same order in the tree.
@@ -641,7 +650,7 @@ describe('Operate: the rail on the left (layout L5)', () => {
   it('stays where it is while the rail is not on screen, and says so by not pressing the grid', () => {
     localStorage.setItem('nexus.operate.railSide', 'left')
     renderCockpit({ stations: 'removed' }, 'classic')
-    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+    expect(toggle().checked).toBe(true)
     expect(grid().hasAttribute('data-rail'), 'a rail-left template with no rail').toBe(false)
   })
 })

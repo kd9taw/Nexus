@@ -16094,18 +16094,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* Roster mode (GridTracker-style): the Call Roster pane (first child) is dominant,
    Band Activity + Rx Frequency ride a narrow side rail. The two tracks consume the
    --op-roster-a/-b fr tokens the divider between them paints (layout L5); undragged,
-   the 1.4fr / 1fr defaults apply. */
+   the 140fr / 100fr defaults apply (1.4 : 1, in whole fr: see Classic's note below). */
 .cockpit-lower.roster {
   /* Rail widened for the FULL decode window (filter chips + sort need ~360px);
      the roster stays the centerpiece but no longer starves the decodes. */
-  grid-template-columns: minmax(0, var(--op-roster-a, 1.4fr)) minmax(360px, var(--op-roster-b, 1fr));
+  grid-template-columns: minmax(0, var(--op-roster-a, 140fr)) minmax(360px, var(--op-roster-b, 100fr));
 }
-/* THE RAIL ON THE LEFT (layout L5, the header's Rail left): the same tracks mirrored, and the rail
+/* THE RAIL ON THE LEFT (layout L5, ⊞ Panels ▸ Side rail on the left): the same tracks mirrored, and the rail
    first by `order` (below), so no pane changes its place in the tree. The cockpit sets the
    attribute only while the rail and another column are both on screen; the narrow stack below
    outranks it by source order at equal specificity. */
 .cockpit-lower.roster[data-rail='left'] {
-  grid-template-columns: minmax(360px, var(--op-roster-b, 1fr)) minmax(0, var(--op-roster-a, 1.4fr));
+  grid-template-columns: minmax(360px, var(--op-roster-b, 100fr)) minmax(0, var(--op-roster-a, 140fr));
 }
 /* Panel removal (⊞ Panels): once the main cell OR the whole side rail is gone, the
    region is a SINGLE column — otherwise the survivor keeps its old track and the
@@ -16119,22 +16119,26 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    min-content floor can force horizontal blow-out. The three tracks consume the
    --op-col-ba/-a/-b fr tokens the two column dividers (PaneSeam, axis='x') paint on
    this container (layout L5; features/operateColumns — each divider moves only its
-   own pair); undragged, the 1.15fr/0.95fr/0.72fr defaults apply. Tighter 8px gap
-   (density pass). */
+   own pair); undragged, the 115fr/95fr/72fr defaults apply (1.15 : 0.95 : 0.72).
+   WHOLE fr, deliberately: tracks whose flex factors sum to less than 1 do not fill
+   the grid, and the px floors freeze tracks out of the sum, so a Band Activity
+   dragged to 0.47fr beside two floored columns left 272 px of the grid empty at
+   1024×768 (Chrome). No token here is ever below 7.5fr. Tighter 8px gap (density
+   pass). */
 .cockpit-lower.classic {
   grid-template-columns:
-    minmax(0, var(--op-col-ba, 1.15fr))
-    minmax(300px, var(--op-col-a, 0.95fr))
-    minmax(260px, var(--op-col-b, 0.72fr));
+    minmax(0, var(--op-col-ba, 115fr))
+    minmax(300px, var(--op-col-a, 95fr))
+    minmax(260px, var(--op-col-b, 72fr));
   gap: var(--space-2);
 }
 /* The Stations rail on the left: the same three tracks, mirrored. Before the data-cols collapse
    rules on purpose: at two or one columns they win this equal-specificity rule by source order. */
 .cockpit-lower.classic[data-rail='left'] {
   grid-template-columns:
-    minmax(260px, var(--op-col-b, 0.72fr))
-    minmax(0, var(--op-col-ba, 1.15fr))
-    minmax(300px, var(--op-col-a, 0.95fr));
+    minmax(260px, var(--op-col-b, 72fr))
+    minmax(0, var(--op-col-ba, 115fr))
+    minmax(300px, var(--op-col-a, 95fr));
 }
 /* Populated-column collapse (data-cols is the COUNT the cockpit derives): the
    survivors flow into the smaller generic template in source order, exactly the
@@ -16731,8 +16735,7 @@ button.cq-skiptx1.on {
  * piece. Same type metrics and hover treatment as `.clt-opt` so it still reads as one
  * family in the header, just its own pill beside the first.
  */
-.cockpit-map-btn,
-.cockpit-rail-btn {
+.cockpit-map-btn {
   padding: 5px 14px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
@@ -16744,15 +16747,8 @@ button.cq-skiptx1.on {
   cursor: pointer;
   white-space: nowrap;
 }
-.cockpit-map-btn:hover,
-.cockpit-rail-btn:hover {
+.cockpit-map-btn:hover {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-/* Rail left (layout L5) is a toggle in the Map button's family (it shares the rules above);
-   pressed, it reads like the pill's active option. */
-.cockpit-rail-btn.active {
-  background: var(--accent);
-  color: var(--accent-ink);
 }
 .cockpit-roster > * {
   flex: 1;

@@ -16,14 +16,30 @@
 //
 // Neither changes a pane's column or its place in the tree; a divider only paints tokens the
 // sheet's templates read (operate-classic-grid.test.ts pins the templates to these defaults).
+//
+// ⚠️ EVERY TOKEN IS AT LEAST 1fr. Grid tracks whose flex factors sum to LESS than 1 do not fill the
+// grid (the flex-factor sum is floored at 1 before it divides the space), and the px floors freeze
+// tracks out of that sum: with the Rx Frequency column and Stations held at their 300 / 260 px at
+// 1024×768, a Band Activity of 0.47fr took 0.47 of what was left and the grid stood 272 px short of
+// its width (measured in Chrome). So the sheet's defaults and every painted token are in big units
+// (hundredths of the grid for Classic), where no column is ever below 7.5fr.
 import type { CSSProperties } from 'react'
 import type { OperatePanelId, PanelLayout } from './panelState'
 
 /** The sheet's own Classic widths, in its fr (`.cockpit-lower.classic`): Band Activity, the Rx
  *  Frequency column, Stations. */
-export const CLASSIC_FR = [1.15, 0.95, 0.72] as const
+export const CLASSIC_FR = [115, 95, 72] as const
 /** The sheet's own Roster widths (`.cockpit-lower.roster`): the Call Roster, the side rail. */
-export const ROSTER_FR = [1.4, 1] as const
+export const ROSTER_FR = [140, 100] as const
+
+/** What a column's fraction of the Classic grid is painted as: hundredths (see the ⚠️ above). */
+const CLASSIC_UNIT = 100
+/** What a share of 1 of Roster's pair is painted as: the mean of the sheet's two, so a pair of
+ *  shares paints the sheet's own total. */
+export const ROSTER_SCALE = (ROSTER_FR[0] + ROSTER_FR[1]) / 2
+/** An earlier build painted its Classic pair in small fr beside Band Activity's 1.15fr, which the
+ *  sheet now writes 115fr: its pair is painted ×100, the same proportions. */
+const LEGACY_UNIT = 100
 
 /** The grid tokens of Classic's three columns, in the same order. */
 export const CLASSIC_VARS = ['--op-col-ba', '--op-col-a', '--op-col-b'] as const
@@ -55,23 +71,24 @@ export function classicWidths(layout: PanelLayout<OperatePanelId>): ClassicWidth
     const st = b / 2
     // A pair no divider could have written (the two edge columns filling the grid) is not a
     // layout; the earlier layers stand instead.
-    if (1 - ba - st >= MIDDLE_MIN) return { fr: [ba, 1 - ba - st, st], source: 'cols' }
+    if (1 - ba - st >= MIDDLE_MIN) return { fr: [ba * CLASSIC_UNIT, (1 - ba - st) * CLASSIC_UNIT, st * CLASSIC_UNIT], source: 'cols' }
   }
   const t = layout.share.txmsgs
   const s = layout.share.stations
-  if (t != null || s != null) return { fr: [CLASSIC_FR[0], t ?? CLASSIC_FR[1], s ?? CLASSIC_FR[2]], source: 'legacy' }
+  if (t != null || s != null)
+    return { fr: [CLASSIC_FR[0], t != null ? t * LEGACY_UNIT : CLASSIC_FR[1], s != null ? s * LEGACY_UNIT : CLASSIC_FR[2]], source: 'legacy' }
   return { fr: [...CLASSIC_FR], source: 'stock' }
 }
 
-/** The grid's inline tokens: none for the sheet's own widths, an earlier build's pair exactly as it
- *  painted them (Band Activity left to the sheet), or all three. */
+/** The grid's inline tokens: none for the sheet's own widths, an earlier build's pair in the same
+ *  proportions as it painted them (Band Activity left to the sheet), or all three. */
 export function classicStyle(layout: PanelLayout<OperatePanelId>): CSSProperties | undefined {
   const w = classicWidths(layout)
   if (w.source === 'stock') return undefined
   const out: Record<string, string> = {}
   if (w.source === 'legacy') {
-    if (layout.share.txmsgs != null) out[CLASSIC_VARS[1]] = `${layout.share.txmsgs}fr`
-    if (layout.share.stations != null) out[CLASSIC_VARS[2]] = `${layout.share.stations}fr`
+    if (layout.share.txmsgs != null) out[CLASSIC_VARS[1]] = `${w.fr[1]}fr`
+    if (layout.share.stations != null) out[CLASSIC_VARS[2]] = `${w.fr[2]}fr`
   } else {
     CLASSIC_VARS.forEach((v, i) => (out[v] = `${w.fr[i]}fr`))
   }
@@ -123,9 +140,9 @@ export function classicReset(w: ClassicWidths, i: number, j: number): { a: numbe
 }
 
 /** Roster's inline tokens: none for the sheet's own widths, else the Call Roster's share and the
- *  rail's (the rest of 2). */
+ *  rail's (the rest of 2), at ROSTER_SCALE. */
 export function rosterStyle(layout: PanelLayout<OperatePanelId>): CSSProperties | undefined {
   const r = layout.share.callRoster
   if (r == null) return undefined
-  return { [ROSTER_VARS[0]]: `${r}fr`, [ROSTER_VARS[1]]: `${2 - r}fr` } as CSSProperties
+  return { [ROSTER_VARS[0]]: `${r * ROSTER_SCALE}fr`, [ROSTER_VARS[1]]: `${(2 - r) * ROSTER_SCALE}fr` } as CSSProperties
 }

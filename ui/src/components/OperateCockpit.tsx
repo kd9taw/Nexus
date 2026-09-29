@@ -13,7 +13,7 @@ import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // Nothing that stops or keys a transmission is in this file: Operate's stop line is Stop TX
 // and Tune in `OperateQsoStrip.tsx` (both deferred, see that file's header) plus the Esc
 // binding below, which is a keyboard handler with no string of its own.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { engagedInQso } from '../alerts'
@@ -73,6 +73,7 @@ import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
   CLASSIC_VARS,
+  ROSTER_SCALE,
   ROSTER_VARS,
   classicCommit,
   classicReset,
@@ -432,6 +433,7 @@ export function OperateCockpit({
   // mirrored templates move it (styles.css `[data-rail='left']`), so no pane changes its place in
   // the tree and nothing remounts.
   const [railLeft, setRailLeft] = useState(() => surfaceGet(RAIL_SIDE_KEY) === 'left')
+  const railNoteId = `${useId()}-rail`
   const toggleRail = () => {
     const next = !railLeft
     surfaceSet(RAIL_SIDE_KEY, next ? 'left' : 'right')
@@ -675,6 +677,7 @@ export function OperateCockpit({
         columnsOn={lowerRef}
         varName="--op-roster"
         columnVars={railOnLeft ? [ROSTER_VARS[1], ROSTER_VARS[0]] : ROSTER_VARS}
+        scale={ROSTER_SCALE}
         className="op-colseam op-colseam-2"
         // The Call Roster's share is stored; the rail's is the rest of 2 (operateColumns).
         onCommit={(av, bv) => panels.setShares({ callRoster: railOnLeft ? bv : av })}
@@ -1149,6 +1152,21 @@ export function OperateCockpit({
               onUndo={panels.undo}
               canUndo={panels.canUndo}
               onReset={panels.reset}
+              // The rail side (layout L5), where the operator already arranges this cockpit: in
+              // the header it wrapped the row at 1024×768 and took 44 px from the decode lists.
+              lead={
+                <div className="panels-menu-item">
+                  <div className="panels-menu-row">
+                    <label className="panels-menu-check">
+                      <input type="checkbox" checked={railLeft} onChange={toggleRail} aria-describedby={railNoteId} />
+                      <span>{t('operate.panels.railLeft.label')}</span>
+                    </label>
+                  </div>
+                  <span className="panels-menu-why" id={railNoteId}>
+                    {t('operate.panels.railLeft.note')}
+                  </span>
+                </div>
+              }
             />
           </>
         }
@@ -1337,15 +1355,6 @@ export function OperateCockpit({
               {t('operate.header.layout.roster.label')}
             </button>
           </div>
-          <button
-            type="button"
-            className={`cockpit-rail-btn${railLeft ? ' active' : ''}`}
-            aria-pressed={railLeft}
-            onClick={toggleRail}
-            title={t('operate.header.rail.title')}
-          >
-            {t('operate.header.rail.label')}
-          </button>
           <button
             type="button"
             className="cockpit-map-btn"

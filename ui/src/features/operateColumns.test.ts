@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   CLASSIC_FR,
+  ROSTER_SCALE,
   classicCommit,
   classicReset,
   classicScale,
@@ -33,20 +34,23 @@ describe('where Classic’s widths come from', () => {
     expect(classicStyle(layout())).toBeUndefined()
   })
 
-  it('an earlier build’s pair opens exactly as that build painted it (Band Activity left to the sheet)', () => {
+  it('an earlier build’s pair opens in the proportions that build painted (Band Activity left to the sheet)', () => {
+    // That build: 1.15fr | 1.2fr | 0.8fr. The sheet writes Band Activity's 1.15 as 115fr now.
     const l = layout({ share: { txmsgs: 1.2, stations: 0.8 } })
-    expect(classicWidths(l)).toEqual({ fr: [1.15, 1.2, 0.8], source: 'legacy' })
-    expect(classicStyle(l)).toEqual({ '--op-col-a': '1.2fr', '--op-col-b': '0.8fr' })
+    const w = classicWidths(l)
+    expect(w.source).toBe('legacy')
+    expect(w.fr.map((v) => +v.toFixed(9))).toEqual([115, 120, 80])
+    expect(classicStyle(l)).toEqual({ '--op-col-a': `${w.fr[1]}fr`, '--op-col-b': `${w.fr[2]}fr` })
     // Half a pair (a hand-edited record) paints its half, as before.
-    expect(classicStyle(layout({ share: { stations: 0.5 } }))).toEqual({ '--op-col-b': '0.5fr' })
+    expect(classicStyle(layout({ share: { stations: 0.5 } }))).toEqual({ '--op-col-b': '50fr' })
   })
 
   it('the dividers’ widths: fractions ×2 for the two edge columns, the Rx Frequency column the rest', () => {
     const l = layout({ v: 2, share: { txmsgs: 1.2, stations: 0.8 }, cols: { a: 0.8, b: 0.5 } })
     const w = classicWidths(l)
     expect(w.source, 'the dividers’ own widths win over an older pair').toBe('cols')
-    expect(w.fr.map((v) => +v.toFixed(12))).toEqual([0.4, 0.35, 0.25])
-    expect(classicStyle(l)).toEqual({ '--op-col-ba': '0.4fr', '--op-col-a': `${1 - 0.4 - 0.25}fr`, '--op-col-b': '0.25fr' })
+    expect(w.fr.map((v) => +v.toFixed(9))).toEqual([40, 35, 25])
+    expect(classicStyle(l)).toEqual({ '--op-col-ba': `${w.fr[0]}fr`, '--op-col-a': `${w.fr[1]}fr`, '--op-col-b': `${w.fr[2]}fr` })
   })
 
   it('a stored pair that leaves the Rx Frequency column nothing is not a layout: the earlier layers stand', () => {
@@ -95,8 +99,26 @@ describe('a Classic divider moves only its own two columns', () => {
 
   it('paints a pair at its own mean, so its painted total is the total it had', () => {
     const w = classicWidths(layout())
-    expect(classicScale(w, 1, 2)).toBeCloseTo((0.95 + 0.72) / 2, 12)
-    expect(classicScale(w, 0, 1)).toBeCloseTo((1.15 + 0.95) / 2, 12)
+    expect(classicScale(w, 1, 2)).toBeCloseTo((95 + 72) / 2, 12)
+    expect(classicScale(w, 0, 1)).toBeCloseTo((115 + 95) / 2, 12)
+  })
+
+  it('never paints a token below 1fr, however far the dividers go (a set below 1fr leaves the grid half empty)', () => {
+    // CSS Grid floors a flex-factor sum at 1: once the px floors freeze two columns, a third below
+    // 1fr takes only that fraction of what is left (272 px of empty grid at 1024×768, Chrome).
+    const lows: Array<{ a: number; b: number }> = [
+      classicCommit(classicWidths(layout()), 0, 1, ...seamShares(0)),
+      classicCommit(classicWidths(layout()), 1, 2, ...seamShares(1)),
+      { a: 0.15, b: 0.15 },
+      { a: 1.85, b: 0.15 },
+    ]
+    for (const cols of lows) {
+      const w = stored(cols)
+      expect(Math.min(...w.fr), JSON.stringify(cols)).toBeGreaterThanOrEqual(1)
+      // And what a divider paints between two of them, at the far end of its travel.
+      for (const [i, j] of [[0, 1], [1, 2], [2, 0]]) expect(classicScale(w, i, j) * 0.15).toBeGreaterThanOrEqual(1)
+    }
+    expect(Math.min(...stored({ a: 1.85, b: 0.15 }).fr)).toBeGreaterThanOrEqual(1)
   })
 
   it('the far end of a drag is stored in the record’s range, with the Rx Frequency column kept', () => {
@@ -127,8 +149,13 @@ describe('a Classic divider’s reset', () => {
 })
 
 describe('Roster’s one divider', () => {
-  it('paints nothing until moved, then the Call Roster’s share and the rail’s rest of 2', () => {
+  it('paints nothing until moved, then the Call Roster’s share and the rail’s rest of 2, in whole fr', () => {
     expect(rosterStyle(layout())).toBeUndefined()
-    expect(rosterStyle(layout({ share: { callRoster: 1.2 } }))).toEqual({ '--op-roster-a': '1.2fr', '--op-roster-b': `${2 - 1.2}fr` })
+    expect(rosterStyle(layout({ share: { callRoster: 1.2 } }))).toEqual({
+      '--op-roster-a': `${1.2 * ROSTER_SCALE}fr`,
+      '--op-roster-b': `${(2 - 1.2) * ROSTER_SCALE}fr`,
+    })
+    // The record's smallest share still paints well above 1fr.
+    expect(0.15 * ROSTER_SCALE).toBeGreaterThanOrEqual(1)
   })
 })
