@@ -903,11 +903,53 @@ impl LogStore {
         change
     }
 
-    /// Let the writer's answers in now: what it wrote, gave up on, or turned back — no I/O, never
-    /// waits. A plan takes them in first, so it never reads a change's rows the store turned back
-    /// ([`Self::collect`]).
-    pub(crate) fn take_in_answers(&mut self) {
-        self.collect(Instant::now());
+    /// Take in now the changes the store turned back ([`writer::Refusal::conflict`]) — no I/O,
+    /// never waits — so a plan never reads the rows of a change the store did not write. Every
+    /// other answer waits for [`Self::collect`], as it always has: a change that landed is read as
+    /// this process made it until then.
+    pub(crate) fn take_in_conflicts(&mut self) {
+        if !self
+            .inflight
+            .iter()
+            .any(|f| f.ticket.refusal().is_some_and(|r| r.conflict))
+        {
+            return;
+        }
+        let mut kept = Vec::with_capacity(self.inflight.len());
+        for f in std::mem::take(&mut self.inflight) {
+            match f.ticket.refusal() {
+                Some(refusal) if refusal.conflict => self.let_go(f.resends, refusal),
+                _ => kept.push(f),
+            }
+        }
+        self.inflight = kept;
+    }
+
+    /// A change the store turned back, `resends` times sent again already: another window changed
+    /// a row since the change read it, and the store did not write over that. The change is let go
+    /// of — its rows leave what a plan reads — and the hot index, which followed it as it was made,
+    /// owes a build from the store ([`Self::index_owed`]). A first send is planned again by the
+    /// command that made it, or its work is done again later (an upload's stamp, a fill); a change
+    /// sent AGAIN has no one to plan it, and is reported instead.
+    fn let_go(&mut self, resends: u32, refusal: Refusal) {
+        self.conflicts += 1;
+        if resends > 0 {
+            tempo_core::applog::warn(
+                "logbook",
+                &format!(
+                    "a logbook change the database had refused was not saved when sent again, \
+                     because another window changed the same contact meanwhile ({})",
+                    refusal.reason
+                ),
+            );
+            self.last_refusal = Some(refusal.reason.clone());
+            self.overtaken.push(refusal);
+        } else {
+            tempo_core::applog::info(
+                "logbook",
+                &format!("a logbook change is planned again: {}", refusal.reason),
+            );
+        }
     }
 
     /// Whether the station's hot index owes a build from the store: a change of this process's
@@ -960,31 +1002,7 @@ impl LogStore {
                 continue;
             };
             if refusal.conflict {
-                // Another window changed a row since this change read it, and the store did not
-                // write over that. The change is let go of — its rows leave what a plan reads —
-                // and the hot index, which followed it as it was made, owes a build from the
-                // store ([`Self::index_owed`]). A first send is planned again by the command that
-                // made it, or its work is done again later (an upload's stamp, a fill); a change
-                // sent AGAIN has no one to plan it, and is reported instead.
-                self.conflicts += 1;
-                if f.resends > 0 {
-                    tempo_core::applog::warn(
-                        "logbook",
-                        &format!(
-                            "a logbook change the database had refused was not saved when sent \
-                             again, because another window changed the same contact meanwhile \
-                             ({})",
-                            refusal.reason
-                        ),
-                    );
-                    self.last_refusal = Some(refusal.reason.clone());
-                    self.overtaken.push(refusal);
-                } else {
-                    tempo_core::applog::info(
-                        "logbook",
-                        &format!("a logbook change is planned again: {}", refusal.reason),
-                    );
-                }
+                self.let_go(f.resends, refusal);
                 continue;
             }
             let wait = resend_after(f.resends);

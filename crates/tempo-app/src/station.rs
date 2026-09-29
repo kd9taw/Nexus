@@ -2078,8 +2078,8 @@ impl StationCore {
     /// ([`Self::unchanged_since`]); the index takes them in off the lock
     /// ([`crate::engine::sync_shared_log`]).
     pub fn log_plan(&mut self) -> LogPlan {
-        // A change the store turned back leaves what the plan reads first ([`LogStore::collect`]).
-        self.store.take_in_answers();
+        // A change the store turned back leaves what the plan reads first.
+        self.store.take_in_conflicts();
         self.log_view()
     }
 
@@ -3219,7 +3219,7 @@ impl StationCore {
     /// ⚠️ It READS THE STORE when something changed: never under the Engine lock (a debug build
     /// panics).
     pub(crate) fn take_in_shared_log(&mut self) -> bool {
-        self.store.take_in_answers();
+        self.store.take_in_conflicts();
         let mut took = self.take_in_foreign_stamps();
         let mut files = true;
         for _ in 0..PLANS {
