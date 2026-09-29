@@ -324,6 +324,10 @@ impl Engine {
                     self.js8_station.cancel_pending_reply();
                 }
             }
+            // …and a heartbeat that falls due is dropped and its interval re-based, so turning
+            // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
+            // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
+            self.js8_station.drop_due_heartbeat(now_ms);
         }
         let actions = self.js8_station.tick(now_ms);
         self.js8_handle_actions(actions);
@@ -1472,8 +1476,12 @@ mod tests {
     /// period boundary, the transmit decision (`poll_tx`'s plan → build → commit, the plan
     /// kept for its offset). Returns (period start, f0) for each over that keyed.
     fn run_js8_loop(e: &mut Engine, secs: u64) -> Vec<(u64, f32)> {
+        run_js8_loop_from(e, tempo_core::timing::now_unix_ms() as u64, secs)
+    }
+
+    /// `run_js8_loop` from `t0` (ms, the wall-clock axis) instead of from now.
+    fn run_js8_loop_from(e: &mut Engine, t0: u64, secs: u64) -> Vec<(u64, f32)> {
         let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
-        let t0 = tempo_core::timing::now_unix_ms() as u64;
         let mut last = t0 / period_ms;
         let mut overs = Vec::new();
         for k in 0..=secs {
@@ -1710,6 +1718,32 @@ mod tests {
             (row.text.as_str(), row.freq_hz),
             ("KD9TAW: W1AW HEARTBEAT SNR -07", f0),
             "…and it is booked where it keyed"
+        );
+    }
+
+    /// A heartbeat that falls due while the TX latch is down is dropped and its interval
+    /// re-based, as JS8Call's is (`startTx` → `ensureCanTransmit` fails →
+    /// `on_stopTxButton_clicked`, mainwindow.cpp:5304 → :7397), so turning TX back on sends
+    /// nothing.
+    #[test]
+    fn a_js8_heartbeat_due_while_tx_is_off_is_not_sent_when_tx_comes_back() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.set_tx_enabled(false);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 6 * 60); // through the due moment, latch down
+        assert!(off.is_empty(), "control: nothing keys with the latch down");
+        let rebased = e.js8_state().hb_next_at_ms;
+        e.set_tx_enabled(true);
+        let on = run_js8_loop_from(&mut e, t0 + 6 * 60 * 1000, 2 * 60);
+        assert!(on.is_empty(), "turning TX back on sends nothing: {on:?}");
+        // Dropped in its due second (the boundary before `due` + under 1 s), so the next cycle
+        // is that boundary + 16 s, and the interval goes on top: `due` + 315 s.
+        assert_eq!(
+            rebased,
+            Some(due + 315_000),
+            "…because it was dropped and re-based to the next cycle + the interval"
         );
     }
 

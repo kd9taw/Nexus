@@ -855,6 +855,27 @@ impl Station {
         }
     }
 
+    /// Drop a heartbeat that has fallen due while nothing may transmit, and re-base the
+    /// interval, as JS8Call does: `checkRepeat` (mainwindow.cpp:5723) sends it anyway, `startTx`
+    /// finds TX off (`ensureCanTransmit`, :5295) and calls `on_stopTxButton_clicked` (:5304),
+    /// which clears the queue and re-bases the heartbeat (`resetAutomaticIntervalTransmissions
+    /// (false, false)`, :7397 → `resetHeartbeatTimer`, :3720). An on-demand heartbeat (interval
+    /// 0) is simply dropped. "Due" is `checkRepeat`'s test, `secsTo(next) <= 0`: under a second
+    /// before `next`. The engine calls this while its TX latch is down.
+    pub fn drop_due_heartbeat(&mut self, now_ms: u64) {
+        let Some(next) = self.hb_next_ms else {
+            return;
+        };
+        if !self.hb_on || now_ms + 1000 <= next {
+            return;
+        }
+        self.hb_next_ms = if self.cfg.hb_interval_min == 0 {
+            None
+        } else {
+            Some(self.hb_due_after(now_ms))
+        };
+    }
+
     /// A periodic heartbeat's next deadline: `nextTransmitCycle()` + the interval
     /// (`on_hbMacroButton_toggled`, mainwindow.cpp:6319).
     fn hb_due_after(&self, now_ms: u64) -> u64 {
@@ -2310,6 +2331,43 @@ mod tests {
             }),
             "the typed message's announcement carries the square"
         );
+    }
+
+    /// A heartbeat that falls due while nothing may transmit is dropped and its interval
+    /// re-based, as JS8Call's is: `checkRepeat` (mainwindow.cpp:5723) sends it anyway, `startTx`
+    /// finds TX off (`ensureCanTransmit`, :5295) and calls `on_stopTxButton_clicked` (:5304),
+    /// which clears the queue and re-bases the heartbeat (`resetAutomaticIntervalTransmissions`,
+    /// :7397 → :3720). "Due" is `checkRepeat`'s: `secsTo(next) <= 0`, under a second before it.
+    #[test]
+    fn a_heartbeat_due_while_tx_is_off_is_dropped_and_re_based() {
+        let mut c = cfg();
+        c.hb_interval_min = 5;
+        let mut s = Station::new(c);
+        s.set_hb(true, 67_250); // due at 376 s
+        s.drop_due_heartbeat(375_000);
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(376_000),
+            "a whole second early is not due yet"
+        );
+        s.drop_due_heartbeat(375_001);
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(391_000 + 300_000),
+            "due: dropped, and re-based to the next transmit cycle + the interval"
+        );
+        assert!(drain(&mut s, 390_000).is_none(), "and nothing is queued");
+    }
+
+    /// …and an on-demand one (interval 0) is simply dropped: JS8Call's single press sends it at
+    /// once, and TX being off discards it the same way.
+    #[test]
+    fn an_on_demand_heartbeat_pressed_while_tx_is_off_is_dropped() {
+        let mut s = Station::new(cfg()); // interval 0
+        s.set_hb(true, 1_000);
+        s.drop_due_heartbeat(1_000);
+        assert_eq!(s.hb_next_ms(), None, "the on-demand heartbeat is dropped");
+        assert!(drain(&mut s, 15_000).is_none(), "and nothing is queued");
     }
 
     /// An HB-ACK goes on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
