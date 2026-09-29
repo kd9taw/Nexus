@@ -109,6 +109,7 @@ import {
   SSTV_PANEL_IDS,
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
+import { arrangeIds, coercePlacement, movePane, type ArrangeSpec, type PaneMove, type PanePlacement } from '../features/panelPlace'
 import type { AppSnapshot, FieldDayStatus, Js8State, PskState, RttyState, SstvState } from '../types'
 
 const decodeState = {
@@ -353,9 +354,9 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-function panelsWith<P extends string>(removed: readonly P[]): PanelLayoutApi<P> {
+function panelsWith<P extends string>(removed: readonly P[], place?: PanePlacement<P>): PanelLayoutApi<P> {
   return {
-    layout: { v: 1, state: {}, share: {} },
+    layout: place ? { v: 2, state: {}, share: {}, place } : { v: 1, state: {}, share: {} },
     stateOf: (id) => (removed.includes(id) ? 'removed' : 'docked'),
     setPanelState: () => {},
     shareOf: () => 1,
@@ -739,6 +740,95 @@ describe('the stop line, computed against the real cockpits', () => {
       expect([...c.ids], `${c.cockpit} sweeps a stale id list`).toEqual([...vocab!.panelIds])
     }
   })
+})
+
+// ── THE ARRANGEMENT SWEEP (layout L3) ──────────────────────────────────────────────────────────
+// ⊞ Arrange can put a cockpit's panes in any column and any order, so the stop line has to hold under
+// every arrangement too, not only the stock one: for each cockpit whose vocabulary ARRANGES, 50 random
+// valid placements (seeded — a red names a reproducible placement), each with every id hidden singly
+// and all at once, every listed stop control on screen by accessible name and no more disabled than
+// with nothing hidden in the stock arrangement. Half the placements are built the way the menu builds
+// them (random moves); half are hand-edited junk pushed through the record's own coercion, which is
+// the path a stored or foreign record takes. What makes this hold is structural — the controls are in
+// the header and the dock, which no placement can reach, and a stop control has no id to place — so
+// this is the computation of that, and it proves the placements reached the region (a sweep that
+// rendered the stock grouping 50 times would prove nothing).
+function rng(seed: number) {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** `n` placements of `spec`: menu-built (random moves) and coerced junk, alternately. */
+function randomPlacements<P extends string>(spec: ArrangeSpec<P>, n: number, seed: number): Array<PanePlacement<P>> {
+  const next = rng(seed)
+  const ids = arrangeIds(spec)
+  const pick = <T,>(xs: readonly T[]) => xs[Math.floor(next() * xs.length)]
+  const out: Array<PanePlacement<P>> = []
+  while (out.length < n) {
+    if (out.length % 2 === 0) {
+      let place: PanePlacement<P> | undefined
+      for (let k = 1 + Math.floor(next() * 14); k > 0; k--) {
+        place = movePane(spec, place, undefined, pick(ids), pick(['up', 'down', 'left', 'right'] as PaneMove[]), () => true) ?? place
+      }
+      if (place) out.push(place)
+    } else {
+      const raw: Record<string, unknown> = {}
+      for (const id of [...ids, 'ptt', 'stopTx', 'scope', 'txmeters']) {
+        if (next() < 0.7) raw[id] = { col: pick(['a', 'b', 'log', 'c']), order: Math.floor(next() * 9) - 2 }
+      }
+      const place = coercePlacement(spec, raw)
+      if (place) out.push(place)
+    }
+  }
+  return out
+}
+
+describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that stops a transmission', () => {
+  const ARRANGING = CASES.filter((c) => ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)?.arrange)
+
+  it('some cockpit arranges, so this sweep is reading something', () => {
+    expect(ARRANGING.map((c) => c.view)).toContain('phone')
+  })
+
+  it.each(ARRANGING.map((c) => [c.cockpit, c] as const))(
+    '%s: 50 random placements, every id hidden singly and all at once, every stop control where it was',
+    async (_name, c) => {
+      const spec = ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)!.arrange! as ArrangeSpec<string>
+      const found = (name: RegExp) => screen.queryAllByRole('button', { name })
+      const order = () => [...document.querySelectorAll('.cockpit-panes .pane-frame')].map((f) => f.getAttribute('data-pane'))
+      c.render(panelsWith<string>([]))
+      await settle()
+      const stock = order()
+      const baseline = new Map(c.stopControls.map(([label, name]) => [label, (found(name) as HTMLButtonElement[]).some((e) => !e.disabled)]))
+      cleanup()
+      let differs = 0
+      const placements = randomPlacements(spec, 50, 20260929)
+      expect(placements.length).toBe(50)
+      for (const [i, place] of placements.entries()) {
+        const combos: Array<readonly string[]> = [[], ...c.ids.map((id: string) => [id]), [...c.ids]]
+        for (const removed of combos) {
+          c.render(panelsWith(removed, place))
+          await settle()
+          if (removed.length === 0 && order().join() !== stock.join()) differs++
+          for (const [label, name] of c.stopControls) {
+            const els = found(name) as HTMLButtonElement[]
+            const where = `${c.cockpit}, placement #${i} ${JSON.stringify(place)}, hiding {${removed.join(', ')}}`
+            expect(els.length, `${where} took "${label}" with it`).toBeGreaterThan(0)
+            expect(els.some((e) => !e.disabled), `${where} left "${label}" on screen but DISABLED`).toBe(baseline.get(label))
+          }
+          cleanup()
+        }
+      }
+      // The placements reached the region: most of them render in an order the stock one does not.
+      expect(differs, `${c.cockpit}: the random placements left the region in its stock order — the sweep is reading nothing`).toBeGreaterThan(20)
+    },
+    120_000,
+  )
 })
 
 describe('RTTY: the macro editor never stands between the operator and a stop', () => {
