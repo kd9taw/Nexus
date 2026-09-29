@@ -16555,6 +16555,17 @@ button.cq-skiptx1.on {
   flex: 0 1 auto;
   overflow-y: auto;
 }
+/* SIZED BY ITS DIVIDER (layout L5), and only once the operator sizes it: until then the machine
+   keeps the content height above. Sized, it is a strip under its divider (PaneSeam `after`): grow 0
+   so the dragged basis is what renders, a 4em floor that yields in a column shorter than it, and
+   never taller than its own rows, so the divider can only give Rx Frequency room (the machine
+   scrolls) or take it back. The floor is the divider's clamp (features/paneSeam TX_SPLIT_MIN); the
+   ceiling is measured. */
+.cockpit-qsocol > .tx-panel[data-sized] {
+  flex: 0 1 var(--op-tx-h, auto);
+  min-height: min(4em, 100%);
+  max-height: max-content;
+}
 .cockpit-lower.classic .cockpit-roster {
   /* The Stations roster shares the classic rail with the (often empty) decode list, and
      collapsed to ~1 row in the stacked/magnified layout. Give it a bigger SHARE so it shows
@@ -21828,7 +21839,7 @@ button.sat-chip:disabled {
    overlap), so a divider is centred in the gap between its neighbours and takes nothing from the
    column. Each rule names the gap it gives back: the cockpit shells' and the pane grid's columns'
    (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
-   a column carry `in-column` instead), and Operate's body and side rail (8 px).
+   a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px).
    Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
    sm/xs viewports, which hide every divider. cockpit-shells.test.ts computes each net. */
 .layout.single.rtty-cockpit > .pane-splitter.horizontal,
@@ -21841,7 +21852,8 @@ button.sat-chip:disabled {
   margin-block: calc(-0.5 * var(--space-3) - var(--space-1));
 }
 .cockpit-body > .pane-splitter.horizontal,
-.cockpit-side > .pane-splitter.horizontal {
+.cockpit-side > .pane-splitter.horizontal,
+.cockpit-qsocol > .pane-splitter.horizontal {
   margin-block: calc(-0.5 * var(--space-2) - var(--space-1));
 }
 

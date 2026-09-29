@@ -58,6 +58,7 @@ import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { PaneSeam } from './PaneSeam'
+import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -419,6 +420,8 @@ export function OperateCockpit({
   const classicSideRef = useRef<HTMLElement>(null)
   const rosterMainRef = useRef<HTMLDivElement>(null)
   const rosterSideRef = useRef<HTMLElement>(null)
+  // Classic's Tx1–Tx6 machine, which the divider above it sizes (layout L5).
+  const txRef = useRef<HTMLElement>(null)
   // Only apply a stored share; an un-dragged pane keeps the CSS default proportions.
   const shareStyle = (id: OperatePanelId): React.CSSProperties | undefined => {
     const s = panels.layout.share[id]
@@ -1709,8 +1712,27 @@ export function OperateCockpit({
                       />
                     </div>
                   )}
+                  {/* THE Rx FREQUENCY / Tx1–Tx6 DIVIDER (layout L5): it sizes the Tx machine BELOW it,
+                      and paints nothing until moved, so the machine keeps its content height and
+                      Rx Frequency takes the rest (`.tx-panel[data-sized]`, styles.css). Moved, it
+                      gives Rx Frequency more room (the machine scrolls) or takes it back, never
+                      making the machine taller than its rows. It sends and stops nothing. */}
+                  {shown('rxfreq') && shown('txmsgs') && (
+                    <PaneSeam
+                      axis="y"
+                      varName="--op-tx-h"
+                      strip={txRef}
+                      after
+                      storageKey="nexus.split.operate.tx"
+                      min={TX_SPLIT_MIN}
+                      max={TX_SPLIT_MAX}
+                      defaultPct={null}
+                      label={t('operate.txmsgs.splitter.label')}
+                    />
+                  )}
                   {shown('txmsgs') && (
                     <TxPanel
+                      stripRef={txRef}
                       {...closeProps('txmsgs')}
                       paneTitle={labels.txmsgs}
                       compact

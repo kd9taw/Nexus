@@ -4781,6 +4781,7 @@ export const JA: PartialCatalog = {
   "operate.waterfall.redock.label": "⧉ ウォーターフォールは別ウィンドウ表示中 — クリックで戻す",
   "operate.waterfall.redock.title": "ウォーターフォールは別ウィンドウにあります — クリックでここへ戻します",
   "operate.waterfall.splitter.label": "ウォーターフォールの高さ",
+  "operate.txmsgs.splitter.label": "Tx メッセージの高さ",
   "operate.seam.bandActivityRxFreq.label": "バンドアクティビティ / 受信周波数",
   "operate.seam.qsocolStations.label": "受信周波数列 / 局一覧",
   "operate.seam.decodesQsocol.label": "バンドアクティビティ / 受信周波数列",

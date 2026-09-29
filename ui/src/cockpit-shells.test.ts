@@ -7,6 +7,7 @@ import {
   SCOPE_SPLIT_MIN,
   SSTV_STAGE_SPLIT_MAX,
   SSTV_STAGE_SPLIT_MIN,
+  TX_SPLIT_MIN,
   WATERFALL_SPLIT_MAX,
   WATERFALL_SPLIT_MIN,
   type SplitClamp,
@@ -734,6 +735,7 @@ describe('a y divider costs its column nothing: its margins give back the gap it
   const OPERATE = shellChain('operate-cockpit')
   const BODY = [...OPERATE, new Set(['cockpit-body'])]
   const SIDE = [...BODY, new Set(['cockpit-lower', 'roster']), new Set(['cockpit-side'])]
+  const QSOCOL = [...BODY, new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])]
   /** [what, the column's chain (null: a pane-grid column), the divider's own classes] */
   const CASES: Array<[string, Array<Set<string>> | null, Array<Set<string>>, string[]]> = [
     ...['rtty-cockpit', 'psk-cockpit', 'sstv-view', 'phone-cockpit', 'cw-cockpit', 'js8-cockpit'].map(
@@ -749,6 +751,7 @@ describe('a y divider costs its column nothing: its margins give back the gap it
     ),
     ['.operate-cockpit .cockpit-body', BODY, BODY, ['pane-splitter', 'horizontal']],
     ['.operate-cockpit .cockpit-side', SIDE, SIDE, ['pane-splitter', 'horizontal', 'seam']],
+    ['.operate-cockpit .cockpit-qsocol', QSOCOL, QSOCOL, ['pane-splitter', 'horizontal']],
   ]
   for (const [what, columnChain, parent, own] of CASES) {
     it(`${what}: a divider's height, both margins and the column's gap sum to zero`, () => {
@@ -812,6 +815,22 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
       `\`${stock!.selector}\` gives the stock SSTV stage flex-grow ${stock!.value}: until the operator sizes ` +
         'it the stage must grow with the view, or the picture loses the upscale a tall window gave it.',
     ).toBeGreaterThan(0)
+  })
+
+  // Operate Classic's Tx1–Tx6 machine (layout L5) keeps its content height until its divider sizes
+  // it; sized, grow 0 as every strip, a floor that yields, and never taller than its rows.
+  it('.cockpit-qsocol > .tx-panel[data-sized]: grow 0, a yielding 4em floor, capped at its content', () => {
+    const qsocol = [...shellChain('operate-cockpit'), new Set(['cockpit-body']), new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])]
+    const sized = [...qsocol, new Set(['tx-panel', 'panel', 'tx-panel-compact', '[data-sized]'])]
+    const stock = [...qsocol, new Set(['tx-panel', 'panel', 'tx-panel-compact'])]
+    expect(winningValue(sized, blockGrow)?.value, 'the dragged basis would not be what renders').toBe(0)
+    expect(winningValue(stock, blockLonghand('min-height'))?.selector, 'the sized floor leaked onto the stock machine').not.toBe('.cockpit-qsocol > .tx-panel[data-sized]')
+    const floor = winningValue(sized, blockLonghand('min-height'))!
+    expect(floor.value, `\`${floor.selector}\``).toBe('min(4em, 100%)')
+    const cap = winningValue(sized, blockLonghand('max-height'))!
+    expect(cap.value, `\`${cap.selector}\`: a sized machine could grow past its own rows`).toBe('max-content')
+    // Its divider's floor is the sheet's (the 4em arm, where the yield does not bind).
+    for (const fontPx of [14, 16]) expect(resolveClamp(TX_SPLIT_MIN, { fontPx, vhEff: 768 })).toBe(4 * fontPx)
   })
 
   for (const shell of ['phone-cockpit', 'cw-cockpit']) {

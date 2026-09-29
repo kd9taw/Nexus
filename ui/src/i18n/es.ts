@@ -2879,6 +2879,7 @@ export const ES: PartialCatalog = {
   "operate.waterfall.redock.label": "⧉ Cascada en ventana aparte — pulsa para acoplarla",
   "operate.waterfall.redock.title": "La cascada está en su propia ventana — pulsa para traerla de vuelta aquí",
   "operate.waterfall.splitter.label": "altura de la cascada",
+  "operate.txmsgs.splitter.label": "altura de los mensajes Tx",
   "ota.activation.active": "📻 Activando <b>{{program}} {{reference}}</b><note> · {{count}} anotados — los QSOs llevarán tu parque</note>",
   "ota.activation.ended": "Activación terminada",
   "ota.activation.label": "Estoy activando:",

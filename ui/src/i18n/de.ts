@@ -4422,6 +4422,7 @@ export const DE: PartialCatalog = {
   "operate.waterfall.redock.label": "⧉ Wasserfall abgedockt — klicken zum Andocken",
   "operate.waterfall.redock.title": "Der Wasserfall ist in einem eigenen Fenster — klicken, um ihn hierher zurückzuholen",
   "operate.waterfall.splitter.label": "Wasserfallhöhe",
+  "operate.txmsgs.splitter.label": "Höhe der TX-Nachrichten",
   "operate.seam.bandActivityRxFreq.label": "Bandaktivität / RX-Frequenz",
   "operate.seam.qsocolStations.label": "Spalte RX-Frequenz / Stationsliste",
   "operate.seam.decodesQsocol.label": "Bandaktivität / Spalte RX-Frequenz",

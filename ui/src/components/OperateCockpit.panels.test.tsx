@@ -506,6 +506,87 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
   })
 })
 
+describe('Operate Classic: the Rx Frequency / Tx1–Tx6 divider (layout L5)', () => {
+  // The Tx machine keeps its content height until the divider moves; the divider sits ABOVE it, so
+  // moving down shrinks it (it scrolls) and gives Rx Frequency the room. jsdom lays nothing out: the
+  // column is 400 px, the machine's rows 198 px, and sized it lays out like its rule (the painted
+  // basis, the 4em floor at jsdom's 16 px, never taller than its rows).
+  beforeEach(() => localStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
+  const KEY = 'nexus.split.operate.tx'
+  const qsocol = () => document.querySelector<HTMLElement>('.cockpit-qsocol')!
+  const tx = () => document.querySelector<HTMLElement>('.cockpit-qsocol > .tx-panel')!
+  const divider = () => screen.queryByRole('separator', { name: 'Tx messages height' })
+  const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => el.getAttribute(a))
+  function layOut() {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    const rect = (height: number) => ({ top: 0, left: 0, width: 500, height, right: 500, bottom: height, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('.cockpit-qsocol')) return rect(400)
+      if (this.matches('.cockpit-qsocol > .tx-panel')) {
+        if (!this.hasAttribute('data-sized')) return rect(198)
+        const v = (this.parentElement as HTMLElement).style.getPropertyValue('--op-tx-h')
+        const basis = v === '' ? 198 : v.endsWith('%') ? parseFloat(v) * 4 : parseFloat(v)
+        return rect(Math.min(198, Math.max(64, basis)))
+      }
+      return real.call(this)
+    })
+  }
+
+  it('sits between Rx Frequency and the Tx machine, and paints nothing until it is moved', () => {
+    layOut()
+    renderCockpit({}, 'classic')
+    const sep = divider()!
+    expect(sep, 'no divider between Rx Frequency and the Tx machine').not.toBeNull()
+    expect(sep.previousElementSibling!.classList.contains('cockpit-rxfreq')).toBe(true)
+    expect(sep.nextElementSibling).toBe(tx())
+    expect(sep.tabIndex).toBe(0)
+    expect(qsocol().style.getPropertyValue('--op-tx-h')).toBe('')
+    expect(tx().hasAttribute('data-sized')).toBe(false)
+    expect(localStorage.getItem(KEY)).toBeNull()
+    // The machine as it stands; its 4em floor; its own rows as the ceiling.
+    expect(aria(sep)).toEqual(['198', '64', '198'])
+  })
+
+  it('down shrinks the machine (it scrolls), up gives it back, and a reset returns its content height', () => {
+    layOut()
+    renderCockpit({}, 'classic')
+    const sep = divider()!
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(qsocol().style.getPropertyValue('--op-tx-h')).toBe(`${(182 / 400) * 100}%`)
+    expect(tx().hasAttribute('data-sized')).toBe(true)
+    expect(localStorage.getItem(KEY)).toBe(String((182 / 400) * 100))
+    fireEvent.keyDown(sep, { key: 'ArrowUp' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('198')
+    fireEvent.keyDown(sep, { key: 'Home' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('64')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(qsocol().style.getPropertyValue('--op-tx-h')).toBe('')
+    expect(tx().hasAttribute('data-sized')).toBe(false)
+    expect(sep.getAttribute('aria-valuenow')).toBe('198')
+  })
+
+  it('a stored height is restored sized and clamped, and never rewritten', () => {
+    localStorage.setItem(KEY, '10')
+    layOut()
+    renderCockpit({}, 'classic')
+    expect(tx().hasAttribute('data-sized')).toBe(true)
+    expect(divider()!.getAttribute('aria-valuenow'), 'the 4em floor').toBe('64')
+    expect(localStorage.getItem(KEY)).toBe('10')
+  })
+
+  it('goes with either of the two panes it sits between', () => {
+    renderCockpit({ rxfreq: 'removed' }, 'classic')
+    expect(divider()).toBeNull()
+    cleanup()
+    renderCockpit({ txmsgs: 'removed' }, 'classic')
+    expect(divider()).toBeNull()
+    cleanup()
+    renderCockpit({}, 'roster')
+    expect(divider(), 'Roster has no Tx machine').toBeNull()
+  })
+})
+
 describe('Operate: the rail on the left (layout L5)', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => vi.restoreAllMocks())

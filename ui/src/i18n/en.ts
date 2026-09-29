@@ -7769,6 +7769,7 @@ export const EN = {
   'operate.waterfall.redock.title':
     'The waterfall is in its own window — click to bring it back here',
   'operate.waterfall.splitter.label': 'waterfall height',
+  'operate.txmsgs.splitter.label': 'Tx messages height',
   'operate.seam.bandActivityRxFreq.label': 'Band Activity / Rx Frequency',
   'operate.seam.qsocolStations.label': 'Rx Frequency column / Stations roster',
   'operate.seam.decodesQsocol.label': 'Band Activity / Rx Frequency column',
