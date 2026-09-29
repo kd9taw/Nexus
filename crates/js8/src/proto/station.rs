@@ -594,7 +594,7 @@ impl Station {
                 self.expand_grid_macros(&self.cfg.info)
             )),
             Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text(now_ms))),
-            Command::HearingQuery => Some(format!("{from} HEARING {}", self.hearing_text())),
+            Command::HearingQuery => Some(self.hearing_reply(&from)),
             Command::Nack | Command::Ack => None, // acks are logged, not answered
             _ => None,
         };
@@ -803,15 +803,16 @@ impl Station {
         out
     }
 
-    fn hearing_text(&self) -> String {
-        let mut calls: Vec<&Heard> = self.heard.iter().collect();
+    /// JS8Call's HEARING? reply (mainwindow.cpp:8868-8905): "<FROM> HEARING" (:8903), then up to
+    /// four calls, newest first (:8873-8883), never the station that asked (:8890). JS8Call also
+    /// skips calls older than its callsign aging (:8894), a setting that ships off (CallsignAging
+    /// 0, Configuration.cpp:1853) and that Nexus does not have, so nothing is aged out here.
+    fn hearing_reply(&self, from: &str) -> String {
+        let mut calls: Vec<&Heard> = self.heard.iter().filter(|h| h.call != from).collect();
         calls.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
-        calls
-            .iter()
-            .take(4)
-            .map(|h| h.call.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut words = vec![format!("{from} HEARING")];
+        words.extend(calls.iter().take(4).map(|h| h.call.clone()));
+        words.join(" ")
     }
 
     fn schedule_reply(
@@ -3199,6 +3200,53 @@ mod tests {
             s.idle_minutes(3_600_000_000 + 7 * 60_000),
             7,
             "seven minutes"
+        );
+    }
+
+    /// `call` heard in a heartbeat at `t`, so the heard list knows when.
+    fn heard_at(s: &mut Station, call: &str, t: u64) {
+        let MessageEvent::Message(mut m) = heartbeat(call, -10) else {
+            unreachable!("heartbeat() builds a message");
+        };
+        m.first_ms = t;
+        m.last_ms = t;
+        s.on_event(&MessageEvent::Message(m), t);
+    }
+
+    /// The HEARING? reply `querier` draws at `t`.
+    fn hearing_reply(s: &mut Station, querier: &str, t: u64) -> Option<String> {
+        let MessageEvent::Message(mut m) =
+            directed(querier, "KD9TAW", Some(Command::HearingQuery), None, "", -7)
+        else {
+            unreachable!("directed() builds a message");
+        };
+        m.first_ms = t;
+        m.last_ms = t;
+        s.on_event(&MessageEvent::Message(m), t);
+        drain(s, t + 5_000).map(|f| f.display)
+    }
+
+    /// JS8Call's HEARING? reply (mainwindow.cpp:8868-8905): "<FROM> HEARING" (:8903) and up to four
+    /// calls, newest first (:8873-8883), never the station that asked (:8890).
+    #[test]
+    fn a_hearing_reply_names_the_newest_four_but_never_the_asker() {
+        let mut s = Station::new(cfg());
+        for (i, call) in ["K1ABC", "N0XYZ", "W1AW", "K2DEF", "K3GHI", "K4JKL"]
+            .iter()
+            .enumerate()
+        {
+            heard_at(&mut s, call, 10_000 + i as u64 * 1_000);
+        }
+        assert_eq!(
+            hearing_reply(&mut s, "W1AW", 60_000).as_deref(),
+            Some("KD9TAW: W1AW HEARING K4JKL K3GHI K2DEF N0XYZ"),
+            "the asker is skipped and takes no place in the four"
+        );
+        let mut s = Station::new(cfg());
+        assert_eq!(
+            hearing_reply(&mut s, "W1AW", 60_000).as_deref(),
+            Some("KD9TAW: W1AW HEARING"),
+            "with nobody else heard, the reply names nobody"
         );
     }
 }

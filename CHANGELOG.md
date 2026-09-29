@@ -244,6 +244,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: a HEARING? reply no longer names the station that asked, as in JS8Call.** A station asking
+  who you hear used to find its own call in your reply, usually first, taking one of the four
+  places. The reply now lists the four stations you heard most recently, not counting the one
+  asking.
+
 - **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
   do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
   offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
