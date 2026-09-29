@@ -145,3 +145,36 @@ pub fn fetch_daily_solar_indices() -> Result<crate::solar_indices::DailySolarInd
     crate::solar_indices::parse_daily_solar_indices(&body)
         .ok_or_else(|| "daily solar indices: no dated row in the response".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Network test: `#[ignore]`d, run on demand with
+    // `cargo test -p propagation --features live -- --ignored live::swpc`.
+
+    /// The real file through the real client. The parser's offline tests pin the rows; this pins
+    /// the wire: SWPC still serves the text product at this URL, in a shape that parses.
+    #[test]
+    #[ignore = "network: services.swpc.noaa.gov"]
+    fn live_daily_solar_indices_arrive_and_parse() {
+        let f = fetch_daily_solar_indices().expect("SWPC answered with a file that parses");
+        assert!(
+            f.days.len() >= 25,
+            "about thirty days, got {}",
+            f.days.len()
+        );
+        assert!(
+            f.days.iter().any(|d| d.sfi.is_some() && d.ssn.is_some()),
+            "no day carries both a flux and a sunspot number"
+        );
+        let newest = f.days.last().unwrap();
+        println!(
+            "SWPC daily indices: {} days, newest day_unix {} sfi {:?} ssn {:?}",
+            f.days.len(),
+            newest.day_unix,
+            newest.sfi,
+            newest.ssn
+        );
+    }
+}
