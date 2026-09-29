@@ -5358,6 +5358,7 @@ export const ES: PartialCatalog = {
   "settings.satellites.vfoMap.failed": "No se pudo confirmar la asignación de VFO",
   "settings.save.callsignFirst": "Introduce tu indicativo en la pestaña Estación antes de guardar.",
   "settings.save.fdPositionName": "Pon un nombre a esta posición en la pestaña Concursos antes de alojar un evento de club o unirte a uno: el tablero de bandas del club muestra ese nombre.",
+  "settings.save.js8GroupCannotJoin": "{{group}} es un grupo al que no se puede unir. Quítalo de Grupos, en JS8 de la pestaña Digital, antes de guardar.",
   "settings.save.checkRadio": "Revisa los ajustes del equipo.",
   "settings.save.failed": "No se pudieron guardar los ajustes.",
   "settings.search.empty": "Nada coincide con “{{query}}”. Prueba con las palabras del control — “tarjeta de sonido”, “puerto COM”, “WPM”.",

@@ -4911,6 +4911,8 @@ export const EN = {
   // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
   'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
   'settings.save.fdPositionName': 'Name this position on the Contesting tab before hosting or joining a club event — the club band board shows this name.',
+  'settings.save.js8GroupCannotJoin':
+    '{{group}} is a group that cannot be joined. Take it out of Groups under JS8 on the Digital tab before saving.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 

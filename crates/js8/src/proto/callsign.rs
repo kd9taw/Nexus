@@ -348,6 +348,13 @@ pub fn is_compound_call(s: &str) -> bool {
         })
 }
 
+/// JS8Call's `isGroupAllowed` (varicode.cpp:1314-1320): @APRSIS and @JS8NET cannot be joined.
+/// JS8Call asks it when a group is added and when Settings is saved (Configuration.cpp:1016,
+/// :2450), on upper-cased text, and never on transmit: a message may be sent to either.
+pub fn may_join_group(group: &str) -> bool {
+    !matches!(group, "@APRSIS" | "@JS8NET")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,5 +566,12 @@ mod tests {
             is_base_call("KD9TAW"),
             "the /P-stripped core is a real base call"
         );
+    }
+
+    #[test]
+    fn aprsis_and_js8net_cannot_be_joined() {
+        assert!(!may_join_group("@APRSIS"));
+        assert!(!may_join_group("@JS8NET"));
+        assert!(may_join_group("@FUN"), "control: any other group may be");
     }
 }

@@ -91,11 +91,14 @@ impl Engine {
                 0 => 0,
                 m => m.max(5),
             },
+            // A group JS8Call will not let be joined (@APRSIS, @JS8NET) is never joined here,
+            // whatever put it in Settings: an older Nexus accepted one, and the Remote can write
+            // the list. Settings keeps it as written, and the panel refuses a save that adds one.
             groups: s
                 .js8_groups
                 .iter()
                 .map(|g| g.trim().to_ascii_uppercase())
-                .filter(|g| !g.is_empty())
+                .filter(|g| !g.is_empty() && ::js8::proto::callsign::may_join_group(g))
                 .collect(),
             info: s.js8_info.clone(),
             status: s.js8_status.clone(),
@@ -2270,5 +2273,55 @@ mod tests {
         );
         e.js8_send(None, "TEST".into()).expect("queues");
         assert_eq!(e.js8_state().idle_minutes, 0, "an operator send resets it");
+    }
+
+    // ===== groups that cannot be joined =====
+
+    /// JS8Call will not let @APRSIS or @JS8NET be joined (`isGroupAllowed`, varicode.cpp:1314-1320,
+    /// asked when a group is added and when Settings is saved, Configuration.cpp:1016, :2450). A
+    /// settings file written by a Nexus that accepted one still loads, and the station does not
+    /// join it: a query to @APRSIS draws no automatic reply, while one to a real group does.
+    #[test]
+    fn a_stored_aprsis_or_js8net_group_is_not_joined() {
+        let older =
+            r#"{"mycall":"KD9TAW","mygrid":"EN52","js8Groups":["@APRSIS","@ares","@JS8NET"]}"#;
+        let settings: Settings = serde_json::from_str(older).expect("an older settings file loads");
+        assert_eq!(
+            settings.js8_groups,
+            vec!["@APRSIS", "@ares", "@JS8NET"],
+            "the file's list is kept as written"
+        );
+        let mut e = Engine::with_settings(settings);
+        e.js8_enter();
+        assert_eq!(
+            e.js8_station.config().groups,
+            vec!["@ARES".to_string()],
+            "only the group that can be joined is joined"
+        );
+        let query = |to: &str| Frame::Directed {
+            from: CallRef::Base("W1AW".to_string()),
+            to: CallRef::parse(to).expect("a group"),
+            cmd: Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        let slot = now_unix_secs() / 15;
+        e.js8_ingest(
+            &[row(&query("@APRSIS"), whole(), Js8Speed::Normal, 1200.0)],
+            slot,
+        );
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "a query to @APRSIS draws no automatic reply"
+        );
+        e.js8_ingest(
+            &[row(&query("@ARES"), whole(), Js8Speed::Normal, 1200.0)],
+            slot,
+        );
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: a query to a joined group is answered"
+        );
     }
 }

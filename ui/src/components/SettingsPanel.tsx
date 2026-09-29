@@ -7,7 +7,7 @@ import { useRemotePreferences } from '../remote-web/useRemotePreferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { JS8_SPEED_LIST } from '../js8Vocab'
+import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
@@ -3137,6 +3137,18 @@ export function SettingsPanel({
       setTab('contesting')
       setError(t('settings.save.fdPositionName'))
       setPosNameInvalid(true)
+      return
+    }
+    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: its Settings refuses the save
+    // ("%1 is a group that cannot be joined", Configuration.cpp:2449-2453). ON THE CHANGE, as the
+    // position name above: a settings file from a Nexus that accepted one loads and is not
+    // refused on an unrelated save, and the engine never joins it either way.
+    const js8Groups = form.js8Groups ?? []
+    const js8GroupsChanged = js8Groups.join(',') !== (savedRef.current?.js8Groups ?? []).join(',')
+    const unjoinable = js8Groups.find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
+    if (js8GroupsChanged && unjoinable) {
+      setTab('digital')
+      setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so

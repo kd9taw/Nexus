@@ -77,6 +77,9 @@ export const JS8_QUICK_QUERIES: readonly Js8Command[] = [0, 4, 16, 3, 12].map((i
 /** GRID, which a station row's one-click "send my grid" sends with the whole locator, as
  *  JS8Call's query menu does (mainwindow.cpp:6656-6668). */
 export const JS8_GRID: Js8Command = JS8_COMMANDS[15]
+/** The groups JS8Call will not let be joined (`isGroupAllowed`, varicode.cpp:1314-1320). A
+ *  message may still be sent to either. */
+export const JS8_UNJOINABLE_GROUPS: readonly string[] = ['@APRSIS', '@JS8NET']
 
 /** JS8Call's SNR rendering: sign always, two digits (`+07`, `-12`). */
 export function fmtSnr(db: number): string {
