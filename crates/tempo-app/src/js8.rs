@@ -606,10 +606,6 @@ impl Engine {
         use ::js8::proto::compose::ComposeError as E;
         match e {
             E::NoCallsign => "Set your callsign in Settings before transmitting JS8.".to_string(),
-            E::ForbiddenDestination => {
-                "JS8Call refuses @APRSIS and @JS8NET as destinations, and so does Nexus."
-                    .to_string()
-            }
             E::Empty => "Nothing to send.".to_string(),
             E::TooLong { frames, max } => format!(
                 "That message needs {frames} frames; the cap at this speed is {max} \
@@ -2129,5 +2125,23 @@ mod tests {
             800.0,
             "filed at 750 Hz, 800 Hz is free"
         );
+    }
+
+    // ===== @APRSIS and @JS8NET: destinations JS8Call sends to =====
+
+    /// A message with @APRSIS or @JS8NET in the To field is sent and keys, as in JS8Call, whose
+    /// `isGroupAllowed` (varicode.cpp:1314-1320) guards joining a group, never sending to one.
+    #[test]
+    fn a_js8_message_to_aprsis_or_js8net_is_sent() {
+        for to in ["@APRSIS", "@JS8NET"] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            assert_eq!(
+                e.js8_send(Some(to.into()), "GRID EN52".into()),
+                Ok(()),
+                "{to}: the send is accepted"
+            );
+            let overs = run_js8_loop(&mut e, 2 * 60);
+            assert!(!overs.is_empty(), "{to}: and it keys");
+        }
     }
 }

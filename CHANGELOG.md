@@ -227,6 +227,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   middle frames of a long message, which carry no callsign, and a signal that drifts counts once,
   where it is now. Your own offset always counts as free, as it does in JS8Call.
 
+- **JS8: a message can be addressed to @APRSIS or @JS8NET, as in JS8Call.** With either in the
+  To field, Send used to refuse, saying JS8Call refuses them. JS8Call sends to both like any
+  group; it only stops you joining them. A JS8Call station that gates to APRS-IS forwards what it
+  hears addressed to @APRSIS: `@APRSIS GRID <locator>` puts your position on APRS-IS, and
+  `@APRSIS CMD <text>` puts `<text>` on APRS-IS as a packet from your call, such as an APRS
+  message to another station or to a gateway (JS8Call's own example is the EMAIL-2 email
+  gateway). The command list and a typed `@APRSIS …` line already sent these; now the To field
+  does too.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as

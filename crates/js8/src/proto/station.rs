@@ -2635,6 +2635,37 @@ mod tests {
         assert!(drain(&mut s, 15_000).is_none(), "and nothing is queued");
     }
 
+    /// JS8Call sends to @APRSIS and @JS8NET as to any group: both are packable destinations
+    /// (varicode.cpp:217, :259), and `isGroupAllowed` (:1314-1320), which names them, is asked
+    /// only when a group is JOINED (Configuration.cpp:1016, :2450). A message with one in the
+    /// To field goes out as the same directed traffic as the line typed with it.
+    #[test]
+    fn a_message_to_aprsis_or_js8net_goes_out_as_directed_traffic() {
+        for to in ["@APRSIS", "@JS8NET"] {
+            let dest = CallRef::parse(to).expect("a packable group");
+            let mut s = Station::new(cfg());
+            if let Err(e) = s.send(Some(&dest), "GRID EN52", 0) {
+                panic!("{to}: JS8Call sends it, got {e:?}");
+            }
+            let wire = keyed_wire(&mut s, 0);
+            assert!(
+                matches!(
+                    wire.first(),
+                    Some((Frame::Directed { from, to: d, cmd: Command::Grid, .. }, true, _))
+                        if from.render() == "KD9TAW" && *d == dest
+                ),
+                "{to}: a GRID directed to {to} from KD9TAW: {wire:?}"
+            );
+            let mut typed = Station::new(cfg());
+            typed.send(None, &format!("{to} GRID EN52"), 0).unwrap();
+            assert_eq!(
+                wire,
+                keyed_wire(&mut typed, 0),
+                "{to}: the same frames as the line typed with it"
+            );
+        }
+    }
+
     /// An HB-ACK goes on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
     /// (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299), not on the dial.
     #[test]

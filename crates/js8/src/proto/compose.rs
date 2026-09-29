@@ -15,11 +15,12 @@
 //! `Compound { mycall, grid }` then `CompoundDirected { to, cmd, num }`.
 //!
 //! WHAT IS REFUSED, and why here: an empty or non-packable MYCALL (`NoCallsign`) — this is the
-//! mode's identity gate below the engine's `structured_tx_ready` (spec TX invariant 2);
-//! `@APRSIS` / `@JS8NET` destinations (`ForbiddenDestination`, mainwindow.cpp:4043/4068 via
-//! `may_transmit_to`); an empty line; and more than `max_frames(speed)` frames (`TooLong`) —
-//! frames × period must stay under 600 s so §97.119 identification holds without inserting a
-//! frame a JS8Call receiver would read as a new message.
+//! mode's identity gate below the engine's `structured_tx_ready` (spec TX invariant 2); an
+//! empty line; and more than `max_frames(speed)` frames (`TooLong`) — frames × period must stay
+//! under 600 s so §97.119 identification holds without inserting a frame a JS8Call receiver
+//! would read as a new message. `@APRSIS` and `@JS8NET` are destinations like any group:
+//! JS8Call's `isGroupAllowed` (varicode.cpp:1314-1320) guards JOINING a group
+//! (Configuration.cpp:1016, :2450), never sending to one.
 //!
 //! Text discipline: uppercase (JS8Call's editor forces it; Huffman is uppercase-only) and
 //! Latin-1 (chars above U+00FF become '?'). The grammars below are hand ports of three Qt
@@ -34,9 +35,7 @@
 //! only difference from `isCompoundCallsign` is that a `basecalls` special is never compound).
 use crate::phy::{Speed, I3};
 use crate::proto::alphabet::CQS;
-use crate::proto::callsign::{
-    is_base_call, is_compound_call, may_transmit_to, pack28, split_portable, CallRef,
-};
+use crate::proto::callsign::{is_base_call, is_compound_call, pack28, split_portable, CallRef};
 use crate::proto::command::Command;
 use crate::proto::crc16::checksum3;
 use crate::proto::frame::{pack_data_prefix, Frame};
@@ -44,7 +43,6 @@ use crate::proto::frame::{pack_data_prefix, Frame};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposeError {
     NoCallsign,
-    ForbiddenDestination,
     Empty,
     TooLong { frames: usize, max: usize },
 }
@@ -410,11 +408,6 @@ fn build(
         let (base, _) = split_portable(&mycall);
         if !is_base_call(&mycall) || pack28(&CallRef::Base(base.to_string())).is_none() {
             return Err(ComposeError::NoCallsign);
-        }
-    }
-    if let Some(t) = to {
-        if !may_transmit_to(t) {
-            return Err(ComposeError::ForbiddenDestination);
         }
     }
     let mut line = normalise(text);
@@ -889,15 +882,6 @@ mod tests {
         assert_eq!(
             frames("KD9TAW", None, "   ", Speed::Normal),
             Err(ComposeError::Empty)
-        );
-        assert_eq!(
-            frames("KD9TAW", Some(&CallRef::Js8Net), "HELLO", Speed::Normal),
-            Err(ComposeError::ForbiddenDestination)
-        );
-        let aprsis = CallRef::parse("@APRSIS").expect("@APRSIS is group 33-4");
-        assert_eq!(
-            frames("KD9TAW", Some(&aprsis), "HELLO", Speed::Normal),
-            Err(ComposeError::ForbiddenDestination)
         );
         let long = "LOREM IPSUM DOLOR SIT AMET CONSECTETUR ".repeat(40);
         match frames("KD9TAW", None, &long, Speed::Slow) {
