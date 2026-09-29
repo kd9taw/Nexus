@@ -325,6 +325,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits
   between. Now only those two move.
+- **Two windows sharing one data folder no longer undo each other's changes.** With two Nexus
+  windows on one data folder (the two-radio setup), a change you made to a contact in one window
+  could, rarely, undo a change the other window had just made to the same contact: an upload
+  stamp, a QSL mark, an edit. It could also bring back a contact the other window had just
+  deleted, and neither window said so. The logbook now refuses to save over a change it has not
+  seen. Your change is made again on the contact as it now stands, and both changes stay. If
+  the other window deleted the contact, or changed what you were editing, you are told so
+  instead. A change that had to wait while the logbook was busy, and finds the contact changed
+  in the meantime, is not saved over it: the save notice and the quit prompt name it, so you can
+  make it again. Update both windows, because a window still running 1.15 can still undo the
+  other's changes.
+- **Clear log removes only the contacts this window had.** With two windows on one data folder,
+  Clear log also removed any contact the other window had logged since this window last took
+  the log in. It now removes exactly the contacts this window had when you pressed it.
 - **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
   colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
   you picked. The dark theme is unchanged.

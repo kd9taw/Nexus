@@ -24006,6 +24006,8 @@ pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
     for _ in 0..crate::station::PLANS {
         let job = {
             let mut eng = engine_lock(engine);
+            // The changes the store turned back first: each owes the index a build.
+            eng.station.store.take_in_conflicts();
             took |= eng.station.take_in_foreign_stamps();
             match eng.station.shared_log_job(files) {
                 Some(job) => job,

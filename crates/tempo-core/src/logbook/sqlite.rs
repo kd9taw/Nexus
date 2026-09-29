@@ -522,6 +522,13 @@ pub enum Error {
         /// What the proof found, in words an operator can be shown.
         reason: String,
     },
+    /// A row is not as the change's plan read it ([`Batch::expect`]): another window changed it,
+    /// took it out or put it in since, and nothing may be written over that. The chunk wrote
+    /// nothing; the change is planned again on the rows as they now stand, or dropped.
+    Conflict {
+        /// The rows that were not as the change expected.
+        rows: Vec<RecordId>,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -542,6 +549,11 @@ impl std::fmt::Display for Error {
                 )
             }
             Error::Copy { reason } => write!(f, "logbook database copy: {reason}"),
+            Error::Conflict { rows } => write!(
+                f,
+                "another window changed {} contact(s) since this change read them",
+                rows.len()
+            ),
         }
     }
 }
@@ -683,6 +695,30 @@ pub struct Batch<'a> {
     /// change a hot index must be built again for, when another window made it (every change
     /// but a stamp — [`super::writer::Change::stamp_only`]).
     pub index_move: bool,
+    /// What the change expects of the rows it writes or takes out, by id: each as its plan read
+    /// it, or none there ([`Expect`]). Checked inside this transaction before anything is
+    /// written ([`LogDb::apply`]); a row not listed is written as it is.
+    pub expect: Option<&'a HashMap<RecordId, Expect>>,
+}
+
+/// What a change expects of one row before it writes it or takes it out: that the row is still
+/// what the change's plan read. Another window sharing the store can commit to the row after that
+/// read and before this window has counted the commit, so only the store, when it writes, can see
+/// it (SPEC-2 v3 C19). Nothing is written over such a commit: the chunk is refused
+/// ([`Error::Conflict`]).
+#[derive(Debug, Clone)]
+pub enum Expect {
+    /// No row carries the id: the plan found it absent and puts it in.
+    Absent,
+    /// The row is this one, as the operator's own log writes it
+    /// ([`super::adif_record_own_log`]). A row the change takes out may also be gone already.
+    Row(Arc<QsoRecord>),
+}
+
+/// Whether two records are the same row as the operator's own log writes it — every field the
+/// store keeps for them, and none it derives when writing (cty.dat's entity and zone).
+fn same_row(a: &QsoRecord, b: &QsoRecord) -> bool {
+    a == b || super::adif_record_own_log(a) == super::adif_record_own_log(b)
 }
 
 /// The `log_meta` key every process sharing the store moves on by one, in the transaction of the
@@ -1015,8 +1051,20 @@ impl LogDb {
     /// changed by being rewritten, not by having a row updated. The four deletes are index
     /// probes that find nothing for a row being inserted for the first time, which is why one
     /// path serves both cases.
+    ///
+    /// **Nothing is written over a row another window changed since the change read it.** The
+    /// rows the batch expects ([`Batch::expect`]) are checked first, in the same transaction,
+    /// which takes the write lock before it reads (`BEGIN IMMEDIATE`): no other connection can
+    /// commit between the check and the writes. A row that is not as expected refuses the whole
+    /// batch ([`Error::Conflict`]), and nothing of it is written.
     pub fn apply(&mut self, b: Batch<'_>) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        if let Some(expect) = b.expect {
+            self.check_expected(&b, expect)?;
+        }
         {
             if b.clear {
                 // One statement. The children go with it — `ON DELETE CASCADE` fires on a
@@ -1091,6 +1139,55 @@ impl LogDb {
             }
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// [`Self::apply`]'s check, inside its transaction: every row the batch writes or takes out
+    /// that the change expects something of is still as the change's plan read it — none there
+    /// for a row put in, the same row for one changed, the same row or already gone for one
+    /// taken out.
+    fn check_expected(&self, b: &Batch<'_>, expect: &HashMap<RecordId, Expect>) -> Result<()> {
+        let ids: Vec<RecordId> = b
+            .remove
+            .iter()
+            .copied()
+            .chain(b.upsert.iter().filter_map(|w| w.rec.id))
+            .filter(|id| expect.contains_key(id))
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let stored: HashMap<RecordId, QsoRecord> = self
+            .rows_by_ids(&ids)?
+            .into_iter()
+            .filter_map(|r| r.id.map(|id| (id, r)))
+            .collect();
+        let taken_out: std::collections::HashSet<&RecordId> = b.remove.iter().collect();
+        let rows: Vec<RecordId> = ids
+            .into_iter()
+            .filter(|id| match (&expect[id], stored.get(id)) {
+                (Expect::Absent, None) => false,
+                (Expect::Absent, Some(_)) => true,
+                (Expect::Row(_), None) => !taken_out.contains(id),
+                (Expect::Row(was), Some(now)) => !same_row(was, now),
+            })
+            .collect();
+        if rows.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Conflict { rows })
+        }
+    }
+
+    /// Move the shared [`INDEX_SEQ`] on by one, in a transaction of its own: for a change the
+    /// writer stopped partway ([`Error::Conflict`]) after chunks of it were written, so another
+    /// window still builds its hot index again for what did land.
+    pub fn move_index_seq(&mut self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO log_meta (k, v) VALUES (?1, 1)
+             ON CONFLICT(k) DO UPDATE SET v = v + 1",
+            [INDEX_SEQ],
+        )?;
         Ok(())
     }
 
@@ -3183,6 +3280,84 @@ mod tests {
         assert_eq!(db.load_all().unwrap()[0].qsl_sent.cleared_unix, None);
     }
 
+    /// ⛔ THE STORE'S CHECK NEVER TURNS A ROW BACK FOR HAVING BEEN STORED. A change planned on a row
+    /// the store holds — or on one this process wrote, which the store took — expects that row:
+    /// every record of a synthetic log carrying every representation the schema holds (foreign
+    /// tags, stamps, contest exchange, credits, notes) compares the same to itself read back, and
+    /// a change expecting each is written. The CONTROL: expecting a row with one field it does not
+    /// hold is refused.
+    #[test]
+    fn a_stored_row_is_the_row_a_change_expects() {
+        let mut records = parse_adif(&synthetic_log(2_000));
+        for (i, r) in records.iter_mut().enumerate() {
+            r.id = Some(RecordId::Provisional {
+                hash: i as u64,
+                ordinal: 0,
+            });
+        }
+        let mut db = LogDb::open_in_memory().expect("open");
+        let rows: Vec<RowWrite> = records
+            .iter()
+            .map(|r| RowWrite::new(Arc::new(r.clone())))
+            .collect();
+        for chunk in rows.chunks(256) {
+            db.apply(Batch {
+                upsert: chunk,
+                ..Batch::default()
+            })
+            .expect("stored");
+        }
+        let back = db.load_all().expect("load");
+        assert_eq!(back.len(), records.len(), "premise: every row stored");
+        for (was, now) in records.iter().zip(&back) {
+            assert!(
+                same_row(was, now),
+                "a row reads back as another: {:?}",
+                was.id
+            );
+        }
+
+        let expect: HashMap<RecordId, Expect> = records
+            .iter()
+            .filter_map(|r| r.id.map(|id| (id, Expect::Row(Arc::new(r.clone())))))
+            .collect();
+        let again: Vec<RowWrite> = back
+            .iter()
+            .map(|r| {
+                let mut r = r.clone();
+                r.comment = Some("again".into());
+                RowWrite::new(Arc::new(r))
+            })
+            .collect();
+        for chunk in again.chunks(256) {
+            db.apply(Batch {
+                upsert: chunk,
+                expect: Some(&expect),
+                ..Batch::default()
+            })
+            .expect("every row is as the change expects");
+        }
+
+        let mut not_held = back[0].clone();
+        not_held.name = Some("not stored".into());
+        let control: HashMap<RecordId, Expect> =
+            [(not_held.id.expect("an id"), Expect::Row(Arc::new(not_held)))]
+                .into_iter()
+                .collect();
+        let write = [RowWrite::new(Arc::new(back[0].clone()))];
+        assert!(
+            matches!(
+                db.apply(Batch {
+                    upsert: &write,
+                    expect: Some(&control),
+                    ..Batch::default()
+                }),
+                Err(Error::Conflict { .. })
+            ),
+            "CONTROL: a row not as expected is refused"
+        );
+    }
+
     /// A record with no id cannot be addressed again, so it is refused rather than written.
     #[test]
     fn a_record_without_an_id_is_refused() {
@@ -3596,6 +3771,7 @@ mod tests {
             marks: None,
             meta: &[],
             index_move: false,
+            expect: None,
         };
         db.apply(batch()).expect("first write");
         db.apply(batch()).expect("the same row written again");
