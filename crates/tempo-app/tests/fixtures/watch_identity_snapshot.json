@@ -156,6 +156,7 @@
     "sourceLabel": "Native (FT4)",
     "splitTxMhz": null,
     "squelch": null,
+    "streamMic": null,
     "swrScaleVerified": false,
     "timeSyncOk": true,
     "trPeriodSecs": 7.5,

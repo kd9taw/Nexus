@@ -13,7 +13,7 @@
 // The presses here come from the REAL dispatcher, so the mark under test is the one the stream
 // makes and not a stand-in for it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import type { AppSnapshot } from '../types'
@@ -82,14 +82,14 @@ afterEach(async () => {
   armStreamMic.mockImplementation(async () => true)
 })
 
-function makeSnap(): AppSnapshot {
+function makeSnap(radio: Record<string, unknown> = {}): AppSnapshot {
   return {
     mycall: 'KD9TAW',
     radio: {
       dialMhz: 14.2, band: '20m', catOk: true, sideband: 'USB', sidebandOverride: null, rigMode: 'USB',
       transmitting: false, txEnabled: true, txAllowed: true, qsoRecording: false, rfPower: null, micGain: null,
       nrLevel: 0.3, agc: 'fast', nb: true, nr: true, notch: null, comp: null, vox: null, filterWidthHz: null,
-      splitTxMhz: null, smeterDb: null, rxLevel: 0, phoneSegLo: null, phoneSegHi: null,
+      splitTxMhz: null, smeterDb: null, rxLevel: 0, phoneSegLo: null, phoneSegHi: null, ...radio,
     },
   } as unknown as AppSnapshot
 }
@@ -135,7 +135,9 @@ describe('R1: a press through the stream arms the browser microphone, never the 
     under = ptt()
     await streamed(pointer('down'))
     expect(armStreamMic).toHaveBeenCalledTimes(1)
-    expect(ptt().textContent, 'the press shows as held').toMatch(/ON AIR/i)
+    // Held, and armed: the voice keys it (the Armed label, below).
+    expect(ptt().classList.contains('keyed'), 'the press shows as held').toBe(true)
+    expect(ptt().textContent).toBe('Armed — talk to transmit')
     await streamed(pointer('up'))
     expect(releaseStreamMic).toHaveBeenCalledTimes(1)
     expect(keyedAtTheShack()).toBe(false)
@@ -241,5 +243,83 @@ describe('R1: a press through the stream arms the browser microphone, never the 
     view.unmount()
     await settle()
     expect(releaseStreamMic).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── The Armed label (the operator's pick "Show Armed until keyed"), DISPLAY ONLY ───────────────
+//
+// A press through the picture ARMS the over and the voice keys it, so until the voice arrives the
+// button reads "Armed — talk to transmit", then "ON AIR — release to stop" as before. What does not
+// change: its accessible name in each state (the stop-line sweep finds it by name), its colours,
+// and a release still lets go of the over. The station says which the over is (`radio.streamMic`).
+
+const ON_AIR = 'ON AIR — release to stop'
+const ARMED = 'Armed — talk to transmit'
+// The stop-line sweep's own matcher for this button (stop-line.test.tsx, Phone's PTT).
+const SWEEP = /push to talk|on air — release to stop|tx locked|tx off — click to enable/i
+const phone = (radio: Record<string, unknown> = {}) =>
+  <PhoneCockpit snap={makeSnap(radio)} theme="dark" onWorkSpot={() => {}} spots={[]} />
+
+describe('the Armed label: a streamed press reads Armed until the voice keys the rig', () => {
+  it('the PTT button pressed through the picture reads Armed, under the name it had, until the voice keys; then ON AIR', async () => {
+    const view = render(phone())
+    under = ptt()
+    await streamed(pointer('down'))
+    expect(armStreamMic).toHaveBeenCalledTimes(1)
+    // Before the station's next snapshot reports the over, the press already reads Armed: no
+    // flash of ON AIR for the up to 300 ms until it does.
+    expect(ptt().textContent, 'the press, before the station reports the over').toBe(ARMED)
+    // The station armed the over; no voice yet.
+    view.rerender(phone({ streamMic: 'armed' }))
+    expect(ptt().textContent, 'armed, no voice yet').toBe(ARMED)
+    expect(screen.getByRole('button', { name: ON_AIR }), 'the accessible name changed').toBe(ptt())
+    expect(screen.getByRole('button', { name: SWEEP }), 'the stop-line sweep no longer finds it').toBe(ptt())
+    expect(ptt().classList.contains('keyed'), 'its colours are no longer the held ones').toBe(true)
+    // The voice keys the rig.
+    view.rerender(phone({ streamMic: 'keyed' }))
+    expect(ptt().textContent, 'keyed by the voice').toBe(ON_AIR)
+    expect(screen.getByRole('button', { name: ON_AIR })).toBe(ptt())
+  })
+
+  it('it stays a stop control while it reads Armed: letting go, through the picture or at the shack, releases the over', async () => {
+    const view = render(phone())
+    under = ptt()
+    await streamed(pointer('down'))
+    view.rerender(phone({ streamMic: 'armed' }))
+    expect(ptt().textContent).toBe(ARMED)
+    await streamed(pointer('up'))
+    expect(releaseStreamMic, 'the release through the picture').toHaveBeenCalledTimes(1)
+    expect(ptt().textContent).toBe('PUSH TO TALK')
+    // Armed again with Space over the picture, and let go at the shack.
+    await streamed(SPACE('down'))
+    expect(ptt().textContent).toBe(ARMED)
+    fireEvent.keyUp(window, { key: ' ', code: 'Space' })
+    await settle()
+    expect(releaseStreamMic, 'the release at the shack').toHaveBeenCalledTimes(2)
+    expect(keyedAtTheShack()).toBe(false)
+  })
+
+  it('CONTROL: a press at the shack reads as before, even while the station reports an over armed from the page', async () => {
+    // The page's own Hold PTT armed the over; nobody pressed this button.
+    render(phone({ streamMic: 'armed' }))
+    expect(ptt().textContent, 'not pressed here').toBe('PUSH TO TALK')
+    fireEvent.pointerDown(ptt())
+    await settle()
+    expect(setPtt).toHaveBeenLastCalledWith(true)
+    expect(ptt().textContent, 'a shack press').toBe(ON_AIR)
+    fireEvent.pointerUp(ptt())
+    await settle()
+    expect(ptt().textContent).toBe('PUSH TO TALK')
+    expect(armStreamMic).not.toHaveBeenCalled()
+  })
+
+  it('CONTROL: an over the station no longer reports armed (it ended while still held) reads as before', async () => {
+    const view = render(phone())
+    await streamed(SPACE('down'))
+    view.rerender(phone({ streamMic: 'armed' }))
+    expect(ptt().textContent).toBe(ARMED)
+    // The audio design's gaps end the over at the station while the press is still held here.
+    view.rerender(phone({ streamMic: null }))
+    expect(ptt().textContent, 'Armed shown over no over at all').toBe(ON_AIR)
   })
 })

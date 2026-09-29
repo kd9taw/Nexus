@@ -553,6 +553,42 @@ mod tests {
         }
     }
 
+    // ── What the Phone cockpit's PTT reads (display only) ───────────────────────────────────
+
+    /// The operator's pick "Show Armed until keyed": the snapshot says the over is `Armed` from the
+    /// press and `Keyed` from the first frame of the operator's voice, and nothing once it ends.
+    /// The cockpit's PTT label reads it; nothing keys, refuses or releases on it.
+    #[test]
+    fn the_snapshot_says_armed_until_the_voice_keys_the_rig() {
+        use crate::dto::StreamMic;
+        let mut s = scene();
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            None,
+            "an over reported before any press"
+        );
+        assert_eq!(s.held_tick(0), MicTick::Armed, "premise: the press arms");
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            Some(StreamMic::Armed),
+            "armed, no voice yet"
+        );
+        s.feed.push(frame(0, s.at(0))).unwrap();
+        assert_eq!(s.tick(0), MicTick::Key, "premise: the first frame keys");
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            Some(StreamMic::Keyed),
+            "keyed by the voice"
+        );
+        s.e.halt_tx();
+        assert!(!s.e.mic_armed(), "premise: Stop TX ends the over");
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            None,
+            "an ended over still reported"
+        );
+    }
+
     // ── One owner ─────────────────────────────────────────────────────────────────────────────
 
     /// The microphone joins the transmit arbiter: while it is armed the voice keyer is refused, a

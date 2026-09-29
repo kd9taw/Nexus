@@ -160,6 +160,7 @@
     "sourceLabel": "Native (FT8)",
     "splitTxMhz": null,
     "squelch": null,
+    "streamMic": null,
     "swrScaleVerified": false,
     "timeSyncOk": true,
     "trPeriodSecs": 15.0,

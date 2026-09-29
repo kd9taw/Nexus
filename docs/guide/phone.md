@@ -129,7 +129,9 @@ of this window on, you talk on your own microphone instead of the rig's.
 3. Hold PTT: the page's **Hold PTT**, the Space bar over the picture, or this
    cockpit's **PTT** clicked through the picture. Each one arms an over, and the
    rig keys when your audio arrives. With the microphone off, nothing keys, and
-   the page says so.
+   the page says so. Pressed through the picture, this cockpit's PTT reads
+   **Armed — talk to transmit** until your voice keys the rig, then **ON AIR —
+   release to stop**.
 
 The over ends when you let go, when your audio stops arriving for 200 ms, when
 the picture or the connection freezes, and at 10 minutes. **Lock** does not work
