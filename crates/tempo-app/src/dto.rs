@@ -1827,9 +1827,9 @@ fn is_false(b: &bool) -> bool {
 /// same key the engine will refuse on.
 ///
 /// The strip used to hardcode `(call, band, mode class)`. That is the rule for exactly
-/// two of the seventeen shipped rulesets (both Field Days): Sweepstakes keys on the call
+/// two of the eighteen shipped rulesets (both Field Days): Sweepstakes keys on the call
 /// alone, CQ WW and ARRL VHF drop the mode class, and every QSO party adds the county in
-/// both directions. The badge was therefore wrong in fifteen of seventeen, and for the
+/// both directions. The badge was therefore wrong in sixteen of eighteen, and for the
 /// QSO parties it was wrong in the expensive direction — `contest::dupe` puts it plainly:
 /// *"Under-reporting a dupe costs one duplicate contact that scores zero; over-reporting
 /// refuses a legal contact."*

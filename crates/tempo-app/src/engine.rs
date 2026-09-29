@@ -38316,6 +38316,61 @@ mod tests {
         assert_eq!(fd.score_note_key, "");
     }
 
+    /// ⭐ **The New York QSO Party on the operator's screen and in the file they submit** —
+    /// the strip's own command, the snapshot's score and boards, and the dialog's export.
+    ///
+    /// nyqp.org's 2026 rules (v1.1 2026-09-25): *"The first valid New York county logged
+    /// will count as the multiplier for New York"* — so one county is two multipliers on
+    /// screen and the county grid is still drawn once; *"(DX counts as QSO points but not
+    /// multipliers.)"*; and *"For fixed stations in New York, use your NYQP-approved
+    /// three-letter county abbreviation"* heads the file.
+    #[test]
+    fn the_new_york_partys_score_boards_and_file_reach_the_operator() {
+        let mut e = Engine::new("W2XYZ", "FN32", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "nyqp".into();
+            s.contest_qth_state = "NY".into();
+            s.contest_qth_county = "ALB".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), q.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K2AAA", &ex("SUF"), "CW", None)
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(fd.mult_count, Some(2), "Suffolk, and New York with it");
+        assert!(e
+            .contest_log_manual("W1AAA", &ex("CT"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("DL1AAA", &ex("DX"), "CW", None)
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("still in the contest");
+        assert_eq!(fd.qso_count, 3);
+        assert_eq!(fd.points, 6, "three CW contacts, the DX one among them");
+        assert_eq!(fd.mult_count, Some(3), "SUF, New York and CT; DX is none");
+        assert_eq!(fd.total_score, 18);
+        assert_eq!(fd.score_note_key, "");
+        assert_eq!(
+            fd.boards.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(),
+            ["county", "mult"],
+            "the county grid once, and the states and provinces"
+        );
+        let cab = e.export_log("cabrillo").expect("one entry");
+        assert!(cab.contains("CONTEST: NY-QSO-PARTY\n"), "{cab}");
+        assert!(cab.contains("LOCATION: ALB\n"), "{cab}");
+        assert!(cab.contains("CLAIMED-SCORE: 18\n"), "{cab}");
+        assert!(cab.contains(" W2XYZ 599 ALB DL1AAA 599 DX\n"), "{cab}");
+    }
+
     /// ⚠️ **A NAMED BEHAVIOUR CHANGE, pinned here rather than discovered.** A section
     /// the domain does not hold now REFUSES mode entry; before this batch the mode
     /// started and the operator transmitted it, and the ARRL received a log full of a

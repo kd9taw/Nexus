@@ -192,7 +192,7 @@ const EXT: Record<ExportFormat, string> = {
  * occurrences and called anything seen twice a dupe — a fourth copy of the dupe key, and
  * wrong three ways. Counting marked the ORIGINAL as well as the duplicate, so a real
  * scoring contact was styled as a dupe for being worked again later. The triple is the key
- * for two of the seventeen shipped rulesets: Sweepstakes works a station once on ANY band
+ * for two of the eighteen shipped rulesets: Sweepstakes works a station once on ANY band
  * (rule 2.2), so its cross-band dupe went unmarked, while a QSO party counts a new county
  * as a new contact, so two legal contacts were both marked. And it could not see what
  * actually decides whether a row scores — whether the ENGINE logged it as a dupe.

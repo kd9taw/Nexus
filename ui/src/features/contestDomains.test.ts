@@ -163,3 +163,50 @@ describe('what a typed value resolves to', () => {
     expect(resolveDomainValue(QTH, 'Germany')).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// THE NEW YORK QSO PARTY — the same type-ahead over the sponsor's three-letter county codes
+// and what everyone else sends, mirrored in `nyqpQth.ts` and guarded against the rules seed
+// by tempo-core.
+// ---------------------------------------------------------------------------
+
+const NY_QTH = ['ny_counties', 'ny_mults', 'dx_literal'] // the NYQP exchange slot's three arms
+
+describe('the NYQP domains', () => {
+  it('carries the sponsor’s 62 counties and the states and provinces everyone else sends', () => {
+    expect(contestDomain('ny_counties')?.total).toBe(62)
+    expect(contestDomain('ny_mults')?.total).toBe(62)
+    expect(inDomain('ny_counties', 'mon')).toBe(true)
+    expect(inDomain('ny_counties', 'MONR')).toBe(false)
+    // New York's own stations send a county, so NY is not a value anybody sends.
+    expect(inDomain('ny_mults', 'NY')).toBe(false)
+    expect(inDomain('ny_mults', 'CT')).toBe(true)
+    expect(
+      contestDomain('ny_mults')?.groups.map((g) => [g.label, g.values.length]),
+    ).toEqual([
+      ['W', 49],
+      ['VE', 13],
+    ])
+  })
+
+  it('resolves a county by its name, and picks nothing where one name is two places', () => {
+    expect(resolveDomainValue(NY_QTH, 'Monroe')).toBe('MON')
+    expect(resolveDomainValue(NY_QTH, 'st lawrence')).toBe('STL')
+    // "New York" is a COUNTY in this contest (NEW) and nothing else: the state is not a
+    // value anybody sends, so there is exactly one place of that name to resolve to.
+    expect(resolveDomainValue(NY_QTH, 'New York')).toBe('NEW')
+    // Three New York counties share a name with a state or a province. Each resolves to
+    // nothing and the list offers both, so the operator picks — a county sent as a state
+    // is a different multiplier.
+    for (const [name, both] of [
+      ['Washington', ['WAS', 'WA']],
+      ['Delaware', ['DEL', 'DE']],
+      ['Ontario', ['ONT', 'ON']],
+    ] as const) {
+      expect(resolveDomainValue(NY_QTH, name)).toBeUndefined()
+      expect(domainSuggestions(NY_QTH, name).map((v) => v.code)).toEqual(both)
+    }
+    // A DX station's `DX` stays exactly as typed.
+    expect(resolveDomainValue(NY_QTH, 'DX')).toBeUndefined()
+  })
+})

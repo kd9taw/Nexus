@@ -2973,7 +2973,7 @@ export interface FieldDayQso {
  *
  *  The entry strip's while-typing badge must build the same key the engine will refuse
  *  on. It used to hardcode `(call, band, mode class)`, which is the rule for two of the
- *  seventeen shipped rulesets: Sweepstakes keys on the CALL ALONE, CQ WW and ARRL VHF
+ *  eighteen shipped rulesets: Sweepstakes keys on the CALL ALONE, CQ WW and ARRL VHF
  *  drop the mode class, and every QSO party adds the county in both directions. For the
  *  QSO parties the hardcoded triple was wrong in the expensive direction — it showed
  *  DUPE for a legal contact with a mobile in a new county.

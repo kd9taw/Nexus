@@ -508,7 +508,9 @@ pub struct BoardSpec {
 /// > CQ WW shows two boards (zone, country) and a QSO party shows one.
 ///
 /// **Two sources, and the fallback is not a fudge.** A ruleset that declares
-/// [`MultiplierRule`]s gets one board per rule, filtered to the ones this role counts.
+/// [`MultiplierRule`]s gets one board per rule, filtered to the ones this role counts —
+/// and one per UNIVERSE: a second rule over a slot and domain an earlier rule already
+/// draws (NYQP's New York multiplier, counted off the county list) adds no second grid.
 /// A ruleset that declares NONE — which is both Field Day events, neither of which has
 /// a multiplier — gets one board per received [`FieldKind::Enum`] slot, because the
 /// shipped worked-sections board is a WORKED-STATUS board over a closed value set and
@@ -533,7 +535,7 @@ pub fn boards(
     exchange: &super::ExchangeSpec,
     role: &super::RoleSpec,
 ) -> Vec<BoardSpec> {
-    let declared: Vec<BoardSpec> = scoring
+    let mut declared: Vec<BoardSpec> = scoring
         .multipliers
         .iter()
         .filter(|m| m.roles.is_empty() || m.roles.contains(&role.id))
@@ -550,6 +552,18 @@ pub fn boards(
             MultSource::DxccEntity | MultSource::Prefix => None,
         })
         .collect();
+    // ⭐ ONE BOARD PER UNIVERSE. A board is a grid of a slot's values over a domain, and
+    // two rules over the same slot and domain would draw the same grid twice. NYQP is the
+    // case: *"The first valid New York county logged will count as the multiplier for New
+    // York"* is a rule over the county list capped at one, and a second 62-cell grid
+    // reading "9 of 62" for a term worth at most 1 is a board that lies. The first rule
+    // over a universe draws it.
+    let mut drawn: Vec<(&str, Option<&str>)> = Vec::new();
+    declared.retain(|b| {
+        let fresh = !drawn.contains(&(b.slot, b.domain));
+        drawn.push((b.slot, b.domain));
+        fresh
+    });
     if !declared.is_empty() {
         return declared;
     }
@@ -982,6 +996,74 @@ mod tests {
         assert!(boards(&scoring, spec, &theirs)
             .iter()
             .all(|x| x.slot != "SECTION"));
+    }
+
+    /// ⭐ **One board per UNIVERSE, not one per rule.** The New York QSO Party counts New
+    /// York itself off the county list — *"The first valid New York county logged will
+    /// count as the multiplier for New York"* (nyqp.org, 2026 rules v1.1) — so a second rule
+    /// reads the same slot and the same domain as the county rule, capped at one. A board
+    /// per rule would draw the 62 counties twice, the second grid reading "9 of 62" for a
+    /// term that can contribute 1. The first rule over a universe draws it.
+    #[test]
+    fn two_rules_over_one_universe_draw_one_board() {
+        static RULES: &[MultiplierRule] = &[
+            MultiplierRule {
+                id: "county",
+                source: MultSource::Field {
+                    key: "QTH",
+                    domain: Some("ny_counties"),
+                },
+                scope: MultScope::PerLog,
+                excluding: &[],
+                roles: &[],
+                cap: None,
+            },
+            MultiplierRule {
+                id: "ny",
+                source: MultSource::Field {
+                    key: "QTH",
+                    domain: Some("ny_counties"),
+                },
+                scope: MultScope::PerLog,
+                excluding: &[],
+                roles: &[],
+                cap: Some(1),
+            },
+            // The same SLOT over a different DOMAIN is a different universe, and keeps its
+            // board — the control that the key is the universe and not the slot.
+            MultiplierRule {
+                id: "mult",
+                source: MultSource::Field {
+                    key: "QTH",
+                    domain: Some("ny_mults"),
+                },
+                scope: MultScope::PerLog,
+                excluding: &[],
+                roles: &[],
+                cap: None,
+            },
+        ];
+        static POST: &[PostMultiplier] = &[];
+        let scoring = Scoring {
+            qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: RULES,
+            post: POST,
+        };
+        let spec = crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd);
+        let role = super::super::RoleSpec {
+            id: "in_state",
+            selector: super::super::RoleSelector::Always,
+            sends: &[],
+            receives: &["QTH"],
+            constant_sent: &[],
+        };
+        assert_eq!(
+            boards(&scoring, spec, &role)
+                .iter()
+                .map(|b| b.id)
+                .collect::<Vec<_>>(),
+            vec!["county", "mult"]
+        );
     }
 
     /// ⭐ **A capped universe stops counting at its cap**, and an uncapped one does not.

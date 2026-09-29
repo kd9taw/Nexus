@@ -291,6 +291,18 @@ pub struct FdRuleset {
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
     /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
     pub cabrillo_location: &'static [(&'static str, &'static str)],
+    /// ⭐ **The slot whose SENT value is the entry's `LOCATION`**, or `""` for every contest
+    /// whose `LOCATION` is the entrant's state (all of them before the New York QSO Party).
+    ///
+    /// NYQP's own Cabrillo specification (nyqp.org, *"2026 New York QSO Party Rules v1.1
+    /// 2026-09-25"*): *"For fixed stations outside New York, use your state abbreviation,
+    /// Canadian province abbreviation, or DX. For fixed stations in New York, use your
+    /// NYQP-approved three-letter county abbreviation. For mobile and portable stations in
+    /// New York, use the NYQP-approved three-letter county abbreviation of any county
+    /// activated during the contest."* — role by role, exactly what the entry sends in its
+    /// QTH slot, which is the whole of this key. The loader refuses a slot some role does
+    /// not send.
+    pub cabrillo_location_slot: &'static str,
     /// ⭐ **The bands this contest runs on, as ADVISORY data** (`"20m"`), or empty when the
     /// ruleset names none. Nothing scores or dupes off it: a contact on another band is
     /// logged, and the entry strip says the contest does not use that band.
@@ -886,6 +898,10 @@ struct CabrilloSpec {
     /// Sent QTH → `LOCATION` spelling, where the two lists differ.
     #[serde(default)]
     location: std::collections::BTreeMap<String, String>,
+    /// The slot whose sent value IS the `LOCATION` (NYQP's `QTH`); `""` = the entrant's
+    /// state, which is what every contest before this key writes.
+    #[serde(default)]
+    location_slot: String,
 }
 
 /// One column of [`CabrilloSpec`].
@@ -2033,6 +2049,27 @@ mode class ({})",
                     ));
                 }
             }
+            // The LOCATION slot is what each role SENDS, so a role that sends no such slot
+            // would head its file with nothing it sent.
+            let slot = r.cabrillo.location_slot.as_str();
+            if !slot.is_empty() {
+                if !x.fields.iter().any(|f| f.key == slot) {
+                    return Err(format!(
+                        "{tag}: cabrillo location_slot {slot:?} is not a slot this exchange \
+                         declares"
+                    ));
+                }
+                if let Some(role) = x
+                    .roles
+                    .iter()
+                    .find(|role| !role.sends.iter().any(|k| k == slot))
+                {
+                    return Err(format!(
+                        "{tag}: cabrillo location_slot {slot:?} is not sent by role {:?}",
+                        role.id
+                    ));
+                }
+            }
         }
         // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
         // lists — otherwise it silently selects nothing — and it must not re-point a code
@@ -2631,6 +2668,7 @@ fn build(spec: FileSpec) -> RulesTable {
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
                 ),
+                cabrillo_location_slot: leak_str(r.cabrillo.location_slot),
                 bands: leak_keys(r.bands),
                 location_aliases: Box::leak(
                     r.location_aliases
@@ -3171,6 +3209,49 @@ mod tests {
         // POSITIVE CONTROL: a mirror missing one county is not equal.
         let mut short = ts.clone();
         short.retain(|(c, _)| *c != "COOK");
+        assert_ne!(short, want);
+    }
+
+    /// ⭐ **The New York QSO Party's two universes, mirrored into the UI and guarded** — the
+    /// ILQP guard above, for the same three keystroke questions (a legal county, the county
+    /// the operator is typing the NAME of, the board's cells).
+    #[test]
+    fn the_typescript_nyqp_mirror_matches_the_seed_domains() {
+        let ts_src = include_str!("../../../ui/src/features/nyqpQth.ts");
+        let ts: Vec<(&str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| Some((ts_str_field(l, "code")?, ts_str_field(l, "name")?)))
+            .collect();
+        // A parser that found nothing would pass the comparisons below it.
+        assert!(
+            ts.len() > 100,
+            "parsed only {} rows out of nyqpQth.ts — the parser is broken, not the mirror",
+            ts.len()
+        );
+        let rs = ruleset_by_id("nyqp", CURRENT_RULES_YEAR).expect("nyqp is seeded");
+        let domain = |id: &str| {
+            rs.domains
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap_or_else(|| panic!("{id} is declared"))
+                .values
+                .to_vec()
+        };
+        let counties = domain("ny_counties");
+        let mults = domain("ny_mults");
+        assert_eq!(counties.len(), 62, "New York's 62 counties");
+        assert_eq!(mults.len(), 62, "49 states + 13 provinces");
+        let want: Vec<(&str, &str)> = counties.iter().chain(&mults).copied().collect();
+        assert_eq!(
+            ts, want,
+            "ui/src/features/nyqpQth.ts drifted from the seed's NYQP domains \
+             (code, name and order)"
+        );
+        // POSITIVE CONTROL: a mirror missing one county is not equal.
+        let mut short = ts.clone();
+        short.retain(|(c, _)| *c != "MON");
         assert_ne!(short, want);
     }
 
@@ -3901,6 +3982,58 @@ mod tests {
         );
     }
 
+    /// ⭐ **`cabrillo.location_slot` must name a slot EVERY role sends.** It is NYQP's
+    /// `LOCATION` rule — *"For fixed stations outside New York, use your state abbreviation,
+    /// Canadian province abbreviation, or DX. For fixed stations in New York, use your
+    /// NYQP-approved three-letter county abbreviation"* — which is, role by role, exactly
+    /// what the entry sends in its QTH slot. A slot the exchange does not declare, or one a
+    /// role never sends, would head that role's file with a value nobody sent. (The corpus
+    /// pins the first refusal; every role in the corpus seed sends every slot it declares,
+    /// so the second cannot be one mutation off it and is pinned here instead.)
+    #[test]
+    fn a_cabrillo_location_slot_must_be_a_slot_every_role_sends() {
+        let with = |slot: &str| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            let ny = v["rulesets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|r| r["event"] == "nyqp")
+                .expect("NYQP is seeded");
+            v["rulesets"][ny]["cabrillo"]["location_slot"] = slot.into();
+            parse_spec(&v.to_string())
+        };
+        let e = with("COUNTY").unwrap_err();
+        assert!(
+            e.contains("cabrillo location_slot \"COUNTY\" is not a slot this exchange declares"),
+            "{e}"
+        );
+        // A slot that IS declared but that one role does not send. Every NYQP role sends both
+        // of its slots, so the case is built by taking QTH off the dx role's sends.
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        let ny = v["rulesets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|r| r["event"] == "nyqp")
+            .expect("NYQP is seeded");
+        let roles = v["rulesets"][ny]["exchange"]["roles"]
+            .as_array_mut()
+            .unwrap();
+        let dx = roles
+            .iter()
+            .position(|r| r["id"] == "dx")
+            .expect("a dx role");
+        roles[dx]["sends"] = serde_json::json!(["RST"]);
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(
+            e.contains("cabrillo location_slot \"QTH\" is not sent by role \"dx\""),
+            "{e}"
+        );
+        // POSITIVE CONTROL: the shipped value loads.
+        assert!(with("QTH").is_ok(), "{:?}", with("QTH").err());
+    }
+
     /// A dupe rule that does not key on the callsign is not a dupe rule — every
     /// contest in the researched set keys on it, and a file saying otherwise is
     /// far more likely to be a mistake than a new contest shape. Refused by
@@ -4469,6 +4602,12 @@ mod tests {
             ("cqp", "ca_counties", 58),
             ("cqp", "cqp_states", 63),
             ("txqp", "tx_counties", 254),
+            // NYQP: the 62 counties of the rules PDF, repeated code for code by the county
+            // checklist PDF and CSV; and what everyone else sends — the 50 states less New
+            // York (whose stations send a county) plus the 13 provinces of the rules'
+            // "CANADIAN MULTIPLIER LIST".
+            ("nyqp", "ny_counties", 62),
+            ("nyqp", "ny_mults", 62),
         ] {
             let d = domain_of(party(event), domain);
             assert_eq!(d.values.len(), n, "{event}/{domain}");
@@ -4544,6 +4683,15 @@ mod tests {
                 [1, 2, 2],
                 MultScope::PerLog,
             ),
+            // NYQP: phone 1, CW 2, RTTY or other digital 3, all "per band"; multipliers
+            // once per LOG ("Maximum of 125 multipliers" is only reachable that way).
+            (
+                "nyqp",
+                "NY-QSO-PARTY",
+                ["RST", "QTH"],
+                [1, 2, 3],
+                MultScope::PerLog,
+            ),
         ] {
             let rs = party(event);
             assert_eq!(rs.contest_id, contest_id);
@@ -4600,8 +4748,9 @@ mod tests {
             );
         }
         // ⭐ ILQP is the third: its bonus stations ARE computed (they are in the log,
-        // not on a menu), so its score omits nothing and it carries no note.
-        for event in ["ohqp", "cqp", "ilqp"] {
+        // not on a menu), so its score omits nothing and it carries no note. NYQP names
+        // no bonus at all: points times multipliers is the whole of it.
+        for event in ["ohqp", "cqp", "ilqp", "nyqp"] {
             assert!(
                 party(event).score_note_key.is_empty(),
                 "{event}'s score is complete — no note"
@@ -4635,6 +4784,8 @@ mod tests {
             // OUTER ENVELOPE; the sponsor's 0200Z–1400Z Sunday break is not
             // expressible and is recorded in `_provenance`.
             ("txqp", at(2026, 9, 19, 14), at(2026, 9, 20, 20)),
+            // "October 17, 2026, from 14:00 UTC through 01:59 UTC."
+            ("nyqp", at(2026, 10, 17, 14), at(2026, 10, 18, 2)),
         ] {
             let w = party(event).event_window(2026);
             assert_eq!(w.start_unix, start, "{event} start");
@@ -4837,8 +4988,8 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            17,
-            "two Field Day events + five QSO parties + both Sweepstakes weekends + \
+            18,
+            "two Field Day events + six QSO parties + both Sweepstakes weekends + \
              CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
@@ -4867,6 +5018,11 @@ mod tests {
             assert_eq!(
                 x.cabrillo_location, y.cabrillo_location,
                 "{}: location",
+                x.event
+            );
+            assert_eq!(
+                x.cabrillo_location_slot, y.cabrillo_location_slot,
+                "{}: location slot",
                 x.event
             );
             assert_eq!(x.bands, y.bands, "{}: bands", x.event);

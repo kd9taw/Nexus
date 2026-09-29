@@ -41,7 +41,7 @@ it('accepts the sent exchange a newer station sends, and still bounds it',()=>{
 
 // The ruleset's DUPE RULE, each row's key under it, and the club's generalised keys. The strip
 // builds the key the ENGINE will refuse on instead of the (call, band, mode class) triple it
-// hardcoded — the rule for two of the seventeen shipped rulesets. This validator refuses keys it
+// hardcoded — the rule for two of the eighteen shipped rulesets. This validator refuses keys it
 // does not know, so all three had to be taught here or a station sending them goes blank through
 // Remote, which is the defect this file's own header records happening twice before.
 it('accepts the ruleset dupe rule and the keys built from it, and bounds all three',()=>{

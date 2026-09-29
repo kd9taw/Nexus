@@ -429,6 +429,14 @@ mod tests {
             // ILLINOIS QSO PARTY`. Sponsor-first, the same rule the ARRL-SS and CQ-WW
             // rows above follow when a registry and a sponsor disagree.
             ("ilqp", "IL QSO Party", "ILLINOIS QSO PARTY"),
+            // ⭐ NYQP — the party where all THREE sources AGREE, each read on 2026-09-29, so
+            // the map must leave it alone. ADIF 3.1.7's CONTEST_ID enumeration
+            // (https://adif.org/317/ADIF_317.htm, "updated 2026-03-22") lists NY-QSO-PARTY =
+            // "New York QSO Party"; the WA7BNM master list (contestcalendar.com/cabnames.php,
+            // Revision Date February 23, 2026) carries the same string at id 473; and the
+            // sponsor's own rules PDF (nyqp.org, "2026 New York QSO Party Rules v1.1
+            // 2026-09-25") prints `CONTEST: NY-QSO-PARTY` in both of its sample headers.
+            ("nyqp", "NY-QSO-PARTY", "NY-QSO-PARTY"),
             // ⭐ Sweepstakes is the contest where the two registries AGREE, and it is
             // pinned for that reason: ADIF 3.1.7's CONTEST_ID enumeration lists
             // ARRL-SS-CW = "ARRL November Sweepstakes (CW)" and ARRL-SS-SSB = "ARRL
