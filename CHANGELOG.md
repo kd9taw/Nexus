@@ -237,8 +237,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either end, and Backspace or a double-click puts it back to where it started. A screen reader
   says each divider's name and its position. The layouts you have saved open exactly where you
   left them.
+- **Phone, CW and JS8: drag the columns wider or narrower.** When one of these cockpits shows two
+  or three columns, a divider on the left edge of the log column sets how wide the log is, and
+  with three columns a second divider shares the width between the other two. Drag them, or Tab
+  to one and use the arrow keys (Shift for a bigger step, Home and End for either end, Backspace
+  or a double-click for the standard width). The log column stays between its usual minimum and
+  half the width of the panes; a width you set on a big monitor comes back there, and on a
+  smaller window it is simply narrowed to fit. On a narrow window, where the panes stack in one
+  column, there are no column dividers. **⊞ Panels ▸ Reset layout** puts the standard columns
+  back, and **Undo last change** undoes one divider move. Moving a divider never reloads the
+  log form or the voice keyer, so a half-typed contact stays where it is.
+- **JS8: resize the panes and the waterfall.** A divider between Activity and Band activity and
+  another between Stations and Inbox share the height between each pair, and a divider under the
+  waterfall sets its height, from the mouse or the keyboard like every other divider. The
+  waterfall opens at about the size it had before; the height you set is kept, and fitted to the
+  window when it changes size.
+- **RTTY, PSK and SSTV: resize the text, the log and the waterfall.** In RTTY and PSK a divider
+  between the decoded text and the log sets how they share the height, and a divider under the
+  waterfall sets its height. In SSTV a divider under the picture area sets its height: the band
+  waterfall while you wait, the picture while one comes in. Drag them, or Tab to one and use the
+  arrow keys (Shift for a bigger step, Home and End for either end, Backspace or a double-click to
+  put it back). Until you move SSTV's divider the picture area keeps growing with the window as it
+  always has, so a picture coming in on a big monitor keeps its full size, and Backspace gives you
+  that back. The heights you set are kept, and fitted to the window when it changes size.
+  **⊞ Panels ▸ Undo last change** and **Reset layout** cover the divider between the text and the
+  log. RTTY's and PSK's waterfalls open at a quarter of the cockpit's height, about what they had
+  before, and on a short window or a large UI scale they now get smaller before the cockpit starts
+  to scroll.
+- **Operate: resize its columns, and put the side rail on either side.** In the Classic layout a
+  divider between Band Activity and the Rx Frequency column joins the one between the Rx Frequency
+  column and Stations, and a divider between Rx Frequency and the Tx1–Tx6 messages lets the
+  messages take less height (they scroll) so Rx Frequency gets more; it never makes them taller
+  than their rows. In the Roster layout a divider sits between the Call Roster and the side rail.
+  Each one moves only the two columns or panes beside it and stops where either reaches its
+  smallest width. Drag them, or Tab to one and use the arrow keys, like every other divider;
+  **⊞ Panels ▸ Undo last change** and **Reset layout** cover the column dividers. **⊞ Panels ▸
+  Side rail on the left** moves the rail (Stations in Classic; Band Activity and Rx Frequency in
+  Roster) to the left of the window. A layout you set before this opens exactly as you left it.
+- **APRS: a wider station list, and the map on either side.** A divider between the map and the
+  column with the beacon form, the message form and the station list sets that column's width,
+  from 260 px up to half the view (and never less than today's 420 px), so the station table can
+  show its last columns. The **Map on the left** button in the map's top-right corner swaps the map
+  and the column. Drag the divider, or Tab to it and use the arrow keys (Shift for a bigger step,
+  Home and End for either end, Backspace or a double-click for the standard width). Each window
+  keeps its own width and side; a width you set on a big monitor comes back there, and on a
+  smaller window it is narrowed to fit. On a narrow window, where the map sits above the list,
+  there is no divider.
+- **Connect: a taller or shorter bottom row.** A divider between the map and the row of panels
+  under it sets the row's height, from a pane's title and a line of it up to half of Connect, so
+  the map always keeps at least half. Until you move it the row is as tall as its panes need, as
+  before. Drag it, or Tab to it and use the arrow keys (Backspace or a double-click puts the usual
+  height back); **⊞ Panels ▸ Reset layout** puts it back too. Each window keeps its own height,
+  fitted to the window when it changes size.
+- **Logbook: resize the globe.** A divider under the 3-D globe at the top of the Logbook sets its
+  height, from a small strip up to most of the list; until you move it the globe is its usual
+  320 px. The table starts right under it, and scrolling still takes the globe away. Drag it, or
+  Tab to it and use the arrow keys (Backspace or a double-click for the usual height). Each window
+  keeps its own height, fitted to the window when it changes size.
+- **Satellites and Awards: move the line between the two columns.** In Satellites a divider
+  between the schedule and the pass column, and in Awards one between the progress by band and
+  mode and the chase lists, moves that boundary, from the mouse or the keyboard like every other
+  divider. Neither column goes below 260 px, the split you set is kept per window, and Backspace
+  or a double-click puts the usual split back. On a narrow window, where the columns stack, there
+  is no divider.
 
 ### Changed
+
+- **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
+  under a scope or waterfall and the dividers between panes now sit in the space that was already
+  between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as
+  RTTY's, PSK's and SSTV's new dividers do.
 
 - **ON AIR is now a solid red sign you cannot miss.** While the rig is keyed, the TX state in the
   cockpit header (Phone, CW, RTTY, PSK, SSTV, JS8 and Tempo), Operate's **▲ TRANSMITTING** in the
@@ -302,6 +370,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
+  narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
+  width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits
+  between. Now only those two move.
 - **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
   colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
   you picked. The dark theme is unchanged.

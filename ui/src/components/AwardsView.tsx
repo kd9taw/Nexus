@@ -18,6 +18,9 @@ import {
 } from '../api'
 import { t } from '../i18n'
 import { logSource } from '../features/logSource'
+import { PaneSeam } from './PaneSeam'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { VIEW_COLUMN_FLOOR, columnShareStyle, parseColumnShare } from '../features/viewColumns'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { pushToast } from '../toast'
 import { StateBlock } from './StateBlock'
@@ -293,6 +296,10 @@ function RowAction({
   return null
 }
 
+/** The two fr tokens the Awards grid reads for its columns (layout L7): the progress column's and
+ *  the chase lists'. */
+const AWARDS_COLUMN_VARS = ['--awards-col-a', '--awards-col-b'] as const
+
 export function AwardsView({
   showGamification = true,
   onOpenSettings,
@@ -317,6 +324,18 @@ export function AwardsView({
   // returns for the loading, error and empty-log states and a hook below those is not
   // called on every render path.
   const [gridsVuccOnly, setGridsVuccOnly] = useState(true)
+  // THE TWO COLUMNS' SPLIT (layout L7), up here for the same reason: the divider between the
+  // progress column and the chase lists stores the first one's share of 2, per window, and the
+  // grid reads it as two fr tokens.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const leftRef = useRef<HTMLDivElement>(null)
+  const chasesRef = useRef<HTMLDivElement>(null)
+  const [colShare, setColShare] = useState(() => parseColumnShare(surfaceGet('nexus.awards.columns')))
+  const commitCols = (share: number | null) => {
+    setColShare(share)
+    // '' reads back as "never set" (parseColumnShare): the sheet's stock split.
+    surfaceSet('nexus.awards.columns', share == null ? '' : String(share))
+  }
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   // Guards post-await setState in upload() — TQSL signing can take seconds, during
@@ -762,8 +781,8 @@ export function AwardsView({
         </div>
       </div>
 
-      <div className="awards-body">
-        <div className="aw-left">
+      <div className="awards-body" ref={bodyRef} style={columnShareStyle(colShare, AWARDS_COLUMN_VARS)}>
+        <div className="aw-left" ref={leftRef}>
           <div className="aw-panel">
             <h3>{t('awards.bands.head')}</h3>
             <div className="aw-bands">
@@ -879,7 +898,7 @@ export function AwardsView({
           </div>
         </div>
 
-        <div className="aw-chases">
+        <div className="aw-chases" ref={chasesRef}>
           <div className="aw-panel">
             <h3>
               <Target size={14} aria-hidden="true" />{' '}
@@ -919,6 +938,21 @@ export function AwardsView({
             )}
           </div>
         </div>
+        {/* The progress column | chase lists divider (layout L7): out of flow, in the gap before
+            the chase lists (styles.css `.awards-colseam`). The stacked sm/xs layout hides it. */}
+        <PaneSeam
+          above={leftRef}
+          below={chasesRef}
+          axis="x"
+          columnsOn={bodyRef}
+          varName="--awards-col"
+          columnVars={AWARDS_COLUMN_VARS}
+          floors={[VIEW_COLUMN_FLOOR, VIEW_COLUMN_FLOOR]}
+          className="awards-colseam"
+          onCommit={(a: number) => commitCols(a)}
+          onReset={() => commitCols(null)}
+          label={t('awards.columns.split.label')}
+        />
       </div>
 
       {shownDiag && (shownDiag.diagnoses.length > 0 || shownDiag.pendingLag > 0 || shownDiag.waitingOnPartner > 0) && (

@@ -81,16 +81,24 @@ vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> })
 vi.mock('../remote-web/RemoteRecall', () => ({ RemoteRecallEntry: () => <div data-testid="recall-stub" /> }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
-/** The observed region's callback, so a test can fire a resize (useRegionCols.test's harness). */
+/** Fire a resize the way the browser does: to EVERY live observer. The region's (useRegionCols)
+ *  is no longer the only one — with the real panel record the log column's width divider
+ *  observes too (panes/RegionColumnSeams), and a harness that kept the last one constructed
+ *  fired the divider's instead of the region's. */
 let fire: (() => void) | null = null
 beforeEach(() => {
-  fire = null
+  const live = new Set<() => void>()
+  fire = () => [...live].forEach((cb) => cb())
   globalThis.ResizeObserver = class {
+    cb: () => void
     constructor(cb: () => void) {
-      fire = cb
+      this.cb = cb
+      live.add(cb)
     }
     observe() {}
-    disconnect() {}
+    disconnect() {
+      live.delete(this.cb)
+    }
     unobserve() {}
   } as unknown as typeof ResizeObserver
   Element.prototype.setPointerCapture = () => {}
@@ -477,9 +485,12 @@ describe('the divider between the two panes', () => {
     }
     await width(1200)
     expect(region.getAttribute('data-cols')).toBe('2')
-    // Between the two, in the same column.
+    // Between the two, in the same column — and marked as a column's divider, the class the sheet
+    // keys its in-gap margins on (styles.css `.in-column`; cockpit-shells.test.ts computes the net).
     expect(sep()!.previousElementSibling).toBe(pane('spots'))
     expect(sep()!.nextElementSibling).toBe(pane('needed'))
+    expect(sep()!.parentElement!.classList.contains('cockpit-col')).toBe(true)
+    expect(sep()!.classList.contains('in-column'), 'the divider takes a 12 px gap of its own').toBe(true)
     // Tier 3 puts Needed under the strips in the middle column: nothing to split, no divider.
     await width(1800)
     expect(region.getAttribute('data-cols')).toBe('3')
@@ -519,6 +530,36 @@ describe('the divider between the two panes', () => {
     // …and the record's value is what the frames carry from then on.
     expect(pane('spots')!.style.getPropertyValue('--pane-share')).toBe(String(a))
     expect(pane('needed')!.style.getPropertyValue('--pane-share')).toBe(String(b))
+  })
+
+  it('while the divider is there the feeds’ floors follow their shares; a lone feed keeps the stock floor', async () => {
+    // L1 left this divider inert at 1024×768 and 1366×768 (measured in Chrome): the leading
+    // column is too short for both feeds' floors, so both sat on them and a share moved nothing.
+    // The floor now follows the share — but only for the PAIR the divider splits: at tier 3 each
+    // feed is alone in its column, and hiding one leaves the other alone too.
+    localStorage.setItem(PHONE_KEY, JSON.stringify({ v: 2, state: { spots: 'docked', needed: 'docked' }, share: { spots: 1.6, needed: 0.4 } }))
+    render(<Live />)
+    const region = document.querySelector('.cockpit-panes')!
+    const width = async (w: number) => {
+      Object.defineProperty(region, 'clientWidth', { configurable: true, get: () => w })
+      act(() => fire!())
+      await act(async () => {
+        await new Promise((r) => requestAnimationFrame(() => r(null)))
+      })
+    }
+    const SPLIT_FLOOR = 'min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1) / 1), 100%)'
+    const STOCK_FLOOR = 'var(--cockpit-fill-min, 0)'
+    await width(1200)
+    expect(pane('spots')!.style.minHeight).toBe(SPLIT_FLOOR)
+    expect(pane('needed')!.style.minHeight).toBe(SPLIT_FLOOR)
+    expect(pane('spots')!.style.getPropertyValue('--pane-share')).toBe('1.6')
+    await width(1800)
+    expect(pane('spots')!.style.minHeight, 'tier 3: Spots is alone in its column').toBe(STOCK_FLOOR)
+    expect(pane('spots')!.style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('needed')!.style.minHeight).toBe(STOCK_FLOOR)
+    await width(1200)
+    fireEvent.click(within(pane('needed')!).getByRole('button', { name: 'Hide Needed' }))
+    expect(pane('spots')!.style.minHeight, 'Needed hidden: Spots is alone').toBe(STOCK_FLOOR)
   })
 
   it('answers the keyboard from where the panes are, and Backspace puts the stock split back (PaneSeam)', async () => {

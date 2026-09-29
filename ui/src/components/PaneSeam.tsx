@@ -23,13 +23,20 @@
 //     actually HONOURS, measured, because a neighbour can cap a strip below every rule of its own:
 //     Phone's scope at 1024×768 stopped at ~242 CSS px under a declared 406, and the rest of the
 //     drag was dead. The drag is relative to where it started, so a grab never jumps the divider.
+//     A strip whose stock size is the SHEET's own (`defaultPct={null}`, SSTV's picture stage, a
+//     grower) is painted nothing until the operator sizes it, carries `data-sized` once sized, and
+//     a reset gives the sheet's own size back. A strip may also come AFTER its divider (`after`:
+//     Operate's Tx1–Tx6 machine, below its divider), and then moving down shrinks it.
 //   · SPLIT (`above`/`below`): two panes' shares in the panel record (panelState.setShares), as
-//     `--pane-share` on flex panes or as fr tokens on a grid container (`columnsOn`). Its value is
-//     the split as MEASURED on screen, because a pane's stock share is a sheet default the record
-//     never saw (Operate's Band Activity : Rx Frequency is 1.6 : 1). Reset clears the pair back to
-//     that default. The drag maps the pointer's place in the pair, the mapping SplitterSeam had.
-//   · VALUE (`value`): the host owns the size (App's Tempo rails, usePaneWidths). The divider
-//     steps, drags and resets it; the host clamps and stores.
+//     `--pane-share` on flex panes or as fr tokens on a grid container (`columnsOn`, optionally
+//     named: `columnVars`). Its value is the split as MEASURED on screen, because a pane's stock
+//     share is a sheet default the record never saw (Operate's Band Activity : Rx Frequency is
+//     1.6 : 1). Reset clears the pair back to that default. The drag maps the pointer's place in
+//     the pair, the mapping SplitterSeam had. What it paints is the share × `scale`, so the pair
+//     keeps its current total and nothing beside it moves.
+//   · VALUE (`value`): the host owns the size (App's Tempo rails, usePaneWidths; a grid cockpit's
+//     log column, panes/RegionColumnSeams). The divider steps, drags and resets it; the host
+//     clamps and stores.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Its own prose is the
 // tooltip; each divider's accessible name is its caller's `label`.
@@ -179,8 +186,14 @@ export interface StripSeamProps {
    *  in another window. The strip comes BEFORE its divider in the tree (the divider sits after
    *  what it sizes), which is also what makes its ref ready when the divider mounts: a
    *  component's layout effects run before an ANCESTOR's ref is attached, never a preceding
-   *  sibling's. */
+   *  sibling's. A strip AFTER its divider says so with `after`. */
   strip: RefObject<HTMLElement | null>
+  /** The strip sits AFTER its divider (below it, or to its right): moving the divider down or
+   *  right SHRINKS it, the arrows and a drag act the other way round, and its ref is not attached
+   *  yet when the divider's layout effect first runs (a FOLLOWING sibling's), so the divider takes
+   *  one more synchronous pass, before anything paints, to find it. Operate's Tx1–Tx6 machine
+   *  under its divider. */
+  after?: boolean
   /** localStorage key (nexus.split.<section>.<id>). PER-SURFACE — scoped here rather than at the
    *  call sites, so a split can never be shared between a window and a pop-out with a different
    *  aspect. */
@@ -188,10 +201,18 @@ export interface StripSeamProps {
   /** Clamps for the strip, in the sheet's own units where the sheet sets them (SplitClamp). */
   min: SplitClamp
   max: SplitClamp
-  /** Default size as a percentage of the container (until the first move, and after a reset). */
-  defaultPct: number
+  /** Default size as a percentage of the container (until the first move, and after a reset).
+   *  `null`: the strip keeps the SHEET's OWN size — a grower no fixed share reproduces at every
+   *  window, SSTV's picture stage — until the operator sizes it, and a reset gives that back.
+   *  Nothing is painted until then; a sized strip carries `data-sized`, the attribute its sheet
+   *  rule keys the sized shape on (grow 0, this variable as the basis). */
+  defaultPct: number | null
   /** Accessible name. */
   label: string
+  /** The most of its container the strip may take, as a share (default 0.9, the drag's bound since
+   *  Splitter). A strip that shares its container with something that must keep its room says so
+   *  here: Connect's bottom strip, which leaves the map at least half of the grid (layout L7). */
+  maxShare?: number
 }
 
 /** The container's CONTENT box along the axis, in CSS px: a flex item's % basis resolves against
@@ -235,18 +256,23 @@ function honouredRange(
   varName: string,
   axis: SeamAxis,
   z: number,
+  /** A strip whose sized shape keys on `data-sized` is measured in that shape. */
+  sizedMark: boolean,
 ): [number, number] | null {
   const size = () => {
     const r = strip.getBoundingClientRect()
     return (axis === 'y' ? r.height : r.width) / z
   }
   const was = target.style.getPropertyValue(varName)
+  const marked = strip.hasAttribute('data-sized')
+  if (sizedMark && !marked) strip.setAttribute('data-sized', '')
   target.style.setProperty(varName, '0px')
   const lo = size()
   target.style.setProperty(varName, '100000px')
   const hi = size()
   if (was) target.style.setProperty(varName, was)
   else target.style.removeProperty(varName)
+  if (sizedMark && !marked) strip.removeAttribute('data-sized')
   return hi > 0 ? [lo, hi] : null
 }
 
@@ -259,14 +285,30 @@ interface StripBox {
   hi: number
 }
 
-function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label }: StripSeamProps) {
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9 }: StripSeamProps) {
   const container = () => strip.current?.parentElement ?? null
-  // The operator's PREFERENCE as stored. A re-clamp never writes it.
-  const pref = useRef<number | null>(null)
-  if (pref.current === null) pref.current = parseSplitPct(surfaceGet(storageKey)) ?? defaultPct
-  // The % on the container now: the preference fitted into the live box, or a drag in flight.
-  const painted = useRef(pref.current)
+  // The operator's PREFERENCE as stored (null: none, and the sheet's own size stands — only for a
+  // strip whose default is the sheet's). A re-clamp never writes it. `undefined` = not read yet.
+  const pref = useRef<number | null | undefined>(undefined)
+  if (pref.current === undefined) pref.current = parseSplitPct(surfaceGet(storageKey)) ?? defaultPct
+  // The % on the container now: the preference fitted into the live box, or a drag in flight;
+  // null while the strip stands at the sheet's own size.
+  const painted = useRef<number | null>(pref.current)
   const [view, setView] = useState<{ px: number; lo: number; hi: number } | null>(null)
+  // A strip whose stock size is the sheet's own is MARKED while a size is painted: its sheet rule
+  // keys the sized shape (grow 0, the variable as the basis) on `data-sized`.
+  const ownSize = defaultPct == null
+  const mark = (on: boolean) => {
+    const s = strip.current
+    if (!ownSize || !s) return
+    if (on) s.setAttribute('data-sized', '')
+    else s.removeAttribute('data-sized')
+  }
+  /** The strip's rendered size, CSS px. */
+  const stripSize = (z: number) => {
+    const r = strip.current?.getBoundingClientRect()
+    return r ? (axis === 'y' ? r.height : r.width) / z : 0
+  }
 
   const box = (): StripBox | null => {
     const el = container()
@@ -274,10 +316,10 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     const z = elZoom(el)
     const span = contentSpan(el, axis, z)
     if (!(span > 0)) return null
-    const g = splitGeom(el, z)
+    const g = { ...splitGeom(el, z), span }
     let lo = resolveClamp(min, g)
-    let hi = Math.min(resolveClamp(max, g), 0.9 * span)
-    const honoured = honouredRange(strip.current!, el, varName, axis, z)
+    let hi = Math.min(resolveClamp(max, g), maxShare * span)
+    const honoured = honouredRange(strip.current!, el, varName, axis, z, ownSize)
     if (honoured) {
       lo = Math.max(lo, honoured[0])
       hi = Math.min(hi, honoured[1])
@@ -290,6 +332,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
   const write = (b: StripBox, px: number) => {
     const pct = (px / b.span) * 100
     b.el.style.setProperty(varName, `${pct}%`)
+    mark(true)
     painted.current = pct
     return pct
   }
@@ -301,29 +344,58 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
   }
   /** Re-fit the PREFERENCE into the box as it is now: load, every resize, a reset. */
   const fit = () => {
+    const pct = pref.current
+    if (pct == null) {
+      // No preference and the sheet's own size stands: nothing painted, nothing marked, and the
+      // value is what renders (the range is measured in the sized shape all the same, and
+      // stretched to hold that value, so what is announced is always inside it).
+      container()?.style.removeProperty(varName)
+      mark(false)
+      painted.current = null
+      const b = box()
+      if (!b) return
+      const px = stripSize(b.z)
+      const lo = Math.min(b.lo, px)
+      const hi = Math.max(b.hi, px)
+      setView((v) => (v && v.px === px && v.lo === lo && v.hi === hi ? v : { px, lo, hi }))
+      return
+    }
     const b = box()
     if (!b) {
       // Hidden (a keep-alive host's 0×0): the stored % raw, as Splitter's mount did. The next real
       // box is re-fitted before it paints.
-      container()?.style.setProperty(varName, `${pref.current}%`)
-      painted.current = pref.current!
+      container()?.style.setProperty(varName, `${pct}%`)
+      mark(true)
+      painted.current = pct
       return
     }
-    settle(b, clampIn(b, (pref.current! / 100) * b.span))
+    settle(b, clampIn(b, (pct / 100) * b.span))
   }
+  /** Where the strip stands, CSS px: the painted size, or the sheet's own. */
+  const current = (b: StripBox) => clampIn(b, painted.current != null ? (painted.current / 100) * b.span : stripSize(b.z))
   const fitRef = useRef(fit)
   fitRef.current = fit
 
   // Before first paint, and on every resize of the container: a window resize, a zoom change, and
   // a kept-alive host shown again (it mounted at 0×0, where nothing could be clamped).
+  // A strip at the sheet's own size can also change on its own (a grower, as its neighbours come
+  // and go), so that one is observed too.
+  // A strip after its divider has no ref yet on the first pass (above): one more pass, which
+  // React runs synchronously before paint because it is scheduled from a layout effect.
+  const [findTries, findAgain] = useState(0)
   useLayoutEffect(() => {
+    if (!strip.current) {
+      if (after && findTries === 0) findAgain(1)
+      return
+    }
     fitRef.current()
     const el = strip.current?.parentElement
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => fitRef.current())
     ro.observe(el)
+    if (ownSize && strip.current) ro.observe(strip.current)
     return () => ro.disconnect()
-  }, [strip])
+  }, [strip, ownSize, after, findTries])
 
   const commit = (px: number) => {
     const b = box()
@@ -343,30 +415,35 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
       max={view?.hi ?? 0}
       step={SEAM_STEP_PX}
       bigStep={SEAM_STEP_PX_BIG}
-      grows={1}
+      grows={after ? -1 : 1}
       now={() => {
         const b = box()
-        return b ? { value: clampIn(b, (painted.current / 100) * b.span), min: b.lo, max: b.hi } : null
+        return b ? { value: current(b), min: b.lo, max: b.hi } : null
       }}
       commit={commit}
       reset={() => {
         pref.current = defaultPct
-        surfaceSet(storageKey, String(defaultPct))
+        // '' reads back as "never set" (parseSplitPct), which is what a sheet-sized default is.
+        surfaceSet(storageKey, defaultPct == null ? '' : String(defaultPct))
         fit()
       }}
       drag={(e) => {
         const b = box()
         if (!b) return null
         // Relative to where the drag STARTED, from where the strip IS: a grab off-centre never
-        // jumps the divider, and the pointer and the divider move together.
-        const start = clampIn(b, (painted.current / 100) * b.span)
+        // jumps the divider, and the pointer and the divider move together. From the sheet's own
+        // size that is its rendered size, so the first paint lands exactly where it stood.
+        const start = current(b)
         const p0 = axis === 'y' ? e.clientY : e.clientX
         const was = painted.current
         return {
-          at: (ev) => clampIn(b, start + ((axis === 'y' ? ev.clientY : ev.clientX) - p0) / b.z),
+          at: (ev) => clampIn(b, start + ((after ? -1 : 1) * ((axis === 'y' ? ev.clientY : ev.clientX) - p0)) / b.z),
           paint: (px) => write(b, px),
           restore: () => {
-            b.el.style.setProperty(varName, `${was}%`)
+            if (was == null) {
+              b.el.style.removeProperty(varName)
+              mark(false)
+            } else b.el.style.setProperty(varName, `${was}%`)
             painted.current = was
           },
         }
@@ -395,15 +472,41 @@ export interface SplitSeamProps {
   axis?: SeamAxis
   /** Grid-column mode: the container whose template consumes the fr tokens. */
   columnsOn?: RefObject<HTMLElement | null>
+  /** Classes that place this divider in its container, beside its own (a grid cockpit's column
+   *  divider rides the gap before its track: cockpit-panes.css `.cockpit-colseam`). */
+  className?: string
+  /** The grow (or fr) a share of 1 stands for: what is painted is share × scale. The shares
+   *  committed are the pair's own (seamShares, summing to 2); the painted values keep the pair's
+   *  current total, so a pair of unequal weights among other growers moves only its own boundary:
+   *  fill panes in a column (CockpitPaneFrame `split`), and fr columns in a grid of three, where a
+   *  pair painted at a new total would move the third column (Operate's Classic, layout L5).
+   *  Default 1. */
+  scale?: number
+  /** Grid-column mode: the two fr tokens to paint, the first for `above`, when they are not
+   *  `${varName}-a`/`-b` — a column shared by two dividers is one token read by both (Operate's
+   *  Classic: Band Activity | the Rx Frequency column | Stations). */
+  columnVars?: readonly [string, string]
+  /** The two panes' own floors along the axis, CSS px (a template's `minmax(<floor>, …)`): the
+   *  divider stops where either reaches its floor, and announces that as its range. Past a floor
+   *  the grid freezes the floored track and hands the rest of the move to the tracks NOT in the
+   *  pair — Operate's Classic at 1024×768 took 9 px from Band Activity on the Stations divider's
+   *  first step — and the pointer goes on while the divider does not. */
+  floors?: readonly [number, number]
 }
 
 /** A pane never goes below MIN_SHARE, so the divider never leaves this span of the pair. */
 const SPLIT_LO = MIN_SHARE / 2
 const SPLIT_HI = 1 - MIN_SHARE / 2
 
-function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y', columnsOn }: SplitSeamProps) {
-  /** The split on screen: the first pane's fraction of the two, or null when nothing is laid out. */
-  const measure = useCallback((): number | null => {
+function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y', columnsOn, className, scale = 1, columnVars, floors }: SplitSeamProps) {
+  // Read through a ref: a host builds the pair per render, and the measurement must not be
+  // re-created (and its observers re-attached) every time it does.
+  const floorsRef = useRef(floors)
+  floorsRef.current = floors
+  /** The split on screen — the first pane's fraction of the two — and the range it may take:
+   *  SPLIT_LO … SPLIT_HI, narrowed to where neither pane is below its floor. null when nothing is
+   *  laid out. */
+  const measure = useCallback((): { f: number; lo: number; hi: number } | null => {
     const a = above.current
     const b = below.current
     if (!a || !b) return null
@@ -411,34 +514,60 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
     const rb = b.getBoundingClientRect()
     const sa = axis === 'x' ? ra.width : ra.height
     const sb = axis === 'x' ? rb.width : rb.height
-    return sa + sb > 0 ? sa / (sa + sb) : null
+    if (!(sa + sb > 0)) return null
+    let lo = SPLIT_LO
+    let hi = SPLIT_HI
+    const fl = floorsRef.current
+    if (fl) {
+      // Rects are zoomed; the floors are CSS px.
+      const z = elZoom(a)
+      const flo = (fl[0] * z) / (sa + sb)
+      const fhi = 1 - (fl[1] * z) / (sa + sb)
+      // Both panes ON their floors meet at one split (to rounding — measured at 1024×768 with a
+      // stored layout at the far end, the two ends came out a hair crossed), and the divider stays
+      // there. Floors the pair cannot both keep (a grid already overflowing) narrow nothing.
+      if (flo <= fhi + 1e-6) {
+        lo = Math.max(lo, Math.min(flo, fhi))
+        hi = Math.min(hi, Math.max(flo, fhi))
+      }
+    }
+    return { f: sa / (sa + sb), lo, hi }
   }, [above, below, axis])
-  const [measured, setMeasured] = useState<number | null>(null)
+  const [measured, setMeasured] = useState<{ f: number; lo: number; hi: number } | null>(null)
   const later = useRef(0)
   const remeasure = useCallback(() => {
     cancelAnimationFrame(later.current)
     later.current = requestAnimationFrame(() => setMeasured(measure()))
   }, [measure])
   // Measured once the commit is done, on every window resize (where a column's floor can start or
-  // stop binding), and after each commit of the divider's own (below). Not in a layout effect: the
-  // pane after the divider (Rx Frequency under its seam, Classic's Stations aside) has no ref yet
-  // while the divider's layout effects run. Only the announced value waits for it — a key or a
-  // drag measures at the moment it acts. A ratio needs no clamp against the box: the record's
-  // shares are clamped on load (coercePanelLayout) and on every write (seamShares).
+  // stop binding), whenever either pane changes size by itself, and after each commit of the
+  // divider's own (below). The panes' own sizes are observed because a floor starts binding with
+  // no window resize at all: a neighbour arriving after the first layout (measured in Chrome at
+  // 1024×768: RTTY's waterfall came in 34 ms after the cockpit, took its 25 % from the pair and
+  // left both panes at their floors, 50 %, while the divider still announced the stock 40 % it had
+  // measured), a neighbour's divider, a pane shown beside them. Not in a layout effect: the pane
+  // after the divider (Rx Frequency under its seam, Classic's Stations aside) has no ref yet while
+  // the divider's layout effects run. Only the announced value waits for it — a key or a drag
+  // measures at the moment it acts. A ratio needs no clamp against the box: the record's shares
+  // are clamped on load (coercePanelLayout) and on every write (seamShares).
   useEffect(() => {
     setMeasured(measure())
     window.addEventListener('resize', remeasure)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => remeasure())
+    for (const el of [above.current, below.current]) if (el) ro?.observe(el)
     return () => {
       window.removeEventListener('resize', remeasure)
+      ro?.disconnect()
       cancelAnimationFrame(later.current)
     }
-  }, [measure, remeasure])
+  }, [measure, remeasure, above, below])
 
-  const clampF = (f: number) => Math.min(SPLIT_HI, Math.max(SPLIT_LO, f))
+  const clampIn = (f: number, r: { lo: number; hi: number } | null) =>
+    Math.min(r?.hi ?? SPLIT_HI, Math.max(r?.lo ?? SPLIT_LO, f))
   /** The painted properties, as [element, property] pairs. */
   const targets = (): Array<[HTMLElement, string]> => {
     const c = columnsOn?.current
-    if (c) return [[c, `${varName}-a`], [c, `${varName}-b`]]
+    if (c) return [[c, columnVars?.[0] ?? `${varName}-a`], [c, columnVars?.[1] ?? `${varName}-b`]]
     const a = above.current
     const b = below.current
     return a && b ? [[a, varName], [b, varName]] : []
@@ -447,29 +576,29 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
     const [av, bv] = seamShares(f)
     const [pa, pb] = targets()
     if (!pa || !pb) return
-    const unit = columnsOn?.current ? 'fr' : ''
-    pa[0].style.setProperty(pa[1], `${av}${unit}`)
-    pb[0].style.setProperty(pb[1], `${bv}${unit}`)
+    const unit = columnsOn?.current != null ? 'fr' : ''
+    pa[0].style.setProperty(pa[1], `${av * scale}${unit}`)
+    pb[0].style.setProperty(pb[1], `${bv * scale}${unit}`)
   }
 
   return (
     <SeamHandle
-      className={`pane-splitter ${axis === 'x' ? 'col-seam' : 'horizontal'} seam`}
+      className={`pane-splitter ${axis === 'x' ? 'col-seam' : 'horizontal'} seam${className ? ` ${className}` : ''}`}
       axis={axis}
       label={label}
-      value={measured}
-      min={SPLIT_LO}
-      max={SPLIT_HI}
+      value={measured?.f ?? null}
+      min={measured?.lo ?? SPLIT_LO}
+      max={measured?.hi ?? SPLIT_HI}
       ariaScale={100}
       step={SEAM_STEP_SPLIT}
       bigStep={SEAM_STEP_SPLIT_BIG}
       grows={1}
       now={() => {
-        const f = measure()
-        return f == null ? null : { value: f, min: SPLIT_LO, max: SPLIT_HI }
+        const m = measure()
+        return m == null ? null : { value: m.f, min: m.lo, max: m.hi }
       }}
       commit={(f) => {
-        const [av, bv] = seamShares(clampF(f))
+        const [av, bv] = seamShares(clampIn(f, measure()))
         onCommit(av, bv)
         remeasure()
       }}
@@ -488,11 +617,13 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
         const lo = axis === 'x' ? ra.left : ra.top
         const span = (axis === 'x' ? rb.right : rb.bottom) - lo
         if (!(span > 0)) return null
-        // What the panes carried before the drag, so a cancel puts exactly that back.
+        // What the panes carried before the drag, so a cancel puts exactly that back; and the
+        // range as it is at the grab (the floors stop the drag where they stop the layout).
         const props = targets()
         const was = props.map(([el, p]) => el.style.getPropertyValue(p))
+        const range = measure()
         return {
-          at: (ev) => clampF(((axis === 'x' ? ev.clientX : ev.clientY) - lo) / span),
+          at: (ev) => clampIn(((axis === 'x' ? ev.clientX : ev.clientY) - lo) / span, range),
           paint,
           restore: () =>
             props.forEach(([el, p], i) => (was[i] ? el.style.setProperty(p, was[i]) : el.style.removeProperty(p))),
@@ -508,8 +639,9 @@ export interface ValueSeamProps {
   axis: SeamAxis
   /** The class that places this divider in its grid, beside `pane-splitter`. */
   className: string
-  /** The size it stands at, CSS px, and the host's clamps for it. */
-  value: number
+  /** The size it stands at, CSS px, and the host's clamps for it. null = nothing measurable (a
+   *  hidden box): no values are announced and only a reset acts. */
+  value: number | null
   min: number
   max: number
   /** +1: moving the divider down/right grows what it sizes; −1: moving it up/left does. */
@@ -520,11 +652,15 @@ export interface ValueSeamProps {
   onCommit: (v: number) => void
   /** This divider's default back. */
   onReset: () => void
+  /** A cancelled drag: put back exactly what was painted before it. Omitted ⇒ paint the size it
+   *  started at, which is right for a host that always paints a size (the Tempo rails) and wrong
+   *  for one whose default is NO value at all (a grid cockpit's log column). */
+  onCancel?: () => void
   /** Accessible name. */
   label: string
 }
 
-function ValueSeam({ axis, className, value, min, max, grows, onPaint, onCommit, onReset, label }: ValueSeamProps) {
+function ValueSeam({ axis, className, value, min, max, grows, onPaint, onCommit, onReset, onCancel, label }: ValueSeamProps) {
   // The floor wins a disagreement: a pane the operator cannot grab back is worse than a ceiling
   // overrun on a window below the supported minimum.
   const hi = Math.max(min, max)
@@ -543,13 +679,14 @@ function ValueSeam({ axis, className, value, min, max, grows, onPaint, onCommit,
       commit={(v) => onCommit(clampV(v))}
       reset={onReset}
       drag={(e) => {
+        if (value == null) return null
         // Relative to where the drag started, in CSS px.
         const z = elZoom(e.currentTarget)
         const p0 = axis === 'x' ? e.clientX : e.clientY
         return {
           at: (ev) => clampV(value + (grows * ((axis === 'x' ? ev.clientX : ev.clientY) - p0)) / z),
           paint: onPaint,
-          restore: () => onPaint(value),
+          restore: onCancel ?? (() => onPaint(value)),
         }
       }}
     />

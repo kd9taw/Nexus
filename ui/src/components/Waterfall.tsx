@@ -8,7 +8,7 @@
 // are measurements and tokens, so they stay in the code — as do the zoom LABELS, which live in
 // `waterfall.ts` and are not this batch's file. The one thing drawn on the canvas that IS prose
 // is the paused chip, and it comes from the catalog.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut } from '../colormaps'
 import {
@@ -230,6 +230,9 @@ interface Props {
    * SSTV over — the three surfaces this label exists for. Each cockpit passes its own keyed
    * state. */
   keyed?: boolean
+  /** The strip's own box, for the divider under it to measure and size (PaneSeam's strip kind:
+   *  JS8's waterfall height, layout L2). Omitted ⇒ no ref. */
+  stripRef?: Ref<HTMLDivElement>
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -268,6 +271,7 @@ export function Waterfall({
   txBlanks = false,
   fixedWindow,
   keyed = false,
+  stripRef,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -1071,7 +1075,7 @@ export function Waterfall({
   }
 
   return (
-    <div className="waterfall-wrap">
+    <div className="waterfall-wrap" ref={stripRef}>
       <div className="panel-header">
         <h2>{t('waterfall.title')}</h2>
         {/* MOD_LABEL: advertising "Ctrl" on a Mac names the OS right-click gesture — ⌘ there. */}

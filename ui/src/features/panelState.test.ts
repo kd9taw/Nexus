@@ -56,13 +56,13 @@ describe('coercePanelLayout', () => {
 
   it('coerces junk to the stock layout instead of throwing', () => {
     for (const junk of [null, 42, 'nope', [], { state: 7, share: 'x' }]) {
-      expect(coercePanelLayout(OPERATE_PANELS, junk)).toEqual({ v: 1, state: {}, share: {} })
+      expect(coercePanelLayout(OPERATE_PANELS, junk)).toEqual({ v: 2, state: {}, share: {} })
     }
   })
 
   it('recovers the stock layout from an unparseable stored record', () => {
     localStorage.setItem(KEY, '{not json')
-    expect(loadPanelLayout(OPERATE_PANELS)).toEqual({ v: 1, state: {}, share: {} })
+    expect(loadPanelLayout(OPERATE_PANELS)).toEqual({ v: 2, state: {}, share: {} })
   })
 
   it('drops unknown panel ids, unknown states, and non-positive shares', () => {
@@ -243,7 +243,7 @@ describe('usePanelLayout', () => {
     expect(result.current.shareOf('rxfreq')).toBe(1)
     // Coerced: an unknown id is not written, a collapsing share is clamped to the floor.
     expect(result.current.shareOf('bandActivity')).toBe(MIN_SHARE)
-    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ v: 1, state: { stations: 'removed' }, share: { bandActivity: MIN_SHARE } })
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ v: 2, state: { stations: 'removed' }, share: { bandActivity: MIN_SHARE } })
     // One Undo brings back the whole previous record.
     act(() => result.current.undo())
     expect(result.current.stateOf('waterfall')).toBe('removed')
@@ -296,6 +296,75 @@ describe('share (seam resize)', () => {
     act(() => result.current.setShare('rxfreq', 1.8))
     act(() => result.current.reset())
     expect(result.current.shareOf('rxfreq')).toBe(1)
+  })
+})
+
+describe('cols (the grid cockpits’ column dividers, layout L2)', () => {
+  const PHONE_KEY = panelStorageKey('phone')
+  const stored = () => JSON.parse(localStorage.getItem(PHONE_KEY)!)
+
+  it('a v1 record — every record saved before the column dividers — loads on the default columns, its panes and shares as stored', () => {
+    localStorage.setItem(PHONE_KEY, JSON.stringify({ v: 1, state: { spots: 'docked', receiver: 'removed' }, share: { spots: 1.3, needed: 0.7 } }))
+    const l = loadPanelLayout(PHONE_PANELS)
+    expect(l.cols, 'a record with no columns grew some').toBeUndefined()
+    expect(l.state).toEqual({ spots: 'docked', receiver: 'removed' })
+    expect(l.share).toEqual({ spots: 1.3, needed: 0.7 })
+    expect(l.v).toBe(2)
+  })
+
+  it('a v2 record keeps its columns across a reload, next to its panes and shares', () => {
+    const { result, unmount } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    act(() => result.current.setShares({ spots: 1.2, needed: 0.8 }))
+    act(() => result.current.setCols!({ a: 1.3, b: 0.7, log: 560 }))
+    // The columns sit in a key of their own, beside the two an older build reads.
+    expect(stored()).toEqual({ v: 2, state: {}, share: { spots: 1.2, needed: 0.8 }, cols: { a: 1.3, b: 0.7, log: 560 } })
+    unmount()
+    const again = renderHook(() => usePanelLayout(PHONE_PANELS))
+    expect(again.result.current.layout.cols).toEqual({ a: 1.3, b: 0.7, log: 560 })
+    expect(again.result.current.layout.share).toEqual({ spots: 1.2, needed: 0.8 })
+  })
+
+  it('clamps stored columns on load: the fr pair into the writers’ range, the log width to whole px, junk dropped', () => {
+    const l = coercePanelLayout(PHONE_PANELS, {
+      v: 2,
+      state: {},
+      share: {},
+      cols: { a: 1e-9, b: 50, log: 612.6, bogus: 3 },
+    })
+    expect(l.cols).toEqual({ a: MIN_SHARE, b: 2 - MIN_SHARE, log: 613 })
+    for (const junk of [{ a: -1, b: 'wide', log: Infinity }, { log: 0 }, 'cols', null]) {
+      expect(coercePanelLayout(PHONE_PANELS, { v: 2, state: {}, share: {}, cols: junk }).cols, JSON.stringify(junk)).toBeUndefined()
+    }
+  })
+
+  it('setCols is ONE undoable step; null puts one column back to the default', () => {
+    const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    act(() => result.current.setCols!({ a: 1.4, b: 0.6 }))
+    act(() => result.current.setCols!({ log: 500 }))
+    expect(result.current.layout.cols).toEqual({ a: 1.4, b: 0.6, log: 500 })
+    // A divider's release is a single history entry: one Undo takes back exactly that release.
+    act(() => result.current.undo())
+    expect(result.current.layout.cols).toEqual({ a: 1.4, b: 0.6 })
+    act(() => result.current.setCols!({ a: null, b: null }))
+    expect(result.current.layout.cols, 'a reset leaves no column of its own behind').toBeUndefined()
+    expect(stored().cols).toBeUndefined()
+    // A write that could not have come from a divider changes nothing.
+    act(() => result.current.setCols!({ log: 480 }))
+    act(() => result.current.setCols!({ log: Number.NaN }))
+    expect(result.current.layout.cols).toEqual({ log: 480 })
+  })
+
+  it('⊞ Reset puts the default columns back and Undo restores them (with everything else Reset took)', () => {
+    const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
+    act(() => result.current.setPanelState('receiver', 'removed'))
+    act(() => result.current.setCols!({ a: 1.5, b: 0.5, log: 640 }))
+    act(() => result.current.reset())
+    expect(result.current.layout.cols).toBeUndefined()
+    expect(stored().cols).toBeUndefined()
+    act(() => result.current.undo())
+    expect(result.current.layout.cols).toEqual({ a: 1.5, b: 0.5, log: 640 })
+    expect(result.current.stateOf('receiver')).toBe('removed')
+    expect(stored().cols).toEqual({ a: 1.5, b: 0.5, log: 640 })
   })
 })
 

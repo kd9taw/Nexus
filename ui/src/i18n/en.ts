@@ -1256,6 +1256,8 @@ export const EN = {
   // The table. Column headers name a CONCEPT and are prose; every value under them is a
   // token. `{{query}}` is what the operator typed, inserted verbatim.
   'logbook.globe.loading': 'Loading globe…',
+  // The divider under the globe band (layout L7); its tooltip is paneSeam.title.
+  'logbook.globe.height.label': 'Globe height',
   'logbook.search.placeholder': 'Search call / grid / band / mode / date…',
   'logbook.search.clear': 'Clear',
   'logbook.filter.needsConfirmation.label': 'needs confirmation',
@@ -1699,6 +1701,9 @@ export const EN = {
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
+  // The divider between the progress column (DXCC and grids by band, DXCC by mode) and the chase
+  // lists (layout L7); its tooltip is paneSeam.title.
+  'awards.columns.split.label': 'Progress column / chase lists',
   'awards.grids.head': 'Grids by band (VUCC)',
   // Band names and frequencies are invariant tokens — never translate '6 m' or '50 MHz'.
   'awards.grids.filter.vucc.label': 'VUCC bands',
@@ -4165,6 +4170,9 @@ export const EN = {
 
   // The 48 h schedule, its sortable headers and the discovery band beneath it.
   'sat.schedule.head': 'Schedule — favorites, next {{hours}} h',
+  // The divider between the planning column (the schedule) and the pass column (layout L7); its
+  // tooltip is paneSeam.title.
+  'sat.columns.split.label': 'Schedule column / pass column',
   'sat.schedule.sortBy': 'Sort by {{label}}',
   'sat.schedule.column.bird': 'Bird',
   'sat.schedule.column.aos': 'AOS local',
@@ -7240,6 +7248,8 @@ export const EN = {
   'connect.rail.left.split': 'Split between the left panels',
   'connect.rail.right.split': 'Split between the right panels',
   'connect.rail.handle.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click to reset.',
+  // The divider between the map and the bottom panels (layout L7); its tooltip is paneSeam.title.
+  'connect.strip.height.label': 'Bottom panel row height',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
@@ -7511,6 +7521,11 @@ export const EN = {
   'aprs.retune.title.noCoverage':
     "This radio doesn't cover {{freq}} MHz — RF APRS needs a VHF radio.",
   'aprs.dial.title': "The rig's current dial / band / mode (this view hides the top bar's readout)",
+  // The body's layout (layout L7): the divider between the station list column and the map, and
+  // the switch that puts the map on the left.
+  'aprs.rail.width.label': 'Station list column width',
+  'aprs.mapLeft.label': 'Map on the left',
+  'aprs.mapLeft.title': 'Show the map on the left of the station list, or back on the right',
   // Monitor arms the DECODER on the receive audio. Three states, because "decoding" and
   // "may ack by itself" are different things — the ack still needs TX on.
   'aprs.monitor.label.auto': '● Monitoring (auto)',
@@ -7838,8 +7853,15 @@ export const EN = {
   'operate.waterfall.redock.title':
     'The waterfall is in its own window — click to bring it back here',
   'operate.waterfall.splitter.label': 'waterfall height',
+  'operate.txmsgs.splitter.label': 'Tx messages height',
   'operate.seam.bandActivityRxFreq.label': 'Band Activity / Rx Frequency',
   'operate.seam.qsocolStations.label': 'Rx Frequency column / Stations roster',
+  'operate.seam.decodesQsocol.label': 'Band Activity / Rx Frequency column',
+  'operate.seam.stationsDecodes.label': 'Stations roster / Band Activity',
+  'operate.seam.rosterRail.label': 'Call Roster / side rail',
+  'operate.seam.railRoster.label': 'Side rail / Call Roster',
+  'operate.panels.railLeft.label': 'Side rail on the left',
+  'operate.panels.railLeft.note': 'Stations in Classic; Band Activity and Rx Frequency in Roster',
 
   // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
   // built rather than at import (the registry-by-getter rule, batch 3).
@@ -8150,6 +8172,8 @@ export const EN = {
   // menu, because that is what each surface shipped; two keys rather than one re-cased.
   'rtty.pane.stream.title': 'Decoded text',
   'rtty.pane.log.title': 'Log',
+  'rtty.seam.streamLog.label': 'Decoded text / Log',
+  'rtty.waterfall.splitter.label': 'waterfall height',
   'rtty.stream.title':
     "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
   'rtty.arm.on.label': 'RX armed',
@@ -8280,6 +8304,8 @@ export const EN = {
   // ── PSK ▸ the decoded-text pane ─────────────────────────────────────────────────────
   'psk.pane.log.title': 'Log',
   'psk.pane.stream.title': 'Decoded text',
+  'psk.seam.streamLog.label': 'Decoded text / Log',
+  'psk.waterfall.splitter.label': 'waterfall height',
   'psk.stream.title':
     "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",
   'psk.arm.on.label': 'RX armed',
@@ -8360,6 +8386,11 @@ export const EN = {
   'js8.panel.inbox': 'Inbox',
   'js8.panel.log': 'Log',
   'js8.panel.offsets': 'Band activity',
+  'js8.seam.columns.label': 'Activity column / Stations column',
+  'js8.seam.auxWidth.label': 'Stations column width',
+  'js8.seam.activityOffsets.label': 'Activity / Band activity',
+  'js8.seam.stationsInbox.label': 'Stations / Inbox',
+  'js8.waterfall.splitter.label': 'waterfall height',
   'js8.panel.activity.title':
     'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
   // Appended to the tooltip above rather than folded into it: a translated catalog keeps its
@@ -8575,6 +8606,7 @@ export const EN = {
     'Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build.',
   'sstv.header.slant.aria': 'SSTV slant trim (disabled — decoder not wired yet)',
   'sstv.stage.aria': 'SSTV image',
+  'sstv.stage.splitter.label': 'waterfall and picture height',
   'sstv.waterfall.hint': 'the band — a picture takes this space when one arrives',
   'sstv.caption.lines': '{{mode}} — {{done}}/{{total}} lines',
   'sstv.caption.decoding': 'decoding {{mode}}…',
@@ -8840,6 +8872,7 @@ export const EN = {
   'cw.scope.audio.sub': 'zero-beat',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
+  'cw.seam.columns.label': 'Decode column / Rig controls column',
   'cw.rfZoom.aria': 'Panadapter zoom',
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
@@ -8963,6 +8996,7 @@ export const EN = {
   'phone.pane.needed.title': 'Needed',
   // The divider between those two panes (its accessible name, and the resize tooltip's).
   'phone.seam.spotsNeeded.label': 'Spots / Needed',
+  'phone.seam.columns.label': 'Band activity column / Receiver column',
   'phone.pane.rigscope.title': 'Rig scope controls',
   'phone.pane.receiver.title': 'Receiver',
   'phone.pane.transmitter.title': 'Transmitter',
@@ -9682,6 +9716,7 @@ export const EN = {
   // `{{title}}` is the pane's own name, supplied by the cockpit.
   'pane.popOut.aria': 'Open {{title}} in its own window',
   'pane.popOut.title': 'Open this pane in its own window (for a second monitor)',
+  'pane.seam.logWidth.label': 'log column width',
   'pane.hide.aria': 'Hide {{title}}',
   'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
 

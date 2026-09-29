@@ -12,6 +12,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { PaneSeam } from './PaneSeam'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -121,6 +123,9 @@ const TX_IDLE = 'TX'
  *  glyph and the CR that travels with it as nothing. */
 const LINE_BREAK = '↵'
 const CQ = 'CQ'
+/** The grow a share of 1 stands for in the transcript | log strip pair (layout L6): the mean of
+ *  their stock weights, 1 and 1.5. */
+const STREAM_LOG_SPLIT = 1.25
 
 /** Display labels for the RTTY removable panels (the ⊞ Panels menu). Resolved when the
  *  menu is BUILT — a module constant would freeze the first locale loaded. */
@@ -309,6 +314,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const shown = (id: RttyPanelId) => (host ? host.shown(id) : true)
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
   const closeProps = (id: RttyPanelId) => (host ? host.closeProps(id) : {})
+  // THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6): the two fill frames share
+  // the shell's height, and the operator moves the boundary. A pair only while both render (the
+  // log strip with a snapshot, the transcript while ticked) and there is a record to keep the split
+  // in; then each carries the operator's share and its floor follows it (CockpitPaneFrame `split`),
+  // so the divider still moves them on a window too short for both floors. The transcript weighs 1
+  // and the log 1.5, so the divider paints grows of share × 1.25 and the pair keeps its stock total.
+  // Only the TRANSCRIPT's share is stored: the log strip has no id in RTTY's vocabulary (it is not
+  // ⊞-removable), and a divider's pair always sums to 2, so the log's share is the rest.
+  const streamFrameRef = useRef<HTMLElement>(null)
+  const logFrameRef = useRef<HTMLElement>(null)
+  // The waterfall strip, for the divider under it (its height).
+  const wfRef = useRef<HTMLDivElement>(null)
+  const streamLogPair = panels != null && snap != null && shown('stream')
+  const streamShare = streamLogPair ? panels?.layout.share.stream : undefined
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
   // re-activation catches the display up.
@@ -897,19 +916,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       )}
 
       {/* THE BAND WATERFALL, ⊞-hideable since 2026-08-16. A shell child whose render is gated,
-          which leaves RTTY's census (header, waterfall, keyer-error banner, ONE pane frame, TX
-          dock) intact — one kind is conditional, as `stream` already was. `.rtty-cockpit
-          .waterfall-wrap` is `flex: 0 0 auto` with a 22%-of-viewport height, so hiding it hands
-          that height straight to `.rtty-cockpit > .pane-frame`, the shell's only grower: the
-          transcript gets taller, nothing is stranded, and there is no seam to clean up (this is
-          the one scope in the tree with no Splitter).
+          which leaves RTTY's census (header, waterfall, keyer-error banner, the pane frames, TX
+          dock) intact — one kind is conditional, as `stream` already was. Its divider (layout
+          L6) sits under it and sets its height (`--rtty-wf-h`, stored per surface), the scope
+          dividers' kind; hiding the strip takes the divider with it and hands the height to the
+          pane frames below, the shell's growers, and the stored height stays for its return.
 
           It hosts no stop control — the cursors and click-to-net are the decoder's tuning aid,
           and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch stay in
           the header, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
           With this and `stream` both unticked the cockpit still holds all four. */}
       {rtty && shown('scope') && (
+        <>
         <Waterfall
+          stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={rttyPanelLabels().scope}
           theme={theme}
@@ -936,6 +956,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           hint={receiverControl ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={receiverControl ? (hz) => void rttyNet(hz).then(setRtty).catch(() => {}) : undefined}
         />
+        <PaneSeam
+          axis="y"
+          varName="--rtty-wf-h"
+          strip={wfRef}
+          storageKey="nexus.split.rtty.waterfall"
+          min={WATERFALL_SPLIT_MIN}
+          max={WATERFALL_SPLIT_MAX}
+          defaultPct={25}
+          label={t('rtty.waterfall.splitter.label')}
+        />
+        </>
       )}
 
       {rtty?.keyerError && (
@@ -969,7 +1000,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           itself. Do NOT add the Auto toggle to stop-line.test.tsx's RTTY stopControls; that
           would demand this cockpit's only ⊞ entry be unhideable. */}
       {shown('stream') && (
-      <CockpitPaneFrame title={t('rtty.pane.stream.title')} paneId="stream" {...closeProps('stream')}>
+      <CockpitPaneFrame
+        title={t('rtty.pane.stream.title')}
+        paneId="stream"
+        split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
+        share={streamShare != null ? streamShare * STREAM_LOG_SPLIT : undefined}
+        paneRef={streamFrameRef}
+        {...closeProps('stream')}
+      >
       <div className="cw-decode rtty-stream" title={t('rtty.stream.title')}>
         <div className="cw-decode-head">
           <span className="cw-decode-label">{RX_PLATE}</span>
@@ -1117,8 +1155,26 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           behind a scroll, and the everyday strip is no better there: that is the zoom's, not
           the contest's. Esc/Stop and Stop TX are on screen at every size measured, and the
           page body never scrolls. */}
+      {streamLogPair && panels && (
+        <PaneSeam
+          above={streamFrameRef}
+          below={logFrameRef}
+          varName="--pane-share"
+          scale={STREAM_LOG_SPLIT}
+          onCommit={(stream) => panels.setShares({ stream })}
+          onReset={() => panels.setShares({ stream: null })}
+          label={t('rtty.seam.streamLog.label')}
+        />
+      )}
       {snap && (
-        <CockpitPaneFrame title={t('rtty.pane.log.title')} paneId="log" weight={1.5}>
+        <CockpitPaneFrame
+          title={t('rtty.pane.log.title')}
+          paneId="log"
+          weight={1.5}
+          split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
+          share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
+          paneRef={logFrameRef}
+        >
           {!control ? <RemoteRecallEntry snap={snap} mode={RTTY} onOpenLog={onOpenLogbook} /> : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}

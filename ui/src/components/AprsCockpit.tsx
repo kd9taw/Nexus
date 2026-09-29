@@ -14,6 +14,7 @@ import { useAprs } from '../remote-web/useAprs'
 import { displayNow } from '../remote-web/display-validation'
 import { MapView } from './MapView'
 import { AprsStationCard } from './AprsStationCard'
+import { AprsRailSeam } from './AprsRailSeam'
 import type { NeedTag, Station } from '../types'
 import type { Theme } from '../useTheme'
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
@@ -44,9 +45,16 @@ import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
 import { pollSingleFlight } from '../singleFlight'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { aprsRailValue, parseAprsRail } from '../features/aprsRail'
 
 /** The mode's own name — four letters, the same in every language. */
 const APRS_MODE = 'APRS'
+
+/** Where the station list column's dragged width is stored (per surface): CSS px (layout L7). */
+const APRS_RAIL_KEY = 'nexus.aprs.railWidth'
+/** Where the map-side choice is stored (per surface): 'left', or anything else for the stock right. */
+const APRS_MAP_SIDE_KEY = 'nexus.aprs.mapSide'
 
 /** The North American APRS channel, named in the failed-checksum advice. A frequency is a
  * token: it is interpolated into that sentence, never written inside it. */
@@ -638,6 +646,22 @@ export function AprsCockpit({
   // point subscribing to a feed you then hide), but one click hides every station our own antenna
   // has not heard — which is the honest view of what this radio can actually reach.
   const [showInet, setShowInet] = useState(true)
+  // THE BODY'S LAYOUT (layout L7), both per window: the rail's width, which the layout clamps
+  // (features/aprsRail) and the divider sets, and which side the map stands on.
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const railRef = useRef<HTMLDivElement | null>(null)
+  const [railPx, setRailPx] = useState(() => parseAprsRail(surfaceGet(APRS_RAIL_KEY)))
+  const commitRail = (px: number | null) => {
+    setRailPx(px)
+    // '' reads back as "never set" (parseAprsRail): the stock width.
+    surfaceSet(APRS_RAIL_KEY, px == null ? '' : String(Math.round(px)))
+  }
+  const [mapLeft, setMapLeft] = useState(() => surfaceGet(APRS_MAP_SIDE_KEY) === 'left')
+  const toggleMapSide = () => {
+    const next = !mapLeft
+    surfaceSet(APRS_MAP_SIDE_KEY, next ? 'left' : 'right')
+    setMapLeft(next)
+  }
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   // Edit BUFFERS for the two blur-committed text fields, seeded from settings when they arrive.
@@ -1287,8 +1311,13 @@ export function AprsCockpit({
           The controls and lists become a left rail; the map takes the space they
           were not using. Positions were already in the packets (AprsHeard carries
           lat/lon, course and speed) — nothing new is decoded for this. */}
-      <div className="aprs-body">
-        <div className="aprs-rail">
+      <div
+        className="aprs-body"
+        ref={bodyRef}
+        data-map={mapLeft ? 'left' : undefined}
+        style={railPx == null ? undefined : ({ '--aprs-rail-w': aprsRailValue(railPx) } as React.CSSProperties)}
+      >
+        <div className="aprs-rail" ref={railRef}>
       <div className="aprs-beacon">
         <span className="aprs-beacon-title">{t('aprs.beacon.title')}</span>
         <label>
@@ -1485,6 +1514,17 @@ export function AprsCockpit({
             onSelectCall={noSelectCall}
             needByCall={noNeeds}
           />
+          {/* Which side the map stands on (layout L7). Over the map, not in the header: one more
+              chip there wraps the row at some widths and takes a line from the body. */}
+          <button
+            type="button"
+            className={`np-chip aprs-map-side${mapLeft ? ' active' : ''}`}
+            aria-pressed={mapLeft}
+            onClick={toggleMapSide}
+            title={t('aprs.mapLeft.title')}
+          >
+            {t('aprs.mapLeft.label')}
+          </button>
           {positioned === 0 && (
             <div className="aprs-map-empty">
               {decode.state === 'decoding' ? t('aprs.map.noPositions') : decode.detail}
@@ -1501,6 +1541,14 @@ export function AprsCockpit({
             />
           )}
         </div>
+        <AprsRailSeam
+          body={bodyRef}
+          rail={railRef}
+          stored={railPx}
+          mapLeft={mapLeft}
+          onCommit={commitRail}
+          label={t('aprs.rail.width.label')}
+        />
       </div>
     </main>
   )

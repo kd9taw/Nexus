@@ -43,10 +43,11 @@ function stubWidth(el: HTMLElement, w: number) {
 }
 
 function Region({ max }: { max?: 1 | 2 | 3 }) {
-  const { ref, cols } = useRegionCols<HTMLDivElement>(max)
+  const { ref, cols, flow } = useRegionCols<HTMLDivElement>(max)
   return (
     <div data-testid="region" ref={ref}>
       <span data-testid="cols">{cols}</span>
+      <span data-testid="flow">{flow}</span>
     </div>
   )
 }
@@ -162,6 +163,24 @@ describe('useRegionCols', () => {
     await frame()
     expect(el.getAttribute('data-cols')).toBe('1') // one track: only one column has content
     expect(el.getAttribute('data-flow')).toBe('fill') // …but the region is NOT narrow
+  })
+
+  it('reports the flow it stamps, so TSX can gate what exists only in the bounded flow (layout L2)', async () => {
+    // A divider between two fill panes in a column is only real in the bounded flow: in the
+    // stacking flow every pane is content height. One track on a wide region is still bounded
+    // (JS8 with only its decode panes shown), so the TRACK COUNT cannot stand in for this.
+    render(<Region max={1} />)
+    const el = screen.getByTestId('region')
+    expect(screen.getByTestId('flow').textContent).toBe('stack')
+    stubWidth(el, 3390)
+    fire!()
+    await frame()
+    expect([el.getAttribute('data-flow'), screen.getByTestId('flow').textContent]).toEqual(['fill', 'fill'])
+    expect(screen.getByTestId('cols').textContent).toBe('1')
+    stubWidth(el, 900)
+    fire!()
+    await frame()
+    expect([el.getAttribute('data-flow'), screen.getByTestId('flow').textContent]).toEqual(['stack', 'stack'])
   })
 
   it("never stamps a 'stack' flow at more than one track (the state space CSS enumerates)", async () => {

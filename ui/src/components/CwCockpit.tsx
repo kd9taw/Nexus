@@ -26,6 +26,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { isFieldDay } from '../fdEvent'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
@@ -33,6 +34,7 @@ import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
 import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
+import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import {
   panelHost,
@@ -1055,6 +1057,10 @@ export function CwCockpit({
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
     mainPresent && auxPresent ? 3 : mainPresent || auxPresent ? 2 : 1,
   )
+  // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
+  const mainColRef = useRef<HTMLDivElement>(null)
+  const auxColRef = useRef<HTMLDivElement>(null)
+  const logColRef = useRef<HTMLDivElement>(null)
 
   // DECODE's own head row is DELETED, and its controls render in the frame head's action
   // cluster — which was rendering EMPTY on every CW pane (2026-08-04 density pass). The row's
@@ -1836,32 +1842,50 @@ export function CwCockpit({
           wiped every in-progress LogEntry field mid-QSO (fix-round D1, 2026-07-31;
           guarded by CwCockpit.structure.test.tsx). Aux panes still change columns on a
           2↔3 flip and do remount — their state (guide, candidates, slider values) lives
-          in this component, so the residual is cosmetic and accepted. */}
-      <div className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`} ref={panesRef}>
+          in this component, so the residual is cosmetic and accepted.
+
+          THE COLUMN DIVIDERS (layout L2) ride the region after its columns and move only the
+          boundaries between them — Phone's twin, which says why. */}
+      <div
+        className={`cockpit-panes${quick ? ' cockpit-panes--contact' : ''}`}
+        ref={panesRef}
+        style={quick ? undefined : regionColsStyle(panels?.layout.cols)}
+      >
         {cols === 3 ? (
           <>
-            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
               {decodePane}
               {sentPane}
             </div>
-            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux">{auxPanes}</div>
-            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux" ref={auxColRef}>{auxPanes}</div>
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
               {logPane}
             </div>
           </>
         ) : (
           <>
             {(mainPresent || auxPresent) && (
-              <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main">
+              <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
                 {decodePane}
                 {sentPane}
                 {auxPanes}
               </div>
             )}
-            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log">
+            <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
               {logPane}
             </div>
           </>
+        )}
+        {!quick && panels?.setCols && (
+          <RegionColumnSeams
+            region={panesRef}
+            cols={cols}
+            tracks={cols === 3 ? [mainColRef, auxColRef, logColRef] : [mainColRef, logColRef]}
+            stored={panels.layout.cols}
+            setCols={panels.setCols}
+            splitLabel={t('cw.seam.columns.label')}
+            widthLabel={t('pane.seam.logWidth.label')}
+          />
         )}
       </div>
 

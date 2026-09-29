@@ -3019,6 +3019,9 @@ impl StationCore {
     /// keyed on them reads the store again. Whether there were any.
     pub(crate) fn take_in_foreign_stamps(&mut self) -> bool {
         let store = &mut self.store;
+        // The count first, then its kind: the writer counts a look's index moves before the
+        // look's commits, so a commit read here is never short of its index move
+        // ([`LogWriter::foreign_index_moves`]).
         if !store.foreign_changed() || store.foreign_index_changed() {
             return false;
         }

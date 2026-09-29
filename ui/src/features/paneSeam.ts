@@ -64,6 +64,10 @@ export function seamKey(e: SeamKeyPress, k: SeamKeys): number | 'reset' | null {
 export interface SplitGeom {
   fontPx: number
   vhEff: number
+  /** The container's content span along the divider's axis, CSS px, where a strip divider resolves
+   *  the clamp (PaneSeam fills it in): what a clamp relative to the box it sizes the strip in reads.
+   *  Absent where there is no box yet. */
+  span?: number
 }
 
 /** A drag end: CSS px, or a function of the live geometry.
@@ -93,6 +97,44 @@ export function resolveClamp(c: SplitClamp, g: SplitGeom): number {
  *  other definition. */
 export const SCOPE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
 export const SCOPE_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
+
+/** The clamps of JS8's waterfall strip (layout L2), in the sheet's units, from its own rule
+ *  (`.js8-cockpit .waterfall-wrap`): the YIELDING floor the keyboard cockpits' waterfalls share —
+ *  8em where there is room, never more than 28 % of the effective viewport — and the scope's
+ *  45 % ceiling. cockpit-shells.test.ts computes both sides at three geometries. */
+export const WATERFALL_SPLIT_MIN: SplitClamp = (g) => Math.min(8 * g.fontPx, 0.28 * g.vhEff)
+export const WATERFALL_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
+
+/** The clamps of SSTV's picture stage once sized (layout L6), from its own rules (`.sstv-canvas`,
+ *  `.sstv-canvas[data-sized]`): the stage's 16em floor and a 70 % ceiling. */
+export const SSTV_STAGE_SPLIT_MIN: SplitClamp = (g) => 16 * g.fontPx
+export const SSTV_STAGE_SPLIT_MAX: SplitClamp = (g) => 0.7 * g.vhEff
+
+/** The clamps of Operate Classic's Tx1–Tx6 machine once sized (layout L5), from its own rules
+ *  (`.cockpit-qsocol > .tx-panel[data-sized]`): the 4em floor, and no ceiling of its own — the
+ *  sheet caps the machine at its content height, which only the measured range can know. */
+export const TX_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
+export const TX_SPLIT_MAX: SplitClamp = Infinity
+
+/** Connect's bottom strip once sized (layout L7), from its own rules (`.connect`'s
+ *  `grid-auto-rows`, `.connect-strip[data-sized] > .pane-frame`): a 4em floor (a pane's title bar and
+ *  a line of it), no ceiling of its own, and never more than half the grid (`CONNECT_STRIP_MAX_SHARE`,
+ *  the divider's `maxShare`): the map above it keeps the larger share. Stock, the strip is its
+ *  tallest pane capped at 30 % of the effective viewport; that height is where the divider starts. */
+export const CONNECT_STRIP_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
+export const CONNECT_STRIP_SPLIT_MAX: SplitClamp = Infinity
+export const CONNECT_STRIP_MAX_SHARE = 0.5
+
+/** The Logbook's globe band once sized (layout L7), from its own rules (`.log-globe-band`,
+ *  `.log-globe-band[data-sized]`): an 8em floor (the band's readout and band picker over a globe
+ *  still worth looking at), and a ceiling of 90 % of the list's scroller that never stops short of
+ *  the stock 320 px. The band scrolls away with the list, so a band taller than a short list IS the
+ *  stock layout there (measured at a pinned 175 % on 1920×1080: a 124 px scroller), and a range that
+ *  stopped below it would snap the band down on the first key. The divider passes no share cap
+ *  (`maxShare={Infinity}`): this is the whole ceiling. */
+export const LOG_GLOBE_STOCK_PX = 320
+export const LOG_GLOBE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
+export const LOG_GLOBE_SPLIT_MAX: SplitClamp = (g) => Math.max(LOG_GLOBE_STOCK_PX, 0.9 * (g.span ?? 0))
 
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */

@@ -37,6 +37,8 @@ import { PaneFrame } from './connect/PaneFrame'
 import { paneById } from './connect/panes'
 import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
 import { PanelsMenu } from './PanelsMenu'
+import { PaneSeam } from './PaneSeam'
+import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { PaneContext } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
 import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
@@ -482,6 +484,12 @@ export function ConnectView({
   const railsState = present.left ? (present.right ? 'both' : 'left') : present.right ? 'right' : 'none'
   const gridRef = useRef<HTMLDivElement>(null)
   const widths = useRailWidths(gridRef, present)
+  // THE BOTTOM STRIP'S HEIGHT (layout L7): the divider above the strip owns it (a PaneSeam strip,
+  // stored per surface in `nexus.split.connect.strip`, a % of the grid). Reset layout is the
+  // out-of-box state, so it clears the height too, and remounts the divider so it reads the stock
+  // height back: `stripEpoch` is its key.
+  const stripRef = useRef<HTMLDivElement>(null)
+  const [stripEpoch, setStripEpoch] = useState(0)
   const gridStyle = {
     ...(widths.applied.left != null ? { '--cn-rail-l': `${widths.applied.left}px` } : {}),
     ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
@@ -593,6 +601,10 @@ export function ConnectView({
               panels.reset()
               resetSlots()
               widths.resetAll()
+              // '' reads back as "never set": the strip's own height (a height is not an undo step,
+              // like the widths).
+              surfaceSet('nexus.split.connect.strip', '')
+              setStripEpoch((n) => n + 1)
             }}
             lead={
               // THE LAYOUT PICKER. A column of choices, not a chip row: the popover is 220 px wide,
@@ -703,7 +715,25 @@ export function ConnectView({
               into a canvas that has to be re-stamped on re-show. Nothing to keep, nothing to
               re-stamp. An empty strip is not rendered at all: it would be a dead row. */}
           {!chromeHidden && stripSlots.length > 0 && (
-            <div className="connect-strip">{stripSlots.map((s) => frame(s))}</div>
+            <div className="connect-strip" ref={stripRef}>
+              {stripSlots.map((s) => frame(s))}
+              {/* The map | strip divider (layout L7): in the gap above the strip, out of flow
+                  (styles.css `.connect-strip > .pane-splitter`), so the strip's panes still split
+                  its width. The strip comes after it on screen: moving it down shrinks the strip. */}
+              <PaneSeam
+                key={stripEpoch}
+                axis="y"
+                varName="--cn-strip-h"
+                strip={stripRef}
+                after
+                storageKey="nexus.split.connect.strip"
+                min={CONNECT_STRIP_SPLIT_MIN}
+                max={CONNECT_STRIP_SPLIT_MAX}
+                maxShare={CONNECT_STRIP_MAX_SHARE}
+                defaultPct={null}
+                label={t('connect.strip.height.label')}
+              />
+            </div>
           )}
         </div>
       </div>

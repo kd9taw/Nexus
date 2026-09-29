@@ -23,6 +23,8 @@ import { useLayoutEffect, useRef, useState } from 'react'
 
 /** The three pane-region tiers. Also the literal `data-cols` value. */
 export type RegionCols = 1 | 2 | 3
+/** The literal `data-flow` value: 'stack' only when the region measured narrow. */
+export type RegionFlow = 'stack' | 'fill'
 
 /**
  * Column tier for a pane region `width` CSS px wide. Pure + total, so the thresholds are
@@ -83,9 +85,14 @@ export function useRegionCols<T extends HTMLElement>(
 ): {
   ref: React.RefObject<T>
   cols: RegionCols
+  /** The stamped `data-flow`, for the parts of the layout that live in TSX: a divider between
+   *  two fill panes in a column exists only in the bounded flow (layout L2) — in the stacking
+   *  flow every pane is content height and a share moves nothing. */
+  flow: RegionFlow
 } {
   const ref = useRef<T>(null)
   const [cols, setCols] = useState<RegionCols>(1)
+  const [flow, setFlow] = useState<RegionFlow>('stack')
   // The MEASURED tier, kept across effect re-runs (a maxCols change must not forget the
   // last measurement and re-stamp 1 while the region happens to be hidden).
   const measured = useRef<RegionCols>(1)
@@ -103,8 +110,10 @@ export function useRegionCols<T extends HTMLElement>(
       const next = Math.min(measured.current, maxCols) as RegionCols
       el.setAttribute('data-cols', String(next))
       // The MEASUREMENT, uncapped: `maxCols` may narrow the template, never the flow.
-      el.setAttribute('data-flow', measured.current === 1 ? 'stack' : 'fill')
+      const f: RegionFlow = measured.current === 1 ? 'stack' : 'fill'
+      el.setAttribute('data-flow', f)
       setCols(next) // same value ⇒ React bails out, no re-render
+      setFlow(f)
     }
 
     measure()
@@ -120,5 +129,5 @@ export function useRegionCols<T extends HTMLElement>(
     }
   }, [maxCols])
 
-  return { ref, cols }
+  return { ref, cols, flow }
 }

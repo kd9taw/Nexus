@@ -26,7 +26,13 @@ import { PALETTE_ROLES } from './features/paletteRoles'
 export const PER_SURFACE = [
   'neededFilters',
   'nexus-ui-scale-mode',
+  // APRS's body (layout L7): the station list column's width and the side the map stands on —
+  // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
+  'nexus.aprs.mapSide',
+  'nexus.aprs.railWidth',
   'nexus.awardsTab',
+  // The Awards and Satellites views' column split (layout L7): a proportion of THIS window's grid.
+  'nexus.awards.columns',
   'nexus.connect.config',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
@@ -62,6 +68,9 @@ export const PER_SURFACE = [
   'nexus.decodes.newestTop',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
+  // Which side Operate's rail stands on (layout L5): a layout choice of THIS window, like the
+  // Classic / Roster pick on either side of it.
+  'nexus.operate.railSide',
   'nexus.operateLayout',
   'nexus.ota.bandFilter',
   // Hide worked today: a statement about what THIS board shows, like the filters beside it — a
@@ -75,11 +84,24 @@ export const PER_SURFACE = [
   'nexus.phonescope.flow',
   'nexus.phonescope.win',
   'nexus.roster.filters',
+  'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',
+  // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.
+  'nexus.split.connect.strip',
   'nexus.split.cw.scope',
+  // JS8's waterfall height (layout L2): a % of THIS window's shell, like the three beside it.
+  'nexus.split.js8.waterfall',
+  // The Logbook's globe band height (layout L7): a % of THIS window's list, the same kind.
+  'nexus.split.logbook.globe',
   'nexus.split.operate.waterfall',
+  // Operate Classic's Tx1–Tx6 machine height (layout L5), the same kind.
+  'nexus.split.operate.tx',
   'nexus.split.phone.scope',
+  // RTTY's and PSK's waterfall heights (layout L6), the same kind; and SSTV's picture stage.
+  'nexus.split.psk.waterfall',
+  'nexus.split.rtty.waterfall',
+  'nexus.split.sstv.stage',
   'nexus.view',
   'nexus.waterfall.dss',
   'nexus.waterfall.flow',
@@ -339,6 +361,13 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.operate.waterfall',
     'nexus.split.cw.scope',
     'nexus.split.phone.scope',
+    'nexus.split.js8.waterfall',
+    'nexus.split.rtty.waterfall',
+    'nexus.split.psk.waterfall',
+    'nexus.split.sstv.stage',
+    'nexus.split.operate.tx',
+    'nexus.split.connect.strip',
+    'nexus.split.logbook.globe',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
@@ -486,6 +515,20 @@ describe('call sites agree with the classification', () => {
     expect([...indirect].sort()).toEqual(Object.keys(INDIRECT).sort())
   })
 
+  it('classifies every strip divider’s key — a JSX `storageKey` literal no call-site scan can see', () => {
+    // PaneSeam's strip kind stores through `surfaceGet(storageKey)`, so the literal lives in a JSX
+    // attribute at each caller and the scan above never meets it: a new divider's key (JS8's
+    // waterfall, layout L2) went unclassified and every test stayed green. Every one, found in
+    // the source, must be declared as that seam's key and classified per surface.
+    const found = new Set<string>()
+    for (const file of sources(SRC)) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/storageKey="([^"]+)"/g)) found.add(m[1])
+    }
+    expect(found.size, 'the scan found no divider key at all — it is reading nothing').toBeGreaterThanOrEqual(3)
+    expect([...found].sort()).toEqual([...INDIRECT['components/PaneSeam.tsx:storageKey']].sort())
+    for (const k of found) expect(PER_SURFACE, `${k} is not classified`).toContain(k)
+  })
+
   it('checks the pass-through seams really carry the keys they claim', () => {
     const panes = readFileSync(join(SRC, 'usePaneWidths.ts'), 'utf8')
     expect(panes).toContain("const KEY_RIGHT = 'tempo-right-rail-w'")
@@ -497,6 +540,13 @@ describe('call sites agree with the classification', () => {
       ['components/OperateCockpit.tsx', 'nexus.split.operate.waterfall'],
       ['components/CwCockpit.tsx', 'nexus.split.cw.scope'],
       ['components/PhoneCockpit.tsx', 'nexus.split.phone.scope'],
+      ['components/Js8Cockpit.tsx', 'nexus.split.js8.waterfall'],
+      ['components/RttyCockpit.tsx', 'nexus.split.rtty.waterfall'],
+      ['components/PskCockpit.tsx', 'nexus.split.psk.waterfall'],
+      ['components/SstvView.tsx', 'nexus.split.sstv.stage'],
+      ['components/OperateCockpit.tsx', 'nexus.split.operate.tx'],
+      ['components/ConnectView.tsx', 'nexus.split.connect.strip'],
+      ['components/Logbook.tsx', 'nexus.split.logbook.globe'],
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }

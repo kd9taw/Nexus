@@ -238,16 +238,45 @@ export type PanelState = 'docked' | 'popped' | 'removed'
 const PANEL_STATES = ['docked', 'popped', 'removed'] as const
 
 export interface PanelLayout<P extends string> {
-  v: 1
+  /** 2 since the grid cockpits' column dividers (layout L2) put `cols` in the record. A v1 record
+   *  reads as a v2 one with no columns stored; this build writes 2. */
+  v: 1 | 2
   /** Absent ⇒ the vocabulary's DEFAULT (`panelStateIn`): docked, unless the vocabulary lists
    *  the id in `defaultRemoved`. Partial is deliberate: a panel added in a later release ships
    *  at its default with no migration — visible, or hidden when its vocabulary says so, which
    *  is how a pane can be added without changing anybody's screen on update — and an explicit
    *  choice is always a STORED value, so it can never be confused with "new". */
   state: Partial<Record<P, PanelState>>
-  /** Flex/fr share within its region. Nothing writes it yet (seam resize is a later
-   *  step); it rides in the record from commit one so that step needs no version bump. */
+  /** Flex/fr share within its region: what a divider between two panes (PaneSeam) wrote. */
   share: Partial<Record<P, number>>
+  /** The COLUMN WIDTHS the operator set with the dividers between a grid cockpit's columns
+   *  (Phone, CW, JS8 — layout L2). Absent, or any one of them absent, is the sheet's default.
+   *
+   *  An older build reading this record copies only `state` and `share` (its coercion never reads
+   *  `cols`), so it opens on the default columns and loses nothing else. */
+  cols?: PanelCols
+}
+
+/** A grid cockpit's column widths, as its column dividers write them (PanelLayout.cols):
+ *    · `a`, `b` — the two feed columns' fr shares at three columns: the divider between them
+ *      splits the pair the way a divider between two panes does (seamShares, summing to 2);
+ *    · `log` — the log column's width in CSS px at two and three columns (the width divider on its
+ *      left edge). The sheet caps it at half the region and floors it at 24em, so a width stored on
+ *      a wide window is clamped by the layout itself wherever it is read (features/paneColumns). */
+export interface PanelCols {
+  a?: number
+  b?: number
+  log?: number
+}
+export type PanelColId = keyof PanelCols
+
+/** A share, clamped into the writers' range [MIN_SHARE, 2 − MIN_SHARE]. */
+const clampShare = (v: number) => Math.min(2 - MIN_SHARE, Math.max(MIN_SHARE, v))
+
+/** One stored column value, or null for a value no writer could have produced. */
+function colValue(id: PanelColId, v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null
+  return id === 'log' ? Math.round(v) : clampShare(v)
 }
 
 /** A view's panel vocabulary: its storage namespace plus the coercion whitelist. */
@@ -276,7 +305,7 @@ export function isPanelState(v: unknown): v is PanelState {
 
 /** Stock layout: nothing stored, so every panel is at its vocabulary's default. */
 export function emptyPanelLayout<P extends string>(): PanelLayout<P> {
-  return { v: 1, state: {}, share: {} }
+  return { v: 2, state: {}, share: {} }
 }
 
 /** A panel's state in a record: what is stored for it, else its vocabulary's default — docked,
@@ -305,6 +334,7 @@ export function panelStorageKey(view: string, instance?: string): string {
  * A valid record from any input. Unknown panel ids and unknown state strings are
  * dropped, a junk blob coerces to the stock layout, and a share that isn't a finite
  * positive number is discarded — one that is gets CLAMPED into the writers' own range.
+ * Column widths the same way (a v1 record has none, so it loads with the default columns).
  * Mirrors coercePlacement's "missing → safe default".
  */
 export function coercePanelLayout<P extends string>(
@@ -313,7 +343,7 @@ export function coercePanelLayout<P extends string>(
 ): PanelLayout<P> {
   const out = emptyPanelLayout<P>()
   if (!raw || typeof raw !== 'object') return out
-  const obj = raw as { state?: unknown; share?: unknown }
+  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown }
   if (obj.state && typeof obj.state === 'object') {
     const src = obj.state as Record<string, unknown>
     for (const id of spec.panelIds) {
@@ -333,6 +363,15 @@ export function coercePanelLayout<P extends string>(
         out.share[id] = Math.min(2 - MIN_SHARE, Math.max(MIN_SHARE, v))
       }
     }
+  }
+  if (obj.cols && typeof obj.cols === 'object') {
+    const src = obj.cols as Record<string, unknown>
+    const cols: PanelCols = {}
+    for (const id of ['a', 'b', 'log'] as const) {
+      const v = colValue(id, src[id])
+      if (v != null) cols[id] = v
+    }
+    if (Object.keys(cols).length > 0) out.cols = cols
   }
   return out
 }
@@ -471,6 +510,12 @@ export interface PanelLayoutApi<P extends string> {
    *  CLEARS a pane's share, so it goes back to its stock proportion: the sheet's default,
    *  which the record never holds (Operate's Band Activity is 1.6 : 1) — a divider's reset. */
   setShares: (updates: Partial<Record<P, number | null>>) => void
+  /** Set a grid cockpit's column widths in ONE undoable step — a column divider's release, key
+   *  or reset (components/panes/RegionColumnSeams). `a`/`b` are fr shares, `log` CSS px; a `null`
+   *  clears one back to the sheet's default. Optional: only the cockpits with column dividers
+   *  (Phone, CW, JS8) read it, and a host without them never needs it. usePanelLayout always
+   *  provides it. */
+  setCols?: (updates: Partial<Record<PanelColId, number | null>>) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
@@ -487,7 +532,7 @@ export interface PanelLayoutApi<P extends string> {
    *  nothing (see `defaultRemoved`). So Reset can only ever MOUNT a pane that ends something. */
   undoRemoves: readonly P[]
   /** Back to stock — every panel at its default (docked, or hidden for a pane the vocabulary
-   *  ships hidden), every share reset. Undoable like any change. */
+   *  ships hidden), every share and column width reset. Undoable like any change. */
   reset: () => void
 }
 
@@ -560,6 +605,24 @@ export function usePanelLayout<P extends string>(
       }),
     [apply],
   )
+  const setCols = useCallback(
+    (updates: Partial<Record<PanelColId, number | null>>) =>
+      apply((cur) => {
+        const cols: PanelCols = { ...cur.cols }
+        for (const [id, v] of Object.entries(updates) as [PanelColId, number | null | undefined][]) {
+          if (v === null) {
+            delete cols[id]
+          } else {
+            const c = colValue(id, v)
+            if (c != null) cols[id] = c
+          }
+        }
+        const next: PanelLayout<P> = { v: 2, state: cur.state, share: cur.share }
+        if (Object.keys(cols).length > 0) next.cols = cols
+        return next
+      }),
+    [apply],
+  )
   const undo = useCallback(
     () =>
       setHist((h) => {
@@ -592,6 +655,7 @@ export function usePanelLayout<P extends string>(
     shareOf,
     setShare,
     setShares,
+    setCols,
     undo,
     canUndo: hist.prev != null,
     undoRemoves,
