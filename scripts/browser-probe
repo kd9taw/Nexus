@@ -160,7 +160,7 @@ TOTAL=$(sed -n 's/.*browser shard [0-9]* of [0-9]*: running [0-9]* of \([0-9]*\)
 if [ "$RC" = 0 ]; then
   echo "browser-probe: PASS — ${PASSED} of ${TOTAL:-?} scenarios, in a real browser."
   if [ -n "$SHARD" ]; then
-    echo "browser-probe: NOT COVERED — CI's other two shards, and everything outside remote/."
+    echo "browser-probe: NOT COVERED — everything outside remote/."
   else
     echo "browser-probe: NOT COVERED — every other scenario, every other application version, and"
     echo "browser-probe: everything outside remote/. A failure that needs state or timing to build"
