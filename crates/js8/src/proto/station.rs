@@ -415,18 +415,25 @@ impl Station {
             return actions; // a CQ is displayed; the operator answers it, not the autoreply engine
         }
 
-        // Directed command autoreply / relay / store-and-forward.
+        // Directed command autoreply / relay / store-and-forward. JS8Call acts on no command that
+        // is not addressed to me, @ALLCALL or a group I joined (mainwindow.cpp:8601), and a relay
+        // (`>`, :8908), a MSG TO: (:9012) or a QUERY MSG n (:9171) never on @ALLCALL either.
+        let mine = to_me || to_group;
         if let Some(cmd) = m.cmd {
             if self.cfg.relay && cmd == Command::Relay {
-                self.handle_relay(m, now_ms, &mut actions);
+                if mine {
+                    self.handle_relay(m, now_ms, &mut actions);
+                }
                 return actions;
             }
             if cmd == Command::MsgTo {
-                self.handle_msg_to(m, now_ms, &mut actions);
+                if mine {
+                    self.handle_msg_to(m, now_ms, &mut actions);
+                }
                 return actions;
             }
             if cmd == Command::QueryMsgs || is_query_msg(m) {
-                self.handle_query_msg(m, now_ms, &mut actions);
+                self.handle_query_msg(m, mine, now_ms, &mut actions);
                 return actions;
             }
             // Never an @ALLCALL query: JS8Call's SNR?/INFO?/STATUS?/GRID?/HEARING? replies each
@@ -678,10 +685,23 @@ impl Station {
         self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
     }
 
-    fn handle_query_msg(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
+    /// `mine`: addressed to my call or a group I joined (not @ALLCALL, not another station).
+    fn handle_query_msg(
+        &mut self,
+        m: &Message,
+        mine: bool,
+        now_ms: u64,
+        actions: &mut Vec<StationAction>,
+    ) {
         let from = split_portable(&m.from).0.to_ascii_uppercase();
-        // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it.
-        if let Some(id) = query_msg_id(m) {
+        // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it,
+        // only when the query was addressed to me (mainwindow.cpp:8601, :9171). Anything else
+        // it may be draws no reply at all: JS8Call's buffered QUERY skips every miss
+        // (:9194-9233) and never answers it as a QUERY MSGS.
+        if m.cmd != Some(Command::QueryMsgs) {
+            let Some(id) = query_msg_id(m).filter(|_| mine) else {
+                return;
+            };
             if let Some(e) = self.inbox.iter_mut().find(|e| {
                 e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&from)
             }) {
@@ -696,8 +716,8 @@ impl Station {
                     now_ms,
                     actions,
                 );
-                return;
             }
+            return;
         }
         // `QUERY MSGS` (do you have any for me?) → offer the first stored id, else NO. On
         // @ALLCALL, JS8Call answers only YES, and says NO to a directed query alone
@@ -1621,6 +1641,97 @@ mod tests {
             allcall_query_msgs(&mut s, "K1ABC", 200_000),
             vec![format!("KD9TAW: K1ABC YES MSG ID {id}")],
             "a waiting message is offered"
+        );
+    }
+
+    /// Everything the station keys over six periods from `from_ms` (one entry per frame).
+    fn keyed_displays(s: &mut Station, from_ms: u64) -> Vec<String> {
+        (0..6u64)
+            .filter_map(|k| drain(s, from_ms + k * 15_000))
+            .map(|f| f.display)
+            .collect()
+    }
+
+    /// JS8Call acts on no command that is not addressed to me, @ALLCALL or a group I joined
+    /// (`if (!isAllCall && !toMe && !isGroupCall) continue;`, mainwindow.cpp:8601), and it never
+    /// relays one addressed to @ALLCALL (`d.cmd == ">" && !isAllCall`, :8908).
+    #[test]
+    fn a_relay_request_not_addressed_to_me_is_not_relayed() {
+        for to in ["K1ABC", "@ALLCALL"] {
+            let mut s = Station::new(cfg());
+            let acts = s.on_event(
+                &directed("W1AW", to, Some(Command::Relay), None, "N0XYZ HELLO", -5),
+                1000,
+            );
+            let relayed = acts
+                .iter()
+                .any(|a| matches!(a, StationAction::Relayed { .. }));
+            assert!(
+                !relayed && keyed_displays(&mut s, 2000).is_empty(),
+                "a relay request to {to} is not relayed, got {acts:?}"
+            );
+        }
+    }
+
+    /// …nor stores a `MSG TO:` that was addressed to someone else, or to @ALLCALL
+    /// (`d.cmd == " MSG TO:" && !isAllCall`, :9012).
+    #[test]
+    fn a_msg_to_not_addressed_to_me_is_not_stored() {
+        for to in ["K1ABC", "@ALLCALL"] {
+            let mut s = Station::new(cfg());
+            s.on_event(
+                &directed("W1AW", to, Some(Command::MsgTo), None, "N0XYZ HELLO", -5),
+                1000,
+            );
+            assert!(
+                s.inbox().is_empty(),
+                "a MSG TO: sent to {to} is not stored at my station"
+            );
+        }
+    }
+
+    /// …nor delivers a stored message to a `QUERY MSG n` addressed to someone else, or to
+    /// @ALLCALL (`d.cmd == " QUERY" && !isAllCall`, :9171).
+    #[test]
+    fn a_query_msg_not_addressed_to_me_is_not_delivered() {
+        for to in ["K1ABC", "@ALLCALL"] {
+            let mut s = Station::new(cfg());
+            store_for(&mut s, "N0XYZ", 0);
+            let id = s.inbox()[0].id;
+            s.on_event(
+                &directed(
+                    "N0XYZ",
+                    to,
+                    Some(Command::Query),
+                    None,
+                    &format!("MSG {id}"),
+                    -5,
+                ),
+                1000,
+            );
+            assert_eq!(
+                (s.inbox()[0].state, keyed_displays(&mut s, 2000)),
+                (InboxState::Store, Vec::new()),
+                "a QUERY MSG {id} sent to {to} delivers nothing"
+            );
+        }
+    }
+
+    /// …and a `QUERY MSG n` that matches nothing waiting for the asker draws no reply at all:
+    /// JS8Call's buffered QUERY skips every miss (mainwindow.cpp:9194-9233) and is never
+    /// answered as a `QUERY MSGS` (no YES, no NO).
+    #[test]
+    fn a_query_msg_that_matches_nothing_draws_no_reply() {
+        let mut s = Station::new(cfg());
+        store_for(&mut s, "N0XYZ", 0);
+        s.on_event(
+            &directed("N0XYZ", "KD9TAW", Some(Command::Query), None, "MSG 99", -5),
+            1000,
+        );
+        assert_eq!(
+            keyed_displays(&mut s, 2000),
+            Vec::<String>::new(),
+            "QUERY MSG 99 (no such message) draws no reply"
         );
     }
 

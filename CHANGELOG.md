@@ -304,6 +304,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that announces the callsign, and JS8Call puts your four-character square in that frame. Nexus
   sent it without one; it now carries the square. A /P callsign is not compound and is
   unchanged.
+- **JS8: Nexus no longer relays, stores or answers traffic addressed to other stations.** With
+  relay on (the default), Nexus relayed any relay request it heard on the band, even one
+  addressed to another station or to @ALLCALL. It also stored MSG TO: messages meant for someone
+  else, and could hand a stored message to a QUERY MSG sent to another station. JS8Call acts only
+  on what is addressed to your call or to a group you joined, and so does Nexus now. A QUERY MSG
+  for a message that isn't there now gets no answer, as in JS8Call.
 - **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits
