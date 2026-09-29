@@ -589,6 +589,59 @@ mod tests {
         );
     }
 
+    /// And `Armed` only while the armed over OWNS the transmitter (the lead's Q1 ruling,
+    /// 2026-09-29): the header's ON AIR sign waits on it for every over, the page's own Hold PTT
+    /// included. Anything the arbiter puts in front of it is on the air (a key at the shack, an FT
+    /// over, the tune carrier), and then the over is not reported armed, so the sign lights.
+    #[test]
+    fn the_snapshot_says_armed_only_while_the_over_owns_the_transmitter() {
+        use super::super::TxOwner;
+        use crate::dto::StreamMic;
+        let mut s = scene();
+        assert_eq!(
+            s.held_tick(0),
+            MicTick::Armed,
+            "premise: the page's press arms"
+        );
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            Some(StreamMic::Armed),
+            "armed, with nothing else on the air"
+        );
+        // A key at the shack rides along: the arbiter names it first.
+        s.e.set_ptt(true);
+        assert_eq!(s.e.tx_owner(), Some(TxOwner::ManualPtt), "premise");
+        assert!(s.e.mic_armed(), "premise: the over is still armed");
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            None,
+            "armed reported under a key at the shack"
+        );
+        s.e.set_ptt(false);
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            Some(StreamMic::Armed),
+            "the shack's key let go, and the over is not armed again"
+        );
+        // An FT over in flight.
+        s.e.app.radio.transmitting = true;
+        assert_eq!(s.e.tx_owner(), Some(TxOwner::Slot), "premise");
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            None,
+            "armed reported under an FT over"
+        );
+        s.e.app.radio.transmitting = false;
+        // The tune carrier, before the next tick ends the over (G3).
+        s.e.set_tune(true);
+        assert!(s.e.mic_armed(), "premise: armed until the next tick");
+        assert_eq!(
+            s.e.snapshot().radio.stream_mic,
+            None,
+            "armed reported under the tune carrier"
+        );
+    }
+
     // ── One owner ─────────────────────────────────────────────────────────────────────────────
 
     /// The microphone joins the transmit arbiter: while it is armed the voice keyer is refused, a

@@ -1257,9 +1257,10 @@ pub struct RadioStatus {
     #[serde(default)]
     pub tx_busy_reason: Option<String>,
     /// The streamed Remote operator's microphone over, `None` without one. DISPLAY ONLY: the Phone
-    /// cockpit's PTT reads "Armed" for a press it made through the stream until this is `Keyed`.
-    /// The arbiter already counts an armed over as the owner (`tx_busy_reason`), and nothing keys,
-    /// refuses or releases on this.
+    /// cockpit's PTT reads "Armed" for a press it made through the stream until this is `Keyed`,
+    /// and the header's ON AIR sign waits while it is `Armed`, which it is only while the armed over
+    /// owns the transmitter. The arbiter already counts an armed over as the owner
+    /// (`tx_busy_reason`), and nothing keys, refuses or releases on this.
     #[serde(default)]
     pub stream_mic: Option<StreamMic>,
     /// Whether the transmit watchdog has tripped (continuous-TX limit reached)

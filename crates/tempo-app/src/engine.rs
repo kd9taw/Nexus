@@ -19953,10 +19953,12 @@ contact yourself."
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
-        // What the Phone cockpit's PTT shows of a streamed microphone over; display only.
+        // What the Phone cockpit's PTT and the header's ON AIR sign show of a streamed microphone
+        // over; display only. `Armed` only while that over owns the transmitter: anything the
+        // arbiter names before it (an FT over, the tune carrier, a key at the shack) is on the air.
         s.radio.stream_mic = if self.mic.keyed() {
             Some(crate::dto::StreamMic::Keyed)
-        } else if self.mic.active() {
+        } else if self.mic.active() && self.tx_owner() == Some(TxOwner::Mic) {
             Some(crate::dto::StreamMic::Armed)
         } else {
             None

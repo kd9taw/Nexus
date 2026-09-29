@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
 //
 // THE PHONE HEADER'S ON AIR SIGN WAITS FOR THE VOICE, LIKE THE PTT BUTTON (the operator's pick
-// "Header ON AIR waits too", 2026-09-28). DISPLAY ONLY.
+// "Header ON AIR waits too", 2026-09-28, completed by the lead's Q1 ruling of 2026-09-29). DISPLAY ONLY.
 //
-// A press through the stream ARMS the streamed operator's microphone over, and their voice keys
-// the rig (PhoneCockpit.stream-ptt.test.tsx). The PTT button reads "Armed — talk to transmit" until
-// the station reports the voice keyed (`radio.streamMic`), but the header's ON AIR sign lit from
-// the arm, because the arbiter counts an armed over as the transmitter's owner. It now waits with
-// the button: dark while the press's over is only armed, lit once the voice keys it, and exactly as
-// before for a press at the shack. Anything else on the air lights it as before. What does not
-// change: the sign's tooltip, the rest of the header, and the amplifier strip's lock, which still
-// reads the arbiter (CockpitHeader.ampgate.test.tsx).
+// Every PTT a streamed operator holds (the page's own Hold PTT, Space over the picture, this
+// cockpit's PTT clicked through it) ARMS their microphone over, and their voice keys the rig
+// (PhoneCockpit.stream-ptt.test.tsx). The arbiter counts an armed over as the transmitter's owner,
+// so the header's ON AIR sign lit from the arm. It now waits: while the station reports the over
+// armed (`radio.streamMic`, which says `armed` only while that over owns the transmitter), the sign
+// reads as it does before a key, and it lights once the voice keys the rig. A press at the shack
+// reads exactly as before, and anything else on the air lights it. What does not change: the sign's
+// tooltip, the rest of the header, and the amplifier strip's lock, which still reads the arbiter
+// (CockpitHeader.ampgate.test.tsx).
 //
 // The header is REAL here (the stream-ptt file stubs it), and the presses come from the REAL
 // stream dispatcher, so the mark under test is the one the stream makes.
@@ -127,18 +128,19 @@ const TUNE = 'Tune carrier is up — stop tuning first'
 const VOICE = 'A voice message is transmitting — stop it first'
 const ARMED = 'Armed — talk to transmit'
 
-const PRESSES: [string, () => Promise<void>][] = [
-  ['the PTT button pressed through the picture', async () => { under = ptt(); await streamed(pointer('down')) }],
-  ['Space over the picture', () => streamed(SPACE('down'))],
+// Each PTT a streamed operator can hold, and what this cockpit's button reads while it is armed.
+const PRESSES: [string, () => Promise<void>, string][] = [
+  ["the page's own Hold PTT, nothing pressed here", async () => {}, 'PUSH TO TALK'],
+  ['the PTT button pressed through the picture', async () => { under = ptt(); await streamed(pointer('down')) }, ARMED],
+  ['Space over the picture', () => streamed(SPACE('down')), ARMED],
 ]
 
 describe("the Phone header's ON AIR sign waits for the voice, like the PTT button", () => {
-  it.each(PRESSES)('%s: dark while the over is only armed, lit once the voice keys it', async (_how, press) => {
+  it.each(PRESSES)('%s: dark while the station reports the over armed, lit once the voice keys it', async (_how, press, button) => {
     const view = render(phone())
     await press()
-    expect(armStreamMic).toHaveBeenCalledTimes(1)
     view.rerender(phone({ streamMic: 'armed', txBusyReason: MIC }))
-    expect(ptt().textContent, 'premise: the button reads Armed').toBe(ARMED)
+    expect(ptt().textContent, 'premise: the button').toBe(button)
     expect(lit(), 'the sign lit while the over is only armed').toBe(false)
     expect(sign().textContent, 'the sign said TX while the over is only armed').toBe('▼ RX')
     view.rerender(phone({ streamMic: 'keyed', txBusyReason: MIC }))
@@ -148,9 +150,9 @@ describe("the Phone header's ON AIR sign waits for the voice, like the PTT butto
 
   it.each([
     ['nothing else', {}, { txBusyReason: HELD }],
-    // The arbiter names the held key before the armed over (`Engine::tx_owner`'s order).
-    ['while the station reports an over armed from the page', { streamMic: 'armed', txBusyReason: MIC },
-      { streamMic: 'armed', txBusyReason: HELD }],
+    // A key at the shack riding along with an over the page armed: the arbiter names the key
+    // first, so the station no longer reports the over armed (`Engine::snapshot`).
+    ['while the page holds an over armed', { streamMic: 'armed', txBusyReason: MIC }, { streamMic: null, txBusyReason: HELD }],
   ])('CONTROL: a press at the shack lights it as before, %s', async (_while, before, keyed) => {
     const view = render(phone(before))
     fireEvent.pointerDown(ptt())
@@ -161,30 +163,26 @@ describe("the Phone header's ON AIR sign waits for the voice, like the PTT butto
     expect(sign().textContent).toBe('▲ TX')
   })
 
-  it("CONTROL: an over armed from the page's own Hold PTT, nothing pressed here, lights it as before", () => {
-    // The sign follows THIS cockpit's button, and nothing was pressed here: it reads as it did.
-    render(phone({ streamMic: 'armed', txBusyReason: MIC }))
-    expect(ptt().textContent, 'not pressed here').toBe('PUSH TO TALK')
-    expect(lit(), 'the page armed an over and the sign went dark').toBe(true)
-  })
-
   it.each([
-    ['the tune carrier', { tuning: true, txBusyReason: TUNE }],
-    ['a key at the radio', { txBusyReason: MIC, rigKeyed: true }],
-    ['an FT over', { transmitting: true, txBusyReason: MIC }],
-  ])('%s, while the press is only armed, lights it as before', async (_what, over) => {
-    const view = render(phone())
-    under = ptt()
-    await streamed(pointer('down'))
-    view.rerender(phone({ streamMic: 'armed', txBusyReason: MIC }))
+    // What the station reports with something else holding the transmitter: the over not armed.
+    ['the tune carrier', { streamMic: null, tuning: true, txBusyReason: TUNE }],
+    ['a key at the shack', { streamMic: null, txBusyReason: HELD }],
+    // The rig's own PTT read back is not one of the arbiter's owners, so the station can report the
+    // over armed while a key at the radio is on the air: the header's own guard lights it.
+    ['a key at the radio', { streamMic: 'armed', txBusyReason: MIC, rigKeyed: true }],
+    // A station built before the Q1 ruling said `armed` whatever else held the transmitter.
+    ['the tune carrier, as an older station reports it', { streamMic: 'armed', tuning: true, txBusyReason: TUNE }],
+    ['an FT over, as an older station reports it', { streamMic: 'armed', transmitting: true, txBusyReason: MIC }],
+  ])('%s, over an armed over, lights it as before', (_what, radio) => {
+    const view = render(phone({ streamMic: 'armed', txBusyReason: MIC }))
     expect(lit(), 'premise: the armed over alone leaves it dark').toBe(false)
-    view.rerender(phone({ streamMic: 'armed', ...over }))
+    view.rerender(phone(radio))
     expect(lit(), 'on the air, and the sign dark').toBe(true)
     expect(sign().textContent).toBe('▲ TX')
   })
 
   it('an over already on the air when the press is made (the voice keyer) keeps it lit while the station answers', async () => {
-    // The button reads Armed from the press, before the station has answered the arm: the sign
+    // The button reads Armed from the press, before the station has answered the arm; the sign
     // waits only for an over the station itself reports armed.
     let answer: (armed: boolean) => void = () => {}
     armStreamMic.mockImplementation(() => new Promise<boolean>((resolve) => { answer = resolve }))
@@ -200,19 +198,17 @@ describe("the Phone header's ON AIR sign waits for the voice, like the PTT butto
     expect(lit()).toBe(true)
   })
 
-  it('display only: the press changes the sign and nothing else in the header, and Stop TX still stops', async () => {
-    // One snapshot throughout, the station already reporting an over armed (the page's own Hold
-    // PTT); this cockpit then presses through the stream. Only the sign may differ.
-    render(phone({ streamMic: 'armed', txBusyReason: MIC }))
-    const before = restOfHeader()
-    const title = sign().title
-    expect(title, 'premise: the tooltip is the arbiter\'s sentence').toBe(MIC)
-    under = ptt()
-    await streamed(pointer('down'))
-    expect(ptt().textContent, 'premise: the press is armed').toBe(ARMED)
+  it('display only: the voice keying changes the sign and nothing else in the header, and Stop TX stops while it waits', () => {
+    const view = render(phone({ streamMic: 'armed', txBusyReason: MIC }))
     expect(lit(), 'premise: the sign waits').toBe(false)
+    const waiting = restOfHeader()
+    const title = sign().title
+    expect(title, "premise: the tooltip is the arbiter's sentence").toBe(MIC)
+    view.rerender(phone({ streamMic: 'keyed', txBusyReason: MIC }))
+    expect(lit(), 'premise: keyed').toBe(true)
     expect(sign().title, "the sign's tooltip, its accessible description, changed").toBe(title)
-    expect(restOfHeader(), 'something in the header besides the sign changed').toBe(before)
+    expect(restOfHeader(), 'something in the header besides the sign changed').toBe(waiting)
+    view.rerender(phone({ streamMic: 'armed', txBusyReason: MIC }))
     fireEvent.click(screen.getByRole('button', { name: /^stop tx$/i }))
     expect(api.haltTx, 'Stop TX while the sign waits').toHaveBeenCalledTimes(1)
   })
