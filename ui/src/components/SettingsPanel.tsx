@@ -573,11 +573,23 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
  * backend (404) is the DCU-1 flavour at a FIXED 4800, so an ERC V4 owner following the
  * vendor's setup who picks the entry with their board's name on it gets a rotator that never
  * answers. Both labels now say which mode they are; the vendor-recommended path is model 603.
+ *
+ * ⭐ THE YAESU G-5500 IS NAMED ON ITS INTERFACES' ENTRIES, NOT BESIDE THEM (2026-09-29). Hamlib
+ * has no G-5500 model because the rotator has no computer port: it is driven through a GS-232B or
+ * GS-232A interface, or a GS-232 clone board, so the entry that works is that interface's model.
+ * The setting stores ONE number and a <select> shows the first option carrying it, so a separate
+ * "G-5500" entry saving 603 would be displayed as the other 603 entry after a save — the list
+ * would name something the operator did not pick. The name leads each label, with the interface
+ * straight after it, so a closed select too narrow for the whole label still shows both.
  */
 export const ROTATOR_MODELS: { model: number; label: string }[] = [
-  { model: 601, label: 'Yaesu GS-232A (az/el)' },
-  { model: 603, label: 'Yaesu GS-232B (az/el) — also ERC V4 in its recommended mode (9600)' },
-  { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
+  {
+    model: 603,
+    label:
+      'Yaesu G-5500 / G-5500DC — GS-232B interface (az/el); also any GS-232B, and ERC V4 in its recommended mode (9600)',
+  },
+  { model: 601, label: 'Yaesu G-5500 / G-5500DC — GS-232A interface (az/el); also any GS-232A' },
+  { model: 602, label: 'GS-232 (generic, az/el) — GS-232 clone boards; also EA4TX ARS-USB, LVB, ST2' },
   { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
   { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
   { model: 607, label: 'AMSAT LVB Tracker (az/el)' },
