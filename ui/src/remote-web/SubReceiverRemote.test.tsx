@@ -49,6 +49,7 @@ vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (ru
 import { getSettings, cwDecode } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
+import { WHEEL_REST_MS } from '../components/WheelRange'
 
 const clients: OperationClient[] = []
 const uninstall: (() => void)[] = []
@@ -300,5 +301,34 @@ describe.each(['phone', 'cw'] as const)('the Remote page, %s cockpit', mode => {
     await settle()
     expect(subRow()).toBeNull()
     expect(mainPlate()).toBeNull()
+  })
+})
+
+// #384: A WHEEL BURST IS A DRAG, so on the page it is ONE intent, sent once the wheel rests, for the
+// reason a drag is one. The Phone cockpit opts its Sub row in; CW's keeps no wheel.
+describe('the mouse wheel on the Remote page’s Sub row', () => {
+  const af = () => screen.getByLabelText('Sub receiver AF gain') as HTMLInputElement
+  const notchUp = () => fireEvent.wheel(af(), { deltaY: -100, deltaMode: 0 })
+
+  it('Phone: a burst of notches sends ONE radio.subLevel intent, its final value, once the wheel rests', async () => {
+    const p = page('phone', DUAL, ['subReceiverLevels'])
+    await settle()
+    for (let i = 0; i < 3; i++) notchUp()
+    await settle()
+    expect(Number(af().value), 'the thumb follows the wheel').toBe(31)
+    expect(p.writes(), 'a notch was sent before the wheel rested').toHaveLength(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(WHEEL_REST_MS) })
+    expect(p.writes()).toHaveLength(1)
+    expect(p.writes()[0].request.action).toEqual({ action: 'radio.subLevel', level: 'afGain', value: 0.31 })
+    expect(pushToast, 'a wheel burst raised an error').not.toHaveBeenCalled()
+  })
+
+  it('CW: the wheel leaves the Sub row alone', async () => {
+    const p = page('cw', DUAL, ['subReceiverLevels'])
+    await settle()
+    expect(notchUp(), 'CW’s Sub row stopped the scroll').toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(WHEEL_REST_MS) })
+    expect(Number(af().value)).toBe(25)
+    expect(p.writes()).toHaveLength(0)
   })
 })

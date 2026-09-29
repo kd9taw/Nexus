@@ -40,6 +40,8 @@ describe('processDecodes QSO-aware quieting', () => {
     })
     expect(toasts).toHaveBeenCalledTimes(1)
     expect(toasts.mock.calls[0][0]).toContain('calling you')
+    // #391: an alert, so the pop-up switch takes it out of the corner (it still beeps).
+    expect(toasts.mock.calls[0][3]).toMatchObject({ alert: true, prominent: true })
   })
 
   // ⚠️ THIS PAIR WAS SPLIT ON 2026-08-22, and the reason is the whole point. It used to assert
@@ -180,6 +182,7 @@ describe('processDecodes QSO-aware quieting', () => {
     )
     expect(toasts).toHaveBeenCalledTimes(1)
     expect(toasts.mock.calls[0][0]).toContain('NEW DXCC')
+    expect(toasts.mock.calls[0][3]).toMatchObject({ alert: true })
   })
 
   it('behaves as before when no QSO context is passed', () => {
@@ -198,6 +201,7 @@ describe('processDecodes QSO-aware quieting', () => {
     expect(kind).toBe('info')
     expect(ttl).toBe(6000)
     expect((opts as { prominent?: boolean } | undefined)?.prominent).toBeUndefined()
+    expect(opts).toMatchObject({ alert: true })
   })
 
   it('a RARE needed grid earns the loud prominent alert', () => {
@@ -211,7 +215,7 @@ describe('processDecodes QSO-aware quieting', () => {
     const [msg, kind, , opts] = toasts.mock.calls[0]
     expect(msg).toContain('ULTRA-RARE grid RR73')
     expect(kind).toBe('success')
-    expect(opts).toMatchObject({ prominent: true, actionLabel: 'Work' })
+    expect(opts).toMatchObject({ alert: true, prominent: true, actionLabel: 'Work' })
   })
 
   it('rare-grid alerts dedup per GRID, not per station', () => {
@@ -340,7 +344,7 @@ describe('grid squares on the watch list', () => {
     const [msg, , , opts] = toasts.mock.calls[0]
     expect(msg).toContain('⭐ Watch')
     expect(msg).toContain('grid EM7*')
-    expect(opts).toMatchObject({ prominent: true, actionLabel: 'Work' })
+    expect(opts).toMatchObject({ alert: true, prominent: true, actionLabel: 'Work' })
   })
 
   it('fires on HF — a square asked for by name outranks the HF grid-quiet default', () => {

@@ -3040,6 +3040,9 @@ export const EN = {
   'settings.pounce.threshold.atnoZoneOrState': 'New entity, zone, or US state',
 
   'settings.alerts.legend': 'Alerts',
+  'settings.alerts.popups.label': 'Pop-up notifications',
+  'settings.alerts.popups.hint':
+    'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',

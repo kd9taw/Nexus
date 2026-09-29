@@ -18,7 +18,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { t } from './i18n'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
-import { withErrorToast } from './toast'
+import { setPopupNotifications, withErrorToast } from './toast'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
 import type {
@@ -315,6 +315,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       stopSettings()
     }
   }, [])
+  // #391: this window's toast host follows the pop-up setting too, from the settings it polls.
+  useEffect(() => {
+    setPopupNotifications(settings?.popupNotifications !== false)
+  }, [settings?.popupNotifications])
 
   // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.)
   useEffect(() => {

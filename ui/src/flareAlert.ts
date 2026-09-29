@@ -85,8 +85,8 @@ export function processFlare(flux: number | null): void {
     (rec ? ` · fade ~${Math.round(rec)} min` : '')
   if (t >= 2) {
     doubleBeep(FLARE_BEEP_HZ)
-    pushToast(msg, 'error', 15000, { prominent: true })
+    pushToast(msg, 'error', 15000, { alert: true, prominent: true })
   } else {
-    pushToast(msg, 'info', 8000)
+    pushToast(msg, 'info', 8000, { alert: true })
   }
 }

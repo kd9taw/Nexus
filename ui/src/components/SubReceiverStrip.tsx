@@ -41,6 +41,7 @@ import { t } from '../i18n'
 import { useStationCapability, useStationControl } from '../stationAccess'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { formatDialMhz } from './FrequencyReadout'
+import { WheelRange } from './WheelRange'
 import {
   deadControlProps,
   subCauseFor,
@@ -77,6 +78,7 @@ export function SubReceiverStrip({
   catOk,
   describedBy,
   onSnap,
+  wheelStep,
 }: {
   radio: RadioStatus
   /** The snapshot's active radio: a Remote drag begun on one radio's Sub never lands on another's. */
@@ -85,6 +87,9 @@ export function SubReceiverStrip({
   /** The pane's no-CAT banner, which a dead row points at rather than repeating it. */
   describedBy?: string
   onSnap?: (s: AppSnapshot) => void
+  /** How far one mouse-wheel notch moves a row (#384), a wheel burst being a drag. Its host's
+   *  choice: Phone passes one, CW none, so the wheel does nothing on CW's rows. */
+  wheelStep?: number
 }) {
   const receivers = radio.receivers
   const sub = receivers?.sub
@@ -113,6 +118,7 @@ export function SubReceiverStrip({
           dead={subCauseFor(c, state) === 'noCat'}
           describedBy={describedBy}
           onSnap={onSnap}
+          wheelStep={wheelStep}
         />
       ))}
       {unconfirmed.length > 0 && (
@@ -151,6 +157,7 @@ function SubLevelRow({
   dead,
   describedBy,
   onSnap,
+  wheelStep,
 }: {
   control: RigControl
   sub: ReceiverStatus
@@ -158,6 +165,7 @@ function SubLevelRow({
   dead: boolean
   describedBy?: string
   onSnap?: (s: AppSnapshot) => void
+  wheelStep?: number
 }) {
   const spec = LEVELS[control.id]
   const accepted = spec ? sub[spec.field] : null
@@ -227,7 +235,8 @@ function SubLevelRow({
     <div className="ph-chain-item" data-chain={control.id}>
       <label className="ph-dsplev" title={spec.title()}>
         <span>{control.plate}</span>
-        <input
+        <WheelRange
+          wheelStep={wheelStep}
           {...(dead ? deadControlProps('input', describedBy) : { disabled: !permitted })}
           type="range"
           min={0}

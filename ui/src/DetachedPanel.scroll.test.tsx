@@ -131,6 +131,8 @@ vi.mock('./toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn((f: () => Promise<unknown>) => f().catch(() => null)),
   subscribeToasts: vi.fn(() => () => {}),
+  subscribePopups: vi.fn(() => () => {}),
+  setPopupNotifications: vi.fn(),
   dismissToast: vi.fn(),
 }))
 

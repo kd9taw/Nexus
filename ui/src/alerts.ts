@@ -392,6 +392,7 @@ export function processDecodes(
             'success',
             15000,
             {
+              alert: true,
               prominent: true,
               action: onWork && d.from ? () => onWork(d) : undefined,
               actionLabel: t('alerts.action.work'),
@@ -463,6 +464,7 @@ export function processDecodes(
       // Aggressive: double tone + a prominent, long-lived toast.
       doubleBeep(BEEP_HZ.newdxcc)
       pushToast(t('alerts.newDxcc', { call: who, where }), 'success', 15000, {
+        alert: true,
         prominent: true,
         action: workAction,
         actionLabel: t('alerts.action.work'),
@@ -478,6 +480,7 @@ export function processDecodes(
     // find it). An opt-in CQ stays a quieter, shorter info toast.
     if (kind === 'mycall') {
       pushToast(t('alerts.myCall', { call: who }), 'success', 20000, {
+        alert: true,
         prominent: true,
         action: workAction,
         actionLabel: t('alerts.action.answer'),
@@ -493,6 +496,7 @@ export function processDecodes(
           'success',
           15000,
           {
+            alert: true,
             prominent: true,
             action: workAction,
             actionLabel: t('alerts.action.work'),
@@ -500,12 +504,14 @@ export function processDecodes(
         )
       } else {
         pushToast(t('alerts.newGrid', { call: who, where }), 'info', 6000, {
+          alert: true,
           action: workAction,
           actionLabel: t('alerts.action.work'),
         })
       }
     } else {
       pushToast(t('alerts.cq', { call: who, where }), 'info', 6000, {
+        alert: true,
         action: workAction,
         actionLabel: t('alerts.action.answer'),
       })

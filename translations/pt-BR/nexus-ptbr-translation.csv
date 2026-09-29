@@ -1926,6 +1926,8 @@
 "4","settings.connections.log.hint","every save, sync, push, and failure lands here","","",""
 "4","settings.connections.log.empty","No events yet this session — save a credential or run a sync and it shows here.","","",""
 "4","settings.alerts.legend","Alerts","","","One-word control on: Settings ▸ Alerts. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Portuguese word."
+"4","settings.alerts.popups.label","Pop-up notifications","","","Label of a switch on: Settings ▸ Spots & Alerts ▸ Alerts. It turns off the messages that pop up in the bottom-right corner of the window."
+"4","settings.alerts.popups.hint","The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.","","DXCC | QSO","The explanation under the Pop-up notifications switch. Logged QSO and Stop alarm are the words of a message and of a button elsewhere in the program (shell.toast.logged, dxped.alarm.stop): use the Portuguese you give those, so the operator recognises them."
 "4","settings.alerts.myCall.label","My call","","","Short label on: Settings ▸ Alerts. The same English text ""My call"" is used by 2 different keys (e.g. settings.cw.macros.role.myCall) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "4","settings.alerts.myCall.hint","Beep + flash when someone directs a call at you.","","",""
 "4","settings.alerts.confirmTier.label","Confirmation opportunities","","",""

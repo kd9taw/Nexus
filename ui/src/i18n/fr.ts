@@ -4229,6 +4229,8 @@ export const FR: PartialCatalog = {
   "settings.alerts.grid.hint": "Notification discrète sur un locator non contacté. Par défaut VHF+ uniquement — les diplômes locator (VUCC/FFMA) commencent à 6 m ; en HF presque chaque décodage est un locator non contacté. Le choix de bande décide aussi où l'icône LOC. apparaît, dans Stations et sur les lignes de décodage.",
   "settings.alerts.grid.label": "Nouveau locator",
   "settings.alerts.legend": "Alertes",
+  "settings.alerts.popups.label": "Notifications contextuelles",
+  "settings.alerts.popups.hint": "Les messages en bas à droite. Désactivées, les confirmations comme « QSO enregistré » et les alertes comme un nouveau DXCC, une station qui vous appelle, une ouverture de bande ou la météo spatiale n'apparaissent plus. Les sons ne changent pas. Les erreurs, les avis sur l'émission, la radio ou le log et tout message avec un bouton, comme « Arrêter l'alarme », s'affichent toujours.",
   "settings.alerts.myCall.hint": "Bip + flash quand une station vous appelle.",
   "settings.alerts.confirmTier.label": "Occasions de confirmation",
   "settings.alerts.confirmTier.hint": "Afficher les cases travaillées mais non confirmées — occasions de confirmation LoTW — sur le tableau Needed et en pastilles sur les décodages. Désactivez pour ne chasser que les nouveaux contacts.",

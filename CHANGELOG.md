@@ -23,6 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Any distance**, which shows every station, as before. A station you have not heard send a grid
   yet has no known distance, so it always stays on the list, and so does the station you are
   working. The choice is remembered with the roster's other filters.
+- **A switch for the pop-ups in the bottom-right corner (#391).** Settings ▸ Spots & Alerts ▸
+  Alerts ▸ **Pop-up notifications**, on unless you turn it off. Off, the confirmations (Logged QSO,
+  Saved, a QSY, an upload to QRZ) and the alerts (a new DXCC, a station calling you, a band
+  opening, space weather, a DXpedition you chase coming on) stop popping up; their sounds are
+  unchanged. What must be seen still pops up: every error, every notice about transmitting, the
+  radio or the log (TX locked, nothing to log, TX turned back on), and every message with a
+  button, such as an alarm's Stop, an Undo or an update's Download. Pop-out windows follow the
+  same switch; the Remote page's own pop-ups are unchanged.
+- **The mouse wheel moves the Phone cockpit's sliders (#384).** Point at a slider and scroll. AF
+  gain, RF gain, squelch, noise reduction, mic gain, the speech processor, the monitor and the Sub
+  receiver's levels move 2% a notch, RF power 1%, the manual notch 10 Hz, the Icom scope reference
+  0.5 dB and the Flex one 5 dB. The scope's G and Z move one step, where scrolling over them used
+  to tune the radio. A trackpad works the same way. A slider moves exactly as it would under your
+  hand, so RF power stays within your power limit and nothing done with the wheel keys the
+  transmitter. Only the slider under the pointer moves, never one you clicked earlier, and a scroll
+  that starts elsewhere and passes over a slider keeps scrolling. On the Remote page a run of
+  notches is sent as one change once the wheel stops, as a drag is.
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2
@@ -598,6 +615,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (KE7G/P and KF7XYZ/P) are no longer taken for the same one. Clicking a station also tells your
   own call apart the same way, so an operator signing VE7/ followed by their call can work other
   VE7/ stations.
+- **The park box no longer comes back empty or stale (#383).** Clicking an activator's spot could
+  still leave the park box empty under a hunt line naming the park, when you had typed a park
+  before entering the previous station's call and your callbook had looked that call up. And
+  after you logged a hunted contact, the empty log strip showed that contact's park again and
+  kept it. The box now fills with the clicked activator's park, and clears once its contact is
+  logged.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

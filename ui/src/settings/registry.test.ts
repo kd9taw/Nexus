@@ -391,6 +391,13 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('amber')[0]).toBe('colours')
   })
 
+  it('finds the pop-up switch (#391) by the words that report used', () => {
+    // "how do I turn off the popup notifications in the bottom right of the application?"
+    for (const q of ['popup', 'pop-up notifications', 'popups', 'notifications', 'bottom right', 'toast']) {
+      expect(ids(q)[0], `"${q}" must reach the Alerts section first`).toBe('alerts')
+    }
+  })
+
   it('finds the toggle from issue #62 by the words that report used', () => {
     // An FT-991A owner could not find "Data modes use plain SSB" — it was folded inside the
     // collapsed Advanced group — and filed a feature request for a capability that had already

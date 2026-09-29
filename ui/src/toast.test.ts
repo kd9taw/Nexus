@@ -5,7 +5,16 @@
 // to the screen, and several call sites asked for even less (3 s). Errors now stay at least
 // ERROR_MIN_TTL_MS, or until dismissed; info/success toasts keep their own timing.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { pushToast, dismissToast, subscribeToasts, ERROR_MIN_TTL_MS, type Toast } from './toast'
+import {
+  pushToast,
+  dismissToast,
+  subscribeToasts,
+  subscribePopups,
+  setPopupNotifications,
+  popsUpWhenOff,
+  ERROR_MIN_TTL_MS,
+  type Toast,
+} from './toast'
 
 let current: Toast[] = []
 let unsub: () => void = () => {}
@@ -63,5 +72,58 @@ describe('error toasts stay readable (D#19)', () => {
     expect(visible(info)).toBe(true)
     vi.advanceTimersByTime(2000)
     expect(visible(info)).toBe(false)
+  })
+})
+
+// #391: WHAT STILL POPS UP WITH POP-UPS OFF. The rule case by case (`popsUpWhenOff`), then the two
+// subscriptions: the corner's, which the switch filters, and the bus's, which it never touches.
+describe('pop-ups off (#391)', () => {
+  const noop = () => {}
+  it.each([
+    ['a confirmation', { kind: 'success' }, false],
+    ['a decode alert, loud and with its Work button', { kind: 'success', alert: true, prominent: true, action: noop }, false],
+    ['a quiet alert with a button (a new grid)', { kind: 'info', alert: true, action: noop }, false],
+    ['an alert drawn red for loudness (a storm)', { kind: 'error', alert: true, prominent: true }, false],
+    ['an error', { kind: 'error' }, true],
+    ['a notice (a transmit refusal)', { kind: 'info' }, true],
+    ['a prominent notice that is not an alert (the ISS auto-arm)', { kind: 'success', prominent: true }, true],
+    ['a confirmation with a button that is a control (Undo)', { kind: 'success', action: noop }, true],
+    ['a prominent notice (a contest start warning)', { kind: 'info', prominent: true }, true],
+  ] as const)('%s', (_what, fields, shows) => {
+    expect(popsUpWhenOff({ id: 1, message: 'm', ...fields } as Toast)).toBe(shows)
+  })
+
+  let shown: Toast[] = []
+  let unsubPopups: () => void = () => {}
+  beforeEach(() => {
+    unsubPopups = subscribePopups((now) => {
+      shown = now
+    })
+  })
+  afterEach(() => {
+    setPopupNotifications(true)
+    unsubPopups()
+  })
+  const inCorner = (id: number) => shown.some((t) => t.id === id)
+
+  it('takes a confirmation already up out of the corner at once, and brings it back when turned on', () => {
+    const logged = pushToast('Logged W1AW', 'success')
+    const failed = pushToast('Could not write the log', 'error')
+    expect(inCorner(logged) && inCorner(failed), 'fixture: both up').toBe(true)
+    setPopupNotifications(false)
+    expect(inCorner(logged), 'the confirmation stayed in the corner').toBe(false)
+    expect(inCorner(failed), 'the error left the corner').toBe(true)
+    expect(visible(logged), 'the bus lost the confirmation').toBe(true)
+    setPopupNotifications(true)
+    expect(inCorner(logged)).toBe(true)
+  })
+
+  it('keeps a toast raised while off on the bus, out of the corner, and on its own timer', () => {
+    setPopupNotifications(false)
+    const saved = pushToast('Saved', 'success', 2000)
+    expect(visible(saved)).toBe(true)
+    expect(inCorner(saved)).toBe(false)
+    vi.advanceTimersByTime(2100)
+    expect(visible(saved), 'a hidden toast outlived its ttl').toBe(false)
   })
 })

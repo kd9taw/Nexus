@@ -88,6 +88,7 @@ function fixture(mode: 'cw' | 'phone' = 'phone', capabilities: ControlCapability
 
 import { t } from '../i18n'
 import { CockpitHeader } from '../components/CockpitHeader'
+import { WHEEL_REST_MS } from '../components/WheelRange'
 const choices = [
   ['phone','power','rfPower','phone.header.power.label',50,35],
   ['phone','micGain','micGain','phone.mic.aria',50,35],
@@ -177,6 +178,32 @@ it.each(choices)('%s %s drag submits the released target once and waits for a st
   expect(Number(slider().value)).toBe(before)
   h.rerender(h.view({...h.snap,radio:{...h.snap.radio,[field]:target/scale}}));await tick()
   expect(Number(slider().value)).toBe(target)
+})
+
+// #384: A WHEEL BURST IS A DRAG. Its notches move the draft and ONE command goes out, with the
+// burst's final value, once the wheel rests — the contract of the drag above. CW keeps no wheel.
+const wheelNotch=(el:Element)=>fireEvent.wheel(el,{deltaY:-100,deltaMode:0})
+it.each(choices.filter(c=>c[0]==='phone'))('%s %s wheel burst submits its final value once, when the wheel rests', async(mode,level,_field,label,before)=>{
+  const h=fixture(mode);await tick()
+  const slider=()=>h.getByRole('slider',{name:t(label)}) as HTMLInputElement
+  const step=level==='power'?1:level==='notch'?10:2
+  for(let i=0;i<3;i++)wheelNotch(slider())
+  await tick()
+  expect(Number(slider().value),'the thumb follows the wheel').toBe(before+3*step)
+  expect(h.writes(),'a notch was sent before the wheel rested').toHaveLength(0)
+  await tick(WHEEL_REST_MS)
+  expect(h.writes()).toHaveLength(1)
+  const scale=level==='notch'?1:100
+  expect(h.writes()[0].request.action).toEqual({action:'radio.level',mode,level,expected:before/scale,value:(before+3*step)/scale})
+  for(const fn of [setRfPower,setMicGain,setNrLevel,setCompLevel,setNotchFreq,setPtt]) expect(fn).not.toHaveBeenCalled()
+})
+
+it('the CW cockpit’s levels leave the wheel alone', async()=>{
+  const h=fixture('cw');await tick()
+  const slider=h.getByRole('slider',{name:t('cw.rxDsp.nr.aria')}) as HTMLInputElement
+  expect(wheelNotch(slider),'CW’s NR slider stopped the scroll').toBe(true)
+  await tick(WHEEL_REST_MS)
+  expect(Number(slider.value)).toBe(30);expect(h.writes()).toHaveLength(0)
 })
 
 it.each(['pointer cancel','blur','permission loss','reading change','radio change','mode change'] as const)

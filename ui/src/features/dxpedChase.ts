@@ -89,8 +89,8 @@ export function processDxpedAlerts(
         'success',
         20000,
         onWork
-          ? { prominent: true, action: () => onWork(hot), actionLabel: t('dxped.chase.work') }
-          : { prominent: true },
+          ? { alert: true, prominent: true, action: () => onWork(hot), actionLabel: t('dxped.chase.work') }
+          : { alert: true, prominent: true },
       )
       continue
     }
@@ -102,7 +102,7 @@ export function processDxpedAlerts(
       const key = `quiet|${call}|${day}`
       if (alerted.has(key)) continue
       alerted.add(key)
-      pushToast(t('dxped.chase.open.quiet', { call, best: w.best }), 'info', 8000)
+      pushToast(t('dxped.chase.open.quiet', { call, best: w.best }), 'info', 8000, { alert: true })
     }
   }
 }

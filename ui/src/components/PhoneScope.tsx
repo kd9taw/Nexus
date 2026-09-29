@@ -46,6 +46,7 @@ import { drawDss } from '../dss'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
+import { WheelRange } from './WheelRange'
 
 /** The scope's own vocabulary: the unit on the Δ readout, the two native-panadapter feed
  *  names (a product and a protocol), and the plate drawn beside the carrier line. Tokens,
@@ -168,6 +169,9 @@ interface Props {
    * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
    * phone takes the `normal` default (a hold short enough for CW flickers on every syllable). */
   traceHoldMs?: number
+  /** The mouse wheel moves the G and Z sliders, one of their steps a notch (#384), rather than
+   *  tuning the rig through them. Phone passes it; CW keeps its scope's wheel as it was. */
+  wheelSliders?: boolean
 }
 
 /**
@@ -217,6 +221,7 @@ export function PhoneScope({
   cwPitchRefDial = true,
   interactive = false,
   traceHoldMs = TRACE_HOLD_MS.normal,
+  wheelSliders = false,
 }: Props) {
   const control = useStationControl()
   const [scopeAvailable, setScopeAvailable] = useState(control)
@@ -1362,7 +1367,8 @@ export function PhoneScope({
         )}
         <label className="ph-scope-gz" title={t('scope.gain.title')}>
           G
-          <input
+          <WheelRange
+            wheelStep={wheelSliders ? 0.05 : undefined}
             type="range"
             min={-1}
             max={1}
@@ -1374,7 +1380,8 @@ export function PhoneScope({
         </label>
         <label className="ph-scope-gz" title={t('scope.zero.title')}>
           Z
-          <input
+          <WheelRange
+            wheelStep={wheelSliders ? 0.05 : undefined}
             type="range"
             min={-1}
             max={1}

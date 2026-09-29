@@ -63,6 +63,7 @@ import {
 } from '../features/rigControls'
 import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
+import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -569,6 +570,13 @@ const FLEX_SPANS = [
   { label: '1M', hz: 1_000_000 },
   { label: '2M', hz: 2_000_000 },
 ] as const
+
+/** #384: how far one wheel notch moves a Phone slider (`WheelRange`). 2 % on a 0–100 % level:
+ *  fifty notches end to end, about two turns of an ordinary wheel, fine enough to ride AF gain and
+ *  quick enough to cross the range. RF power moves 1 %, its own step and the finest it has: an
+ *  amplifier's drive is set to within a few watts, and a flick is bounded to four notches. The
+ *  notch, the scope references and the scope's G and Z move one of their own steps. */
+const LEVEL_WHEEL_STEP = 2
 
 export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard }: Props) {
   const display = useRemotePresentation()
@@ -1788,7 +1796,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </div>
             <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <input disabled={!scopeControl}
+              <WheelRange wheelStep={5} disabled={!scopeControl}
                 type="range"
                 min={-200}
                 max={200}
@@ -1826,7 +1834,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </div>
             <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <input disabled={!scopeControl}
+              <WheelRange wheelStep={5} disabled={!scopeControl}
                 type="range"
                 min={-140}
                 max={-20}
@@ -1929,7 +1937,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="RF">
               <label className="ph-dsplev" title={t('phone.analog.rf.title')}>
                 <span>{RF}</span>
-                <input {...levels.input('rfGain')} disabled={dead('RF') || !levels.can('rfGain')}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} {...levels.input('rfGain')} disabled={dead('RF') || !levels.can('rfGain')}
                   aria-describedby={describedBy('rx')}
                   type="range"
                   min={0}
@@ -1960,7 +1968,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="NRLVL">
               <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
                 <span>{NR}</span>
-                <input {...levels.input('nr')} disabled={dead('NRLVL') || !levels.can('nr')}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} {...levels.input('nr')} disabled={dead('NRLVL') || !levels.can('nr')}
                   aria-describedby={describedBy('rx')}
                   type="range"
                   min={0}
@@ -1997,7 +2005,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="NOTCHF">
               <label className="ph-dsplev" title={t('phone.rxDsp.notchFreq.title')}>
                 <span>{NOTCH}</span>
-                <input {...levels.input('notch')} disabled={dead('NOTCHF') || !levels.can('notch')}
+                <WheelRange wheelStep={10} {...levels.input('notch')} disabled={dead('NOTCHF') || !levels.can('notch')}
                   aria-describedby={describedBy('rx')}
                   type="range"
                   min={300}
@@ -2050,7 +2058,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="AF">
               <label className="ph-dsplev" title={t('phone.analog.af.title')}>
                 <span>{AF}</span>
-                <input {...levels.input('afGain')} disabled={dead('AF') || !levels.can('afGain')}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} {...levels.input('afGain')} disabled={dead('AF') || !levels.can('afGain')}
                   aria-describedby={describedBy('rx')}
                   type="range"
                   min={0}
@@ -2080,7 +2088,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="SQL">
               <label className="ph-dsplev" title={t('phone.analog.sql.title')}>
                 <span>{SQL}</span>
-                <input {...levels.input('squelch')} disabled={dead('SQL') || !levels.can('squelch')}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} {...levels.input('squelch')} disabled={dead('SQL') || !levels.can('squelch')}
                   aria-describedby={describedBy('rx')}
                   type="range"
                   min={0}
@@ -2113,7 +2121,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               radio's pane is exactly what it was. On the Remote page too: its sliders go through
               the station's `radio.subLevel` intent. A component of its own, not a widened shared
               one — see its header. */}
-          <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
+          <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} wheelStep={LEVEL_WHEEL_STEP} />
         </CockpitPaneFrame>
   ) : null
   const transmitterPane = hasTransmitterPane ? (
@@ -2128,7 +2136,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="MIC">
               <label className="ph-dsplev" title={t('phone.mic.title')}>
                 <span>{t('phone.mic.label')}</span>
-                <input {...levels.input('micGain')} disabled={dead('MIC') || !levels.can('micGain')}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} {...levels.input('micGain')} disabled={dead('MIC') || !levels.can('micGain')}
                   aria-describedby={describedBy('tx')}
                   type="range"
                   min={0}
@@ -2158,7 +2166,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="COMPLVL">
               <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
                 <span>{COMP}</span>
-                <input {...levels.input('compression')} disabled={dead('COMPLVL') || !levels.can('compression')}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} {...levels.input('compression')} disabled={dead('COMPLVL') || !levels.can('compression')}
                   aria-describedby={describedBy('tx')}
                   type="range"
                   min={0}
@@ -2195,7 +2203,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             <div className="ph-chain-item" data-chain="MON">
               <label className="ph-dsplev" title={t('phone.chain.mon.title')}>
                 <span>{MON}</span>
-                <input disabled={dead('MON') || !control}
+                <WheelRange wheelStep={LEVEL_WHEEL_STEP} disabled={dead('MON') || !control}
                   aria-describedby={describedBy('tx')}
                   type="range"
                   min={0}
@@ -2354,6 +2362,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           value: control ? power : snap.radio.rfPower == null ? null : Math.round(snap.radio.rfPower * 100),
           unit: '%',
           onChange: changePower,
+          wheelStep: 1,
           label: t('phone.header.power.label'),
           title: t('phone.header.power.title'),
           onPointerDown: () => {
@@ -2581,6 +2590,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           )}
           <PhoneScope
             hideSmeter
+            wheelSliders
             active={active && details}
             transmitting={snap.radio.transmitting}
             theme={theme}
