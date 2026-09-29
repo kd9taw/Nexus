@@ -106,6 +106,12 @@ export const WATERFALL_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 export const SSTV_STAGE_SPLIT_MIN: SplitClamp = (g) => 16 * g.fontPx
 export const SSTV_STAGE_SPLIT_MAX: SplitClamp = (g) => 0.7 * g.vhEff
 
+/** The clamps of Operate Classic's Tx1–Tx6 machine once sized (layout L5), from its own rules
+ *  (`.cockpit-qsocol > .tx-panel[data-sized]`): the 4em floor, and no ceiling of its own — the
+ *  sheet caps the machine at its content height, which only the measured range can know. */
+export const TX_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
+export const TX_SPLIT_MAX: SplitClamp = Infinity
+
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */
 export function parseSplitPct(raw: string | null): number | null {

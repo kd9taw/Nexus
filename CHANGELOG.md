@@ -182,8 +182,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log. RTTY's and PSK's waterfalls open at a quarter of the cockpit's height, about what they had
   before, and on a short window or a large UI scale they now get smaller before the cockpit starts
   to scroll.
+- **Operate: resize its columns, and put the side rail on either side.** In the Classic layout a
+  divider between Band Activity and the Rx Frequency column joins the one between the Rx Frequency
+  column and Stations, and a divider between Rx Frequency and the Tx1–Tx6 messages lets the
+  messages take less height (they scroll) so Rx Frequency gets more; it never makes them taller
+  than their rows. In the Roster layout a divider sits between the Call Roster and the side rail.
+  Each one moves only the two columns or panes beside it and stops where either reaches its
+  smallest width. Drag them, or Tab to one and use the arrow keys, like every other divider;
+  **⊞ Panels ▸ Undo last change** and **Reset layout** cover the column dividers. **⊞ Panels ▸
+  Side rail on the left** moves the rail (Stations in Classic; Band Activity and Rx Frequency in
+  Roster) to the left of the window. A layout you set before this opens exactly as you left it.
 
 ### Changed
+
+- **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
+  under a scope or waterfall and the dividers between panes now sit in the space that was already
+  between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as
+  RTTY's, PSK's and SSTV's new dividers do.
 
 - **ON AIR is now a solid red sign you cannot miss.** While the rig is keyed, the TX state in the
   cockpit header (Phone, CW, RTTY, PSK, SSTV, JS8 and Tempo), Operate's **▲ TRANSMITTING** in the
@@ -247,6 +262,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
+  narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
+  width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits
+  between. Now only those two move.
 - **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
   colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
   you picked. The dark theme is unchanged.

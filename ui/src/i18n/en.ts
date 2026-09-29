@@ -7766,8 +7766,15 @@ export const EN = {
   'operate.waterfall.redock.title':
     'The waterfall is in its own window — click to bring it back here',
   'operate.waterfall.splitter.label': 'waterfall height',
+  'operate.txmsgs.splitter.label': 'Tx messages height',
   'operate.seam.bandActivityRxFreq.label': 'Band Activity / Rx Frequency',
   'operate.seam.qsocolStations.label': 'Rx Frequency column / Stations roster',
+  'operate.seam.decodesQsocol.label': 'Band Activity / Rx Frequency column',
+  'operate.seam.stationsDecodes.label': 'Stations roster / Band Activity',
+  'operate.seam.rosterRail.label': 'Call Roster / side rail',
+  'operate.seam.railRoster.label': 'Side rail / Call Roster',
+  'operate.panels.railLeft.label': 'Side rail on the left',
+  'operate.panels.railLeft.note': 'Stations in Classic; Band Activity and Rx Frequency in Roster',
 
   // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
   // built rather than at import (the registry-by-getter rule, batch 3).

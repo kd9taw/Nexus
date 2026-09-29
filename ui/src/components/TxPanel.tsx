@@ -1,3 +1,4 @@
+import type { Ref } from 'react'
 import { useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The six rows are
 // WSJT-X's Tx1–Tx6 slots: the row NAME (`Tx 3`), the generated message text, the DX call and
@@ -49,6 +50,8 @@ interface Props {
   hideNote?: string
   /** This pane's ⊞ label, for the ✕'s accessible name. */
   paneTitle?: string
+  /** The panel's own box, for the Classic divider above it that sizes it (layout L5). */
+  stripRef?: Ref<HTMLElement>
 }
 
 /**
@@ -77,6 +80,7 @@ export function TxPanel({
   onRemove,
   hideNote,
   paneTitle,
+  stripRef,
 }: Props) {
   const messagesControl = useStationCapability('ftMessages')
   const cqControl = useStationCapability('ftOperate')
@@ -94,6 +98,7 @@ export function TxPanel({
 
   return (
     <section
+      ref={stripRef}
       className={`tx-panel panel${compact ? ' tx-panel-compact' : ''}`}
       aria-label={t('operate.tx.aria')}
     >

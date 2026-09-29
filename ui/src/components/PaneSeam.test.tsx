@@ -349,8 +349,67 @@ describe('a STRIP divider over a strip the SHEET sizes until it is moved (defaul
   })
 })
 
+describe('a STRIP divider over a strip that comes AFTER it (after)', () => {
+  // Operate's Tx1–Tx6 machine sits under its divider (layout L5): moving the divider down shrinks
+  // it, and its ref is a FOLLOWING sibling's, not attached when the divider's layout effect runs.
+  /** A 1000 px column holding the divider and then the strip, in one React tree; the strip lays out
+   *  like `flex: 0 1 var(--h)` held between 50 and 400 px. */
+  function mount(stored?: string) {
+    if (stored != null) localStorage.setItem('nexus.split.test.after', stored)
+    const rect = (height: number) =>
+      ({ top: 0, left: 0, width: 800, height, right: 800, bottom: height, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.box === 'col') return rect(1000)
+      if (this.dataset.box === 'strip') {
+        const v = (this.parentElement as HTMLElement).style.getPropertyValue('--h')
+        const basis = v.endsWith('%') ? parseFloat(v) * 10 : v === '' ? 200 : parseFloat(v)
+        return rect(Math.min(400, Math.max(50, basis)))
+      }
+      return rect(0)
+    })
+    const ref = createRef<HTMLElement>()
+    const view = render(
+      <div data-box="col">
+        <PaneSeam axis="y" varName="--h" strip={ref} storageKey="nexus.split.test.after" min={50} max={400} defaultPct={20} label="tx height" after />
+        <section data-box="strip" ref={ref} />
+      </div>,
+    )
+    const col = view.container.querySelector<HTMLElement>('[data-box="col"]')!
+    return { col, sep: view.getByRole('separator', { name: 'tx height' }) }
+  }
+  const pct = (col: HTMLElement) => col.style.getPropertyValue('--h')
+  afterEach(() => vi.restoreAllMocks())
+
+  it('finds the strip after it on mount and fits the stored size before anything is touched', () => {
+    const { col, sep } = mount('30')
+    expect(pct(col), 'the divider never found the strip below it').toBe('30%')
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => sep.getAttribute(a))).toEqual(['300', '50', '400'])
+  })
+
+  it('the arrows move the divider the way they point, so down shrinks the strip below it', () => {
+    const { col, sep } = mount('30')
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(pct(col)).toBe(`${(284 / 1000) * 100}%`)
+    fireEvent.keyDown(sep, { key: 'ArrowUp', shiftKey: true })
+    expect(pct(col)).toBe(`${(348 / 1000) * 100}%`)
+    fireEvent.keyDown(sep, { key: 'Home' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('50')
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('400')
+  })
+
+  it('a drag down shrinks it by exactly the pointer’s travel, and commits once on release', () => {
+    const { col, sep } = mount('30')
+    fireEvent.pointerDown(sep, { clientY: 500, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientY: 550, pointerId: 1 })
+    expect(pct(col)).toBe('25%')
+    fireEvent.pointerUp(window, { clientY: 550, pointerId: 1 })
+    expect(localStorage.getItem('nexus.split.test.after')).toBe('25')
+  })
+})
+
 describe('a SPLIT divider', () => {
-  function mount(axis: 'x' | 'y', columns = false, scale?: number) {
+  function mount(axis: 'x' | 'y', columns = false, scale?: number, columnVars?: [string, string], floors?: [number, number]) {
     const a = document.createElement('div')
     const b = document.createElement('div')
     const grid = document.createElement('div')
@@ -369,6 +428,8 @@ describe('a SPLIT divider', () => {
         onReset={onReset}
         label="pair"
         scale={scale}
+        columnVars={columnVars}
+        floors={floors}
       />,
     )
     return { a, b, grid, onCommit, onReset, sep: view.getByRole('separator', { name: 'pair' }) }
@@ -433,11 +494,60 @@ describe('a SPLIT divider', () => {
     expect(onCommit).toHaveBeenCalledWith(a1, b1)
   })
 
-  it('a scale never touches column mode: fr tokens stay the pair’s own shares', () => {
-    const { grid, sep } = mount('x', true, 1.5)
+  it('in column mode a scale multiplies the fr tokens too, so the pair keeps its fr total', () => {
+    // Operate's Classic (layout L5): a pair of columns beside a third fr column. Painted at the
+    // pair's own total, the third column keeps its width; painted as shares summing to 2, the
+    // first step of the Rx Frequency column / Stations divider narrowed Band Activity.
+    const { grid, sep, onCommit } = mount('x', true, 0.835)
     fireEvent.pointerDown(sep, { clientX: 405, pointerId: 1, button: 0 })
     fireEvent.pointerMove(window, { clientX: 460, pointerId: 1 })
-    expect(grid.style.getPropertyValue('--col-a')).toBe(`${seamShares((460 - 100) / 510)[0]}fr`)
+    const [a1, b1] = seamShares((460 - 100) / 510)
+    expect(parseFloat(grid.style.getPropertyValue('--col-a'))).toBeCloseTo(a1 * 0.835, 10)
+    expect(parseFloat(grid.style.getPropertyValue('--col-b'))).toBeCloseTo(b1 * 0.835, 10)
+    expect(parseFloat(grid.style.getPropertyValue('--col-a')) + parseFloat(grid.style.getPropertyValue('--col-b'))).toBeCloseTo(1.67, 10)
+    fireEvent.pointerUp(window, { clientX: 460, pointerId: 1 })
+    expect(onCommit, 'the record still takes the pair’s own shares').toHaveBeenCalledWith(a1, b1)
+  })
+
+  it('in column mode `columnVars` names the two tokens (a column two dividers share)', () => {
+    const { grid, sep } = mount('x', true, 1, ['--ba', '--q'])
+    grid.style.setProperty('--q', '0.9fr')
+    fireEvent.pointerDown(sep, { clientX: 405, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 460, pointerId: 1 })
+    const [a1, b1] = seamShares((460 - 100) / 510)
+    expect(grid.style.getPropertyValue('--ba')).toBe(`${a1}fr`)
+    expect(grid.style.getPropertyValue('--q')).toBe(`${b1}fr`)
+    expect(grid.style.getPropertyValue('--col-a'), 'the default names are not painted').toBe('')
+    fireEvent(window, new Event('pointercancel'))
+    expect(grid.style.getPropertyValue('--ba')).toBe('')
+    expect(grid.style.getPropertyValue('--q')).toBe('0.9fr')
+  })
+
+  it('with floors, it stops where a pane reaches its own: the announced range, End and a drag all stop there', () => {
+    // 300 + 200 px on screen; the second pane floors at 150 px, so the split goes no further than
+    // 350 / 500. Past it the grid would freeze that track and take the rest from a third.
+    const { sep, onCommit } = mount('x', true, 1, undefined, [0, 150])
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((x) => sep.getAttribute(x))).toEqual(['60', '8', '70'])
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(onCommit).toHaveBeenLastCalledWith(...seamShares(0.7))
+    fireEvent.pointerDown(sep, { clientX: 405, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 590, pointerId: 1 })
+    fireEvent.pointerUp(window, { clientX: 590, pointerId: 1 })
+    expect(onCommit).toHaveBeenLastCalledWith(...seamShares(0.7))
+    // The first pane's floor, likewise, at the other end.
+    cleanup()
+    const other = mount('x', true, 1, undefined, [200, 0])
+    expect(other.sep.getAttribute('aria-valuemin')).toBe('40')
+    fireEvent.keyDown(other.sep, { key: 'Home' })
+    expect(other.onCommit).toHaveBeenLastCalledWith(...seamShares(0.4))
+    // Both panes ON their floors (300 and 200 of 500, a hair crossed by rounding): the divider
+    // stays where it is, rather than moving a split the grid would pay for from a third pane.
+    cleanup()
+    const pinned = mount('x', true, 1, undefined, [300.0000001, 200])
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((x) => pinned.sep.getAttribute(x))).toEqual(['60', '60', '60'])
+    fireEvent.keyDown(pinned.sep, { key: 'ArrowRight' })
+    const [av] = pinned.onCommit.mock.lastCall!
+    expect(av, 'the step moved a pair already on both floors').toBeCloseTo(seamShares(0.6)[0], 6)
   })
 
   it('the keyboard steps from where the panes ARE; Home/End stop at the share floor; reset is the host’s', () => {

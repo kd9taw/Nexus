@@ -1716,6 +1716,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onCommit={(av, bv) => panels.setShares({ spots: av, needed: bv })}
             onReset={() => panels.setShares({ spots: null, needed: null })}
             label={t('phone.seam.spotsNeeded.label')}
+            className="in-column"
           />
         )}
         {neededPane}

@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,182 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,189 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -95,7 +95,7 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 312 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| band | 315 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 228 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
@@ -110,7 +110,7 @@ word in, and use only that word in the CSV.
 | pass | 85 | A satellite pass. | |
 | callsign | 78 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
-| frequency | 73 | | |
+| frequency | 76 | | |
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 52 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
