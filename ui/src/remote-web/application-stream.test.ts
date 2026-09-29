@@ -110,6 +110,47 @@ it('rejects stale native responses, prototype payloads, duplicate topics and mut
   expect(commands.one.close).toHaveBeenCalled()
   expect(commands.station.send).not.toHaveBeenCalled()
 })
+// A WALL CLOCK STEPPING BACK NEVER DISCONNECTS A STATION. The relay times credits and samples on its own
+// clock (a Durable Object reads the host's wall clock), so an answer that reads as arriving before its
+// credit is that clock stepping back, never anything the station did. Found on a WSL2 dev box whose clock
+// steps back ~115 ms every ~30 s: a station answering 100 ms after a credit read as -15 ms, and the relay
+// dropped it, and every browser with it.
+it('accepts a station answer that reads as arriving before its credit, when the relay clock steps back', () => {
+  const { station, one, subscribe, batch } = setup()
+  subscribe('one', ['get_snapshot'], id(), 1000)
+  batch(last(station), 985)
+  expect(station.close, 'a clock step never closes the station').not.toHaveBeenCalled()
+  expect(last(station).type, 'the next credit is issued').toBe('applicationCredit')
+  expect(last(one).updates[0].data.mycall, 'and the sample reaches the browser').toBe('TEST')
+})
+// Both kinds of answer, because a sample carries its own age check that refuses at the same instant
+// (age = elapsed + ageMs): only a station error, which has no age, shows the credit's own bound.
+it('keeps the 3 s bound exactly: an answer 2999 ms after its credit is accepted, one 3000 ms after closes the station', () => {
+  for (const kind of ['error', 'sample'] as const) for (const [after, closes] of [[2999, false], [3000, true]] as const) {
+    const { station, relay, subscribe } = setup()
+    subscribe('one', ['get_snapshot'], id(), 1000)
+    const watch = last(station)
+    const update = kind === 'error'
+      ? { type: 'applicationError', requestId: watch.requestId, command: 'get_snapshot', error: 'applicationUnavailable' }
+      : sample(watch.requestId)
+    relay.receiveStation({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId, updates: [update] }, 1000 + after)
+    if (closes) expect(station.close, `${kind} at ${after} ms`).toHaveBeenCalledWith(1008, 'invalidApplicationResult')
+    else expect(station.close, `${kind} at ${after} ms`).not.toHaveBeenCalled()
+  }
+})
+it('delivers a held sample on a browser ACK that reads as arriving before the sample, when the relay clock steps back', () => {
+  const { station, one, relay, subscribe, batch } = setup()
+  subscribe('one', ['get_snapshot'], id(), 1000)
+  batch(last(station), 1100)
+  const frame = last(one), credit = last(station)
+  // Revision 2 arrives while the browser still owes an ACK for the first frame, so the relay holds it.
+  batch(credit, 1200, [sample(credit.requestId, 'get_snapshot', 2, 1)])
+  expect(last(one).requestId, 'precondition: revision 2 is held for the ACK').toBe(frame.requestId)
+  // The clock steps back: the ACK reads as arriving 50 ms before revision 2 was taken in.
+  relay.receiveBrowser('one', { type: 'applicationFrameAck', requestId: frame.requestId, nextRequestId: id() }, 1050)
+  expect(last(one).updates?.[0]?.revision, 'revision 2 is delivered on the ACK').toBe(2)
+  expect(one.close).not.toHaveBeenCalled()
+})
 it('combines local panel reads into one subscription, shares results and stops expired interest', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   const sent: Record<string, unknown>[] = [], close = vi.fn()
