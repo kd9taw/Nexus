@@ -8078,6 +8078,8 @@ export const EN = {
   // menu, because that is what each surface shipped; two keys rather than one re-cased.
   'rtty.pane.stream.title': 'Decoded text',
   'rtty.pane.log.title': 'Log',
+  'rtty.seam.streamLog.label': 'Decoded text / Log',
+  'rtty.waterfall.splitter.label': 'waterfall height',
   'rtty.stream.title':
     "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
   'rtty.arm.on.label': 'RX armed',
@@ -8208,6 +8210,8 @@ export const EN = {
   // ── PSK ▸ the decoded-text pane ─────────────────────────────────────────────────────
   'psk.pane.log.title': 'Log',
   'psk.pane.stream.title': 'Decoded text',
+  'psk.seam.streamLog.label': 'Decoded text / Log',
+  'psk.waterfall.splitter.label': 'waterfall height',
   'psk.stream.title':
     "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",
   'psk.arm.on.label': 'RX armed',
@@ -8508,6 +8512,7 @@ export const EN = {
     'Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build.',
   'sstv.header.slant.aria': 'SSTV slant trim (disabled — decoder not wired yet)',
   'sstv.stage.aria': 'SSTV image',
+  'sstv.stage.splitter.label': 'waterfall and picture height',
   'sstv.waterfall.hint': 'the band — a picture takes this space when one arrives',
   'sstv.caption.lines': '{{mode}} — {{done}}/{{total}} lines',
   'sstv.caption.decoding': 'decoding {{mode}}…',

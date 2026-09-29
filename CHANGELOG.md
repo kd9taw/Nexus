@@ -170,6 +170,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waterfall sets its height, from the mouse or the keyboard like every other divider. The
   waterfall opens at about the size it had before; the height you set is kept, and fitted to the
   window when it changes size.
+- **RTTY, PSK and SSTV: resize the text, the log and the waterfall.** In RTTY and PSK a divider
+  between the decoded text and the log sets how they share the height, and a divider under the
+  waterfall sets its height. In SSTV a divider under the picture area sets its height: the band
+  waterfall while you wait, the picture while one comes in. Drag them, or Tab to one and use the
+  arrow keys (Shift for a bigger step, Home and End for either end, Backspace or a double-click to
+  put it back). Until you move SSTV's divider the picture area keeps growing with the window as it
+  always has, so a picture coming in on a big monitor keeps its full size, and Backspace gives you
+  that back. The heights you set are kept, and fitted to the window when it changes size.
+  **⊞ Panels ▸ Undo last change** and **Reset layout** cover the divider between the text and the
+  log. RTTY's and PSK's waterfalls open at a quarter of the cockpit's height, about what they had
+  before, and on a short window or a large UI scale they now get smaller before the cockpit starts
+  to scroll.
 
 ### Changed
 

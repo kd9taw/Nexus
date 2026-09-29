@@ -214,6 +214,141 @@ describe('a STRIP divider', () => {
   })
 })
 
+describe('a STRIP divider over a strip the SHEET sizes until it is moved (defaultPct null)', () => {
+  // SSTV's picture stage (layout L6): a grower no fixed share reproduces at every window. Until the
+  // divider is moved nothing is painted and the sheet's own size stands; moved, the strip is marked
+  // `data-sized`, the attribute its sized sheet rule keys on, and a reset gives the grower back.
+  /** A container `span` tall and a strip in it that renders `own` px while unmarked (the sheet's
+   *  grower), and once marked lays out like `flex: 0 1 var(--h)` with `min-height: minPx` under a
+   *  neighbour that stops it at `capPx`. */
+  function mount(opts: { span: number; own: number; stored?: string; minPx?: number; capPx?: number }) {
+    if (opts.stored != null) localStorage.setItem('nexus.split.test.h', opts.stored)
+    const target = document.createElement('div')
+    const strip = document.createElement('section')
+    target.appendChild(strip)
+    document.body.appendChild(target)
+    let own = opts.own
+    rectOf(target, () => ({ height: opts.span }))
+    rectOf(strip, () => {
+      if (!strip.hasAttribute('data-sized')) return { height: own }
+      const v = target.style.getPropertyValue('--h')
+      const basis = v.endsWith('%') ? (parseFloat(v) / 100) * opts.span : parseFloat(v) || 0
+      return { height: Math.min(opts.capPx ?? Infinity, Math.max(opts.minPx ?? 0, basis)) }
+    })
+    const view = render(
+      <PaneSeam
+        axis="y"
+        varName="--h"
+        strip={{ current: strip }}
+        storageKey="nexus.split.test.h"
+        min={100}
+        max={420}
+        defaultPct={null}
+        label="stage height"
+      />,
+    )
+    const sep = view.getByRole('separator', { name: 'stage height' })
+    return { target, strip, sep, setOwn: (px: number) => (own = px), view }
+  }
+  const pct = (target: HTMLElement) => target.style.getPropertyValue('--h')
+  const sized = (strip: HTMLElement) => strip.hasAttribute('data-sized')
+  const aria = (sep: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => sep.getAttribute(a))
+
+  it('paints, marks and stores nothing, and announces the size the sheet gives the strip', () => {
+    // The range is the SIZED shape's, measured: its 120 px floor and a neighbour's 350 px stop.
+    const { target, strip, sep } = mount({ span: 1000, own: 280, minPx: 120, capPx: 350 })
+    expect(pct(target)).toBe('')
+    expect(sized(strip)).toBe(false)
+    expect(localStorage.getItem('nexus.split.test.h')).toBeNull()
+    expect(aria(sep)).toEqual(['280', '120', '350'])
+  })
+
+  it('follows the sheet’s size as the strip grows or shrinks by itself, still painting nothing', () => {
+    const { target, strip, sep, setOwn } = mount({ span: 1000, own: 280, minPx: 120 })
+    setOwn(330)
+    resized(strip)
+    expect(sep.getAttribute('aria-valuenow')).toBe('330')
+    expect(pct(target)).toBe('')
+    expect(sized(strip)).toBe(false)
+  })
+
+  it('a key sizes it FROM where it stands: painted, marked and stored', () => {
+    const { target, strip, sep } = mount({ span: 1000, own: 280, minPx: 120 })
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(pct(target)).toBe(`${(296 / 1000) * 100}%`)
+    expect(sized(strip)).toBe(true)
+    expect(sep.getAttribute('aria-valuenow')).toBe('296')
+    expect(localStorage.getItem('nexus.split.test.h')).toBe(String((296 / 1000) * 100))
+    fireEvent.keyDown(sep, { key: 'Home' })
+    expect(pct(target)).toBe('12%')
+  })
+
+  it('a reset gives the sheet its size back — the variable, the mark and the stored size all go — and a reload stays so', () => {
+    const { target, strip, sep, view } = mount({ span: 1000, own: 280, minPx: 120 })
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(pct(target)).toBe('42%')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(pct(target)).toBe('')
+    expect(sized(strip)).toBe(false)
+    expect(sep.getAttribute('aria-valuenow')).toBe('280')
+    fireEvent.keyDown(sep, { key: 'End' })
+    fireEvent.doubleClick(sep)
+    expect(pct(target)).toBe('')
+    expect(sized(strip)).toBe(false)
+    view.unmount()
+    const again = mount({ span: 1000, own: 280, minPx: 120 })
+    expect(pct(again.target), 'a reload after a reset came back sized').toBe('')
+    expect(sized(again.strip)).toBe(false)
+  })
+
+  it('a stored size restores the SIZED strip, clamped against the current box and never rewritten', () => {
+    const { target, strip, sep } = mount({ span: 1000, own: 280, minPx: 120, stored: '30' })
+    expect(pct(target)).toBe('30%')
+    expect(sized(strip)).toBe(true)
+    expect(aria(sep)).toEqual(['300', '120', '420'])
+    cleanup()
+    localStorage.clear()
+    const big = mount({ span: 1000, own: 280, minPx: 120, stored: '90' })
+    expect(pct(big.target)).toBe('42%')
+    expect(sized(big.strip)).toBe(true)
+    expect(localStorage.getItem('nexus.split.test.h')).toBe('90')
+  })
+
+  it('a hidden box gets a stored % raw and marked, and with nothing stored stays unpainted', () => {
+    const stored = mount({ span: 0, own: 0, stored: '30' })
+    expect(pct(stored.target)).toBe('30%')
+    expect(sized(stored.strip)).toBe(true)
+    cleanup()
+    localStorage.clear()
+    const stock = mount({ span: 0, own: 0 })
+    expect(pct(stock.target)).toBe('')
+    expect(sized(stock.strip)).toBe(false)
+    expect(stock.sep.getAttribute('aria-valuenow'), 'no value is invented for a box that is not there').toBeNull()
+  })
+
+  it('a drag from the sheet’s size starts where the strip stands; a cancel gives it back; a release commits once', () => {
+    const { target, strip, sep } = mount({ span: 1000, own: 280, minPx: 120 })
+    fireEvent.pointerDown(sep, { clientY: 300, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientY: 350, pointerId: 1 })
+    expect(pct(target), 'the grab jumped the strip').toBe(`${(330 / 1000) * 100}%`)
+    expect(sized(strip)).toBe(true)
+    fireEvent(window, new Event('pointercancel'))
+    expect(pct(target)).toBe('')
+    expect(sized(strip)).toBe(false)
+    expect(localStorage.getItem('nexus.split.test.h')).toBeNull()
+    const writes = vi.spyOn(Storage.prototype, 'setItem')
+    fireEvent.pointerDown(sep, { clientY: 300, pointerId: 2, button: 0 })
+    fireEvent.pointerMove(window, { clientY: 330, pointerId: 2 })
+    fireEvent.pointerMove(window, { clientY: 350, pointerId: 2 })
+    expect(writes.mock.calls.filter(([k]) => k === 'nexus.split.test.h')).toHaveLength(0)
+    fireEvent.pointerUp(window, { clientY: 350, pointerId: 2 })
+    expect(writes.mock.calls.filter(([k]) => k === 'nexus.split.test.h')).toHaveLength(1)
+    expect(localStorage.getItem('nexus.split.test.h')).toBe(String((330 / 1000) * 100))
+    expect(sized(strip)).toBe(true)
+    writes.mockRestore()
+  })
+})
+
 describe('a SPLIT divider', () => {
   function mount(axis: 'x' | 'y', columns = false, scale?: number) {
     const a = document.createElement('div')
@@ -243,6 +378,18 @@ describe('a SPLIT divider', () => {
     const { sep } = mount('y')
     expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((x) => sep.getAttribute(x))).toEqual(['60', '8', '93'])
     expect(sep.getAttribute('aria-orientation')).toBe('horizontal')
+  })
+
+  it('re-announces the split when a pane changes size with no window resize (the UI scale, a neighbour)', async () => {
+    const { a, sep } = mount('y')
+    expect(sep.getAttribute('aria-valuenow')).toBe('60')
+    // The pane above stops at a floor: 200 of 400 now, and nothing resized the window.
+    rectOf(a, () => ({ top: 100, height: 200 }))
+    resized(a)
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(sep.getAttribute('aria-valuenow'), 'the divider still announces the split it opened with').toBe('50')
   })
 
   it('a drag maps the pointer to its place in the pair, paints live, and commits once', () => {

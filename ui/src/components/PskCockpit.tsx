@@ -9,6 +9,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, PskState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { PaneSeam } from './PaneSeam'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -104,6 +106,9 @@ interface Props {
 const BAUD_SYMBOL = 'Bd'
 const RX_PLATE = 'RX ▼'
 const TX_PLATE = 'TX ▲'
+/** The grow a share of 1 stands for in the transcript | log strip pair (layout L6): the mean of
+ *  their stock weights, 1 and 1.5. */
+const STREAM_LOG_SPLIT = 1.25
 
 /** Display labels for the PSK removable panels (the ⊞ Panels menu). Resolved when the menu
  *  is BUILT — a module constant would freeze the first locale loaded. */
@@ -151,6 +156,17 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const shown = (id: PskPanelId) => (host ? host.shown(id) : true)
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
   const closeProps = (id: PskPanelId) => (host ? host.closeProps(id) : {})
+  // THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6) — RTTY's, for the same shell:
+  // a pair only while both render and there is a record to keep the split in; each then carries
+  // the operator's share and floors in proportion to it (CockpitPaneFrame `split`), grows of
+  // share × 1.25 keep the pair's stock total (weights 1 and 1.5), and only the transcript's share
+  // is stored — the log strip has no id in PSK's vocabulary, and the pair always sums to 2.
+  const streamFrameRef = useRef<HTMLElement>(null)
+  const logFrameRef = useRef<HTMLElement>(null)
+  // The waterfall strip, for the divider under it (its height).
+  const wfRef = useRef<HTMLDivElement>(null)
+  const streamLogPair = panels != null && snap != null && shown('stream')
+  const streamShare = streamLogPair ? panels?.layout.share.stream : undefined
 
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
@@ -685,9 +701,13 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           shares its strip CSS). It hosts no stop control and no sender: the single cursor
           marks where the decoder listens AND where TX transmits (the transceive
           convention), and a click NETS THE DECODER (pskNet — engine RX state), never the
-          rig. Hiding it hands its height to the stream frame, the shell's only grower. */}
+          rig. Its divider (layout L6, RTTY's) sits under it and sets its height, stored per
+          surface; hiding the strip takes the divider with it and hands the height to the pane
+          frames below, the shell's growers. */}
       {psk && shown('scope') && (
+        <>
         <Waterfall
+          stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={pskPanelLabels().scope}
           theme={theme}
@@ -705,6 +725,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           hint={receiverControl ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={receiverControl ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
         />
+        {/* `--rtty-wf-h`: PSK's strip rides RTTY's rule (styles.css), and the variable is this
+            shell's own, so the one name serves both. */}
+        <PaneSeam
+          axis="y"
+          varName="--rtty-wf-h"
+          strip={wfRef}
+          storageKey="nexus.split.psk.waterfall"
+          min={WATERFALL_SPLIT_MIN}
+          max={WATERFALL_SPLIT_MAX}
+          defaultPct={25}
+          label={t('psk.waterfall.splitter.label')}
+        />
+        </>
       )}
 
       {psk?.keyerError && (
@@ -719,7 +752,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           NO `weight`, deliberately: since #159 there is a second fill frame below it (the log
           strip), and the share that matters is declared THERE, measured. See that frame. */}
       {shown('stream') && (
-        <CockpitPaneFrame title={t('psk.pane.stream.title')} paneId="stream" {...closeProps('stream')}>
+        <CockpitPaneFrame
+          title={t('psk.pane.stream.title')}
+          paneId="stream"
+          split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
+          share={streamShare != null ? streamShare * STREAM_LOG_SPLIT : undefined}
+          paneRef={streamFrameRef}
+          {...closeProps('stream')}
+        >
           <div className="cw-decode psk-stream" title={t('psk.stream.title')}>
             <div className="cw-decode-head">
               <span className="cw-decode-label">{RX_PLATE}</span>
@@ -832,8 +872,26 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               and on screen, and nothing is trapped. Same at 175 % pinned zoom, except there the
               shell valve does engage — by design — and the dock still parks in the scrollport,
               so the stop line holds at magnification. */}
+      {streamLogPair && panels && (
+        <PaneSeam
+          above={streamFrameRef}
+          below={logFrameRef}
+          varName="--pane-share"
+          scale={STREAM_LOG_SPLIT}
+          onCommit={(stream) => panels.setShares({ stream })}
+          onReset={() => panels.setShares({ stream: null })}
+          label={t('psk.seam.streamLog.label')}
+        />
+      )}
       {snap && (
-        <CockpitPaneFrame title={t('psk.pane.log.title')} paneId="log" weight={1.5}>
+        <CockpitPaneFrame
+          title={t('psk.pane.log.title')}
+          paneId="log"
+          weight={1.5}
+          split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
+          share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
+          paneRef={logFrameRef}
+        >
           {!control ? psk && <RemoteRecallEntry snap={snap} mode={mode.name} onOpenLog={onOpenLogbook} /> : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}

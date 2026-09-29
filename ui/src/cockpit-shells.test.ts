@@ -5,6 +5,8 @@ import {
   resolveClamp,
   SCOPE_SPLIT_MAX,
   SCOPE_SPLIT_MIN,
+  SSTV_STAGE_SPLIT_MAX,
+  SSTV_STAGE_SPLIT_MIN,
   WATERFALL_SPLIT_MAX,
   WATERFALL_SPLIT_MIN,
   type SplitClamp,
@@ -98,14 +100,17 @@ function parseRules(sheet: string): Rule[] {
 const RULES = parseRules(css)
 
 /** One compound of class selectors ('.a.b') as its class list; null when the compound
- *  contains anything else (pseudos, attributes, tags, ids, or is empty). Rejecting is
- *  the fail-safe direction here: a selector this computer cannot evaluate must never
- *  count as a cascade winner by accident. */
+ *  contains anything else (pseudos, valued attributes, tags, ids, or is empty). Rejecting
+ *  is the fail-safe direction here: a selector this computer cannot evaluate must never
+ *  count as a cascade winner by accident. A PRESENCE attribute (`[data-sized]`) is the one
+ *  addition, kept as its own token ('[data-sized]'): a chain entry matches it only when the
+ *  modelled element lists that token, so a rule keyed on an attribute never styles an
+ *  element modelled without it — SSTV's sized stage (layout L6) is the element that has it. */
 function compoundClasses(compound: string): string[] | null {
-  if (/[\s>+~:[#]/.test(compound)) return null
-  const parts = compound.match(/\.[a-zA-Z0-9_-]+/g)
+  if (/[\s>+~:#]/.test(compound)) return null
+  const parts = compound.match(/\.[a-zA-Z0-9_-]+|\[[a-zA-Z0-9_-]+\]/g)
   if (!parts || parts.join('') !== compound) return null
-  return parts.map((p) => p.slice(1))
+  return parts.map((p) => (p.startsWith('.') ? p.slice(1) : p))
 }
 
 /** Right-to-left match of a class-only selector (descendant/child combinators OK)
@@ -150,9 +155,10 @@ function matchesChain(selector: string, chain: Array<Set<string>>): boolean {
   return true
 }
 
-/** Class-count specificity — every candidate here is a class-only compound. */
+/** Class-count specificity — every candidate here is a class-only compound, or carries a
+ *  presence attribute, which counts as a class does. */
 function specificity(selector: string): number {
-  return (selector.match(/\./g) ?? []).length
+  return (selector.match(/[.[]/g) ?? []).length
 }
 
 /** Final overflow-y a block computes, honouring in-block declaration order and the
@@ -633,6 +639,10 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     ['operate-cockpit', ['cockpit-body']],
     // JS8's waterfall divider (layout L2), a shell child like Phone's and CW's.
     ['js8-cockpit', []],
+    // RTTY's and PSK's waterfall dividers (layout L6), the same kind; and SSTV's stage divider.
+    ['rtty-cockpit', []],
+    ['psk-cockpit', []],
+    ['sstv-view', []],
   ]
   for (const [shell, between] of STRIPS) {
     it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
@@ -648,6 +658,90 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
   }
 })
 
+/** Final value of a block-axis margin side in a block (in-block order): the `margin` shorthand
+ *  (1–4 values), `margin-block` (1–2) and the side's own longhand. */
+function blockMargin(side: 'top' | 'bottom'): (body: string) => string | null {
+  return (body: string) => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      const m = /^\s*(margin|margin-block|margin-top|margin-bottom)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+      if (!m) continue
+      const vals = splitSpaces(m[2])
+      if (m[1] === 'margin') v = side === 'top' ? vals[0] : (vals[2] ?? vals[0])
+      else if (m[1] === 'margin-block') v = side === 'top' ? vals[0] : (vals[1] ?? vals[0])
+      else if (m[1] === `margin-${side}`) v = vals[0]
+    }
+    return v
+  }
+}
+
+/** Split a value list at top-level spaces (parens-aware), so `calc(a - b) 0` is two values. */
+function splitSpaces(v: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const c of v.trim()) {
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    if (/\s/.test(c) && depth === 0) {
+      if (cur) out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+/** A length written with the spacing ladder, in px at a `--space-scale`: px, `var(--space-N)` as
+ *  :root declares it, and calc() arithmetic over them. Anything else is null (the caller fails). */
+function spacePx(v: string, scale: number): number | null {
+  let expr = v
+  for (let i = 0; i < 4 && /var\(/.test(expr); i++) {
+    expr = expr
+      .replace(/var\(\s*--space-scale\s*\)/g, String(scale))
+      .replace(/var\(\s*(--space-\d)\s*\)/g, (_, name: string) => `(${finalDecl(':root', name) ?? 'NaN'})`)
+  }
+  expr = expr.replace(/calc\(/g, '(').replace(/(\d)px\b/g, '$1')
+  if (!/^[\d.\s()+\-*/]+$/.test(expr)) return null
+  return new Function(`return (${expr})`)() as number
+}
+
+describe('an L6 divider costs its column nothing: its margins give back the gap it adds', () => {
+  // Each divider is one more flex child of its shell, so it adds one more gap. Its own box nets 0
+  // (8 px tall, -4 px each side), and in RTTY, PSK and SSTV its block margins also take back that
+  // gap, so it sits in the gap its neighbours already had. Measured in Chrome before this: RTTY's
+  // log strip lost 23 px at 1024×768 to two dividers, and SSTV's growing stage lost 6 px at
+  // 2560×1440, which dropped a picture in flight from 4× to 3×. Computed at the spacing scale the
+  // dividers render at, 1: `--space-scale` drops below 1 only at the sm/xs viewports, and those
+  // hide every divider (`[data-viewport='sm'] .pane-splitter { display: none }`).
+  for (const shell of ['rtty-cockpit', 'psk-cockpit', 'sstv-view']) {
+    it(`.${shell}: a divider's height, both margins and the shell's gap sum to zero`, () => {
+      const chain = [...shellChain(shell), new Set(['pane-splitter', 'horizontal'])]
+      const gap = winningValue(shellChain(shell), (b) => {
+        let g: string | null = null
+        for (const decl of b.split(';')) {
+          const m = /^\s*(gap|row-gap)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+          if (m) g = splitSpaces(m[2])[0]
+        }
+        return g
+      })
+      const height = winningValue(chain, blockLonghand('height'))
+      const top = winningValue(chain, blockMargin('top'))
+      const bottom = winningValue(chain, blockMargin('bottom'))
+      expect(gap && height && top && bottom, `.${shell}: gap, height or a margin is not declared`).toBeTruthy()
+      const px = [gap!, height!, top!, bottom!].map((w) => spacePx(w.value, 1))
+      expect(px.every((x) => x !== null), `unreadable: ${[gap, height, top, bottom].map((w) => w!.value).join(' | ')}`).toBe(true)
+      const [g, h, t, b] = px as number[]
+      expect(
+        h + t + b + g,
+        `.${shell}: the divider takes ${(h + t + b + g).toFixed(2)} px of the column (height ${h}, margins ` +
+          `${t} / ${b} from \`${top!.selector}\` / \`${bottom!.selector}\`, gap ${g}): a layout nobody has ` +
+          'divided is no longer the one it was.',
+      ).toBeCloseTo(0, 6)
+    })
+  }
+})
+
 describe('the scope splitter drag is respected (winning flex-grow is 0)', () => {
   // The Splitter (PhoneCockpit.tsx ~728 / CwCockpit) drives --ph-scope-h / --cw-scope-h
   // as the scope's flex-BASIS. A basis only sets the rendered height while flex-grow
@@ -657,14 +751,38 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
   // nothing (review 2026-07-31; CW split the surplus 1:1 with `.cw-lower` and tracked
   // the pointer at half rate instead). Operate is the pattern: `.cockpit-waterfall
   // { flex: 0 1 var(--cockpit-wf-h, 22%) }` with the decode scroller as the grower.
-  it('.js8-cockpit .waterfall-wrap resolves flex-grow 0 (the waterfall divider, layout L2)', () => {
-    const win = winningValue([...shellChain('js8-cockpit'), new Set(['waterfall-wrap'])], blockGrow)
-    expect(win, '.js8-cockpit .waterfall-wrap: no rule declares flex at all').not.toBeNull()
+  // JS8's (layout L2), RTTY's and PSK's (L6) waterfall dividers drive the same kind of basis.
+  for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit']) {
+    it(`.${shell} .waterfall-wrap resolves flex-grow 0 (its waterfall divider)`, () => {
+      const win = winningValue([...shellChain(shell), new Set(['waterfall-wrap'])], blockGrow)
+      expect(win, `.${shell} .waterfall-wrap: no rule declares flex at all`).not.toBeNull()
+      expect(
+        win!.value,
+        `\`${win!.selector}\` gives the ${shell} waterfall flex-grow ${win!.value}: its divider drives the ` +
+          'flex-basis, which only sets the rendered height while grow is 0.',
+      ).toBe(0)
+    })
+  }
+
+  // SSTV's stage (layout L6) is the column's GROWER until the operator sizes it — the one shape
+  // that follows that view at every window — and only then takes the strip shape, on the
+  // `data-sized` its divider sets. Both halves: the sized stage follows the basis, and the stock
+  // stage is still the grower (a sized rule leaking onto it would fix the stock picture's size).
+  it('.sstv-view .sstv-canvas[data-sized] resolves flex-grow 0, and the stock stage keeps its grower', () => {
+    const sized = winningValue([...shellChain('sstv-view'), new Set(['sstv-canvas', '[data-sized]'])], blockGrow)
+    expect(sized, '.sstv-canvas[data-sized]: no rule declares flex at all').not.toBeNull()
     expect(
-      win!.value,
-      `\`${win!.selector}\` gives JS8's waterfall flex-grow ${win!.value}: its divider drives the flex-basis, ` +
-        'which only sets the rendered height while grow is 0.',
+      sized!.value,
+      `\`${sized!.selector}\` gives the sized SSTV stage flex-grow ${sized!.value}: its divider drives the ` +
+        'flex-basis, which only sets the rendered height while grow is 0.',
     ).toBe(0)
+    const stock = winningValue([...shellChain('sstv-view'), new Set(['sstv-canvas'])], blockGrow)
+    expect(stock, '.sstv-canvas: no rule declares flex at all').not.toBeNull()
+    expect(
+      stock!.value,
+      `\`${stock!.selector}\` gives the stock SSTV stage flex-grow ${stock!.value}: until the operator sizes ` +
+        'it the stage must grow with the view, or the picture loses the upscale a tall window gave it.',
+    ).toBeGreaterThan(0)
   })
 
   for (const shell of ['phone-cockpit', 'cw-cockpit']) {
@@ -1044,14 +1162,15 @@ describe('the band-scope strip is sized by its HOST, never by the shared base ru
   }
 })
 
-describe('the RTTY/PSK waterfall floor YIELDS (the scopes with no Splitter)', () => {
+describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divider)', () => {
   // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
-  // carried the same `min-height: 120px` — but RTTY gives the operator no drag handle,
-  // so on a short or pinned-zoom window that floor is unrecoverable: the strip simply
-  // takes its 120 px out of a window that has ~400 to spend. The shell valve keeps it
-  // from TRAPPING anything, which is why this is a share bug and not a safety bug.
-  // PSK shares the strip rule (one comma group) and the same no-Splitter shape, so it
-  // is computed separately here — a split of that group could regress one alone.
+  // carried the same `min-height: 120px` — and until layout L6 RTTY gave the operator no drag
+  // handle, so on a short or pinned-zoom window that floor was unrecoverable: the strip simply
+  // took its 120 px out of a window that has ~400 to spend. It has a divider now, but a divider
+  // cannot go under the floor (it is WATERFALL_SPLIT_MIN), so the floor must still yield. The
+  // shell valve keeps it from TRAPPING anything, which is why this is a share bug and not a
+  // safety bug. PSK shares the strip rule (one comma group), so it is computed separately
+  // here — a split of that group could regress one alone.
   for (const shell of ['rtty-cockpit', 'psk-cockpit']) {
     const chain = [...shellChain(shell), new Set(['waterfall-wrap'])]
 
@@ -1076,7 +1195,7 @@ describe('the RTTY/PSK waterfall floor YIELDS (the scopes with no Splitter)', ()
           floor!,
           `.${shell} .waterfall-wrap min-height is \`${v}\` = ${floor}px at --vh-eff ${vhEff} ` +
             `— ${((100 * floor!) / vhEff).toFixed(0)}% of the window for a glance strip, with ` +
-            'no Splitter to take it back. Write the floor to yield: min(Xem, share).',
+            'a floor its divider cannot go under. Write the floor to yield: min(Xem, share).',
         ).toBeLessThanOrEqual(0.3 * vhEff)
       }
     })
@@ -1102,7 +1221,14 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     // min(8em, 28 % of --vh-eff)) yields, so a declared clamp that dropped the yield fails here.
     { fontPx: 14, vhEff: 384 },
   ]
-  const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX, WATERFALL_SPLIT_MIN, WATERFALL_SPLIT_MAX }
+  const DECLARED: Record<string, SplitClamp> = {
+    SCOPE_SPLIT_MIN,
+    SCOPE_SPLIT_MAX,
+    WATERFALL_SPLIT_MIN,
+    WATERFALL_SPLIT_MAX,
+    SSTV_STAGE_SPLIT_MIN,
+    SSTV_STAGE_SPLIT_MAX,
+  }
 
   /** The `<PaneSeam …/>` that drives `varName`, as prop → source expression. */
   function splitterProps(src: string, varName: string): Record<string, string> {
@@ -1123,14 +1249,23 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     return Number.isFinite(n) ? n : null
   }
 
-  const CALLERS: Array<[string, string, string, string]> = [
-    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h', 'ph-scope-panel'],
-    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h', 'ph-scope-panel'],
+  /** [shell, source, variable, the strip as its selector tokens (the element's classes, and a
+   *  presence attribute where the strip's sized shape keys on one)]. */
+  const CALLERS: Array<[string, string, string, string[]]> = [
+    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h', ['ph-scope-panel']],
+    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h', ['ph-scope-panel']],
     // JS8's waterfall divider (layout L2): the RTTY/PSK waterfall's yielding floor, the scope's cap.
-    ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', 'waterfall-wrap'],
+    ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', ['waterfall-wrap']],
+    // RTTY's and PSK's (layout L6): the same clamps; PSK's strip rides RTTY's rule and variable.
+    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    // SSTV's stage divider (layout L6) sizes the stage in its SIZED shape, which is the one its
+    // clamps must agree with: the stage's own 16em floor and the sized rule's ceiling.
+    ['sstv-view', './components/SstvView.tsx', '--sstv-stage-h', ['sstv-canvas', '[data-sized]']],
   ]
-  for (const [shell, file, varName, strip] of CALLERS) {
-    const chain = [...shellChain(shell), new Set([strip])]
+  for (const [shell, file, varName, tokens] of CALLERS) {
+    const chain = [...shellChain(shell), new Set(tokens)]
+    const strip = tokens.map((t) => (t.startsWith('[') ? t : `.${t}`)).join('').slice(1)
     for (const [end, prop] of [
       ['min', 'min-height'],
       ['max', 'max-height'],

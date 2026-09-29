@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,177 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,182 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -99,7 +99,7 @@ word in, and use only that word in the CSV.
 | radio | 228 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
-| log / logbook | 133 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
+| log / logbook | 135 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 121 | The Settings screen and every reference to it. | |
 | grid | 113 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 106 | Sound cards, levels, routing. | |
@@ -123,7 +123,7 @@ word in, and use only that word in the CSV.
 | entity | 37 | A DXCC entity. Not the same thing as a country — the distinction matters to the award. | |
 | section | 36 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
 | cluster | 34 | The DX cluster. | |
-| waterfall | 39 | The scrolling spectrum display. | |
+| waterfall | 42 | The scrolling spectrum display. | |
 | contact | 32 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |

@@ -71,17 +71,23 @@ vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 vi.mock('./SpotsPanel', () => ({ SpotsPanel: () => <div data-testid="spots-stub" /> }))
 vi.mock('./NeededPanel', () => ({ NeededPanel: () => <div data-testid="needed-stub" /> }))
 
-/** The observed element's callback, so a test can fire a resize the way the browser
- *  does (the useRegionCols.test.tsx harness). */
+/** Fire a resize the way the browser does: EVERY live observer hears it (the useRegionCols.test.tsx
+ *  harness kept only the last one created, and a split divider's own observer — the feeds' pair
+ *  at tier 2 — then silently took the region's place). */
 let fire: (() => void) | null = null
 beforeEach(() => {
-  fire = null
+  const live = new Set<() => void>()
+  fire = () => [...live].forEach((cb) => cb())
   globalThis.ResizeObserver = class {
+    cb: () => void
     constructor(cb: () => void) {
-      fire = cb
+      this.cb = cb
+      live.add(cb)
     }
     observe() {}
-    disconnect() {}
+    disconnect() {
+      live.delete(this.cb)
+    }
     unobserve() {}
   } as unknown as typeof ResizeObserver
 })

@@ -101,6 +101,11 @@ export const SCOPE_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 export const WATERFALL_SPLIT_MIN: SplitClamp = (g) => Math.min(8 * g.fontPx, 0.28 * g.vhEff)
 export const WATERFALL_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 
+/** The clamps of SSTV's picture stage once sized (layout L6), from its own rules (`.sstv-canvas`,
+ *  `.sstv-canvas[data-sized]`): the stage's 16em floor and a 70 % ceiling. */
+export const SSTV_STAGE_SPLIT_MIN: SplitClamp = (g) => 16 * g.fontPx
+export const SSTV_STAGE_SPLIT_MAX: SplitClamp = (g) => 0.7 * g.vhEff
+
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */
 export function parseSplitPct(raw: string | null): number | null {
