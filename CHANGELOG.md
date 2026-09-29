@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The mouse wheel moves the Phone cockpit's sliders (#384).** Point at a slider and scroll. AF
+  gain, RF gain, squelch, noise reduction, mic gain, the speech processor, the monitor and the Sub
+  receiver's levels move 2% a notch, RF power 1%, the manual notch 10 Hz, the Icom scope reference
+  0.5 dB and the Flex one 5 dB. The scope's G and Z move one step, where scrolling over them used
+  to tune the radio. A trackpad works the same way. A slider moves exactly as it would under your
+  hand, so RF power stays within your power limit and nothing done with the wheel keys the
+  transmitter. Only the slider under the pointer moves, never one you clicked earlier, and a scroll
+  that starts elsewhere and passes over a slider keeps scrolling. On the Remote page a run of
+  notches is sent as one change once the wheel stops, as a drag is.
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2
