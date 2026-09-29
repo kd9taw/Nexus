@@ -148,6 +148,8 @@ interface Props {
   amp?: AmpStatus | null
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
+  /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
+  rigBand?: string | null
 }
 
 export function ConnectView({
@@ -164,6 +166,7 @@ export function ConnectView({
   onPoint,
   onSelectSat,
   onPopOut,
+  rigBand,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -425,6 +428,8 @@ export function ConnectView({
     needByCall,
     needAlerts: needAlerts ?? [],
     amp: amp ?? null,
+    // The Remote browser's copy carries no radio band of its own here.
+    rigBand: remote ? null : (rigBand ?? null),
     selectedCall,
     selStation,
     selSpot,

@@ -25,6 +25,7 @@ import { bandTiming } from '../../propViz'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
+import { BandTiles } from '../prop/BandTiles'
 import { OpeningStrip } from '../prop/OpeningStrip'
 import { LikelihoodHeatmap } from '../prop/LikelihoodHeatmap'
 import { BestBandTable } from '../prop/BestBandTable'
@@ -403,6 +404,27 @@ export const PANES: PaneDef[] = [
           worldwideBands={c.prop.worldwide?.bands ?? null}
           onBandClick={c.toggleFocusBand}
           activeBand={c.focusBand}
+        />
+      ) : null,
+  },
+  {
+    // BANDS FOR YOU — the band advice as tiles, one per band, in the Band Advisor's default slot.
+    // With a snapshot it always draws: offline or stale data gives hollow neutral tiles, never green
+    // (features/bandTiles). Before the first snapshot it returns null, and Basic says so.
+    id: 'bandTiles',
+    get title() {
+      return t('connect.pane.bandTiles.title')
+    },
+    category: 'core',
+    basic: bandAdvisorLine,
+    expert: (c) =>
+      c.prop ? (
+        <BandTiles
+          prop={c.prop}
+          outlook={c.bandOutlook?.bands}
+          rigBand={c.rigBand}
+          focusBand={c.focusBand}
+          onBandClick={c.toggleFocusBand}
         />
       ) : null,
   },

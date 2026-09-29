@@ -63,10 +63,11 @@ describe('the presets are well formed', () => {
 
   it('the Standard layout IS the operator-approved DEFAULT_SLOTS, unchanged, and no preset touches it', () => {
     // Pinned by value: this is the approved first-run layout (connectConfig.ts — "don't change
-    // without asking"). A preset is additive; it may never be edited into the default.
+    // without asking"). A preset is additive; it may never be edited into the default. Asked and
+    // answered 2026-09-28: "Bands for you" takes the Band Advisor's slot ("In the default slot").
     expect(DEFAULT_SLOTS).toEqual({
       left1: 'advisory',
-      left2: 'bandAdvisor',
+      left2: 'bandTiles',
       right1: 'chase',
       right2: 'outlook',
       bottom1: 'openings',

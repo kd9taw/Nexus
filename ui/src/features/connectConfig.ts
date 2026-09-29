@@ -15,7 +15,7 @@ export const PANE_IDS = [
   'advisory', 'bandAdvisor', 'selection', 'outlook', 'openings', 'openingsLog', 'spacewx', 'getout',
   'bestband', 'activity', 'beacons', 'insights', 'chase',
   'greyline', 'bandHours', 'esNowcast', 'measuredMuf', 'chaseFeed', 'satPasses', 'rotor', 'contests',
-  'scope', 'amp', 'kpOutlook',
+  'scope', 'amp', 'kpOutlook', 'bandTiles',
 ] as const
 export type PaneId = (typeof PANE_IDS)[number]
 
@@ -27,7 +27,9 @@ export function isPaneId(v: unknown): v is PaneId {
  *  selection-driven on the right, live "now" ticker across the bottom (the wall-display model). */
 export const DEFAULT_SLOTS: Record<SlotId, PaneId> = {
   left1: 'advisory',
-  left2: 'bandAdvisor',
+  // "Bands for you" takes the Band Advisor's default slot; the ranked rows stay one pick away
+  // (operator pick, 2026-09-28: "In the default slot"). A stored layout keeps what it has.
+  left2: 'bandTiles',
   right1: 'chase', // flagship "work THIS now" — Selection stays one dropdown-click away
   right2: 'outlook',
   bottom1: 'openings',

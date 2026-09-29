@@ -58,6 +58,9 @@ export interface PaneContext {
    * NOT a poll of its own. `null`/absent = no amplifier configured, which is what makes the
    * Amplifier pane render nothing at all. Display-only: it gates and stops nothing. */
   amp: AmpStatus | null
+  /** The band the active radio is on, off the same snapshot (the band tiles ring it). Null when
+   *  unknown — the Remote browser, the wall display. Display-only. */
+  rigBand: string | null
   // B3 live external data (desktop-only; null/empty until the feeds answer)
   scales: NoaaScalesView | null
   alerts: AlertView[]

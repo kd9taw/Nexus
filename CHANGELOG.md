@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Connect: "Bands for you", the band advice as tiles.** A new Connect box shows one tile per
+  band, big enough to read from across the desk. The tiles run in band-stack order, 160 m up to
+  6 m, plus 4 m and 2 m when there is an opening there. Each tile gives the band and its word,
+  with the same word and colour as the map's Band conditions list and the band menu:
+  - Open: green, with a solid outline.
+  - Marginal: amber, with a dashed outline.
+  - Closed: no colour, dimmer letters.
+
+  On each tile:
+  - A dot shows what you are hearing now.
+  - ★ marks the Band Advisor's best band, and a ring marks the band your radio is on.
+  - On 6 m, 4 m and 2 m, the mode of an opening is named (Es, Tropo, Aurora, F2, MS).
+  - Hover for why: who hears you, the best direction, and when the model expects the band to
+    open or close next.
+  - Click a tile to show that band on the map.
+
+  With no fresh data the tiles are hollow and grey, never green. The box takes the Band Advisor's
+  place in the default Connect layout (and on the wall display). The Band Advisor's ranked list
+  is one pick away in the box's menu. A layout you have already arranged keeps what it has, and
+  Reset layout brings in the tiles.
+
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2

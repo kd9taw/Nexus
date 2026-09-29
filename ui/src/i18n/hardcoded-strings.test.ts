@@ -177,6 +177,7 @@ const MIGRATED = [
   'components/prop/ActivityMatrix.tsx',
   'components/prop/BandAdvisor.tsx',
   'components/prop/BandConditionStrip.tsx',
+  'components/prop/BandTiles.tsx',
   'components/prop/BeaconMonitor.tsx',
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
