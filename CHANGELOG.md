@@ -86,8 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote as a stream: the Phone PTT says Armed until your voice keys the rig.** Pressed through
   the stream (its button, or the space bar over the picture), the Phone cockpit's PTT reads "Armed
   — talk to transmit" while the over waits for your voice, and "ON AIR — release to stop" once your
-  voice has keyed the rig. It is the same stop control with the same name for screen readers, and
-  a press at the shack reads as before.
+  voice has keyed the rig. The Phone header's ▲ TX sign waits with it: it stays dark until your
+  voice keys the rig, unless something else is on the air. It is the same stop control with the
+  same name for screen readers, and a press at the shack reads as before.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

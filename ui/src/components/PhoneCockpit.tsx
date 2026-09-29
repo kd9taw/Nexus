@@ -2353,6 +2353,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           },
         }}
         txActiveLabel="▲ TX"
+        // The header's ON AIR sign waits with the button while its press reads Armed.
+        txArmed={pttArmed}
         onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
         onAtuTune={() =>
           void atuTune()
