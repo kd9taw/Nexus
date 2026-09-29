@@ -2336,6 +2336,10 @@ export const EN = {
   'prop.impact.bz.hardSouth': 'field hard south — storm likely, polar paths fading',
   'prop.impact.bz.south': 'field south — high-lat paths softening soon',
   'prop.impact.bz.neutral': 'field neutral/north — stable',
+  // The solar-wind speed gauge. It turns where the insight feed's fast-stream line does
+  // (FAST_WIND_KMS in propViz.ts), so the two never disagree about the same wind.
+  'prop.impact.wind.normal': 'ordinary wind — stable',
+  'prop.impact.wind.fast': 'fast stream — high-lat paths may get unsettled',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
@@ -2442,6 +2446,8 @@ export const EN = {
   // Space-weather gauges. The index NAMES (SFI, Kp, A, X-ray, Bz) are technical tokens and
   // stay in the component; these are the Simple-mode plain-English glosses.
   'prop.spaceWx.aria': 'Space weather',
+  // The speed gauge's name is prose, unlike the index tokens; its unit (km/s) stays in the component.
+  'prop.spaceWx.wind': 'Wind',
   'prop.spaceWx.gloss.sfi':
     'Solar Flux Index — how energized the ionosphere is. Higher opens the upper HF bands (20–10 m). ~70 is low; 150+ is great.',
   'prop.spaceWx.gloss.kp':
@@ -7216,6 +7222,12 @@ export const EN = {
   'connect.kp.kind.observed': 'measured',
   'connect.kp.kind.estimated': 'estimated by NOAA',
   'connect.kp.kind.predicted': 'forecast',
+  // ---- The Space Wx box's 30-day trends (NOAA's daily solar indices). SFI and SSN are index
+  // tokens and stay in the component; each {{date}}/{{from}}/{{to}} is a short UTC day it formats.
+  'connect.solar.caption': 'NOAA daily · {{from}} – {{to}}',
+  'connect.solar.stale': 'NOAA daily indices not updated since {{date}}',
+  'connect.solar.unavailable': '30-day SFI and sunspot trend unavailable.',
+  'connect.solar.trend.aria': '{{index}} daily, {{from}} to {{to}}: low {{low}}, high {{high}}',
   'connect.pane.spacewx.title': 'Space Wx',
   'connect.pane.getout.title': 'Getting Out',
   'connect.pane.bestband.title': 'Best Band → Region',
@@ -7233,6 +7245,7 @@ export const EN = {
   'connect.pane.amp.title': 'Amplifier',
   'connect.pane.scope.title': 'Band Scope',
   'connect.pane.contests.title': 'Contests',
+  'connect.pane.clock.title': 'Clock',
 
   // The five self-fetching panes describe themselves: their data lives inside the
   // component, so their one-line projection is a standing hint rather than a reading.
@@ -7248,6 +7261,17 @@ export const EN = {
     "A live spectrum of the active radio's passband — band noise and signals at a glance.",
   'connect.pane.scope.idle': "Flat — the radio's audio isn't reaching Nexus right now.",
   'connect.pane.contests.basic': 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
+
+  // ---- The Clock box. UTC is a token and stays in the component, "Local" is the top bar's own
+  // word, and every time is ASCII digits the component formats (never locale-formatted).
+  'connect.pane.clock.basic': "UTC and local time, today's date, and sunrise and sunset at your grid.",
+  'connect.clock.utc.aria': 'UTC {{time}}',
+  'connect.clock.local.aria': 'Local time {{time}}',
+  'connect.clock.sun': '{{grid}} · Sunrise {{rise}} · Sunset {{set}}',
+  'connect.clock.sun.local': "On this computer's clock: sunrise {{rise}}, sunset {{set}}",
+  'connect.clock.sun.up': 'Sun up all day',
+  'connect.clock.sun.down': 'Sun down all day',
+  'connect.clock.noGrid': "Set your grid in Settings for today's sunrise and sunset.",
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',

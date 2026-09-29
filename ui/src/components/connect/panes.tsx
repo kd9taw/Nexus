@@ -36,6 +36,8 @@ import { ChaseFeedPane } from '../prop/ChaseFeedPane'
 import { SatPassesPane } from '../prop/SatPassesPane'
 import { OpeningsLogPane } from '../prop/OpeningsLogPane'
 import { KpOutlookPane } from '../prop/KpOutlookPane'
+import { SolarTrends } from '../prop/SolarTrends'
+import { ClockPane } from '../prop/ClockPane'
 import { RotorPane } from '../prop/RotorPane'
 import { AmpPane } from '../prop/AmpPane'
 import { MiniSpectrum } from '../MiniSpectrum'
@@ -470,6 +472,9 @@ export const PANES: PaneDef[] = [
       c.prop && c.prop.source !== 'offline' ? (
         <>
           <SpaceWxGauges wx={c.prop.spaceWx} gloss={false} />
+          {/* Self-fetching (get_solar_indices, cached an hour server-side): SSN and the 30-day
+              SFI/SSN lines, stale-honest by the file's own dates. */}
+          <SolarTrends />
           <ScalesAnnunciator scales={c.scales} alerts={c.alerts} />
         </>
       ) : null,
@@ -670,6 +675,17 @@ export const PANES: PaneDef[] = [
     // lives in the component, not PaneContext (same pattern as Satellite Passes).
     basic: () => t('connect.pane.contests.basic'),
     expert: () => <ContestCalendarPane load={getContests} />,
+  },
+  {
+    id: 'clock',
+    get title() {
+      return t('connect.pane.clock.title')
+    },
+    category: 'core',
+    // Clock-derived, like the beacons: never gates on a feed and never returns null, so the
+    // Basic line is only a description.
+    basic: () => t('connect.pane.clock.basic'),
+    expert: (c) => <ClockPane myGrid={c.myGrid} />,
   },
 ]
 

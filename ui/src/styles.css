@@ -702,6 +702,129 @@ button.nb-chip:hover {
   font-size: var(--fs-label);
   line-height: var(--lh-tight);
 }
+/* A unit after a gauge's value (the solar wind's km/s): smaller, so the number stays short. */
+.swx-vu {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.swx-u {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+
+/* The Space Wx box's 30-day trends (components/prop/SolarTrends.tsx) — content inside the pane
+   body, no size of its own. A row is name · line · newest value · its date; the line takes what
+   the row leaves (`minmax(0, 1fr)`, so a narrow rail shrinks the line and never the numbers). */
+.swx-trends {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  min-width: 0;
+}
+.swx-trend-head {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.swx-trend-head.stale {
+  color: var(--alert-warning);
+}
+.swx-trend {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.swx-trend-k {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.swx-spark {
+  display: block;
+  width: 100%;
+  height: calc(24px * var(--text-scale));
+  overflow: visible;
+}
+.swx-spark polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.swx-trend-v {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.swx-trend-d {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.swx-trend-none {
+  margin: 0;
+  padding-top: var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+
+/* The Clock box (components/prop/ClockPane.tsx) — content inside the pane body, no size of its
+   own. The digits are SVG text that follows the pane's WIDTH, so they fit a 200 px rail at every
+   text size; the height caps ride --text-scale, so in a wide slot Text size still decides how big
+   they may grow. Local time is the smaller of the two: UTC is the station clock. */
+.clock-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.clock-local {
+  margin-top: var(--space-1);
+}
+.clock-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--space-2);
+}
+.clock-label {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.clock-date {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.clock-digits {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(64px * var(--text-scale));
+  overflow: visible;
+  color: var(--text);
+}
+.clock-local .clock-digits {
+  width: 72%;
+  max-height: calc(40px * var(--text-scale));
+}
+.clock-digits text {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  fill: currentColor;
+}
+.clock-sun {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-label);
+  line-height: var(--lh-normal);
+}
 
 /* Band advisor */
 .band-advisor h2,

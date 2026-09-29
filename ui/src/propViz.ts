@@ -175,6 +175,17 @@ export function bzImpact(bz: number): Impact {
   if (bz <= -5) return { sev: 'warn', text: t('prop.impact.bz.south') }
   return { sev: 'quiet', text: t('prop.impact.bz.neutral') }
 }
+/** The insight layer's fast-stream threshold (crates/propagation/src/insight.rs: "Fast solar-wind
+ * stream arriving" from this speed). The gauge turns at the SAME speed, so the Space Wx box never
+ * calls a wind ordinary while the insight feed beside it warns about it; propViz.wind.test.ts
+ * reads the number out of the Rust source and compares. */
+export const FAST_WIND_KMS = 600
+/** Solar-wind bulk speed (km/s). The ordinary wind runs ~300–500 km/s; a fast stream unsettles
+ * the high-latitude paths on a slower fuse than a southward Bz. */
+export function windSpeedImpact(kms: number): Impact {
+  if (kms >= FAST_WIND_KMS) return { sev: 'warn', text: t('prop.impact.wind.fast') }
+  return { sev: 'quiet', text: t('prop.impact.wind.normal') }
+}
 /** A-index (24 h average of geomagnetic activity — the day's character, where Kp is
  * the last 3 h). NOAA scale: <8 quiet · 8–15 unsettled · 16–29 active · 30+ storm. */
 export function aImpact(a: number): Impact {

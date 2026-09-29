@@ -181,6 +181,7 @@ const MIGRATED = [
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
   'components/prop/ChasePane.tsx',
+  'components/prop/ClockPane.tsx',
   'components/prop/KpOutlookPane.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
@@ -195,6 +196,7 @@ const MIGRATED = [
   'components/prop/OpeningStrip.tsx',
   'components/prop/OpeningsLogPane.tsx',
   'components/prop/ScalesAnnunciator.tsx',
+  'components/prop/SolarTrends.tsx',
   'components/prop/SpaceWxGauges.tsx',
   'components/prop/WorkNowCard.tsx',
   // Batch 5 (2026-08-18) — spots, the watch list, the display filters and the Settings
