@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
+  the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
+  every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2
+  and digital 3. New York stations send RST and their county as the sponsor's three-letter code;
+  the rest of the US and Canada send their state or province, and everyone else sends `DX`. **The
+  county box takes the name as well as the code**: `Monroe` becomes MON. Washington, Delaware and
+  Ontario are also the name of a state or a province, so for those you pick from the list. A
+  station counts once per band on phone, CW and digital, a New York station that changes county
+  is a new station, and a station on a county line is logged once for each county. **Duplicates
+  stay in the log**, marked and scoring nothing, because the sponsor uses them to cross-check the
+  other logs. New York stations multiply by New York counties, US states and Canadian provinces,
+  **with New York itself counted from your first New York county**; everyone else multiplies by
+  the New York counties worked. **FT8 and FT4 earn no credit**, because their contest messages
+  have no room for a county. The Cabrillo export writes `CONTEST: NY-QSO-PARTY` and your county
+  code as `LOCATION` for a New York entry, as the sponsor's sample log does.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
