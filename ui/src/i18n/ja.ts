@@ -5269,6 +5269,7 @@ export const JA: PartialCatalog = {
   "sstv.header.slant.title": "スラント調整 — サンプルクロックの微調整です。デコーダーが自動補正します。手動調整は今後のビルドで対応予定です。",
   "sstv.header.slant.aria": "SSTV スラント調整（無効 — デコーダー未接続）",
   "sstv.stage.aria": "SSTV 画像",
+  "sstv.stage.splitter.label": "ウォーターフォールと画像の高さ",
   "sstv.waterfall.hint": "バンド表示 — 画像が届くとこの場所に表示されます",
   "sstv.caption.lines": "{{mode}} — {{done}}/{{total}} ライン",
   "sstv.caption.decoding": "{{mode}} をデコード中…",

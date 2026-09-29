@@ -8512,6 +8512,7 @@ export const EN = {
     'Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build.',
   'sstv.header.slant.aria': 'SSTV slant trim (disabled — decoder not wired yet)',
   'sstv.stage.aria': 'SSTV image',
+  'sstv.stage.splitter.label': 'waterfall and picture height',
   'sstv.waterfall.hint': 'the band — a picture takes this space when one arrives',
   'sstv.caption.lines': '{{mode}} — {{done}}/{{total}} lines',
   'sstv.caption.decoding': 'decoding {{mode}}…',

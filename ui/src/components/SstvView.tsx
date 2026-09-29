@@ -6,7 +6,7 @@
 // catalog under `sstv.*`; the mode names, rasters, key-down seconds, VIS codes, dial
 // readings, callsigns, FSK IDs and the picture's own painted text are invariant tokens and
 // stay in the code.
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { sstvPlan, loadSstvImage } from '../remote-web/sstv'
@@ -21,6 +21,8 @@ import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { PanelsMenu } from './PanelsMenu'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { PaneSeam } from './PaneSeam'
+import { SSTV_STAGE_SPLIT_MAX, SSTV_STAGE_SPLIT_MIN } from '../features/paneSeam'
 import { panelHost } from '../features/panelHost'
 import { sstvImageWidth } from '../sstvScale'
 import { readExifOrientation, readIntrinsicSize, sniffImageKind, type ImageKind } from '../sstvExif'
@@ -784,6 +786,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // the measured integer upscale silently never applied. React calls a callback ref on every
   // mount and unmount, so the observer follows the section instead of the first render.
   const [stageEl, setStageEl] = useState<HTMLElement | null>(null)
+  // The stage's divider (layout L6) sizes the same element, and reads it through a ref object;
+  // one callback feeds both, so the divider follows the section through its mounts too.
+  const stageRef = useRef<HTMLElement | null>(null)
+  const stageRefCb = useCallback((el: HTMLElement | null) => {
+    stageRef.current = el
+    setStageEl(el)
+  }, [])
   const [stage, setStage] = useState({ w: 0, h: 0 })
   useLayoutEffect(() => {
     const el = stageEl
@@ -1818,7 +1827,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           all in this cockpit. Stop lives in `.sstv-tx-bar` and the TX-enable latch in the
           header, neither with a ⊞ id (THE STOP LINE). */}
       {(inFlight || shown('scope')) && (
-      <section className="sstv-canvas" aria-label={t('sstv.stage.aria')} ref={setStageEl}>
+      <>
+      <section className="sstv-canvas" aria-label={t('sstv.stage.aria')} ref={stageRefCb}>
         {inFlight ? (
           <div className="sstv-live">
             {preview && (
@@ -1917,6 +1927,23 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           </div>
         )}
       </section>
+      {/* THE STAGE'S DIVIDER (layout L6), under it and with it, a shell child like the scope
+          dividers. It sizes the stage — the band or the picture, whichever is on it — and it
+          paints NOTHING until the operator moves it: the stage is a grower that follows this
+          view at every window, and no fixed share reproduces it (`.sstv-canvas[data-sized]`,
+          styles.css). Moved, the size is stored per surface; Backspace or a double-click gives
+          the growing stage back. It stops nothing and sends nothing (THE STOP LINE). */}
+      <PaneSeam
+        axis="y"
+        varName="--sstv-stage-h"
+        strip={stageRef}
+        storageKey="nexus.split.sstv.stage"
+        min={SSTV_STAGE_SPLIT_MIN}
+        max={SSTV_STAGE_SPLIT_MAX}
+        defaultPct={null}
+        label={t('sstv.stage.splitter.label')}
+      />
+      </>
       )}
 
       {/* THE LOWER PANES — CockpitPaneFrame with ROLES, and deliberately NO

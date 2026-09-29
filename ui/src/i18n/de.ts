@@ -5628,6 +5628,7 @@ export const DE: PartialCatalog = {
   "sstv.header.slant.title": "Slant-Korrektur — feine Korrektur des Abtasttakts. Wird vom Dekoder automatisch korrigiert; die manuelle Korrektur kommt in einem späteren Build.",
   "sstv.header.slant.aria": "SSTV-Slant-Korrektur (deaktiviert — Dekoder noch nicht angebunden)",
   "sstv.stage.aria": "SSTV-Bild",
+  "sstv.stage.splitter.label": "Höhe von Wasserfall und Bild",
   "sstv.waterfall.hint": "das Band — ein eintreffendes Bild nimmt diesen Platz ein",
   "sstv.caption.lines": "{{mode}} — {{done}}/{{total}} Zeilen",
   "sstv.caption.decoding": "dekodiere {{mode}}…",

@@ -5,6 +5,8 @@ import {
   resolveClamp,
   SCOPE_SPLIT_MAX,
   SCOPE_SPLIT_MIN,
+  SSTV_STAGE_SPLIT_MAX,
+  SSTV_STAGE_SPLIT_MIN,
   WATERFALL_SPLIT_MAX,
   WATERFALL_SPLIT_MIN,
   type SplitClamp,
@@ -98,14 +100,17 @@ function parseRules(sheet: string): Rule[] {
 const RULES = parseRules(css)
 
 /** One compound of class selectors ('.a.b') as its class list; null when the compound
- *  contains anything else (pseudos, attributes, tags, ids, or is empty). Rejecting is
- *  the fail-safe direction here: a selector this computer cannot evaluate must never
- *  count as a cascade winner by accident. */
+ *  contains anything else (pseudos, valued attributes, tags, ids, or is empty). Rejecting
+ *  is the fail-safe direction here: a selector this computer cannot evaluate must never
+ *  count as a cascade winner by accident. A PRESENCE attribute (`[data-sized]`) is the one
+ *  addition, kept as its own token ('[data-sized]'): a chain entry matches it only when the
+ *  modelled element lists that token, so a rule keyed on an attribute never styles an
+ *  element modelled without it — SSTV's sized stage (layout L6) is the element that has it. */
 function compoundClasses(compound: string): string[] | null {
-  if (/[\s>+~:[#]/.test(compound)) return null
-  const parts = compound.match(/\.[a-zA-Z0-9_-]+/g)
+  if (/[\s>+~:#]/.test(compound)) return null
+  const parts = compound.match(/\.[a-zA-Z0-9_-]+|\[[a-zA-Z0-9_-]+\]/g)
   if (!parts || parts.join('') !== compound) return null
-  return parts.map((p) => p.slice(1))
+  return parts.map((p) => (p.startsWith('.') ? p.slice(1) : p))
 }
 
 /** Right-to-left match of a class-only selector (descendant/child combinators OK)
@@ -150,9 +155,10 @@ function matchesChain(selector: string, chain: Array<Set<string>>): boolean {
   return true
 }
 
-/** Class-count specificity — every candidate here is a class-only compound. */
+/** Class-count specificity — every candidate here is a class-only compound, or carries a
+ *  presence attribute, which counts as a class does. */
 function specificity(selector: string): number {
-  return (selector.match(/\./g) ?? []).length
+  return (selector.match(/[.[]/g) ?? []).length
 }
 
 /** Final overflow-y a block computes, honouring in-block declaration order and the
@@ -633,9 +639,10 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     ['operate-cockpit', ['cockpit-body']],
     // JS8's waterfall divider (layout L2), a shell child like Phone's and CW's.
     ['js8-cockpit', []],
-    // RTTY's and PSK's waterfall dividers (layout L6), the same kind.
+    // RTTY's and PSK's waterfall dividers (layout L6), the same kind; and SSTV's stage divider.
     ['rtty-cockpit', []],
     ['psk-cockpit', []],
+    ['sstv-view', []],
   ]
   for (const [shell, between] of STRIPS) {
     it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
@@ -672,6 +679,27 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
       ).toBe(0)
     })
   }
+
+  // SSTV's stage (layout L6) is the column's GROWER until the operator sizes it — the one shape
+  // that follows that view at every window — and only then takes the strip shape, on the
+  // `data-sized` its divider sets. Both halves: the sized stage follows the basis, and the stock
+  // stage is still the grower (a sized rule leaking onto it would fix the stock picture's size).
+  it('.sstv-view .sstv-canvas[data-sized] resolves flex-grow 0, and the stock stage keeps its grower', () => {
+    const sized = winningValue([...shellChain('sstv-view'), new Set(['sstv-canvas', '[data-sized]'])], blockGrow)
+    expect(sized, '.sstv-canvas[data-sized]: no rule declares flex at all').not.toBeNull()
+    expect(
+      sized!.value,
+      `\`${sized!.selector}\` gives the sized SSTV stage flex-grow ${sized!.value}: its divider drives the ` +
+        'flex-basis, which only sets the rendered height while grow is 0.',
+    ).toBe(0)
+    const stock = winningValue([...shellChain('sstv-view'), new Set(['sstv-canvas'])], blockGrow)
+    expect(stock, '.sstv-canvas: no rule declares flex at all').not.toBeNull()
+    expect(
+      stock!.value,
+      `\`${stock!.selector}\` gives the stock SSTV stage flex-grow ${stock!.value}: until the operator sizes ` +
+        'it the stage must grow with the view, or the picture loses the upscale a tall window gave it.',
+    ).toBeGreaterThan(0)
+  })
 
   for (const shell of ['phone-cockpit', 'cw-cockpit']) {
     it(`.${shell} .ph-scope-panel resolves flex-grow 0 (grow ≥1 voids the dragged basis)`, () => {
@@ -1109,7 +1137,14 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     // min(8em, 28 % of --vh-eff)) yields, so a declared clamp that dropped the yield fails here.
     { fontPx: 14, vhEff: 384 },
   ]
-  const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX, WATERFALL_SPLIT_MIN, WATERFALL_SPLIT_MAX }
+  const DECLARED: Record<string, SplitClamp> = {
+    SCOPE_SPLIT_MIN,
+    SCOPE_SPLIT_MAX,
+    WATERFALL_SPLIT_MIN,
+    WATERFALL_SPLIT_MAX,
+    SSTV_STAGE_SPLIT_MIN,
+    SSTV_STAGE_SPLIT_MAX,
+  }
 
   /** The `<PaneSeam …/>` that drives `varName`, as prop → source expression. */
   function splitterProps(src: string, varName: string): Record<string, string> {
@@ -1130,17 +1165,23 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     return Number.isFinite(n) ? n : null
   }
 
-  const CALLERS: Array<[string, string, string, string]> = [
-    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h', 'ph-scope-panel'],
-    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h', 'ph-scope-panel'],
+  /** [shell, source, variable, the strip as its selector tokens (the element's classes, and a
+   *  presence attribute where the strip's sized shape keys on one)]. */
+  const CALLERS: Array<[string, string, string, string[]]> = [
+    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h', ['ph-scope-panel']],
+    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h', ['ph-scope-panel']],
     // JS8's waterfall divider (layout L2): the RTTY/PSK waterfall's yielding floor, the scope's cap.
-    ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', 'waterfall-wrap'],
+    ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', ['waterfall-wrap']],
     // RTTY's and PSK's (layout L6): the same clamps; PSK's strip rides RTTY's rule and variable.
-    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', 'waterfall-wrap'],
-    ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', 'waterfall-wrap'],
+    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    // SSTV's stage divider (layout L6) sizes the stage in its SIZED shape, which is the one its
+    // clamps must agree with: the stage's own 16em floor and the sized rule's ceiling.
+    ['sstv-view', './components/SstvView.tsx', '--sstv-stage-h', ['sstv-canvas', '[data-sized]']],
   ]
-  for (const [shell, file, varName, strip] of CALLERS) {
-    const chain = [...shellChain(shell), new Set([strip])]
+  for (const [shell, file, varName, tokens] of CALLERS) {
+    const chain = [...shellChain(shell), new Set(tokens)]
+    const strip = tokens.map((t) => (t.startsWith('[') ? t : `.${t}`)).join('').slice(1)
     for (const [end, prop] of [
       ['min', 'min-height'],
       ['max', 'max-height'],

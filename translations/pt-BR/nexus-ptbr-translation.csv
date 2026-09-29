@@ -2633,6 +2633,7 @@
 "5","sstv.header.slant.title","Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build.","","",""
 "5","sstv.header.slant.aria","SSTV slant trim (disabled — decoder not wired yet)","","SSTV",""
 "5","sstv.stage.aria","SSTV image","","SSTV",""
+"5","sstv.stage.splitter.label","waterfall and picture height","","","The name of the divider under the SSTV view's picture area (the band waterfall while nothing is decoding, the picture while one is), which is dragged, or moved with the arrow keys, to make that area taller or shorter. Screen readers read it aloud, and it appears inside the divider's tooltip (paneSeam.title), so it is a short lower-case phrase."
 "5","sstv.waterfall.hint","the band — a picture takes this space when one arrives","","",""
 "5","sstv.caption.lines","{{mode}} — {{done}}/{{total}} lines","","{{mode}} | {{done}} | {{total}}",""
 "5","sstv.caption.decoding","decoding {{mode}}…","","{{mode}}",""

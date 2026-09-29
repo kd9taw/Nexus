@@ -82,9 +82,10 @@ export const PER_SURFACE = [
   'nexus.split.js8.waterfall',
   'nexus.split.operate.waterfall',
   'nexus.split.phone.scope',
-  // RTTY's and PSK's waterfall heights (layout L6), the same kind.
+  // RTTY's and PSK's waterfall heights (layout L6), the same kind; and SSTV's picture stage.
   'nexus.split.psk.waterfall',
   'nexus.split.rtty.waterfall',
+  'nexus.split.sstv.stage',
   'nexus.view',
   'nexus.waterfall.dss',
   'nexus.waterfall.flow',
@@ -347,6 +348,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.js8.waterfall',
     'nexus.split.rtty.waterfall',
     'nexus.split.psk.waterfall',
+    'nexus.split.sstv.stage',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
@@ -522,6 +524,7 @@ describe('call sites agree with the classification', () => {
       ['components/Js8Cockpit.tsx', 'nexus.split.js8.waterfall'],
       ['components/RttyCockpit.tsx', 'nexus.split.rtty.waterfall'],
       ['components/PskCockpit.tsx', 'nexus.split.psk.waterfall'],
+      ['components/SstvView.tsx', 'nexus.split.sstv.stage'],
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }

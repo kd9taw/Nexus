@@ -15,7 +15,7 @@
 // the shell's flex share (1.1) with the band's self-disarming floor, and a frame's
 // .pane-body scroller would hand its height to content measurement instead.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act, cleanup } from '@testing-library/react'
+import { render, act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { SstvView } from './SstvView'
 import * as api from '../api'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
@@ -122,11 +122,12 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('SstvView pane shell', () => {
-  it('the shell holds no child kinds beyond the census (header, RX stage, TX bar, frames)', async () => {
+  it('the shell holds no child kinds beyond the census (header, RX stage and its divider, TX bar, frames)', async () => {
     await renderView()
     const shell = document.querySelector('main.layout.single.sstv-view')!
     expect(shell).not.toBeNull()
-    const ALLOWED = ['.cockpit-header', '.sstv-canvas', '.sstv-tx-bar', '.pane-frame']
+    // The stage's divider (layout L6) is a shell child, as the scope dividers are in Phone/CW/JS8.
+    const ALLOWED = ['.cockpit-header', '.sstv-canvas', '.pane-splitter', '.sstv-tx-bar', '.pane-frame']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -326,6 +327,112 @@ describe('SstvView pane shell', () => {
       if (cw) Object.defineProperty(Element.prototype, 'clientWidth', cw)
       if (ch) Object.defineProperty(Element.prototype, 'clientHeight', ch)
     }
+  })
+})
+
+// ── THE STAGE'S DIVIDER (layout L6) ──────────────────────────────────────────────────────────
+// The stage is the column's grower — the one shape that follows this view at every window, and
+// the picture's integer upscale rides on it — so its divider paints NOTHING until the operator
+// moves it; moved, the stage is marked `data-sized` (its sheet rule's key) and the size is stored
+// per surface; a reset gives the grower back. jsdom lays nothing out, so the shell and the stage
+// are stubbed: the stock stage stands at 300 px of a 1000 px shell, and the sized one lays out like
+// its rule (the painted basis, the 16em floor, 70 % of the window) at jsdom's 16 px / 768 px.
+describe('the SSTV stage divider', () => {
+  function layOut() {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    const rect = (height: number) =>
+      ({ top: 0, left: 0, width: 800, height, right: 800, bottom: height, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('main.sstv-view')) return rect(1000)
+      if (this.matches('.sstv-canvas')) {
+        if (!this.hasAttribute('data-sized')) return rect(300)
+        const v = shell().style.getPropertyValue('--sstv-stage-h')
+        const basis = v === '' ? 350 : v.endsWith('%') ? parseFloat(v) * 10 : parseFloat(v)
+        return rect(Math.min(0.7 * 768, Math.max(16 * 16, basis)))
+      }
+      return real.call(this)
+    })
+  }
+  const shell = () => document.querySelector<HTMLElement>('main.sstv-view')!
+  const stage = () => document.querySelector<HTMLElement>('.sstv-canvas')!
+  const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => el.getAttribute(a))
+  const divider = () => screen.queryByRole('separator', { name: 'waterfall and picture height' })
+  const KEY = 'nexus.split.sstv.stage'
+  const LIVE: SstvState = {
+    ...IDLE,
+    armed: true,
+    mode: 'Robot 36',
+    linesDone: 1,
+    linesTotal: 240,
+    previewRgbBase64: btoa('\x01\x02\x03\x04\x05\x06'),
+    previewWidth: 2,
+    previewHeight: 1,
+  }
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.style.removeProperty('--vh-eff')
+    document.documentElement.style.removeProperty('--ui-zoom')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('sits right under the stage, a shell child outside every pane, and the TX bar stays last', async () => {
+    await renderView()
+    const sep = divider()
+    expect(sep, 'no divider under the stage').not.toBeNull()
+    expect(sep!.previousElementSibling, 'the divider is not under the stage').toBe(stage())
+    expect(sep!.parentElement).toBe(shell())
+    expect(sep!.closest('.pane-frame')).toBeNull()
+    expect(sep!.tabIndex).toBe(0)
+    expect(shell().lastElementChild!.classList.contains('sstv-tx-bar')).toBe(true)
+  })
+
+  it('stock: the stage keeps the size the sheet gives it — nothing painted, marked or stored', async () => {
+    layOut()
+    await renderView()
+    expect(shell().style.getPropertyValue('--sstv-stage-h')).toBe('')
+    expect(stage().hasAttribute('data-sized')).toBe(false)
+    expect(localStorage.getItem(KEY)).toBeNull()
+    // The stage as it stands; the 16em floor at 16 px; 70 % of the 768 px window.
+    expect(aria(divider()!)).toEqual(['300', '256', '538'])
+  })
+
+  it('a key sizes the stage from where it stands, a reset gives the grower back', async () => {
+    layOut()
+    await renderView()
+    const sep = divider()!
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(shell().style.getPropertyValue('--sstv-stage-h')).toBe(`${(316 / 1000) * 100}%`)
+    expect(stage().hasAttribute('data-sized')).toBe(true)
+    expect(localStorage.getItem(KEY)).toBe(String((316 / 1000) * 100))
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('538')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(shell().style.getPropertyValue('--sstv-stage-h')).toBe('')
+    expect(stage().hasAttribute('data-sized')).toBe(false)
+    expect(sep.getAttribute('aria-valuenow')).toBe('300')
+  })
+
+  it('a stored height is restored sized, clamped against this window, and kept for a bigger one', async () => {
+    localStorage.setItem(KEY, '75')
+    layOut()
+    await renderView()
+    expect(stage().hasAttribute('data-sized')).toBe(true)
+    expect(divider()!.getAttribute('aria-valuenow')).toBe('538')
+    expect(localStorage.getItem(KEY), 'the clamp is apply-side only').toBe('75')
+  })
+
+  it('goes with the stage when the waterfall is unticked and nothing is decoding', async () => {
+    await renderView({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('.sstv-canvas')).toBeNull()
+    expect(divider()).toBeNull()
+  })
+
+  it('stays with the stage while a picture is in flight, the waterfall unticked or not', async () => {
+    getSstvState.mockResolvedValue(LIVE)
+    await renderView({ panels: fakePanels(['scope']) })
+    expect(document.querySelector('.sstv-live'), 'no picture on the stage').not.toBeNull()
+    expect(divider(), 'the picture lost its divider with the waterfall').not.toBeNull()
+    expect(divider()!.previousElementSibling).toBe(stage())
   })
 })
 

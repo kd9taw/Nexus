@@ -5945,6 +5945,7 @@ export const ES: PartialCatalog = {
   "sstv.rx.unsupported": "Se oyó una cabecera SSTV hace {{age}} en un modo que esta build no puede decodificar{{vis}}. La señal y la ruta de audio están bien — las imágenes Scottie, Martin, Robot y PD sí decodifican.",
   "sstv.rx.where": "En esta banda las imágenes salen en {{freq}} {{mode}}.",
   "sstv.stage.aria": "Imagen SSTV",
+  "sstv.stage.splitter.label": "altura de la cascada y la imagen",
   "sstv.tx.announce.finished": "Transmisión de SSTV terminada",
   "sstv.tx.announce.sending": "Transmitiendo SSTV {{mode}}",
   "sstv.tx.drop.hint": "Suelta aquí una imagen, o elige una abajo — de cualquier tamaño, se redimensiona al modo por ti.",

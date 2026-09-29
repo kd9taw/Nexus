@@ -23830,6 +23830,21 @@ button.sat-chip:disabled {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+/* SIZED BY ITS DIVIDER (layout L6), and only once the operator sizes it. Until then the stage
+   is the grower above — the only shape that follows this view at every window: the composer is
+   content-height, so the stage's share of the shell runs from 28 % at 1024×768 to 41.5 % at
+   2560×1440 (L6 base, in Chrome), and the picture's integer upscale rides on it (1× … 4×). No
+   fixed share keeps both ends; so the divider paints nothing until moved (PaneSeam's
+   sheet-sized strip, `defaultPct={null}`), marks the stage `data-sized` once it is, and a reset
+   gives this grower back. Sized, it is the scope strips' shape: grow 0 so the dragged basis is
+   what renders (cockpit-shells.test.ts), the 16em floor above, and a generous ceiling: the
+   limit the gallery and the TX bar set is the layout's own, which the divider measures and stops
+   at wherever it binds first. Both ends are the divider's clamps
+   (features/paneSeam SSTV_STAGE_SPLIT_MIN/MAX). */
+.sstv-canvas[data-sized] {
+  flex: 0 1 var(--sstv-stage-h, 35%);
+  max-height: calc(0.7 * var(--vh-eff, 100vh));
+}
 .sstv-canvas-empty {
   color: var(--text-faint);
   font-style: italic;
