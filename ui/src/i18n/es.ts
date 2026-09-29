@@ -1666,6 +1666,8 @@ export const ES: PartialCatalog = {
   "js8.panel.offsets": "Actividad de banda",
   "js8.seam.columns.label": "Columna Actividad / columna Estaciones",
   "js8.seam.auxWidth.label": "ancho de la columna Estaciones",
+  "js8.seam.activityOffsets.label": "Actividad / Actividad de banda",
+  "js8.seam.stationsInbox.label": "Estaciones / Bandeja de entrada",
   "js8.panel.activity.title": "Cada trama decodificada a cada velocidad activa — E/A/B/C es la velocidad (Slow/Normal/Fast/Turbo), luego el desplazamiento, la SNR y el mensaje. Las filas tenues son copia de baja confianza; las filas en cursiva se cerraron sin su última trama.",
   "js8.panel.activity.differs": "Una sola lista, donde JS8Call tiene dos: esta es la transcripción continua, en orden de tiempo. El panel Actividad de banda reúne las mismas decodificaciones en una fila por desplazamiento, con DT.",
   "js8.panel.activity.empty": "Escuchando… las tramas decodificadas a cada velocidad activa aparecen aquí",

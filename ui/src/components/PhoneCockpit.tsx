@@ -1649,12 +1649,18 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // shown the leading column is never empty, so `cols === 1` IS the stacking flow — and a floor
   // at the bounded tiers would overflow a pane squeezed to its fill floor into a second scroller.
   const feedWrap = `np-pane${cols === 1 ? ' np-pane--stacked' : ''}`
+  // The two feeds are a PAIR only while the divider between them is on screen (tier 2, both
+  // shown — see feedPanes below): then each carries the operator's share, and its floor follows
+  // that share (CockpitPaneFrame `split`), so the divider moves them even in a column too short
+  // for both floors. Anywhere else each is the only feed in its column and keeps the stock floor.
+  const feedsSplit = hasSpotsPane && hasNeededPane && cols === 2 && panels != null
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
         title={t('phone.pane.spots.title')}
         paneId="spots"
-        share={panels?.shareOf('spots')}
+        split={feedsSplit ? 1 : undefined}
+        share={feedsSplit ? panels?.layout.share.spots : undefined}
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
@@ -1677,7 +1683,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       <CockpitPaneFrame
         title={t('phone.pane.needed.title')}
         paneId="needed"
-        share={panels?.shareOf('needed')}
+        split={feedsSplit ? 1 : undefined}
+        share={feedsSplit ? panels?.layout.share.needed : undefined}
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
@@ -1701,7 +1708,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     ) : (
       <>
         {spotsPane}
-        {hasSpotsPane && hasNeededPane && cols === 2 && panels && (
+        {feedsSplit && panels && (
           <PaneSeam
             above={spotsFrameRef}
             below={neededFrameRef}

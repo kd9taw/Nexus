@@ -5486,6 +5486,8 @@ export const DE: PartialCatalog = {
   "js8.panel.offsets": "Bandaktivität",
   "js8.seam.columns.label": "Spalte Aktivität / Spalte Stationen",
   "js8.seam.auxWidth.label": "Breite der Spalte Stationen",
+  "js8.seam.activityOffsets.label": "Aktivität / Bandaktivität",
+  "js8.seam.stationsInbox.label": "Stationen / Posteingang",
   "js8.panel.activity.title": "Jeder dekodierte Frame jeder aktiven Geschwindigkeit — E/A/B/C ist die Geschwindigkeit (Slow/Normal/Fast/Turbo), dann Ablage, SNR und die Nachricht. Blasse Zeilen sind unsichere Mitschrift; kursive Zeilen wurden ohne ihren letzten Frame geschlossen.",
   "js8.panel.activity.differs": "Eine Liste, wo JS8Call zwei hat: dies ist die laufende Mitschrift in Zeitfolge. Das Fenster Bandaktivität zeigt dieselben Dekodierungen auf je eine Zeile pro Ablage zusammengefasst, mit DT.",
   "js8.panel.activity.empty": "Hört mit… Frames aller aktiven Geschwindigkeiten erscheinen hier",

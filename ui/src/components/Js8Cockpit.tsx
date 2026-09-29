@@ -16,6 +16,7 @@ import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8S
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
+import { PaneSeam } from './PaneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
@@ -406,7 +407,7 @@ export function Js8Cockpit({
   const auxPresent = shown('stations') || shown('inbox')
   const logPresent = shown('log')
   const populated = [activityPresent, auxPresent, logPresent].filter(Boolean).length
-  const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
+  const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
   // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
   const mainColRef = useRef<HTMLDivElement>(null)
   const auxColRef = useRef<HTMLDivElement>(null)
@@ -414,6 +415,26 @@ export function Js8Cockpit({
   // Two tracks with the log hidden are activity | stations + inbox: the second track is the
   // stations column, and the width divider on its left edge says so.
   const auxInLogTrack = cols === 2 && !logPresent
+
+  // THE DIVIDERS BETWEEN PANES IN A COLUMN (layout L2): Activity | Band activity (the two decode
+  // surfaces) and Stations | Inbox. Each pair is adjacent in its column at every tier, and a
+  // pair only while both are shown and the region is bounded — in the stacking flow every pane is
+  // content height and a share moves nothing. While it is a pair, each pane carries the operator's
+  // share and its floor follows it (CockpitPaneFrame `split`). Activity weighs 2 and Band activity
+  // 1, so their divider paints grows of share × 1.5: the pair keeps its stock total of 3, and at
+  // two columns, where Stations and Inbox share the column, they stay exactly where they were.
+  const activityFrameRef = useRef<HTMLElement>(null)
+  const offsetsFrameRef = useRef<HTMLElement>(null)
+  const stationsFrameRef = useRef<HTMLElement>(null)
+  const inboxFrameRef = useRef<HTMLElement>(null)
+  const decodePair = panels != null && flow === 'fill' && shown('activity') && shown('offsets')
+  const heardPair = panels != null && flow === 'fill' && shown('stations') && shown('inbox')
+  /** The grow a share of 1 stands for in the decode pair: the mean of its stock weights 2 and 1. */
+  const DECODE_SPLIT = 1.5
+  const pairedShare = (paired: boolean, id: Js8PanelId, k: number) => {
+    const s = panels?.layout.share[id]
+    return paired && s != null ? s * k : undefined
+  }
 
   const activityPin = usePinnedScroll<HTMLDivElement>()
   const units = useUnits()
@@ -545,6 +566,9 @@ export function Js8Cockpit({
       title={t('js8.panel.activity')}
       paneId="activity"
       weight={2}
+      split={decodePair ? DECODE_SPLIT : undefined}
+      share={pairedShare(decodePair, 'activity', DECODE_SPLIT)}
+      paneRef={activityFrameRef}
       {...closeProps('activity')}
     >
       <div
@@ -590,6 +614,9 @@ export function Js8Cockpit({
       title={t('js8.panel.offsets')}
       paneId="offsets"
       weight={1}
+      split={decodePair ? DECODE_SPLIT : undefined}
+      share={pairedShare(decodePair, 'offsets', DECODE_SPLIT)}
+      paneRef={offsetsFrameRef}
       {...closeProps('offsets')}
     >
       <div className="js8-offsets" title={t('js8.panel.offsets.title')}>
@@ -626,6 +653,9 @@ export function Js8Cockpit({
     <CockpitPaneFrame
       title={t('js8.panel.stations')}
       paneId="stations"
+      split={heardPair ? 1 : undefined}
+      share={pairedShare(heardPair, 'stations', 1)}
+      paneRef={stationsFrameRef}
       {...closeProps('stations')}
     >
       <div className="js8-stations">
@@ -741,6 +771,9 @@ export function Js8Cockpit({
     <CockpitPaneFrame
       title={t('js8.panel.inbox')}
       paneId="inbox"
+      split={heardPair ? 1 : undefined}
+      share={pairedShare(heardPair, 'inbox', 1)}
+      paneRef={inboxFrameRef}
       {...closeProps('inbox')}
     >
       <div className="js8-inbox">
@@ -810,6 +843,30 @@ export function Js8Cockpit({
         fdSubmode={JS8}
       />}
     </CockpitPaneFrame>
+  )
+
+  // The two dividers between panes (see decodePair / heardPair above). Each sits between its pair
+  // in whichever column holds them, as its own slot, so its coming and going moves no pane.
+  const decodeSeam = decodePair && panels && (
+    <PaneSeam
+      above={activityFrameRef}
+      below={offsetsFrameRef}
+      varName="--pane-share"
+      scale={DECODE_SPLIT}
+      onCommit={(a, b) => panels.setShares({ activity: a, offsets: b })}
+      onReset={() => panels.setShares({ activity: null, offsets: null })}
+      label={t('js8.seam.activityOffsets.label')}
+    />
+  )
+  const heardSeam = heardPair && panels && (
+    <PaneSeam
+      above={stationsFrameRef}
+      below={inboxFrameRef}
+      varName="--pane-share"
+      onCommit={(a, b) => panels.setShares({ stations: a, inbox: b })}
+      onReset={() => panels.setShares({ stations: null, inbox: null })}
+      label={t('js8.seam.stationsInbox.label')}
+    />
   )
 
   return (
@@ -973,10 +1030,12 @@ export function Js8Cockpit({
           <>
             <div className="cockpit-col" key="main" ref={mainColRef}>
               {activityPane}
+              {decodeSeam}
               {offsetsPane}
             </div>
             <div className="cockpit-col" key="aux" ref={auxColRef}>
               {stationsPane}
+              {heardSeam}
               {inboxPane}
             </div>
             <div className="cockpit-col" key="log" ref={logColRef}>
@@ -987,10 +1046,12 @@ export function Js8Cockpit({
           <>
             <div className="cockpit-col" key="main" ref={mainColRef}>
               {activityPane}
+              {decodeSeam}
               {offsetsPane}
             </div>
             <div className="cockpit-col" key="aux" ref={auxColRef}>
               {stationsPane}
+              {heardSeam}
               {inboxPane}
             </div>
           </>
@@ -999,8 +1060,10 @@ export function Js8Cockpit({
             {(activityPresent || auxPresent) && (
               <div className="cockpit-col" key="main" ref={mainColRef}>
                 {activityPane}
+                {decodeSeam}
                 {offsetsPane}
                 {stationsPane}
+                {heardSeam}
                 {inboxPane}
               </div>
             )}

@@ -13,12 +13,12 @@
 // jsdom has no layout, so region widths are stubbed the way useRegionCols.test.tsx does.
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
 import type { AppSnapshot, Js8State } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
-import { JS8_PANELS, panelStorageKey, usePanelLayout } from '../features/panelState'
+import { JS8_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
 
 const js8Fixture = (): Js8State => ({
   speed: 'normal',
@@ -392,5 +392,102 @@ describe('Js8Cockpit column dividers', () => {
     expect(region.style.getPropertyValue('--cockpit-col-a')).toBe('1.2fr')
     expect(region.style.getPropertyValue('--cockpit-col-b')).toBe('0.8fr')
     expect(region.style.getPropertyValue('--cockpit-col-log')).toBe('min(480px, 50%)')
+  })
+})
+
+// ── THE DIVIDERS BETWEEN PANES IN A COLUMN (layout L2) ───────────────────────────────────────
+describe('Js8Cockpit dividers between panes', () => {
+  let live: Set<() => void>
+  const resize = () => act(() => [...live].forEach((cb) => cb()))
+  beforeEach(() => {
+    live = new Set()
+    localStorage.clear()
+    globalThis.ResizeObserver = class {
+      cb: () => void
+      constructor(cb: () => void) {
+        this.cb = cb
+        live.add(cb)
+      }
+      observe() {}
+      disconnect() {
+        live.delete(this.cb)
+      }
+      unobserve() {}
+    } as unknown as typeof ResizeObserver
+  })
+  function Live() {
+    const panels = usePanelLayout(JS8_PANELS)
+    return <Js8Cockpit snap={snap} panels={panels} />
+  }
+  async function mountLive() {
+    render(<Live />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    return document.querySelector('.cockpit-panes')!
+  }
+  async function tier(region: Element, width: number) {
+    stubWidth(region, width)
+    resize()
+    await frame()
+  }
+  const pane = (id: string) => document.querySelector<HTMLElement>(`[data-pane="${id}"]`)!
+  const seam = (name: RegExp) => screen.queryByRole('separator', { name })
+  /** The panes around a divider, by their data-pane. */
+  const around = (sep: Element) => [
+    (sep.previousElementSibling as HTMLElement | null)?.dataset.pane,
+    (sep.nextElementSibling as HTMLElement | null)?.dataset.pane,
+  ]
+
+  it('exist only in the bounded flow, each between its own pair, at three columns and at two', async () => {
+    const region = await mountLive()
+    expect(seam(/^Activity \/ Band activity$/), 'a stack cannot be divided').toBeNull()
+    await tier(region, 1800)
+    expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
+    expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
+    // Two columns: all four in the leading column, each divider still between its own pair.
+    await tier(region, 1200)
+    expect(region.getAttribute('data-cols')).toBe('2')
+    expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
+    expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
+    await tier(region, 900)
+    expect(seam(/^Activity \/ Band activity$/)).toBeNull()
+    expect(seam(/^Stations \/ Inbox$/)).toBeNull()
+  })
+
+  it('panes nobody has divided are the stock panes: their weights as the grow, the stock floor', async () => {
+    const region = await mountLive()
+    await tier(region, 1800)
+    expect(pane('activity').style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('activity').getAttribute('style')).toContain('var(--pane-share, 2) 1 0')
+    expect(pane('offsets').getAttribute('style')).toContain('var(--pane-share, 1) 1 0')
+    expect(pane('activity').style.minHeight).toBe('min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1.5) / 1.5), 100%)')
+  })
+
+  it('a key commits the pair’s shares; the panes carry them as grows that keep the pair’s stock total', async () => {
+    const region = await mountLive()
+    await tier(region, 1800)
+    const rect = (top: number, h: number) => () => ({ top, bottom: top + h, height: h, left: 0, right: 600, width: 600, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+    pane('activity').getBoundingClientRect = rect(100, 300)
+    pane('offsets').getBoundingClientRect = rect(412, 150)
+    fireEvent.keyDown(seam(/^Activity \/ Band activity$/)!, { key: 'ArrowDown' })
+    const [a, b] = seamShares(300 / 450 + 0.05)
+    expect(JSON.parse(localStorage.getItem(panelStorageKey('js8'))!).share).toEqual({ activity: a, offsets: b })
+    expect(Number(pane('activity').style.getPropertyValue('--pane-share'))).toBeCloseTo(a * 1.5, 10)
+    expect(Number(pane('offsets').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.5, 10)
+    // Backspace: the stock split back, no share of its own left behind.
+    fireEvent.keyDown(seam(/^Activity \/ Band activity$/)!, { key: 'Backspace' })
+    expect(JSON.parse(localStorage.getItem(panelStorageKey('js8'))!).share).toEqual({})
+    expect(pane('activity').style.getPropertyValue('--pane-share')).toBe('')
+  })
+
+  it('a pane whose partner is hidden is the stock pane again, whatever split is stored', async () => {
+    localStorage.setItem(panelStorageKey('js8'), JSON.stringify({ v: 2, state: { offsets: 'removed' }, share: { activity: 0.3, offsets: 1.7 } }))
+    const region = await mountLive()
+    await tier(region, 1800)
+    expect(seam(/^Activity \/ Band activity$/)).toBeNull()
+    expect(pane('activity').style.getPropertyValue('--pane-share'), 'a lone pane took a split share').toBe('')
+    expect(pane('activity').style.minHeight, 'a lone pane took a split floor').toBe('var(--cockpit-fill-min, 0)')
   })
 })

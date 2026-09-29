@@ -36,6 +36,7 @@ export function CockpitPaneFrame({
   fit,
   weight,
   share,
+  split,
   paneRef,
   onPopOut,
   onRemove,
@@ -71,8 +72,21 @@ export function CockpitPaneFrame({
    *  `share`) — `weight`, carried as `--pane-share` on the frame itself so the seam can repaint
    *  it live mid-drag, and so the record's value (React's) is what stands after a release, a
    *  Reset or an Undo. Still a typed number from the host, never a size the pane declares.
-   *  Omitted ⇒ `weight` alone, inline, exactly as before. Ignored with fit. */
+   *  With a `split` other than 1 it is the pane's GROW, the record's share × `split` — the unit
+   *  the divider paints (PaneSeam `scale`). Omitted ⇒ `weight`. Ignored with fit. */
   share?: number
+  /** Set on a fill pane that a PaneSeam splits (with or without a `share` yet): the grow a
+   *  share of 1 stands for — the mean stock `weight` of the two panes the divider splits, so the
+   *  pair's shares sum to 2 (seamShares) while their grows keep the pair's stock total and every
+   *  other fill pane in the column stays where it was. Default 1.
+   *
+   *  THE FLOOR FOLLOWS THE SHARE: `--cockpit-fill-min × share` (the pane's stock floor at the
+   *  stock split), so the pair's floors always add up to the two stock floors and the divider
+   *  divides them too. It has to: in a column too short for every fill pane's floor, each pane
+   *  sits ON its floor and a share alone moves nothing — Phone's Spots / Needed divider did
+   *  exactly that at 1024×768 and 1366×768 (layout L2, measured in Chrome), rewriting the record
+   *  while neither pane moved a pixel. Still written to yield: never more than the column. */
+  split?: number
   /** The frame's own box, for a PaneSeam to measure and repaint. Omitted ⇒ no ref. */
   paneRef?: Ref<HTMLElement>
   /** Tear this pane off into its own window (open_panel_window). Omitted ⇒ no button. */
@@ -100,11 +114,11 @@ export function CockpitPaneFrame({
       style={
         fit === 'content'
           ? { flex: '0 0 auto' }
-          : share != null
+          : share != null || split != null
             ? ({
-                '--pane-share': share,
-                flex: 'var(--cockpit-pane-flex, var(--pane-share) 1 0)',
-                minHeight: 'var(--cockpit-fill-min, 0)',
+                ...(share != null ? { '--pane-share': share } : {}),
+                flex: `var(--cockpit-pane-flex, var(--pane-share, ${weight ?? 1}) 1 0)`,
+                minHeight: `min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, ${split ?? 1}) / ${split ?? 1}), 100%)`,
               } as CSSProperties)
             : { flex: `var(--cockpit-pane-flex, ${weight ?? 1} 1 0)`, minHeight: 'var(--cockpit-fill-min, 0)' }
       }

@@ -1666,6 +1666,8 @@ export const FR: PartialCatalog = {
   "js8.panel.offsets": "Activité de bande",
   "js8.seam.columns.label": "Colonne Activité / colonne Stations",
   "js8.seam.auxWidth.label": "largeur de la colonne Stations",
+  "js8.seam.activityOffsets.label": "Activité / Activité de bande",
+  "js8.seam.stationsInbox.label": "Stations / Boîte de réception",
   "js8.panel.activity.title": "Chaque trame décodée à chaque vitesse active — E/A/B/C est la vitesse (Slow/Normal/Fast/Turbo), puis le décalage, le SNR et le message. Les lignes pâles sont une copie peu sûre ; les lignes en italique ont été closes sans leur dernière trame.",
   "js8.panel.activity.differs": "Une seule liste, là où JS8Call en a deux : voici la transcription continue, dans l’ordre du temps. Le panneau Activité de bande regroupe les mêmes décodages en une ligne par décalage, avec le DT.",
   "js8.panel.activity.empty": "À l’écoute… les trames décodées à chaque vitesse active s’affichent ici",

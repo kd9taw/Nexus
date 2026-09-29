@@ -399,13 +399,18 @@ export interface SplitSeamProps {
   /** Classes that place this divider in its container, beside its own (a grid cockpit's column
    *  divider rides the gap before its track: cockpit-panes.css `.cockpit-colseam`). */
   className?: string
+  /** The grow a share of 1 stands for, painted on flex panes: `varName` = share × scale. The
+   *  shares committed are the pair's own (seamShares, summing to 2); the panes' grows keep the
+   *  pair's stock total, so a pair of unequal stock weights in a column of other fill panes
+   *  moves only its own boundary (CockpitPaneFrame `split`). Default 1. */
+  scale?: number
 }
 
 /** A pane never goes below MIN_SHARE, so the divider never leaves this span of the pair. */
 const SPLIT_LO = MIN_SHARE / 2
 const SPLIT_HI = 1 - MIN_SHARE / 2
 
-function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y', columnsOn, className }: SplitSeamProps) {
+function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y', columnsOn, className, scale = 1 }: SplitSeamProps) {
   /** The split on screen: the first pane's fraction of the two, or null when nothing is laid out. */
   const measure = useCallback((): number | null => {
     const a = above.current
@@ -451,9 +456,11 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
     const [av, bv] = seamShares(f)
     const [pa, pb] = targets()
     if (!pa || !pb) return
-    const unit = columnsOn?.current ? 'fr' : ''
-    pa[0].style.setProperty(pa[1], `${av}${unit}`)
-    pb[0].style.setProperty(pb[1], `${bv}${unit}`)
+    const cols = columnsOn?.current != null
+    const unit = cols ? 'fr' : ''
+    const k = cols ? 1 : scale
+    pa[0].style.setProperty(pa[1], `${av * k}${unit}`)
+    pb[0].style.setProperty(pb[1], `${bv * k}${unit}`)
   }
 
   return (

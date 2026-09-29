@@ -529,6 +529,36 @@ describe('the divider between the two panes', () => {
     expect(pane('needed')!.style.getPropertyValue('--pane-share')).toBe(String(b))
   })
 
+  it('while the divider is there the feeds’ floors follow their shares; a lone feed keeps the stock floor', async () => {
+    // L1 left this divider inert at 1024×768 and 1366×768 (measured in Chrome): the leading
+    // column is too short for both feeds' floors, so both sat on them and a share moved nothing.
+    // The floor now follows the share — but only for the PAIR the divider splits: at tier 3 each
+    // feed is alone in its column, and hiding one leaves the other alone too.
+    localStorage.setItem(PHONE_KEY, JSON.stringify({ v: 2, state: { spots: 'docked', needed: 'docked' }, share: { spots: 1.6, needed: 0.4 } }))
+    render(<Live />)
+    const region = document.querySelector('.cockpit-panes')!
+    const width = async (w: number) => {
+      Object.defineProperty(region, 'clientWidth', { configurable: true, get: () => w })
+      act(() => fire!())
+      await act(async () => {
+        await new Promise((r) => requestAnimationFrame(() => r(null)))
+      })
+    }
+    const SPLIT_FLOOR = 'min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1) / 1), 100%)'
+    const STOCK_FLOOR = 'var(--cockpit-fill-min, 0)'
+    await width(1200)
+    expect(pane('spots')!.style.minHeight).toBe(SPLIT_FLOOR)
+    expect(pane('needed')!.style.minHeight).toBe(SPLIT_FLOOR)
+    expect(pane('spots')!.style.getPropertyValue('--pane-share')).toBe('1.6')
+    await width(1800)
+    expect(pane('spots')!.style.minHeight, 'tier 3: Spots is alone in its column').toBe(STOCK_FLOOR)
+    expect(pane('spots')!.style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('needed')!.style.minHeight).toBe(STOCK_FLOOR)
+    await width(1200)
+    fireEvent.click(within(pane('needed')!).getByRole('button', { name: 'Hide Needed' }))
+    expect(pane('spots')!.style.minHeight, 'Needed hidden: Spots is alone').toBe(STOCK_FLOOR)
+  })
+
   it('answers the keyboard from where the panes are, and Backspace puts the stock split back (PaneSeam)', async () => {
     render(<Live />)
     fireEvent.click(box(/^Spots$/))
