@@ -8,6 +8,13 @@
 // A PINNED pane (the voice keyer: D9) has only ▲ ▼, and says why. The log form has no id and no
 // entry: it stays at the foot of its column.
 //
+// FOCUS STAYS WITH THE PANE. A move pressed from a focused button can take that button away: it goes
+// disabled at the end of its column, or its row is rebuilt in the pane's new column. Either way the
+// browser drops focus to <body>, and a keyboard operator restarts Tab at the top of the document.
+// So after such a move focus goes to the same button while it can still move the pane that way,
+// else the opposite one, else any live button of that pane. A press from an unfocused button (a
+// mouse click where the webview does not focus buttons) leaves focus alone.
+//
 // THE STOP LINE is not near this: only a pane with a vocabulary id can be listed or moved (the
 // ArrangeSpec, features/panelPlace), and no control that stops a transmission has one. A move changes
 // where a pane stands in the region and nothing else — the header and the TX dock are not the
@@ -15,7 +22,7 @@
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The panes' names are the
 // cockpit's (`labels`); the arrows are glyphs, not words.
-import { useId } from 'react'
+import { useId, useLayoutEffect, useRef } from 'react'
 import { t } from '../../i18n'
 import { PANE_COLUMNS, canMovePane, placedColumns, type ArrangeSpec, type PaneColumn, type PaneMove } from '../../features/panelPlace'
 import type { PanelLayout } from '../../features/panelState'
@@ -27,6 +34,8 @@ const MOVES: ReadonlyArray<readonly [PaneMove, string]> = [
   ['left', '◀'],
   ['right', '▶'],
 ]
+
+const OPPOSITE: Readonly<Record<PaneMove, PaneMove>> = { up: 'down', down: 'up', left: 'right', right: 'left' }
 
 const moveName = (move: PaneMove, pane: string): string =>
   move === 'up'
@@ -53,8 +62,27 @@ export interface ArrangePanesProps<P extends string> {
 export function ArrangePanes<P extends string>({ spec, layout, shown, labels, onMove }: ArrangePanesProps<P>) {
   const uid = useId()
   const cols = placedColumns(spec, layout.place)
+  const rootRef = useRef<HTMLDivElement>(null)
+  // The move just pressed from a focused button, until the render that shows it.
+  const pending = useRef<{ id: P; move: PaneMove } | null>(null)
+  useLayoutEffect(() => {
+    const p = pending.current
+    if (!p) return
+    pending.current = null
+    const buttons = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>('button[data-arrange]') ?? [])]
+    for (const move of [p.move, OPPOSITE[p.move], ...MOVES.map(([m]) => m)]) {
+      const b = buttons.find((x) => x.dataset.arrange === `${p.id} ${move}`)
+      if (b && !b.disabled) {
+        if (document.activeElement !== b) {
+          b.focus({ preventScroll: true })
+          b.scrollIntoView?.({ block: 'nearest' })
+        }
+        return
+      }
+    }
+  })
   return (
-    <div className="panels-arrange" role="group" aria-labelledby={`${uid}-head`}>
+    <div className="panels-arrange" role="group" aria-labelledby={`${uid}-head`} ref={rootRef}>
       <span className="panels-arrange-head" id={`${uid}-head`}>
         {t('panels.arrange.heading')}
       </span>
@@ -86,7 +114,11 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, on
                             // The columns on screen are a | b | log: no cockpit renders a stored
                             // column order yet, so the moves follow the stock one (as the hook's do).
                             disabled={!canMovePane(spec, layout.place, undefined, id, move, shown)}
-                            onClick={() => onMove(id, move)}
+                            data-arrange={`${id} ${move}`}
+                            onClick={(e) => {
+                              if (document.activeElement === e.currentTarget) pending.current = { id, move }
+                              onMove(id, move)
+                            }}
                           >
                             {glyph}
                           </button>

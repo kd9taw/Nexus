@@ -95,4 +95,37 @@ describe('⊞ Arrange', () => {
     fireEvent.click(up)
     expect(cols().a[0]).toBe('voiceKeyer')
   })
+
+  // A press from the keyboard is a focused button's click. Chrome drops focus to <body> when the
+  // focused button goes disabled or its row is rebuilt; these check where focus lands instead.
+  it('a move pressed from a focused button keeps focus with that pane', () => {
+    render(<Host />)
+    // To the top of its column: ▲ goes disabled, so focus takes ▼.
+    const up = btn('Move Transmitter up')
+    up.focus()
+    fireEvent.click(up)
+    expect(cols().b.filter(shown)).toEqual(['transmitter', 'receiver'])
+    expect(document.activeElement).toBe(btn('Move Transmitter down'))
+    // Into Column 1: the row is rebuilt there and ◀ is disabled, so focus takes ▶ in the new row.
+    const left = btn('Move Receiver to the column on the left')
+    left.focus()
+    fireEvent.click(left)
+    expect(cols().a).toContain('receiver')
+    expect(document.activeElement).toBe(btn('Move Receiver to the column on the right'))
+    // Into Column 2, which has a column to its right: focus stays on ▶, in the rebuilt row.
+    const right = btn('Move Band Activity to the column on the right')
+    right.focus()
+    fireEvent.click(right)
+    expect(cols().b).toContain('bandActivity')
+    expect(document.activeElement).toBe(btn('Move Band Activity to the column on the right'))
+  })
+
+  it('a press from a button that does not have focus leaves focus where it is', () => {
+    render(<Host />)
+    const undo = btn('Undo')
+    undo.focus()
+    fireEvent.click(btn('Move Transmitter up'))
+    expect(cols().b.filter(shown)).toEqual(['transmitter', 'receiver'])
+    expect(document.activeElement).toBe(undo)
+  })
 })
