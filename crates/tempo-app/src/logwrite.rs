@@ -237,6 +237,8 @@ pub fn stamp_push(
         let Some(rows) = station::stamped_rows(&[target], service, &status) else {
             return (false, Durability::default());
         };
+        #[cfg(test)]
+        tests::race();
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
             e.station_mut()
                 .commit_planned(

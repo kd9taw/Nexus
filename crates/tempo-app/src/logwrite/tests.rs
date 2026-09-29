@@ -316,6 +316,190 @@ fn another_windows_change_to_another_row_plans_again_and_both_stand() {
     );
 }
 
+// ── another window's commit this window has not counted yet ────────────────────
+//
+// The two tests above let window A commit only once A's writer has counted B's commit. These do
+// not: B commits inside A's plan-to-commit gap and A commits at once, before its writer's next
+// look (`FOREIGN_POLL`), so the count the commit check compares has not moved. Only the store,
+// checking each row as it writes it, can see B's change there.
+
+/// Wait until `e`'s changes are committed: the writer alone, not the `log.adi` mirror behind it,
+/// so the racing window's commit lands as close to the plan it races as a real one would.
+fn committed(e: &Engine) {
+    e.log_store_writer().flush(DURABLE_WAIT).expect("committed");
+}
+
+/// ⛔ ANOTHER WINDOW'S STAMP, MADE UNDER THE PLAN, IS NOT WRITTEN OVER. Window B stamps a contact
+/// between window A's plan and A's commit. The store turns A's change back, A plans it again on
+/// the row as it now stands, and both stand. (Before the store checked the rows it writes, A wrote
+/// the row as it had read it, and B's stamp was gone: 10 runs out of 10.)
+#[test]
+fn another_windows_stamp_made_under_the_plan_is_not_written_over() {
+    let d = Dir::new("cas-stamp");
+    let a = shared(&d, 6);
+    let b = Arc::new(Mutex::new(engine_on_store(&d)));
+    let id = id_at(&*a, 4);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (b, plans) = (Arc::clone(&b), Rc::clone(&plans));
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                let (made, _) = change_ops(&b, id, None, &[qrz_stamp(id, 9)], "window B");
+                assert!(matches!(made, Ok(Ok(_))), "B's stamp is made");
+                committed(&engine_lock(&b));
+            }
+        }
+    };
+    let (made, durability) = racing(hook, || change_ops(&a, id, None, &[card(id)], "window A"));
+    assert!(matches!(made, Ok(Ok(_))), "A's card is made: {made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert_eq!(
+        row.upload.qrz.map(|s| s.when_unix),
+        Some(9),
+        "B's stamp stands"
+    );
+    assert!(row.qsl_rcvd.card, "and A's card with it");
+    assert_eq!(plans.get(), 2, "A's change was planned again");
+}
+
+/// ⛔ A CONTACT ANOTHER WINDOW DELETED UNDER THE PLAN STAYS DELETED. Window B deletes the contact
+/// window A is changing, between A's plan and A's commit. The store turns A's change back, and A's
+/// change, planned again, finds the contact gone and says so. (Before: A wrote the row as it had
+/// read it, and the deleted contact was back in the store with A's card on it: 11 runs out of 11.)
+#[test]
+fn a_contact_another_window_deleted_under_the_plan_stays_deleted() {
+    let d = Dir::new("cas-delete");
+    let a = shared(&d, 6);
+    let mut b = engine_on_store(&d);
+    let id = id_at(&*a, 4);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let plans = Rc::clone(&plans);
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                assert!(b.delete_qso(id), "B deletes the contact");
+                committed(&b);
+            }
+        }
+    };
+    let (made, _) = racing(hook, || change_ops(&a, id, None, &[card(id)], "window A"));
+    flush(&engine_lock(&a));
+    assert_eq!(
+        stored_row_opt(&d, id),
+        None,
+        "the contact B deleted stays deleted"
+    );
+    assert!(
+        matches!(made, Ok(Err(RowRefusal::Gone))),
+        "and A's change finds it gone: {made:?}"
+    );
+}
+
+/// ⛔ A BACKGROUND STAMP PLANNED BEFORE ANOTHER WINDOW'S EDIT DOES NOT UNDO THE EDIT. The upload
+/// worker's stamp does not wait for the disk, so a stamp the store turns back is simply not made,
+/// and the next push stamps the contact again: the edit, the operator's own data, stands, and the
+/// stamp lands on top of it. (Before: the stamp wrote the row as the worker had read it, and the
+/// edit was gone.)
+#[test]
+fn a_background_stamp_planned_before_another_windows_edit_does_not_undo_it() {
+    let d = Dir::new("cas-edit");
+    let a = shared(&d, 6);
+    let mut b = engine_on_store(&d);
+    let id = id_at(&*a, 4);
+    let pushed = row_at(&a, 4);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (plans, pushed) = (Rc::clone(&plans), pushed.clone());
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                let mut edited = pushed.clone();
+                edited.comment = Some("from window B".into());
+                assert!(b.update_qso(id, edited), "B edits the contact");
+                committed(&b);
+            }
+        }
+    };
+    let status = UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 7,
+        detail: None,
+    };
+    let (stamped, _) = racing(hook, || {
+        stamp_push(&a, &pushed, UploadService::Qrz, status.clone())
+    });
+    assert!(
+        stamped,
+        "premise: the worker made its stamp, and does not wait for it"
+    );
+    flush(&engine_lock(&a));
+    assert_eq!(
+        stored_row(&d, id).comment.as_deref(),
+        Some("from window B"),
+        "B's edit stands"
+    );
+    let (stamped, durability) = stamp_push(&a, &pushed, UploadService::Qrz, status);
+    assert!(stamped, "the next push stamps the contact again");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert_eq!(
+        row.comment.as_deref(),
+        Some("from window B"),
+        "B's edit still stands"
+    );
+    assert_eq!(
+        row.upload.qrz.map(|s| s.when_unix),
+        Some(7),
+        "with the stamp on top of it"
+    );
+}
+
+/// ⛔ A LOTW MERGE PLANNED BEFORE ANOTHER WINDOW'S CARD KEEPS THE CARD — a merge of more contacts
+/// than the store writes in one transaction. The chunk holding the contact B changed is turned
+/// back, the merge is planned again on the log as it now stands, and it lands its confirmations
+/// on top: the chunk before it is already in and changes nothing the second time. (Before: the
+/// merge wrote the row as it had read it, and B's card was gone.)
+#[test]
+fn a_lotw_merge_planned_before_another_windows_card_keeps_the_card() {
+    let n = tempo_core::logbook::writer::CHUNK_ROWS + 44;
+    let d = Dir::new("cas-merge");
+    let a = shared(&d, n);
+    let mut b = engine_on_store(&d);
+    // The last contact, in the merge's second chunk.
+    let id = id_at(&*a, n - 1);
+    let text: String = (0..n)
+        .map(|at| adif_record(&row_at(&a, at)).replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>"))
+        .collect();
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let plans = Rc::clone(&plans);
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                assert!(b.mark_qsl_card(id, true), "B marks the card");
+                committed(&b);
+            }
+        }
+    };
+    let (made, durability) = racing(hook, || merge_lotw_report(&a, &text));
+    assert!(made.is_ok(), "the merge is made: {made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let rows = stored(&d);
+    let row = rows
+        .iter()
+        .find(|r| r.id == Some(id))
+        .expect("the contact is stored");
+    assert!(row.qsl_rcvd.card, "B's card stands");
+    assert!(
+        rows.iter().all(|r| r.qsl_rcvd.lotw),
+        "and every contact carries the merge's confirmation"
+    );
+    assert_eq!(plans.get(), 2, "the merge was planned again");
+}
+
 /// ★ A PLAN READS THIS PROCESS'S OWN CHANGES THE STORE HAS NOT TAKEN YET (SPEC-2 v3 C19). With
 /// the writer stalled, a change to a row is on its way — not in the store. A second change to the
 /// same row plans on the row as this process knows it (the first change laid over the store's

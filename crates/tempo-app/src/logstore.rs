@@ -5031,6 +5031,70 @@ pub(crate) mod tests {
         );
     }
 
+    /// ⛔ A CHANGE SENT AGAIN DOES NOT WRITE OVER ANOTHER WINDOW'S COMMIT TO THE SAME ROW. A change
+    /// the writer gave up on is held as the rows it wrote, whole, as they stood when it was made,
+    /// and sent again seconds to minutes later. Window B's edit of the same row, committed while
+    /// A's change waited, is not A's to undo. Built as the station builds a change, from the row
+    /// as it was read and as the change left it ([`Change::of_pairs`]).
+    #[test]
+    fn a_change_sent_again_does_not_write_over_another_windows_commit() {
+        use tempo_core::logbook::LogOp;
+        let d = Dir::new("resend-over");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = open_fast(&d);
+        let mut b = open_fast(&d);
+        let mut log_a = log_of(&a);
+        let mut log_b = log_of(&b);
+        let id = log_a.records()[2].id.expect("an id");
+
+        // Window A's paper card on the row, dropped by its writer: held in A's store only.
+        let before = Arc::clone(&log_a.records()[2]);
+        let _ = log_a.apply(LogOp::MarkQslCard { id, received: true });
+        let after = Arc::clone(&log_a.records()[2]);
+        let lost = Change::of_pairs(log_a.marks(), false, &[(Some(before), Some(after))], |_| {
+            (None, None)
+        });
+        a.store.dropped.push(Dropped {
+            held: Arc::new(Held::of(&lost)),
+            rev: lost.rev,
+            refusal: Refusal {
+                reason: "logbook database: database is locked".into(),
+                retryable: true,
+            },
+            resends: 0,
+            due: Instant::now() + Duration::from_secs(3600),
+        });
+
+        // Window B edits the same row while A's change waits.
+        let mut theirs = QsoRecord::clone(&log_b.records()[2]);
+        theirs.comment = Some("from window B".into());
+        let t = change(
+            &mut b.store,
+            &mut log_b,
+            LogOp::Edit {
+                id,
+                rec: Box::new(theirs),
+            },
+        )
+        .expect("sent");
+        b.store
+            .writer
+            .wait_durable(&t, DURABLE_WAIT)
+            .expect("B's change lands");
+
+        assert_eq!(a.store.resend(log_a.marks(), true, Instant::now()), 1);
+        let _ = a.store.unsaved().wait(DURABLE_WAIT);
+        let row = stored(&d)
+            .into_iter()
+            .find(|r| r.id == Some(id))
+            .expect("the contact is stored");
+        assert_eq!(
+            row.comment.as_deref(),
+            Some("from window B"),
+            "B's edit stands"
+        );
+    }
+
     /// Poll `f` until it says yes or `limit` passes.
     fn eventually_for(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
         let deadline = Instant::now() + limit;
