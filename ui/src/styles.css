@@ -18761,8 +18761,29 @@ button.cq-skiptx1.on {
 }
 .awards-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  /* THE OPERATOR'S SPLIT (layout L7): the divider between the columns writes `--awards-col-a/-b`
+     inline (features/viewColumns), fr shares summing to 2; unset, each is the stock 1.3fr / 1fr.
+     Both tracks floor at `min(260px, 40%)`, the divider's own stop: two of them can never exceed
+     the grid, and at every width this grid exists (md and up; sm and xs stack below) it is 260 px,
+     which the stock split never comes near. */
+  grid-template-columns: minmax(min(260px, 40%), var(--awards-col-a, 1.3fr)) minmax(min(260px, 40%), var(--awards-col-b, 1fr));
   gap: var(--space-4);
+  /* The containing block of the column divider (`.awards-colseam` below). */
+  position: relative;
+}
+/* THE COLUMN DIVIDER (layout L7): an absolutely positioned child of the grid, placed on the chase
+   lists' track and pulled back over the gap before it — the full height of the row, 12 px wide,
+   centred on the gap, covering neither column. The stacked sm/xs layout hides it with every
+   divider. */
+.awards-body > .awards-colseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  grid-column: 2 / 3;
+  grid-row: 1;
+  left: calc(var(--space-4) / -2 - 6px);
+  width: 12px;
+  margin: 0;
 }
 .aw-panel {
   background: var(--bg-elev);
@@ -19670,8 +19691,15 @@ button.cq-skiptx1.on {
      Both columns share the growth. Column 2 leads now (the pass column holds
      the two graphics, the log and Birds), and the 340px floor is gone: a floor
      under `overflow: hidden` with no interposed scroller is the contract's
-     named bug, and `minmax(0, …)` is what lets both tracks actually shrink. */
-  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1fr);
+     named bug, and `minmax(0, …)` is what lets both tracks actually shrink.
+     THE OPERATOR'S SPLIT (layout L7): the divider between the columns writes
+     `--sats-col-a/-b` inline (features/viewColumns), fr shares summing to 2;
+     unset, each is the stock 0.82fr / 1fr. The floor the divider stops at is
+     `min(260px, 40%)`, which is not that bug: two of them can never exceed the
+     grid, and at every width this grid exists (md and up; sm and xs stack below)
+     it is 260 px, which the stock split never comes near (the planning column
+     is ~480 px at 1024×768). */
+  grid-template-columns: minmax(min(260px, 40%), var(--sats-col-a, 0.82fr)) minmax(min(260px, 40%), var(--sats-col-b, 1fr));
   grid-template-rows: auto auto minmax(0, 1fr);
   /* --space-2, not --space-3: five vertical seams across this grid, and every
      reclaimed pixel is a schedule row. (The FT8 console's own density pass.) */
@@ -19679,6 +19707,22 @@ button.cq-skiptx1.on {
   padding: var(--space-2);
   height: 100%;
   overflow: hidden;
+  /* The containing block of the column divider (`.sats-colseam` below). */
+  position: relative;
+}
+/* THE COLUMN DIVIDER (layout L7): an absolutely positioned child of the grid, placed on the pass
+   column's track and row and pulled back over the gap before it — the full height of the two
+   columns, 12 px wide, centred on the gap, covering neither. The header and the arm bar above
+   span both columns and are not divided. The stacked sm/xs layout hides it with every divider. */
+.sats-view > .sats-colseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  grid-column: 2 / 3;
+  grid-row: 3;
+  left: calc(var(--space-2) / -2 - 6px);
+  width: 12px;
+  margin: 0;
 }
 .sats-head {
   grid-column: 1 / -1;

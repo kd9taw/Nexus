@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { APRS_RAIL_MIN, APRS_RAIL_STOCK } from './features/aprsRail'
+import { VIEW_COLUMN_FLOOR } from './features/viewColumns'
 
-// THE OWN-GRID VIEWS' DIVIDERS (layout L7): APRS's station list width and the Logbook's globe band.
+// THE OWN-GRID VIEWS' DIVIDERS (layout L7): APRS's station list width, the Logbook's globe band, and
+// the Satellites and Awards column splits.
 // Computes the cascade winner
 // of every property a divider depends on, for the element as it renders — its data attributes and
 // the <html> [data-viewport] tier — never a regex over the sheet (a dead selector passes those;
@@ -348,3 +350,40 @@ describe('the Logbook: the globe band and its divider', () => {
     expect(value([...logScroll('xs'), { cls: ['pane-splitter', 'horizontal'] }], 'display')).toBe('none')
   })
 })
+
+// ── Satellites and Awards: one split between two fr columns ─────────────────────────────────────
+
+const SPLITS = [
+  { view: 'Satellites', grid: ['sats-view'], seam: 'sats-colseam', vars: ['--sats-col-a', '--sats-col-b'], stock: ['0.82fr', '1fr'], row: '3', gap: 'var(--space-2)' },
+  { view: 'Awards', grid: ['awards-body'], seam: 'awards-colseam', vars: ['--awards-col-a', '--awards-col-b'], stock: ['1.3fr', '1fr'], row: '1', gap: 'var(--space-4)' },
+] as const
+
+for (const v of SPLITS) {
+  const gridEl = (vp: string): El[] => [html(vp), { cls: [...v.grid] }]
+  const seamEl = (vp: string): El[] => [...gridEl(vp), { cls: ['pane-splitter', 'col-seam', 'seam', v.seam] }]
+
+  describe(`${v.view}: the column split`, () => {
+    for (const vp of ['md', 'lg', 'xl'])
+      it(`[data-viewport=${vp}] each track reads the operator's share over the stock fr, floored where the divider stops`, () => {
+        const floor = `min(${VIEW_COLUMN_FLOOR}px, 40%)`
+        expect(tracks(value(gridEl(vp), 'grid-template-columns')!)).toEqual([
+          `minmax(${floor}, var(${v.vars[0]}, ${v.stock[0]}))`,
+          `minmax(${floor}, var(${v.vars[1]}, ${v.stock[1]}))`,
+        ])
+        expect(value(gridEl(vp), 'position'), 'the grid is the divider’s containing block').toBe('relative')
+      })
+
+    for (const vp of TIERS)
+      it(`[data-viewport=${vp}] the divider is out of flow in the gap before the second column${vp === 'sm' || vp === 'xs' ? ', and hidden in the stack' : ''}`, () => {
+        expect(value(seamEl(vp), 'position')).toBe('absolute')
+        expect(value(seamEl(vp), 'grid-column')).toBe('2 / 3')
+        expect(value(seamEl(vp), 'grid-row')).toBe(v.row)
+        expect(value(gridEl(vp), 'gap'), 'the gap the divider is centred on').toBe(v.gap)
+        expect(value(seamEl(vp), 'left')).toBe(`calc(${v.gap} / -2 - 6px)`)
+        expect(value(seamEl(vp), 'width')).toBe('12px')
+        const display = value(seamEl(vp), 'display') ?? 'block'
+        if (vp === 'sm' || vp === 'xs') expect(display, 'the columns stack at this tier').toBe('none')
+        else expect(display).not.toBe('none')
+      })
+  })
+}

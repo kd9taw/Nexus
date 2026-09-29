@@ -31,6 +31,8 @@ export const PER_SURFACE = [
   'nexus.aprs.mapSide',
   'nexus.aprs.railWidth',
   'nexus.awardsTab',
+  // The Awards and Satellites views' column split (layout L7): a proportion of THIS window's grid.
+  'nexus.awards.columns',
   'nexus.connect.config',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
@@ -82,6 +84,7 @@ export const PER_SURFACE = [
   'nexus.phonescope.flow',
   'nexus.phonescope.win',
   'nexus.roster.filters',
+  'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',
   // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.

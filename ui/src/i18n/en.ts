@@ -1641,6 +1641,9 @@ export const EN = {
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
+  // The divider between the progress column (DXCC and grids by band, DXCC by mode) and the chase
+  // lists (layout L7); its tooltip is paneSeam.title.
+  'awards.columns.split.label': 'Progress column / chase lists',
   'awards.grids.head': 'Grids by band (VUCC)',
   // Band names and frequencies are invariant tokens — never translate '6 m' or '50 MHz'.
   'awards.grids.filter.vucc.label': 'VUCC bands',
@@ -4107,6 +4110,9 @@ export const EN = {
 
   // The 48 h schedule, its sortable headers and the discovery band beneath it.
   'sat.schedule.head': 'Schedule — favorites, next {{hours}} h',
+  // The divider between the planning column (the schedule) and the pass column (layout L7); its
+  // tooltip is paneSeam.title.
+  'sat.columns.split.label': 'Schedule column / pass column',
   'sat.schedule.sortBy': 'Sort by {{label}}',
   'sat.schedule.column.bird': 'Bird',
   'sat.schedule.column.aos': 'AOS local',

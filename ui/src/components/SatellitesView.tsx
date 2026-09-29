@@ -91,6 +91,9 @@ import { t } from '../i18n'
 import { pollSingleFlight } from '../singleFlight'
 import { T } from '../i18n/T'
 import { MapView } from './MapView'
+import { PaneSeam } from './PaneSeam'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { VIEW_COLUMN_FLOOR, columnShareStyle, parseColumnShare } from '../features/viewColumns'
 import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
@@ -2198,6 +2201,10 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
   )
 }
 
+/** The two fr tokens the Satellites grid reads for its columns (layout L7): the planning column's
+ *  and the pass column's. */
+const SATS_COLUMN_VARS = ['--sats-col-a', '--sats-col-b'] as const
+
 export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Props) {
   // Every gesture in this section — arm, stop, pick, Doppler, mapping, peg, elements — asks this
   // one question, on the desktop and from a browser alike. `allowed` draws the control; `send`
@@ -2248,6 +2255,17 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
   const [tpAll, setTpAll] = useState(false)
   const railRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
+  // THE TWO COLUMNS' SPLIT (layout L7): the divider between the planning column and the pass
+  // column stores the first one's share of 2, per window; the grid reads it as two fr tokens.
+  const viewRef = useRef<HTMLDivElement>(null)
+  const planRef = useRef<HTMLElement>(null)
+  const sideRef = useRef<HTMLElement>(null)
+  const [colShare, setColShare] = useState(() => parseColumnShare(surfaceGet('nexus.sats.columns')))
+  const commitCols = (share: number | null) => {
+    setColShare(share)
+    // '' reads back as "never set" (parseColumnShare): the sheet's stock split.
+    surfaceSet('nexus.sats.columns', share == null ? '' : String(share))
+  }
   // The rail's "pick"/"change" fix. It used to be a bare scrollIntoView, which
   // was the right idiom while the chooser sat far down a scrolling column. The
   // chooser is in the planning quadrant now — permanently on screen at md+ — so
@@ -3231,7 +3249,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
         because the readiness rail, the radio binding and the lock-on pill each ask it and none of
         them can work it out from what they are given. */}
     <SatelliteControlContext.Provider value={stationControl}>
-    <div className="sats-view">
+    <div className="sats-view" ref={viewRef} style={columnShareStyle(colShare, SATS_COLUMN_VARS)}>
       <header className="sats-head">
           {remote&&<span role="status" className="dim">{view?t('remote.collectionObserver'):remoteView.loading?t('remote.collectionLoading'):t('remote.collectionUnavailable')}</span>}
         <h1>{t('sat.head.title')}</h1>
@@ -3580,7 +3598,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
            operator's "like the first 10 lines" arrives at about 900 px of window
            height. The per-size statement lives in the CHANGELOG and the guide;
            styles.css's `.sats-plan` comment carries the full table. */
-        <section className="sats-plan">
+        <section className="sats-plan" ref={planRef}>
           {/* THE NEXT/BEST STRIP — still the primary action surface
               (litigation ①: a pass is WORKED from here, not merely opened),
               re-ruled 2026-08 after the field report: the old "Next up" was a
@@ -4218,7 +4236,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
         </section>
       )}
 
-      <aside className="sats-side">
+      <aside className="sats-side" ref={sideRef}>
         {/* SKED WITH A STATION — the two-observer band.
             COLUMN 2, NOT COLUMN 1, and the reason is a budget rather than a
             taste. It reads like a planning block and the thought that reaches
@@ -4466,6 +4484,25 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
           </ul>
         </section>
       </aside>
+
+      {/* The planning column | pass column divider (layout L7): out of flow, in the gap before the
+          pass column (styles.css `.sats-colseam`), and only while both columns are there — without
+          a grid the planning column is a one-line notice. The stacked sm/xs layout hides it. */}
+      {gridSet && (
+        <PaneSeam
+          above={planRef}
+          below={sideRef}
+          axis="x"
+          columnsOn={viewRef}
+          varName="--sats-col"
+          columnVars={SATS_COLUMN_VARS}
+          floors={[VIEW_COLUMN_FLOOR, VIEW_COLUMN_FLOOR]}
+          className="sats-colseam"
+          onCommit={(a: number) => commitCols(a)}
+          onReset={() => commitCols(null)}
+          label={t('sat.columns.split.label')}
+        />
+      )}
 
       {/* THE >14 d ARM CONFIRM (phase 3): the STALE threshold's second
           consequence. Three honest exits — Refresh (fetch fresh elements,
