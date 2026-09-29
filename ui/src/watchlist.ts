@@ -32,6 +32,11 @@ export interface WatchFilter {
   minSnr?: number | null
   /** Optional friendly label shown in the alert (e.g. "Bouvet DXpedition"). */
   label?: string
+  /** #390 — the operator's own note on the entry: why it is on the list and when it can come off
+   *  ("Samoa DXp 9/27-10/3"). Shown and edited in the Settings manager, and nowhere else. Nothing
+   *  matches or gates on it, and the station is never sent it (App sends kind and value alone).
+   *  Absent when there is none, never an empty string. */
+  notes?: string
 }
 
 const STORAGE_KEY = 'nexus.watchlist'
@@ -174,13 +179,23 @@ export function loadWatchlist(): WatchFilter[] {
     if (!raw) return []
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
-    return arr.filter(
-      (f): f is WatchFilter =>
-        f &&
-        typeof f.id === 'string' &&
-        (f.kind === 'call' || f.kind === 'dxcc' || f.kind === 'grid') &&
-        typeof f.value === 'string',
-    )
+    return arr
+      .filter(
+        (f): f is WatchFilter =>
+          f &&
+          typeof f.id === 'string' &&
+          (f.kind === 'call' || f.kind === 'dxcc' || f.kind === 'grid') &&
+          typeof f.value === 'string',
+      )
+      .map((f) => {
+        // A note that is not text (a hand-edited or damaged file) is dropped, and never the entry
+        // it rides on: that is still a station the operator asked to watch. Any other entry comes
+        // back as the very object that was stored.
+        if (f.notes === undefined || typeof f.notes === 'string') return f
+        const kept = { ...f }
+        delete kept.notes
+        return kept
+      })
   } catch {
     return []
   }

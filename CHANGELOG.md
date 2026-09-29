@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Watch list: a note on each entry (#390).** Every entry on the watch list (Settings ▸ Spots &
+  Alerts) has a note field of its own, for why the call is there and when it can come off, such
+  as `Samoa DXp 9/27-10/3`. Type the note when you add the entry, or later in the field on its
+  row: it is saved when you leave the field or press Enter. Empty the field to remove the note.
+  Your existing watch list comes up exactly as it was, with no notes, and a note changes nothing
+  about what alerts or what the Call Roster, the Stations list and Spots mark.
+- **Call Roster: show only the stations within a distance you choose (#386).** The Call Roster's
+  filter row has a new picker beside Hide blocked. Pick **Within 1000 mi**, for example, and the
+  stations farther from your grid square than that leave the list, so a band full of stations you
+  cannot reach stops crowding the ones you can. The choices run from 250 to 5000, in miles or
+  kilometres as the Units setting says (Settings ▸ Station ▸ Operator & Radio). It starts at
+  **Any distance**, which shows every station, as before. A station you have not heard send a grid
+  yet has no known distance, so it always stays on the list, and so does the station you are
+  working. The choice is remembered with the roster's other filters.
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2

@@ -20,7 +20,7 @@
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DECODE_FILTERS, type DecodeFilter } from './decodeHistory'
 
-/** The Call Roster's two visibility checkboxes. */
+/** The Call Roster's visibility checkboxes and its distance cap. */
 export interface RosterFilters {
   /** Show only stations that carry a need tag. */
   neededOnly: boolean
@@ -28,6 +28,10 @@ export interface RosterFilters {
   hideWorked: boolean
   /** Drop blocked callsigns from the roster entirely (default: they render dimmed). */
   hideBlocked?: boolean
+  /** #386 — drop stations farther away than this. In km, the unit every distance is computed in;
+   *  the picker shows it in the operator's own units. ABSENT = no limit, the default, so a value
+   *  stored before the cap existed reads exactly as it did. */
+  maxDistanceKm?: number
 }
 
 /** Both off — the behaviour every build so far has started with, so an operator who never
@@ -108,10 +112,14 @@ export function loadRosterFilters(): RosterFilters {
     // A stored `null`, number or string parses fine and simply has no fields — each one
     // then takes its default, which is why this narrows per field instead of per object.
     const o = (JSON.parse(raw) ?? {}) as Partial<RosterFilters>
+    const km = o.maxDistanceKm
     return {
       neededOnly: typeof o.neededOnly === 'boolean' ? o.neededOnly : DEFAULT_ROSTER_FILTERS.neededOnly,
       hideWorked: typeof o.hideWorked === 'boolean' ? o.hideWorked : DEFAULT_ROSTER_FILTERS.hideWorked,
       hideBlocked: typeof o.hideBlocked === 'boolean' ? o.hideBlocked : false,
+      // Only a real distance is a cap. Anything else (a zero, a string, a number too big to be
+      // finite) is no limit — the key left out, not set to a value the picker cannot show.
+      ...(typeof km === 'number' && Number.isFinite(km) && km > 0 ? { maxDistanceKm: km } : {}),
     }
   } catch {
     return { ...DEFAULT_ROSTER_FILTERS }

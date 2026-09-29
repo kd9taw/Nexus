@@ -1309,7 +1309,11 @@ a new one is genuinely an event.
 Each band choice governs both halves of a need: whether it makes a sound and
 whether it paints an icon. Set **New grid** to VHF+ and an HF FT8 roster stops
 showing GRID chips — the icons follow the setting, not just the alerts.
-- **Watch list** — the calls you want flagged wherever they turn up.
+- **Watch list** — the calls you want flagged wherever they turn up. Each entry can
+  carry a note of your own, such as why it is there and when it can come off
+  (`Samoa DXp 9/27-10/3`): type it when you add the entry, or later in the field
+  on its row, which saves when you leave it. A note changes nothing about what
+  alerts.
 
 ---
 

@@ -86,7 +86,11 @@ right of every row.*
 - **Classic** is the stock-style Band Activity view, with the Tx1–Tx6 message
   panel, editable DX Call / DX Grid fields, and Generate Std Msgs.
 - **Roster** is a modern sortable call roster — one row per station, sorted by
-  what matters to you.
+  what matters to you. The distance picker in its filter row keeps only the
+  stations within a distance of your grid square (**Within 1000 mi**, say, in the
+  units set in [Settings ▸ Station ▸ Operator & Radio](settings-reference.md#operator--radio)).
+  A station that has not sent a grid yet stays on the list, because its distance
+  is not known, and so does the station you are working.
 
 Use Classic when you want the familiar WSJT-X message-by-message control; use
 Roster when you're scanning a busy band for the one call worth working.
