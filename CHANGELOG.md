@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the New York counties worked. **FT8 and FT4 earn no credit**, because their contest messages
   have no room for a county. The Cabrillo export writes `CONTEST: NY-QSO-PARTY` and your county
   code as `LOCATION` for a New York entry, as the sponsor's sample log does.
+- **JS8: send your grid to a station in one click, as in JS8Call.** Each station in the JS8
+  cockpit's Stations pane has a new button beside the quick queries, **GRID** followed by your
+  locator. One click sends that station your locator, the way JS8Call's menu item "GRID … - Send
+  my current station Maidenhead grid locator" does. It is greyed out until Settings has a locator.
+- **JS8: the `<MYGRID4>` and `<MYGRID12>` macros, as in JS8Call.** Type either in a JS8 message,
+  or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
+  4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
+  current value, so it follows the locator when you move.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -236,6 +244,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
+  do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
+  offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
+  heartbeat's, and the Activity pane shows it there. Unlike the heartbeat, it does this even when
+  your own offset is 1000 Hz or lower, as in JS8Call.
+
+- **JS8: a heartbeat that comes due while TX is off is skipped, as in JS8Call.** With HB on and
+  TX off, the heartbeat that came due used to wait and go out the moment you turned TX back on.
+  Now it is dropped and the next one is counted from then, so turning TX on sends nothing until
+  the next heartbeat is due.
+
+- **JS8: no automatic replies to questions sent to @ALLCALL, as in JS8Call.** A station asking
+  everyone (@ALLCALL) for SNR, INFO, STATUS, GRID or HEARING used to get an answer from every
+  Nexus station with autoreply on. JS8Call stations never answer those, and Nexus now doesn't
+  either. Questions sent to your call, or to a group you joined, are answered as before. Nexus
+  also stays quiet where JS8Call does: no reply to INFO? when your info is empty or to GRID?
+  when no locator is set, and an @ALLCALL QUERY MSGS gets an answer only when a message is
+  waiting for that station (at most once every 15 minutes), never a NO.
+
+- **JS8: nothing is transmitted until Settings has your locator, as in JS8Call.** With the Grid
+  field in Settings (Operator & Radio) empty, JS8 used to transmit anyway, and heartbeats and CQs
+  went out without your square. Now Send, CQ and the query buttons are refused with a message
+  saying where to set it, and an automatic reply or heartbeat that comes due is dropped, with the
+  same message in the JS8 cockpit. A message already going out when the locator is cleared still
+  finishes.
+
+- **JS8: the free spot for a heartbeat or its acknowledgement is chosen from everything heard,
+  as in JS8Call.** A spot used to count as taken only when a station whose callsign had been
+  decoded was heard there in the last 30 seconds. Now every decoded frame counts, including the
+  middle frames of a long message, which carry no callsign, and a signal that drifts counts once,
+  where it is now. Your own offset always counts as free, as it does in JS8Call.
+
+- **JS8: a message can be addressed to @APRSIS or @JS8NET, as in JS8Call.** With either in the
+  To field, Send used to refuse, saying JS8Call refuses them. JS8Call sends to both like any
+  group; it only stops you joining them. A JS8Call station that gates to APRS-IS forwards what it
+  hears addressed to @APRSIS: `@APRSIS GRID <locator>` puts your position on APRS-IS, and
+  `@APRSIS CMD <text>` puts `<text>` on APRS-IS as a packet from your call, such as an APRS
+  message to another station or to a gateway (JS8Call's own example is the EMAIL-2 email
+  gateway). The command list and a typed `@APRSIS …` line already sent these; now the To field
+  does too.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as
@@ -321,6 +370,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a row: first a CQ with no locator, then the locator on its own. It now carries the
   four-character square, as JS8Call's CQ does, so it is one frame again. A four-character
   locator is unchanged.
+- **JS8: with a compound callsign, directed messages announce your square, as JS8Call's do.**
+  A compound callsign such as KD9TAW/QRP starts each directed message and reply with a frame
+  that announces the callsign, and JS8Call puts your four-character square in that frame. Nexus
+  sent it without one; it now carries the square. A /P callsign is not compound and is
+  unchanged.
+- **JS8: Nexus no longer relays, stores or answers traffic addressed to other stations.** With
+  relay on (the default), Nexus relayed any relay request it heard on the band, even one
+  addressed to another station or to @ALLCALL. It also stored MSG TO: messages meant for someone
+  else, and could hand a stored message to a QUERY MSG sent to another station. JS8Call acts only
+  on what is addressed to your call or to a group you joined, and so does Nexus now. A QUERY MSG
+  for a message that isn't there now gets no answer, as in JS8Call.
 - **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits

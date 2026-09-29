@@ -348,15 +348,6 @@ pub fn is_compound_call(s: &str) -> bool {
         })
 }
 
-/// varicode.cpp:1322-1328 `isGroupAllowed`: operators may not transmit to `@APRSIS` or `@JS8NET`.
-pub fn may_transmit_to(c: &CallRef) -> bool {
-    match c {
-        CallRef::Js8Net => false,
-        CallRef::Group(i) => GROUPS.get(*i as usize) != Some(&"@APRSIS"),
-        _ => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,16 +559,5 @@ mod tests {
             is_base_call("KD9TAW"),
             "the /P-stripped core is a real base call"
         );
-    }
-
-    #[test]
-    fn transmit_guard_refuses_aprsis_and_js8net() {
-        // mainwindow.cpp:4043 / :4068 via varicode.cpp isGroupAllowed.
-        assert!(!may_transmit_to(&CallRef::Js8Net));
-        assert!(!may_transmit_to(&CallRef::parse("@APRSIS").unwrap()));
-        assert!(may_transmit_to(&CallRef::AllCall));
-        assert!(may_transmit_to(&CallRef::parse("@POTA").unwrap()));
-        assert!(may_transmit_to(&CallRef::Base("W1AW".into())));
-        assert!(may_transmit_to(&CallRef::Placeholder));
     }
 }

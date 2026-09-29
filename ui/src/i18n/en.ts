@@ -8351,6 +8351,7 @@ export const EN = {
   'js8.station.empty': 'No stations heard yet — the heard list fills as heartbeats and CQs decode',
   'js8.station.select.title': 'Write to {{call}} (fills the To box and the log strip)',
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
+  'js8.station.sendGrid.title': 'Send your grid square {{grid}} to {{call}}',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
   'js8.station.pin.title': 'Pin {{call}} to the top of this list',
   'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',

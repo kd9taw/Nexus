@@ -98,8 +98,8 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function renderCockpit() {
-  const r = render(<Js8Cockpit snap={snap} />)
+async function renderCockpit(s: AppSnapshot = snap) {
+  const r = render(<Js8Cockpit snap={s} />)
   await act(async () => {
     await Promise.resolve()
     await Promise.resolve()
@@ -254,5 +254,33 @@ describe('the pending auto-reply and the queue', () => {
     await renderCockpit()
     expect(document.querySelector('.js8-pending-row')).toBeNull()
     expect(document.querySelector('.js8-queue-row')).toBeNull()
+  })
+})
+
+// JS8Call's query menu has "GRID <locator> - Send my current station Maidenhead grid locator"
+// (mainwindow.cpp:6656), disabled with no locator (:6657), which sends `<call> GRID <my_grid()>`
+// (:6665) at once (TransmitDirected, on by default: Configuration.cpp:1947). The station row's
+// one-click queries are Nexus's query menu.
+describe('send my grid, from a station row', () => {
+  const sendGrid = () => q<HTMLButtonElement>('.js8-station-acts .js8-send-grid')
+
+  it('one click sends that station GRID and the whole locator', async () => {
+    await renderCockpit({ ...snap, mygrid: 'en52xa' } as AppSnapshot)
+    expect(sendGrid()?.textContent).toBe('GRID EN52XA')
+    expect(sendGrid().title).toBe('Send your grid square EN52XA to W1AW')
+    await act(async () => {
+      fireEvent.click(sendGrid())
+    })
+    expect(js8SendCommand).toHaveBeenCalledWith('W1AW', 15, 'EN52XA')
+  })
+
+  it('is disabled with no locator in Settings', async () => {
+    await renderCockpit({ ...snap, mygrid: '  ' } as AppSnapshot)
+    expect(sendGrid()?.disabled).toBe(true)
+    expect(sendGrid().textContent).toBe('GRID')
+    await act(async () => {
+      fireEvent.click(sendGrid())
+    })
+    expect(js8SendCommand).not.toHaveBeenCalled()
   })
 })

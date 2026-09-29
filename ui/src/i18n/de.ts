@@ -5526,6 +5526,7 @@ export const DE: PartialCatalog = {
   "js8.station.empty": "Noch keine Station gehört — die Liste füllt sich mit dekodierten Heartbeats und CQs",
   "js8.station.select.title": "An {{call}} schreiben (füllt das An-Feld und die Logzeile)",
   "js8.station.query.title": "{{cmd}} an {{call}} senden — bei eingeschalteter Auto-Antwort antwortet die Station von selbst",
+  "js8.station.sendGrid.title": "Ihren Locator {{grid}} an {{call}} senden",
   "js8.station.stored": { "one": "{{count}} Nachricht für diese Station hinterlegt", "other": "{{count}} Nachrichten für diese Station hinterlegt" },
   "js8.station.pin.title": "{{call}} oben in dieser Liste festhalten",
   "js8.station.unpin.title": "{{call}} loslassen — die Station reiht sich wieder nach Hörfolge ein",

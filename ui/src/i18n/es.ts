@@ -1693,6 +1693,7 @@ export const ES: PartialCatalog = {
   "js8.station.empty": "Aún no se ha oído ninguna estación — la lista se llena con los heartbeats y CQ decodificados",
   "js8.station.select.title": "Escribir a {{call}} (rellena el campo Para y la tira de log)",
   "js8.station.query.title": "Enviar {{cmd}} a {{call}} — responde automáticamente si tiene activada la respuesta automática",
+  "js8.station.sendGrid.title": "Enviar tu Locator {{grid}} a {{call}}",
   "js8.station.stored": { "one": "{{count}} mensaje guardado para esta estación", "other": "{{count}} mensajes guardados para esta estación" },
   "js8.station.pin.title": "Fijar {{call}} arriba en esta lista",
   "js8.station.unpin.title": "Soltar {{call}} — vuelve al orden de escucha",
