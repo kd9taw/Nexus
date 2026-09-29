@@ -206,6 +206,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Now it is dropped and the next one is counted from then, so turning TX on sends nothing until
   the next heartbeat is due.
 
+- **JS8: no automatic replies to questions sent to @ALLCALL, as in JS8Call.** A station asking
+  everyone (@ALLCALL) for SNR, INFO, STATUS, GRID or HEARING used to get an answer from every
+  Nexus station with autoreply on. JS8Call stations never answer those, and Nexus now doesn't
+  either. Questions sent to your call, or to a group you joined, are answered as before. Nexus
+  also stays quiet where JS8Call does: no reply to INFO? when your info is empty or to GRID?
+  when no locator is set, and an @ALLCALL QUERY MSGS gets an answer only when a message is
+  waiting for that station (at most once every 15 minutes), never a NO.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as
