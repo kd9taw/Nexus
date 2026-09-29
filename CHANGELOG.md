@@ -352,6 +352,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Connect: the Band conditions list on the map is readable in every theme (#382).** The band
+  names are now drawn in the theme's own text colour. Before, they used the computer's default
+  button colour, so with Windows in light mode they came out black on the dark theme and could
+  hardly be seen. The Open, Marginal and Closed words are now lettered in the text colour too,
+  and the band's green, amber or grey shows as the tint and outline of each word. In the light
+  theme those words had been too faint to read comfortably. A closed band's word is dimmer, so it
+  recedes.
+
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

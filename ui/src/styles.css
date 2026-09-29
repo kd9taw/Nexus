@@ -3095,7 +3095,15 @@ body.resizing-row {
   letter-spacing: 0.03em;
   color: var(--text-faint);
 }
-/* Band-condition strip — modelled colour pill + observed dot. */
+/* Band-condition strip — modelled colour pill + observed dot.
+   THE LETTERS ARE THE THEME'S INKS (#382). A row is a <button>, and a button draws its text in the
+   BROWSER's ink unless the sheet colours it: in 1.15.0 that followed the computer's light/dark, so
+   a light Windows drew black band names on the dark rail, and since the colour-scheme rule it is
+   still the browser's white or black, not --text (Night, High contrast and the themes ignored).
+   The pill's band colour (`--bc-color`, set per band by the component) is its tint and its edge,
+   never its letters: a word in the band colour on a tint of itself read 2.6–3.5:1 in the light
+   theme and 3.8:1 for "Closed" in the dark one. Guard: BandConditionStrip.test.tsx, every mode and
+   theme. */
 .band-cond {
   display: flex;
   flex-direction: column;
@@ -3110,6 +3118,7 @@ body.resizing-row {
   background: none;
   border: none;
   border-radius: var(--radius-sm);
+  color: var(--text);
   cursor: pointer;
   text-align: left;
 }
@@ -3128,9 +3137,17 @@ body.resizing-row {
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
   border-radius: 4px;
-  padding: 1px 6px;
+  /* One pixel less than before on every side: the edge takes it, so the pill's box is unchanged. */
+  padding: 0 5px;
   text-align: center;
   letter-spacing: 0.02em;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bc-color) 16%, transparent);
+  border: 1px solid var(--bc-color);
+}
+/* A closed band recedes: dim letters, still no red. */
+.bc-state.is-closed {
+  color: var(--text-dim);
 }
 .bc-dot {
   width: 8px;
