@@ -284,16 +284,22 @@ describe('the merged operating strip is the un-removable TX surface', () => {
   ] as const)('%s layout, rail on the %s: every protected control is in the strip, hidden panes or not', (layoutMode, side) => {
     for (const state of [{}, ALL_REMOVED]) {
       localStorage.setItem('nexus.operate.railSide', side)
-      const { container } = renderCockpit(state, { layoutMode })
-      // The side really took (with the rail on screen), or this would sweep one layout four times.
-      if (Object.keys(state).length === 0)
-        expect(container.querySelector('.cockpit-lower')?.getAttribute('data-rail') ?? 'right', `${layoutMode}: the rail side did not apply`).toBe(side)
-      for (const name of PROTECTED) {
-        const btn = screen.getByRole('button', { name })
-        expect(btn.closest('.cockpit-qso'), `${layoutMode}, rail ${side}: ${String(name)} left the strip`).not.toBeNull()
+      // In a `finally`: a red here must not leave the rail on the left for the tests after it.
+      try {
+        const { container } = renderCockpit(state, { layoutMode })
+        // The layout and the side really took (the side with the rail on screen), or this would sweep
+        // one layout four times.
+        expect(container.querySelector('.cockpit-lower')?.classList.contains(layoutMode), `${layoutMode}: the layout did not apply`).toBe(true)
+        if (Object.keys(state).length === 0)
+          expect(container.querySelector('.cockpit-lower')?.getAttribute('data-rail') ?? 'right', `${layoutMode}: the rail side did not apply`).toBe(side)
+        for (const name of PROTECTED) {
+          const btn = screen.getByRole('button', { name })
+          expect(btn.closest('.cockpit-qso'), `${layoutMode}, rail ${side}: ${String(name)} left the strip`).not.toBeNull()
+        }
+      } finally {
+        cleanup()
+        localStorage.removeItem('nexus.operate.railSide')
       }
-      cleanup()
-      localStorage.removeItem('nexus.operate.railSide')
     }
   })
 
