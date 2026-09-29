@@ -26,6 +26,7 @@
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from './arrlSections'
 import { CQWW_RTTY_US_QTH, CQWW_RTTY_VE_QTH } from './cqwwRttyQth'
 import { ILQP_COUNTIES, ILQP_MULTS } from './ilqpQth'
+import { NYQP_COUNTIES, NYQP_MULTS } from './nyqpQth'
 
 /** One cell of a board / one legal value of a slot. */
 export interface DomainValue {
@@ -109,6 +110,26 @@ const IL_MULTS: ContestDomain = {
   total: ILQP_MULTS.length,
 }
 
+/** ⭐ The New York QSO Party's 62 counties — the sponsor's own list, mirrored in
+ *  `nyqpQth.ts`. One block, for the ILQP chart's reason: the list is alphabetical and has
+ *  no grouping of its own. */
+const NY_COUNTIES: ContestDomain = {
+  codes: new Set(NYQP_COUNTIES.map((c) => c.code)),
+  groups: [{ label: 'NY', values: NYQP_COUNTIES }],
+  total: NYQP_COUNTIES.length,
+}
+
+/** What a station outside New York sends — the 49 other states, then the 13 provinces, in
+ *  the same call-area blocks as the Illinois list. */
+const NY_MULTS: ContestDomain = {
+  codes: new Set(NYQP_MULTS.map((c) => c.code)),
+  groups: [
+    { label: 'W', values: NYQP_MULTS.filter((c) => !VE_CODES.has(c.code)) },
+    { label: 'VE', values: NYQP_MULTS.filter((c) => VE_CODES.has(c.code)) },
+  ],
+  total: NYQP_MULTS.length,
+}
+
 const DOMAINS: Record<string, ContestDomain> = {
   fd_sections: FD_SECTIONS,
   // The plain 85-section universe under its own Rust id, same table.
@@ -116,6 +137,8 @@ const DOMAINS: Record<string, ContestDomain> = {
   cqww_rtty_qth: CQWW_RTTY_QTH,
   il_counties: IL_COUNTIES,
   il_mults: IL_MULTS,
+  ny_counties: NY_COUNTIES,
+  ny_mults: NY_MULTS,
 }
 
 /** The domain behind an id, or `undefined` when this build carries no value set for it. */

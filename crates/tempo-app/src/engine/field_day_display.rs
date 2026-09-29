@@ -179,7 +179,7 @@ impl Engine {
                 .collect(),
             // ⭐ The WHOLE rule, so the strip's badge can build the key the engine will
             // refuse on instead of the `(call, band, mode class)` triple it hardcoded —
-            // which is the rule for two of the seventeen shipped rulesets.
+            // which is the rule for two of the eighteen shipped rulesets.
             dupe_rule: crate::dto::DupeRuleDto {
                 by_call: rs.dupe_rule.by_call,
                 by_band: rs.dupe_rule.by_band,
@@ -474,7 +474,7 @@ mod tests {
 
     /// ⭐ **The while-typing verdict must ask the ENGINE's question.** The strip built a
     /// hardcoded `(call, band, mode class)` triple, which is the rule for exactly two of
-    /// the seventeen shipped rulesets. Sweepstakes keys on the CALL ALONE (rule 2.2 —
+    /// the eighteen shipped rulesets. Sweepstakes keys on the CALL ALONE (rule 2.2 —
     /// `by_band: false`), so the strip said "new" for a station the log then refused; a
     /// QSO party keys on the counties too, so it said DUPE for a legal contact with a
     /// mobile in a new county. `contest::dupe` names that second direction the costly

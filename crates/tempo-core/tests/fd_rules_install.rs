@@ -97,6 +97,22 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
         ),
         "a file downloaded before CQ WW RTTY existed loses to this seed"
     );
+    // …and again for the New York QSO Party. The file published from the seed that
+    // carried ILQP is stamped 2026-09-17T21:00:00Z and has no nyqp; on an equal stamp it
+    // would win, and NYQP would be missing from every upgraded install's menu.
+    let mut before_nyqp: serde_json::Value = serde_json::from_str(SEED).unwrap();
+    before_nyqp["rulesets"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["event"] != "nyqp");
+    before_nyqp["generated"] = "2026-09-17T21:00:00Z".into();
+    assert!(
+        matches!(
+            fd_rules::install_from(&before_nyqp.to_string()),
+            Err(RulesInitError::OlderThanSeed { .. })
+        ),
+        "a file downloaded before NYQP existed loses to this seed"
+    );
 
     // -- The install: seed with SFD phone points edited 1 → 3. -------------
     let mut spec: serde_json::Value = serde_json::from_str(SEED).unwrap();

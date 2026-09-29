@@ -1663,6 +1663,25 @@ impl FieldDayLog {
         let mut classes: Vec<&str> = self.qsos.iter().map(|q| q.mode.as_str()).collect();
         classes.sort_unstable();
         classes.dedup();
+        // ⭐ A SPONSOR WHOSE `LOCATION` IS WHAT THE ENTRY SENDS (NYQP: the county for a New
+        // York entry, the state, province or `DX` for everyone else). *"For mobile and
+        // portable stations in New York, use the NYQP-approved three-letter county
+        // abbreviation of any county activated during the contest"* — so the value is read
+        // off the first ROW that sent one, a county a contact was actually made from, and
+        // not off the county being composed now, which a mobile that has moved on and not
+        // yet worked anybody has not activated. An empty log has activated nothing, and
+        // heads the county it is sending from.
+        let slot = rs.cabrillo_location_slot;
+        let sent_location = (!slot.is_empty())
+            .then(|| {
+                self.qsos
+                    .iter()
+                    .map(|q| q.sent(slot).trim())
+                    .find(|v| !v.is_empty())
+                    .unwrap_or_else(|| self.session.field(slot).trim())
+                    .to_string()
+            })
+            .filter(|v| !v.is_empty());
         let headers = crate::contest::CabrilloHeaders {
             // ⭐ …then translated out of ADIF's namespace into Cabrillo's. The id
             // above is an ADIF `CONTEST_ID` enumeration value, which is NOT the
@@ -1688,22 +1707,25 @@ impl FieldDayLog {
             category_operator: self.session.entry_category,
             // LOCATION is a per-ENTRY value, so it reads the session's declared
             // location and not a row: Cabrillo puts it in a header, once, for exactly
-            // that reason. The per-contact truth is on the QSO lines below.
+            // that reason. The per-contact truth is on the QSO lines below. (A sponsor
+            // that ties LOCATION to what the entry SENDS is the exception, above.)
             //
             // A `dx`-role entry is `DX` whatever its state field holds — §2.3's role word
             // for it, and what CQ WW RTTY X.3 asks for: "other stations indicate 'DX'". A
             // sponsor whose LOCATION list spells a place differently from its exchange
             // (CQ WW RTTY's `PEI` is `PE` there) maps it through `cabrillo.location`.
-            location: if self.session.role().id == "dx" {
-                "DX".to_string()
-            } else {
-                let state = self.session.my_location.state.as_str();
-                rs.cabrillo_location
-                    .iter()
-                    .find(|(from, _)| from.eq_ignore_ascii_case(state))
-                    .map_or(state, |(_, to)| to)
-                    .to_string()
-            },
+            location: sent_location.unwrap_or_else(|| {
+                if self.session.role().id == "dx" {
+                    "DX".to_string()
+                } else {
+                    let state = self.session.my_location.state.as_str();
+                    rs.cabrillo_location
+                        .iter()
+                        .find(|(from, _)| from.eq_ignore_ascii_case(state))
+                        .map_or(state, |(_, to)| to)
+                        .to_string()
+                }
+            }),
             created_by: "Nexus".to_string(),
             // Which rules data scored this log (X- headers are Cabrillo-legal and
             // ignored by robots) — a fetched rules file with different parameters
