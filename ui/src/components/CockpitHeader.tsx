@@ -103,10 +103,6 @@ export interface CockpitHeaderProps {
   txState?: boolean
   /** Label shown on the pill while transmitting (default '▲ KEYING'; Phone passes '▲ TX'). */
   txActiveLabel?: string
-  /** This cockpit's own press holds an over armed and waiting for the voice (Phone's PTT pressed
-   * through the stream, reading "Armed"). While the station reports that over armed and nothing
-   * else is on the air, the pill waits with the button. DISPLAY ONLY: see `lit` below. */
-  txArmed?: boolean
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
   /** Run the RADIO's own built-in ATU (discussion #19 — WSJT-X fires it from a right-click on
@@ -171,7 +167,6 @@ export function CockpitHeader({
   power,
   txState = true,
   txActiveLabel = TX_KEYING,
-  txArmed = false,
   onTune,
   onAtuTune,
   onStopTx,
@@ -265,13 +260,16 @@ export function CockpitHeader({
   // same rule the wheel-tune gate above already follows.
   const onAir = isOnAir(radio)
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
-  // 2026-09-28). An over the cockpit's press armed through the stream owns the transmitter from
-  // the arm, but nothing is on the air until the voice keys it, so while the station reports it
-  // only armed the pill reads as it does before a key. Anything else on the air lights it as
-  // always. DISPLAY ONLY: `onAir` stays the arbiter's answer, and the amplifier strip reads it.
+  // 2026-09-28). A streamed operator's PTT, whichever they hold, arms an over that owns the
+  // transmitter from the arm, but nothing is on the air until the voice keys it, so while the
+  // station reports it armed (`streamMic`, which says so only while that over owns the
+  // transmitter) the pill reads as it does before a key. A key read back from the radio is not one
+  // of the arbiter's owners, and the FT slot flag and the tune carrier are checked here too, for a
+  // station that reports `armed` whatever else holds the transmitter: any of them lights it.
+  // DISPLAY ONLY: `onAir` stays the arbiter's answer, and the amplifier strip reads it.
   const lit =
     onAir &&
-    !(txArmed && radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
+    !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
   const txPill = lit ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (

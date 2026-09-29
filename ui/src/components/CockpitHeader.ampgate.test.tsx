@@ -16,7 +16,7 @@
 // the right answer, which the strip's own tests cannot see.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, screen, within } from '@testing-library/react'
-import { CockpitHeader, type CockpitHeaderProps } from './CockpitHeader'
+import { CockpitHeader } from './CockpitHeader'
 import type { AmpStatus, AppSnapshot, RadioStatus } from '../types'
 
 // Derived from the real module (AmpStrip.test.tsx's rule): a partial mock leaves every other
@@ -46,11 +46,7 @@ const amp = (transmitting: boolean | null): AmpStatus =>
     warningRaised: false,
   }) as AmpStatus
 
-function ampButtons(
-  over: Partial<RadioStatus>,
-  ampTx: boolean | null,
-  props: Partial<CockpitHeaderProps> = {},
-): HTMLButtonElement[] {
+function ampButtons(over: Partial<RadioStatus>, ampTx: boolean | null): HTMLButtonElement[] {
   const snap = {
     activeRadioId: 0,
     radio: {
@@ -58,7 +54,7 @@ function ampButtons(
       tuning: false, txAllowed: true, txBusyReason: null, rigKeyed: false, amp: amp(ampTx), ...over,
     },
   } as unknown as AppSnapshot
-  render(<CockpitHeader snap={snap} modeIndicator={<span>SSB</span>} bandControl={<span>—</span>} {...props} />)
+  render(<CockpitHeader snap={snap} modeIndicator={<span>SSB</span>} bandControl={<span>—</span>} />)
   const strip = screen.getByRole('group', { name: /amplifier/i })
   return within(strip).getAllByRole('button') as HTMLButtonElement[]
 }
@@ -98,12 +94,12 @@ describe("the header's amplifier strip locks during every over", () => {
     for (const b of ampButtons(over, null)) expect(b.disabled).toBe(true)
   })
 
-  // Phone's ON AIR sign waits out an over its press armed through the stream (the operator's pick
-  // "Header ON AIR waits too", 2026-09-28). That is the SIGN only: the armed over owns the
-  // transmitter, and the strip keeps reading the arbiter, so it stays locked.
+  // The ON AIR sign waits out an over armed through the stream (the operator's pick "Header ON AIR
+  // waits too", 2026-09-28). That is the SIGN only: the armed over owns the transmitter, and the
+  // strip keeps reading the arbiter, so it stays locked.
   it.each(AMPS)('an over armed through the stream, which the sign waits out, still locks it (amplifier reporting %s)', (_kind, tx) => {
     const over = { streamMic: 'armed', txBusyReason: 'The Remote microphone is transmitting — stop it first' } as const
-    const buttons = ampButtons(over, tx, { txArmed: true })
+    const buttons = ampButtons(over, tx)
     expect(document.querySelector('.cockpit-txstate')?.classList.contains('on'), 'premise: the sign waits').toBe(false)
     for (const b of buttons) expect(b.disabled, `${b.getAttribute('aria-label') ?? b.textContent} is live under an armed over`).toBe(true)
   })
