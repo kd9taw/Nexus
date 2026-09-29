@@ -14,7 +14,9 @@
 //! - [`stun`] — the one binding request that learns the station's reflexive address.
 //! - [`session`] — one streamed session over WebRTC: answer, candidates, video, data channels.
 //! - [`video`] — the picture: the station's window, captured and encoded as VP8.
+//! - [`keep_awake`] — the shack kept awake, system and display, while a stream is attached.
 pub mod frame_clock;
+pub mod keep_awake;
 pub mod lan;
 pub mod offer;
 pub mod protocol;

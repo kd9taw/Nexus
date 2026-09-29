@@ -75,6 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this window to an approved browser** in Settings, and on the stream page beside **Start the
   stream**, Nexus says that the stream is its window as Windows draws it at the shack, so Nexus
   must stay open there and not minimized.
+- **Remote as a stream: the shack's PC stays awake while you stream (Windows).** Clicks and keys
+  from a stream reach Nexus only, so Windows does not count them as someone at the computer, and it
+  could turn the shack's screen off or put the PC to sleep in the middle of a stream. While a stream
+  is attached, Nexus now asks Windows to keep the PC awake with the screen on, and it stops asking
+  when the last stream ends, however it ended, or when Nexus closes. A screen saver still starts if
+  one is set, a lock enforced by policy still happens, and someone at the shack can still put the PC
+  to sleep. A forgotten stream still ends at the "Still there?" question, and from then on Windows'
+  own power settings apply again.
 - **Remote as a stream: the Phone PTT says Armed until your voice keys the rig.** Pressed through
   the stream (its button, or the space bar over the picture), the Phone cockpit's PTT reads "Armed
   — talk to transmit" while the over waits for your voice, and "ON AIR — release to stop" once your

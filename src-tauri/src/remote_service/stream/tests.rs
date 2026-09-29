@@ -86,6 +86,22 @@ struct Fixture {
     station: Station,
     lease: String,
     delivered: Arc<Mutex<Vec<WebviewInput>>>,
+    /// The keep-awake request as the OS would see it: every hold and release, in order.
+    awake: Arc<Mutex<Vec<&'static str>>>,
+}
+
+/// The OS side of the keep-awake request, recorded.
+struct AwakeRecorder(Arc<Mutex<Vec<&'static str>>>);
+
+impl tempo_stream::keep_awake::Power for AwakeRecorder {
+    fn hold(&mut self) -> Result<(), String> {
+        self.0.lock().unwrap().push("hold");
+        Ok(())
+    }
+    fn release(&mut self) -> Result<(), String> {
+        self.0.lock().unwrap().push("release");
+        Ok(())
+    }
 }
 
 fn fixture(now: Instant) -> Fixture {
@@ -129,6 +145,7 @@ fn fixture(now: Instant) -> Fixture {
         )
         .unwrap();
     let delivered = Arc::new(Mutex::new(Vec::new()));
+    let awake = Arc::new(Mutex::new(Vec::new()));
     let sink = delivered.clone();
     let input: InputSink = Arc::new(move |i: &WebviewInput| sink.lock().unwrap().push(i.clone()));
     Fixture {
@@ -141,6 +158,10 @@ fn fixture(now: Instant) -> Fixture {
                 ptt,
                 mic,
                 window: None,
+                awake: tempo_stream::keep_awake::KeepAwake::new(
+                    Box::new(AwakeRecorder(awake.clone())),
+                    Arc::new(|_: &str| {}),
+                ),
             },
             #[cfg(feature = "radio")]
             audio: None,
@@ -150,6 +171,7 @@ fn fixture(now: Instant) -> Fixture {
         },
         lease: acquired["leaseId"].as_str().unwrap().to_string(),
         delivered,
+        awake,
     }
 }
 
@@ -1208,5 +1230,45 @@ fn the_stream_hears_the_station_while_the_listen_lane_does() {
     assert!(
         heard >= 8 && streamed == heard,
         "the Listen lane sent {heard} bundles and the stream {streamed}"
+    );
+}
+
+// ----- The shack kept awake while a stream is attached (the operator's pick, 2026-09-28) -----
+
+/// A stream's connection holds the shack awake, once, and its state going, which is how every end
+/// of the session loop ends a stream, releases it. CONTROL: a connection refused at A5 never
+/// holds it.
+#[test]
+fn a_connected_stream_keeps_the_shack_awake_until_it_is_gone() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let requests = || f.awake.lock().unwrap().clone();
+    let signed = protocol::offer_fingerprint(&offer(&f.lease).sdp).unwrap();
+    let mut other = signed;
+    other[0] ^= 0xff;
+    let mut refused = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert_eq!(
+        refused.connected(Some(other), now),
+        Err(StreamReason::DeviceKeyMismatch)
+    );
+    drop(refused);
+    assert!(
+        requests().is_empty(),
+        "a connection refused at A5 held the shack awake: {:?}",
+        requests()
+    );
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert!(requests().is_empty(), "held before the connection");
+    assert_eq!(streaming.connected(Some(signed), now), Ok(()));
+    assert_eq!(
+        requests(),
+        ["hold"],
+        "connected, and the shack not held awake"
+    );
+    drop(streaming);
+    assert_eq!(
+        requests(),
+        ["hold", "release"],
+        "the stream's end did not release it"
     );
 }

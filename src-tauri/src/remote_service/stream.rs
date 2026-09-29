@@ -99,6 +99,9 @@ pub struct Host {
     /// The one window a stream shows: the station's `main` window. `None` where there is none
     /// (a test, or a build without a window), and then a stream is answered unavailable.
     pub window: Option<WindowHandle>,
+    /// The shack kept awake, system and display, while a stream is attached (the operator's pick
+    /// "Keep awake during streams"). Held from a session's connection until its state is gone.
+    pub awake: tempo_stream::keep_awake::KeepAwake,
 }
 
 /// The device key the operator pinned for a browser when they approved it at the radio (A5), as
@@ -398,6 +401,9 @@ pub(super) struct Streaming {
     mic: Option<tempo_audio::mic_decode::MicDecoder>,
     /// The microphone over as the page was last told it (`micState`), so it is told of changes only.
     mic_told: tempo_app::mic::MicStatus,
+    /// The shack held awake from the connection on. Dropped with this state, which the session
+    /// loop drops however the stream ends, a panic included.
+    awake: Option<tempo_stream::keep_awake::Attached>,
 }
 
 impl Streaming {
@@ -416,6 +422,7 @@ impl Streaming {
             #[cfg(feature = "radio")]
             mic: tempo_audio::mic_decode::MicDecoder::new().ok(),
             mic_told,
+            awake: None,
         }
     }
 
@@ -468,6 +475,8 @@ impl Streaming {
         }
         self.verified = true;
         self.presence.renew(&self.station, &self.offer, now);
+        // Attached: the shack stays awake, system and display, until this stream is gone.
+        self.awake = Some(self.station.host.awake.attach());
         Ok(())
     }
 
