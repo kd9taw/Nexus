@@ -2379,6 +2379,7 @@ export function Logbook({
               storageKey="nexus.split.logbook.globe"
               min={LOG_GLOBE_SPLIT_MIN}
               max={LOG_GLOBE_SPLIT_MAX}
+              maxShare={Infinity}
               defaultPct={null}
               label={t('logbook.globe.height.label')}
             />

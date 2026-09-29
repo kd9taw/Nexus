@@ -316,7 +316,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     const z = elZoom(el)
     const span = contentSpan(el, axis, z)
     if (!(span > 0)) return null
-    const g = splitGeom(el, z)
+    const g = { ...splitGeom(el, z), span }
     let lo = resolveClamp(min, g)
     let hi = Math.min(resolveClamp(max, g), maxShare * span)
     const honoured = honouredRange(strip.current!, el, varName, axis, z, ownSize)

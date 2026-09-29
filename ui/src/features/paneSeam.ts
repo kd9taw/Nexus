@@ -64,6 +64,10 @@ export function seamKey(e: SeamKeyPress, k: SeamKeys): number | 'reset' | null {
 export interface SplitGeom {
   fontPx: number
   vhEff: number
+  /** The container's content span along the divider's axis, CSS px, where a strip divider resolves
+   *  the clamp (PaneSeam fills it in): what a clamp relative to the box it sizes the strip in reads.
+   *  Absent where there is no box yet. */
+  span?: number
 }
 
 /** A drag end: CSS px, or a function of the live geometry.
@@ -123,10 +127,14 @@ export const CONNECT_STRIP_MAX_SHARE = 0.5
 
 /** The Logbook's globe band once sized (layout L7), from its own rules (`.log-globe-band`,
  *  `.log-globe-band[data-sized]`): an 8em floor (the band's readout and band picker over a globe
- *  still worth looking at) and no ceiling of its own — the divider's default 90 % of the scroller
- *  holds, and the band scrolls away with the list. Stock, the band is 320 px. */
+ *  still worth looking at), and a ceiling of 90 % of the list's scroller that never stops short of
+ *  the stock 320 px. The band scrolls away with the list, so a band taller than a short list IS the
+ *  stock layout there (measured at a pinned 175 % on 1920×1080: a 124 px scroller), and a range that
+ *  stopped below it would snap the band down on the first key. The divider passes no share cap
+ *  (`maxShare={Infinity}`): this is the whole ceiling. */
+export const LOG_GLOBE_STOCK_PX = 320
 export const LOG_GLOBE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
-export const LOG_GLOBE_SPLIT_MAX: SplitClamp = Infinity
+export const LOG_GLOBE_SPLIT_MAX: SplitClamp = (g) => Math.max(LOG_GLOBE_STOCK_PX, 0.9 * (g.span ?? 0))
 
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */

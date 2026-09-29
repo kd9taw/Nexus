@@ -15,6 +15,8 @@ import type { LogQuestion } from '../features/logAnswers'
 const KEY = 'nexus.split.logbook.globe'
 const SCROLL_H = 500
 const BAND_H = 320
+/** The scroller's height, per test: 500 px, or a short one. */
+let scrollH = SCROLL_H
 
 /** Every ResizeObserver made, with its callback and the elements it watches. */
 let observers: Array<{ cb: () => void; els: Element[] }> = []
@@ -70,6 +72,7 @@ beforeEach(() => {
   localStorage.clear()
   observers = []
   offsetReads = 0
+  scrollH = SCROLL_H
   globalThis.ResizeObserver = class {
     entry: { cb: () => void; els: Element[] }
     constructor(cb: () => void) {
@@ -93,10 +96,10 @@ beforeEach(() => {
   })
   HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
     const box = (height: number) => ({ x: 0, y: 0, left: 0, top: 0, width: 900, height, right: 900, bottom: height, toJSON() {} }) as DOMRect
-    if (this.classList.contains('log-scroll')) return box(SCROLL_H)
+    if (this.classList.contains('log-scroll')) return box(scrollH)
     if (this.classList.contains('log-globe-band')) {
       const v = this.parentElement?.style.getPropertyValue('--log-globe-h') ?? ''
-      if (this.hasAttribute('data-sized') && v.endsWith('%')) return box((parseFloat(v) / 100) * SCROLL_H)
+      if (this.hasAttribute('data-sized') && v.endsWith('%')) return box((parseFloat(v) / 100) * scrollH)
       if (this.hasAttribute('data-sized') && v.endsWith('px')) return box(parseFloat(v))
       return box(BAND_H)
     }
@@ -137,6 +140,21 @@ describe('the Logbook’s globe | table divider', () => {
     expect(painted(c)).toBe('')
     expect(band(c)!.hasAttribute('data-sized')).toBe(false)
     expect(localStorage.getItem(KEY)).toBe('')
+  })
+
+  it('on a list too short for the stock band, the band’s 320 px is still inside the range: a key never jumps it', async () => {
+    // Measured in Chrome at a pinned 175 % on 1920×1080: the list's scroller is 124 px, under the
+    // stock 320 px band. The range tops out at the stock height there (the band scrolls away with
+    // the list, so a band taller than the list is the stock layout, not an error), so "grow" from
+    // the stock stays put instead of snapping the band to 90 % of 124 px.
+    scrollH = 124
+    const c = await mount()
+    const d = divider()
+    expect(aria(d)).toEqual([BAND_H, 128, BAND_H])
+    fireEvent.keyDown(d, { key: 'ArrowDown' })
+    expect(parseFloat(painted(c)) * scrollH / 100, 'grow from the top of the range stays at the top').toBeCloseTo(BAND_H, 6)
+    fireEvent.keyDown(d, { key: 'ArrowUp' })
+    expect(parseFloat(painted(c)) * scrollH / 100).toBeCloseTo(BAND_H - 16, 6)
   })
 
   it('a stored height is fitted into this scroller on load, and the stored preference is never rewritten', async () => {
