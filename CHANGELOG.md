@@ -280,6 +280,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a row: first a CQ with no locator, then the locator on its own. It now carries the
   four-character square, as JS8Call's CQ does, so it is one frame again. A four-character
   locator is unchanged.
+- **JS8: with a compound callsign, directed messages announce your square, as JS8Call's do.**
+  A compound callsign such as KD9TAW/QRP starts each directed message and reply with a frame
+  that announces the callsign, and JS8Call puts your four-character square in that frame. Nexus
+  sent it without one; it now carries the square. A /P callsign is not compound and is
+  unchanged.
 - **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits

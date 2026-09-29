@@ -43,7 +43,11 @@
 use crate::phy::{Speed, Word87, I3};
 use crate::proto::callsign::{split_portable, CallRef};
 use crate::proto::command::Command;
-use crate::proto::compose::{frames, ComposeError};
+// Every composer below hands `frames_with_grid` the station's locator, as JS8Call hands
+// `buildMessageFrames` `my_grid().left(4)` for every message (mainwindow.cpp:5434, :7885):
+// compose puts the square in a compound callsign's announcement (varicode.cpp:2125) and
+// nowhere else.
+use crate::proto::compose::{frames_with_grid, ComposeError};
 use crate::proto::frame::{encode_frame, format_snr, Frame};
 use crate::proto::reassembly::{Message, MessageEvent};
 use std::collections::HashMap;
@@ -948,7 +952,7 @@ impl Station {
         text: &str,
         freq_hint: FreqHint,
     ) -> Result<OutMsg, ComposeError> {
-        let seq = frames(&self.cfg.mycall, None, text, self.cfg.speed)?;
+        let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, None, text, self.cfg.speed)?;
         Ok(OutMsg {
             origin,
             display: format!("{}: {text}", self.base()),
@@ -967,7 +971,7 @@ impl Station {
         now_ms: u64,
     ) -> Result<usize, ComposeError> {
         self.mark_active(now_ms);
-        let seq = frames(&self.cfg.mycall, to, text, self.cfg.speed)?;
+        let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, to, text, self.cfg.speed)?;
         let n = seq.len();
         let out = OutMsg {
             origin: Origin::Operator,
@@ -993,7 +997,13 @@ impl Station {
         } else {
             format!("{} {word} {arg}", to.render())
         };
-        let seq = frames(&self.cfg.mycall, None, &line, self.cfg.speed)?;
+        let seq = frames_with_grid(
+            &self.cfg.mycall,
+            &self.cfg.grid,
+            None,
+            &line,
+            self.cfg.speed,
+        )?;
         let n = seq.len();
         let out = OutMsg {
             origin: Origin::Operator,
@@ -1022,7 +1032,13 @@ impl Station {
         // next period.
         let grid4: String = self.cfg.grid.chars().take(4).collect();
         let line = format!("{cqs} {grid4}");
-        let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
+        let seq = frames_with_grid(
+            &self.cfg.mycall,
+            &self.cfg.grid,
+            None,
+            line.trim(),
+            self.cfg.speed,
+        )?;
         Ok(OutMsg {
             origin,
             display: format!("{}: @ALLCALL {line}", self.base()),
@@ -1052,7 +1068,13 @@ impl Station {
         // that keys on the next period.
         let grid4: String = self.cfg.grid.chars().take(4).collect();
         let line = format!("HEARTBEAT {grid4}");
-        let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
+        let seq = frames_with_grid(
+            &self.cfg.mycall,
+            &self.cfg.grid,
+            None,
+            line.trim(),
+            self.cfg.speed,
+        )?;
         let out = OutMsg {
             origin: Origin::Heartbeat,
             display: format!("{}: @HB {line}", self.base()),
@@ -2218,6 +2240,87 @@ mod tests {
         let mut s = Station::new(cfg()); // EN52
         s.call_cq(0, 0).unwrap();
         assert_eq!(keyed_wire(&mut s, 0), one_cq_frame("EN52"));
+    }
+
+    /// A compound callsign's directed message leads with JS8Call's compound announcement,
+    /// `` `MYCALL GRID4 `` (varicode.cpp:2125, live under `ALLOW_SEND_COMPOUND_DIRECTED`,
+    /// :1934), and every message JS8Call builds is handed the square for it
+    /// (`buildMessageFrames(…, my_grid().left(4), …)`, mainwindow.cpp:5434). The station
+    /// composed without one, so the announcement went out with no grid. (A `/P` call is not
+    /// compound: it rides the directed frame's portable bit, in JS8Call too.)
+    #[test]
+    fn a_compound_callsigns_directed_message_announces_the_square() {
+        let mut c = cfg();
+        c.mycall = "KD9TAW/QRP".into();
+        c.grid = "EN52HW".into();
+        let mut s = Station::new(c);
+        s.send_command(&CallRef::Base("W1AW".into()), Command::SnrQuery, "", 0)
+            .unwrap();
+        let announcement = Frame::Compound {
+            call: "KD9TAW/QRP".into(),
+            grid: Some("EN52".into()),
+        };
+        let directed = Frame::CompoundDirected {
+            call: "W1AW".into(),
+            cmd: Command::SnrQuery,
+            num: None,
+        };
+        assert_eq!(
+            keyed_wire(&mut s, 0),
+            vec![(announcement, true, false), (directed, false, true)],
+            "the compound announcement carries the 4-character square"
+        );
+    }
+
+    /// The first frame the station keys from `from_ms`, as it reads on the air.
+    fn first_on_air(s: &mut Station, from_ms: u64) -> Option<Frame> {
+        keyed_wire(s, from_ms).into_iter().next().map(|(f, _, _)| f)
+    }
+
+    /// KD9TAW/QRP, a compound callsign, with a 6-character locator.
+    fn compound_station() -> Station {
+        Station::new(StationConfig {
+            mycall: "KD9TAW/QRP".into(),
+            grid: "EN52HW".into(),
+            ..cfg()
+        })
+    }
+
+    /// …a typed message to a station takes the same route: JS8Call frames the message box at
+    /// the start of the over (`appendMessage`, mainwindow.cpp:5492 → :5344), through the same
+    /// `buildMessageFrames` that is handed the square (:5434)…
+    #[test]
+    fn a_compound_callsigns_typed_message_announces_the_square() {
+        let mut s = compound_station();
+        s.send(Some(&CallRef::Base("W1AW".into())), "SNR?", 0)
+            .unwrap();
+        assert_eq!(
+            first_on_air(&mut s, 0),
+            Some(Frame::Compound {
+                call: "KD9TAW/QRP".into(),
+                grid: Some("EN52".into()),
+            }),
+            "the typed message's announcement carries the square"
+        );
+    }
+
+    /// …and so does an automatic reply: JS8Call puts a queued reply in the same message box
+    /// (`processTxQueue`, :9671) and frames it the same way.
+    #[test]
+    fn a_compound_callsigns_automatic_reply_announces_the_square() {
+        let mut s = compound_station();
+        s.on_event(
+            &directed("W1AW", "KD9TAW/QRP", Some(Command::SnrQuery), None, "", -5),
+            0,
+        );
+        assert_eq!(
+            first_on_air(&mut s, 1000), // cfg()'s reply countdown is 1 s
+            Some(Frame::Compound {
+                call: "KD9TAW/QRP".into(),
+                grid: Some("EN52".into()),
+            }),
+            "the automatic reply's announcement carries the square"
+        );
     }
 
     #[test]
