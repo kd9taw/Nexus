@@ -12347,6 +12347,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 0 5px;
 }
+/* #390 — an entry's own note, edited in place. Compact, so a long list stays a list (a Settings
+   field's touch-sized box on every row would double its height), and on a BOUNDED basis: the rows
+   are left unbounded on purpose (the note above the md+ `.settings-hint` cap), and a field free
+   to grow would stretch across a 3440px window to hold a dozen words. */
+.watchlist-notes {
+  flex: 0 1 30em;
+  min-width: 8em;
+  padding: 1px var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.watchlist-notes:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .watchlist-remove {
   margin-left: auto;
   color: var(--state-weak);
@@ -12382,6 +12401,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-dim);
   white-space: nowrap;
+}
+/* The add row's note field: room for a dozen words, wrapping onto its own line when the row is
+   narrow, and never the whole width of a wide window. */
+.watchlist-notes-new {
+  flex: 0 1 22em;
+  min-width: 12em;
 }
 .watchlist-add-btn {
   padding: 5px var(--space-4);

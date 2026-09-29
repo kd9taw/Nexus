@@ -2847,6 +2847,9 @@ export const EN = {
   'watchlist.item.remove.title': 'Remove from watch list',
   // `{{value}}` is the call, prefix, grid or entity the operator typed.
   'watchlist.item.remove.aria': 'Remove {{value}}',
+  // #390 — an entry's own note, edited in place on its row. `{{value}}` as above.
+  'watchlist.item.notes.aria': 'Notes for {{value}}',
+  'watchlist.item.notes.placeholder': 'Add a note',
   'watchlist.add.kind.aria': 'Watch kind',
   // The <option> VALUES ('call', 'dxcc', 'grid') are persisted tokens and stay in the code.
   'watchlist.add.kind.call': 'Call / prefix',
@@ -2858,6 +2861,11 @@ export const EN = {
   'watchlist.add.value.placeholder.dxcc': 'e.g. {{entity}}',
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
+  'watchlist.add.notes.aria': 'Notes for the new entry',
+  'watchlist.add.notes.placeholder': 'Notes (optional): why, and until when',
+  // The tooltip on both note fields, the add row's and each entry's.
+  'watchlist.notes.title':
+    'Your own note on this entry: why it is on the list, and when it can come off. It changes nothing about what alerts.',
   'watchlist.add.submit': 'Add',
   // The WATCH tile on the Call Roster, the Stations list and Spots — one word on all three,
   // echoing this list's own name. `{{what}}` is the entry that matched: the operator's label

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Watch list: a note on each entry (#390).** Every entry on the watch list (Settings ▸ Spots &
+  Alerts) has a note field of its own, for why the call is there and when it can come off, such
+  as `Samoa DXp 9/27-10/3`. Type the note when you add the entry, or later in the field on its
+  row: it is saved when you leave the field or press Enter. Empty the field to remove the note.
+  Your existing watch list comes up exactly as it was, with no notes, and a note changes nothing
+  about what alerts or what the Call Roster, the Stations list and Spots mark.
 - **Call Roster: show only the stations within a distance you choose (#386).** The Call Roster's
   filter row has a new picker beside Hide blocked. Pick **Within 1000 mi**, for example, and the
   stations farther from your grid square than that leave the list, so a band full of stations you

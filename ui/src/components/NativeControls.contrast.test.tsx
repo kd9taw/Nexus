@@ -445,3 +445,43 @@ describe('the watch list × paints its own face', () => {
     expect(left.some((m) => m.endsWith('the browser draws its face')), left.join('\n')).toBe(true)
   })
 })
+
+// ── The watch list's note fields (WatchlistPanel.tsx, #390) ────────────────────────────────────
+
+/** The note field on each entry of a watch list holding two, and the add row's, off the DOM. */
+function watchlistNotes(): Control[] {
+  localStorage.setItem('nexus.watchlist', JSON.stringify([
+    { id: 'call-VP8-a1', kind: 'call', value: 'VP8*', notes: 'Falklands, until November' },
+    { id: 'grid-FN31-b2', kind: 'grid', value: 'FN31', cqOnly: true },
+  ]))
+  const r = render(<WatchlistPanel />)
+  const out = [...r.container.querySelectorAll<HTMLInputElement>('input.watchlist-notes, input.watchlist-notes-new')].map((i) => ({
+    name: `Watch list note "${i.getAttribute('aria-label')}"`,
+    chain: chainOf(i),
+  }))
+  cleanup()
+  localStorage.removeItem('nexus.watchlist')
+  return out
+}
+
+describe('the watch list’s note fields paint their own face (#390)', () => {
+  it('renders one on each entry and one to add with (a guard over none is inert)', () => {
+    expect(watchlistNotes().length).toBe(3)
+  })
+
+  it('none is left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, watchlistNotes())).toEqual([])
+  })
+
+  it('each reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, watchlistNotes())).toEqual([])
+  })
+
+  it('FIRES: an entry’s note field with no rule of its own is caught', () => {
+    const bare = RULES.filter((r) => r.selector !== '.watchlist-notes')
+    expect(bare.length, 'the rule under test is not in the sheet').toBe(RULES.length - 1)
+    expect(leftToTheBrowser(bare, watchlistNotes())).toContain(
+      `Watch list note "${t('watchlist.item.notes.aria', { value: 'VP8*' })}": the browser draws its face`,
+    )
+  })
+})

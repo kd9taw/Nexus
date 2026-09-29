@@ -116,3 +116,41 @@ describe('persistence', () => {
     expect(loadWatchlist()).toEqual([])
   })
 })
+
+// #390 — every entry can carry a note: why it is on the list, and when it can come off. The note
+// rides in the list the app already keeps (`nexus.watchlist`, mirrored to ui-state.json), so a list
+// saved before notes existed must read back exactly as it was written, and a note must survive.
+describe('persistence: the note on each entry (#390)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('reads a list saved before notes existed back exactly as it was written', () => {
+    const raw = JSON.stringify([
+      { id: 'call-VP8*-a1b2c3', kind: 'call', value: 'VP8*', cqOnly: true, minSnr: -10, label: 'Falklands' },
+      { id: 'dxcc-Bouvet-d4e5f6', kind: 'dxcc', value: 'Bouvet' },
+      { id: 'grid-EM7*-g7h8i9', kind: 'grid', value: 'EM7*' },
+    ])
+    localStorage.setItem('nexus.watchlist', raw)
+    expect(JSON.stringify(loadWatchlist())).toBe(raw)
+  })
+
+  it('keeps an entry’s note through a save and a load', () => {
+    const list = [newWatchFilter('call', '5W1SA', { notes: 'Samoa DXp 9/27-10/3' }), newWatchFilter('dxcc', 'Bouvet')]
+    saveWatchlist(list)
+    expect(loadWatchlist()).toEqual(list)
+    expect(loadWatchlist()[0].notes).toBe('Samoa DXp 9/27-10/3')
+  })
+
+  it('drops a note that is not text, and never the entry it rides on', () => {
+    localStorage.setItem(
+      'nexus.watchlist',
+      JSON.stringify([
+        { id: 'call-5W-1', kind: 'call', value: '5W1SA', notes: 42 },
+        { id: 'call-3Y-2', kind: 'call', value: '3Y0J', cqOnly: true, notes: { why: 'Bouvet' } },
+      ]),
+    )
+    expect(loadWatchlist()).toStrictEqual([
+      { id: 'call-5W-1', kind: 'call', value: '5W1SA' },
+      { id: 'call-3Y-2', kind: 'call', value: '3Y0J', cqOnly: true },
+    ])
+  })
+})

@@ -381,6 +381,8 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('colour blind')).toContain('waterfall-scopes')
     expect(ids('logbook globe')).toContain('map-globe')
     expect(ids('reduce motion')).toContain('performance')
+    // #390: the note on each watch-list entry, whose rows sit in the Alerts section.
+    expect(ids('watch list notes')).toContain('alerts')
     // The built-in themes (2026-09-27) by their names, and by what an operator wants of one; bare
     // 'amber' still reaches Colours first, which owns that word.
     for (const q of ['amber lcd', 'blue vfd', 'silver chassis', 'paper', 'oled', 'true black', 'rig looks']) {
