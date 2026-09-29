@@ -8,6 +8,9 @@ import type { OperationView } from './operation-client'
 import type { MonitorSource } from '../remote-monitor/session'
 import { fixtureSource } from '../remote-monitor/fixtureSource'
 import { ANSWER, CHANNEL, LEASE, SIGNAL, byName, harness, last } from './stream-link.testkit'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { chainOf, contrast, expandWith, parseRules, toRgb, tokensAt, winnerAt, type Mode } from '../cssCascade'
 
 const BOOT = '0f7d1c2e-5b3a-4c1d-9e8f-7a6b5c4d3e2f'
 const EPOCH = '000000000000002b'
@@ -765,4 +768,102 @@ it('the stream\'s entry says, beside Start the stream, that Nexus at the shack m
   view({ state: state('occupied'), fresh: true })
   expect(screen.queryByRole('button', { name: 'Start the stream' })).toBeNull()
   expect(note(), 'with another browser in control').toBeNull()
+})
+
+// ── The Hold PTT's colours (the operator's pick "Page PTT colours", 2026-09-28), DISPLAY ONLY ─────
+//
+// A press on this page ARMS the station's microphone over and the voice keys it (M1), so the held
+// button takes the accent, the microphone button's own "on, and not on the air" look, while the over
+// waits for the voice, and the transmit colour only once the station reports the voice keyed. Its
+// name, its pressed state and what a press and a release send are unchanged. Measured on the cascade
+// WINNER of the page's own sheets, as it imports them (entry.tsx, then this view), in both themes.
+
+const pageSheet = (path: string) =>
+  readFileSync(resolve(process.cwd(), 'src', path), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+const PAGE_RULES = parseRules(['styles.css', 'remote-monitor/monitor.css', 'remote-web/remote.css', 'remote-web/stream.css']
+  .map(pageSheet).join('\n'))
+const THEMES: Mode[] = ['dark', 'light']
+type Look = 'neutral' | 'accent' | 'tx'
+
+/** What the cascade paints on `el` in `mode` against what `look` must paint, token by token. */
+function paint(el: Element, mode: Mode, look: Look) {
+  const chain = chainOf(el)
+  const tokens = tokensAt(PAGE_RULES, mode, chain)
+  const winner = (...props: string[]) => {
+    const win = winnerAt(PAGE_RULES, mode, chain, ...props)
+    return win ? expandWith(tokens, win.value) : null
+  }
+  const token = (name: string) => {
+    const value = tokens.get(name)
+    expect(value, `${name} is not defined in ${mode}`).toBeTruthy()
+    return value!
+  }
+  const got = { color: winner('color'), background: winner('background', 'background-color'), border: winner('border-color') }
+  const want = look === 'tx' ? { color: token('--bg'), background: token('--tx'), border: token('--tx') }
+    : look === 'accent' ? { color: token('--accent'), background: token('--bg-elev'), border: token('--accent') }
+    : { color: token('--text'), background: token('--bg-elev'), border: null }
+  return { got, want, tokens }
+}
+
+it('the Hold PTT held is the accent while the over waits for the voice, and the transmit colour once the voice keys it', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = screen.getByRole('button', { name: 'Hold PTT' })
+  const looks = (what: string, look: Look) => {
+    for (const mode of THEMES) {
+      const { got, want } = paint(ptt, mode, look)
+      expect(got, `${what} (${mode})`).toEqual(want)
+    }
+  }
+  looks('not held', 'neutral')
+  fireEvent.pointerDown(ptt, { button: 0 })
+  expect(ptt.getAttribute('aria-pressed')).toBe('true')
+  looks('held, before the station reports the over', 'accent')
+  v.station(ARMED)
+  looks('armed, no voice yet', 'accent')
+  expect(screen.getByRole('button', { name: 'Hold PTT' }), 'the name changed').toBe(ptt)
+  expect(ptt.getAttribute('aria-pressed'), 'the pressed state changed').toBe('true')
+  v.station(KEYED)
+  looks('keyed by the voice', 'tx')
+  v.station(KEYED_NO_POWER)
+  looks('keyed, the rig showing no power out', 'tx')
+  // The station ends the over while the button is still held (a gap in the audio): not on the air.
+  v.station('mic over ended: audioGap')
+  looks('held, the over ended', 'accent')
+  fireEvent.pointerUp(ptt)
+  expect(ptt.getAttribute('aria-pressed')).toBe('false')
+  looks('let go', 'neutral')
+  expect(last(v.peer.channel('ptt').sent), 'a release sent something else').toMatchObject({ type: 'pttRelease' })
+})
+
+it('CONTROL: an over the voice keyed from the cockpit through the picture, this page holding nothing, leaves the Hold PTT as it was', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = screen.getByRole('button', { name: 'Hold PTT' })
+  v.station(KEYED)
+  for (const mode of THEMES) {
+    const { got, want } = paint(ptt, mode, 'neutral')
+    expect(got, mode).toEqual(want)
+  }
+})
+
+it('the armed look reads in both themes: the accent label on the button is at least 4.5:1, as the microphone button is', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const ptt = screen.getByRole('button', { name: 'Hold PTT' })
+  const mic = screen.getByRole('button', { name: 'Mic off' })
+  await act(async () => { fireEvent.click(mic); await Promise.resolve() })
+  fireEvent.pointerDown(ptt, { button: 0 })
+  v.station(ARMED)
+  for (const mode of THEMES) {
+    const { got, tokens } = paint(ptt, mode, 'accent')
+    const on = paint(screen.getByRole('button', { name: 'Mic on' }), mode, 'accent').got
+    expect({ color: got.color, border: got.border }, `the microphone's own look (${mode})`).toEqual({ color: on.color, border: on.border })
+    const backdrop = toRgb(tokens.get('--bg')!, [0, 0, 0])!
+    const fill = toRgb(got.background!, backdrop)!
+    expect(contrast(toRgb(got.color!, fill)!, fill), `the label (${mode})`).toBeGreaterThanOrEqual(4.5)
+  }
 })

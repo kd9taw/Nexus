@@ -1447,7 +1447,8 @@ export interface RadioStatus {
   txBusyReason?: string | null
   /** A streamed Remote operator's microphone over, null/absent without one: `armed` by their press
    * and waiting for their voice, then `keyed` by it. DISPLAY ONLY — the Phone cockpit's PTT reads
-   * "Armed" for a press it made through the stream until this says `keyed`. */
+   * "Armed" for a press it made through the stream until this says `keyed`, and the header's ON AIR
+   * sign waits with it. */
   streamMic?: 'armed' | 'keyed' | null
   /** True if the TX watchdog has auto-halted transmit (needs a re-enable). */
   txWatchdog: boolean

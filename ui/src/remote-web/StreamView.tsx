@@ -104,6 +104,7 @@ export function StreamView({ connection, station, disconnect, signOut }: {
         {stream.control && <AudioListen audio={link.audio} client={operations} />}
         {stream.control && <button type="button" className="remote-button remote-stream-ptt" aria-pressed={stream.ptt}
           title={t('remote.stream.ptt.title')} disabled={stream.phase !== 'live' || !lease} data-keyed={stream.keyed || undefined}
+          data-voice={stream.station?.keyed ? 'keyed' : undefined}
           onPointerDown={event => {
             if (event.button !== 0) return
             try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* the hold still starts */ }

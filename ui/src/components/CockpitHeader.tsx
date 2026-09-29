@@ -103,6 +103,10 @@ export interface CockpitHeaderProps {
   txState?: boolean
   /** Label shown on the pill while transmitting (default '▲ KEYING'; Phone passes '▲ TX'). */
   txActiveLabel?: string
+  /** This cockpit's own press holds an over armed and waiting for the voice (Phone's PTT pressed
+   * through the stream, reading "Armed"). While the station reports that over armed and nothing
+   * else is on the air, the pill waits with the button. DISPLAY ONLY: see `lit` below. */
+  txArmed?: boolean
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
   /** Run the RADIO's own built-in ATU (discussion #19 — WSJT-X fires it from a right-click on
@@ -167,6 +171,7 @@ export function CockpitHeader({
   power,
   txState = true,
   txActiveLabel = TX_KEYING,
+  txArmed = false,
   onTune,
   onAtuTune,
   onStopTx,
@@ -259,7 +264,15 @@ export function CockpitHeader({
   // TX). `txBusyReason` ships whenever ANY of the seven owners holds the transmitter; the
   // same rule the wheel-tune gate above already follows.
   const onAir = isOnAir(radio)
-  const txPill = onAir ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
+  // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
+  // 2026-09-28). An over the cockpit's press armed through the stream owns the transmitter from
+  // the arm, but nothing is on the air until the voice keys it, so while the station reports it
+  // only armed the pill reads as it does before a key. Anything else on the air lights it as
+  // always. DISPLAY ONLY: `onAir` stays the arbiter's answer, and the amplifier strip reads it.
+  const lit =
+    onAir &&
+    !(txArmed && radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
+  const txPill = lit ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (
     <div className={`cockpit-header${quick ? ' cockpit-header--quick' : ''}${brief ? ' cockpit-header--brief' : ''}`}>
@@ -481,7 +494,7 @@ export function CockpitHeader({
             </button>
           ) : (
             <span
-              className={`cockpit-txstate${onAir ? ' on' : ''}`}
+              className={`cockpit-txstate${lit ? ' on' : ''}`}
               title={!radio.transmitting && radio.txBusyReason ? radio.txBusyReason : undefined}
             >
               {txPill}

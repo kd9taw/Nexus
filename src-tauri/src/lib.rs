@@ -29925,6 +29925,9 @@ fn remote_service_for(
             ptt: Default::default(),
             mic: Default::default(),
             window: Some(main_window),
+            awake: tempo_stream::keep_awake::KeepAwake::system(Arc::new(|line: &str| {
+                tempo_core::applog::warn("remote", line)
+            })),
         },
     )
 }

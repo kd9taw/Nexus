@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator's own voice reaches the rig in Phone, played into the rig's USB audio.
   **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig
   keys only when the operator's voice starts arriving, so a held PTT with the microphone off or
-  muted puts nothing on the air. The over ends 200 ms after the voice stops arriving or the PTT
+  muted puts nothing on the air. Held, the page's PTT shows the accent colour, as the microphone
+  button does, while it waits for the voice, and the transmit colour once the voice has keyed the
+  rig. The over ends 200 ms after the voice stops arriving or the PTT
   is let go, whichever comes first. Stop TX, TX Off, a lost connection, a frozen picture and
   leaving Phone each end it at once, and no over lasts longer than 10 minutes. Voice that arrives
   late is dropped, never played late. The rig must take its SSB audio from USB (the menu that
@@ -75,11 +77,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this window to an approved browser** in Settings, and on the stream page beside **Start the
   stream**, Nexus says that the stream is its window as Windows draws it at the shack, so Nexus
   must stay open there and not minimized.
+- **Remote as a stream: the shack's PC stays awake while you stream (Windows).** Clicks and keys
+  from a stream reach Nexus only, so Windows does not count them as someone at the computer, and it
+  could turn the shack's screen off or put the PC to sleep in the middle of a stream. While a stream
+  is attached, Nexus now asks Windows to keep the PC awake with the screen on, and it stops asking
+  when the last stream ends, however it ended, or when Nexus closes. A screen saver still starts if
+  one is set, a lock enforced by policy still happens, and someone at the shack can still put the PC
+  to sleep. A forgotten stream still ends at the "Still there?" question, and from then on Windows'
+  own power settings apply again.
 - **Remote as a stream: the Phone PTT says Armed until your voice keys the rig.** Pressed through
   the stream (its button, or the space bar over the picture), the Phone cockpit's PTT reads "Armed
   — talk to transmit" while the over waits for your voice, and "ON AIR — release to stop" once your
-  voice has keyed the rig. It is the same stop control with the same name for screen readers, and
-  a press at the shack reads as before.
+  voice has keyed the rig. The Phone header's ▲ TX sign waits with it: it stays dark until your
+  voice keys the rig, unless something else is on the air. It is the same stop control with the
+  same name for screen readers, and a press at the shack reads as before.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
