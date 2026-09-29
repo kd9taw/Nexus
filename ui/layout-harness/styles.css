@@ -1420,7 +1420,7 @@ button.nb-chip:hover {
   border-bottom: 1px solid var(--border);
 }
 /* World-first: the map is a full-bleed surface and the propagation info FLOATS
-   over it as a translucent card (HamClock/Geochron model — everything around the
+   over it as a translucent card (the wall-map model — everything around the
    world), instead of a co-equal side column. */
 /* Wrap-the-globe assignable pane grid (B1): the globe is the center cell; reassignable
    panes frame it (a left rail, a right rail, a bottom strip). The map keeps a definite size —

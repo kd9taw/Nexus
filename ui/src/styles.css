@@ -1465,7 +1465,7 @@ button.nb-chip:hover {
   border-bottom: 1px solid var(--border);
 }
 /* World-first: the map is a full-bleed surface and the propagation info FLOATS
-   over it as a translucent card (HamClock/Geochron model — everything around the
+   over it as a translucent card (the wall-map model — everything around the
    world), instead of a co-equal side column. */
 /* Wrap-the-globe assignable pane grid (B1): the globe is the center cell; reassignable
    panes frame it (a left rail, a right rail, a bottom strip). The map keeps a definite size —
@@ -4485,8 +4485,8 @@ body.resizing-row {
 /* ---- MAP BASEMAP: the map's land and sea (MapView.tsx; features/skins.ts STANDARD_MAP) -------
    The map bakes its basemap from these tokens: the sea, the land (darker on the globe), the
    coastlines, the US state borders, the globe's rim and its lit and deep ocean. The standard
-   basemap is dark in BOTH themes on purpose (a map should read as a map, as HamClock's and
-   Geochron's do), so both themes declare the same values, per the layout contract. A dark
+   basemap is dark in BOTH themes on purpose (a map should read as a map, as wall maps
+   do), so both themes declare the same values, per the layout contract. A dark
    built-in theme brings its own in its THEMES block; a light one keeps these. Plain hexes: the
    canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
 :root,

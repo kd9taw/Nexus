@@ -1315,7 +1315,7 @@ export const DE: PartialCatalog = {
   "settings.n1mm.addr.sending": "Sendet bei jedem geloggten QSO.",
   "settings.n1mm.addr.idle": "Eine Adresse allein sendet außerhalb eines Field-Day-Events nichts — für den Alltagsbetrieb unten Jedes QSO senden einschalten.",
   "settings.n1mm.broadcastAll.label": "Jedes QSO senden",
-  "settings.n1mm.broadcastAll.hint": "Sendet das QSO-Paket für <b>jedes</b> geloggte QSO, nicht nur im Field Day — OpenHamClock oder GridTracker auf die Adresse oben richten, und jedes QSO erscheint beim Loggen auf deren Karte. Ein Paket pro QSO: Es kommt nie zu Dopplungen mit der Field-Day-Übertragung, es kann also während einer Veranstaltung anbleiben. Standardmäßig aus; ausgeschaltet gehen Pakete <em>nur</em> während eines laufenden Field-Day-Events hinaus.",
+  "settings.n1mm.broadcastAll.hint": "Sendet das QSO-Paket für <b>jedes</b> geloggte QSO, nicht nur im Field Day — eine Karten-App wie GridTracker auf die Adresse oben richten, und jedes QSO erscheint beim Loggen auf ihrer Karte. Ein Paket pro QSO: Es kommt nie zu Dopplungen mit der Field-Day-Übertragung, es kann also während einer Veranstaltung anbleiben. Standardmäßig aus; ausgeschaltet gehen Pakete <em>nur</em> während eines laufenden Field-Day-Events hinaus.",
   "settings.lotwUsers.legend": "LoTW-Nutzerliste",
   "settings.lotwUsers.fetch.action": "Jetzt holen",
   "settings.lotwUsers.fetch.busy": "Wird geholt…",

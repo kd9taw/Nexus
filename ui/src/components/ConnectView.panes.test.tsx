@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // CLOSE AND RESIZE ON THE CONNECT SURFACE (operator-approved 2026-09-13). A tester comparing
-// Nexus with OpenHamClock: Connect shows too much at once — close the panels you don't use,
+// Nexus with a wall-display app: Connect shows too much at once — close the panels you don't use,
 // add them back when you choose, and make the map bigger.
 //
 // ⚠️ THE REAL ConnectView AND THE REAL MapView ARE MOUNTED HERE. Only the backend is stubbed.

@@ -24,7 +24,7 @@ export function isPaneId(v: unknown): v is PaneId {
 }
 
 /** Recommended first-run Basic layout: static conditions reference framing the left,
- *  selection-driven on the right, live "now" ticker across the bottom (HamClock model). */
+ *  selection-driven on the right, live "now" ticker across the bottom (the wall-display model). */
 export const DEFAULT_SLOTS: Record<SlotId, PaneId> = {
   left1: 'advisory',
   left2: 'bandAdvisor',

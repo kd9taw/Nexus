@@ -1491,7 +1491,7 @@ Test N3FJP button continue to the right.*
   stack on one host, and 12060 is often already taken by another logger." Blank
   = off. An address alone sends nothing outside a Field Day event.
 - **Broadcast every QSO** — send the contact packet for **every** logged QSO, not
-  just Field Day: point OpenHamClock or GridTracker at the address and each
+  just Field Day: point a map app such as GridTracker at the address and each
   contact plots as you log it. "One packet per QSO: this never doubles up with
   the Field Day broadcast." Off by default; turning it on with a blank address
   fills in `127.0.0.1:12060` visibly, rather than as a hidden default.

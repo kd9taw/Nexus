@@ -6501,7 +6501,7 @@ export const EN = {
   // ── Settings ▸ Logging & Connectors ▸ Integrations & Feeds ─────────────────────────
   // ⚠️ Everything this section names on the wire is invariant and stays in the panel: the
   // UDP addresses and ports it offers as field examples, the file names (ALL.TXT, .wav) and
-  // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD, OpenHamClock) inside these
+  // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD) inside these
   // sentences. Two labels are invariant as WHOLE strings and are still in the panel because
   // they are nothing but names — `WSJT-X UDP API` and `PSK Reporter`, the same rule that
   // leaves the Phone/CW/Digital tab labels literal. So are the cluster presets, which name
@@ -6676,7 +6676,7 @@ export const EN = {
     'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
   'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
   'settings.n1mm.broadcastAll.hint':
-    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point OpenHamClock or GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
 
   // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
   // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,

@@ -104,7 +104,7 @@ import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, type MapToken } from '../features/skins'
-// Geochron-style shaded-relief basemap (Natural Earth I 50m, public domain),
+// A shaded-relief basemap (Natural Earth I 50m, public domain),
 // downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
 import reliefUrl from '../assets/earth-relief.webp'
 
@@ -492,8 +492,8 @@ const PATH_LP = 'LP'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
-// basemap (features/skins.ts STANDARD_MAP) is deliberately theme-agnostic and dark (like
-// HamClock/Geochron), so it looks intentional in any UI theme, and a dark built-in theme brings
+// basemap (features/skins.ts STANDARD_MAP) is deliberately theme-agnostic and dark (as
+// wall maps are), so it looks intentional in any UI theme, and a dark built-in theme brings
 // its own. Read at bake like every other token here; STANDARD_MAP is also what paints where no
 // sheet is loaded. Globe (orthographic) 3D shading: a lit ocean highlight toward the top-left
 // light source, deepening to a dark limb, plus an atmospheric rim glow and a star field — turns
@@ -1459,7 +1459,7 @@ export function MapView({
 
       const useRelief = kind === 'world' && layers.relief.visible && reliefRef.current
       if (useRelief) {
-        // Geochron-style shaded relief: a direct stretch-blit to the equirectangular
+        // Shaded relief: a direct stretch-blit to the equirectangular
         // bounds (lon/lat map linearly here, so no per-pixel reprojection). The
         // greyline night shading draws on top → a true day/night terrain map. Only
         // World; AEQD stays on filled vectors (a raster there needs slow inverse-proj).
@@ -2067,7 +2067,7 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
-    // BAND HEAT — the HamClock-class aura layer: kernel-density glow built from the
+    // BAND HEAT — the activity aura layer: kernel-density glow built from the
     // SAME live spots (real evidence, not a model), splatted at 1/3 resolution with
     // radial gradients in each spot's band color and composited additively, so
     // WHERE a band is open reads as a colored aura at a glance. Bands with a
@@ -2190,7 +2190,7 @@ export function MapView({
     // Live spots — the cluster/RBN/PSKR firehose + own decodes, placed by grid or
     // DXCC centroid. Colored by band; green = a station that heard ME ("getting
     // out"); faded by age; centroid-placed (approx) spots dimmer. This is what
-    // fills the map with real activity (HamClock-style), under the operator's own
+    // fills the map with real activity, under the operator's own
     // decode roster + needed/selected stations.
     // Band focus only DIMS when the focused band actually has something to highlight.
     // A modeled-open-but-unheard band (clicked from the band-condition strip / insight
@@ -2484,7 +2484,7 @@ export function MapView({
   // sun disc hangs in space off the limb in the TRUE subsolar direction,
   // streaming dashed rays onto the sunlit face; when the subsolar point rotates
   // behind the planet only a warm corona peeks around the limb. World/AEQD: the
-  // sun sits AT the subsolar point (geochron-style) with rotating spokes.
+  // sun sits AT the subsolar point with rotating spokes.
   // Stream/pulse speed ∝ R-scale — movement IS the intensity readout.
   const flareOpacity = layers.flare.opacity
   useEffect(() => {
@@ -2620,7 +2620,7 @@ export function MapView({
         }
       } else {
         // Flat maps have no "space" to hang a sun in: it sits at its true
-        // subsolar position (geochron-style) with rotating, pulsing spokes.
+        // subsolar position with rotating, pulsing spokes.
         const pss = project(proj, ss)
         if (pss) {
           const rs = Math.max(10, Math.min(w, h) * 0.05)

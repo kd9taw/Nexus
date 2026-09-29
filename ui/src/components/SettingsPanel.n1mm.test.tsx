@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // The N1MM contact broadcast only spoke during a Field Day event, which made it useless for what a
-// tester actually wanted it for: OpenHamClock listening for N1MM contact datagrams and plotting
+// tester actually wanted it for: a map app listening for N1MM contact datagrams and plotting
 // every QSO on its map as it is logged (2026-07-29 request). "Broadcast every QSO" is that standing
 // switch. These tests pin the two things that decide whether an operator can find and use it: it
 // lives in the N1MM+ section on the tab where they went looking, and it starts OFF.

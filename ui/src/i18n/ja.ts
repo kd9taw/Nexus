@@ -4107,7 +4107,7 @@ export const JA: PartialCatalog = {
   "settings.n1mm.addr.sending": "記録したすべてのQSOで送信しています。",
   "settings.n1mm.addr.idle": "アドレスだけではフィールドデーイベント以外は何も送信されません — 普段のロギングには下の「すべてのQSOをブロードキャスト」をオンにしてください。",
   "settings.n1mm.broadcastAll.label": "すべてのQSOをブロードキャスト",
-  "settings.n1mm.broadcastAll.hint": "フィールドデーに限らず、記録した<b>すべての</b>QSOで交信パケットを送ります — OpenHamClockやGridTrackerを上のアドレスに向ければ、記録するたびに各交信がマップにプロットされます。1 QSOにつき1パケットで、フィールドデーのブロードキャストと二重になることはないため、イベント中もオンのままで安全です。デフォルトはオフで、オフの間はフィールドデーイベントの実行中<em>のみ</em>パケットが送出されます。",
+  "settings.n1mm.broadcastAll.hint": "フィールドデーに限らず、記録した<b>すべての</b>QSOで交信パケットを送ります — GridTrackerなどの地図アプリを上のアドレスに向ければ、記録するたびに各交信がマップにプロットされます。1 QSOにつき1パケットで、フィールドデーのブロードキャストと二重になることはないため、イベント中もオンのままで安全です。デフォルトはオフで、オフの間はフィールドデーイベントの実行中<em>のみ</em>パケットが送出されます。",
   "settings.lotwUsers.legend": "LoTWユーザーリスト",
   "settings.lotwUsers.fetch.action": "今すぐ取得",
   "settings.lotwUsers.fetch.busy": "取得中…",

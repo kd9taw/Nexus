@@ -4962,7 +4962,7 @@ export const ES: PartialCatalog = {
   "settings.n1mm.addr.label": "Dirección de difusión de contactos de N1MM",
   "settings.n1mm.addr.placeholder": "{{example}} (vacío = off)",
   "settings.n1mm.addr.sending": "Se manda en cada QSO anotado.",
-  "settings.n1mm.broadcastAll.hint": "Manda el paquete de contacto de <b>todos</b> los QSOs anotados, no solo los de Field Day — apunta OpenHamClock o GridTracker a la dirección de arriba y cada contacto se dibuja en su mapa según lo anotas. Un paquete por QSO: esto nunca se duplica con la difusión de Field Day, así que se puede dejar activado durante todo el evento. Desactivado por defecto; con esto apagado, los paquetes salen <em>solo</em> mientras hay un evento de Field Day en marcha.",
+  "settings.n1mm.broadcastAll.hint": "Manda el paquete de contacto de <b>todos</b> los QSOs anotados, no solo los de Field Day — apunta una app de mapas como GridTracker a la dirección de arriba y cada contacto se dibuja en su mapa según lo anotas. Un paquete por QSO: esto nunca se duplica con la difusión de Field Day, así que se puede dejar activado durante todo el evento. Desactivado por defecto; con esto apagado, los paquetes salen <em>solo</em> mientras hay un evento de Field Day en marcha.",
   "settings.n1mm.broadcastAll.label": "Difundir todos los QSOs",
   "settings.n1mm.legend": "Integración con N1MM+",
   "settings.n3fjp.forwardAll.hint": "Manda además <b>todos</b> los QSOs anotados (no solo los de Field Day) a N3FJP ACLog en el host de arriba — log general del día a día. N3FJP quita duplicados, así que es seguro usarlo junto al envío de Field Day.",

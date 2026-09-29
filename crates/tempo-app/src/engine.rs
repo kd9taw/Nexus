@@ -11668,7 +11668,7 @@ impl Engine {
 
     /// Broadcast a logged QSO as an N1MM `<contactinfo>` datagram — the STANDING
     /// output, on for every logged contact rather than only during a Field Day
-    /// event. Live map/dashboard consumers (OpenHamClock, GridTracker) plot each
+    /// event. Live map/dashboard consumers (GridTracker and similar) plot each
     /// contact from it as it is logged.
     ///
     /// Deliberately here, beside `push_to_hrd`, and NOT on the shell's upload
@@ -37469,7 +37469,7 @@ mod tests {
         );
     }
 
-    /// What a map consumer (OpenHamClock / GridTracker) actually needs off an
+    /// What a map consumer (GridTracker and similar) actually needs off an
     /// ORDINARY QSO: who, where, which band/frequency, which mode, when.
     #[test]
     fn an_ordinary_qso_broadcasts_the_fields_a_map_plots_from() {

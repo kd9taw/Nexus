@@ -615,7 +615,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'connect-web',
     label: 'Connect on a TV',
     tab: 'appearance',
-    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan', 'hamclock',
+    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan',
       'network', 'web page', 'cast', 'chromecast', 'firestick', 'fire stick', 'tablet',
       'phone', 'remote view', 'read only', 'shack tv'],
   },

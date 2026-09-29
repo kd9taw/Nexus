@@ -4059,7 +4059,7 @@ A released section is history and is not rewritten, so two credits it got wrong 
   TV" served a plain digest — a band table and some numbers. It now serves Connect
   itself: the same map with every layer (grayline, spots, MUF, aurora, satellites,
   parks on the air), the same panes, live in any browser on your network — a shack TV,
-  a Fire Stick's browser, a tablet — as a HamClock-style wall display. Still read-only
+  a Fire Stick's browser, a tablet — as a wall display. Still read-only
   in the strict sense: the server accepts nothing but reads, a short fixed list of
   propagation and space-weather feeds is all a browser can ask for, and everything
   else is refused. Your log, your needs board and the frequency you are on are still
@@ -10583,7 +10583,7 @@ ever fired during a Field Day event, and said so nowhere.
 **Settings ▸ Logging & Connectors ▸ N1MM+ Integration** now has a **Broadcast every QSO** switch.
 Turn it on and each logged contact goes out as an N1MM contact packet, event or not — from the
 digital modes, from the CW and Phone cockpits, from a hand-typed logbook entry, all of them. Point
-OpenHamClock or GridTracker at the address and every QSO plots on its map as you log it. The
+a map app such as GridTracker at the address and every QSO plots on its map as you log it. The
 packet leaves at the moment the QSO is logged, in the same breath as the HRD one. Turn the switch
 on with the address field empty and Nexus fills in the usual local target for you. The address
 field now also states which of the two it is doing, so a configured-but-silent output can never

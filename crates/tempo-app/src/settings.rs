@@ -1029,7 +1029,7 @@ pub struct Settings {
     pub n1mm_addr: String,
     /// Broadcast the N1MM `<contactinfo>` datagram for EVERY logged QSO, not just
     /// Field Day contacts — the standing output a live map/dashboard consumer
-    /// (OpenHamClock, GridTracker) needs to plot each contact as it is logged.
+    /// (GridTracker and similar) needs to plot each contact as it is logged.
     /// Sends to the same `n1mm_addr`; empty address = off regardless.
     ///
     /// Off by default, and no code path may turn it on: an upgrade must never
@@ -4207,8 +4207,8 @@ impl Default for Settings {
             companion_addr: "127.0.0.1:2237".to_string(),
             source: SourceKind::Native,
             // Live by default (once a real call is set) — a ham dashboard should
-            // arrive connected, like HamClock/GridTracker. Both are public read
-            // feeds; cluster_host is the RBN endpoint, so this gives RBN spots free.
+            // arrive connected, like other ham dashboards. PSK Reporter and the cluster are public
+            // read feeds; cluster_host is the RBN endpoint, so this gives RBN spots free.
             pskreporter: true,
             cluster_enabled: true,
             // A public human DX-cluster node for SSB/phone + human spots (the RBN CW +
