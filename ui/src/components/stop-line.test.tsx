@@ -789,7 +789,11 @@ function randomPlacements<P extends string>(spec: ArrangeSpec<P>, n: number, see
 }
 
 describe('THE ARRANGEMENT SWEEP: no placement of the panes gates a control that stops a transmission', () => {
-  const ARRANGING = CASES.filter((c) => ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)?.arrange)
+  // One case per arranging vocabulary (the first; the Sub-receiver twins change no placement, and
+  // each pass is 550 renders).
+  const ARRANGING = CASES.filter(
+    (c, i) => ALL_PANEL_VOCABULARIES.find((v) => v.view === c.view)?.arrange && CASES.findIndex((d) => d.view === c.view) === i,
+  )
 
   it('some cockpit arranges, so this sweep is reading something', () => {
     expect(ARRANGING.map((c) => c.view)).toContain('phone')

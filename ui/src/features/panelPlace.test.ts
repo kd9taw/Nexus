@@ -19,7 +19,7 @@ import {
   type ArrangeSpec,
   type PanePlacement,
 } from './panelPlace'
-import { CW_PANELS, PHONE_PANELS, coercePanelLayout, panelStorageKey, usePanelLayout, type PanelLayout, type PhonePanelId } from './panelState'
+import { PHONE_PANELS, RTTY_PANELS, coercePanelLayout, panelStorageKey, usePanelLayout, type PanelLayout, type PhonePanelId } from './panelState'
 
 const SPEC = PHONE_PANELS.arrange!
 const all = () => true
@@ -165,8 +165,8 @@ describe('the panel record carries the placement', () => {
   it('keeps a Phone placement through coercion, and drops one no vocabulary arranges', () => {
     const place: PanePlacement<PhonePanelId> = { receiver: { col: 'a', order: 0 } }
     expect(coercePanelLayout(PHONE_PANELS, { v: 2, state: {}, share: {}, place }).place).toEqual(place)
-    // CW arranges nothing (yet): a place in its record is not read.
-    expect(coercePanelLayout(CW_PANELS, { v: 2, state: {}, share: {}, place: { decode: { col: 'b', order: 0 } } }).place).toBeUndefined()
+    // RTTY has no pane grid to arrange: a place in its record is not read.
+    expect(coercePanelLayout(RTTY_PANELS, { v: 2, state: {}, share: {}, place: { stream: { col: 'b', order: 0 } } }).place).toBeUndefined()
   })
 
   it('a record written before L3 (v1, or v2 with column widths) opens on the stock grouping with everything else kept', () => {
@@ -231,7 +231,7 @@ describe('the hook moves a pane in one undoable step', () => {
   })
 
   it('only a vocabulary that arranges offers a move at all', () => {
-    const { result } = renderHook(() => usePanelLayout(CW_PANELS, 'main'))
+    const { result } = renderHook(() => usePanelLayout(RTTY_PANELS, 'main'))
     expect(result.current.movePane).toBeUndefined()
   })
 })

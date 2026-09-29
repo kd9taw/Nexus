@@ -14,7 +14,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // transmit path and move exactly as PTT Method did. WPM, pitch and filter width in Hz, the
 // scope spans and reference levels, the macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH}
 // tokens and every <select> value are invariant tokens and stay in the code.
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
@@ -36,13 +36,15 @@ import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { PanelsMenu } from './PanelsMenu'
+import { ArrangePanes } from './panes/ArrangePanes'
 import {
   panelHost,
   NO_DSP_FUNCS_REASON,
   NO_DSP_LEVELS_REASON,
   NOTHING_SENT_REASON,
 } from '../features/panelHost'
-import { CW_PANEL_IDS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
+import { CW_PANEL_IDS, CW_PANELS, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
+import { regionGroups } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
 import { SpotDialog } from './SpotDialog'
 import {
@@ -1042,8 +1044,6 @@ export function CwCockpit({
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
   const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane || hasSubRow
-  const mainPresent = hasDecodePane || hasSentPane
-  const auxPresent = hasRigCtlPane || hasBandPane || hasCopilotPane
   // Three columns are decode+sent | aux | log, so the tier is only offered when BOTH the
   // leading (transcript) column and the aux column have something to hold — otherwise a
   // track would sit empty, the operator's "band of empty black" rebuilt. Same collapse
@@ -1054,8 +1054,19 @@ export function CwCockpit({
   // ⊞-removable): a 2-col template with an empty leading minmax(0,1fr) track is that
   // same band of black at full height. At tier 1 rows are `auto`, so an empty column
   // simply takes no space (fix-round, 2026-07-31).
+  // WHERE EACH PANE STANDS (layout L3, ⊞ Panels ▸ Arrange): the record's placement, or the stock
+  // grouping (features/panelPlace). The Rig controls frame is not a vocabulary pane: it stays at the
+  // head of the middle column, and counts for that column's track.
+  const place = panels?.layout.place
+  const paneShown = (id: CwPanelId): boolean =>
+    ({ decode: hasDecodePane, sent: hasSentPane, bandActivity: hasBandPane, copilot: hasCopilotPane })[id as string] ?? false
+  const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
+  const leadCount = placed3[0].ids.length
+  const midCount = placed3[1].ids.length + (hasRigCtlPane ? 1 : 0)
+  // Stock, this is exactly the rule it replaced (the lead column's decode + sent, and the middle's
+  // rig controls, Band Activity and copilot, each present or not).
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
-    mainPresent && auxPresent ? 3 : mainPresent || auxPresent ? 2 : 1,
+    leadCount > 0 && midCount > 0 ? 3 : leadCount + midCount > 0 ? 2 : 1,
   )
   // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
   const mainColRef = useRef<HTMLDivElement>(null)
@@ -1357,12 +1368,9 @@ export function CwCockpit({
     </CockpitPaneFrame>
   ) : null
 
-  const auxPanes = (
-    <>
-      {rigCtlPane}
-
-      {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
-      {hasBandPane && onWorkSpot && (
+  // One element per pane (layout L3): ⊞ Arrange places each where the operator put it.
+  /* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */
+  const bandPane = hasBandPane && onWorkSpot ? (
         <CockpitPaneFrame title={t('cw.pane.bandActivity.title')} paneId="bandActivity" fit="content" {...closeProps('bandActivity')}>
           {control || spotsRead?.phase === 'ready' ? <BandStrip
             band={snap.radio.band}
@@ -1383,12 +1391,12 @@ export function CwCockpit({
           /> : <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>}
           {!control && <CollectionStatus name="spots" />}
         </CockpitPaneFrame>
-      )}
+  ) : null
 
-      {/* CW copilot — decoded-call chips + (Guided) the next-step prompt. Configurable for
-          new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
-          ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
-      {hasCopilotPane && (
+  /* CW copilot — decoded-call chips + (Guided) the next-step prompt. Configurable for
+     new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
+     ops (Expert: just the chips). Nothing here transmits — the operator always keys. */
+  const copilotPane = hasCopilotPane ? (
         <CockpitPaneFrame title={t('cw.pane.copilot.title')} paneId="copilot" fit="content" {...closeProps('copilot')}>
           <div className="cw-copilot panel expert">
             <div className="cw-copilot-chips">
@@ -1422,9 +1430,7 @@ export function CwCockpit({
             </div>
           </div>
         </CockpitPaneFrame>
-      )}
-    </>
-  )
+  ) : null
 
   const logPane = (
     <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('cw.pane.log.title')} paneId="log">
@@ -1457,6 +1463,18 @@ export function CwCockpit({
     </CockpitPaneFrame>
   )
 
+  // Each placed pane by its id, KEYED by it (layout L3): a move within a column is a React move, not
+  // a remount, and only a change of column remounts a pane (the log form, keyed apart, never moves).
+  const paneEls: Partial<Record<CwPanelId, React.ReactNode>> = {
+    decode: decodePane,
+    sent: sentPane,
+    bandActivity: bandPane,
+    copilot: copilotPane,
+  }
+  const placedPane = (id: CwPanelId) => <Fragment key={id}>{paneEls[id]}</Fragment>
+  const rigCtlSlot = <Fragment key="rigctl">{rigCtlPane}</Fragment>
+  const logSlot = <Fragment key="log-form">{logPane}</Fragment>
+
   return (
     <main className={`layout single cw-cockpit${quick ? ' remote-quick-contact' : ''}`}>
       <CockpitHeader
@@ -1479,6 +1497,18 @@ export function CwCockpit({
               onUndo={panels.undo}
               canUndo={panels.canUndo}
               onReset={panels.reset}
+              // ⊞ Arrange (layout L3): where each region pane stands. Undo and Reset above cover it.
+              lead={
+                panels.movePane ? (
+                  <ArrangePanes
+                    spec={CW_PANELS.arrange!}
+                    layout={panels.layout}
+                    shown={paneShown}
+                    labels={cwPanelLabels()}
+                    onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                  />
+                ) : undefined
+              }
             />
           ) : undefined
         }
@@ -1851,28 +1881,30 @@ export function CwCockpit({
         ref={panesRef}
         style={quick ? undefined : regionColsStyle(panels?.layout.cols)}
       >
+        {/* Each column's children are ONE flat keyed list at every tier: a pane that stays in its
+            column keeps its fiber across a 2↔3 flip only if its place in the tree is the same
+            shape at both (a nested list at one tier and a flat one at the other remounts it). */}
         {cols === 3 ? (
           <>
             <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
-              {decodePane}
-              {sentPane}
+              {placed3[0].ids.map(placedPane)}
             </div>
-            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux" ref={auxColRef}>{auxPanes}</div>
+            <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="aux" ref={auxColRef}>
+              {[rigCtlSlot, ...placed3[1].ids.map(placedPane)]}
+            </div>
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
-              {logPane}
+              {[...placed3[2].ids.map(placedPane), logSlot]}
             </div>
           </>
         ) : (
           <>
-            {(mainPresent || auxPresent) && (
+            {leadCount + midCount > 0 && (
               <div className={`cockpit-col${!details ? ' cockpit-col--quiet' : ''}`} key="main" ref={mainColRef}>
-                {decodePane}
-                {sentPane}
-                {auxPanes}
+                {[...placed3[0].ids.map(placedPane), rigCtlSlot, ...placed3[1].ids.map(placedPane)]}
               </div>
             )}
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
-              {logPane}
+              {[...placed3[2].ids.map(placedPane), logSlot]}
             </div>
           </>
         )}

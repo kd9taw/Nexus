@@ -910,6 +910,20 @@ export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
+  // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
+  // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
+  // frame; the log form (no id) alone in the last column. The three rig-control groups (`scopeCtl`,
+  // `dsp`, `rxdsp`) share ONE frame, which is not a vocabulary pane: it keeps its place at the head
+  // of the middle column, and is not listed. Nothing here is pinned (CW has no voice keyer; the log
+  // form cannot move). Below three tracks the middle column simply follows the first.
+  arrange: {
+    columns: {
+      a: ['decode', 'sent'],
+      b: ['bandActivity', 'copilot'],
+      log: [],
+    },
+    pinned: [],
+  },
 }
 
 /** RTTY cockpit's removable panels (Phase 3). The CockpitHeader + StopTX + TX-arm, the
