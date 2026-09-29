@@ -221,6 +221,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same message in the JS8 cockpit. A message already going out when the locator is cleared still
   finishes.
 
+- **JS8: the free spot for a heartbeat or its acknowledgement is chosen from everything heard,
+  as in JS8Call.** A spot used to count as taken only when a station whose callsign had been
+  decoded was heard there in the last 30 seconds. Now every decoded frame counts, including the
+  middle frames of a long message, which carry no callsign, and a signal that drifts counts once,
+  where it is now. Your own offset always counts as free, as it does in JS8Call.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as

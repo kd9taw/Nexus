@@ -351,7 +351,10 @@ impl Engine {
     fn js8_handle_events(&mut self, events: Vec<MessageEvent>, low_conf: bool, now_ms: u64) {
         for ev in events {
             let row = match &ev {
-                MessageEvent::Frame(rx) => Some(self.js8_row_for_frame(rx, low_conf)),
+                MessageEvent::Frame(rx) => {
+                    self.js8_file_band_activity(rx.freq_hz, rx.speed, rx.at_ms);
+                    Some(self.js8_row_for_frame(rx, low_conf))
+                }
                 // A single-frame message IS its frame row; only multi-frame text (or an
                 // incomplete/force-closed buffer) earns a second, reassembled row.
                 MessageEvent::Message(m) if m.frames > 1 || !m.complete => Some(Js8ActivityRow {
@@ -378,6 +381,27 @@ impl Engine {
             let actions = self.js8_station.on_event(&ev, now_ms);
             self.js8_handle_actions(actions);
         }
+    }
+
+    /// File a decoded frame in the band activity, as JS8Call's decode path does for every frame
+    /// (mainwindow.cpp:3967-4016), at its whole-hertz offset (`frequencyOffset()`, the decoder's
+    /// float truncated to an int). An offset not yet filed first takes over the filed offset
+    /// within the speed's `rxThreshold` of it that `generateOffsets` meets first counting up
+    /// from offset − range (:3970-3981, :3730-3739), so a drifting signal keeps one entry.
+    fn js8_file_band_activity(&mut self, freq_hz: f32, speed: Js8Speed, at_ms: u64) {
+        let offset = freq_hz as i32;
+        if !self.js8_band_activity.contains_key(&offset) {
+            let range = speed.drift_hz() as i32;
+            let prev = self
+                .js8_band_activity
+                .range(offset - range..=offset + range)
+                .next()
+                .map(|(&o, _)| o);
+            if let Some(prev) = prev {
+                self.js8_band_activity.remove(&prev);
+            }
+        }
+        self.js8_band_activity.insert(offset, at_ms);
     }
 
     /// One decoded frame → its activity row (JS8Call's display line, byte-exact).
@@ -847,21 +871,25 @@ impl Engine {
         }
         let period_ms = u64::from(speed.period_s()) * 1000;
         let period_start_ms = slot.saturating_mul(period_ms);
-        // JS8Call's "free HB slot" rule, `isFreqOffsetFree(f, 50)` (mainwindow.cpp:5566): nothing
-        // heard within 50 Hz in the last 30 s. The 50 is `findFreeFreqOffset(500, 1000, 50)`'s
-        // own argument at every speed, not the signal's bandwidth. Snapshot the heard table
-        // first — the station is borrowed mutably by `next_frame` below.
+        // JS8Call's "free HB slot" rule, `isFreqOffsetFree(f, 50)` (mainwindow.cpp:5566-5590): the
+        // operator's own offset is free (`freq() == f`, :5572); any other is taken while the band
+        // activity holds an offset within 50 Hz heard in the last 30 s (:5579-5587). The 50 is
+        // `findFreeFreqOffset(500, 1000, 50)`'s own argument at every speed, not the signal's
+        // bandwidth. Its other exception, an offset in the directed cache (:5572), never holds on
+        // the air: only `initializeDummyData` (:1658) marks one. Snapshot the band activity first
+        // — the station is borrowed mutably by `next_frame` below.
         let bw = 50.0;
-        let heard: Vec<(f32, u64)> = self
-            .js8_station
-            .heard()
+        let own = self.tx_offset_hz().trunc();
+        let activity: Vec<(f32, u64)> = self
+            .js8_band_activity
             .iter()
-            .map(|h| (h.freq_hz, h.last_ms))
+            .map(|(&o, &at)| (o as f32, at))
             .collect();
         let busy = move |f: f32| {
-            heard
-                .iter()
-                .any(|&(hf, at)| (hf - f).abs() < bw && period_start_ms.saturating_sub(at) < 30_000)
+            f != own
+                && activity.iter().any(|&(o, at)| {
+                    (o - f).abs() < bw && period_start_ms.saturating_sub(at) < 30_000
+                })
         };
         let mut seed = self.js8_rng;
         let next = {
@@ -1982,6 +2010,124 @@ mod tests {
             st.last_error.as_deref(),
             Some(NO_LOCATOR),
             "…and the cockpit says why"
+        );
+    }
+
+    // ===== the free heartbeat spot: JS8Call's band activity =====
+
+    /// A data frame at `freq`: a message's continuation, which carries no callsign.
+    fn continuation(freq: f32) -> modes::Decode {
+        let data = Frame::Data {
+            text: "HELLO WORLD".into(),
+            dense: false,
+        };
+        let i3 = I3 {
+            first: false,
+            last: false,
+            data: true,
+        };
+        row(&data, i3, Js8Speed::Normal, freq)
+    }
+
+    /// The one heartbeat over an on-demand heartbeat keys in the next 20 s, and its offset.
+    fn heartbeat_offset(e: &mut Engine) -> f32 {
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let overs = run_js8_loop(e, 20);
+        let [(_, f0)] = overs[..] else {
+            panic!("one heartbeat over, got {overs:?}");
+        };
+        f0
+    }
+
+    /// JS8Call's free-spot test reads its band activity (`isFreqOffsetFree`, mainwindow.cpp:
+    /// 5579-5587), where every decoded frame is filed (:4013). A station in the middle of a long
+    /// message sends frames that carry no callsign, and its offset stays taken.
+    #[test]
+    fn a_spot_heard_only_in_continuation_frames_is_taken() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_ingest(&[continuation(900.0)], now_unix_secs() / 15);
+        e.js8_rng = 2; // the first draw is 900 Hz, the second 500 Hz
+        assert_eq!(
+            heartbeat_offset(&mut e),
+            500.0,
+            "900 Hz is taken, so the second draw is used"
+        );
+    }
+
+    /// …except the operator's own offset, which the test calls free whatever was heard there
+    /// (`freq() == f`, :5572): an HB-ACK may go out where the operator already is.
+    #[test]
+    fn the_operators_own_offset_counts_as_a_free_spot() {
+        let mut e = hb_engine("EN52", 30, 700.0); // our own heartbeat is 30 min away
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB-ack on");
+        e.js8_ingest(
+            &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 700.0)],
+            now_unix_secs() / 15,
+        );
+        e.js8_rng = 23; // the first draw is 700 Hz, the second 800 Hz
+        let overs = run_js8_loop(&mut e, 60);
+        let [(_, f0)] = overs[..] else {
+            panic!("one HB-ACK over, got {overs:?}");
+        };
+        assert_eq!(
+            f0, 700.0,
+            "W1AW was heard at 700 Hz, but that is the operator's own offset, so it is free"
+        );
+    }
+
+    /// A drifting signal keeps one entry: a frame at an offset not yet filed takes over the one
+    /// filed within the speed's `rxThreshold` (:3970-3981), so the spot the signal left is free.
+    #[test]
+    fn a_drifting_signal_keeps_one_band_activity_entry() {
+        for (drifted, free) in [(false, false), (true, true)] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            let slot = now_unix_secs() / 15;
+            e.js8_ingest(&[continuation(745.0)], slot); // 45 Hz from 700
+            if drifted {
+                e.js8_ingest(&[continuation(752.0)], slot); // 7 Hz on: 52 Hz from 700
+            }
+            e.js8_rng = 6; // the first two draws are 700 Hz, the third 500 Hz
+            let f0 = heartbeat_offset(&mut e);
+            assert_eq!(
+                f0 == 700.0,
+                free,
+                "drifted {drifted}: 700 Hz is {} ({f0})",
+                if free { "free" } else { "taken" }
+            );
+        }
+    }
+
+    /// …and the entry that moves is the first one `generateOffsets` meets counting up from
+    /// offset − range (:3730-3739, then the first hit, :3975-3979), not the nearest: a frame at
+    /// 750 Hz takes over the stale 740 and leaves the fresh 755, which still holds 800 Hz.
+    #[test]
+    fn a_new_frame_takes_over_the_lowest_band_activity_entry_in_range() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let now = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_file_band_activity(740.0, Js8Speed::Normal, now - 60_000);
+        e.js8_file_band_activity(755.0, Js8Speed::Normal, now - 5_000);
+        e.js8_file_band_activity(750.0, Js8Speed::Normal, now);
+        e.js8_rng = 4; // the first draw is 800 Hz, the second 500 Hz
+        assert_eq!(
+            heartbeat_offset(&mut e),
+            500.0,
+            "755 Hz, heard 5 s ago, still holds 800 Hz"
+        );
+    }
+
+    /// A frame is filed at its offset truncated to whole hertz, as `DecodedText` takes the
+    /// decoder's float into an int (decodedtext.cpp:248 → decodedtext.h:80): 750.9 Hz is filed
+    /// at 750, a full 50 Hz from 800, which stays free.
+    #[test]
+    fn a_frame_is_filed_at_its_offset_truncated_to_whole_hertz() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_ingest(&[continuation(750.9)], now_unix_secs() / 15);
+        e.js8_rng = 4; // the first draw is 800 Hz
+        assert_eq!(
+            heartbeat_offset(&mut e),
+            800.0,
+            "filed at 750 Hz, 800 Hz is free"
         );
     }
 }

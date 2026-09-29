@@ -2385,6 +2385,9 @@ pub struct Engine {
     js8_seen: VecDeque<(modes::Js8Speed, u64, [u8; 11])>,
     /// The activity pane, newest last, capped at 200.
     js8_activity: VecDeque<crate::dto::Js8ActivityRow>,
+    /// JS8Call's band activity as its free-spot test reads it: audio offset (whole Hz) → when a
+    /// frame was last decoded there. See `js8_file_band_activity`.
+    js8_band_activity: std::collections::BTreeMap<i32, u64>,
     /// The last refused JS8 verb's reason (surfaced as `Js8State.last_error`).
     js8_last_error: Option<String>,
     /// `<config dir>/js8_station.json` — the inbox/heard journal (`set_js8_journal_path`).
@@ -4765,6 +4768,7 @@ impl Engine {
             js8_hb_on: false,
             js8_seen: VecDeque::new(),
             js8_activity: VecDeque::new(),
+            js8_band_activity: std::collections::BTreeMap::new(),
             js8_last_error: None,
             js8_journal_path: None,
             js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
