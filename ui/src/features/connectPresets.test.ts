@@ -106,7 +106,7 @@ describe('Frame — the wall-display layout', () => {
     expect([p.slots.right1, p.slots.right2]).toEqual(['getout', 'chase'])
   })
 
-  it('columns wide enough to read a box from across the desk, which leave the map 800 px at the dashboard window’s 1600', () => {
+  it('400 px columns, wide enough to read a box from across the desk', () => {
     expect(CONNECT_PRESETS.frame.rails).toEqual({ left: 400, right: 400 })
   })
 })

@@ -122,8 +122,9 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
   // that runs the full height, the arrangement a station keeps on a screen of its own. Its columns
   // top to bottom: band conditions over the solar numbers on the left, who is hearing you (PSK
   // Reporter's side of it) over what to chase on the right. The bottom row is closed so the map
-  // takes the height; the default's other panes wait in it. 400 px columns read across a desk and
-  // leave the map 800 px in the dashboard window's 1600.
+  // takes the height; the default's other panes wait in it. 400 px columns read across a desk; in
+  // the dashboard window's 1600×1000 they leave the map 728×866 (measured in Chrome), and on a
+  // 1024 window they narrow to fit around the map's 280 px floor.
   frame: {
     slots: {
       left1: 'bandAdvisor',

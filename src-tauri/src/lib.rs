@@ -17226,10 +17226,10 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         "operatemap" => (1140.0, 760.0),
         // The Connect dashboard window. The generic 760 wide is under Connect's 768 px
         // `xs` line, so it opened as the phone-style stack; 1600 is the `lg` class, where two
-        // 400 px side columns (the Dashboard layout's) leave the map 800 px. 1000 tall fits a
-        // 1920×1080 screen with its taskbar; a smaller screen gets the work area instead (the
-        // open path fits it with `prevent_overflow`). After the first close it reopens as it
-        // was left.
+        // 400 px side columns (the Dashboard layout's) leave the map 728 px (measured in
+        // Chrome; the grid's padding and gaps take the rest). 1000 tall fits a 1920×1080
+        // screen with its taskbar; a smaller screen gets the work area instead (the open path
+        // fits it with `prevent_overflow`). After the first close it reopens as it was left.
         "connect" => (1600.0, 1000.0),
         "bandmapPhone" | "bandmapCw" => (420.0, 780.0),
         "fieldday" => (560.0, 760.0), // the scoreboard: operator + tiles + sections board
