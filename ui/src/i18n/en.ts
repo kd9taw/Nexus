@@ -7972,6 +7972,13 @@ export const EN = {
   'operate.roster.filter.hideBlocked': 'Hide blocked',
   'operate.roster.filter.hideBlocked.title':
     'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',
+  // #386 — the distance cap. `{{distance}}` is a number and its unit ("1000 mi", "1500 km"), in the
+  // units chosen in Settings.
+  'operate.roster.filter.distance.aria': 'Maximum distance',
+  'operate.roster.filter.distance.title':
+    'Show only the stations within this distance of your grid square. A station you have not heard send a grid yet has no known distance, so it always stays on the list, and so does the station you are working.',
+  'operate.roster.filter.distance.any': 'Any distance',
+  'operate.roster.filter.distance.within': 'Within {{distance}}',
   // Two whole labels: the button names the station when there is one to name.
   'operate.roster.spot.label': 'Spot',
   'operate.roster.spot.label.call': 'Spot {{call}}',

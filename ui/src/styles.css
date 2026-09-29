@@ -17543,6 +17543,17 @@ button.cq-skiptx1.on {
 .or-filter input {
   accent-color: var(--accent);
 }
+/* #386 — the distance cap, a compact picker among the filters, in Band Activity's sort picker's
+   look (`.od-sort select`). The `select` base rule owns the arrow (background-image and
+   padding-right, both !important); this sets the face, the ink and the box. */
+.or-distance {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: var(--fs-label);
+}
 .or-grid {
   flex: 1;
   min-height: 0;

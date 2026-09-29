@@ -288,6 +288,37 @@ describe('the three mixed controls paint their own face', () => {
   })
 })
 
+// ── The roster's distance picker (OperateRoster.tsx, #386) ─────────────────────────────────────
+
+/** The Call Roster's distance picker, read off the rendered DOM. */
+function rosterDistance(): Control[] {
+  const r = render(
+    <OperateRoster stations={[heard]} myGrid="EN52" currentSlot={100} needByCall={new Map()} selectedCall={null}
+      onSelect={() => {}} onCall={() => {}} />,
+  )
+  const s = r.container.querySelector<HTMLSelectElement>('select.or-distance')
+  expect(s, 'the roster has no distance picker').not.toBeNull()
+  const out = [{ name: 'Operate roster distance picker', chain: chainOf(s!) }]
+  cleanup()
+  return out
+}
+
+describe('the roster’s distance picker paints its own face (#386)', () => {
+  it('is not left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, rosterDistance())).toEqual([])
+  })
+
+  it('reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, rosterDistance())).toEqual([])
+  })
+
+  it('FIRES: the picker with neither its own rule nor the select base look is caught', () => {
+    const bare = RULES.filter((r) => r.selector !== '.or-distance' && r.selector !== 'select')
+    expect(bare.length, 'the rules under test are not in the sheet').toBe(RULES.length - 2)
+    expect(leftToTheBrowser(bare, rosterDistance())).toContain('Operate roster distance picker: the browser draws its face')
+  })
+})
+
 // ── The fully native three (PotaSotaView.tsx, SatellitesView.tsx) ──────────────────────────────
 
 const POTA_SNAP = { hunt: null, radio: { dialMhz: 14.285 } } as unknown as AppSnapshot
