@@ -73,6 +73,9 @@ export const CONTESTS: { id: string; name: string; short: string }[] = [
   // The sponsor is the Western Illinois Amateur Radio Club; the name is the one its own
   // rules and its sample log use ("Announcing the 2025 Illinois QSO Party").
   { id: 'ilqp', name: 'Illinois QSO Party', short: 'ILQP' },
+  // The sponsor is the NYQP committee (nyqp.org); the name is the one its own rules use
+  // ("2026 New York QSO Party Rules").
+  { id: 'nyqp', name: 'New York QSO Party', short: 'NYQP' },
   { id: 'ohqp', name: 'Ohio QSO Party', short: 'OhQP' },
   { id: 'tnqp', name: 'Tennessee QSO Party', short: 'TNQP' },
   { id: 'txqp', name: 'Texas QSO Party', short: 'TXQP' },

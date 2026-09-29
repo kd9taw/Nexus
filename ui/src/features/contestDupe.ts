@@ -63,7 +63,7 @@ export function contestDupe(
   //
   // The two directions are not symmetric, and `contest::dupe` states which one hurts:
   // "Under-reporting a dupe costs one duplicate contact that scores zero; over-reporting
-  // refuses a legal contact." Eight of the seventeen shipped rulesets key on a slot — five
+  // refuses a legal contact." Nine of the eighteen shipped rulesets key on a slot — six
   // QSO parties on QTH, three ARRL VHF runnings on GRID, each in BOTH directions (working
   // someone else's mobile, and being one). Comparing the triple there answered from a
   // PREFIX of the key: a rover reappearing from a new grid read as already-worked and the

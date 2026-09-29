@@ -14,7 +14,7 @@ function qso(call: string, band: string, mode: string, dupe?: boolean): FieldDay
 //
 //   * COUNTING marks the ORIGINAL as well as the duplicate — a real, scoring contact was
 //     styled as a dupe purely because the call came back later;
-//   * the triple is the key for two of the seventeen shipped rulesets. Sweepstakes works a
+//   * the triple is the key for two of the eighteen shipped rulesets. Sweepstakes works a
 //     station once on ANY band, so its cross-band dupe went unmarked; a QSO party counts a
 //     new county as a new contact, so two legal contacts were both marked;
 //   * it could not see a row the ENGINE logged as a dupe, which is the only thing that

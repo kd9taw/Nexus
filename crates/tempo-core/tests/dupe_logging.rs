@@ -377,6 +377,11 @@ const DUPE_POLICY: &[(&str, bool)] = &[
     ("cqp", false),
     ("txqp", false),
     ("ilqp", false),
+    // ⭐ THE ONE PARTY WHOSE SPONSOR SAYS IT. The 2026 New York QSO Party rules (nyqp.org,
+    // "v1.1 2026-09-25", QSO POINTS): "Do not remove duplicates from your log before
+    // submission. They are used for cross-checking other logs." — the cross-check
+    // reasoning ARRL and CQ give, stated by this sponsor for this contest.
+    ("nyqp", true),
     // ARRL LGCK.1 — "Duplicate contacts are removed with no additional penalty." It is
     // written for ARRL contests generally, which is why the VHF three are here beside
     // Sweepstakes; Field Day is the exception above, and it is an exception because it

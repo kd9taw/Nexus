@@ -162,8 +162,8 @@ describe('contestDupe — when there is nothing to say', () => {
 // THE RULESET'S OWN KEY, not a hardcoded triple.
 //
 // `contestDupe` compared (call, band, mode class) whatever contest was running. That is the
-// key for TWO of the seventeen shipped rulesets — both Field Days. Counted from
-// fd_rules.seed.json: eight key on an exchange slot as well (five QSO parties on QTH, three
+// key for TWO of the eighteen shipped rulesets — both Field Days. Counted from
+// fd_rules.seed.json: nine key on an exchange slot as well (six QSO parties on QTH, three
 // ARRL VHF runnings on GRID), and seven more drop a component (Sweepstakes keys on the CALL
 // ALONE, rule 2.2; CQ WW and WPX drop the mode class).
 //
