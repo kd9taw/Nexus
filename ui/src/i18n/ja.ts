@@ -611,6 +611,8 @@ export const JA: PartialCatalog = {
   "update.download": "ダウンロード",
   "update.downloadFailed": "ブラウザを開けませんでした。{{url}}からNexusを手動でダウンロードしてください",
   "update.copyLink": "リンクをコピー",
+  "update.downloadInstead.title": "ダウンロードページを開いて、アップデートを手動でインストールします",
+  "update.downloading": "Nexus {{version}}をダウンロード中です。ダウンロードが終わるとインストールできます",
   "update.checkFailed": "アップデートサーバーに接続できず、更新を確認できませんでした",
   "update.upToDate": "最新のNexus（{{current}}）を使用中です",
   "update.unreadable": "最新リリースの情報を読み取れませんでした",

@@ -391,6 +391,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
+  the "update available" notice with its Download button no longer turns up beside the prompt
+  that installs the update. Settings ▸ Check for updates now works the same way: it downloads a
+  newer version and offers to install it (again, even if you chose Not now), or tells you that
+  you are up to date. If an update fails to install, its message now has a Download button that
+  opens the download page. The notice still appears when Nexus cannot check for updates itself,
+  and it stays on the .deb packages (the PC one and both Raspberry Pi ones). The PC .deb no
+  longer downloads the AppImage in the background and offers an Install button that could not
+  work there. Installing is still your call: Install waits while you transmit, tune, work a
+  station, run CQ or have TX enabled, and the beta channel works as before.
 - **JS8: the Band activity by offset pane groups Fast and Turbo signals as JS8Call does.** A
   station drifting a little at Fast or Turbo could show as two rows, because the pane joined
   decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's

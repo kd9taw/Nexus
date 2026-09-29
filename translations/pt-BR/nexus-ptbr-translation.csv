@@ -353,6 +353,8 @@
 "1","update.download","Download","","","Short label on: update banner. The same English text ""Download"" is used by 2 different keys (e.g. ota.parks.download) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "1","update.downloadFailed","Couldn't open your browser — download Nexus yourself from {{url}}","","{{url}} | Nexus",""
 "1","update.copyLink","Copy link","","",""
+"1","update.downloadInstead.title","Open the download page and install the update yourself","","","Tooltip on the Download button that the update banner shows when installing an update has failed. The button opens the download page in the browser, so the operator can install the new version by hand."
+"1","update.downloading","Downloading Nexus {{version}}. You can install it when the download finishes.","","{{version}} | Nexus","Shown for a few seconds after Settings ▸ Check for updates finds a newer version. The update then downloads, and the update banner offers Install when it is done."
 "1","update.checkFailed","Could not reach the update server to check for updates","","",""
 "1","update.upToDate","You're on the latest Nexus ({{current}})","","{{current}} | Nexus",""
 "1","update.unreadable","Couldn't read the latest release info","","",""

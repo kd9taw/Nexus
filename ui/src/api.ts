@@ -1395,6 +1395,22 @@ export async function openDownloadPage(): Promise<void> {
   return invoke('open_download_page')
 }
 
+/** How this install takes an update (Rust `update_route`), decided by the package it was
+ * installed from. Ask it only where the updater plugin's API exists: a page without one (the
+ * Remote page, a plain browser) has nothing to ask. */
+export interface UpdateRoute {
+  /** True for the packages the signed self-updater can replace: the Windows setup, the AppImage
+   *  and the macOS app. False for the .deb packages and a build run straight from cargo, which
+   *  keep the notice that opens the download page. */
+  selfUpdate: boolean
+  /** The download page, for the way out when a self-update fails. */
+  downloadPage: string
+}
+
+export async function updateRoute(): Promise<UpdateRoute> {
+  return invoke<UpdateRoute>('update_route')
+}
+
 /** Liveness of the background live feeds (cluster/RBN + PSK Reporter MQTT) for the
  *  Now-Bar connector pills. */
 export async function getFeedHealth(): Promise<FeedHealth> {

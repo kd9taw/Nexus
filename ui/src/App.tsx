@@ -192,7 +192,6 @@ import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
-import { maybeCheckForUpdate } from './features/updateCheck'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
 // renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
@@ -527,12 +526,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const rttyPanels = usePanelLayout(RTTY_PANELS)
   const pskPanels = usePanelLayout(PSK_PANELS)
   const js8Panels = usePanelLayout(JS8_PANELS)
-
-  // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
-  // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
-  useEffect(() => {
-    void maybeCheckForUpdate()
-  }, [])
 
   // Operate MODE: 'dx' (FT8/FT4 structured cockpit) or 'msg' (Tempo two-way
   // calling). The FT8/FT4 ⇄ Tempo switch binds the radio tier+mode and swaps only
@@ -1369,7 +1362,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // time `pounceAlert` is set; this is the visual half plus the one-click work.
   const { alert: pounceAlert, dismiss: dismissPounce } = usePounce()
   // Signed self-update: downloads quietly, installs only on an explicit press that the engine
-  // refuses while the radio is busy (see useSelfUpdate / update_install_block).
+  // refuses while the radio is busy (see useSelfUpdate / update_install_block). It is also the
+  // one owner of the launch's update prompt: the old "update available" notice speaks only
+  // where the self-updater cannot (features/updateCheck.ts).
   const selfUpdate = useSelfUpdate(!!settings?.betaUpdates)
   const handlePounceWork = useCallback(
     (a: PounceAlert) => {

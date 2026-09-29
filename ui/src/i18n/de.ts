@@ -2376,6 +2376,8 @@ export const DE: PartialCatalog = {
   "update.download": "Herunterladen",
   "update.downloadFailed": "Browser konnte nicht geöffnet werden — laden Sie Nexus selbst herunter von {{url}}",
   "update.copyLink": "Link kopieren",
+  "update.downloadInstead.title": "Die Download-Seite öffnen und das Update selbst installieren",
+  "update.downloading": "Nexus {{version}} wird heruntergeladen. Sie können es installieren, sobald der Download fertig ist.",
   "update.checkFailed": "Update-Server für die Update-Prüfung nicht erreichbar",
   "update.upToDate": "Sie haben das neueste Nexus ({{current}})",
   "update.unreadable": "Informationen zur neuesten Version nicht lesbar",
