@@ -580,6 +580,22 @@ it('IDLE: a key anywhere on the page starts the fifteen minutes again', async ()
   } finally { vi.useRealTimers() }
 })
 
+it('IDLE: a turn of the mouse wheel on the picture starts the fifteen minutes again (ruling B3: tuning with the wheel is the operator at work)', async () => {
+  idleTimers()
+  try {
+    const v = await streaming()
+    watching(v, 10 * MIN)
+    v.video.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 800, clientY: 550, deltaY: 120 }))
+    watching(v, 5 * MIN + 30_000)
+    expect(stillThere(), '15:30 from the start, when it would stand had the wheel not counted').toBeNull()
+    expect(v.link.getSnapshot().phase).toBe('live')
+    watching(v, 9 * MIN + 29_000)
+    expect(stillThere(), 'fourteen fifty-nine after the wheel').toBeNull()
+    watching(v, 1000)
+    expect(stillThere(), 'fifteen after the wheel').toBeTruthy()
+  } finally { vi.useRealTimers() }
+})
+
 it('IDLE: a held PTT counts for as long as it is held - its re-assertions are activity - and the fifteen minutes start when it is let go', async () => {
   idleTimers()
   try {

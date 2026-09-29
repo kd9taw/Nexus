@@ -156,8 +156,8 @@ export function StreamView({ connection, station, disconnect, signOut }: {
   </div>
 }
 
-/** "Still there?" (the operator's pick, "15 min + prompt"): true while it is asked. Any click or key
- *  on this page is the operator's, wherever it lands, and the link counts a held PTT; watching,
+/** "Still there?" (the operator's pick, "15 min + prompt"): true while it is asked. Any click, key or
+ *  turn of the wheel on this page is the operator's, wherever it lands, and the link counts a held PTT; watching,
  *  listening and the station transmitting are not. A press keeps the prompt up until it is let go.
  *  Unanswered for a minute, `idle` runs. Each look reads the link's clock, every second and whenever
  *  the tab is shown or hidden, so a tab whose timers are throttled still ends on its first look past
@@ -184,6 +184,8 @@ function useStillThere(running: boolean, link: StreamLink, idle: () => void): bo
     document.addEventListener('keydown', input, true)
     // Assistive technology activates a control with a click alone, no press before it.
     document.addEventListener('click', input, true)
+    // Tuning with the wheel is the operator at work (ruling B3).
+    document.addEventListener('wheel', input, { capture: true, passive: true })
     document.addEventListener('visibilitychange', look)
     return () => {
       clearInterval(timer)
@@ -192,6 +194,7 @@ function useStillThere(running: boolean, link: StreamLink, idle: () => void): bo
       document.removeEventListener('pointercancel', look, true)
       document.removeEventListener('keydown', input, true)
       document.removeEventListener('click', input, true)
+      document.removeEventListener('wheel', input, true)
       document.removeEventListener('visibilitychange', look)
       setAsking(false)
     }

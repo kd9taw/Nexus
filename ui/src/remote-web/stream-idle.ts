@@ -1,6 +1,7 @@
 // An idle stream (the operator's picks "15 min + prompt" and "Only clicks, keys, PTT"). Watching
 // alone is idle, because the waterfall always moves: what counts is the operator's own input - a
-// click or a key anywhere on the page, and a held PTT for as long as it is re-asserted. The station
+// click, a key or a turn of the wheel anywhere on the page (the wheel by ruling B3: tuning with it
+// is the operator at work), and a held PTT for as long as it is re-asserted. The station
 // listening, the audio playing and the rig transmitting never count, so a running FT sequence does
 // not hold a stream open. Fifteen minutes without any of it brings "Still there?"; a minute more,
 // unanswered, ends the stream the way End the stream does.
