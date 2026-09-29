@@ -412,6 +412,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
   opened JS8, and the reply writes it as JS8Call does: "IDLE 5M", "IDLE 1H", "IDLE 2D".
 
+- **Connect at 1024×768: the Layers panel no longer covers the band list.** When the map is too
+  narrow for both, the Layers panel now starts folded, so it no longer hides the band names in
+  the Conditions panel on the map's right. It opens again by itself on a wider window. Once you
+  fold or unfold it yourself, your choice is kept. The 2-D map and the 3-D globe both work this
+  way.
+
 - **Connect: the Band conditions list on the map is readable in every theme (#382).** The band
   names are now drawn in the theme's own text colour. Before, they used the computer's default
   button colour, so with Windows in light mode they came out black on the dark theme and could

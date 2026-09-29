@@ -41,7 +41,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { MapLayersPanel } from './MapLayersPanel'
+import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
 import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots } from '../api'
 import { logSource } from '../features/logSource'
@@ -3245,7 +3245,13 @@ export function MapView({
               Layers button peeks it back (see `layersPeek`). Rendered BEFORE the flare/PCA chips: they
               sit beside it via a sibling selector (`.map-layers ~ .flare-chip`). */}
           {!embedded && (!full || layersPeek) && (
-            <MapLayersPanel className="map-layers" title={t('map.layers.head')}>
+            // Folded by default where it would cover the Conditions rail's band list (the 1024×768
+            // floor), unless the operator has chosen (MapLayersPanel `narrow`).
+            <MapLayersPanel
+              className="map-layers"
+              title={t('map.layers.head')}
+              narrow={prop != null && size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+            >
               {(Object.keys(layers) as LayerKey[]).map((k) => (
                 <div className="map-layer" key={k}>
                   <label>
