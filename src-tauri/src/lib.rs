@@ -26336,6 +26336,64 @@ struct UpdateInfo {
     download_url: String,
 }
 
+/// Whether the signed self-updater can replace THIS install, judged by the package the bundler
+/// stamped into the binary (`tauri::utils::platform::bundle_type`).
+///
+/// ⚠️ THE PACKAGE DECIDES, NOT WHETHER A CHECK SUCCEEDS. The manifest (`latest.json`, built in
+/// release.yml) carries three installers: the NSIS setup under `windows-x86_64`, the AppImage
+/// under `linux-x86_64` and the macOS app under `darwin-aarch64`. The plugin looks up
+/// `linux-x86_64-deb` and then the bare `linux-x86_64`, so on a PC's .deb the check found the
+/// AppImage, downloaded it, and Install failed every time: the plugin installs over a .deb only
+/// from a .deb (`InvalidUpdaterFormat`). The .deb packages (the PC one and both Pi ones) are
+/// apt's to replace, so they keep the notice that opens the download page. An MSI install (Nexus
+/// publishes none) would be handed the NSIS setup, a different installer from the one that put
+/// it there, and a build run straight from cargo reports no package at all; both keep the notice
+/// too. macOS reports its app bundle for every build, a dev build included, because the bundler
+/// stamps nothing there.
+fn self_updates(bundle: Option<&tauri::utils::config::BundleType>) -> bool {
+    use tauri::utils::config::BundleType;
+    matches!(
+        bundle,
+        Some(BundleType::Nsis | BundleType::AppImage | BundleType::App)
+    )
+}
+
+/// How this install takes an update: see [`update_route`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateRoute {
+    /// True where the signed self-updater can replace this install ([`self_updates`]).
+    self_update: bool,
+    /// The download page, for the way out when a self-update fails.
+    download_page: String,
+}
+
+/// How this install takes an update: the self-updater's Install button, or the notice whose
+/// Download button opens the download page. The frontend asks before its first self-update
+/// check, so a .deb never downloads an AppImage it cannot install. Logged, because the plugin's
+/// own checks write nothing to the diagnostic log.
+#[tauri::command]
+fn update_route() -> UpdateRoute {
+    let bundle = tauri::utils::platform::bundle_type();
+    let self_update = self_updates(bundle.as_ref());
+    tempo_core::applog::info(
+        "updater",
+        &format!(
+            "package {}: {}",
+            bundle.map_or_else(|| "none".to_string(), |b| b.to_string()),
+            if self_update {
+                "updates install themselves"
+            } else {
+                "updates are announced with the download page"
+            }
+        ),
+    );
+    UpdateRoute {
+        self_update,
+        download_page: DOWNLOAD_PAGE_URL.to_string(),
+    }
+}
+
 /// Blocking GET of a text/JSON URL — mirrors the propagation crate's reqwest usage (rustls, short
 /// timeout, a UA). Returns the raw body; call it via `spawn_blocking` from the command.
 fn fetch_text(url: &str) -> Result<String, String> {
@@ -29710,6 +29768,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             qrz_lookup,
             check_for_update,
             open_download_page,
+            update_route,
             set_qrz_logbook_key,
             clear_qrz_logbook_key,
             set_cloudlog_key,
@@ -35877,6 +35936,26 @@ mod tests {
         // The operator acts on the first thing they read, so the most immediate hazard wins.
         let r = install_block_reason(true, true, Some("K1ABC"), true, true).expect("refuses");
         assert!(r.starts_with("Transmitting"), "got {r:?}");
+    }
+
+    /// ONE UPDATE PROMPT (2026-09-29). The self-updater is the prompt only where it can replace
+    /// this install: the three packages the manifest carries. Everything else keeps the notice
+    /// with the download page, the .deb above all, whose check used to find the AppImage.
+    #[test]
+    fn only_the_packages_the_manifest_carries_update_themselves() {
+        use tauri::utils::config::BundleType;
+        for (bundle, expected) in [
+            (Some(BundleType::Nsis), true),
+            (Some(BundleType::AppImage), true),
+            (Some(BundleType::App), true),
+            (Some(BundleType::Deb), false),
+            (Some(BundleType::Rpm), false),
+            (Some(BundleType::Msi), false),
+            (Some(BundleType::Dmg), false),
+            (None, false),
+        ] {
+            assert_eq!(super::self_updates(bundle.as_ref()), expected, "{bundle:?}");
+        }
     }
 
     #[test]

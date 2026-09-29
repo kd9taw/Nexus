@@ -848,6 +848,10 @@ export const EN = {
   'update.downloadFailed':
     "Couldn't open your browser — download Nexus yourself from {{url}}",
   'update.copyLink': 'Copy link',
+  // The Download button on a failed self-update (the banner's way out), and the note Settings'
+  // "Check for updates" shows while the update it found downloads.
+  'update.downloadInstead.title': 'Open the download page and install the update yourself',
+  'update.downloading': 'Downloading Nexus {{version}}. You can install it when the download finishes.',
   'update.checkFailed': 'Could not reach the update server to check for updates',
   'update.upToDate': "You're on the latest Nexus ({{current}})",
   'update.unreadable': "Couldn't read the latest release info",

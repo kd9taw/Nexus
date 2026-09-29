@@ -6264,6 +6264,8 @@ export const FR: PartialCatalog = {
   "update.checkFailed": "Impossible de joindre le serveur pour rechercher des mises à jour",
   "update.download": "Télécharger",
   "update.downloadFailed": "Impossible d'ouvrir le navigateur — téléchargez Nexus vous-même depuis {{url}}",
+  "update.downloadInstead.title": "Ouvrir la page de téléchargement et installer la mise à jour vous-même",
+  "update.downloading": "Téléchargement de Nexus {{version}}. Vous pourrez l'installer une fois le téléchargement terminé.",
   "update.copyLink": "Copier le lien",
   "update.failed": "Échec de la mise à jour",
   "update.install.label": "Installer et redémarrer",

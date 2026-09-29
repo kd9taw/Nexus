@@ -14,7 +14,7 @@
 //
 // There was no test for this flow at all — `features/` had ten test files and none for the
 // updater.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { UpdateInfo } from '../types'
 
 // Node test env: in-memory localStorage (the connectConfig.test.ts shim).
@@ -31,16 +31,25 @@ const memStore = new MemoryStorage() as unknown as Storage
 globalThis.localStorage = memStore
 vi.stubGlobal('window', { localStorage: memStore, setTimeout } as unknown as Window & typeof globalThis)
 
-vi.mock('../toast', () => ({ pushToast: vi.fn() }))
-vi.mock('../api', () => ({ checkForUpdate: vi.fn(), openDownloadPage: vi.fn() }))
+vi.mock('../toast', () => ({ pushToast: vi.fn(), dismissToast: vi.fn() }))
+vi.mock('../api', () => ({ checkForUpdate: vi.fn(), openDownloadPage: vi.fn(), appVersion: vi.fn() }))
 
-import { pushToast } from '../toast'
-import { checkForUpdate, openDownloadPage } from '../api'
-import { maybeCheckForUpdate } from './updateCheck'
+import { dismissToast, pushToast } from '../toast'
+import { appVersion, checkForUpdate, openDownloadPage } from '../api'
+import { t } from '../i18n'
+import {
+  checkForUpdateManual,
+  installSelfUpdate,
+  maybeCheckForUpdate,
+  retireDownloadPrompt,
+  type SelfUpdateAnswer,
+} from './updateCheck'
 
 const toasts = vi.mocked(pushToast)
+const dismiss = vi.mocked(dismissToast)
 const check = vi.mocked(checkForUpdate)
 const open = vi.mocked(openDownloadPage)
+const version = vi.mocked(appVersion)
 
 const LS_DISMISSED = 'nexus.update.dismissedVersion'
 const URL = 'https://github.com/kd9taw/Nexus/releases'
@@ -62,8 +71,10 @@ function downloadAction(): unknown {
 beforeEach(() => {
   memStore.clear()
   toasts.mockClear()
+  dismiss.mockClear()
   check.mockReset().mockResolvedValue(INFO)
   open.mockReset().mockResolvedValue(undefined)
+  version.mockReset().mockResolvedValue('1.6.1')
 })
 
 describe('the update prompt', () => {
@@ -125,5 +136,75 @@ describe('Download FAILED — the opener could not reach a browser', () => {
     // Relaunch.
     await maybeCheckForUpdate()
     expect(toasts.mock.calls.some((c) => String(c[0]).includes('1.7.0'))).toBe(true)
+  })
+})
+
+// ONE UPDATE PROMPT (operator, 2026-09-29): where the signed self-updater can replace this
+// install it is the prompt, and this notice speaks only when it could not answer.
+describe('the notice, beside the self-updater', () => {
+  it("stays silent when this launch's self-update check answered", async () => {
+    await maybeCheckForUpdate(Promise.resolve(true))
+    expect(check, 'its feed is still read: that is the launch line in the diagnostic log').toHaveBeenCalled()
+    expect(toasts).not.toHaveBeenCalled()
+  })
+
+  it('speaks, exactly as before, when it could not', async () => {
+    await maybeCheckForUpdate(Promise.resolve(false))
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('1.7.0')
+    expect(toasts.mock.calls[0][2]).toBe(0)
+  })
+
+  it('gives way to the install prompt when that arrives later', async () => {
+    toasts.mockReturnValueOnce(41)
+    await maybeCheckForUpdate(Promise.resolve(false))
+    retireDownloadPrompt()
+    expect(dismiss).toHaveBeenCalledWith(41)
+  })
+})
+
+describe('Settings ▸ Check for updates', () => {
+  let dispose: () => void = () => {}
+  const answering = (answer: SelfUpdateAnswer) => {
+    dispose = installSelfUpdate(() => Promise.resolve(answer))
+  }
+  afterEach(() => dispose())
+
+  it('says an update is downloading, and does not ask the notice', async () => {
+    answering({ kind: 'downloading', version: '1.7.0' })
+    await checkForUpdateManual()
+    expect(toasts.mock.calls.map((c) => c[0])).toEqual([t('update.downloading', { version: '1.7.0' })])
+    expect(check).not.toHaveBeenCalled()
+  })
+
+  it('adds nothing while the install prompt is already up', async () => {
+    answering({ kind: 'ready', version: '1.7.0' })
+    await checkForUpdateManual()
+    expect(toasts).not.toHaveBeenCalled()
+    expect(check).not.toHaveBeenCalled()
+  })
+
+  it('says "up to date" with the running version', async () => {
+    answering({ kind: 'upToDate' })
+    await checkForUpdateManual()
+    expect(toasts.mock.calls.map((c) => c[0])).toEqual([t('update.upToDate', { current: '1.6.1' })])
+    expect(check).not.toHaveBeenCalled()
+  })
+
+  it.each(['failed', 'unsupported'] as const)(
+    'hands a %s self-update check to the notice, which answers exactly as before',
+    async (kind) => {
+      answering({ kind })
+      await checkForUpdateManual()
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(toasts.mock.calls[0][0]).toBe(t('update.available', { latest: '1.7.0', current: '1.6.1' }))
+    },
+  )
+
+  it('is the notice alone with no self-updater installed, and after it goes', async () => {
+    answering({ kind: 'upToDate' })
+    dispose()
+    await checkForUpdateManual()
+    expect(check).toHaveBeenCalledTimes(1)
   })
 })

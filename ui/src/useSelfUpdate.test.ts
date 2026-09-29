@@ -10,6 +10,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useSelfUpdate } from './useSelfUpdate'
+import { checkForUpdateManual } from './features/updateCheck'
+import { dismissToast, subscribeToasts, type Toast } from './toast'
+import { t } from './i18n'
+import type { UpdateInfo } from './types'
 
 type Handle = {
   available: boolean
@@ -19,17 +23,36 @@ type Handle = {
 }
 
 let nextCheck: () => Promise<Handle | null>
-/** What `check_beta_update` returns when the beta channel is exercised (null = up to date). */
-let betaInfo: { version: string; notes: string | null } | null = null
+/** What `check_beta_update` returns when the beta channel is exercised (null = up to date; an
+ *  Error = the check fails with it). */
+let betaInfo: { version: string; notes: string | null } | null | Error = null
+/** What `update_route` says of this install: a package the updater can replace (the NSIS setup,
+ *  the AppImage, the macOS app) unless a test is a .deb. */
+let selfUpdates = true
+/** What the old notice's own feed says (`check_for_update`); null = unreachable. */
+let noticeInfo: UpdateInfo | null = null
+/** Whether `open_download_page` reached a browser. */
+let pageOpens = true
 const checkCalls: number[] = []
 /** Every `invoke(cmd)` the hook made through the api bridge, in order. */
 const invoked: string[] = []
+let toasts: Toast[] = []
+let unsubscribe: () => void = () => {}
+
+const PAGE = 'https://github.com/kd9taw/nexus/releases/latest'
+const INFO: UpdateInfo = { current: '1.15.0', latest: '9.9.9', updateAvailable: true, downloadUrl: PAGE }
 
 beforeEach(() => {
   vi.useFakeTimers()
   checkCalls.length = 0
   invoked.length = 0
   betaInfo = null
+  selfUpdates = true
+  noticeInfo = null
+  pageOpens = true
+  unsubscribe = subscribeToasts((now) => {
+    toasts = now
+  })
   ;(window as unknown as { __TAURI__: unknown }).__TAURI__ = {
     updater: {
       check: () => {
@@ -43,7 +66,17 @@ beforeEach(() => {
       invoke: (cmd: string) => {
         invoked.push(cmd)
         if (cmd === 'update_install_block') return Promise.resolve(null)
-        if (cmd === 'check_beta_update') return Promise.resolve(betaInfo)
+        if (cmd === 'check_beta_update') {
+          return betaInfo instanceof Error ? Promise.reject(betaInfo) : Promise.resolve(betaInfo)
+        }
+        if (cmd === 'update_route') return Promise.resolve({ selfUpdate: selfUpdates, downloadPage: PAGE })
+        if (cmd === 'app_version') return Promise.resolve('1.15.0')
+        if (cmd === 'check_for_update') {
+          return noticeInfo ? Promise.resolve(noticeInfo) : Promise.reject(new Error('offline'))
+        }
+        if (cmd === 'open_download_page') {
+          return pageOpens ? Promise.resolve() : Promise.reject(new Error('no launcher opened it'))
+        }
         return Promise.resolve(undefined)
       },
     },
@@ -52,16 +85,26 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__
+  for (const toast of toasts) dismissToast(toast.id)
+  unsubscribe()
 })
+
+/** The old prompt: the "update available" toast, found by its own words. */
+const notices = () =>
+  toasts.filter((x) => x.message === t('update.available', { latest: '9.9.9', current: '1.15.0' }))
+const messages = () => toasts.map((x) => x.message)
 
 const HOUR = 60 * 60 * 1000
 
-function offering(version: string): () => Promise<Handle | null> {
+function offering(
+  version: string,
+  download: () => Promise<void> = () => Promise.resolve(), // instant "download" — phase goes straight to ready
+): () => Promise<Handle | null> {
   return () =>
     Promise.resolve({
       available: true,
       version,
-      download: () => Promise.resolve(), // instant "download" — phase goes straight to ready
+      download,
     })
 }
 
@@ -230,5 +273,217 @@ describe('opt-in beta channel', () => {
     await settle()
     expect(result.current.phase).toBe('idle')
     expect(result.current.version).toBeNull()
+  })
+})
+
+// ONE UPDATE PROMPT (operator, 2026-09-29). The self-updater is the prompt wherever it can
+// replace this install; the old notice (a toast whose Download button opens the release page)
+// speaks only where it cannot. App.updatePrompt.test.tsx holds the launch half in the real App.
+describe('where the updater cannot replace this install (the .deb packages)', () => {
+  // The plugin is in every desktop build, and the manifest's bare `linux-x86_64` key (the
+  // AppImage) matches a .deb on a PC, so the check "succeeded", the AppImage downloaded, and
+  // Install failed every time: the plugin installs a .deb only from a .deb.
+  it('never checks, downloads or offers, on either channel, at launch or on the hour', async () => {
+    selfUpdates = false
+    nextCheck = offering('9.9.9')
+    betaInfo = { version: '1.10.3-beta.2', notes: null }
+    for (const beta of [false, true]) {
+      const { result, unmount } = renderHook(() => useSelfUpdate(beta))
+      await settle()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(HOUR + 1000)
+      })
+      expect(invoked, 'control: the route was asked').toContain('update_route')
+      expect(checkCalls, 'no stable check, so no AppImage download').toHaveLength(0)
+      expect(invoked, 'no beta check').not.toContain('check_beta_update')
+      expect(result.current.phase).toBe('idle')
+      unmount()
+    }
+  })
+})
+
+describe('the old notice', () => {
+  it('gives way when the install prompt arrives later', async () => {
+    // Launch: the self-update check fails, so the notice speaks…
+    noticeInfo = INFO
+    nextCheck = () => Promise.reject(new Error('Could not fetch a valid release JSON from the remote'))
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(notices(), 'premise: the notice is up').toHaveLength(1)
+    // …and on the hour the self-updater gets through. Both on one screen is the bug.
+    nextCheck = offering('9.9.9')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOUR + 1000)
+    })
+    expect(result.current.phase).toBe('ready')
+    expect(notices(), 'one prompt: the notice gave way').toHaveLength(0)
+  })
+
+  it('gives way on the beta channel too', async () => {
+    noticeInfo = INFO
+    betaInfo = new Error('no pre-release manifest yet')
+    const { result } = renderHook(() => useSelfUpdate(true))
+    await settle()
+    expect(notices(), 'premise: the notice is up').toHaveLength(1)
+    betaInfo = { version: '1.10.3-beta.2', notes: null }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOUR + 1000)
+    })
+    expect(result.current.phase).toBe('ready')
+    expect(notices(), 'one prompt: the notice gave way').toHaveLength(0)
+  })
+})
+
+describe('Settings ▸ Check for updates', () => {
+  /** Mount the hook up to date, so a press has something to find. */
+  async function upToDateAtLaunch() {
+    nextCheck = () => Promise.resolve(null)
+    const hook = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(hook.result.current.phase, 'premise: up to date at launch').toBe('idle')
+    invoked.length = 0
+    return hook
+  }
+  const press = async () => {
+    await act(async () => {
+      await checkForUpdateManual()
+    })
+    await settle()
+  }
+
+  it('finds an update the launch did not, says it is downloading, then offers the install', async () => {
+    const { result } = await upToDateAtLaunch()
+    noticeInfo = INFO // the notice's feed would say "available": it must not be the one asked
+    nextCheck = offering('9.9.9')
+    await press()
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.version).toBe('9.9.9')
+    expect(messages()).toContain(t('update.downloading', { version: '9.9.9' }))
+    expect(notices(), 'no old notice beside it').toHaveLength(0)
+    expect(invoked, "the notice's feed was not asked").not.toContain('check_for_update')
+    // Nexus never installs on its own schedule: finding an update is not a press of Install.
+    for (const cmd of ['prepare_update_install', 'install_beta_update', 'restart_app']) {
+      expect(invoked, cmd).not.toContain(cmd)
+    }
+  })
+
+  it('offers again a version put off with "Not now": the operator asked', async () => {
+    nextCheck = offering('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    act(() => result.current.dismiss())
+    expect(result.current.phase).toBe('idle')
+    await press()
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.version).toBe('9.9.9')
+  })
+
+  it('while an update is ready, starts nothing, adds nothing and installs nothing', async () => {
+    nextCheck = offering('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase).toBe('ready')
+    const checks = checkCalls.length
+    invoked.length = 0
+    await press()
+    expect(result.current.phase, 'the banner stays as it is').toBe('ready')
+    expect(checkCalls, 'no second check or download').toHaveLength(checks)
+    expect(toasts, 'the banner on screen is the answer').toHaveLength(0)
+    expect(invoked).not.toContain('restart_app')
+  })
+
+  it('says "up to date" with the running version', async () => {
+    await upToDateAtLaunch()
+    noticeInfo = INFO
+    await press()
+    expect(messages()).toEqual([t('update.upToDate', { current: '1.15.0' })])
+    expect(invoked, "the notice's feed was not asked").not.toContain('check_for_update')
+  })
+
+  it("falls back to the notice's own check when the self-update check fails", async () => {
+    await upToDateAtLaunch()
+    noticeInfo = INFO
+    nextCheck = () => Promise.reject(new Error('Could not fetch a valid release JSON from the remote'))
+    await press()
+    expect(invoked).toContain('check_for_update')
+    expect(notices(), 'the notice, with its Download button').toHaveLength(1)
+  })
+
+  it("is the notice's check on a .deb, exactly as before", async () => {
+    selfUpdates = false
+    nextCheck = offering('9.9.9')
+    renderHook(() => useSelfUpdate(false))
+    await settle()
+    noticeInfo = INFO
+    await press()
+    expect(notices()).toHaveLength(1)
+    expect(checkCalls, 'the updater stayed out of it').toHaveLength(0)
+  })
+
+  it('while the launch download is still on its way, says so, and a failure then is shown', async () => {
+    let fail: (e: Error) => void = () => {}
+    nextCheck = offering('9.9.9', () => new Promise<void>((_resolve, reject) => (fail = reject)))
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase, 'premise: downloading').toBe('downloading')
+    const checks = checkCalls.length
+    await press()
+    expect(messages()).toContain(t('update.downloading', { version: '9.9.9' }))
+    expect(checkCalls, 'no second check or download').toHaveLength(checks)
+    await act(async () => {
+      fail(new Error('connection reset'))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.phase, 'it became a download the operator asked for').toBe('error')
+  })
+
+  it('shows a download that fails after the press, with the way out', async () => {
+    const { result } = await upToDateAtLaunch()
+    nextCheck = offering('9.9.9', () => Promise.reject(new Error('connection reset')))
+    await press()
+    expect(result.current.phase, 'the operator asked, so the failure is theirs to see').toBe('error')
+    expect(result.current.error).toContain('connection reset')
+    expect(notices(), 'the banner carries the download page; no second prompt').toHaveLength(0)
+  })
+})
+
+describe('the way out of a failed update', () => {
+  async function failedInstall() {
+    nextCheck = () =>
+      Promise.resolve({
+        available: true,
+        version: '9.9.9',
+        download: () => Promise.resolve(),
+        install: () => Promise.reject(new Error('Read-only file system (os error 30)')),
+      })
+    const hook = renderHook(() => useSelfUpdate(false))
+    await settle()
+    act(() => hook.result.current.install())
+    await settle()
+    expect(hook.result.current.phase, 'premise: the install failed').toBe('error')
+    return hook
+  }
+
+  it('opens the download page, and puts this version away for the session', async () => {
+    const { result } = await failedInstall()
+    act(() => result.current.downloadInstead())
+    await settle()
+    expect(invoked).toContain('open_download_page')
+    expect(result.current.phase).toBe('idle')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOUR + 1000)
+    })
+    expect(result.current.phase, 'the hourly check does not bring the same version back').toBe('idle')
+  })
+
+  it('hands over the address when no browser opens, and keeps the failure on screen', async () => {
+    pageOpens = false
+    const { result } = await failedInstall()
+    act(() => result.current.downloadInstead())
+    await settle()
+    const handover = toasts.find((x) => x.message === t('update.downloadFailed', { url: PAGE }))
+    expect(handover, 'the address, to copy').toBeTruthy()
+    expect(handover!.actionLabel).toBe(t('update.copyLink'))
+    expect(result.current.phase).toBe('error')
   })
 })
