@@ -275,6 +275,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat acknowledgements are unchanged. Not yet checked on the air: turn HB on with a
   5-minute interval and check that one heartbeat goes out about five minutes later, shown in the
   Activity pane at an offset between 500 and 1000 Hz.
+- **JS8: a CQ goes out as one frame when your locator has six characters.** With a
+  six-character locator in Settings, every CQ, clicked or repeated, went out on two periods in
+  a row: first a CQ with no locator, then the locator on its own. It now carries the
+  four-character square, as JS8Call's CQ does, so it is one frame again. A four-character
+  locator is unchanged.
 - **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits
