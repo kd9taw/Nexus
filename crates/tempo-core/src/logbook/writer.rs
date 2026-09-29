@@ -598,6 +598,64 @@ struct Shared {
     foreign_index: std::sync::atomic::AtomicU64,
     /// The revision of the latest change submitted. See [`LogWriter::submitted_rev`].
     submitted: std::sync::atomic::AtomicU64,
+    /// A test's hold on the writer's looks at other processes' commits
+    /// ([`LogWriter::hold_looks`]).
+    #[cfg(test)]
+    looks: LookHold,
+}
+
+/// Tests only: a hold on the writer's look at other processes' commits, at the moment it has seen
+/// one and not yet read what kind of change it was ([`LogWriter::hold_looks`]). That moment is one
+/// SQLite read long; held, it lasts as long as a test needs to read the counts as a window would.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct LookHold {
+    /// Whether the hold is on, and whether a look is waiting at it.
+    state: Mutex<(bool, bool)>,
+    moved: Condvar,
+}
+
+#[cfg(test)]
+impl LookHold {
+    /// On the writer's thread: wait here for as long as the hold is on.
+    fn pass(&self) {
+        let mut st = lock(&self.state);
+        if !st.0 {
+            return;
+        }
+        st.1 = true;
+        self.moved.notify_all();
+        while st.0 {
+            st = self.moved.wait(st).unwrap_or_else(PoisonError::into_inner);
+        }
+        st.1 = false;
+    }
+}
+
+/// Tests only: the hold [`LogWriter::hold_looks`] put on; dropping it lets the look go on.
+#[cfg(test)]
+struct HeldLooks<'a>(&'a LookHold);
+
+#[cfg(test)]
+impl HeldLooks<'_> {
+    /// Whether a look is waiting at the hold, waited for up to `wait`.
+    fn reached(&self, wait: Duration) -> bool {
+        let st = lock(&self.0.state);
+        let (st, _) = self
+            .0
+            .moved
+            .wait_timeout_while(st, wait, |st| !st.1)
+            .unwrap_or_else(PoisonError::into_inner);
+        st.1
+    }
+}
+
+#[cfg(test)]
+impl Drop for HeldLooks<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.state).0 = false;
+        self.0.moved.notify_all();
+    }
 }
 
 /// A copy of the database (see [`LogWriter::copy_database`]): where, and who is waiting.
@@ -909,6 +967,9 @@ impl LogWriter {
     /// [`Self::foreign_commits`], at the same looks: a foreign commit that leaves this where it
     /// was is a stamp, which costs another window's index nothing (SPEC-2 v3 C19, D4-A).
     ///
+    /// A look moves this BEFORE [`Self::foreign_commits`], so a caller that reads the count first
+    /// and this second never sees a commit counted without its index move.
+    ///
     /// Counted as `index_seq` less this writer's own moves of it: every move is one `+ 1` in some
     /// process's write transaction, so what this writer did not add, another process did.
     pub fn foreign_index_moves(&self) -> u64 {
@@ -937,6 +998,14 @@ impl LogWriter {
             return None;
         }
         answer.recv_timeout(wait).ok()
+    }
+
+    /// Tests only: hold this writer's looks at other processes' commits where a look has seen one
+    /// and not yet read what kind of change it was, until the value handed back is dropped.
+    #[cfg(test)]
+    fn hold_looks(&self) -> HeldLooks<'_> {
+        lock(&self.shared.looks.state).0 = true;
+        HeldLooks(&self.shared.looks)
     }
 
     /// Copy the database to `dst` ([`sqlite::copy_database`]) FROM THE WRITER THREAD, after
@@ -1137,20 +1206,27 @@ struct IndexSeq {
 
 /// Look for another connection's commits and count them — and, when there are some, how many
 /// moved the store's `index_seq`. See [`LogWriter::foreign_commits`].
+///
+/// ⚠️ The index moves are counted BEFORE the commit is. A window reads the count first and then
+/// its kind, and takes a commit counted with no index move in as a stamp; a count published
+/// ahead of its kind let a window take another window's delete in as one, and keep the deleted
+/// contact in its hot index until its next freshness poll.
 fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, seq: &IndexSeq, shared: &Shared) {
     let Ok(now) = db.data_version() else {
         return;
     };
     if seen.is_some_and(|was| was != now) {
-        shared
-            .foreign
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        #[cfg(test)]
+        shared.looks.pass();
         if let Ok(stored) = db.index_seq() {
             let foreign = stored.saturating_sub(seq.base).saturating_sub(seq.own);
             shared
                 .foreign_index
                 .fetch_max(foreign, std::sync::atomic::Ordering::AcqRel);
         }
+        shared
+            .foreign
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
     *seen = Some(now);
 }
@@ -2715,6 +2791,63 @@ mod tests {
             a.foreign_commits(),
             1,
             "and the count every reader sees moved with it"
+        );
+    }
+
+    /// ⛔ ANOTHER PROCESS'S COMMIT IS COUNTED WITH ITS KIND, NEVER BEFORE IT. A window reads the
+    /// count of other windows' commits, then how many of them moved what a hot index reads
+    /// ([`LogWriter::foreign_index_moves`]), and takes a commit counted with no index move in as
+    /// a stamp, which costs it no rebuild. A window that read the two between a look's count and
+    /// its kind took another window's DELETE in as a stamp, and its hot index kept the deleted
+    /// contact until its next freshness poll (tempo-app's
+    /// `a_lotw_stamp_does_not_bring_back_a_contact_another_window_deleted`, red on main's CI).
+    /// Held where it has seen B's commit and not yet read its kind, A has counted nothing; let
+    /// go, it counts the commit and its index move together. The CONTROL that the kind is read,
+    /// not assumed: a stamp of B's after it is counted with no index move.
+    #[test]
+    fn another_process_commit_is_counted_with_its_kind_never_before_it() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        let held = a.hold_looks();
+        // A contact B logs: a change a hot index must be built again for.
+        let t = b.submit(change(1, vec![rec("W1AW", 1)]));
+        b.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert!(
+            held.reached(Duration::from_secs(10)),
+            "premise: A's writer has seen B's commit"
+        );
+        // Read as a window reads them: the count, then its kind.
+        let counted = a.foreign_commits();
+        let moves = a.foreign_index_moves();
+        assert_eq!(
+            (counted, moves),
+            (0, 0),
+            "before A has read what kind of change B made, it has counted nothing"
+        );
+        drop(held);
+        assert_eq!(
+            a.foreign_commits_now(Duration::from_secs(10)),
+            Some(1),
+            "let go, A counts B's commit"
+        );
+        assert_eq!(a.foreign_index_moves(), 1, "and its index move with it");
+
+        let mut stamped = (*rec("W1AW", 1)).clone();
+        stamped.comment = Some("stamped".into());
+        let mut stamp = change(2, vec![Arc::new(stamped)]);
+        stamp.stamp_only = true;
+        let t = b.submit(stamp);
+        b.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert_eq!(
+            a.foreign_commits_now(Duration::from_secs(10)),
+            Some(2),
+            "B's stamp is counted"
+        );
+        assert_eq!(
+            a.foreign_index_moves(),
+            1,
+            "CONTROL: with no index move, as a stamp costs a window no rebuild"
         );
     }
 
