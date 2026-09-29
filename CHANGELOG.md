@@ -76,6 +76,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimum size it always had. Each window keeps its own layout, the Remote Connect page and the
   TV page have the same menu, and the map's own choices (globe or flat, layers, colours) are left
   alone.
+- **Connect's pop-out is a dashboard window.** **⧉ Pop out** on Connect now opens a large window,
+  1600 × 1000 or your whole screen if it is smaller, showing Connect's full layout instead of the
+  narrow stacked one. A bar across its top shows your callsign and grid, a big UTC clock beside
+  your local time, and the day's SFI, Kp, A, X-ray and solar-wind speed; with no live data each
+  number is a dash, and old data says how old it is. Close the window and it comes back on the
+  same monitor, in the same place and at the same size, maximized if you left it maximized. If
+  that monitor is gone it opens in the middle of your main screen, sized to fit it. The TV page
+  has the same bar.
+- **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
+  **Stay behind** button. Pressed, the window stays behind your other windows even when you click
+  on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
+  it. A click on it still moves the keyboard there, so click back into Nexus before using a
+  keyboard shortcut such as Esc. On macOS and Linux the button does not appear yet.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

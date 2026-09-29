@@ -1,4 +1,5 @@
-//! Main-window geometry persistence — the SHELL half.
+//! Window geometry persistence — the SHELL half, for the main window and (below
+//! [`capture_now`]) the Connect dashboard pop-out.
 //!
 //! Bug #10 (1.0.1, Kubuntu 26.04 AppImage): the operator sets a custom UI scale for a
 //! 4K HiDPI panel, drags the window to fit it, quits — and the next launch restores the
@@ -24,9 +25,16 @@
 //!
 //! Sibling: `sanitize_free_bandmap_rect` in `lib.rs` does this job for the torn-off band
 //! map. The two are deliberately not merged — that one is entangled with the band map's
-//! dock state, and unifying them would mean moving dock policy too. If a third window
-//! ever needs this, that is the moment.
+//! dock state, and unifying them would mean moving dock policy too.
+//!
+//! **The third window is the Connect dashboard**: Connect's pop-out opens at a
+//! dashboard size and reopens on the monitor and in the place the operator left it. It takes
+//! the MAIN window's policy — the same [`geom::restore`] against the monitors attached now and
+//! the same [`geom::capture`] on close — not the band map's, so the band map's dock state is
+//! left where it is. Its record adds one thing the main window has no use for: whether the
+//! operator asked it to stay behind other windows ([`PanelRecord::behind`]).
 
+use crate::chains::{panel_key, Instance};
 use tauri::{Manager, WindowEvent};
 use tempo_app::window_geometry::{self as geom, WindowGeometry, WorkArea};
 
@@ -190,6 +198,214 @@ pub fn capture_now(app: &tauri::AppHandle) {
     }
 }
 
+// ---- The Connect dashboard pop-out ---------------------------------------------------------
+
+/// Which pop-outs remember their window: the Connect dashboard only. It is the one a station
+/// leaves up all day, on a second monitor or full screen behind Nexus, and "it comes back where
+/// I put it" is half of what makes it a dashboard. The band map remembers through its own
+/// dock-aware path (`load_bandmap_window` in `lib.rs`); every other pop-out opens at its fixed
+/// default, as it always has.
+pub(crate) fn remembers(slug: &str) -> bool {
+    slug == "connect"
+}
+
+/// A remembered pop-out's record: its box — the main window's own shape, restored and
+/// captured by the main window's own policy — and whether it stays behind other windows.
+///
+/// Flattened, so the file reads as `window-main.json` with one more key. `behind` defaults to
+/// false, so a record without it loads as an ordinary window.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PanelRecord {
+    #[serde(flatten)]
+    pub geom: WindowGeometry,
+    /// The operator asked this window to stay behind other windows ([`set_window_behind`]).
+    #[serde(default)]
+    pub behind: bool,
+}
+
+/// Where a remembered pop-out's record lives: `<config_dir>/window-<slug>.json`, a sibling of
+/// `settings.json` and so per profile, like `window-main.json`. `None` for a surface that must
+/// never persist its geometry — see `Instance::persists_geometry` (recycled `w<n>` ids).
+fn panel_path(slug: &str, inst: Instance) -> Option<std::path::PathBuf> {
+    if !inst.persists_geometry() {
+        return None;
+    }
+    let name = match inst {
+        Instance::Main => format!("window-{slug}.json"),
+        other => format!("window-{slug}-{other}.json"),
+    };
+    Some(crate::settings_path().with_file_name(name))
+}
+
+/// Read a record. `None` for missing, unreadable or unparsable, each of which means "nothing
+/// saved" — [`restore_from`] already handles that.
+fn load_panel(path: &std::path::Path) -> Option<PanelRecord> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Write a record: a plain write, for the reason `geom::save` gives.
+fn save_panel(path: &std::path::Path, rec: &PanelRecord) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_string(rec).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
+}
+
+/// What a remembered pop-out's record says about opening it now.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PanelRestore {
+    /// The box to open at, clamped against the monitors attached now. `None` on a first open,
+    /// or for a record with no believable box: the caller opens at its default size instead,
+    /// fitted to the work area and centred.
+    pub rect: Option<geom::Restored>,
+    /// The operator asked it to stay behind other windows.
+    pub behind: bool,
+}
+
+/// The open decision, pure. `behind` survives a record with no believable box: the toggle can
+/// be pressed before the window has ever been closed, so before any box was saved.
+fn restore_from(
+    rec: Option<PanelRecord>,
+    monitors: &[WorkArea],
+    primary: Option<WorkArea>,
+    min: (f64, f64),
+) -> PanelRestore {
+    PanelRestore {
+        rect: geom::restore(rec.map(|r| r.geom), monitors, primary, min),
+        behind: rec.is_some_and(|r| r.behind),
+    }
+}
+
+/// What to write on close, pure: the main window's rule for the box (minimised writes nothing,
+/// maximised keeps the restore rect), with the stay-behind choice carried over. A close is not
+/// a vote on it.
+fn capture_from(
+    prev: Option<PanelRecord>,
+    cur: WindowGeometry,
+    minimized: bool,
+) -> Option<PanelRecord> {
+    let geom = geom::capture(prev.map(|r| r.geom), cur, minimized)?;
+    Some(PanelRecord {
+        geom,
+        behind: prev.is_some_and(|r| r.behind),
+    })
+}
+
+/// What opening `slug` should do, from its record and the monitors attached now — or `None`
+/// for a pop-out that does not remember its window.
+pub(crate) fn restore_panel(
+    app: &tauri::AppHandle,
+    slug: &str,
+    inst: Instance,
+    min: (f64, f64),
+) -> Option<PanelRestore> {
+    if !remembers(slug) {
+        return None;
+    }
+    let (all, primary) = monitors(app);
+    let rec = panel_path(slug, inst).and_then(|p| load_panel(&p));
+    Some(restore_from(rec, &all, primary, min))
+}
+
+/// The record path of a window that is a remembered pop-out, else `None`.
+fn record_of(window: &tauri::WebviewWindow) -> Option<std::path::PathBuf> {
+    let (slug, inst) = panel_key(window.label())?;
+    if !remembers(slug) {
+        return None;
+    }
+    panel_path(slug, inst)
+}
+
+/// Snapshot a remembered pop-out's box. A no-op for any other window, so it is safe to sweep
+/// every window with it, which is what the quit path does.
+pub(crate) fn capture_panel(window: &tauri::WebviewWindow) {
+    let Some(path) = record_of(window) else {
+        return;
+    };
+    let Some(cur) = live_geometry(window) else {
+        return;
+    };
+    let minimized = window.is_minimized().unwrap_or(false);
+    if let Some(rec) = capture_from(load_panel(&path), cur, minimized) {
+        let _ = save_panel(&path, &rec);
+    }
+}
+
+/// Arm the save-on-close on a remembered pop-out, on the window itself — [`install`]'s shape,
+/// so the app-wide handler in `lib.rs` gains no new job. The main window's quit cascade closes
+/// pop-outs with `close()`, which sends `CloseRequested` first, so that close is caught too.
+pub(crate) fn arm_panel_capture(window: &tauri::WebviewWindow) {
+    let w = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::CloseRequested { .. }) {
+            capture_panel(&w);
+        }
+    });
+}
+
+/// Whether "stay behind other windows" is offered on this platform: Windows only, for now.
+///
+/// tao's Windows implementation holds the window at the bottom of the z-order on every
+/// position change (`WM_WINDOWPOSCHANGING` → `HWND_BOTTOM`), so a click on it activates it
+/// without lifting it over the window beside it. On Linux it is a hint to the window manager
+/// (`_NET_WM_STATE_BELOW`), which some honour and a Wayland session ignores; on macOS it is a
+/// window level. Neither of those has been seen to work on a real desktop, so neither is
+/// offered until it has.
+pub(crate) fn behind_supported() -> bool {
+    cfg!(windows)
+}
+
+/// A remembered pop-out whose record says it stays behind. Such a window is never focused by
+/// `open_panel_window`: focus would move the keyboard to a window drawn underneath the one the
+/// operator is looking at.
+pub(crate) fn stays_behind(window: &tauri::WebviewWindow) -> bool {
+    behind_supported()
+        && record_of(window)
+            .and_then(|p| load_panel(&p))
+            .is_some_and(|r| r.behind)
+}
+
+/// The calling window's stay-behind state, for the dashboard bar's toggle: whether it can
+/// stay behind at all (a remembered pop-out on a platform that offers it), and whether it does.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct WindowBehind {
+    supported: bool,
+    on: bool,
+}
+
+/// Read the calling window's stay-behind state.
+#[tauri::command]
+pub fn get_window_behind(window: tauri::WebviewWindow) -> WindowBehind {
+    let supported = behind_supported() && record_of(&window).is_some();
+    WindowBehind {
+        supported,
+        on: supported && stays_behind(&window),
+    }
+}
+
+/// Keep the calling window behind other windows, or let it come forward again: applied to the
+/// window now and written to its record, so it opens that way next time. The box in the record
+/// is left as it was — only a close writes that.
+#[tauri::command]
+pub fn set_window_behind(window: tauri::WebviewWindow, on: bool) -> Result<WindowBehind, String> {
+    if !behind_supported() {
+        return Err("staying behind other windows is not available on this platform".into());
+    }
+    let path = record_of(&window)
+        .ok_or_else(|| "only the Connect window can stay behind other windows".to_string())?;
+    // The record first: a write that fails then changes nothing, and the toggle stays true to
+    // both the window and what the next open will do.
+    let mut rec = load_panel(&path).unwrap_or_default();
+    rec.behind = on;
+    save_panel(&path, &rec).map_err(|e| e.to_string())?;
+    window.set_always_on_bottom(on).map_err(|e| e.to_string())?;
+    Ok(WindowBehind {
+        supported: true,
+        on,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +428,221 @@ mod tests {
     #[test]
     fn the_restore_floor_matches_the_shells_minimum_window() {
         assert_eq!(geom::MIN_INNER, (900.0, 600.0));
+    }
+
+    // ---- the Connect dashboard pop-out ---------------------------------------------------
+
+    /// The pop-out's floor, `panel_min_inner("connect")` — the generic arm.
+    const DASH_MIN: (f64, f64) = (420.0, 360.0);
+
+    fn area(x: f64, y: f64, w: f64, h: f64, scale: f64) -> WorkArea {
+        WorkArea { x, y, w, h, scale }
+    }
+
+    /// A 1920×1080 primary at the origin with a 40 px taskbar.
+    fn primary() -> WorkArea {
+        area(0.0, 0.0, 1920.0, 1040.0, 1.0)
+    }
+
+    fn rec(w: f64, h: f64, x: f64, y: f64, behind: bool) -> PanelRecord {
+        PanelRecord {
+            geom: WindowGeometry {
+                w,
+                h,
+                x,
+                y,
+                maximized: false,
+            },
+            behind,
+        }
+    }
+
+    #[test]
+    fn only_the_connect_dashboard_remembers_its_window() {
+        assert!(remembers("connect"));
+        // The band map remembers through its own dock-aware file; the rest keep their defaults.
+        for other in [
+            "bandmapCw",
+            "bandmapPhone",
+            "needed",
+            "operate",
+            "waterfall",
+            "",
+        ] {
+            assert!(!remembers(other), "{other:?} must keep its fixed default");
+        }
+    }
+
+    /// Beside `settings.json`, so per profile like `window-main.json`, and never for a
+    /// recycled `w<n>` surface, which would hand a stranger's box to the next one.
+    #[test]
+    fn the_dashboard_record_is_a_per_profile_sibling_of_settings() {
+        let p = panel_path("connect", Instance::Main).unwrap();
+        assert_eq!(p.file_name().unwrap(), "window-connect.json");
+        assert_eq!(p.parent(), crate::settings_path().parent());
+        assert_ne!(
+            p,
+            geometry_path(),
+            "the pop-out must not share the main window's file"
+        );
+        assert_eq!(
+            panel_path("connect", Instance::Radio(2))
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "window-connect-r2.json"
+        );
+        assert_eq!(panel_path("connect", Instance::Window(3)), None);
+    }
+
+    #[test]
+    fn a_first_open_leaves_the_box_to_the_caller() {
+        // Nothing saved: the caller opens the dashboard size, fitted and centred.
+        let r = restore_from(None, &[primary()], Some(primary()), DASH_MIN);
+        assert_eq!(
+            r,
+            PanelRestore {
+                rect: None,
+                behind: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_saved_box_reopens_on_its_own_monitor_in_its_own_place() {
+        // Left on a second 2560×1440 monitor to the right of the primary.
+        let second = area(1920.0, 0.0, 2560.0, 1400.0, 1.0);
+        let saved = rec(2400.0, 1300.0, 2000.0, 40.0, false);
+        let r = restore_from(Some(saved), &[primary(), second], Some(primary()), DASH_MIN);
+        let rect = r.rect.expect("a believable box restores");
+        assert_eq!(rect.position, Some((2000.0, 40.0)));
+        assert_eq!(
+            (rect.w, rect.h),
+            (2400.0, 1300.0),
+            "capped to ITS monitor, not the primary"
+        );
+    }
+
+    #[test]
+    fn a_box_whose_monitor_is_gone_is_centred_on_the_primary_and_fitted_to_it() {
+        let saved = rec(2400.0, 1300.0, 2000.0, 40.0, false);
+        let rect = restore_from(Some(saved), &[primary()], Some(primary()), DASH_MIN)
+            .rect
+            .unwrap();
+        assert_eq!(rect.position, None, "centred, never replayed off-screen");
+        assert_eq!((rect.w, rect.h), (1920.0, 1040.0));
+    }
+
+    #[test]
+    fn a_tiny_saved_box_is_floored_at_the_pop_outs_own_minimum() {
+        // Not the main window's 900×600: a restore must never ask for a box the operator could
+        // not drag this window to, in either direction.
+        let rect = restore_from(
+            Some(rec(300.0, 250.0, 40.0, 40.0, false)),
+            &[primary()],
+            Some(primary()),
+            DASH_MIN,
+        )
+        .rect
+        .unwrap();
+        assert_eq!((rect.w, rect.h), DASH_MIN);
+    }
+
+    #[test]
+    fn stay_behind_is_remembered_even_before_any_box_was_saved() {
+        // The toggle is pressed on a window that has never been closed: the record carries
+        // behind and a zero box, which must open at the default size AND behind.
+        let r = restore_from(
+            Some(PanelRecord {
+                geom: WindowGeometry::default(),
+                behind: true,
+            }),
+            &[primary()],
+            Some(primary()),
+            DASH_MIN,
+        );
+        assert_eq!(r.rect, None, "a zero box is not a box");
+        assert!(r.behind);
+    }
+
+    #[test]
+    fn a_close_records_the_box_and_keeps_the_stay_behind_choice() {
+        let prev = rec(1600.0, 1000.0, 100.0, 20.0, true);
+        let cur = WindowGeometry {
+            w: 1700.0,
+            h: 950.0,
+            x: 60.0,
+            y: 30.0,
+            maximized: false,
+        };
+        assert_eq!(
+            capture_from(Some(prev), cur, false),
+            Some(PanelRecord {
+                geom: cur,
+                behind: true
+            })
+        );
+        // …and a first close, with no record yet, is not behind.
+        assert_eq!(
+            capture_from(None, cur, false),
+            Some(PanelRecord {
+                geom: cur,
+                behind: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_close_while_minimised_or_maximised_follows_the_main_windows_rule() {
+        let prev = rec(1600.0, 1000.0, 100.0, 20.0, true);
+        let parked = WindowGeometry {
+            w: 1600.0,
+            h: 1000.0,
+            x: -32000.0,
+            y: -32000.0,
+            maximized: false,
+        };
+        assert_eq!(
+            capture_from(Some(prev), parked, true),
+            None,
+            "minimised writes nothing"
+        );
+        let maxed = WindowGeometry {
+            w: 1920.0,
+            h: 1040.0,
+            x: 0.0,
+            y: 0.0,
+            maximized: true,
+        };
+        let out = capture_from(Some(prev), maxed, false).unwrap();
+        assert_eq!(
+            (out.geom.w, out.geom.h, out.geom.x, out.geom.y),
+            (1600.0, 1000.0, 100.0, 20.0),
+            "the restore rect is kept"
+        );
+        assert!(out.geom.maximized && out.behind);
+    }
+
+    #[test]
+    fn a_record_round_trips_and_one_without_behind_loads_as_an_ordinary_window() {
+        let path = std::env::temp_dir().join(format!(
+            "nexus_panelrec_{}_{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let r = rec(1512.0, 945.5, -8.0, 24.0, true);
+        save_panel(&path, &r).unwrap();
+        assert_eq!(load_panel(&path), Some(r));
+        std::fs::write(
+            &path,
+            r#"{"w":1400,"h":900,"x":10,"y":20,"maximized":true}"#,
+        )
+        .unwrap();
+        let legacy = load_panel(&path).unwrap();
+        assert!(!legacy.behind);
+        assert!(legacy.geom.maximized);
+        std::fs::write(&path, "{\"w\": 1200,").unwrap();
+        assert_eq!(load_panel(&path), None, "a torn file is nothing saved");
+        let _ = std::fs::remove_file(&path);
     }
 }

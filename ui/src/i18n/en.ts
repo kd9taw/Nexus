@@ -4773,6 +4773,14 @@ export const EN = {
   'tv.noLink': 'no link to Nexus',
   'tv.stale': 'data {{min}} min old',
   'tv.waiting': 'Waiting for the first propagation picture from Nexus…',
+  // ---- The dashboard bar (components/DashboardBar.tsx): the clock and space-weather
+  // line across the top of the Connect pop-out and the TV page. The index names (SFI, Kp, A,
+  // X-ray, SW) and `UTC` are tokens, not catalog strings.
+  'dash.bar.aria': 'Clock and space weather',
+  'dash.index.sw.title': 'Solar wind speed, km/s',
+  'dash.behind.label': 'Stay behind',
+  'dash.behind.title': 'Keep this window behind your other windows, even when you click on it, so it can fill the screen behind Nexus',
+  'dash.behind.failed': 'Could not change whether this window stays behind',
   'freq.channel.rxOnly': 'receive only',
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',

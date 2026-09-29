@@ -15,8 +15,9 @@
 //   • Panes whose feed is not allowlisted (rotator, amplifier) degrade exactly as the
 //     desktop does offline: their fetches reject, their catch paths render the empty
 //     state. Honest emptiness, never fabricated data.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ConnectView } from '../components/ConnectView'
+import { DashboardBar } from '../components/DashboardBar'
 import { getPropagation, getTvStation } from '../api'
 import type { NeedTag, PropagationSnapshot } from '../types'
 import { useViewport } from '../useViewport'
@@ -66,26 +67,20 @@ export function ConnectTv() {
     }
   }, [])
 
-  // UTC clock, minute resolution — what a shack wall shows.
-  const [nowMin, setNowMin] = useState(() => Date.now())
+  // The link's age is counted in whole minutes, so a ten-second tick is plenty for the chip.
+  // The clocks are the dashboard bar's own.
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const id = window.setInterval(() => setNowMin(Date.now()), 10_000)
+    const id = window.setInterval(() => setNow(Date.now()), 10_000)
     return () => window.clearInterval(id)
   }, [])
-  const clock = useMemo(() => {
-    const d = new Date(nowMin)
-    const two = (n: number) => String(n).padStart(2, '0')
-    return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}z`
-  }, [nowMin])
 
-  const staleMin = lastOk == null ? null : Math.floor((nowMin - lastOk) / 60_000)
+  const staleMin = lastOk == null ? null : Math.floor((now - lastOk) / 60_000)
 
   return (
     <div className="app tv-app">
-      <header className="tv-bar">
-        <span className="tv-call">{station?.call || '—'}</span>
-        <span className="tv-grid">{station?.grid || ''}</span>
-        <span className="tv-spacer" />
+      {/* The same bar as the Connect pop-out: station, clocks, indices. */}
+      <DashboardBar call={station?.call ?? ''} grid={station?.grid ?? ''} prop={prop}>
         {/* Read-only is a promise the server keeps (GET/HEAD only, allowlisted reads);
             the chip just says it out loud so nobody hunts for controls. */}
         <span className="tv-chip">{t('tv.readonly')}</span>
@@ -94,8 +89,7 @@ export function ConnectTv() {
         ) : staleMin != null && staleMin >= 3 ? (
           <span className="tv-chip tv-warn">{t('tv.stale', { min: staleMin })}</span>
         ) : null}
-        <span className="tv-clock">{clock}</span>
-      </header>
+      </DashboardBar>
       {prop == null && !linkDown ? (
         <div className="tv-wait">{t('tv.waiting')}</div>
       ) : (

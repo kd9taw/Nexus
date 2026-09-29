@@ -13,7 +13,7 @@
 //      What must not regress HERE is what the TV hands it: an EMPTY roster and an
 //      EMPTY needs map — operating state stays off the LAN.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 
 const seen = vi.hoisted(() => ({ props: [] as Array<Record<string, unknown>> }))
 vi.mock('../components/ConnectView', () => ({
@@ -84,6 +84,26 @@ describe('the chrome', () => {
     expect((p.needByCall as Map<string, unknown>).size).toBe(0)
     // …and no work handler exists for ConnectView to render an affordance from.
     expect(p.onWorkSpot).toBeUndefined()
+  })
+
+  it('wears the same dashboard bar as the Connect pop-out: the station, the clocks, the indices, its own chips last', async () => {
+    const spaceWx = { sfi: 97, kp: 2, aIndex: 7, xrayClass: 'B3.1-class', flare: false, solarWind: null }
+    mockFetch({
+      get_propagation: { ...PROP, spaceWx, asOf: Math.floor(Date.now() / 1000) },
+      tv_station: { call: 'KD9TAW', grid: 'EN52' },
+    })
+    render(<ConnectTv />)
+    await waitFor(() => expect(document.querySelector('.dash-bar .dash-call')?.textContent).toBe('KD9TAW'))
+    const bar = document.querySelector('.dash-bar') as HTMLElement
+    expect(bar.querySelector('.dash-grid')?.textContent).toBe('EN52')
+    expect(bar.querySelector('.dash-utc .dash-time-v')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
+    await waitFor(() => {
+      const sfi = [...bar.querySelectorAll('.dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === 'SFI')
+      expect(sfi?.querySelector('.dash-index-v')?.textContent).toBe('97')
+    })
+    expect(within(bar).getByText('read-only'), 'the TV’s own chip rides in the bar').toBeTruthy()
+    expect(document.querySelectorAll('.dash-bar').length, 'one bar, not the old one beside it').toBe(1)
+    expect(document.querySelector('.tv-bar')).toBeNull()
   })
 
   it('says "no link" instead of freezing on a stale screen', async () => {

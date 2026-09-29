@@ -26778,10 +26778,117 @@ tr.sel .aprs-sym {
   color: var(--state-good, #30a46c);
 }
 
+/* ---- THE DASHBOARD BAR (components/DashboardBar.tsx) ----
+   Across the top of the Connect pop-out (`.app.detached`) and the TV page (`.tv-app`): the
+   station, a big UTC clock beside the local time, and the day's space-weather indices. CHROME
+   over the view below, not a pane: `flex: none` in each host's flex column, so the view under it
+   keeps an honest remaining height. It WRAPS rather than overflows (the pop-out drags down to
+   420 px); the UTC digits follow the window through --fs-display, a clamp on --vw-eff with no
+   media query; every size rides --text-scale. PLAIN INK: no number is painted in a band colour —
+   lettering in those colours fails the readability floor in the light themes, and the Space Wx
+   box keeps the coloured gauges. */
+.dash-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-5);
+  row-gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.dash-station,
+.dash-clock,
+.dash-time,
+.dash-index {
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
+}
+.dash-station,
+.dash-time {
+  gap: var(--space-2);
+}
+.dash-clock {
+  gap: var(--space-5);
+}
+.dash-index {
+  gap: var(--space-1);
+}
+.dash-call {
+  font-family: var(--font-mono);
+  font-size: var(--fs-title);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.dash-grid {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
+.dash-time-v,
+.dash-index-v {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.dash-utc .dash-time-v {
+  font-size: var(--fs-display);
+  line-height: var(--lh-tight);
+}
+.dash-local .dash-time-v,
+.dash-index-v {
+  font-size: var(--fs-title);
+}
+.dash-time-k,
+.dash-index-k {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+.dash-indices {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* The surface's own chips and the Stay behind toggle, pushed to the end of the line. */
+.dash-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+/* An AUTHORED face, border and ink: an unstyled button takes the computer's light/dark rather
+   than the theme's. The face is the pop-out buttons' (.connect-popout), pressed is the map
+   pickers' active chip. */
+.dash-behind {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+.dash-behind:hover {
+  border-color: var(--accent);
+}
+.dash-behind.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 /* ---- the TV page's chrome (src/tv/ConnectTv.tsx) ----
-   A thin bar over the full ConnectView; everything below it is the app's own view
-   and styles itself. The bar is fixed-height flex so ConnectView's pane grid gets an
-   honest remaining height. */
+   The dashboard bar over the full ConnectView; everything below it is the app's own view
+   and styles itself. */
 .tv-app {
   display: flex;
   flex-direction: column;
@@ -26794,30 +26901,6 @@ tr.sel .aprs-sym {
 .tv-app > *:last-child {
   flex: 1;
   min-height: 0;
-}
-.tv-bar {
-  flex: none;
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  padding: 6px var(--space-3);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev);
-}
-.tv-call {
-  font-weight: 700;
-  font-size: 1.05rem;
-  letter-spacing: 0.02em;
-}
-.tv-grid {
-  color: var(--text-faint);
-}
-.tv-spacer {
-  flex: 1;
-}
-.tv-clock {
-  font-variant-numeric: tabular-nums;
-  font-size: 1.05rem;
 }
 .tv-chip {
   font-size: 0.72rem;
