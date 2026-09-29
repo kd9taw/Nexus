@@ -758,9 +758,12 @@ impl LogStore {
     /// [`Self::submit`] for a purge — a `clear` change that names no row — with `taken`, the hot
     /// index as it stood, for the rows it took out (SPEC-2 v3 C19, §4.11): held as the purge's
     /// rows, moved and never listed, so the purge costs the Engine lock the same whatever the
-    /// log's size. `None` for `taken` when the index could not say (it had not followed the log):
-    /// the purge is made and holds no rows, so one the writer gives up on is sent again as nothing,
-    /// never as every row.
+    /// log's size. The store takes out exactly those rows, listed on the writer's thread — the
+    /// contacts this window had when the operator cleared the log — and never every row: a
+    /// contact another window logged meanwhile survives it (the operator's ruling of 2026-09-28).
+    /// `None` for `taken` when the index could not say (it had not followed the log): then the
+    /// store drops every row, as a purge always did, and holds none of them, so one the writer
+    /// gives up on is sent again as nothing, never as every row.
     pub(crate) fn submit_purge(
         &mut self,
         change: Change,
@@ -771,10 +774,25 @@ impl LogStore {
             "a purge names no row: its first send drops them all"
         );
         self.collect(Instant::now());
+        // Every row this process holds for an earlier change goes with the purge.
         self.supersede(&change);
+        let knew = taken.is_some();
         let taken = PurgedIndex::new(taken.unwrap_or_default(), &self.writer);
-        let held = Held::purge(Arc::new(taken));
-        let ticket = self.send_held(change, Arc::new(held), None, 0, ToFile::Rewrite);
+        let held = Arc::new(Held::purge(Arc::new(taken), !knew));
+        // The rows it took out, as a purge sent again always was: listed on the writer's thread.
+        let (change, later) = if knew {
+            let later = held.remove_later();
+            (
+                Change {
+                    clear: false,
+                    ..change
+                },
+                later,
+            )
+        } else {
+            (change, None)
+        };
+        let ticket = self.send_held(change, held, later, 0, ToFile::Rewrite);
         if let Some(c) = &mut self.collector {
             c.push(ticket.clone());
         }
@@ -1649,9 +1667,10 @@ impl Drop for PurgedIndex {
 /// One change's rows, as this process holds them until the store does: what it purged, removed
 /// and wrote. Each written row is the row AS IT STOOD after the change — state, never a delta —
 /// which is what lets it be read in the store's place, and sent again, safely. A purge's rows are
-/// the index it took out, less any a later change took over since (`released`): while it is on
-/// its way its `clear` answers for every row, and once the writer has given it up those rows are
-/// all it holds ([`LogStore::collect`]).
+/// the index it took out, less any a later change took over since (`released`) — on its way and
+/// after. Only a purge whose index could not say what it held answers for every row with its
+/// `clear` while it is on its way; once the writer has given it up, its rows are all it holds
+/// ([`LogStore::collect`]).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Held {
     clear: bool,
@@ -1682,10 +1701,11 @@ impl Held {
         self.expect.get(&id)
     }
 
-    /// A purge on its way: every row gone, and the rows it took out, `taken`.
-    fn purge(taken: Arc<PurgedIndex>) -> Held {
+    /// A purge on its way: the rows it took out, `taken`, gone — and every row, when `everything`
+    /// (the index could not say what it held, so the store drops them all).
+    fn purge(taken: Arc<PurgedIndex>, everything: bool) -> Held {
         Held {
-            clear: true,
+            clear: everything,
             purged: Some(taken),
             ..Held::default()
         }
@@ -1763,11 +1783,11 @@ impl Held {
 /// a row from the store; if one of these says something of it, that is the row as this process
 /// knows it, whatever the store holds, because the store has not taken it yet (or never will
 /// on its own). A later change takes a row over from an earlier one ([`LogStore::supersede`]),
-/// so a row is held by one change at most, with one exception: a purge on its way says EVERY row
-/// is gone, since its first send drops every row, so a row written after it is held by two —
-/// the purge, and the change that wrote it. The newer is the row ([`Self::row`]). Once the writer
-/// has given the purge up, it is the rows it took out, like any other change
-/// ([`LogStore::collect`]).
+/// so a row is held by one change at most, with one exception: a purge whose index could not say
+/// what it held says EVERY row is gone while it is on its way, since its first send drops every
+/// row, so a row written after it is held by two — the purge, and the change that wrote it. The
+/// newer is the row ([`Self::row`]). Once the writer has given the purge up, it is the rows it
+/// took out, like any other change ([`LogStore::collect`]).
 #[derive(Debug, Clone, Default)]
 pub struct Pending(Vec<(u64, Arc<Held>)>);
 
@@ -5322,6 +5342,32 @@ pub(crate) mod tests {
         );
     }
 
+    /// ⛔ CLEAR TAKES OUT EXACTLY THE CONTACTS THIS WINDOW HAD. A contact another window logged
+    /// meanwhile — committed, and not yet in this window's log — is not one of them, and survives
+    /// the clear (the operator's ruling of 2026-09-28: "Clear removes exactly the contacts this
+    /// window had when you pressed it; a contact the other window logs meanwhile survives").
+    #[test]
+    fn clear_spares_a_contact_another_window_logged_meanwhile() {
+        let d = Dir::new("clear-two");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        b.log_qso(qso("W1NEW", 1_788_000_000));
+        flush(&b);
+        assert!(
+            !indexed(&a, "W1NEW"),
+            "premise: A has not taken B's contact in"
+        );
+        assert_eq!(a.clear_logbook(), 6, "A clears the six it holds");
+        flush(&a);
+        let calls: Vec<String> = stored(&d).into_iter().map(|r| r.call).collect();
+        assert_eq!(
+            calls,
+            vec!["W1NEW".to_string()],
+            "B's contact survives, and only it"
+        );
+    }
+
     /// Poll `f` until it says yes or `limit` passes.
     fn eventually_for(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
         let deadline = Instant::now() + limit;
@@ -7316,28 +7362,41 @@ pub(crate) mod tests {
     }
 
     /// ★ A PURGE'S ROWS ARE THE INDEX IT TOOK OUT, LESS WHAT A LATER CHANGE TOOK OVER (SPEC-2 v3
-    /// C19, landing 33's rule, now without a list made under the lock). On its way the purge says
-    /// every row is gone. Once the writer has given it up it says so of the rows it took out and
-    /// no other, a row a later change brought back (an import restoring a contact with its old id)
-    /// is that change's, and sent again it takes out exactly those rows — listed on the writer's
-    /// thread, never where the lock is held.
+    /// C19, landing 33's rule, now without a list made under the lock). On its way, as once the
+    /// writer has given it up, it says so of the rows it took out and no other: a contact another
+    /// window logged meanwhile survives the clear (the operator's ruling of 2026-09-28, which
+    /// replaced "on its way the purge says every row is gone"). Only a purge whose index could not
+    /// say what it held says every row is gone. A row a later change brought back (an import
+    /// restoring a contact with its old id) is that change's, and sent again the purge takes out
+    /// exactly its rows — listed on the writer's thread, never where the lock is held.
     #[test]
     fn a_purges_rows_are_the_index_it_took_out_less_what_a_later_change_took_over() {
         let d = Dir::new("purge-held");
         let writer = open_fast(&d).store.writer();
         let rows = minted(&["K1AAA", "K2BBB", "K3CCC"], 1);
         let ids: Vec<RecordId> = rows.iter().filter_map(|r| r.id).collect();
-        let mut held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)));
+        let mut held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)), false);
         let later = RecordId::Minted {
             posid: 0,
             nonce: 7,
             seq: 99,
         };
 
-        // On its way: every row gone, whatever row it is asked of.
-        for id in ids.iter().chain([&later]) {
+        // On its way: the rows it took out gone, and a row it never held not its to say.
+        for id in &ids {
             assert_eq!(held.says(*id), Some(None), "on its way, {id:?} is gone");
         }
+        assert_eq!(
+            held.says(later),
+            None,
+            "on its way, a row it never held is not its to say"
+        );
+        let everything = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)), true);
+        assert_eq!(
+            everything.says(later),
+            Some(None),
+            "a purge whose index could not say what it held: every row gone"
+        );
 
         // Given up (what `collect` makes of it): the rows it took out, and no other.
         held.clear = false;
@@ -7394,7 +7453,7 @@ pub(crate) mod tests {
             ..Change::default()
         });
         writer.wait_durable(&seed, DURABLE_WAIT).expect("the log");
-        let held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)));
+        let held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)), false);
 
         // Another program holds the database: the writer stalls inside the next write, and the
         // re-send, sent once it is retrying there, waits behind it holding the purge's rows.
