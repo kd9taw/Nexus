@@ -93,6 +93,16 @@ pub struct LogStore {
     /// when the station's index was last built from a read that followed them
     /// ([`LogWriter::foreign_index_moves`]).
     synced_index: u64,
+    /// How many of this process's changes the store turned back because another window had
+    /// changed a row since they read it ([`writer::Refusal::conflict`]) — and how many of them the
+    /// station's hot index had been built again after, from the store. The index followed each as
+    /// it was made, so it owes a build until then ([`Self::index_owed`]).
+    conflicts: u64,
+    synced_conflicts: u64,
+    /// Changes sent AGAIN that the store turned back that way: made long enough ago that nothing
+    /// can plan them again, so they are reported — the screen and the quit hear of them — and
+    /// never written over the other window's change.
+    overtaken: Vec<Refusal>,
     /// Tickets being collected for a command that will wait on them (see
     /// [`crate::engine::Engine::with_log_tickets`]).
     collector: Option<Vec<Ticket>>,
@@ -273,6 +283,8 @@ pub struct IndexRead {
     foreign: u64,
     /// And how many of them moved what a hot index reads ([`LogWriter::foreign_index_moves`]).
     foreign_index: u64,
+    /// How many of the station's own changes the store had turned back ([`LogStore::index_owed`]).
+    conflicts: u64,
     /// The store held no change the station holds that it refused ([`LogStore::resend`]'s).
     whole: bool,
 }
@@ -284,6 +296,7 @@ pub struct IndexRows {
     pub(crate) marks: Watermarks,
     pub(crate) foreign: u64,
     pub(crate) foreign_index: u64,
+    pub(crate) conflicts: u64,
     /// Whether it is the index of the station's log: read in one picture of the store that held
     /// every change the station had made. One that is not is never installed.
     pub(crate) exact: bool,
@@ -315,6 +328,7 @@ impl IndexRead {
             marks: self.marks,
             foreign: self.foreign,
             foreign_index: self.foreign_index,
+            conflicts: self.conflicts,
             exact: self.whole && fresh == Freshness::Current,
         })
     }
@@ -505,6 +519,9 @@ fn open_reporting_with(
         last_refusal: None,
         synced_foreign,
         synced_index,
+        conflicts: 0,
+        synced_conflicts: 0,
+        overtaken: Vec::new(),
         collector: None,
         placeholder: false,
     };
@@ -540,6 +557,9 @@ impl LogStore {
             last_refusal: None,
             synced_foreign,
             synced_index,
+            conflicts: 0,
+            synced_conflicts: 0,
+            overtaken: Vec::new(),
             collector: None,
             placeholder: false,
         })
@@ -601,6 +621,9 @@ impl LogStore {
             last_refusal: None,
             synced_foreign,
             synced_index,
+            conflicts: 0,
+            synced_conflicts: 0,
+            overtaken: Vec::new(),
             collector: None,
             placeholder: false,
         })
@@ -668,6 +691,7 @@ impl LogStore {
             marks,
             foreign: self.writer.foreign_commits(),
             foreign_index: self.writer.foreign_index_moves(),
+            conflicts: self.conflicts,
             whole: self.dropped.is_empty(),
         }
     }
@@ -722,6 +746,7 @@ impl LogStore {
             return None;
         }
         self.collect(Instant::now());
+        let change = self.inherited(change);
         self.supersede(&change);
         let ticket = self.send_as(change, 0, to_file);
         if let Some(c) = &mut self.collector {
@@ -829,6 +854,50 @@ impl LogStore {
         }
     }
 
+    /// `change` expecting of each row what the store still holds. A row it read from a change the
+    /// writer gave up on is that change's row, which the store never took: the new change takes
+    /// the row over ([`Self::supersede`]) and expects what that change expected of it instead —
+    /// or nothing, where that change expected nothing (an append, which no other window can have
+    /// written). A row read from a change still on its way is that change's, and it lands first:
+    /// writes that share a row keep their order.
+    fn inherited(&self, mut change: Change) -> Change {
+        if self.dropped.is_empty() || change.expect.is_empty() {
+            return change;
+        }
+        change.expect.retain_mut(|(id, expect)| {
+            let Some(held) = self
+                .dropped
+                .iter()
+                .rev()
+                .map(|d| &d.held)
+                .find(|h| h.says(*id).is_some())
+            else {
+                return true;
+            };
+            match held.expects(*id) {
+                Some(theirs) => {
+                    *expect = theirs.clone();
+                    true
+                }
+                None => false,
+            }
+        });
+        change
+    }
+
+    /// Let the writer's answers in now: what it wrote, gave up on, or turned back — no I/O, never
+    /// waits. A plan takes them in first, so it never reads a change's rows the store turned back
+    /// ([`Self::collect`]).
+    pub(crate) fn take_in_answers(&mut self) {
+        self.collect(Instant::now());
+    }
+
+    /// Whether the station's hot index owes a build from the store: a change of this process's
+    /// that it followed was turned back since the last build ([`Self::collect`]).
+    pub(crate) fn index_owed(&self) -> bool {
+        self.conflicts != self.synced_conflicts
+    }
+
     /// Every change's held rows, in flight and given up on.
     fn held_mut(&mut self) -> impl Iterator<Item = &mut Arc<Held>> {
         self.inflight
@@ -872,6 +941,34 @@ impl LogStore {
                 }
                 continue;
             };
+            if refusal.conflict {
+                // Another window changed a row since this change read it, and the store did not
+                // write over that. The change is let go of — its rows leave what a plan reads —
+                // and the hot index, which followed it as it was made, owes a build from the
+                // store ([`Self::index_owed`]). A first send is planned again by the command that
+                // made it, or its work is done again later (an upload's stamp, a fill); a change
+                // sent AGAIN has no one to plan it, and is reported instead.
+                self.conflicts += 1;
+                if f.resends > 0 {
+                    tempo_core::applog::warn(
+                        "logbook",
+                        &format!(
+                            "a logbook change the database had refused was not saved when sent \
+                             again, because another window changed the same contact meanwhile \
+                             ({})",
+                            refusal.reason
+                        ),
+                    );
+                    self.last_refusal = Some(refusal.reason.clone());
+                    self.overtaken.push(refusal);
+                } else {
+                    tempo_core::applog::info(
+                        "logbook",
+                        &format!("a logbook change is planned again: {}", refusal.reason),
+                    );
+                }
+                continue;
+            }
             let wait = resend_after(f.resends);
             if refusal.retryable {
                 tempo_core::applog::warn(
@@ -997,8 +1094,12 @@ impl LogStore {
         for d in &self.dropped {
             s.count_refusal(&d.refusal);
         }
+        for r in &self.overtaken {
+            s.count_refusal(r);
+        }
         for f in &self.inflight {
-            if let Some(r) = f.ticket.refusal() {
+            // A first send turned back for another window's change is planned again, not held.
+            if let Some(r) = f.ticket.refusal().filter(|r| !r.conflict || f.resends > 0) {
                 s.count_refusal(&r);
             }
         }
@@ -1043,10 +1144,12 @@ impl LogStore {
     }
 
     /// The station's hot index was built again from a read of the store made after another
-    /// process's commits reached these counts ([`IndexRead`]): they are taken in.
-    pub(crate) fn foreign_taken(&mut self, foreign: u64, foreign_index: u64) {
+    /// process's commits reached these counts ([`IndexRead`]), and after the store had turned back
+    /// `conflicts` of this process's own changes: they are taken in.
+    pub(crate) fn foreign_taken(&mut self, foreign: u64, foreign_index: u64, conflicts: u64) {
         self.synced_foreign = self.synced_foreign.max(foreign);
         self.synced_index = self.synced_index.max(foreign_index);
+        self.synced_conflicts = self.synced_conflicts.max(conflicts);
     }
 
     /// The store has taken in the `log.adi` with `stamp`: the mirror may replace it now.
@@ -1078,17 +1181,18 @@ impl LogStore {
     /// What a quit still has to wait for (see [`Unsaved`]): this process's changes the writer
     /// has not finished with, and the mirror. Handles only — never touches the disk.
     pub(crate) fn unsaved(&self) -> Unsaved {
-        let tickets = self
-            .inflight
-            .iter()
-            .filter(|f| !f.ticket.is_resolved())
-            .map(|f| f.ticket.clone())
+        let waiting = self.inflight.iter().filter(|f| !f.ticket.is_resolved());
+        let tickets = waiting.clone().map(|f| f.ticket.clone()).collect();
+        let first_sends = waiting
+            .filter(|f| f.resends == 0)
+            .map(|f| f.ticket.revision())
             .collect();
         Unsaved {
             changes: self.durability(tickets),
             held: self.held(),
             mirror: self.mirror.clone(),
             lane: self.lane_so_far(),
+            first_sends,
         }
     }
 
@@ -1191,6 +1295,26 @@ impl Durability {
         self.tickets.extend(later.tickets);
         self.lane = later.lane;
         self
+    }
+
+    /// Wait for the writer to finish with every change this covers, and say whether the store
+    /// turned one back because another window had changed a row since the change read it
+    /// ([`writer::Refusal::conflict`]): the command that made it plans it again, on the rows as
+    /// they now stand. Every other outcome — written, refused otherwise, a wait that ran out — is
+    /// [`Self::wait`]'s to report. ⚠️ Never call it holding a lock.
+    pub fn turned_back(&self, deadline: Duration) -> bool {
+        let Some(writer) = &self.writer else {
+            return false;
+        };
+        let start = std::time::Instant::now();
+        for t in &self.tickets {
+            let left = deadline.saturating_sub(start.elapsed());
+            let _ = writer.wait_durable(t, left);
+            if t.refusal().is_some_and(|r| r.conflict) {
+                return true;
+            }
+        }
+        false
     }
 
     /// [`Self::wait`] for the store alone: every change is in the logbook database, whatever the
@@ -1421,6 +1545,10 @@ pub struct Unsaved {
     /// On the 1.13 path, the lane that puts every change in `log.adi`, where it is saved, and
     /// how many changes it had been handed when this was taken.
     lane: Option<(Arc<LogFileWriter>, u64)>,
+    /// The revisions of the changes on their FIRST way to the store: one the store turns back
+    /// for another window's change is planned again by the command that made it, and is no loss
+    /// ([`LogStore::collect`]). A change sent again that is turned back is one.
+    first_sends: std::collections::HashSet<u64>,
 }
 
 /// How long a change the database refused for a reason that can pass waits before it is sent
@@ -1533,6 +1661,9 @@ pub(crate) struct Held {
     /// Ids a later change took over from the purge: noted as they come, never looked up in its
     /// rows, so a later change costs the purge's `Held` what that change touches and nothing more.
     released: std::collections::HashSet<RecordId>,
+    /// What the change expected of its rows when it was made ([`Change::expect`]): sent again, it
+    /// expects the same, so it is never written over another window's change to them.
+    expect: std::collections::HashMap<RecordId, sqlite::Expect>,
 }
 
 impl Held {
@@ -1541,8 +1672,14 @@ impl Held {
             clear: change.clear,
             remove: change.remove.iter().copied().collect(),
             upsert: change.upsert.clone(),
+            expect: change.expect.iter().cloned().collect(),
             ..Held::default()
         }
+    }
+
+    /// What the change expected of the row `id` when it was made, if anything.
+    fn expects(&self, id: RecordId) -> Option<&sqlite::Expect> {
+        self.expect.get(&id)
     }
 
     /// A purge on its way: every row gone, and the rows it took out, `taken`.
@@ -1567,6 +1704,7 @@ impl Held {
     fn release(&mut self, ids: &std::collections::HashSet<RecordId>) {
         for id in ids {
             self.remove.remove(id);
+            self.expect.remove(id);
         }
         self.upsert
             .retain(|w| w.rec.id.is_none_or(|id| !ids.contains(&id)));
@@ -1601,7 +1739,7 @@ impl Held {
             // Sent again, it moves the shared `index_seq` as any change may: the rows it carries
             // are as they now stand, and a stamp's are no exception worth the risk.
             stamp_only: false,
-            expect: Vec::new(),
+            expect: self.expect.iter().map(|(id, e)| (*id, e.clone())).collect(),
         }
     }
 
@@ -1741,6 +1879,8 @@ impl Unsaved {
         let mut s = self.held.clone();
         for t in &self.changes.tickets {
             match t.refusal() {
+                // Turned back on its first send: planned again by its command, not lost.
+                Some(r) if r.conflict && self.first_sends.contains(&t.revision()) => {}
                 Some(r) => s.count_refusal(&r),
                 None if !t.is_resolved() => s.pending += 1,
                 None => {}
@@ -4972,11 +5112,17 @@ pub(crate) mod tests {
         assert_eq!(e.snapshot().log_save_trouble, None, "and the screen clears");
     }
 
-    /// ⛔ A DROPPED CHANGE SURVIVES ANOTHER WINDOW'S COMMIT TO THE SAME ROW. A change the writer
-    /// dropped is no longer on its way, and it is still this window's: its rows are held by the
-    /// store that dropped it, and a second window's commit to the same row — which this window
-    /// takes in by building its hot index again, never by re-reading rows into memory (SPEC-2 v3
-    /// C19, D4-A) — does not touch them. The re-send lands them.
+    /// ⛔ A DROPPED CHANGE AND ANOTHER WINDOW'S COMMIT TO THE SAME ROW: THE OTHER WINDOW'S STANDS,
+    /// AND THIS WINDOW'S IS REPORTED. A change the writer dropped is still this window's, held by
+    /// the store that dropped it, and a second window's commit to the same row does not touch
+    /// what it holds. Sent again, the store turns it back rather than write it over that commit:
+    /// it is not written, and the screen's save-trouble notice and the quit prompt name it, so the
+    /// operator can make it again. Nothing is lost silently.
+    ///
+    /// This pinned the opposite rule until the operator's ruling of 2026-09-28 ("B's edit stands;
+    /// A's is reported"): that the held change always landed, over the other window's commit. The
+    /// rule's other half stands: a held change with no commit in its way lands when it is sent
+    /// again ([`the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so`]).
     #[test]
     fn another_windows_commit_does_not_erase_a_change_waiting_to_be_sent_again() {
         use tempo_core::logbook::LogOp;
@@ -4988,10 +5134,14 @@ pub(crate) mod tests {
         let mut log_b = log_of(&b);
         let id = log_a.records()[2].id.expect("an id");
 
-        // Window A's change to the row, dropped by its writer: in A's memory only.
-        let dropped = LogOp::MarkQslCard { id, received: true };
-        let effects = log_a.apply(dropped.clone());
-        let lost = Change::of(&dropped, &effects, &log_a, |_| (None, None));
+        // Window A's card on the row, dropped by its writer: in A's memory only. Built as the
+        // station builds a change, from the row as read and as the change left it.
+        let before = Arc::clone(&log_a.records()[2]);
+        let _ = log_a.apply(LogOp::MarkQslCard { id, received: true });
+        let after = Arc::clone(&log_a.records()[2]);
+        let lost = Change::of_pairs(log_a.marks(), false, &[(Some(before), Some(after))], |_| {
+            (None, None)
+        });
         a.store.dropped.push(Dropped {
             held: Arc::new(Held::of(&lost)),
             rev: lost.rev,
@@ -5020,18 +5170,26 @@ pub(crate) mod tests {
             .wait_durable(&t, DURABLE_WAIT)
             .expect("B's change lands");
 
-        // Nothing re-reads the store into A's memory (SPEC-2 v3 C19, D4-A): the change A's
-        // writer dropped is held by A's store, its rows with it, whatever B commits — and it
-        // lands when it is sent again.
         assert_eq!(a.store.resend(log_a.marks(), true, Instant::now()), 1);
-        assert!(a.store.unsaved().wait(DURABLE_WAIT).saved());
-        assert!(
-            stored(&d)
-                .into_iter()
-                .find(|r| r.id == Some(id))
-                .is_some_and(|r| r.qsl_rcvd.card),
-            "A's dropped change reaches the store"
+        let standing = a.store.unsaved().wait(DURABLE_WAIT);
+        assert_eq!(
+            (standing.refused, standing.retryable),
+            (1, 0),
+            "A's card is held and reported, never sent again: {standing:?}"
         );
+        let trouble = a.store.save_trouble().expect("the screen says so");
+        assert_eq!(trouble.held, 1, "{trouble:?}");
+        assert!(trouble.reason.contains("another window"), "{trouble:?}");
+        let row = stored(&d)
+            .into_iter()
+            .find(|r| r.id == Some(id))
+            .expect("the contact is stored");
+        assert_eq!(
+            row.comment.as_deref(),
+            Some("from window B"),
+            "B's edit stands"
+        );
+        assert!(!row.qsl_rcvd.card, "and A's card is not written over it");
     }
 
     /// ⛔ A CHANGE SENT AGAIN DOES NOT WRITE OVER ANOTHER WINDOW'S COMMIT TO THE SAME ROW. A change
@@ -5096,6 +5254,71 @@ pub(crate) mod tests {
             row.comment.as_deref(),
             Some("from window B"),
             "B's edit stands"
+        );
+    }
+
+    /// ⛔ A CHANGE TO A ROW HELD FOR SENDING AGAIN EXPECTS WHAT THE HELD CHANGE EXPECTED. A plan
+    /// reads the row as the held change left it — which the store never took — and the new change
+    /// takes the row over. The store still holds the row as the held change found it, so that is
+    /// what the new change must expect: it is written, carrying both, and not turned back for a
+    /// change of this window's own that never landed. (Expecting the row as the plan read it, it
+    /// would be turned back every time until the held change landed.)
+    #[test]
+    fn a_change_over_a_held_change_expects_what_the_held_change_expected() {
+        use tempo_core::logbook::LogOp;
+        let d = Dir::new("held-expect");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = open_fast(&d);
+        let mut log_a = log_of(&a);
+        let id = log_a.records()[2].id.expect("an id");
+
+        let before = Arc::clone(&log_a.records()[2]);
+        let _ = log_a.apply(LogOp::MarkQslCard { id, received: true });
+        let carded = Arc::clone(&log_a.records()[2]);
+        let lost = Change::of_pairs(
+            log_a.marks(),
+            false,
+            &[(Some(before), Some(Arc::clone(&carded)))],
+            |_| (None, None),
+        );
+        a.store.dropped.push(Dropped {
+            held: Arc::new(Held::of(&lost)),
+            rev: lost.rev,
+            refusal: Refusal {
+                reason: "logbook database: database is locked".into(),
+                retryable: true,
+                conflict: false,
+            },
+            resends: 0,
+            due: Instant::now() + Duration::from_secs(3600),
+        });
+
+        // A change planned on the row as the held change left it.
+        let mut noted = QsoRecord::clone(&carded);
+        noted.comment = Some("noted after".into());
+        let next = Change::of_pairs(
+            Watermarks {
+                revision: lost.rev + 1,
+                ..log_a.marks()
+            },
+            false,
+            &[(Some(carded), Some(Arc::new(noted)))],
+            |_| (None, None),
+        );
+        let t = a.store.submit(next).expect("sent");
+        a.store
+            .writer
+            .wait_durable(&t, DURABLE_WAIT)
+            .expect("it is written, not turned back");
+        let row = stored(&d)
+            .into_iter()
+            .find(|r| r.id == Some(id))
+            .expect("the contact is stored");
+        assert!(row.qsl_rcvd.card, "the held change's card");
+        assert_eq!(
+            row.comment.as_deref(),
+            Some("noted after"),
+            "and the new change"
         );
     }
 

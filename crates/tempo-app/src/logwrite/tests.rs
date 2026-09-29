@@ -321,7 +321,8 @@ fn another_windows_change_to_another_row_plans_again_and_both_stand() {
 // The two tests above let window A commit only once A's writer has counted B's commit. These do
 // not: B commits inside A's plan-to-commit gap and A commits at once, before its writer's next
 // look (`FOREIGN_POLL`), so the count the commit check compares has not moved. Only the store,
-// checking each row as it writes it, can see B's change there.
+// checking each row as it writes it, can see B's change there. A command waits for its change and
+// makes it again when the store turns it back ([`until_written`]); the upload worker does not.
 
 /// Wait until `e`'s changes are committed: the writer alone, not the `log.adi` mirror behind it,
 /// so the racing window's commit lands as close to the plan it races as a real one would.
@@ -351,7 +352,9 @@ fn another_windows_stamp_made_under_the_plan_is_not_written_over() {
             }
         }
     };
-    let (made, durability) = racing(hook, || change_ops(&a, id, None, &[card(id)], "window A"));
+    let (made, durability) = racing(hook, || {
+        until_written(|| change_ops(&a, id, None, &[card(id)], "window A"))
+    });
     assert!(matches!(made, Ok(Ok(_))), "A's card is made: {made:?}");
     durability.wait(DURABLE_WAIT).expect("on disk");
     let row = stored_row(&d, id);
@@ -385,7 +388,9 @@ fn a_contact_another_window_deleted_under_the_plan_stays_deleted() {
             }
         }
     };
-    let (made, _) = racing(hook, || change_ops(&a, id, None, &[card(id)], "window A"));
+    let (made, _) = racing(hook, || {
+        until_written(|| change_ops(&a, id, None, &[card(id)], "window A"))
+    });
     flush(&engine_lock(&a));
     assert_eq!(
         stored_row_opt(&d, id),
@@ -484,7 +489,7 @@ fn a_lotw_merge_planned_before_another_windows_card_keeps_the_card() {
             }
         }
     };
-    let (made, durability) = racing(hook, || merge_lotw_report(&a, &text));
+    let (made, durability) = racing(hook, || until_written(|| merge_lotw_report(&a, &text)));
     assert!(made.is_ok(), "the merge is made: {made:?}");
     durability.wait(DURABLE_WAIT).expect("on disk");
     let rows = stored(&d);
@@ -498,6 +503,366 @@ fn a_lotw_merge_planned_before_another_windows_card_keeps_the_card() {
         "and every contact carries the merge's confirmation"
     );
     assert_eq!(plans.get(), 2, "the merge was planned again");
+}
+
+// ── each path that plans a change and then makes it ────────────────────────────
+
+/// A hook for [`racing`]: at the first plan, window `b` makes `change` and has it committed; every
+/// plan is counted in `plans`.
+fn b_changes_first(
+    mut b: Engine,
+    plans: &Rc<Cell<usize>>,
+    mut change: impl FnMut(&mut Engine) + 'static,
+) -> impl FnMut() + 'static {
+    let plans = Rc::clone(plans);
+    move || {
+        plans.set(plans.get() + 1);
+        if plans.get() == 1 {
+            change(&mut b);
+            committed(&b);
+        }
+    }
+}
+
+/// Window B's QRZ stamp on the contact `row`.
+fn b_stamps(row: QsoRecord) -> impl FnMut(&mut Engine) + 'static {
+    move |b| {
+        assert!(
+            b.stamp_qrz_upload(&row, UploadOutcome::Accepted, 9, None),
+            "B's stamp is made"
+        );
+    }
+}
+
+/// ⛔ THE LOGBOOK FORM'S EDIT, PLANNED BEFORE ANOTHER WINDOW'S STAMP, LANDS ON TOP OF IT. A stamp
+/// changes nothing the form edits, so the edit is still the one the operator made: made again on
+/// the stamped row, and both stand.
+#[test]
+fn an_edit_planned_before_another_windows_stamp_lands_on_top_of_it() {
+    let d = Dir::new("cas-form");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 4);
+    let row = row_at(&a, 4);
+    let key = QsoEdit::project(&row).key();
+    let mut edit = QsoEdit::project(&row);
+    edit.comment = Some("from window A".into());
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, b_stamps(row));
+    let (made, durability) = racing(hook, || until_written(|| edit_row(&a, id, &key, &edit)));
+    assert!(matches!(made, Ok(Ok(_))), "A's edit is made: {made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert_eq!(row.comment.as_deref(), Some("from window A"), "A's edit");
+    assert!(row.upload.qrz.is_some(), "and B's stamp");
+    assert_eq!(plans.get(), 2, "the edit was made again");
+}
+
+/// ⛔ THE FORM'S EDIT, PLANNED BEFORE ANOTHER WINDOW EDITED THE SAME CONTACT, IS NOT MADE: the
+/// contact is no longer the one the operator was editing, and the answer shows it as it now stands
+/// ([`RowRefusal::Changed`]). The other window's edit stands.
+#[test]
+fn an_edit_planned_before_another_windows_edit_answers_changed() {
+    let d = Dir::new("cas-form-both");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 4);
+    let row = row_at(&a, 4);
+    let key = QsoEdit::project(&row).key();
+    let mut edit = QsoEdit::project(&row);
+    edit.comment = Some("from window A".into());
+    let theirs = {
+        let mut r = row.clone();
+        r.comment = Some("from window B".into());
+        r
+    };
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, move |b| {
+        assert!(b.update_qso(id, theirs.clone()), "B edits the contact");
+    });
+    let (made, _) = racing(hook, || until_written(|| edit_row(&a, id, &key, &edit)));
+    assert!(
+        matches!(&made, Ok(Err(RowRefusal::Changed(now))) if now.comment.as_deref() == Some("from window B")),
+        "A's edit answers Changed, with the contact as it now stands: {made:?}"
+    );
+    flush(&engine_lock(&a));
+    assert_eq!(
+        stored_row(&d, id).comment.as_deref(),
+        Some("from window B"),
+        "B's edit stands"
+    );
+}
+
+/// ⛔ A QSL-SENT MARK PLANNED BEFORE ANOTHER WINDOW'S STAMP IS MADE AGAIN ON TOP OF IT.
+#[test]
+fn a_qsl_sent_mark_planned_before_another_windows_stamp_keeps_it() {
+    let d = Dir::new("cas-sent");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 4);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, b_stamps(row_at(&a, 4)));
+    let via = Some(tempo_core::logbook::QslVia::Bureau);
+    let (made, durability) = racing(hook, || {
+        until_written(|| change_ops(&a, id, None, &[qsl_sent(id, via)], "sent"))
+    });
+    assert!(matches!(made, Ok(Ok(_))), "{made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert!(row.qsl_sent.sent, "A's QSL-sent mark");
+    assert!(row.upload.qrz.is_some(), "and B's stamp");
+    assert_eq!(plans.get(), 2, "made again");
+}
+
+/// ⛔ A SATELLITE TAG PLANNED BEFORE ANOTHER WINDOW'S PAPER CARD IS MADE AGAIN ON TOP OF IT.
+#[test]
+fn a_satellite_tag_planned_before_another_windows_card_keeps_it() {
+    let d = Dir::new("cas-sat");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 4);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, move |b| {
+        assert!(b.mark_qsl_card(id, true), "B marks the card");
+    });
+    let tag = LogOp::SetSatTag {
+        id,
+        sat_name: Some("RS-44".into()),
+    };
+    let (made, durability) = racing(hook, || {
+        until_written(|| change_ops(&a, id, None, std::slice::from_ref(&tag), "sat"))
+    });
+    assert!(matches!(made, Ok(Ok(_))), "{made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert_eq!(row.sat_name.as_deref(), Some("RS-44"), "A's tag");
+    assert!(row.qsl_rcvd.card, "and B's card");
+    assert_eq!(plans.get(), 2, "made again");
+}
+
+/// ⛔ A DELETE PLANNED BEFORE ANOTHER WINDOW EDITED THE CONTACT DOES NOT THROW THE EDIT AWAY. The
+/// delete names the version the operator saw (its edit key, as every delete from the Logbook
+/// does); made again, it finds the contact changed and answers so, and the contact stays with the
+/// other window's edit.
+#[test]
+fn a_delete_planned_before_another_windows_edit_answers_changed() {
+    let d = Dir::new("cas-del-edit");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 4);
+    let row = row_at(&a, 4);
+    let key = QsoEdit::project(&row).key();
+    let theirs = {
+        let mut r = row.clone();
+        r.comment = Some("from window B".into());
+        r
+    };
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, move |b| {
+        assert!(b.update_qso(id, theirs.clone()), "B edits the contact");
+    });
+    let (made, _) = racing(hook, || {
+        until_written(|| change_ops(&a, id, Some(&key), &[LogOp::Delete(id)], "delete"))
+    });
+    assert!(
+        matches!(made, Ok(Err(RowRefusal::Changed(_)))),
+        "A's delete answers Changed: {made:?}"
+    );
+    flush(&engine_lock(&a));
+    assert_eq!(
+        stored_row_opt(&d, id).and_then(|r| r.comment),
+        Some("from window B".to_string()),
+        "the contact stays, with B's edit"
+    );
+}
+
+/// ⛔ THE OPERATOR'S PUSH WAITS FOR ITS STAMP, AND MAKES IT AGAIN ON TOP OF ANOTHER WINDOW'S EDIT.
+#[test]
+fn a_push_stamp_planned_before_another_windows_edit_lands_on_top_of_it() {
+    let d = Dir::new("cas-push");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 4);
+    let pushed = row_at(&a, 4);
+    let theirs = {
+        let mut r = pushed.clone();
+        r.comment = Some("from window B".into());
+        r
+    };
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, move |b| {
+        assert!(b.update_qso(id, theirs.clone()), "B edits the contact");
+    });
+    let status = UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 7,
+        detail: None,
+    };
+    let (stamped, durability) = racing(hook, || {
+        until_written(|| stamp_push(&a, &pushed, UploadService::Qrz, status.clone()))
+    });
+    assert!(stamped, "the push stamps the contact");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert_eq!(row.comment.as_deref(), Some("from window B"), "B's edit");
+    assert_eq!(
+        row.upload.qrz.map(|s| s.when_unix),
+        Some(7),
+        "and the push's stamp"
+    );
+    assert_eq!(plans.get(), 2, "made again");
+}
+
+/// ⛔ TQSL'S STAMPS, PLANNED BEFORE ANOTHER WINDOW'S QRZ STAMP ON ONE OF THE CONTACTS, ARE MADE
+/// AGAIN ON TOP OF IT: a connector's stamp changes nothing TQSL signed ([`LotwSigned`]), so every
+/// contact is still the one it signed. (A paper card would: the contact is then no longer the one
+/// signed, and is counted changed, as it always was.)
+#[test]
+fn lotw_stamps_planned_before_another_windows_stamp_keep_it() {
+    let d = Dir::new("cas-tqsl");
+    let a = shared(&d, 6);
+    let ids: Vec<RecordId> = (0..6).map(|at| id_at(&*a, at)).collect();
+    let view = engine_lock(&a).log_view();
+    let rows = view.rows(&ids).expect("read");
+    let signed: Vec<LotwSigned> = ids
+        .iter()
+        .filter_map(|id| rows.get(id))
+        .filter_map(|r| LotwSigned::of(r))
+        .collect();
+    assert_eq!(signed.len(), 6, "premise: TQSL signed all six");
+    let theirs = ids[3];
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, b_stamps(row_at(&a, 3)));
+    let status = UploadStatus {
+        outcome: UploadOutcome::Pending,
+        when_unix: 11,
+        detail: None,
+    };
+    let (done, durability) = racing(hook, || {
+        until_written(|| stamp_lotw_batch(&a, &signed, &status))
+    });
+    assert_eq!(done.stamped, 6, "every contact stamped: {done:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let stored = stored(&d);
+    assert!(
+        stored.iter().all(|r| r.upload.lotw.is_some()),
+        "every contact carries TQSL's stamp"
+    );
+    assert!(
+        stored
+            .iter()
+            .find(|r| r.id == Some(theirs))
+            .is_some_and(|r| r.upload.qrz.is_some()),
+        "and B's stamp"
+    );
+    assert_eq!(plans.get(), 2, "made again");
+}
+
+/// ⛔ "ALREADY UPLOADED", A CHUNK AT A TIME: A CHUNK PLANNED BEFORE ANOTHER WINDOW'S QRZ STAMP IS
+/// MADE AGAIN ON TOP OF IT, and every contact owed is stamped.
+#[test]
+fn already_uploaded_planned_before_another_windows_stamp_keeps_it() {
+    let d = Dir::new("cas-declared");
+    let a = shared(&d, 6);
+    let rows = engine_lock(&a).log_rows();
+    let owed = station::lotw_unsent_ids(&rows).expect("the store reads");
+    assert!(
+        owed.len() > 3,
+        "premise: more than one chunk owed: {owed:?}"
+    );
+    let theirs = owed[1];
+    let row = stored_row(&d, theirs);
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, b_stamps(row));
+    let (made, durability) = racing(hook, || mark_lotw_uploaded_in_chunks(&a, 1_900_000_000, 3));
+    assert_eq!(made, Ok(owed.len()), "every contact owed is stamped");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let stored = stored(&d);
+    assert!(
+        owed.iter().all(|id| stored
+            .iter()
+            .any(|r| r.id == Some(*id) && r.upload.lotw.is_some())),
+        "all stamped"
+    );
+    assert!(
+        stored
+            .iter()
+            .find(|r| r.id == Some(theirs))
+            .is_some_and(|r| r.upload.qrz.is_some()),
+        "and B's stamp stands"
+    );
+    assert_eq!(plans.get(), 3, "two chunks, the first made again");
+}
+
+/// ⛔ AN IMPORT THAT BRINGS A CONTACT UP TO DATE, PLANNED BEFORE ANOTHER WINDOW'S CARD, KEEPS THE
+/// CARD: made again on the log as it now stands.
+#[test]
+fn an_import_planned_before_another_windows_card_keeps_it() {
+    let d = Dir::new("cas-import");
+    let a = shared(&d, 6);
+    let id = id_at(&*a, 2);
+    let text = adif_record(&row_at(&a, 2)).replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, move |b| {
+        assert!(b.mark_qsl_card(id, true), "B marks the card");
+    });
+    let (made, durability) = racing(hook, || until_written(|| import_adif(&a, &text)));
+    assert!(made.is_ok(), "{made:?}");
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let row = stored_row(&d, id);
+    assert!(row.qsl_rcvd.lotw, "the import's confirmation");
+    assert!(row.qsl_rcvd.card, "and B's card");
+    assert_eq!(plans.get(), 2, "made again");
+}
+
+/// ⛔ THE FILL JOB DOES NOT WRITE OVER ANOTHER WINDOW'S EDIT. Its chunk planned before the edit is
+/// turned back, so the job stops there without claiming the log filled (`fill_ver` is not
+/// written), the edit stands, and the job's next pass fills what is still empty.
+#[test]
+fn the_fill_job_does_not_write_over_another_windows_edit() {
+    let d = Dir::new("cas-fill");
+    let a = shared(&d, 6);
+    let edited = id_at(&*a, 1);
+    let theirs = {
+        let mut r = row_at(&a, 1);
+        r.comment = Some("from window B".into());
+        r
+    };
+    let fills: Vec<LogFill> = stored(&d)
+        .iter()
+        .filter_map(|r| r.id)
+        .map(|id| LogFill {
+            id,
+            country: Some("Found".into()),
+            state: None,
+        })
+        .collect();
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = b_changes_first(engine_on_store(&d), &plans, move |b| {
+        assert!(b.update_qso(edited, theirs.clone()), "B edits a contact");
+    });
+    let first = racing(hook, || fill_in_chunks(&a, &fills, 7, 3));
+    assert!(
+        first.is_err(),
+        "the job stops at the chunk turned back: {first:?}"
+    );
+    flush(&engine_lock(&a));
+    let db = LogDb::open(&d.db()).expect("the store opens");
+    assert_eq!(
+        db.meta(crate::logfill::FILL_VER).expect("reads"),
+        None,
+        "and does not claim the log filled"
+    );
+    assert_eq!(
+        stored_row(&d, edited).comment.as_deref(),
+        Some("from window B"),
+        "B's edit stands"
+    );
+
+    let again = fill_in_chunks(&a, &fills, 7, 3).expect("the next pass");
+    assert!(again > 0, "fills what is still empty");
+    flush(&engine_lock(&a));
+    let row = stored_row(&d, edited);
+    assert_eq!(row.comment.as_deref(), Some("from window B"), "B's edit");
+    assert_eq!(row.country.as_deref(), Some("Found"), "filled on top of it");
+    assert!(
+        stored(&d).iter().all(|r| r.country.is_some()),
+        "every contact filled"
+    );
 }
 
 /// ★ A PLAN READS THIS PROCESS'S OWN CHANGES THE STORE HAS NOT TAKEN YET (SPEC-2 v3 C19). With
