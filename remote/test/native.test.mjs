@@ -274,10 +274,21 @@ test('actual native monitor, lease and Stop through workerd, with the old comman
     const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'Monitor bench' })
     const stationId = begin.status.pairingId
     await browser.post('pair/claim', { code: begin.status.pairingCode })
+    await probe.send({ type: 'refresh' })
+    // Pairing's own refusals at the real station, as the retired controller test had them: a typed code
+    // is not agreement to attach the station, and a credential store that fails creates nothing.
+    const approve = { type: 'approve', enrollmentId: stationId, accountId: browser.accountId }
+    const stations = async () => (await app.db.prepare('SELECT COUNT(*) AS count FROM stations WHERE id=?').bind(stationId).first()).count
+    const early = await probe.send(approve)
+    assert.equal(early.ok, false); assert.equal(early.error, 'awaitingConfirmation'); assert.equal(await stations(), 0)
     const { response } = await browser.post('pair/confirm', { id: stationId })
     browser.setCookie(response.headers.get('set-cookie'))
     await probe.send({ type: 'refresh' })
-    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })
+    await probe.send({ type: 'vaultFailure', enabled: true })
+    const refused = await probe.send(approve)
+    assert.equal(refused.ok, false); assert.equal(refused.error, 'credentialStoreUnavailable'); assert.equal(await stations(), 0)
+    await probe.send({ type: 'vaultFailure', enabled: false })
+    const paired = await probe.send(approve)
     assert.equal(paired.ok, true, paired.error)
     const { value: device } = await browser.post(`stations/${stationId}/device`, { name: 'Not asked for' })
     assert.equal(device.approved, true, 'the pairing browser was approved with the station')
@@ -295,6 +306,11 @@ test('actual native monitor, lease and Stop through workerd, with the old comman
     await socket.take(value => value.type === 'session')
     const first = await socket.take(value => value.type === 'observation')
     assert.equal(first.frame.source, 'native')
+    // What the monitor shows is what the station read (the probe's substituted hardware), and fresh.
+    assert.equal(first.frame.station.radio.rigDialMhz, 14.074)
+    assert.equal(first.frame.station.radio.rigKeyed, false)
+    assert.equal(first.frame.station.amplifier.outputWatts, 12)
+    assert.ok(first.frame.station.radio.readings.dial.ageMs < 3000)
     socket.ackObservations()
     // The stream's lease and Stop, on the operation lane, answered by the real station.
     const operation = async request => {
@@ -322,7 +338,13 @@ test('actual native monitor, lease and Stop through workerd, with the old comman
       record: { call: 'W1AW', grid: 'FN31', country: null, state: null, band: '20m', freqMhz: 14.25, mode: 'SSB', rstSent: '59', rstRcvd: '57',
         name: null, qth: null, comment: null, notes: null, whenUnix: Math.floor(Date.now() / 1000), confirmed: false, awardConfirmed: false } })
     assert.equal(logged.error, 'stationUnsupported')
-    assert.equal((await probe.send({ type: 'loggingEvidence' })).count, 0, 'the refused command never reached the station')
+    // Watched for a second, never read once: the refusal comes straight back from the room, while a
+    // command forwarded anyway reaches the station's log about 100 ms later (measured against a Worker
+    // that refused by name AND forwarded), so a single read right after the refusal cannot see it.
+    for (let i = 0; i < 10; i++) {
+      assert.equal((await probe.send({ type: 'loggingEvidence' })).count, 0, 'the refused command never reached the station')
+      await delay(100)
+    }
     const released = await operation({ type: 'release', leaseId: state.leaseId })
     assert.equal(released.value?.phase, 'available')
     // Turning Remote off at the shack ends the page's session; forgetting the pairing ends the station.
@@ -331,6 +353,7 @@ test('actual native monitor, lease and Stop through workerd, with the old comman
     const restarted = await probe.send({ type: 'restart' })
     assert.equal(restarted.status.stationId, stationId)
     assert.equal(restarted.status.phase, 'disabled')
+    assert.equal((await roomStatus(room)).online, false, 'Remote off keeps the station off the service across a restart')
     const forgotten = await probe.send({ type: 'forget' })
     assert.equal(forgotten.ok, true, JSON.stringify(forgotten))
     assert.equal((await app.db.prepare('SELECT enabled FROM stations WHERE id=?').bind(stationId).first()).enabled, 0)
