@@ -352,6 +352,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The S-meter and the receive controls come back on a radio that answers slowly (#385,
+  #376).** Nexus reads the radio's settings back a few at a time and stops when a poll has used
+  its time. Each poll started again at the top of the list, so on a radio that takes a while to
+  answer each read it never reached the bottom. The Yaesu FTX-1 is one: its Hamlib driver waits
+  50 ms after every command. There the S-meter stayed blank, and the Receiver pane listed RF,
+  NB, NR, the notches, AGC and SQL under "Not on this radio" although the radio has all of them.
+  The radio's mode, the VOX, COMP and monitor switches and the monitor level were never read
+  either, and a receive filter width you picked was never sent. A poll that runs out of time now
+  hands the rest of the list to the next one, so every setting gets its turn. A radio that
+  answers quickly is read exactly as before. Not yet checked on the air: on an FTX-1, the
+  S-meter should move within a few seconds of connecting, and the Receiver pane should show RF,
+  NB, NR, the notches, AGC and SQL.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
