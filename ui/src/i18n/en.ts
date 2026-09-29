@@ -9639,6 +9639,19 @@ export const EN = {
   'panels.undo.title': 'Put the layout back the way it was before the last change',
   'panels.reset': 'Reset layout',
   'panels.reset.title': 'Show every panel again (the stock layout)',
+  // ⊞ Panels ▸ Arrange (layout L3): where each pane of a grid cockpit stands, in the menu above the
+  // entries. `{{pane}}` is the pane's name as its ⊞ entry reads it.
+  'panels.arrange.heading': 'Arrange',
+  'panels.arrange.column.a': 'Column 1',
+  'panels.arrange.column.b': 'Column 2',
+  'panels.arrange.column.log': 'Log column',
+  'panels.arrange.logForm': 'The log form stays at the foot of this column.',
+  'panels.arrange.pinned': 'Stays in its column, so nothing in progress is lost; it moves up and down.',
+  'panels.arrange.narrow': 'On a narrower window, column 2 follows column 1.',
+  'panels.arrange.up.aria': 'Move {{pane}} up',
+  'panels.arrange.down.aria': 'Move {{pane}} down',
+  'panels.arrange.left.aria': 'Move {{pane}} to the column on the left',
+  'panels.arrange.right.aria': 'Move {{pane}} to the column on the right',
 
   // ── The cockpit pane frame ──────────────────────────────────────────────────────────
   // `{{title}}` is the pane's own name, supplied by the cockpit.

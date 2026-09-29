@@ -15648,6 +15648,69 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
   cursor: default;
 }
+/* ⊞ Panels ▸ Arrange (layout L3, components/panes/ArrangePanes) — where each pane of a grid cockpit
+   stands, above the entries: the three columns, each pane with ▲ ▼ ◀ ▶. Separated from the entries
+   the way Connect's layouts are. */
+.panels-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.panels-arrange-head {
+  font-size: var(--fs-label);
+  font-weight: 600;
+}
+.panels-arrange-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.panels-arrange-colhead {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.panels-arrange-pane {
+  display: flex;
+  flex-direction: column;
+}
+.panels-arrange-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.panels-arrange-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+}
+.panels-arrange-moves {
+  display: flex;
+  gap: 2px;
+}
+.panels-arrange-btn {
+  min-width: 1.8em;
+  padding: 0 var(--space-1);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.panels-arrange-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.panels-arrange-btn:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
 /* ⊞ Panels ▸ Layout — Connect's layout presets (ConnectView), above the entries. A column of
    full-width choices rather than a chip row: the popover is 220px wide, where three chips side by
    side wrap at Large text or in German. The one on screen is FILLED — a change of form, not of

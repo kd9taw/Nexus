@@ -232,6 +232,15 @@ import { useCallback, useMemo, useState } from 'react'
 import { durableGet, durableSet } from './durableStore'
 import { windowInstance } from './windowScope'
 import { SLOT_IDS, type SlotId } from './connectConfig'
+import {
+  coerceColumnOrder,
+  coercePlacement,
+  movePane as movePlacedPane,
+  type ArrangeSpec,
+  type PaneColumn,
+  type PaneMove,
+  type PanePlacement,
+} from './panelPlace'
 
 export type PanelState = 'docked' | 'popped' | 'removed'
 
@@ -255,6 +264,14 @@ export interface PanelLayout<P extends string> {
    *  An older build reading this record copies only `state` and `share` (its coercion never reads
    *  `cols`), so it opens on the default columns and loses nothing else. */
   cols?: PanelCols
+  /** WHERE EACH PANE STANDS (layout L3, ⊞ Panels ▸ Arrange): its column and its place in it, for the
+   *  panes the vocabulary's `arrange` lists (features/panelPlace). Absent is the stock grouping, and
+   *  a pane it does not name stands at the end of its stock column. Same rule for older builds as
+   *  `cols`: their coercion copies only `state` and `share`, so they open on the stock grouping. */
+  place?: PanePlacement<P>
+  /** The columns' order on screen ("swap columns"): kept by the record, rendered by no cockpit yet
+   *  (see features/panelPlace). Absent is a | b | log. */
+  colOrder?: PaneColumn[]
 }
 
 /** A grid cockpit's column widths, as its column dividers write them (PanelLayout.cols):
@@ -297,6 +314,9 @@ export interface PanelVocabulary<P extends string> {
    *  pane must also be one whose hide ENDS nothing, because Reset hides it with no note (THE
    *  PRACTICE, in the header). */
   readonly defaultRemoved?: readonly P[]
+  /** The panes ⊞ Panels ▸ Arrange may move, their stock columns and the pinned ones (layout L3).
+   *  Only a vocabulary with this may carry a `place` in its record. */
+  readonly arrange?: ArrangeSpec<P>
 }
 
 export function isPanelState(v: unknown): v is PanelState {
@@ -343,7 +363,7 @@ export function coercePanelLayout<P extends string>(
 ): PanelLayout<P> {
   const out = emptyPanelLayout<P>()
   if (!raw || typeof raw !== 'object') return out
-  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown }
+  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown }
   if (obj.state && typeof obj.state === 'object') {
     const src = obj.state as Record<string, unknown>
     for (const id of spec.panelIds) {
@@ -372,6 +392,14 @@ export function coercePanelLayout<P extends string>(
       if (v != null) cols[id] = v
     }
     if (Object.keys(cols).length > 0) out.cols = cols
+  }
+  // Placement (layout L3) only where the vocabulary arranges: an id outside its ArrangeSpec is
+  // dropped, a pinned pane is held in its column, the orders are re-numbered (features/panelPlace).
+  if (spec.arrange) {
+    const place = coercePlacement(spec.arrange, obj.place)
+    if (place) out.place = place
+    const colOrder = coerceColumnOrder(obj.colOrder)
+    if (colOrder) out.colOrder = colOrder
   }
   return out
 }
@@ -516,6 +544,12 @@ export interface PanelLayoutApi<P extends string> {
    *  (Phone, CW, JS8) read it, and a host without them never needs it. usePanelLayout always
    *  provides it. */
   setCols?: (updates: Partial<Record<PanelColId, number | null>>) => void
+  /** Move one pane in the three-column placement (⊞ Panels ▸ Arrange, layout L3): up or down in its
+   *  column past the panes `shown` says are on screen, or into the column beside it. ONE undoable
+   *  step; a move that would change nothing (features/panelPlace `movePane` → null) is no step at
+   *  all, so it cannot spend the one Undo. Optional: only a vocabulary with `arrange` has a
+   *  placement. */
+  movePane?: (id: P, move: PaneMove, shown: (id: P) => boolean) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
@@ -617,7 +651,9 @@ export function usePanelLayout<P extends string>(
             if (c != null) cols[id] = c
           }
         }
-        const next: PanelLayout<P> = { v: 2, state: cur.state, share: cur.share }
+        // Everything else in the record rides along (a placement, a column order); only `cols` changes.
+        const { cols: _was, ...rest } = cur
+        const next: PanelLayout<P> = { ...rest, v: 2 }
         if (Object.keys(cols).length > 0) next.cols = cols
         return next
       }),
@@ -631,6 +667,20 @@ export function usePanelLayout<P extends string>(
         return { cur: h.prev, prev: null }
       }),
     [key],
+  )
+  const movePane = useCallback(
+    (id: P, move: PaneMove, shown: (id: P) => boolean) =>
+      setHist((h) => {
+        if (!spec.arrange) return h
+        // ◀ ▶ go to the neighbouring column ON SCREEN, and no cockpit renders a stored column order
+        // yet (features/panelPlace): the stock one is what the operator sees.
+        const place = movePlacedPane(spec.arrange, h.cur.place, undefined, id, move, shown)
+        if (!place) return h
+        const cur: PanelLayout<P> = { ...h.cur, v: 2, place }
+        savePanelLayout(key, cur)
+        return { cur, prev: h.cur }
+      }),
+    [key, spec],
   )
   const reset = useCallback(() => apply(() => emptyPanelLayout<P>()), [apply])
   const setLayout = useCallback(
@@ -656,6 +706,7 @@ export function usePanelLayout<P extends string>(
     setShare,
     setShares,
     setCols,
+    movePane: spec.arrange ? movePane : undefined,
     undo,
     canUndo: hist.prev != null,
     undoRemoves,
@@ -820,6 +871,21 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
   defaultRemoved: ['spots', 'needed'],
+  // ⊞ Arrange (layout L3): the pane region's stock grouping, as PhoneCockpit renders it — Band
+  // Activity, the voice keyer and Spots lead; the rig strips and Needed in the middle; the log form
+  // (no id) alone in the last column. The scope above the region and the meters in the dock are not
+  // the region's, so they are not here and can never be given a place. THE VOICE KEYER IS PINNED
+  // (D9): it transmits, and a pane that changes column is remounted, which would stop its over and
+  // discard its recording. Below three tracks the feeds follow the rig strips (`stockMerged`).
+  arrange: {
+    columns: {
+      a: ['bandActivity', 'voiceKeyer', 'spots'],
+      b: ['rigscope', 'receiver', 'transmitter', 'needed'],
+      log: [],
+    },
+    pinned: ['voiceKeyer'],
+    stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'],
+  },
 }
 
 /** CW cockpit's removable panels (Phase 3) — the scope strip plus the panes under it. The
@@ -846,6 +912,20 @@ export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
+  // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
+  // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
+  // frame; the log form (no id) alone in the last column. The three rig-control groups (`scopeCtl`,
+  // `dsp`, `rxdsp`) share ONE frame, which is not a vocabulary pane: it keeps its place at the head
+  // of the middle column, and is not listed. Nothing here is pinned (CW has no voice keyer; the log
+  // form cannot move). Below three tracks the middle column simply follows the first.
+  arrange: {
+    columns: {
+      a: ['decode', 'sent'],
+      b: ['bandActivity', 'copilot'],
+      log: [],
+    },
+    pinned: [],
+  },
 }
 
 /** RTTY cockpit's removable panels (Phase 3). The CockpitHeader + StopTX + TX-arm, the
@@ -928,6 +1008,19 @@ export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   view: 'js8',
   panelIds: JS8_PANEL_IDS,
+  // ⊞ Arrange (layout L3): the pane region's stock grouping, as Js8Cockpit renders it — the two
+  // decode surfaces lead, Stations and the inbox in the middle, the log alone in the last column.
+  // JS8'S LOG HAS AN ID (it is ⊞-hideable), so it is listed, and it is PINNED (D9): the log form
+  // holds a half-typed contact, which a change of column would remount and lose. It moves up and
+  // down in its column only.
+  arrange: {
+    columns: {
+      a: ['activity', 'offsets'],
+      b: ['stations', 'inbox'],
+      log: ['log'],
+    },
+    pinned: ['log'],
+  },
 }
 
 /** Connect's removable panes (close + resize, operator-approved 2026-09-13) — its seven

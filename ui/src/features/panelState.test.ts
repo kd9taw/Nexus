@@ -408,6 +408,36 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     },
   )
 
+  // ⊞ ARRANGE (layout L3) can give a pane a PLACE, and that is one more thing an id can do. Every id
+  // a placement can hold must be one of its vocabulary's own ids — so the name check above has
+  // already read it — and none may be NAMED for a stop control, pinned or not. Checked against every
+  // vocabulary that arranges, and the check itself is proven to fire on a planted spec.
+  const arrangeNameProblems = (vocab: { view: string; panelIds: readonly string[]; arrange?: { columns: Record<string, readonly string[]>; pinned: readonly string[]; stockMerged?: readonly string[] } }) => {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '')
+    const a = vocab.arrange
+    if (!a) return []
+    const named = [...Object.values(a.columns).flat(), ...a.pinned, ...(a.stockMerged ?? [])]
+    return named.flatMap((id) => [
+      ...(vocab.panelIds.includes(id) ? [] : [`${vocab.view}: "${id}" can be placed but is not a vocabulary id`]),
+      ...((STOP_CONTROL_WORDS as readonly string[]).includes(norm(id)) ? [`${vocab.view}: "${id}" is named for a stop control`] : []),
+    ])
+  }
+
+  it('every id ⊞ Arrange can place is a vocabulary id, and none is named for a stop control (layout L3)', () => {
+    const arranging = ALL_PANEL_VOCABULARIES.filter((v) => v.arrange)
+    expect(arranging.map((v) => v.view), 'no vocabulary arranges: this guard would be reading nothing').toContain('phone')
+    for (const vocab of arranging) expect(arrangeNameProblems(vocab)).toEqual([])
+    // Control: a spec that could place a stop control, or an id its vocabulary does not have.
+    expect(
+      arrangeNameProblems({ view: 'planted', panelIds: ['decode'], arrange: { columns: { a: ['decode', 'ptt'], b: [], log: [] }, pinned: ['stopTx'] } }),
+    ).toEqual([
+      'planted: "ptt" can be placed but is not a vocabulary id',
+      'planted: "ptt" is named for a stop control',
+      'planted: "stopTx" can be placed but is not a vocabulary id',
+      'planted: "stopTx" is named for a stop control',
+    ])
+  })
+
   it('ALL_PANEL_VOCABULARIES holds every vocabulary this module exports', () => {
     // The backstop above is only as wide as this array, and an array is a thing somebody
     // forgets. So do not trust it: find every export that IS a vocabulary and require it to
