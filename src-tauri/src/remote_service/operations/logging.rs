@@ -737,7 +737,9 @@ pub(super) fn change_found(
             |_, _| (),
         )
     };
-    let (made, durable) = match change {
+    // Made again when the store turns it back: another window changed the contact first
+    // ([`tempo_app::logwrite::until_written`]).
+    let (made, durable) = tempo_app::logwrite::until_written(|| match change {
         Change::Edit { record, .. } => tempo_app::logwrite::update_row(
             engine,
             id,
@@ -761,6 +763,7 @@ pub(super) fn change_found(
             "mark_qsl_card",
         ),
         Change::Delete { .. } => ops(vec![LogOp::Delete(id)], "delete_qso"),
+        // Not a change to a contact: nothing is made, and the browser reads the log again.
         Change::Hunt { .. }
         | Change::ClearHunt {}
         | Change::Activation { .. }
@@ -768,8 +771,11 @@ pub(super) fn change_found(
         | Change::SelfSpot { .. }
         | Change::Spot { .. }
         | Change::Settings { .. }
-        | Change::ProgramEdit { .. } => return Err(ChangeReason::ContextChanged),
-    };
+        | Change::ProgramEdit { .. } => (
+            Ok(Err(tempo_app::station::RowRefusal::Gone)),
+            tempo_app::logstore::Durability::default(),
+        ),
+    });
     // Refused — the contact changed, went, or kept changing (LogBusy) — or the log could not be
     // read: nothing was changed, and the browser reads the log again.
     let Ok(Ok(Some(()))) = made else {

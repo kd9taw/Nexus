@@ -113,13 +113,17 @@ async fn change_row(
     let id = id_of(&target)?;
     durable_command(move || {
         let op = op(id);
-        let (made, durability) = tempo_app::logwrite::change_ops(
-            &engine,
-            id,
-            Some(&target.edit_key),
-            std::slice::from_ref(&op),
-            "log change",
-        );
+        // Made again, on the version the caller held, when the store turns it back: another
+        // window changed the contact first, and the edit key then says so.
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::change_ops(
+                &engine,
+                id,
+                Some(&target.edit_key),
+                std::slice::from_ref(&op),
+                "log change",
+            )
+        });
         (
             made.map(|made| match made {
                 Ok(made) => applied(made),
@@ -151,8 +155,9 @@ pub(crate) async fn edit_row(
 ) -> Result<RowAnswer, String> {
     let id = id_of(&target)?;
     durable_command(move || {
-        let (made, durability) =
-            tempo_app::logwrite::edit_row(&engine, id, &target.edit_key, &edit);
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::edit_row(&engine, id, &target.edit_key, &edit)
+        });
         (
             made.map(|made| match made {
                 Ok(now) => RowAnswer::Applied {

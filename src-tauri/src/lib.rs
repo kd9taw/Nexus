@@ -17773,12 +17773,20 @@ const LOG_ROW_GONE: &str =
 /// it on a runtime of its own; in the app both are the same runtime.
 ///
 /// On the 1.13 path (no store) there is nothing to wait for: the change was written inline.
+///
+/// A body whose change the store may turn back — another window changed a contact it read
+/// before the store wrote it — makes it through [`tempo_app::logwrite::until_written`], which
+/// makes it again on the log as it now stands; one turned back every time is not in the log.
 async fn durable_command<T: Send + 'static>(
     body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability) + Send + 'static,
 ) -> Result<T, String> {
     tokio::task::spawn_blocking(move || {
         let (out, durability) = body();
         let out = out?;
+        // Turned back on every making: another window kept changing what it read. Not in the log.
+        if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
+            return Err(tempo_app::station::LOG_BUSY.into());
+        }
         durability
             .wait(tempo_app::logstore::DURABLE_WAIT)
             .map_err(durability_failed)?;
@@ -17836,13 +17844,17 @@ async fn edit_qso(
         // Planned with the Engine lock released, made under it only while the contact is still the
         // version found (SPEC-2 v3 C19).
         let record: tempo_core::logbook::QsoRecord = record.into();
-        let (made, durability) = tempo_app::logwrite::update_row(
-            &engine,
-            id,
-            &found.edit_key,
-            |_| record.clone(),
-            |_, (_, after)| after.clone(),
-        );
+        // Made again, on the version found, when the store turns it back: another window changed
+        // the contact first, and the edit key then says so.
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::update_row(
+                &engine,
+                id,
+                &found.edit_key,
+                |_| record.clone(),
+                |_, (_, after)| after.clone(),
+            )
+        });
         (changed_row(seen_outcome(made)), durability)
     })
     .await
@@ -17904,8 +17916,10 @@ async fn mark_qsl_sent(
             Ok(found) => found,
             Err(e) => return (Err(e), Default::default()),
         };
-        let (after, durability) = change_found(&engine, &found, "mark_qsl_sent", |id| {
-            vec![tempo_app::logwrite::qsl_sent(id, via)]
+        let (after, durability) = tempo_app::logwrite::until_written(|| {
+            change_found(&engine, &found, "mark_qsl_sent", |id| {
+                vec![tempo_app::logwrite::qsl_sent(id, via)]
+            })
         });
         (changed_row(after), durability)
     })
@@ -17931,8 +17945,10 @@ async fn mark_qsl_card(
             Ok(found) => found,
             Err(e) => return (Err(e), Default::default()),
         };
-        let (after, durability) = change_found(&engine, &found, "mark_qsl_card", |id| {
-            vec![tempo_core::logbook::LogOp::MarkQslCard { id, received }]
+        let (after, durability) = tempo_app::logwrite::until_written(|| {
+            change_found(&engine, &found, "mark_qsl_card", |id| {
+                vec![tempo_core::logbook::LogOp::MarkQslCard { id, received }]
+            })
         });
         (changed_row(after), durability)
     })
@@ -18003,11 +18019,13 @@ async fn set_sat_tag(
             Ok(found) => found,
             Err(e) => return (Err(e), Default::default()),
         };
-        let (after, durability) = change_found(&engine, &found, "set_sat_tag", |id| {
-            vec![tempo_core::logbook::LogOp::SetSatTag {
-                id,
-                sat_name: name.clone(),
-            }]
+        let (after, durability) = tempo_app::logwrite::until_written(|| {
+            change_found(&engine, &found, "set_sat_tag", |id| {
+                vec![tempo_core::logbook::LogOp::SetSatTag {
+                    id,
+                    sat_name: name.clone(),
+                }]
+            })
         });
         (changed_row(after), durability)
     })
@@ -18037,8 +18055,10 @@ async fn delete_qso(
             Ok(found) => found,
             Err(e) => return (Err(e), Default::default()),
         };
-        let (gone, durability) = change_found(&engine, &found, "delete_qso", |id| {
-            vec![tempo_core::logbook::LogOp::Delete(id)]
+        let (gone, durability) = tempo_app::logwrite::until_written(|| {
+            change_found(&engine, &found, "delete_qso", |id| {
+                vec![tempo_core::logbook::LogOp::Delete(id)]
+            })
         });
         let answer = gone.and_then(|after| match after {
             None => Ok(engine_lock(&engine).snapshot()),
@@ -19111,7 +19131,8 @@ async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<Imp
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19): the rows of the
     // file's calls are read off the store, never under the lock.
     durable_command(move || {
-        let (made, durability) = tempo_app::logwrite::import_adif(&engine, &text);
+        let (made, durability) =
+            tempo_app::logwrite::until_written(|| tempo_app::logwrite::import_adif(&engine, &text));
         let made = made.map(|(added, skipped, updated, total)| ImportStats {
             added,
             skipped,
@@ -19144,7 +19165,9 @@ async fn sync_lotw_report(
         {
             let engine = Arc::clone(&state);
             durable_command(move || {
-                let (summary, durability) = tempo_app::logwrite::merge_lotw_report(&engine, &text);
+                let (summary, durability) = tempo_app::logwrite::until_written(|| {
+                    tempo_app::logwrite::merge_lotw_report(&engine, &text)
+                });
                 (summary.map(Into::into), durability)
             })
             .await
@@ -21086,7 +21109,9 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     //
     // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
     // cursor is advanced once it is made.
-    let (summary, merged) = tempo_app::logwrite::merge_lotw_report(state, &body);
+    // Made again when the store turns it back: another window changed a contact it read first.
+    let (summary, merged) =
+        tempo_app::logwrite::until_written(|| tempo_app::logwrite::merge_lotw_report(state, &body));
     let mut result: LotwSyncResult = summary?.into();
     let rows = {
         let mut eng = engine_lock(state);
@@ -21150,8 +21175,10 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
                 // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
-                let (promoted, echoed) =
-                    tempo_app::logwrite::merge_lotw_own_echo(state, &b, now_unix());
+                let now = now_unix();
+                let (promoted, echoed) = tempo_app::logwrite::until_written(|| {
+                    tempo_app::logwrite::merge_lotw_own_echo(state, &b, now)
+                });
                 match promoted {
                     Ok(promoted) => {
                         result.promoted = promoted;
@@ -21434,15 +21461,19 @@ fn lotw_upload_batch_with(
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
             // the store, and stamped under the lock only while it is still the one TQSL signed.
-            let (done, durable) = tempo_app::logwrite::stamp_lotw_batch(
-                state,
-                &signed,
-                &tempo_core::logbook::UploadStatus {
-                    outcome,
-                    when_unix: now_unix(),
-                    detail: stamped,
-                },
-            );
+            let status = tempo_core::logbook::UploadStatus {
+                outcome,
+                when_unix: now_unix(),
+                detail: stamped,
+            };
+            let stamp = || tempo_app::logwrite::stamp_lotw_batch(state, &signed, &status);
+            // The Logbook button makes the stamps again when the store turns them back (another
+            // window changed one of the contacts first); the six-hourly run leaves that to its next.
+            let (done, durable) = if wait {
+                tempo_app::logwrite::until_written(stamp)
+            } else {
+                stamp()
+            };
             if done.unrecorded > 0 {
                 conn_log(
                     "LoTW",
@@ -21604,7 +21635,8 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     //
     // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
     // cursor is advanced once it is made.
-    let (summary, merged) = tempo_app::logwrite::merge_eqsl_report(state, &body);
+    let (summary, merged) =
+        tempo_app::logwrite::until_written(|| tempo_app::logwrite::merge_eqsl_report(state, &body));
     let summary: LotwSyncResult = summary?.into();
     {
         let mut eng = engine_lock(state);
@@ -21796,7 +21828,14 @@ fn sync_qrz_since(
         return Err(qrz_fetch_refused(fetched.reason));
     }
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
-    let (made, merged) = tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
+    let merge = || tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
+    // The operator's sync makes it again when the store turns it back (another window changed
+    // a contact it read first); the hourly one leaves that to its next run.
+    let (made, merged) = if wait {
+        tempo_app::logwrite::until_written(merge)
+    } else {
+        merge()
+    };
     let (added, summary) = made.map_err(|e| QrzSyncFailure {
         detail: QRZ_SYNC_NOT_MERGED,
         message: ScreenReason::new(e),
@@ -22780,16 +22819,27 @@ fn qrz_push_qso_impl(
     //
     // Planned with the Engine lock released (SPEC-2 v3 C19): the row the push names is read off
     // the store, and stamped under the lock only while it is still that row.
-    let (_, stamped) = tempo_app::logwrite::stamp_push(
-        engine,
-        &stamp_subject(named.as_deref(), &rec),
-        tempo_core::logbook::UploadService::Qrz,
-        tempo_core::logbook::UploadStatus {
-            outcome: push.result.to_upload_outcome(),
-            when_unix: now_unix(),
-            detail: push.result.to_upload_detail(),
-        },
-    );
+    let subject = stamp_subject(named.as_deref(), &rec);
+    let status = tempo_core::logbook::UploadStatus {
+        outcome: push.result.to_upload_outcome(),
+        when_unix: now_unix(),
+        detail: push.result.to_upload_detail(),
+    };
+    let stamp = || {
+        tempo_app::logwrite::stamp_push(
+            engine,
+            &subject,
+            tempo_core::logbook::UploadService::Qrz,
+            status.clone(),
+        )
+    };
+    // The push button makes the stamp again when the store turns it back (another window
+    // changed the contact first); the worker's next push makes it.
+    let (_, stamped) = if wait {
+        tempo_app::logwrite::until_written(stamp)
+    } else {
+        stamp()
+    };
     // The operator's push button waits for the stamp to reach the disk; the upload worker
     // does not (a stamp it loses is re-derived: a re-push answers Duplicate).
     if wait {
@@ -23402,16 +23452,25 @@ fn clublog_push_qso_impl(
     // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
         // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
-        let (_, stamped) = tempo_app::logwrite::stamp_push(
-            engine,
-            &stamp_subject(named.as_deref(), &rec),
-            tempo_core::logbook::UploadService::Clublog,
-            tempo_core::logbook::UploadStatus {
-                outcome,
-                when_unix: now_unix(),
-                detail: push.result.to_upload_detail(),
-            },
-        );
+        let subject = stamp_subject(named.as_deref(), &rec);
+        let status = tempo_core::logbook::UploadStatus {
+            outcome,
+            when_unix: now_unix(),
+            detail: push.result.to_upload_detail(),
+        };
+        let stamp = || {
+            tempo_app::logwrite::stamp_push(
+                engine,
+                &subject,
+                tempo_core::logbook::UploadService::Clublog,
+                status.clone(),
+            )
+        };
+        let (_, stamped) = if wait {
+            tempo_app::logwrite::until_written(stamp)
+        } else {
+            stamp()
+        };
         // The push button waits for the stamp; the upload worker does not (see QRZ's).
         if wait {
             stamped
@@ -23528,16 +23587,25 @@ fn eqsl_push_qso_impl(
         }),
         Some(outcome) => {
             // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
-            let (_, stamped) = tempo_app::logwrite::stamp_push(
-                engine,
-                &stamp_subject(named.as_deref(), &rec),
-                tempo_core::logbook::UploadService::Eqsl,
-                tempo_core::logbook::UploadStatus {
-                    outcome,
-                    when_unix: now_unix(),
-                    detail: None,
-                },
-            );
+            let subject = stamp_subject(named.as_deref(), &rec);
+            let status = tempo_core::logbook::UploadStatus {
+                outcome,
+                when_unix: now_unix(),
+                detail: None,
+            };
+            let stamp = || {
+                tempo_app::logwrite::stamp_push(
+                    engine,
+                    &subject,
+                    tempo_core::logbook::UploadService::Eqsl,
+                    status.clone(),
+                )
+            };
+            let (_, stamped) = if wait {
+                tempo_app::logwrite::until_written(stamp)
+            } else {
+                stamp()
+            };
             // The push button waits for the stamp; the upload worker does not (see QRZ's).
             if wait {
                 stamped
@@ -26469,7 +26537,9 @@ async fn import_pota_log(
     let engine = Arc::clone(&state);
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
     durable_command(move || {
-        let (made, durability) = tempo_app::logwrite::import_pota_log(&engine, &text);
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::import_pota_log(&engine, &text)
+        });
         let made = made.map(|(stamped, already, unmatched)| PotaStampResult {
             stamped,
             already,
