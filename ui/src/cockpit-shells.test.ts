@@ -5,6 +5,8 @@ import {
   resolveClamp,
   SCOPE_SPLIT_MAX,
   SCOPE_SPLIT_MIN,
+  WATERFALL_SPLIT_MAX,
+  WATERFALL_SPLIT_MIN,
   type SplitClamp,
 } from './features/paneSeam'
 
@@ -629,6 +631,8 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     ['phone-cockpit', []],
     ['cw-cockpit', []],
     ['operate-cockpit', ['cockpit-body']],
+    // JS8's waterfall divider (layout L2), a shell child like Phone's and CW's.
+    ['js8-cockpit', []],
   ]
   for (const [shell, between] of STRIPS) {
     it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
@@ -653,6 +657,16 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
   // nothing (review 2026-07-31; CW split the surplus 1:1 with `.cw-lower` and tracked
   // the pointer at half rate instead). Operate is the pattern: `.cockpit-waterfall
   // { flex: 0 1 var(--cockpit-wf-h, 22%) }` with the decode scroller as the grower.
+  it('.js8-cockpit .waterfall-wrap resolves flex-grow 0 (the waterfall divider, layout L2)', () => {
+    const win = winningValue([...shellChain('js8-cockpit'), new Set(['waterfall-wrap'])], blockGrow)
+    expect(win, '.js8-cockpit .waterfall-wrap: no rule declares flex at all').not.toBeNull()
+    expect(
+      win!.value,
+      `\`${win!.selector}\` gives JS8's waterfall flex-grow ${win!.value}: its divider drives the flex-basis, ` +
+        'which only sets the rendered height while grow is 0.',
+    ).toBe(0)
+  })
+
   for (const shell of ['phone-cockpit', 'cw-cockpit']) {
     it(`.${shell} .ph-scope-panel resolves flex-grow 0 (grow ≥1 voids the dragged basis)`, () => {
       const chain = [...shellChain(shell), new Set(['ph-scope-panel'])]
@@ -1084,8 +1098,11 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     { fontPx: 14, vhEff: 768 }, // the supported floor
     { fontPx: 14, vhEff: 1440 }, // a tall display
     { fontPx: 16, vhEff: 768 }, // the same window with a larger body font
+    // A short window (768 tall at 175 %): the only one here where a YIELDING floor (JS8's waterfall,
+    // min(8em, 28 % of --vh-eff)) yields, so a declared clamp that dropped the yield fails here.
+    { fontPx: 14, vhEff: 384 },
   ]
-  const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX }
+  const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX, WATERFALL_SPLIT_MIN, WATERFALL_SPLIT_MAX }
 
   /** The `<PaneSeam …/>` that drives `varName`, as prop → source expression. */
   function splitterProps(src: string, varName: string): Record<string, string> {
@@ -1106,12 +1123,14 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     return Number.isFinite(n) ? n : null
   }
 
-  const CALLERS: Array<[string, string, string]> = [
-    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h'],
-    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h'],
+  const CALLERS: Array<[string, string, string, string]> = [
+    ['phone-cockpit', './components/PhoneCockpit.tsx', '--ph-scope-h', 'ph-scope-panel'],
+    ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h', 'ph-scope-panel'],
+    // JS8's waterfall divider (layout L2): the RTTY/PSK waterfall's yielding floor, the scope's cap.
+    ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', 'waterfall-wrap'],
   ]
-  for (const [shell, file, varName] of CALLERS) {
-    const chain = [...shellChain(shell), new Set(['ph-scope-panel'])]
+  for (const [shell, file, varName, strip] of CALLERS) {
+    const chain = [...shellChain(shell), new Set([strip])]
     for (const [end, prop] of [
       ['min', 'min-height'],
       ['max', 'max-height'],
@@ -1122,14 +1141,14 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
           varName,
         )
         const sheet = winningValue(chain, blockLonghand(prop))
-        expect(sheet, `.${shell} .ph-scope-panel: nothing declares ${prop}`).not.toBeNull()
+        expect(sheet, `.${shell} .${strip}: nothing declares ${prop}`).not.toBeNull()
         for (const g of GEOMS) {
           const want = lengthPx(sheet!.value, g)
           expect(want, `\`${sheet!.value}\` is unreadable as a length`).not.toBeNull()
           const got = declaredPx(props[end], g)
           expect(
             got,
-            `${file} declares no readable \`${end}\` for the ${shell} scope splitter`,
+            `${file} declares no readable \`${end}\` for the ${shell} strip divider`,
           ).not.toBeNull()
           expect(
             got!,
@@ -1137,7 +1156,7 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
               `${prop}: ${sheet!.value} }\` honours ${want}px at font ${g.fontPx}px / --vh-eff ` +
               `${g.vhEff}px. The ${Math.abs(got! - want!).toFixed(1)}px of disagreement is DEAD ` +
               'TRAVEL at that end of the drag — declare the clamp in the sheet\'s own units ' +
-              '(SCOPE_SPLIT_MIN / SCOPE_SPLIT_MAX in features/paneSeam.ts).',
+              '(SCOPE_SPLIT_* / WATERFALL_SPLIT_* in features/paneSeam.ts).',
           ).toBeCloseTo(want!, 6)
         }
       })

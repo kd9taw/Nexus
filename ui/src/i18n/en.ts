@@ -8288,6 +8288,11 @@ export const EN = {
   'js8.panel.inbox': 'Inbox',
   'js8.panel.log': 'Log',
   'js8.panel.offsets': 'Band activity',
+  'js8.seam.columns.label': 'Activity column / Stations column',
+  'js8.seam.auxWidth.label': 'Stations column width',
+  'js8.seam.activityOffsets.label': 'Activity / Band activity',
+  'js8.seam.stationsInbox.label': 'Stations / Inbox',
+  'js8.waterfall.splitter.label': 'waterfall height',
   'js8.panel.activity.title':
     'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
   // Appended to the tooltip above rather than folded into it: a translated catalog keeps its
@@ -8768,6 +8773,7 @@ export const EN = {
   'cw.scope.audio.sub': 'zero-beat',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
+  'cw.seam.columns.label': 'Decode column / Rig controls column',
   'cw.rfZoom.aria': 'Panadapter zoom',
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
@@ -8891,6 +8897,7 @@ export const EN = {
   'phone.pane.needed.title': 'Needed',
   // The divider between those two panes (its accessible name, and the resize tooltip's).
   'phone.seam.spotsNeeded.label': 'Spots / Needed',
+  'phone.seam.columns.label': 'Band activity column / Receiver column',
   'phone.pane.rigscope.title': 'Rig scope controls',
   'phone.pane.receiver.title': 'Receiver',
   'phone.pane.transmitter.title': 'Transmitter',
@@ -9609,6 +9616,7 @@ export const EN = {
   // `{{title}}` is the pane's own name, supplied by the cockpit.
   'pane.popOut.aria': 'Open {{title}} in its own window',
   'pane.popOut.title': 'Open this pane in its own window (for a second monitor)',
+  'pane.seam.logWidth.label': 'log column width',
   'pane.hide.aria': 'Hide {{title}}',
   'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
 

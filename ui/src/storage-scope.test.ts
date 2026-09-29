@@ -78,6 +78,8 @@ export const PER_SURFACE = [
   'nexus.sats.favOnly',
   'nexus.spotlegend',
   'nexus.split.cw.scope',
+  // JS8's waterfall height (layout L2): a % of THIS window's shell, like the three beside it.
+  'nexus.split.js8.waterfall',
   'nexus.split.operate.waterfall',
   'nexus.split.phone.scope',
   'nexus.view',
@@ -339,6 +341,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.operate.waterfall',
     'nexus.split.cw.scope',
     'nexus.split.phone.scope',
+    'nexus.split.js8.waterfall',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
@@ -486,6 +489,20 @@ describe('call sites agree with the classification', () => {
     expect([...indirect].sort()).toEqual(Object.keys(INDIRECT).sort())
   })
 
+  it('classifies every strip divider’s key — a JSX `storageKey` literal no call-site scan can see', () => {
+    // PaneSeam's strip kind stores through `surfaceGet(storageKey)`, so the literal lives in a JSX
+    // attribute at each caller and the scan above never meets it: a new divider's key (JS8's
+    // waterfall, layout L2) went unclassified and every test stayed green. Every one, found in
+    // the source, must be declared as that seam's key and classified per surface.
+    const found = new Set<string>()
+    for (const file of sources(SRC)) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/storageKey="([^"]+)"/g)) found.add(m[1])
+    }
+    expect(found.size, 'the scan found no divider key at all — it is reading nothing').toBeGreaterThanOrEqual(3)
+    expect([...found].sort()).toEqual([...INDIRECT['components/PaneSeam.tsx:storageKey']].sort())
+    for (const k of found) expect(PER_SURFACE, `${k} is not classified`).toContain(k)
+  })
+
   it('checks the pass-through seams really carry the keys they claim', () => {
     const panes = readFileSync(join(SRC, 'usePaneWidths.ts'), 'utf8')
     expect(panes).toContain("const KEY_RIGHT = 'tempo-right-rail-w'")
@@ -497,6 +514,7 @@ describe('call sites agree with the classification', () => {
       ['components/OperateCockpit.tsx', 'nexus.split.operate.waterfall'],
       ['components/CwCockpit.tsx', 'nexus.split.cw.scope'],
       ['components/PhoneCockpit.tsx', 'nexus.split.phone.scope'],
+      ['components/Js8Cockpit.tsx', 'nexus.split.js8.waterfall'],
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }

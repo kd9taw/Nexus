@@ -23150,8 +23150,7 @@ button.sat-chip:disabled {
    in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
    skip every row. */
 .rtty-cockpit .waterfall-wrap,
-.psk-cockpit .waterfall-wrap,
-.js8-cockpit .waterfall-wrap {
+.psk-cockpit .waterfall-wrap {
   flex: 0 0 auto;
   /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
   height: calc(0.22 * var(--vh-eff, 100vh));
@@ -23167,6 +23166,19 @@ button.sat-chip:disabled {
      above a ~1000px window, which is exactly where a tall display should get its
      proportional strip like every other size does. The share IS the bound.) */
   min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
+}
+/* JS8's waterfall, SIZED BY ITS DIVIDER (layout L2): the operator drags or arrows its height,
+   stored per surface (`nexus.split.js8.waterfall`) and clamped against the live box on load and
+   on every resize (PaneSeam's strip kind). The Phone/CW/Operate strip shape — grow 0 so the
+   dragged basis is what renders (cockpit-shells.test.ts), the region below the sink — with
+   RTTY/PSK's yielding floor and the scope's ceiling, declared in the sheet's units on both sides
+   (features/paneSeam WATERFALL_SPLIT_MIN/MAX). The divider's default, 25 % of the shell, is where
+   the old fixed `0.22 × --vh-eff` measured: 25.1 % at 1024×768 and 1366×768, 24.5 % at
+   1920×1080. */
+.js8-cockpit .waterfall-wrap {
+  flex: 0 1 var(--js8-wf-h, 25%);
+  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {

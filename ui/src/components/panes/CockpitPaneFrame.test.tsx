@@ -61,9 +61,39 @@ describe('CockpitPaneFrame', () => {
     const frame = screen.getByLabelText('Spots')
     expect(ref.current, 'the seam has no handle on the frame').toBe(frame)
     expect(frame.style.getPropertyValue('--pane-share')).toBe('1.3')
-    expect(frame.getAttribute('style')).toContain('flex: var(--cockpit-pane-flex, var(--pane-share) 1 0)')
-    expect(frame.style.minHeight).toBe('var(--cockpit-fill-min, 0)')
+    expect(frame.getAttribute('style')).toContain('flex: var(--cockpit-pane-flex, var(--pane-share, 1) 1 0)')
     expect(frame.className).toBe('pane-frame') // still no styling hook
+  })
+
+  it('a pane a divider splits floors IN PROPORTION TO ITS SHARE, so the divider moves it in a short column too', () => {
+    // In a column too short for every fill pane's floor, each pane sits ON its floor and a share
+    // moves nothing: Phone's Spots / Needed divider rewrote the record at 1024×768 and 1366×768
+    // while neither pane moved (layout L2, measured in Chrome). So a split pane's floor is the
+    // knob × its share — the pair's floors add up to the two stock floors, divided as the
+    // operator divided the pair — and still yields to the column.
+    render(
+      <CockpitPaneFrame title="Spots" paneId="spots" share={1.3} split={1}>
+        <p>rows</p>
+      </CockpitPaneFrame>,
+    )
+    expect(screen.getByLabelText('Spots').style.minHeight).toBe(
+      'min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1) / 1), 100%)',
+    )
+  })
+
+  it('a split pane nobody has moved is the stock pane: its weight as the grow, the knob as the floor', () => {
+    // A pair of unequal weights (JS8: Activity 2, Band activity 1) is split with `split` = the
+    // pair's mean weight: no share of its own yet, so no --pane-share — the grow falls back to the
+    // weight and the floor to knob × split / split, the stock floor.
+    render(
+      <CockpitPaneFrame title="Activity" paneId="activity" weight={2} split={1.5}>
+        <p>rows</p>
+      </CockpitPaneFrame>,
+    )
+    const frame = screen.getByLabelText('Activity')
+    expect(frame.style.getPropertyValue('--pane-share')).toBe('')
+    expect(frame.getAttribute('style')).toContain('flex: var(--cockpit-pane-flex, var(--pane-share, 2) 1 0)')
+    expect(frame.style.minHeight).toBe('min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1.5) / 1.5), 100%)')
   })
 
   it('renders pop-out / remove only when the cockpit supplies them', () => {

@@ -215,7 +215,7 @@ describe('a STRIP divider', () => {
 })
 
 describe('a SPLIT divider', () => {
-  function mount(axis: 'x' | 'y', columns = false) {
+  function mount(axis: 'x' | 'y', columns = false, scale?: number) {
     const a = document.createElement('div')
     const b = document.createElement('div')
     const grid = document.createElement('div')
@@ -233,6 +233,7 @@ describe('a SPLIT divider', () => {
         onCommit={onCommit}
         onReset={onReset}
         label="pair"
+        scale={scale}
       />,
     )
     return { a, b, grid, onCommit, onReset, sep: view.getByRole('separator', { name: 'pair' }) }
@@ -269,6 +270,27 @@ describe('a SPLIT divider', () => {
     expect(grid.style.getPropertyValue('--col-a')).toBe('1.2fr')
     expect(grid.style.getPropertyValue('--col-b'), 'a token the drag added is removed again').toBe('')
     expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('with a scale, paints each pane’s GROW (share × scale) and commits the pair’s own shares', () => {
+    // A pair of unequal stock weights (JS8: Activity 2, Band activity 1 — mean 1.5) keeps its
+    // stock total of grow while the divider moves, so the other fill panes in its column do not.
+    const { a, b, sep, onCommit } = mount('y', false, 1.5)
+    fireEvent.pointerDown(sep, { clientY: 405, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientY: 355, pointerId: 1 })
+    const [a1, b1] = seamShares((355 - 100) / 510)
+    expect(Number(a.style.getPropertyValue('--share'))).toBeCloseTo(a1 * 1.5, 10)
+    expect(Number(b.style.getPropertyValue('--share'))).toBeCloseTo(b1 * 1.5, 10)
+    expect(Number(a.style.getPropertyValue('--share')) + Number(b.style.getPropertyValue('--share'))).toBeCloseTo(3, 10)
+    fireEvent.pointerUp(window, { clientY: 355, pointerId: 1 })
+    expect(onCommit).toHaveBeenCalledWith(a1, b1)
+  })
+
+  it('a scale never touches column mode: fr tokens stay the pair’s own shares', () => {
+    const { grid, sep } = mount('x', true, 1.5)
+    fireEvent.pointerDown(sep, { clientX: 405, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 460, pointerId: 1 })
+    expect(grid.style.getPropertyValue('--col-a')).toBe(`${seamShares((460 - 100) / 510)[0]}fr`)
   })
 
   it('the keyboard steps from where the panes ARE; Home/End stop at the share floor; reset is the host’s', () => {
@@ -346,6 +368,38 @@ describe('a VALUE divider (the host owns the size)', () => {
     fireEvent(window, new Event('pointercancel'))
     expect(onPaint).toHaveBeenLastCalledWith(300)
     expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('a host whose default is NO value puts that back on a cancel (onCancel), not the size it started at', () => {
+    const onCancel = vi.fn()
+    const onPaint = vi.fn()
+    const view = render(
+      <PaneSeam axis="x" className="log" value={300} min={260} max={600} grows={-1} onPaint={onPaint} onCommit={vi.fn()} onReset={vi.fn()} onCancel={onCancel} label="log width" />,
+    )
+    const sep = view.getByRole('separator', { name: 'log width' })
+    fireEvent.pointerDown(sep, { clientX: 700, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 650, pointerId: 1 })
+    fireEvent(window, new Event('pointercancel'))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onPaint).toHaveBeenLastCalledWith(350) // the drag's own paint, never a "restore" to 300
+  })
+
+  it('with nothing measurable (null) it announces no values, only a reset acts, and a drag does not start', () => {
+    const onPaint = vi.fn()
+    const onCommit = vi.fn()
+    const onReset = vi.fn()
+    const view = render(
+      <PaneSeam axis="x" className="log" value={null} min={0} max={0} grows={-1} onPaint={onPaint} onCommit={onCommit} onReset={onReset} label="log width" />,
+    )
+    const sep = view.getByRole('separator', { name: 'log width' })
+    expect(sep.hasAttribute('aria-valuenow')).toBe(false)
+    fireEvent.keyDown(sep, { key: 'ArrowLeft' })
+    expect(onCommit).not.toHaveBeenCalled()
+    fireEvent.pointerDown(sep, { clientX: 700, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 650, pointerId: 1 })
+    expect(onPaint).not.toHaveBeenCalled()
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(onReset).toHaveBeenCalledTimes(1)
   })
 
   it('a secondary button does not start a drag', () => {
