@@ -658,6 +658,90 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
   }
 })
 
+/** Final value of a block-axis margin side in a block (in-block order): the `margin` shorthand
+ *  (1–4 values), `margin-block` (1–2) and the side's own longhand. */
+function blockMargin(side: 'top' | 'bottom'): (body: string) => string | null {
+  return (body: string) => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      const m = /^\s*(margin|margin-block|margin-top|margin-bottom)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+      if (!m) continue
+      const vals = splitSpaces(m[2])
+      if (m[1] === 'margin') v = side === 'top' ? vals[0] : (vals[2] ?? vals[0])
+      else if (m[1] === 'margin-block') v = side === 'top' ? vals[0] : (vals[1] ?? vals[0])
+      else if (m[1] === `margin-${side}`) v = vals[0]
+    }
+    return v
+  }
+}
+
+/** Split a value list at top-level spaces (parens-aware), so `calc(a - b) 0` is two values. */
+function splitSpaces(v: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const c of v.trim()) {
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    if (/\s/.test(c) && depth === 0) {
+      if (cur) out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+/** A length written with the spacing ladder, in px at a `--space-scale`: px, `var(--space-N)` as
+ *  :root declares it, and calc() arithmetic over them. Anything else is null (the caller fails). */
+function spacePx(v: string, scale: number): number | null {
+  let expr = v
+  for (let i = 0; i < 4 && /var\(/.test(expr); i++) {
+    expr = expr
+      .replace(/var\(\s*--space-scale\s*\)/g, String(scale))
+      .replace(/var\(\s*(--space-\d)\s*\)/g, (_, name: string) => `(${finalDecl(':root', name) ?? 'NaN'})`)
+  }
+  expr = expr.replace(/calc\(/g, '(').replace(/(\d)px\b/g, '$1')
+  if (!/^[\d.\s()+\-*/]+$/.test(expr)) return null
+  return new Function(`return (${expr})`)() as number
+}
+
+describe('an L6 divider costs its column nothing: its margins give back the gap it adds', () => {
+  // Each divider is one more flex child of its shell, so it adds one more gap. Its own box nets 0
+  // (8 px tall, -4 px each side), and in RTTY, PSK and SSTV its block margins also take back that
+  // gap, so it sits in the gap its neighbours already had. Measured in Chrome before this: RTTY's
+  // log strip lost 23 px at 1024×768 to two dividers, and SSTV's growing stage lost 6 px at
+  // 2560×1440, which dropped a picture in flight from 4× to 3×. Computed at the spacing scale the
+  // dividers render at, 1: `--space-scale` drops below 1 only at the sm/xs viewports, and those
+  // hide every divider (`[data-viewport='sm'] .pane-splitter { display: none }`).
+  for (const shell of ['rtty-cockpit', 'psk-cockpit', 'sstv-view']) {
+    it(`.${shell}: a divider's height, both margins and the shell's gap sum to zero`, () => {
+      const chain = [...shellChain(shell), new Set(['pane-splitter', 'horizontal'])]
+      const gap = winningValue(shellChain(shell), (b) => {
+        let g: string | null = null
+        for (const decl of b.split(';')) {
+          const m = /^\s*(gap|row-gap)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+          if (m) g = splitSpaces(m[2])[0]
+        }
+        return g
+      })
+      const height = winningValue(chain, blockLonghand('height'))
+      const top = winningValue(chain, blockMargin('top'))
+      const bottom = winningValue(chain, blockMargin('bottom'))
+      expect(gap && height && top && bottom, `.${shell}: gap, height or a margin is not declared`).toBeTruthy()
+      const px = [gap!, height!, top!, bottom!].map((w) => spacePx(w.value, 1))
+      expect(px.every((x) => x !== null), `unreadable: ${[gap, height, top, bottom].map((w) => w!.value).join(' | ')}`).toBe(true)
+      const [g, h, t, b] = px as number[]
+      expect(
+        h + t + b + g,
+        `.${shell}: the divider takes ${(h + t + b + g).toFixed(2)} px of the column (height ${h}, margins ` +
+          `${t} / ${b} from \`${top!.selector}\` / \`${bottom!.selector}\`, gap ${g}): a layout nobody has ` +
+          'divided is no longer the one it was.',
+      ).toBeCloseTo(0, 6)
+    })
+  }
+})
+
 describe('the scope splitter drag is respected (winning flex-grow is 0)', () => {
   // The Splitter (PhoneCockpit.tsx ~728 / CwCockpit) drives --ph-scope-h / --cw-scope-h
   // as the scope's flex-BASIS. A basis only sets the rendered height while flex-grow
