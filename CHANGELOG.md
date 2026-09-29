@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator's own voice reaches the rig in Phone, played into the rig's USB audio.
   **Holding the page's PTT no longer keys the station by itself:** it arms an over, and the rig
   keys only when the operator's voice starts arriving, so a held PTT with the microphone off or
-  muted puts nothing on the air. The over ends 200 ms after the voice stops arriving or the PTT
+  muted puts nothing on the air. Held, the page's PTT shows the accent colour, as the microphone
+  button does, while it waits for the voice, and the transmit colour once the voice has keyed the
+  rig. The over ends 200 ms after the voice stops arriving or the PTT
   is let go, whichever comes first. Stop TX, TX Off, a lost connection, a frozen picture and
   leaving Phone each end it at once, and no over lasts longer than 10 minutes. Voice that arrives
   late is dropped, never played late. The rig must take its SSB audio from USB (the menu that

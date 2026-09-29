@@ -20,8 +20,12 @@
 }
 .remote-button.remote-stream-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--state-weak) 22%, transparent); }
 .remote-stream-stopstate { color: var(--text-dim); font-size: var(--fs-label); }
-/* Held PTT and the station's own TX reading use the transmit colour, with the ▲ glyph beside it. */
-.remote-button.remote-stream-ptt[aria-pressed='true'] { color: var(--bg); background: var(--tx); border-color: var(--tx); }
+/* Held PTT (M1: the press arms an over, and the voice keys it): the microphone's accent while the over
+   waits for the voice, and the transmit colour once the station reports the voice keyed (the
+   operator's pick "Page PTT colours", 2026-09-28). The station's own TX reading is the transmit
+   colour too, with the ▲ glyph beside it. */
+.remote-button.remote-stream-ptt[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
+.remote-button.remote-stream-ptt[aria-pressed='true'][data-voice='keyed'] { color: var(--bg); background: var(--tx); border-color: var(--tx); }
 .remote-stream-tx { padding: 2px 8px; border: 1px solid var(--tx); border-radius: var(--radius-sm); color: var(--tx); font-weight: 800; font-size: var(--fs-body); }
 /* The microphone, on: the accent, never the transmit colour - a microphone that is on is not on the
    air (PTT arms, the voice keys). */

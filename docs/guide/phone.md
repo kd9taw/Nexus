@@ -132,6 +132,8 @@ of this window on, you talk on your own microphone instead of the rig's.
    the page says so. Pressed through the picture, this cockpit's PTT reads
    **Armed — talk to transmit** until your voice keys the rig, then **ON AIR —
    release to stop**, and the header's **▲ TX** sign stays dark until then too.
+   Held, the page's **Hold PTT** shows the accent colour until your voice keys
+   the rig, and the transmit colour from then on.
 
 The over ends when you let go, when your audio stops arriving for 200 ms, when
 the picture or the connection freezes, and at 10 minutes. **Lock** does not work
