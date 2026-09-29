@@ -1497,7 +1497,14 @@ button.nb-chip:hover {
      into the strip scrolls inside its own .pane-body.
    · A rail is a flex column of its visible frames (`.connect-rail`), so a closed pane's
      sibling takes the whole rail — two equal 1fr rows with a gap and a 1:1 flex column with
-     the same gap are the same rectangles, which is why the default geometry did not move. */
+     the same gap are the same rectangles, which is why the default geometry did not move.
+   · THE OPERATOR'S STRIP HEIGHT (layout L7). The divider above the strip writes
+     `--cn-strip-h` inline, a % of this grid, only once the operator sizes the strip, and marks
+     the strip `data-sized`: the implicit row then IS that height (the one place the map's row
+     gives way to a fixed row, because the operator asked), and the panes fill it instead of
+     stopping at the 30 % cap. The divider fits the stored % into this box on load and on every
+     resize, from 4em to half the grid (features/paneSeam CONNECT_STRIP_*). Unset, the row is the
+     `auto` row above: nothing about the stock layout moves. */
 .connect {
   flex: 1;
   min-height: 0;
@@ -1506,7 +1513,7 @@ button.nb-chip:hover {
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
   grid-template-rows: minmax(0, 1fr);
-  grid-auto-rows: auto;
+  grid-auto-rows: var(--cn-strip-h, auto);
   grid-template-areas: 'left center right';
 }
 .connect:where([data-rails='left']) {
@@ -1752,6 +1759,8 @@ button.nb-chip:hover {
   grid-auto-columns: minmax(0, 1fr);
   gap: var(--space-3);
   min-width: 0;
+  /* The containing block of the map | strip divider below, and of nothing else. */
+  position: relative;
 }
 /* The strip's real cap (see the `.connect` grid-template-rows comment): max-height on a
    BOX genuinely bounds it, unlike a track max, so the auto strip row sizes to its
@@ -1760,6 +1769,27 @@ button.nb-chip:hover {
    raw 30vh is zoom-blind. */
 .connect-strip > .pane-frame {
   max-height: calc(0.3 * var(--vh-eff, 100vh));
+}
+/* Sized by the operator (layout L7), the row is the strip's height and the panes fill it: the cap
+   would stop them short of the row. A taller pane still scrolls inside its own `.pane-body`. */
+.connect-strip[data-sized] > .pane-frame {
+  max-height: none;
+}
+/* THE MAP | STRIP DIVIDER: out of flow, in the gap between the map's row and the strip's, the
+   strip's full width. It takes no column of the strip's grid (an absolutely positioned child is
+   no grid item for auto-placement), so the panes still split the width exactly as before. */
+.connect-strip > .pane-splitter.horizontal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: var(--space-3);
+  margin: 0;
+}
+/* The sm tier keeps the map above the strip, so it keeps their divider (Connect's rail handles
+   show there too); the xs stack hides it (below, and the app-wide divider rule). */
+[data-viewport='sm'] .connect-strip > .pane-splitter {
+  display: block;
 }
 
 /* Slot wrapper — reuses the retired .connect-side glass so panes float over the globe. */
@@ -1968,6 +1998,9 @@ button.nb-chip:hover {
      implicit `auto` rows under it (grid-auto-rows on .connect), in DOM order — so a closed
      rail or strip takes no row and leaves no gap in the stack. */
   grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh)));
+  /* Every implicit row here is content-height, a strip the operator sized on a wider window
+     included: the stack scrolls, and a stack is not divided (layout L7). */
+  grid-auto-rows: auto;
   grid-template-areas: 'center';
   /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
      .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
@@ -1979,6 +2012,10 @@ button.nb-chip:hover {
 }
 [data-viewport='xs'] .connect-strip {
   grid-auto-flow: row;
+}
+/* …and in the stack a sized strip's panes keep the stock cap, as they did before it was sized. */
+[data-viewport='xs'] .connect-strip[data-sized] > .pane-frame {
+  max-height: calc(0.3 * var(--vh-eff, 100vh));
 }
 /* No 'left'/'right' area exists in the xs template — a named area would drop the rail into an
    implicit track OUTSIDE the grid — so the rail auto-places under the map. Its frames are
@@ -11665,8 +11702,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
 }
 /* 3-D QSO globe band atop the Logbook. Lives INSIDE .log-scroll so it scrolls away
-   with the list — prominent on arrival, full-height log once you scroll down. Height
-   must match GLOBE_BAND_H in Logbook.tsx (the virtualizer's scrollMargin). */
+   with the list — prominent on arrival, full-height log once you scroll down. Where the
+   rows start below it is MEASURED (Logbook.tsx's listOffset, the virtualizer's
+   scrollMargin), so its height is free to change. */
 .log-globe-band {
   position: relative;
   height: 320px;
@@ -11674,6 +11712,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   overflow: hidden;
   border-bottom: 1px solid var(--border);
   background: radial-gradient(ellipse at 50% 60%, rgba(30, 44, 62, 0.55), transparent 75%);
+}
+/* THE OPERATOR'S GLOBE HEIGHT (layout L7): once the divider under the band is moved, the band is
+   `--log-globe-h`, a % of the scroller the divider paints on `.log-scroll` and fits into it on
+   load and on every resize (features/paneSeam LOG_GLOBE_*). The stock floor goes with the stock
+   height: the divider's own is 8em. */
+.log-globe-band[data-sized] {
+  height: var(--log-globe-h);
+  min-height: 0;
+}
+/* The divider itself: in the flow between the band and the sticky search/header block, taking no
+   height of its own at any spacing scale (its box and its two negative margins are the same
+   token, so the rows start exactly where they did), and over the sticky block's top edge, which
+   is positioned at z 3. */
+.log-scroll > .pane-splitter.horizontal {
+  position: relative;
+  z-index: 4;
+  height: calc(2 * var(--space-1));
+}
+/* The sm tier keeps the band and the table, so it keeps their divider; xs hides it with every
+   other divider. */
+[data-viewport='sm'] .log-scroll > .pane-splitter {
+  display: block;
 }
 .qso-globe {
   position: absolute;
@@ -18701,8 +18761,29 @@ button.cq-skiptx1.on {
 }
 .awards-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  /* THE OPERATOR'S SPLIT (layout L7): the divider between the columns writes `--awards-col-a/-b`
+     inline (features/viewColumns), fr shares summing to 2; unset, each is the stock 1.3fr / 1fr.
+     Both tracks floor at `min(260px, 40%)`, the divider's own stop: two of them can never exceed
+     the grid, and at every width this grid exists (md and up; sm and xs stack below) it is 260 px,
+     which the stock split never comes near. */
+  grid-template-columns: minmax(min(260px, 40%), var(--awards-col-a, 1.3fr)) minmax(min(260px, 40%), var(--awards-col-b, 1fr));
   gap: var(--space-4);
+  /* The containing block of the column divider (`.awards-colseam` below). */
+  position: relative;
+}
+/* THE COLUMN DIVIDER (layout L7): an absolutely positioned child of the grid, placed on the chase
+   lists' track and pulled back over the gap before it — the full height of the row, 12 px wide,
+   centred on the gap, covering neither column. The stacked sm/xs layout hides it with every
+   divider. */
+.awards-body > .awards-colseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  grid-column: 2 / 3;
+  grid-row: 1;
+  left: calc(var(--space-4) / -2 - 6px);
+  width: 12px;
+  margin: 0;
 }
 .aw-panel {
   background: var(--bg-elev);
@@ -19610,8 +19691,15 @@ button.cq-skiptx1.on {
      Both columns share the growth. Column 2 leads now (the pass column holds
      the two graphics, the log and Birds), and the 340px floor is gone: a floor
      under `overflow: hidden` with no interposed scroller is the contract's
-     named bug, and `minmax(0, …)` is what lets both tracks actually shrink. */
-  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1fr);
+     named bug, and `minmax(0, …)` is what lets both tracks actually shrink.
+     THE OPERATOR'S SPLIT (layout L7): the divider between the columns writes
+     `--sats-col-a/-b` inline (features/viewColumns), fr shares summing to 2;
+     unset, each is the stock 0.82fr / 1fr. The floor the divider stops at is
+     `min(260px, 40%)`, which is not that bug: two of them can never exceed the
+     grid, and at every width this grid exists (md and up; sm and xs stack below)
+     it is 260 px, which the stock split never comes near (the planning column
+     is ~480 px at 1024×768). */
+  grid-template-columns: minmax(min(260px, 40%), var(--sats-col-a, 0.82fr)) minmax(min(260px, 40%), var(--sats-col-b, 1fr));
   grid-template-rows: auto auto minmax(0, 1fr);
   /* --space-2, not --space-3: five vertical seams across this grid, and every
      reclaimed pixel is a schedule row. (The FT8 console's own density pass.) */
@@ -19619,6 +19707,22 @@ button.cq-skiptx1.on {
   padding: var(--space-2);
   height: 100%;
   overflow: hidden;
+  /* The containing block of the column divider (`.sats-colseam` below). */
+  position: relative;
+}
+/* THE COLUMN DIVIDER (layout L7): an absolutely positioned child of the grid, placed on the pass
+   column's track and row and pulled back over the gap before it — the full height of the two
+   columns, 12 px wide, centred on the gap, covering neither. The header and the arm bar above
+   span both columns and are not divided. The stacked sm/xs layout hides it with every divider. */
+.sats-view > .sats-colseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  grid-column: 2 / 3;
+  grid-row: 3;
+  left: calc(var(--space-2) / -2 - 6px);
+  width: 12px;
+  margin: 0;
 }
 .sats-head {
   grid-column: 1 / -1;
@@ -25492,7 +25596,14 @@ tr.sel .aprs-sym {
    map is the point, and the controls belong beside it. */
 .aprs-body {
   display: grid;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  /* THE RAIL'S WIDTH (layout L7). The rail's track reads `--aprs-rail-w`, written inline on the
+     body only once the operator sizes the rail (components/AprsRailSeam), and always written
+     `min(<px>px, max(50%, 420px))` (features/aprsRail), so a stored width is clamped by the layout
+     itself on load, on every resize and on every zoom change. Unset, the track is the stock rail:
+     420 px, the fixed maximum the grid pays out before the map's 1fr sees any space. The floor is
+     the divider's 260 px (it was 320): a floor binds only on a body under 432 px, which is the
+     one-column xs stack below, where this template never applies. */
+  grid-template-columns: minmax(260px, var(--aprs-rail-w, 420px)) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--space-3);
   /* flex:1 + min-height:0 only mean anything because the `.layout.single:has()` rule above
@@ -25500,6 +25611,38 @@ tr.sel .aprs-sym {
      the map has no height to resolve against. */
   min-height: 0;
   flex: 1;
+  /* The containing block of the rail's width divider (`.aprs-railseam` below), and of nothing
+     else: every other positioned box in the body has its own (`.aprs-map`, `.aprs-sym`). */
+  position: relative;
+}
+/* THE MAP ON THE LEFT (layout L7): the map goes first by `order` only — the tree, and the rail's
+   forms and list in it, stay where they are — and the template mirrors so the rail keeps its
+   width track. In :where() so it stays (0,1,0): the xs stack (0,2,0) must win whatever side the
+   operator picked, as it does over Connect's rails. */
+.aprs-body:where([data-map='left']) {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--aprs-rail-w, 420px));
+}
+.aprs-body:where([data-map='left']) > .aprs-map {
+  order: -1;
+}
+/* THE RAIL'S WIDTH DIVIDER: an absolutely positioned child of the body, placed by `grid-column`
+   on the second track and pulled back over the gap before it — the full height of the body, 12 px
+   wide, centred on the gap, covering neither the rail nor the map. With the map on the left the
+   rail is that second track, so the same gap holds it. */
+.aprs-body > .aprs-railseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  grid-column: 2 / 3;
+  grid-row: 1;
+  left: calc(var(--space-3) / -2 - 6px);
+  width: 12px;
+  margin: 0;
+}
+/* The sm tier keeps the two columns, so it keeps their divider: the app-wide rule that hides
+   every divider at sm and xs is about layouts that stack there. xs stacks APRS too, and hides it. */
+[data-viewport='sm'] .aprs-body > .pane-splitter {
+  display: block;
 }
 .aprs-rail {
   display: flex;
@@ -25518,6 +25661,20 @@ tr.sel .aprs-sym {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+}
+/* The map-side switch (layout L7): a chip in the map's top-right corner, over the map rather than
+   in the header, where one more chip wraps the row at some widths and takes a line from the body.
+   Below the station card (z 30), which may cover it while a station is open. */
+.aprs-map-side {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 20;
+  background: var(--panel);
+}
+/* On, it is the header chips' `.active`, laid on the panel so the map never shows through. */
+.aprs-map-side.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
 }
 /* "Nothing plotted" is a NORMAL state — status and message packets carry no
    position at all — so it is named rather than left as an empty planet. */

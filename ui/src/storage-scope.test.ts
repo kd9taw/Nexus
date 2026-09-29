@@ -26,7 +26,13 @@ import { PALETTE_ROLES } from './features/paletteRoles'
 export const PER_SURFACE = [
   'neededFilters',
   'nexus-ui-scale-mode',
+  // APRS's body (layout L7): the station list column's width and the side the map stands on —
+  // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
+  'nexus.aprs.mapSide',
+  'nexus.aprs.railWidth',
   'nexus.awardsTab',
+  // The Awards and Satellites views' column split (layout L7): a proportion of THIS window's grid.
+  'nexus.awards.columns',
   'nexus.connect.config',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
@@ -78,11 +84,16 @@ export const PER_SURFACE = [
   'nexus.phonescope.flow',
   'nexus.phonescope.win',
   'nexus.roster.filters',
+  'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',
+  // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.
+  'nexus.split.connect.strip',
   'nexus.split.cw.scope',
   // JS8's waterfall height (layout L2): a % of THIS window's shell, like the three beside it.
   'nexus.split.js8.waterfall',
+  // The Logbook's globe band height (layout L7): a % of THIS window's list, the same kind.
+  'nexus.split.logbook.globe',
   'nexus.split.operate.waterfall',
   // Operate Classic's Tx1–Tx6 machine height (layout L5), the same kind.
   'nexus.split.operate.tx',
@@ -355,6 +366,8 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.psk.waterfall',
     'nexus.split.sstv.stage',
     'nexus.split.operate.tx',
+    'nexus.split.connect.strip',
+    'nexus.split.logbook.globe',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
@@ -532,6 +545,8 @@ describe('call sites agree with the classification', () => {
       ['components/PskCockpit.tsx', 'nexus.split.psk.waterfall'],
       ['components/SstvView.tsx', 'nexus.split.sstv.stage'],
       ['components/OperateCockpit.tsx', 'nexus.split.operate.tx'],
+      ['components/ConnectView.tsx', 'nexus.split.connect.strip'],
+      ['components/Logbook.tsx', 'nexus.split.logbook.globe'],
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }

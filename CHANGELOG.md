@@ -192,6 +192,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **⊞ Panels ▸ Undo last change** and **Reset layout** cover the column dividers. **⊞ Panels ▸
   Side rail on the left** moves the rail (Stations in Classic; Band Activity and Rx Frequency in
   Roster) to the left of the window. A layout you set before this opens exactly as you left it.
+- **APRS: a wider station list, and the map on either side.** A divider between the map and the
+  column with the beacon form, the message form and the station list sets that column's width,
+  from 260 px up to half the view (and never less than today's 420 px), so the station table can
+  show its last columns. The **Map on the left** button in the map's top-right corner swaps the map
+  and the column. Drag the divider, or Tab to it and use the arrow keys (Shift for a bigger step,
+  Home and End for either end, Backspace or a double-click for the standard width). Each window
+  keeps its own width and side; a width you set on a big monitor comes back there, and on a
+  smaller window it is narrowed to fit. On a narrow window, where the map sits above the list,
+  there is no divider.
+- **Connect: a taller or shorter bottom row.** A divider between the map and the row of panels
+  under it sets the row's height, from a pane's title and a line of it up to half of Connect, so
+  the map always keeps at least half. Until you move it the row is as tall as its panes need, as
+  before. Drag it, or Tab to it and use the arrow keys (Backspace or a double-click puts the usual
+  height back); **⊞ Panels ▸ Reset layout** puts it back too. Each window keeps its own height,
+  fitted to the window when it changes size.
+- **Logbook: resize the globe.** A divider under the 3-D globe at the top of the Logbook sets its
+  height, from a small strip up to most of the list; until you move it the globe is its usual
+  320 px. The table starts right under it, and scrolling still takes the globe away. Drag it, or
+  Tab to it and use the arrow keys (Backspace or a double-click for the usual height). Each window
+  keeps its own height, fitted to the window when it changes size.
+- **Satellites and Awards: move the line between the two columns.** In Satellites a divider
+  between the schedule and the pass column, and in Awards one between the progress by band and
+  mode and the chase lists, moves that boundary, from the mouse or the keyboard like every other
+  divider. Neither column goes below 260 px, the split you set is kept per window, and Backspace
+  or a double-click puts the usual split back. On a narrow window, where the columns stack, there
+  is no divider.
 
 ### Changed
 

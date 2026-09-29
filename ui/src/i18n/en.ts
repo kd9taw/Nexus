@@ -1196,6 +1196,8 @@ export const EN = {
   // The table. Column headers name a CONCEPT and are prose; every value under them is a
   // token. `{{query}}` is what the operator typed, inserted verbatim.
   'logbook.globe.loading': 'Loading globe…',
+  // The divider under the globe band (layout L7); its tooltip is paneSeam.title.
+  'logbook.globe.height.label': 'Globe height',
   'logbook.search.placeholder': 'Search call / grid / band / mode / date…',
   'logbook.search.clear': 'Clear',
   'logbook.filter.needsConfirmation.label': 'needs confirmation',
@@ -1639,6 +1641,9 @@ export const EN = {
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
+  // The divider between the progress column (DXCC and grids by band, DXCC by mode) and the chase
+  // lists (layout L7); its tooltip is paneSeam.title.
+  'awards.columns.split.label': 'Progress column / chase lists',
   'awards.grids.head': 'Grids by band (VUCC)',
   // Band names and frequencies are invariant tokens — never translate '6 m' or '50 MHz'.
   'awards.grids.filter.vucc.label': 'VUCC bands',
@@ -4105,6 +4110,9 @@ export const EN = {
 
   // The 48 h schedule, its sortable headers and the discovery band beneath it.
   'sat.schedule.head': 'Schedule — favorites, next {{hours}} h',
+  // The divider between the planning column (the schedule) and the pass column (layout L7); its
+  // tooltip is paneSeam.title.
+  'sat.columns.split.label': 'Schedule column / pass column',
   'sat.schedule.sortBy': 'Sort by {{label}}',
   'sat.schedule.column.bird': 'Bird',
   'sat.schedule.column.aos': 'AOS local',
@@ -7168,6 +7176,8 @@ export const EN = {
   'connect.rail.left.split': 'Split between the left panels',
   'connect.rail.right.split': 'Split between the right panels',
   'connect.rail.handle.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click to reset.',
+  // The divider between the map and the bottom panels (layout L7); its tooltip is paneSeam.title.
+  'connect.strip.height.label': 'Bottom panel row height',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
@@ -7439,6 +7449,11 @@ export const EN = {
   'aprs.retune.title.noCoverage':
     "This radio doesn't cover {{freq}} MHz — RF APRS needs a VHF radio.",
   'aprs.dial.title': "The rig's current dial / band / mode (this view hides the top bar's readout)",
+  // The body's layout (layout L7): the divider between the station list column and the map, and
+  // the switch that puts the map on the left.
+  'aprs.rail.width.label': 'Station list column width',
+  'aprs.mapLeft.label': 'Map on the left',
+  'aprs.mapLeft.title': 'Show the map on the left of the station list, or back on the right',
   // Monitor arms the DECODER on the receive audio. Three states, because "decoding" and
   // "may ack by itself" are different things — the ack still needs TX on.
   'aprs.monitor.label.auto': '● Monitoring (auto)',

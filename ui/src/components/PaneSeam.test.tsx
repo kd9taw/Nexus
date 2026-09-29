@@ -97,6 +97,29 @@ describe('a STRIP divider', () => {
     expect(pct(target)).toBe('22%')
   })
 
+  it('a strip that must leave its container a share stops at `maxShare` of it (Connect’s bottom strip, layout L7)', () => {
+    const run = (maxShare?: number) => {
+      localStorage.setItem('nexus.split.test.h', '80')
+      const target = document.createElement('div')
+      const strip = document.createElement('section')
+      target.appendChild(strip)
+      document.body.appendChild(target)
+      rectOf(target, () => ({ height: 1000 }))
+      const view = render(
+        <PaneSeam axis="y" varName="--h" strip={{ current: strip }} storageKey="nexus.split.test.h" min={100} max={Infinity} maxShare={maxShare} defaultPct={22} label="test height" />,
+      )
+      const sep = view.getByRole('separator', { name: 'test height' })
+      const out = { pct: pct(target), aria: aria(sep) }
+      view.unmount()
+      target.remove()
+      return out
+    }
+    expect(run(0.5)).toEqual({ pct: '50%', aria: ['500', '100', '500'] })
+    // Control: without it, the drag's long-standing 90 % bound.
+    expect(run()).toEqual({ pct: '80%', aria: ['800', '100', '900'] })
+    expect(localStorage.getItem('nexus.split.test.h'), 'the preference is never rewritten').toBe('80')
+  })
+
   it('re-fits the STORED preference on every resize: clamped in a box too small for it, back again in a big one', () => {
     const { target, sep, setSpan } = mount({ span: 400, stored: '50' })
     expect(pct(target)).toBe('50%') // 200 px of 400

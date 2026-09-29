@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,189 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,196 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -103,11 +103,11 @@ word in, and use only that word in the CSV.
 | settings | 121 | The Settings screen and every reference to it. | |
 | grid | 113 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 106 | Sound cards, levels, routing. | |
-| station | 104 | Both your own station and the one you are working. | |
+| station | 106 | Both your own station and the one you are working. | |
 | port | 97 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 95 / 30 | The verbs. The abbreviations TX/RX stay English. | |
-| pass | 85 | A satellite pass. | |
+| pass | 86 | A satellite pass. | |
 | callsign | 78 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
 | frequency | 76 | | |
@@ -130,7 +130,7 @@ word in, and use only that word in the CSV.
 | antenna | 30 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
 | cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 18 / 11 | The movable boxes inside a cockpit. | |
+| pane / panel | 18 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
 | exchange | 15 | The contest exchange. | |

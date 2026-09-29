@@ -100,7 +100,8 @@ interface El {
 
 interface Compound {
   cls: string[]
-  attrs: Array<[string, string]>
+  /** [name, value]; a null value is a presence test. */
+  attrs: Array<[string, string | null]>
   spec: number
 }
 
@@ -123,6 +124,13 @@ function compound(s: string): Compound | null {
       rest = rest.slice(m[0].length)
       continue
     }
+    m = /^\[([\w-]+)\]/.exec(rest)
+    if (m) {
+      out.attrs.push([m[1], null]) // presence: `[data-sized]` (layout L7)
+      out.spec++
+      rest = rest.slice(m[0].length)
+      continue
+    }
     m = /^:where\(\[([\w-]+)=['"]?([^'"\]]+)['"]?\]\)/.exec(rest)
     if (m) {
       out.attrs.push([m[1], m[2]]) // zero specificity, by definition of :where()
@@ -135,7 +143,10 @@ function compound(s: string): Compound | null {
 }
 
 function compoundMatches(c: Compound, el: El): boolean {
-  return c.cls.every((k) => el.cls.includes(k)) && c.attrs.every(([a, v]) => el.attrs?.[a] === v)
+  return (
+    c.cls.every((k) => el.cls.includes(k)) &&
+    c.attrs.every(([a, v]) => (v === null ? el.attrs?.[a] !== undefined : el.attrs?.[a] === v))
+  )
 }
 
 /** Specificity of a matching selector, or -1 when it does not match `chain` (root → subject). */
@@ -287,8 +298,10 @@ describe('the .connect template has exactly the columns that render', () => {
         const tr = winner(RULES, chain, 'grid-template-rows')
         expect(tracks(tr!.value), `\`${tr!.selector}\``).toEqual(['minmax(0, 1fr)'])
         // An `auto` implicit row: a fixed max would be maximised to its full value before the
-        // fr row grows (css-grid §11.6) — a floor stealing height from the map, not a cap.
-        expect(winner(RULES, chain, 'grid-auto-rows')!.value).toBe('auto')
+        // fr row grows (css-grid §11.6) — a floor stealing height from the map, not a cap. The one
+        // exception is the height the OPERATOR set with the strip's divider (layout L7), which the
+        // row then is; unset, the fallback is that `auto`.
+        expect(winner(RULES, chain, 'grid-auto-rows')!.value).toBe('var(--cn-strip-h, auto)')
       })
     }
 
@@ -362,4 +375,42 @@ describe('rails, strip and separators place themselves where the template expect
       }
     })
   }
+})
+
+describe('the operator’s strip height (layout L7)', () => {
+  for (const vp of TIERS.filter((t) => t !== 'xs'))
+    for (const sized of [false, true]) {
+      it(`[data-viewport=${vp}] a${sized ? ' sized' : 'n unsized'} strip’s panes ${sized ? 'fill the row the operator set' : 'keep the 30 % cap'}`, () => {
+        const frame = [
+          ...connectChain(vp, 'both', false),
+          { cls: ['connect-strip'], attrs: sized ? { 'data-sized': '' } : {} },
+          { cls: ['pane-frame'] },
+        ]
+        const cap = winner(RULES, frame, 'max-height')!.value
+        if (sized) expect(cap, 'a cap below the row would stop the panes short of it').toBe('none')
+        else expect(cap).toBe('calc(0.3 * var(--vh-eff, 100vh))')
+      })
+    }
+
+  for (const rails of RAILS)
+    it(`the xs stack keeps content-height rows and the pane cap, sized or not (data-rails=${rails})`, () => {
+      expect(winner(RULES, connectChain('xs', rails, false), 'grid-auto-rows')!.value).toBe('auto')
+      const frame = [...connectChain('xs', rails, false), { cls: ['connect-strip'], attrs: { 'data-sized': '' } }, { cls: ['pane-frame'] }]
+      expect(winner(RULES, frame, 'max-height')!.value).toBe('calc(0.3 * var(--vh-eff, 100vh))')
+    })
+
+  for (const vp of TIERS)
+    it(`the map | strip divider sits in the gap above the strip, out of flow, ${vp === 'xs' ? 'and is gone in the stack' : 'and shows'} at ${vp}`, () => {
+      const strip = [...connectChain(vp, 'both', false), { cls: ['connect-strip'] }]
+      const seam = [...strip, { cls: ['pane-splitter', 'horizontal'] }]
+      expect(winner(RULES, strip, 'position')!.value, 'the strip is its containing block').toBe('relative')
+      expect(winner(RULES, seam, 'position')!.value).toBe('absolute')
+      expect(winner(RULES, seam, 'bottom')!.value).toBe('100%')
+      expect(winner(RULES, seam, 'height')!.value, 'exactly the grid’s row gap').toBe('var(--space-3)')
+      expect(winner(RULES, [...connectChain(vp, 'both', false)], 'gap')!.value).toBe('var(--space-3)')
+      expect(winner(RULES, seam, 'margin')!.value).toBe('0')
+      const display = winner(RULES, seam, 'display')?.value ?? 'block'
+      if (vp === 'xs') expect(display).toBe('none')
+      else expect(display).not.toBe('none')
+    })
 })
