@@ -272,6 +272,31 @@ describe('the merged operating strip is the un-removable TX surface', () => {
     expect(container.querySelector('.cockpit-status')).toBeNull()
   })
 
+  // …AND OVER OPERATE'S LAYOUTS (layout L3's stop-line ruling for Operate). Operate has no pane
+  // placement; what it arranges is its two layouts and the side its rail stands on (layout L5). Each
+  // of the four, with nothing hidden and with every id hidden: the whole surface still in the strip.
+  // Presence-only, like the sweep above.
+  it.each([
+    ['classic', 'right'],
+    ['classic', 'left'],
+    ['roster', 'right'],
+    ['roster', 'left'],
+  ] as const)('%s layout, rail on the %s: every protected control is in the strip, hidden panes or not', (layoutMode, side) => {
+    for (const state of [{}, ALL_REMOVED]) {
+      localStorage.setItem('nexus.operate.railSide', side)
+      const { container } = renderCockpit(state, { layoutMode })
+      // The side really took (with the rail on screen), or this would sweep one layout four times.
+      if (Object.keys(state).length === 0)
+        expect(container.querySelector('.cockpit-lower')?.getAttribute('data-rail') ?? 'right', `${layoutMode}: the rail side did not apply`).toBe(side)
+      for (const name of PROTECTED) {
+        const btn = screen.getByRole('button', { name })
+        expect(btn.closest('.cockpit-qso'), `${layoutMode}, rail ${side}: ${String(name)} left the strip`).not.toBeNull()
+      }
+      cleanup()
+      localStorage.removeItem('nexus.operate.railSide')
+    }
+  })
+
   it('the strip carries the TX-state cap (the ▲ TRANSMITTING pulse lives here now)', () => {
     renderCockpit({}, { transmitting: true })
     const cap = screen.getByText('▲ TRANSMITTING')
