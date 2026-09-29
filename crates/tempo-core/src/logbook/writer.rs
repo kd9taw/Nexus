@@ -163,6 +163,11 @@ pub struct Change {
     /// store tells a change it must build its hot index again for from one that costs it
     /// nothing (SPEC-2 v3 C19, D4-A). `false` — the change moves it — unless the maker knows.
     pub stamp_only: bool,
+    /// What the change expects of the rows it writes or takes out: each as its plan read it, or
+    /// none there ([`sqlite::Expect`]). The store checks them as it writes and refuses the change
+    /// rather than write over another window's commit ([`Refusal::conflict`]). Empty for a change
+    /// that read nothing — an append — which is written as it is.
+    pub expect: Vec<(RecordId, sqlite::Expect)>,
 }
 
 impl Change {
@@ -231,6 +236,7 @@ impl Change {
             marks: Watermarks::of(log),
             meta: Vec::new(),
             stamp_only: false,
+            expect: Vec::new(),
         }
     }
 
@@ -376,6 +382,17 @@ impl Change {
                 (Some(b), None) => change.remove.extend(b.id),
                 (None, None) => {}
             }
+            // What the plan read of each row it writes or takes out, for the store to check.
+            match (before, after) {
+                (Some(b), Some(a)) if Arc::ptr_eq(b, a) || **b == **a => {}
+                (Some(b), _) => change
+                    .expect
+                    .extend(b.id.map(|id| (id, sqlite::Expect::Row(Arc::clone(b))))),
+                (None, Some(a)) => change
+                    .expect
+                    .extend(a.id.map(|id| (id, sqlite::Expect::Absent))),
+                (None, None) => {}
+            }
         }
         change
     }
@@ -463,6 +480,12 @@ pub struct Refusal {
     /// with no id, a number that will not fit, a damaged database — which it will refuse
     /// every time, so sending it again would only loop.
     pub retryable: bool,
+    /// The store refused the change because a row it writes was no longer the row its plan read:
+    /// another window changed it since ([`sqlite::Error::Conflict`]). Never sent again — sent
+    /// again, its rows would write over that change: its owner plans it again on the rows as they
+    /// now stand, or lets it go. Not a loss to the durability watermark ([`Status::durable_rev`]),
+    /// since nothing the owner keeps is missing from the store because of it.
+    pub conflict: bool,
 }
 
 /// Whether a failed write could succeed if the same rows were written again later. See
@@ -820,6 +843,7 @@ impl LogWriter {
                 Err(Refusal {
                     reason: why,
                     retryable: false,
+                    conflict: false,
                 }),
             );
         }
@@ -1071,6 +1095,10 @@ struct Job {
     /// it. Built once, here, rather than per comparison: a bulk job is compared against on
     /// every chunk boundary.
     touched: HashSet<RecordId>,
+    /// What the change expects of its rows ([`Change::expect`]), checked chunk by chunk. A row's
+    /// expectation is let go once the chunk that wrote it is in: a later chunk of the same change
+    /// that takes the row again finds it as the change itself left it.
+    expect: HashMap<RecordId, sqlite::Expect>,
     cursor: Cursor,
 }
 
@@ -1099,7 +1127,28 @@ impl Job {
             index_move: !c.stamp_only,
             slot,
             touched,
+            expect: c.expect.into_iter().collect(),
             cursor: Cursor::default(),
+        }
+    }
+
+    /// Let go of what the job expected of the rows a chunk that is now in wrote or took out.
+    fn wrote(&mut self, removed: usize, upserted: usize) {
+        if self.expect.is_empty() {
+            return;
+        }
+        let Cursor {
+            removed: r0,
+            upserted: u0,
+            ..
+        } = self.cursor;
+        for id in &self.remove[r0..removed] {
+            self.expect.remove(id);
+        }
+        for w in &self.upsert[u0..upserted] {
+            if let Some(id) = w.rec.id {
+                self.expect.remove(&id);
+            }
         }
     }
 }
@@ -1137,6 +1186,7 @@ fn plan(job: &Job) -> Chunk<'_> {
             marks: finishes.then_some(job.marks),
             meta: if finishes { &job.meta } else { &[] },
             index_move: finishes && job.index_move,
+            expect: (!job.expect.is_empty()).then_some(&job.expect),
         },
         removed,
         upserted,
@@ -1329,6 +1379,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Share
         match outcome {
             Ok(()) if !finishes => {
                 let job = &mut queue[i];
+                job.wrote(removed, upserted);
                 job.cursor = Cursor {
                     cleared: true,
                     removed,
@@ -1360,6 +1411,34 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Share
                 lost.remove(&job.rev);
                 settle(shared, &unresolved, highest_ok, lost.first().copied(), None);
                 resolve(&job.slot, Ok(()));
+            }
+            // Another window changed a row since this change read it. Nothing of the refused
+            // chunk was written, and nothing the owner keeps is missing because of it: it plans
+            // the change again, or lets it go, and never sends these rows again. So the
+            // watermark passes it, and the writer is not failing.
+            Err(refusal) if refusal.conflict => {
+                let job = queue
+                    .remove(i)
+                    .expect("the job pick() chose is in the queue");
+                // Chunks of it before the refused one are in: another window must still build
+                // its hot index again for them, which the last chunk would have told it.
+                let partway =
+                    job.cursor.cleared || job.cursor.removed > 0 || job.cursor.upserted > 0;
+                if partway && job.index_move && db.move_index_seq().is_ok() {
+                    seq.own += 1;
+                }
+                unresolved.remove(&job.rev);
+                highest_ok = highest_ok.max(job.rev);
+                lost.remove(&job.rev);
+                applog::info(
+                    "logdb",
+                    &format!(
+                        "a logbook change was not written, and is planned again: {}",
+                        refusal.reason
+                    ),
+                );
+                settle(shared, &unresolved, highest_ok, lost.first().copied(), None);
+                resolve(&job.slot, Err(refusal));
             }
             Err(refusal) => {
                 let job = queue
@@ -1408,6 +1487,7 @@ fn commit(db: &mut LogDb, batch: Batch<'_>, shared: &Shared) -> std::result::Res
             return Err(Refusal {
                 reason: e.to_string(),
                 retryable: retryable(&e),
+                conflict: matches!(e, sqlite::Error::Conflict { .. }),
             });
         }
         attempt += 1;
@@ -2513,6 +2593,7 @@ mod tests {
             marks: Some(c.marks),
             meta: &c.meta,
             index_move: !c.stamp_only,
+            expect: None,
         })
         .expect("the store accepts the change");
     }
@@ -2848,6 +2929,255 @@ mod tests {
             a.foreign_index_moves(),
             1,
             "CONTROL: with no index move, as a stamp costs a window no rebuild"
+        );
+    }
+
+    // ── nothing written over another process's commit ─────────────────────────
+
+    /// The row `n` as a plan reads it: from the store, through the store's own decoder.
+    fn read_back(path: &std::path::Path, n: u64) -> Arc<QsoRecord> {
+        let id = rec("W1AW", n).id.expect("an id");
+        let db = LogDb::open(path).expect("reader");
+        Arc::new(db.rows_by_ids(&[id]).expect("read").remove(0))
+    }
+
+    /// `row` with its comment set to `text`: a change to it.
+    fn commented(row: &QsoRecord, text: &str) -> Arc<QsoRecord> {
+        let mut r = row.clone();
+        r.comment = Some(text.to_string());
+        Arc::new(r)
+    }
+
+    /// A change that writes `after` over the row it read as `read`, as the station makes one.
+    fn over(rev: u64, read: &Arc<QsoRecord>, after: Arc<QsoRecord>) -> Change {
+        Change::of_pairs(
+            Watermarks {
+                revision: rev,
+                ..Watermarks::default()
+            },
+            false,
+            &[(Some(Arc::clone(read)), Some(after))],
+            |_| (None, None),
+        )
+    }
+
+    /// Wait for `t` and hand back its outcome.
+    fn outcome(w: &LogWriter, t: &Ticket) -> std::result::Result<(), Refusal> {
+        let _ = w.wait_durable(t, Duration::from_secs(60));
+        match t.refusal() {
+            Some(r) => Err(r),
+            None => Ok(()),
+        }
+    }
+
+    /// ⛔ A CHANGE IS NOT WRITTEN OVER A ROW ANOTHER PROCESS CHANGED SINCE IT WAS READ. Process B
+    /// changes a row after process A's plan read it; A's change is refused as a conflict, and
+    /// writes nothing. The refusal is not a loss: A's writer is not failing, and its watermark
+    /// passes the refused revision. The CONTROL: the same change read from the row as it now
+    /// stands is written.
+    #[test]
+    fn a_change_is_not_written_over_a_row_another_process_changed_since_it_was_read() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        let t = a.submit(change(1, vec![rec("W1AW", 1)]));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("seeded");
+        let read = read_back(&scratch.db(), 1);
+
+        let t = b.submit(over(1, &read, commented(&read, "theirs")));
+        assert_eq!(outcome(&b, &t), Ok(()), "B's change lands");
+        let t = a.submit(over(2, &read, commented(&read, "ours")));
+        let refused = outcome(&a, &t).expect_err("A's change is refused");
+        assert!(refused.conflict, "as a conflict: {refused:?}");
+        assert!(!refused.retryable, "and it is never sent again");
+        let id = read.id.expect("an id").to_string();
+        assert_eq!(
+            comment_of(&stored(&scratch.db()), &id).as_deref(),
+            Some("theirs"),
+            "B's change stands"
+        );
+        let status = a.status();
+        assert_eq!(status.state, WriteState::Ok, "the writer is not failing");
+        assert!(
+            status.durable_rev >= 2,
+            "and the watermark passes it: {status:?}"
+        );
+
+        let now = read_back(&scratch.db(), 1);
+        let t = a.submit(over(3, &now, commented(&now, "ours")));
+        assert_eq!(
+            outcome(&a, &t),
+            Ok(()),
+            "CONTROL: read as it stands, it lands"
+        );
+        assert_eq!(
+            comment_of(&stored(&scratch.db()), &id).as_deref(),
+            Some("ours")
+        );
+    }
+
+    /// ⛔ ANY WRITER'S CHANGE IS SEEN — one made on a plain connection, as a window running an older
+    /// Nexus writes, which checks nothing and moves no count this build adds. The store compares
+    /// the row itself, so a change planned before it is refused all the same.
+    #[test]
+    fn a_change_made_on_a_plain_connection_is_not_written_over() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let t = a.submit(change(1, vec![rec("W1AW", 1)]));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("seeded");
+        let read = read_back(&scratch.db(), 1);
+        let id = read.id.expect("an id").to_string();
+        stored(&scratch.db())
+            .execute(
+                "UPDATE qso SET comment = 'an older window' WHERE id = ?1",
+                [&id],
+            )
+            .expect("the other window writes");
+
+        let t = a.submit(over(2, &read, commented(&read, "ours")));
+        let refused = outcome(&a, &t).expect_err("A's change is refused");
+        assert!(refused.conflict, "as a conflict: {refused:?}");
+        assert_eq!(
+            comment_of(&stored(&scratch.db()), &id).as_deref(),
+            Some("an older window"),
+            "the other window's change stands"
+        );
+    }
+
+    /// ⛔ A ROW TAKEN OUT MAY ALREADY BE GONE; A ROW CHANGED SINCE IT WAS READ IS NOT TAKEN OUT.
+    /// Taking out a row another process already took out is the same end state, and lands. Taking
+    /// out a row another process changed since it was read would throw that change away: refused.
+    #[test]
+    fn a_removal_lands_on_a_row_already_gone_and_is_refused_on_one_changed() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        let t = a.submit(change(1, vec![rec("W1AW", 1), rec("K5XYZ", 2)]));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("seeded");
+        let (gone, kept) = (read_back(&scratch.db(), 1), read_back(&scratch.db(), 2));
+        let take_out = |rev: u64, read: &Arc<QsoRecord>| {
+            Change::of_pairs(
+                Watermarks {
+                    revision: rev,
+                    ..Watermarks::default()
+                },
+                false,
+                &[(Some(Arc::clone(read)), None)],
+                |_| (None, None),
+            )
+        };
+
+        let t = b.submit(take_out(1, &gone));
+        assert_eq!(outcome(&b, &t), Ok(()), "B takes the first row out");
+        let t = a.submit(take_out(2, &gone));
+        assert_eq!(
+            outcome(&a, &t),
+            Ok(()),
+            "A's removal of it lands: already gone"
+        );
+
+        let t = b.submit(over(3, &kept, commented(&kept, "theirs")));
+        assert_eq!(outcome(&b, &t), Ok(()), "B changes the second row");
+        let t = a.submit(take_out(4, &kept));
+        let refused = outcome(&a, &t).expect_err("A's removal of it is refused");
+        assert!(refused.conflict, "as a conflict: {refused:?}");
+        assert_eq!(rows(&stored(&scratch.db())), 1, "the changed row stays");
+    }
+
+    /// ⛔ A ROW PUT IN THAT ANOTHER PROCESS ALREADY HOLDS IS REFUSED — a plan that found the id
+    /// absent (a take-in carrying ids, an import) does not write over the row that arrived since.
+    /// The CONTROL: an id still absent is put in.
+    #[test]
+    fn a_row_put_in_that_another_process_already_holds_is_refused() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        let put_in = |rev: u64, row: Arc<QsoRecord>| {
+            Change::of_pairs(
+                Watermarks {
+                    revision: rev,
+                    ..Watermarks::default()
+                },
+                false,
+                &[(None, Some(row))],
+                |_| (None, None),
+            )
+        };
+        let t = b.submit(put_in(1, commented(&rec("W1AW", 1), "theirs")));
+        assert_eq!(outcome(&b, &t), Ok(()), "B puts the row in");
+        let t = a.submit(put_in(1, commented(&rec("W1AW", 1), "ours")));
+        let refused = outcome(&a, &t).expect_err("A's is refused");
+        assert!(refused.conflict, "as a conflict: {refused:?}");
+        let id = rec("W1AW", 1).id.expect("an id").to_string();
+        assert_eq!(
+            comment_of(&stored(&scratch.db()), &id).as_deref(),
+            Some("theirs"),
+            "B's row stands"
+        );
+        let t = a.submit(put_in(2, rec("K5XYZ", 2)));
+        assert_eq!(
+            outcome(&a, &t),
+            Ok(()),
+            "CONTROL: an id still absent is put in"
+        );
+    }
+
+    /// ⛔ A CHANGE REFUSED PARTWAY KEEPS WHAT LANDED, AND OTHER WINDOWS STILL HEAR OF IT. A change
+    /// larger than one transaction is written chunk by chunk; the chunk holding the row another
+    /// process changed is refused and nothing after it is written. The chunks before it stand, and
+    /// the shared `index_seq` moves for them — which only the last chunk would otherwise have
+    /// done — so another window builds its hot index again for what landed.
+    #[test]
+    fn a_change_refused_partway_keeps_its_chunks_and_moves_the_index_seq() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        let n = CHUNK_ROWS as u64 + 10;
+        let seed: Vec<Arc<QsoRecord>> = (0..n).map(|k| rec("W1AW", k)).collect();
+        let t = a.submit(change(1, seed));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("seeded");
+        let read: Vec<Arc<QsoRecord>> = (0..n).map(|k| read_back(&scratch.db(), k)).collect();
+
+        // B changes the LAST row, which A's change writes in its second chunk.
+        let last = &read[read.len() - 1];
+        let t = b.submit(over(1, last, commented(last, "theirs")));
+        assert_eq!(outcome(&b, &t), Ok(()), "B's change lands");
+        let seq_before = meta_of(&stored(&scratch.db()), sqlite::INDEX_SEQ);
+
+        let pairs: Vec<super::super::hot::RowPair> = read
+            .iter()
+            .map(|r| (Some(Arc::clone(r)), Some(commented(r, "ours"))))
+            .collect();
+        let mut c = Change::of_pairs(
+            Watermarks {
+                revision: 2,
+                ..Watermarks::default()
+            },
+            false,
+            &pairs,
+            |_| (None, None),
+        );
+        c = c.in_bulk();
+        let t = a.submit(c);
+        let refused = outcome(&a, &t).expect_err("A's change is refused partway");
+        assert!(refused.conflict, "as a conflict: {refused:?}");
+        let conn = stored(&scratch.db());
+        let ours = |k: u64| comment_of(&conn, &rec("W1AW", k).id.unwrap().to_string());
+        assert_eq!(ours(0).as_deref(), Some("ours"), "the first chunk stands");
+        assert_eq!(
+            ours(CHUNK_ROWS as u64 - 1).as_deref(),
+            Some("ours"),
+            "all of it"
+        );
+        assert_eq!(
+            ours(n - 1).as_deref(),
+            Some("theirs"),
+            "B's change stands where the refused chunk would have written"
+        );
+        assert_eq!(
+            meta_of(&conn, sqlite::INDEX_SEQ),
+            seq_before.map(|s| s + 1),
+            "and index_seq moved for the chunk that landed"
         );
     }
 

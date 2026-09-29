@@ -1601,6 +1601,7 @@ impl Held {
             // Sent again, it moves the shared `index_seq` as any change may: the rows it carries
             // are as they now stand, and a stamp's are no exception worth the risk.
             stamp_only: false,
+            expect: Vec::new(),
         }
     }
 
@@ -4813,6 +4814,7 @@ pub(crate) mod tests {
             refusal: Refusal {
                 reason: "logbook database: database is locked".into(),
                 retryable: true,
+                conflict: false,
             },
             resends: 0,
             due: t0 + Duration::from_secs(5),
@@ -4996,6 +4998,7 @@ pub(crate) mod tests {
             refusal: Refusal {
                 reason: "logbook database: database is locked".into(),
                 retryable: true,
+                conflict: false,
             },
             resends: 0,
             due: Instant::now() + Duration::from_secs(3600),
@@ -5060,6 +5063,7 @@ pub(crate) mod tests {
             refusal: Refusal {
                 reason: "logbook database: database is locked".into(),
                 retryable: true,
+                conflict: false,
             },
             resends: 0,
             due: Instant::now() + Duration::from_secs(3600),
