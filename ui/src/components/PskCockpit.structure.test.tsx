@@ -12,7 +12,7 @@
 // for that lives in stop-line.test.tsx's PSK case. What THIS file pins is the shell
 // census, the dock placement (transmit controls never inside a pane), and the view-entry
 // auto-arm wiring (engine-owned policy, called once per activation edge).
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { PskCockpit } from './PskCockpit'
@@ -65,7 +65,10 @@ vi.mock('./CockpitHeader', () => ({
 vi.mock('./Waterfall', () => ({
   // Capture the cadence prop: the liveliness pin below asserts PSK runs the waterfall
   // at the live-instrument 50 ms cadence (the RTTY value), not the FT default.
-  Waterfall: (p: { rowMs?: number }) => <div className="waterfall-wrap" data-rowms={p.rowMs} />,
+  // …and forward `stripRef`: the strip's box reaches its divider through it (layout L6).
+  Waterfall: (p: { rowMs?: number; stripRef?: Ref<HTMLDivElement> }) => (
+    <div className="waterfall-wrap" data-rowms={p.rowMs} ref={p.stripRef} />
+  ),
 }))
 // The log strip is stubbed for the same reason Phone's and CW's are in their own structure
 // suites: this file is a SHELL census, and the real LogEntry reaches the logbook, the park
@@ -429,5 +432,62 @@ describe('PSK: the divider between the transcript and the log strip', () => {
     await mountLive()
     expect(divider()).toBeNull()
     expect(pane('log').style.minHeight).toBe('var(--cockpit-fill-min, 0)')
+  })
+})
+
+// ── THE WATERFALL'S DIVIDER (layout L6) ──────────────────────────────────────────────────────
+// PSK's waterfall was a fixed 22 % of the viewport with no way to size it. Now a strip divider
+// under it, the scope dividers' kind: focusable, arrows/Home/End/Backspace, its height in CSS px,
+// stored per surface and clamped on load. jsdom lays nothing out, so the shell's box is stubbed;
+// the clamps are the sheet's (WATERFALL_SPLIT_MIN/MAX) at jsdom's 16 px font and 768 px window.
+describe('the PSK waterfall divider', () => {
+  function layOut(height: number) {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('main.psk-cockpit')) {
+        return { top: 0, left: 0, width: 800, height, right: 800, bottom: height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      return real.call(this)
+    })
+  }
+  const shell = () => document.querySelector<HTMLElement>('main.psk-cockpit')!
+  const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => el.getAttribute(a))
+  const KEY = 'nexus.split.psk.waterfall'
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.style.removeProperty('--vh-eff')
+    document.documentElement.style.removeProperty('--ui-zoom')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('sits under the waterfall, focusable, announcing its height, and steps, jumps and resets', async () => {
+    layOut(1000)
+    await renderCockpit()
+    const sep = screen.getByRole('separator', { name: 'waterfall height' })
+    expect(sep.previousElementSibling?.classList.contains('waterfall-wrap'), 'the divider is not under the strip').toBe(true)
+    expect(sep.tabIndex).toBe(0)
+    // 25 % of the shell; 8em at 16 px (under 28 % of the window); 45 % of the 768 px window.
+    expect(aria(sep)).toEqual(['250', '128', '346'])
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(shell().style.getPropertyValue('--rtty-wf-h')).toBe(`${(266 / 1000) * 100}%`)
+    expect(localStorage.getItem(KEY)).toBe(String((266 / 1000) * 100))
+    fireEvent.keyDown(sep, { key: 'Home' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('128')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(shell().style.getPropertyValue('--rtty-wf-h')).toBe('25%')
+    expect(localStorage.getItem(KEY)).toBe('25')
+  })
+
+  it('a stored height is restored, clamped against this window, and kept for a bigger one', async () => {
+    localStorage.setItem(KEY, '75')
+    layOut(1000)
+    await renderCockpit()
+    expect(screen.getByRole('separator', { name: 'waterfall height' }).getAttribute('aria-valuenow')).toBe('346')
+    expect(localStorage.getItem(KEY), 'the clamp is apply-side only').toBe('75')
+  })
+
+  it('goes with the waterfall when the operator hides it', async () => {
+    await renderCockpit({ panels: fakePanels(['scope']) })
+    expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
   })
 })

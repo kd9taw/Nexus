@@ -23145,27 +23145,34 @@ button.sat-chip:disabled {
    sized by the frame's own inline role flex, which this sheet cannot and must not
    restyle (cockpit-panes.test.ts fences .pane-frame growth). Deficit flows to the
    shell's `overflow-y: auto` valve above.) */
-/* RTTY waterfall: a fixed-height stage (mirrors the CW/Phone .ph-scope-panel) so
-   the canvas has real device pixels to draw into. A flex:1 stage collapses to 0
-   in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
-   skip every row. */
+/* RTTY waterfall (PSK rides the same rule): a strip of its own height (mirrors the CW/Phone
+   .ph-scope-panel) so the canvas has real device pixels to draw into. A flex:1 stage collapses
+   to 0 in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then skip
+   every row.
+
+   SIZED BY ITS DIVIDER since layout L6 (JS8's shape, L2): the operator drags or arrows its
+   height, stored per surface (`nexus.split.rtty.waterfall` / `.psk.waterfall`) and clamped
+   against the live box on load and on every resize (PaneSeam's strip kind); grow 0 so the dragged
+   basis is what renders (cockpit-shells.test.ts). The default, 25 % of the shell, is where the
+   old fixed `0.22 × --vh-eff` measured (base tree, in Chrome): 25.1 % at 1024×768 and 1366×768,
+   24.5 % at 1920×1080. The var is the SHELL's own (each shell carries its divider's), so the one
+   name serves both cockpits. */
 .rtty-cockpit .waterfall-wrap,
 .psk-cockpit .waterfall-wrap {
-  flex: 0 0 auto;
-  /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
-  height: calc(0.22 * var(--vh-eff, 100vh));
+  flex: 0 1 var(--rtty-wf-h, 25%);
   /* A YIELDING FLOOR. `min-height: 120px` here was the one px pin left on a strip whose
-     height is otherwise a share of the window, and RTTY is the ONE scope in the tree
-     with no operator Splitter — so on a short or pinned-zoom window (a 768-tall display
-     at 175% is --vh-eff 439; at 200%, 384) the strip simply took 120px out of what the
-     window had and the operator had no handle to take it back. Written to yield, the
-     floor is 8em where there is room and never more than 28% of the effective viewport
-     where there is not. It is still a real floor: the canvas needs device pixels to
-     draw into, and a strip that shrinks to nothing is a decoder with no display.
-     (The old `max-height: 220px` went with it — a ceiling below the 22% share only
-     above a ~1000px window, which is exactly where a tall display should get its
-     proportional strip like every other size does. The share IS the bound.) */
+     height is otherwise a share of the window, and until L6 this strip had no operator
+     divider — so on a short or pinned-zoom window (a 768-tall display at 175% is --vh-eff
+     439; at 200%, 384) it simply took 120px out of what the window had and the operator had
+     no handle to take it back. Written to yield, the floor is 8em where there is room and
+     never more than 28% of the effective viewport where there is not. It is still a real
+     floor: the canvas needs device pixels to draw into, and a strip that shrinks to nothing
+     is a decoder with no display. Its divider's lower end is exactly this floor
+     (WATERFALL_SPLIT_MIN). */
   min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
+  /* The scope's ceiling (WATERFALL_SPLIT_MAX): a waterfall is a glance strip, and the
+     transcript and the log strip below it are what this cockpit is for. */
+  max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
 /* JS8's waterfall, SIZED BY ITS DIVIDER (layout L2): the operator drags or arrows its height,
    stored per surface (`nexus.split.js8.waterfall`) and clamped against the live box on load and

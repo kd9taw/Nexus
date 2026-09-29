@@ -13,6 +13,7 @@ import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Setting
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -323,6 +324,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // ⊞-removable), and a divider's pair always sums to 2, so the log's share is the rest.
   const streamFrameRef = useRef<HTMLElement>(null)
   const logFrameRef = useRef<HTMLElement>(null)
+  // The waterfall strip, for the divider under it (its height).
+  const wfRef = useRef<HTMLDivElement>(null)
   const streamLogPair = panels != null && snap != null && shown('stream')
   const streamShare = streamLogPair ? panels?.layout.share.stream : undefined
   // Live decoder state — polled at 2 Hz while this is the visible view. The
@@ -913,19 +916,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       )}
 
       {/* THE BAND WATERFALL, ⊞-hideable since 2026-08-16. A shell child whose render is gated,
-          which leaves RTTY's census (header, waterfall, keyer-error banner, ONE pane frame, TX
-          dock) intact — one kind is conditional, as `stream` already was. `.rtty-cockpit
-          .waterfall-wrap` is `flex: 0 0 auto` with a 22%-of-viewport height, so hiding it hands
-          that height straight to `.rtty-cockpit > .pane-frame`, the shell's only grower: the
-          transcript gets taller, nothing is stranded, and there is no seam to clean up (this is
-          the one scope in the tree with no Splitter).
+          which leaves RTTY's census (header, waterfall, keyer-error banner, the pane frames, TX
+          dock) intact — one kind is conditional, as `stream` already was. Its divider (layout
+          L6) sits under it and sets its height (`--rtty-wf-h`, stored per surface), the scope
+          dividers' kind; hiding the strip takes the divider with it and hands the height to the
+          pane frames below, the shell's growers, and the stored height stays for its return.
 
           It hosts no stop control — the cursors and click-to-net are the decoder's tuning aid,
           and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch stay in
           the header, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
           With this and `stream` both unticked the cockpit still holds all four. */}
       {rtty && shown('scope') && (
+        <>
         <Waterfall
+          stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={rttyPanelLabels().scope}
           theme={theme}
@@ -952,6 +956,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           hint={receiverControl ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={receiverControl ? (hz) => void rttyNet(hz).then(setRtty).catch(() => {}) : undefined}
         />
+        <PaneSeam
+          axis="y"
+          varName="--rtty-wf-h"
+          strip={wfRef}
+          storageKey="nexus.split.rtty.waterfall"
+          min={WATERFALL_SPLIT_MIN}
+          max={WATERFALL_SPLIT_MAX}
+          defaultPct={25}
+          label={t('rtty.waterfall.splitter.label')}
+        />
+        </>
       )}
 
       {rtty?.keyerError && (

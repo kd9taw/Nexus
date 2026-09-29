@@ -633,6 +633,9 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     ['operate-cockpit', ['cockpit-body']],
     // JS8's waterfall divider (layout L2), a shell child like Phone's and CW's.
     ['js8-cockpit', []],
+    // RTTY's and PSK's waterfall dividers (layout L6), the same kind.
+    ['rtty-cockpit', []],
+    ['psk-cockpit', []],
   ]
   for (const [shell, between] of STRIPS) {
     it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
@@ -657,15 +660,18 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
   // nothing (review 2026-07-31; CW split the surplus 1:1 with `.cw-lower` and tracked
   // the pointer at half rate instead). Operate is the pattern: `.cockpit-waterfall
   // { flex: 0 1 var(--cockpit-wf-h, 22%) }` with the decode scroller as the grower.
-  it('.js8-cockpit .waterfall-wrap resolves flex-grow 0 (the waterfall divider, layout L2)', () => {
-    const win = winningValue([...shellChain('js8-cockpit'), new Set(['waterfall-wrap'])], blockGrow)
-    expect(win, '.js8-cockpit .waterfall-wrap: no rule declares flex at all').not.toBeNull()
-    expect(
-      win!.value,
-      `\`${win!.selector}\` gives JS8's waterfall flex-grow ${win!.value}: its divider drives the flex-basis, ` +
-        'which only sets the rendered height while grow is 0.',
-    ).toBe(0)
-  })
+  // JS8's (layout L2), RTTY's and PSK's (L6) waterfall dividers drive the same kind of basis.
+  for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit']) {
+    it(`.${shell} .waterfall-wrap resolves flex-grow 0 (its waterfall divider)`, () => {
+      const win = winningValue([...shellChain(shell), new Set(['waterfall-wrap'])], blockGrow)
+      expect(win, `.${shell} .waterfall-wrap: no rule declares flex at all`).not.toBeNull()
+      expect(
+        win!.value,
+        `\`${win!.selector}\` gives the ${shell} waterfall flex-grow ${win!.value}: its divider drives the ` +
+          'flex-basis, which only sets the rendered height while grow is 0.',
+      ).toBe(0)
+    })
+  }
 
   for (const shell of ['phone-cockpit', 'cw-cockpit']) {
     it(`.${shell} .ph-scope-panel resolves flex-grow 0 (grow ≥1 voids the dragged basis)`, () => {
@@ -1044,14 +1050,15 @@ describe('the band-scope strip is sized by its HOST, never by the shared base ru
   }
 })
 
-describe('the RTTY/PSK waterfall floor YIELDS (the scopes with no Splitter)', () => {
+describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divider)', () => {
   // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
-  // carried the same `min-height: 120px` — but RTTY gives the operator no drag handle,
-  // so on a short or pinned-zoom window that floor is unrecoverable: the strip simply
-  // takes its 120 px out of a window that has ~400 to spend. The shell valve keeps it
-  // from TRAPPING anything, which is why this is a share bug and not a safety bug.
-  // PSK shares the strip rule (one comma group) and the same no-Splitter shape, so it
-  // is computed separately here — a split of that group could regress one alone.
+  // carried the same `min-height: 120px` — and until layout L6 RTTY gave the operator no drag
+  // handle, so on a short or pinned-zoom window that floor was unrecoverable: the strip simply
+  // took its 120 px out of a window that has ~400 to spend. It has a divider now, but a divider
+  // cannot go under the floor (it is WATERFALL_SPLIT_MIN), so the floor must still yield. The
+  // shell valve keeps it from TRAPPING anything, which is why this is a share bug and not a
+  // safety bug. PSK shares the strip rule (one comma group), so it is computed separately
+  // here — a split of that group could regress one alone.
   for (const shell of ['rtty-cockpit', 'psk-cockpit']) {
     const chain = [...shellChain(shell), new Set(['waterfall-wrap'])]
 
@@ -1076,7 +1083,7 @@ describe('the RTTY/PSK waterfall floor YIELDS (the scopes with no Splitter)', ()
           floor!,
           `.${shell} .waterfall-wrap min-height is \`${v}\` = ${floor}px at --vh-eff ${vhEff} ` +
             `— ${((100 * floor!) / vhEff).toFixed(0)}% of the window for a glance strip, with ` +
-            'no Splitter to take it back. Write the floor to yield: min(Xem, share).',
+            'a floor its divider cannot go under. Write the floor to yield: min(Xem, share).',
         ).toBeLessThanOrEqual(0.3 * vhEff)
       }
     })
@@ -1128,6 +1135,9 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     ['cw-cockpit', './components/CwCockpit.tsx', '--cw-scope-h', 'ph-scope-panel'],
     // JS8's waterfall divider (layout L2): the RTTY/PSK waterfall's yielding floor, the scope's cap.
     ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', 'waterfall-wrap'],
+    // RTTY's and PSK's (layout L6): the same clamps; PSK's strip rides RTTY's rule and variable.
+    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', 'waterfall-wrap'],
+    ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', 'waterfall-wrap'],
   ]
   for (const [shell, file, varName, strip] of CALLERS) {
     const chain = [...shellChain(shell), new Set([strip])]

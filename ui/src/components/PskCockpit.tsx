@@ -10,6 +10,7 @@ import type { AppSnapshot, BandChannel, KeyboardMacroProfile, PskState, Settings
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -162,6 +163,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // is stored — the log strip has no id in PSK's vocabulary, and the pair always sums to 2.
   const streamFrameRef = useRef<HTMLElement>(null)
   const logFrameRef = useRef<HTMLElement>(null)
+  // The waterfall strip, for the divider under it (its height).
+  const wfRef = useRef<HTMLDivElement>(null)
   const streamLogPair = panels != null && snap != null && shown('stream')
   const streamShare = streamLogPair ? panels?.layout.share.stream : undefined
 
@@ -698,9 +701,13 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           shares its strip CSS). It hosts no stop control and no sender: the single cursor
           marks where the decoder listens AND where TX transmits (the transceive
           convention), and a click NETS THE DECODER (pskNet — engine RX state), never the
-          rig. Hiding it hands its height to the stream frame, the shell's only grower. */}
+          rig. Its divider (layout L6, RTTY's) sits under it and sets its height, stored per
+          surface; hiding the strip takes the divider with it and hands the height to the pane
+          frames below, the shell's growers. */}
       {psk && shown('scope') && (
+        <>
         <Waterfall
+          stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={pskPanelLabels().scope}
           theme={theme}
@@ -718,6 +725,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           hint={receiverControl ? t('psk.waterfall.hint') : t('remote.keyboardFollowsStation')}
           onTune={receiverControl ? (hz) => void pskNet(hz).then(setPsk).catch(() => {}) : undefined}
         />
+        {/* `--rtty-wf-h`: PSK's strip rides RTTY's rule (styles.css), and the variable is this
+            shell's own, so the one name serves both. */}
+        <PaneSeam
+          axis="y"
+          varName="--rtty-wf-h"
+          strip={wfRef}
+          storageKey="nexus.split.psk.waterfall"
+          min={WATERFALL_SPLIT_MIN}
+          max={WATERFALL_SPLIT_MAX}
+          defaultPct={25}
+          label={t('psk.waterfall.splitter.label')}
+        />
+        </>
       )}
 
       {psk?.keyerError && (

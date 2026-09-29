@@ -8079,6 +8079,7 @@ export const EN = {
   'rtty.pane.stream.title': 'Decoded text',
   'rtty.pane.log.title': 'Log',
   'rtty.seam.streamLog.label': 'Decoded text / Log',
+  'rtty.waterfall.splitter.label': 'waterfall height',
   'rtty.stream.title':
     "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
   'rtty.arm.on.label': 'RX armed',
@@ -8210,6 +8211,7 @@ export const EN = {
   'psk.pane.log.title': 'Log',
   'psk.pane.stream.title': 'Decoded text',
   'psk.seam.streamLog.label': 'Decoded text / Log',
+  'psk.waterfall.splitter.label': 'waterfall height',
   'psk.stream.title':
     "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",
   'psk.arm.on.label': 'RX armed',
