@@ -349,25 +349,46 @@ describe('the promoted Rx-Frequency column (WSJT-X bottom-right geometry)', () =
   })
 })
 
-describe('the column seam exists only where the grid consumes its vars', () => {
-  // Only the three-column template consumes --op-col-a/-b. In the two-column
-  // collapse (Band Activity removed) a rendered seam is a DEAD drag: it paints
-  // vars the template ignores while onCommit silently rewrites the persisted
-  // txmsgs/stations shares, reshaping the 3-column layout for later.
-  it("data-cols='three': the qsocol carries the drag seam", () => {
+describe('the column dividers exist only where the grid consumes their tokens', () => {
+  // Only Classic's three-column template consumes --op-col-ba/-a/-b, and only Roster's two-column
+  // one --op-roster-a/-b. In a collapse (a column removed) a rendered divider is a DEAD drag: it
+  // paints tokens the template ignores while its commit silently rewrites the stored widths,
+  // reshaping the layout for later. Each divider is the GRID's own child (layout L5: absolutely
+  // positioned on the gap before its track), never a column's, whose clip would cut it.
+  const seams = (c: HTMLElement) => [...c.querySelectorAll('.pane-splitter.col-seam')]
+  it("Classic data-cols='three': two dividers, children of the grid, on the gaps before tracks 2 and 3", () => {
     const { container } = renderCockpit({})
-    expect(container.querySelector('.cockpit-lower.classic')?.getAttribute('data-cols')).toBe('three')
-    expect(container.querySelector('.cockpit-qsocol .pane-splitter.col-seam')).not.toBeNull()
+    const grid = container.querySelector('.cockpit-lower.classic')!
+    expect(grid.getAttribute('data-cols')).toBe('three')
+    expect(seams(container).map((d) => d.parentElement)).toEqual([grid, grid])
+    expect(seams(container).map((d) => [...d.classList].filter((k) => k.startsWith('op-colseam')))).toEqual([
+      ['op-colseam', 'op-colseam-2'],
+      ['op-colseam', 'op-colseam-3'],
+    ])
+    expect(seams(container).map((d) => d.getAttribute('aria-label'))).toEqual([
+      'Band Activity / Rx Frequency column',
+      'Rx Frequency column / Stations roster',
+    ])
   })
 
-  it("data-cols='two' (Band Activity removed): no seam renders", () => {
+  it("Classic data-cols='two' (Band Activity removed): no divider renders", () => {
     const { container } = renderCockpit({ bandActivity: 'removed' })
     expect(container.querySelector('.cockpit-lower.classic')?.getAttribute('data-cols')).toBe('two')
     expect(
-      container.querySelector('.pane-splitter.col-seam'),
-      'a column seam rendered against the 2-track template — its drag is dead on screen ' +
-        'but still rewrites the persisted column shares',
-    ).toBeNull()
+      seams(container),
+      'a column divider rendered against the 2-track template — its drag is dead on screen ' +
+        'but still rewrites the stored column widths',
+    ).toEqual([])
+  })
+
+  it("Roster data-cols='two': one divider, between the Call Roster and the side rail; none at one column", () => {
+    const { container } = renderCockpit({}, { layoutMode: 'roster' })
+    const grid = container.querySelector('.cockpit-lower.roster')!
+    expect(seams(container).map((d) => [d.parentElement, d.getAttribute('aria-label')])).toEqual([[grid, 'Call Roster / side rail']])
+    cleanup()
+    const alone = renderCockpit({ callRoster: 'removed' }, { layoutMode: 'roster' })
+    expect(alone.container.querySelector('.cockpit-lower.roster')?.getAttribute('data-cols')).toBe('one')
+    expect(seams(alone.container)).toEqual([])
   })
 })
 

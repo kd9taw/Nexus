@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { CLASSIC_FR, CLASSIC_VARS, ROSTER_FR, ROSTER_VARS } from './features/operateColumns'
 
 // Guards the DECODE-FIRST Classic rebuild (2026-08, field feedback from an advanced DX
 // operator): the Classic lower region is a THREE-column grid — Band Activity | the
@@ -261,6 +262,8 @@ describe('the Classic lower region is the three-column decode-first grid', () =>
       // dead — the exact dead-fix mechanism this guard style exists to catch.
       expect(win!.value).toContain('var(--op-col-a')
       expect(win!.value).toContain('var(--op-col-b')
+      // …and Band Activity's own since layout L5 (its divider with the Rx Frequency column).
+      expect(win!.value).toContain('var(--op-col-ba')
     })
   }
 
@@ -502,5 +505,85 @@ describe('the merged operating strip replaced the status row and the meters row'
       win!.value,
       `.cq-free input flex is \`${win!.value}\` — must be a shrinkable 16ch basis, never a grower`,
     ).toBe('0 1 16ch')
+  })
+})
+
+// ── OPERATE'S COLUMN DIVIDERS AND THE RAIL SIDE (layout L5) ─────────────────────────────────
+/** The lower grid in either layout, optionally with the rail on the left. */
+function gridChain(mode: 'classic' | 'roster', viewport: string | null, dataCols: string, rail = false): El[] {
+  const chain = lowerChain(viewport, dataCols)
+  chain[chain.length - 1] = {
+    classes: new Set(['cockpit-lower', mode]),
+    attrs: { 'data-cols': dataCols, ...(rail ? { 'data-rail': 'left' } : {}) },
+  }
+  return chain
+}
+/** A track's token and its fallback, read off `minmax(<floor>, var(--token, <n>fr))`. */
+function trackToken(track: string): [string, number] | null {
+  const m = /var\((--[a-z0-9-]+),\s*([\d.]+)fr\)/.exec(track)
+  return m ? [m[1], parseFloat(m[2])] : null
+}
+
+describe("Operate's column dividers read the sheet's own tracks (layout L5)", () => {
+  it('Classic at three columns: each track reads its divider token, and its default is the dividers’ own', () => {
+    const win = winner(gridChain('classic', 'lg', 'three'), 'grid-template-columns')!
+    expect(splitTracks(win.value).map(trackToken), `\`${win.selector}\``).toEqual(CLASSIC_VARS.map((v, i) => [v, CLASSIC_FR[i]]))
+  })
+
+  it('Classic with the rail on the left: the same three tracks, mirrored (Stations first)', () => {
+    const win = winner(gridChain('classic', 'lg', 'three', true), 'grid-template-columns')!
+    expect(splitTracks(win.value).map(trackToken), `\`${win.selector}\``).toEqual([2, 0, 1].map((i) => [CLASSIC_VARS[i], CLASSIC_FR[i]]))
+    // The rail keeps its own floor on the left, the Rx Frequency column its own on the right.
+    expect(splitTracks(win.value).map((t) => /^minmax\((\S+?),/.exec(t)?.[1])).toEqual(['260px', '0', '300px'])
+  })
+
+  it('Classic at two columns with the rail on the left: the rail keeps the narrow track', () => {
+    const win = winner(gridChain('classic', 'lg', 'two', true), 'grid-template-columns')!
+    expect(splitTracks(win.value).map((t) => t.replace(/\s+/g, '')), `\`${win.selector}\``).toEqual(['minmax(280px,1fr)', 'minmax(0,1.2fr)'])
+  })
+
+  it('the collapse and the narrow stack still win with the rail on the left', () => {
+    const one = winner(gridChain('classic', 'lg', 'one', true), 'grid-template-columns')!
+    expect(splitTracks(one.value).map((t) => t.replace(/\s+/g, '')), `\`${one.selector}\``).toEqual(['minmax(0,1fr)'])
+    for (const vp of ['sm', 'xs']) {
+      for (const cols of ['three', 'two']) {
+        const w = winner(gridChain('classic', vp, cols, true), 'grid-template-columns')!
+        expect(splitTracks(w.value).map((t) => t.replace(/\s+/g, '')), `${vp}/${cols}: \`${w.selector}\``).toEqual(['minmax(0,1fr)'])
+      }
+      const r = winner(gridChain('roster', vp, 'two', true), 'grid-template-columns')!
+      expect(splitTracks(r.value).map((t) => t.replace(/\s+/g, '')), `${vp} roster: \`${r.selector}\``).toEqual(['minmax(0,1fr)'])
+    }
+  })
+
+  it('Roster: its two tracks read the divider’s tokens, and mirror with the rail on the left', () => {
+    const right = winner(gridChain('roster', 'lg', 'two'), 'grid-template-columns')!
+    expect(splitTracks(right.value).map(trackToken), `\`${right.selector}\``).toEqual(ROSTER_VARS.map((v, i) => [v, ROSTER_FR[i]]))
+    const left = winner(gridChain('roster', 'lg', 'two', true), 'grid-template-columns')!
+    expect(splitTracks(left.value).map(trackToken), `\`${left.selector}\``).toEqual([1, 0].map((i) => [ROSTER_VARS[i], ROSTER_FR[i]]))
+  })
+
+  it('the rail goes first by `order` only while the grid says so', () => {
+    for (const mode of ['classic', 'roster'] as const) {
+      const rail = [...gridChain(mode, 'lg', mode === 'classic' ? 'three' : 'two', true), { classes: new Set(['cockpit-side']) }]
+      expect(winner(rail, 'order')?.value, `${mode}: the rail did not move`).toBe('-1')
+      const stock = [...gridChain(mode, 'lg', mode === 'classic' ? 'three' : 'two'), { classes: new Set(['cockpit-side']) }]
+      expect(winner(stock, 'order'), `${mode}: the rail moves with the toggle off`).toBeNull()
+    }
+  })
+
+  it('a divider is placed on the gap before its track, taking no track: absolute in a positioned grid', () => {
+    for (const mode of ['classic', 'roster'] as const) {
+      const grid = gridChain(mode, 'lg', mode === 'classic' ? 'three' : 'two')
+      expect(winner(grid, 'position')?.value, `${mode}: the grid is not the dividers' containing block`).toBe('relative')
+      for (const n of [2, 3]) {
+        const seam = [...grid, { classes: new Set(['pane-splitter', 'col-seam', 'seam', 'op-colseam', `op-colseam-${n}`]) }]
+        expect(winner(seam, 'position')?.value).toBe('absolute')
+        expect(winner(seam, 'grid-column')?.value).toBe(`${n} / ${n + 1}`)
+        // Centred on THIS grid's gap: half of it, and half the divider's 12 px, to the left.
+        const gap = winner(grid, 'gap')!.value
+        expect(winner(seam, 'left')?.value, `${mode}: the divider is not centred on the gap (${gap})`).toBe(`calc(${gap} / -2 - 6px)`)
+        expect(winner(seam, 'width')?.value).toBe('12px')
+      }
+    }
   })
 })

@@ -6,6 +6,7 @@ import { TX_METERS_WHEN } from './TxMeters'
 import type { AppSnapshot } from '../types'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 import { seamShares } from '../features/panelState'
+import { CLASSIC_FR, classicCommit, classicWidths } from '../features/operateColumns'
 
 // The waterfall paints to a canvas jsdom does not implement, and it polls the spectrum
 // on a timer — stub it. The point of these cases is whether it MOUNTS at all.
@@ -88,6 +89,7 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
     shareOf: () => 1,
     setShare: vi.fn(),
     setShares: vi.fn(),
+    setCols: vi.fn(),
     undo: vi.fn(),
     canUndo: false,
     undoRemoves: [],
@@ -401,8 +403,22 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
     expect(panels.setShares, 'reset clears the pair back to the sheet defaults').toHaveBeenLastCalledWith({ bandActivity: null, rxfreq: null })
   })
 
-  it('Classic: the Rx-Frequency column / Stations seam steps on the horizontal arrows and resets to stock', () => {
-    layOut({ '.cockpit-qsocol': { left: 400, width: 500, height: 400 }, '.cockpit-side': { left: 908, width: 300, height: 400 } })
+  // Classic's columns on screen for these cases: Band Activity 400, the Rx Frequency column 500,
+  // Stations 300, 8 px gaps (the sheet's own widths are fr, which jsdom never resolves).
+  const classicBoxes = {
+    '.cockpit-decodes': { left: 0, width: 400, height: 400 },
+    '.cockpit-qsocol': { left: 408, width: 500, height: 400 },
+    '.cockpit-side': { left: 916, width: 300, height: 400 },
+  }
+  const stock = classicWidths({ v: 1, state: {}, share: {} })
+  /** Band Activity's, the Rx Frequency column's and Stations' fractions of the grid, as stored. */
+  const storedFractions = (c: { a: number; b: number }) => [c.a / 2, 1 - c.a / 2 - c.b / 2, c.b / 2]
+
+  it('Classic: the Rx Frequency column / Stations divider steps on the horizontal arrows and never moves Band Activity', () => {
+    // L1's leftover: this divider's FIRST step used to narrow Band Activity, because it stored the
+    // pair as shares summing to 2 beside Band Activity's 1.15fr. It paints and stores the pair at
+    // the pair's own total now, so Band Activity keeps the fraction of the grid it had.
+    layOut(classicBoxes)
     const { panels } = renderCockpit({}, 'classic')
     const sep = screen.getByRole('separator', { name: 'Rx Frequency column / Stations roster' })
     expect(sep.tabIndex).toBe(0)
@@ -410,11 +426,141 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
     expect(sep.getAttribute('aria-valuenow')).toBe('63') // 500 of 800
     key(sep, 'ArrowRight')
     const [a, b] = seamShares(0.625 + 0.05)
-    expect(panels.setShares).toHaveBeenLastCalledWith({ txmsgs: a, stations: b })
+    expect(panels.setShares, 'the pair is no longer stored as the old shares').not.toHaveBeenCalled()
+    expect(panels.setCols).toHaveBeenLastCalledWith(classicCommit(stock, 1, 2, a, b))
+    const stored = vi.mocked(panels.setCols!).mock.lastCall![0] as { a: number; b: number }
+    expect(storedFractions(stored)[0], 'Band Activity moved').toBeCloseTo(CLASSIC_FR[0] / (CLASSIC_FR[0] + CLASSIC_FR[1] + CLASSIC_FR[2]), 12)
     key(sep, 'End')
-    const [ea, eb] = seamShares(1)
-    expect(panels.setShares).toHaveBeenLastCalledWith({ txmsgs: ea, stations: eb })
+    expect(panels.setCols).toHaveBeenLastCalledWith(classicCommit(stock, 1, 2, ...seamShares(1)))
     fireEvent.doubleClick(sep)
-    expect(panels.setShares).toHaveBeenLastCalledWith({ txmsgs: null, stations: null })
+    // From the sheet's own widths, the pair's reset IS the sheet: nothing to store.
+    expect(panels.setCols).toHaveBeenLastCalledWith({ a: null, b: null })
+  })
+
+  it('Classic: the Band Activity / Rx Frequency column divider steps and never moves Stations', () => {
+    layOut(classicBoxes)
+    const { panels } = renderCockpit({}, 'classic')
+    const sep = screen.getByRole('separator', { name: 'Band Activity / Rx Frequency column' })
+    expect(sep.tabIndex).toBe(0)
+    expect(sep.getAttribute('aria-valuenow')).toBe('44') // 400 of 900
+    key(sep, 'ArrowLeft')
+    const [a, b] = seamShares(400 / 900 - 0.05)
+    expect(panels.setCols).toHaveBeenLastCalledWith(classicCommit(stock, 0, 1, a, b))
+    const stored = vi.mocked(panels.setCols!).mock.lastCall![0] as { a: number; b: number }
+    expect(storedFractions(stored)[2], 'Stations moved').toBeCloseTo(CLASSIC_FR[2] / (CLASSIC_FR[0] + CLASSIC_FR[1] + CLASSIC_FR[2]), 12)
+  })
+
+  it('Classic: a layout stored by an earlier build opens exactly as it painted, and the first step keeps its Band Activity', () => {
+    // Band Activity 1.15fr (the sheet) beside an L1-era pair of 1.4 / 0.6: 1.15 / 3.15 of the grid.
+    layOut(classicBoxes)
+    const panels = panelsApi({})
+    panels.layout.share = { txmsgs: 1.4, stations: 0.6 }
+    render(
+      <OperateCockpit
+        snap={snap}
+        theme="dark"
+        tier="FT8"
+        onTierChange={() => {}}
+        bandPlan={[]}
+        onSetFrequency={() => {}}
+        onSourceChange={() => {}}
+        onTune={() => {}}
+        onCall={() => {}}
+        onSetTxLevel={() => {}}
+        onSetMode={() => {}}
+        onSetTxEven={() => {}}
+        onSetTxCycleAuto={() => {}}
+        onResend={() => {}}
+        onFreetext={() => {}}
+        onLog={() => {}}
+        onOverrideTx={() => {}}
+        onHaltTx={() => {}}
+        roster={<div data-testid="stations-roster" />}
+        needByCall={new Map()}
+        selectedCall={null}
+        onSelect={() => {}}
+        layoutMode="classic"
+        onLayoutMode={() => {}}
+        panels={panels}
+      />,
+    )
+    const grid = document.querySelector<HTMLElement>('.cockpit-lower.classic')!
+    expect(grid.style.getPropertyValue('--op-col-a')).toBe('1.4fr')
+    expect(grid.style.getPropertyValue('--op-col-b')).toBe('0.6fr')
+    expect(grid.style.getPropertyValue('--op-col-ba'), 'Band Activity is left to the sheet, as that build left it').toBe('')
+    fireEvent.keyDown(screen.getByRole('separator', { name: 'Rx Frequency column / Stations roster' }), { key: 'ArrowRight' })
+    const stored = vi.mocked(panels.setCols!).mock.lastCall![0] as { a: number; b: number }
+    expect(storedFractions(stored)[0]).toBeCloseTo(1.15 / (1.15 + 1.4 + 0.6), 12)
+  })
+
+  it('Roster: the Call Roster / side rail divider stores the Call Roster’s share, and resets to stock', () => {
+    layOut({ '.cockpit-roster-main': { left: 0, width: 600, height: 400 }, '.cockpit-side': { left: 612, width: 400, height: 400 } })
+    const { panels } = renderCockpit({}, 'roster')
+    const sep = screen.getByRole('separator', { name: 'Call Roster / side rail' })
+    expect(sep.tabIndex).toBe(0)
+    expect(sep.getAttribute('aria-valuenow')).toBe('60')
+    key(sep, 'ArrowRight')
+    expect(panels.setShares).toHaveBeenLastCalledWith({ callRoster: seamShares(0.6 + 0.05)[0] })
+    key(sep, 'Backspace')
+    expect(panels.setShares).toHaveBeenLastCalledWith({ callRoster: null })
+  })
+})
+
+describe('Operate: the rail on the left (layout L5)', () => {
+  beforeEach(() => localStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
+  const toggle = () => screen.getByRole('button', { name: 'Rail left' })
+  const grid = () => document.querySelector<HTMLElement>('.cockpit-lower')!
+
+  it('is a pressed-state toggle in the header, remembered per surface, moving the rail by CSS alone', () => {
+    renderCockpit({}, 'classic')
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+    expect(grid().hasAttribute('data-rail')).toBe(false)
+    const aside = document.querySelector('aside.cockpit-side')!
+    const decodes = document.querySelector('.cockpit-decodes')!
+    fireEvent.click(toggle())
+    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+    expect(grid().getAttribute('data-rail')).toBe('left')
+    expect(localStorage.getItem('nexus.operate.railSide')).toBe('left')
+    // No reparent, no remount: the same nodes, in the same order in the tree.
+    expect(document.querySelector('aside.cockpit-side')).toBe(aside)
+    expect(document.querySelector('.cockpit-decodes')).toBe(decodes)
+    expect(decodes.compareDocumentPosition(aside) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    cleanup()
+    renderCockpit({}, 'classic')
+    expect(grid().getAttribute('data-rail'), 'the choice did not survive a remount').toBe('left')
+  })
+
+  it('names Classic’s dividers by the columns they now sit between, and still moves only their pairs', () => {
+    localStorage.setItem('nexus.operate.railSide', 'left')
+    renderCockpit({}, 'classic')
+    expect(screen.getAllByRole('separator').filter((e) => e.classList.contains('op-colseam')).map((e) => e.getAttribute('aria-label'))).toEqual([
+      'Stations roster / Band Activity',
+      'Band Activity / Rx Frequency column',
+    ])
+  })
+
+  it('in Roster, puts the rail first and names its divider that way round; the Call Roster keeps its share', () => {
+    localStorage.setItem('nexus.operate.railSide', 'left')
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const box = this.matches('.cockpit-side') ? [0, 400] : this.matches('.cockpit-roster-main') ? [412, 600] : null
+      if (!box) return real.call(this)
+      const [left, width] = box
+      return { top: 0, left, width, height: 400, right: left + width, bottom: 400, x: left, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+    const { panels } = renderCockpit({}, 'roster')
+    const sep = screen.getByRole('separator', { name: 'Side rail / Call Roster' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('40')
+    fireEvent.keyDown(sep, { key: 'ArrowRight' })
+    // The rail grew: the Call Roster's share is the pair's second.
+    expect(panels.setShares).toHaveBeenLastCalledWith({ callRoster: seamShares(0.4 + 0.05)[1] })
+  })
+
+  it('stays where it is while the rail is not on screen, and says so by not pressing the grid', () => {
+    localStorage.setItem('nexus.operate.railSide', 'left')
+    renderCockpit({ stations: 'removed' }, 'classic')
+    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+    expect(grid().hasAttribute('data-rail'), 'a rail-left template with no rail').toBe(false)
   })
 })

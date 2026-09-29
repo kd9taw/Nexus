@@ -16087,13 +16087,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--gap);
+  /* The containing block of the column dividers (`.op-colseam` below) and of nothing else: every
+     absolutely positioned thing inside the panes already has a positioned ancestor of its own. */
+  position: relative;
 }
 /* Roster mode (GridTracker-style): the Call Roster pane (first child) is dominant,
-   Band Activity + Rx Frequency ride a narrow side rail. */
+   Band Activity + Rx Frequency ride a narrow side rail. The two tracks consume the
+   --op-roster-a/-b fr tokens the divider between them paints (layout L5); undragged,
+   the 1.4fr / 1fr defaults apply. */
 .cockpit-lower.roster {
   /* Rail widened for the FULL decode window (filter chips + sort need ~360px);
      the roster stays the centerpiece but no longer starves the decodes. */
-  grid-template-columns: minmax(0, 1.4fr) minmax(360px, 1fr);
+  grid-template-columns: minmax(0, var(--op-roster-a, 1.4fr)) minmax(360px, var(--op-roster-b, 1fr));
+}
+/* THE RAIL ON THE LEFT (layout L5, the header's Rail left): the same tracks mirrored, and the rail
+   first by `order` (below), so no pane changes its place in the tree. The cockpit sets the
+   attribute only while the rail and another column are both on screen; the narrow stack below
+   outranks it by source order at equal specificity. */
+.cockpit-lower.roster[data-rail='left'] {
+  grid-template-columns: minmax(360px, var(--op-roster-b, 1fr)) minmax(0, var(--op-roster-a, 1.4fr));
 }
 /* Panel removal (⊞ Panels): once the main cell OR the whole side rail is gone, the
    region is a SINGLE column — otherwise the survivor keeps its old track and the
@@ -16104,16 +16116,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* DECODE-FIRST Classic (2026-08 field feedback): THREE columns — Band Activity |
    the promoted Rx-Frequency column (decode pane + Tx1–Tx6 machine) | the Stations
    roster. The WSJT-X pair takes ~75% of the width; every track is minmax so no
-   min-content floor can force horizontal blow-out. Columns 2/3 consume the
-   --op-col-a/-b fr tokens the column seam (a PaneSeam, axis='x') paints on this
-   container, so the operator tunes the pair/roster balance by drag; undragged,
-   the 0.95fr/0.72fr defaults apply. Tighter 8px gap (density pass). */
+   min-content floor can force horizontal blow-out. The three tracks consume the
+   --op-col-ba/-a/-b fr tokens the two column dividers (PaneSeam, axis='x') paint on
+   this container (layout L5; features/operateColumns — each divider moves only its
+   own pair); undragged, the 1.15fr/0.95fr/0.72fr defaults apply. Tighter 8px gap
+   (density pass). */
 .cockpit-lower.classic {
   grid-template-columns:
-    minmax(0, 1.15fr)
+    minmax(0, var(--op-col-ba, 1.15fr))
     minmax(300px, var(--op-col-a, 0.95fr))
     minmax(260px, var(--op-col-b, 0.72fr));
   gap: var(--space-2);
+}
+/* The Stations rail on the left: the same three tracks, mirrored. Before the data-cols collapse
+   rules on purpose: at two or one columns they win this equal-specificity rule by source order. */
+.cockpit-lower.classic[data-rail='left'] {
+  grid-template-columns:
+    minmax(260px, var(--op-col-b, 0.72fr))
+    minmax(0, var(--op-col-ba, 1.15fr))
+    minmax(300px, var(--op-col-a, 0.95fr));
 }
 /* Populated-column collapse (data-cols is the COUNT the cockpit derives): the
    survivors flow into the smaller generic template in source order, exactly the
@@ -16123,6 +16144,37 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .cockpit-lower.classic[data-cols='one'] {
   grid-template-columns: minmax(0, 1fr);
+}
+/* Two columns with the rail on the left (one of the pair hidden, the rail kept): the rail keeps
+   the narrow track it has on the right. */
+.cockpit-lower.classic[data-cols='two'][data-rail='left'] {
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 1.2fr);
+}
+/* The rail goes first, by `order` only: the tree, and every pane in it, stays where it was. */
+.cockpit-lower[data-rail='left'] > .cockpit-side {
+  order: -1;
+}
+/* THE COLUMN DIVIDERS (layout L5): absolutely positioned children of the grid, placed by
+   `grid-column` on the track AFTER them and pulled back over the gap before it: the full height of
+   the grid, 12 px wide, centred on the gap, covering no pane. Not a grid item in flow (that would
+   take a track or a cell) and not a column's child (a column clips). The cockpit-panes.css
+   `.cockpit-colseam` technique, on Operate's own grid. */
+.cockpit-lower > .op-colseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--gap) / -2 - 6px);
+  width: 12px;
+  margin: 0;
+}
+.cockpit-lower.classic > .op-colseam {
+  left: calc(var(--space-2) / -2 - 6px);
+}
+.op-colseam-2 {
+  grid-column: 2 / 3;
+}
+.op-colseam-3 {
+  grid-column: 3 / 4;
 }
 .cockpit-side {
   display: flex;
@@ -16152,7 +16204,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    stack needs its own 3-specific rule AFTER them or the columns crush at phone /
    pinned-zoom widths. Source order: BA → qsocol (Rx pane + Tx machine) → roster. */
 [data-viewport='sm'] .cockpit-lower.classic,
-[data-viewport='xs'] .cockpit-lower.classic {
+[data-viewport='xs'] .cockpit-lower.classic,
+[data-viewport='sm'] .cockpit-lower.classic[data-rail='left'],
+[data-viewport='xs'] .cockpit-lower.classic[data-rail='left'] {
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: minmax(0, 1fr);
 }
@@ -16468,27 +16522,14 @@ button.cq-skiptx1.on {
 }
 /* The promoted Rx-Frequency column (grid col 2): decode pane above (the grower —
    the QSO stream the operator runs the contact from), the content-sized Tx1–Tx6
-   machine docked beneath (WSJT-X bottom-right geometry). position:relative hosts
-   the absolute column seam on its right edge (the seam overlays the grid gap —
-   it must NOT be a grid child, that would burn a track/cell). No px floors. */
+   machine docked beneath (WSJT-X bottom-right geometry). No px floors. (Its column
+   dividers are the grid's own children since layout L5: `.op-colseam` above.) */
 .cockpit-qsocol {
-  position: relative;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-/* Column seam (a PaneSeam, axis='x'): a full-height grab line over the 8px grid
-   gap between the pair column and the roster. Drags paint --op-col-a/-b on the
-   grid container; commit persists via panels.setShares (clamped on load). */
-.cockpit-qsocol > .pane-splitter.col-seam {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: -10px;
-  width: 12px;
-  cursor: col-resize;
 }
 /* Stacked layouts: a column drag is meaningless, hide the seam. */
 [data-viewport='sm'] .pane-splitter.col-seam,
@@ -16679,7 +16720,8 @@ button.cq-skiptx1.on {
  * piece. Same type metrics and hover treatment as `.clt-opt` so it still reads as one
  * family in the header, just its own pill beside the first.
  */
-.cockpit-map-btn {
+.cockpit-map-btn,
+.cockpit-rail-btn {
   padding: 5px 14px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
@@ -16691,8 +16733,15 @@ button.cq-skiptx1.on {
   cursor: pointer;
   white-space: nowrap;
 }
-.cockpit-map-btn:hover {
+.cockpit-map-btn:hover,
+.cockpit-rail-btn:hover {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* Rail left (layout L5) is a toggle in the Map button's family (it shares the rules above);
+   pressed, it reads like the pill's active option. */
+.cockpit-rail-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 .cockpit-roster > * {
   flex: 1;

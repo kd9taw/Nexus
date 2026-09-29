@@ -62,6 +62,9 @@ export const PER_SURFACE = [
   'nexus.decodes.newestTop',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
+  // Which side Operate's rail stands on (layout L5): a layout choice of THIS window, like the
+  // Classic / Roster pick on either side of it.
+  'nexus.operate.railSide',
   'nexus.operateLayout',
   'nexus.ota.bandFilter',
   // Hide worked today: a statement about what THIS board shows, like the filters beside it — a
