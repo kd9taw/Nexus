@@ -254,6 +254,66 @@ describe('a hunted park leaves with its station', () => {
   })
 })
 
+// THE BOX IS READ AS IT STANDS, NOT AS IT WAS RENDERED (#383, the case the two fixes above left).
+// When the call in the box moves off a station the callbook answered for, the call-change effect
+// empties the park box, and the prefill runs in the same commit. It judged "the operator's own
+// park, keep it" from the box as RENDERED, a value that commit was erasing: the chip named the
+// park and the box stayed empty, the symptom of the report. A park typed before any call
+// reaches it, because such a park counts as the operator's for whichever call follows.
+describe('the prefill sees the park box the call change has just emptied', () => {
+  const callBox = () => document.querySelector('input.le-call') as HTMLInputElement
+
+  it('fills the hunted park when the previous station’s park is cleared in the same render', async () => {
+    callbookKnowsThem()
+    const view = render(strip(null, null))
+    await settle()
+    // A park typed with no call in the box (looked up by name, say), then a call the callbook
+    // knows: the enrichment is what arms the call-change clear.
+    fireEvent.change(park(), { target: { value: 'us-1111' } })
+    fireEvent.change(callBox(), { target: { value: 'w1abc' } })
+    await waitFor(() => expect(screen.getByDisplayValue('Adam')).toBeTruthy())
+    expect(park().value, 'fixture: the typed park is still in the box').toBe('US-1111')
+
+    // KE7G's spot is clicked: the hunt and the call arrive as App sends them.
+    view.rerender(strip(KE7G, { call: 'KE7G', ts: 2 }))
+    await waitFor(() => expect(callBox().value).toBe('KE7G'))
+    await settle()
+    expect(park().value, 'the hunt chip names US-3216 and the box is empty').toBe('US-3216')
+  })
+})
+
+// A HUNTED PARK LEAVES WITH ITS HUNT WHEN NO CALL HOLDS IT (#383). Logging the hunted contact spends
+// the hunt in the engine, but the strip's snapshot names it until the next poll, so the reset
+// strip (call empty) prefilled the park again. When the poll brought the hunt's end, nothing took
+// the park out: an empty strip showed the last contact's park, the chip gone.
+describe('the park box after the hunted contact is logged', () => {
+  const callBox = () => document.querySelector('input.le-call') as HTMLInputElement
+
+  it('empties once the hunt that filled it is gone', async () => {
+    const view = render(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(park().value).toBe('US-3216'))
+    fireEvent.click(logButton())
+    await waitFor(() => expect(mockedLog).toHaveBeenCalledTimes(1))
+    await settle()
+    expect(callBox().value, 'fixture: the strip reset after the log').toBe('')
+    // The next snapshot poll: the engine spent the hunt on that contact.
+    view.rerender(strip(null, { call: 'KE7G', ts: 1 }))
+    await settle()
+    expect(park().value, 'KE7G’s park stayed in the empty strip after its contact was logged').toBe('')
+  })
+
+  // THE CONTROL: a park the operator typed into the empty strip is theirs, and stays when the hunt
+  // it replaced ends.
+  it('keeps a park the operator typed into the empty strip when the hunt ends', async () => {
+    const view = render(strip(KE7G, null))
+    await waitFor(() => expect(park().value, 'fixture: the hunt prefilled the empty strip').toBe('US-3216'))
+    fireEvent.change(park(), { target: { value: 'us-4444' } })
+    view.rerender(strip(null, null))
+    await settle()
+    expect(park().value, 'the typed park went with the hunt').toBe('US-4444')
+  })
+})
+
 describe('one station under a portable prefix or suffix, as the engine matches it', () => {
   it('fills the park when the spot says KE7G/P and the log says KE7G', async () => {
     render(strip({ ...KE7G, call: 'KE7G/P' }, { call: 'KE7G', ts: 1 }))

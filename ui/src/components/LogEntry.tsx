@@ -453,6 +453,12 @@ export function LogEntry({
   // the box and read only while one is there, so a clear leaves it alone. See the prefill below
   // for why the value alone cannot say.
   const parkForRef = useRef({ call: '', hunt: false })
+  // The park box as it stands in this commit, for the park prefill. The call-change effect runs
+  // just before it and can empty the box in the same commit, while the rendered `logParkRef`
+  // still holds the value being erased. Synced here on every render; an effect that writes the
+  // box writes this too.
+  const parkBoxRef = useRef(logParkRef)
+  parkBoxRef.current = logParkRef
   // Local park-directory suggestions (POTA only) as the operator types the reference.
   const [parkHits, setParkHits] = useState<Park[]>([])
   const [parkPicked, setParkPicked] = useState(false)
@@ -626,6 +632,7 @@ export function LogEntry({
       setLogImage(null)
       setLogCoords(null)
       setLogParkRef('') // the park was for the previous call
+      parkBoxRef.current = '' // …and the prefill below decides in this same commit
       // The wiped name may have been the CW decoder's copy — un-latch so it can refill for the
       // new call (declared below; the effect callback runs after render, so it's initialized).
       cwNameFilled.current = false
@@ -659,17 +666,27 @@ export function LogEntry({
   // an earlier hunt put there is never one: the same activator re-spotted at another park takes
   // the new park, where the earlier prefill used to hold the box and go out as a typed park.
   //
+  // ⚠️ THE BOX IS READ AS IT STANDS, NOT AS IT WAS RENDERED (`parkBoxRef`). The race above had a
+  // second door. The call-change effect empties the box in the commit this effect decides in, so
+  // a park it was erasing could still read as the operator's own: the fill was skipped and the box
+  // ended empty under a chip naming the park. A park typed before any call opened it, once the
+  // callbook had answered for the call typed after it.
+  //
   // ⚠️ A HUNTED PARK LEAVES WITH ITS STATION. Once the call in the box is not the station a hunt
   // bound the park to, the park goes, whatever the pending hunt now is (another activator's, or
   // none) and whether or not a lookup ran. It used to go only when it equalled the CURRENT hunt,
   // so with the hunt moved on and no callbook, a hand-typed third call was logged at the first
   // activator's park. A park the operator typed never leaves this way: finishing a half-typed
   // call (`W1XY` → `W1XYZ`) keeps it. Its binding still matters, to the override above: a park
-  // typed for W1XYZ does not stop the prefill when KE7G's spot is clicked next.
+  // typed for W1XYZ does not stop the prefill when KE7G's spot is clicked next. With no call in
+  // the box there is no station to hold it, and it leaves with its hunt. Logging the hunted
+  // contact spends the hunt in the engine, but the snapshot here names it until the next poll, so
+  // the reset strip was filled again; when the hunt's end arrived nothing took the park out, and
+  // an empty strip showed the last contact's park.
   useEffect(() => {
     const h = snap.hunt
     const call = logCall.trim()
-    const shown = logParkRef.trim().toUpperCase()
+    const shown = parkBoxRef.current.trim().toUpperCase()
     const huntRef = h?.reference?.trim().toUpperCase() ?? ''
     const bound = parkForRef.current
     if (h?.reference && (call === '' || sameCall(h.call, call))) {
@@ -681,13 +698,15 @@ export function LogEntry({
         setParkPicked(true)
         setLogParkProgram(h.program)
         setLogParkRef(h.reference)
+        parkBoxRef.current = h.reference
         parkForRef.current = { call: baseCall(h.call), hunt: true }
       }
-    } else if (shown !== '' && (shown === huntRef || (bound.hunt && call !== '' && !sameCall(bound.call, call)))) {
-      // The call in the box is not the hunted station: drop the pending hunt's own prefill, and a
-      // park an earlier hunt bound to another station, rather than SHOW (and log) a park that is
-      // not this call's.
+    } else if (shown !== '' && (shown === huntRef || (bound.hunt && (call === '' || !sameCall(bound.call, call))))) {
+      // No hunted station is in the box: drop the pending hunt's own prefill, a park an earlier hunt
+      // bound to another station, and, with no call at all, one whose hunt is over, rather than
+      // SHOW (and log) a park that is not this call's.
       setLogParkRef('')
+      parkBoxRef.current = ''
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.hunt?.reference, snap.hunt?.program, logCall])

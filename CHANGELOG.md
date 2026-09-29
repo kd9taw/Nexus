@@ -535,6 +535,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (KE7G/P and KF7XYZ/P) are no longer taken for the same one. Clicking a station also tells your
   own call apart the same way, so an operator signing VE7/ followed by their call can work other
   VE7/ stations.
+- **The park box no longer comes back empty or stale (#383).** Clicking an activator's spot could
+  still leave the park box empty under a hunt line naming the park, when you had typed a park
+  before entering the previous station's call and your callbook had looked that call up. And
+  after you logged a hunted contact, the empty log strip showed that contact's park again and
+  kept it. The box now fills with the clicked activator's park, and clears once its contact is
+  logged.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
