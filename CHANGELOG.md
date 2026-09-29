@@ -281,6 +281,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in whole pairs (EN52, EN52HW, EN52HW12 and so on), in upper or lower case. Anything else is
   refused with the same message as no locator. FT8 and FT4 keep their own rule.
 
+- **JS8: what is waiting to go is dropped when a missing or malformed locator stops it, as in
+  JS8Call.** Messages queued when the locator was cleared or mistyped, a repeating CQ's call
+  among them, used to wait and go out the moment a locator was set, however long afterwards. They
+  are now dropped when the start is refused, as JS8Call drops its queue. A repeating CQ and the
+  heartbeat stay armed and carry on at their next times once the locator is fixed.
+
 - **JS8: the free spot for a heartbeat or its acknowledgement is chosen from everything heard,
   as in JS8Call.** A spot used to count as taken only when a station whose callsign had been
   decoded was heard there in the last 30 seconds. Now every decoded frame counts, including the

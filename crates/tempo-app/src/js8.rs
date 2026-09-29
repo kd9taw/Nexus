@@ -849,6 +849,11 @@ impl Engine {
             let queue = self.js8_station.queue();
             if queue.first().is_none_or(|next| next.first) {
                 if !queue.is_empty() {
+                    // …and everything waiting is dropped, as JS8Call's refusal does
+                    // (`on_stopTxButton_clicked` → `resetMessage` → `resetMessageTransmitQueue`,
+                    // :5310 → :7396 → :5383-5391), so nothing old goes out once a locator is
+                    // set. The CQ repeat and the heartbeat keep their schedules.
+                    self.js8_station.drop_queue();
                     self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
                 }
                 self.set_transmitting(false);
@@ -1905,6 +1910,46 @@ mod tests {
         );
     }
 
+    /// The refusal drops everything waiting to go, as JS8Call's does (`resetMessageTransmitQueue`,
+    /// mainwindow.cpp:5383-5391: its frame and message queues), so a locator set afterwards sends
+    /// nothing old. The CQ repeat's schedule is its own: the call it queued is dropped with the
+    /// rest, and the repeat stays armed for its next time.
+    #[test]
+    fn a_start_refused_for_the_locator_drops_the_queue_and_nothing_old_goes_out_later() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_send(None, "FIRST".into()).expect("queues");
+        e.js8_send(None, "SECOND".into()).expect("queues");
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.settings.mygrid = "EN5".into(); // a slip in Settings
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let refused = run_js8_loop_from(&mut e, t0, 75); // the CQ repeat queues its call at 60 s
+        assert!(refused.is_empty(), "nothing keys: {refused:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the queue was dropped at the refusal: {:?}",
+            st.queue
+        );
+        assert!(
+            st.cq_on && st.cq_next_at_ms.is_some_and(|next| next > t0 + 75_000),
+            "the CQ repeat keeps its schedule: {:?}",
+            st.cq_next_at_ms
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
+        );
+        e.settings.mygrid = "EN52".into();
+        let later = run_js8_loop_from(&mut e, t0 + 75_000, 20);
+        assert!(
+            later.is_empty(),
+            "setting the locator sends nothing old: {later:?}"
+        );
+    }
+
     /// JS8Call never holds a malformed locator: its Settings dialog refuses to save one
     /// (Configuration.cpp:2443, the `Maidenhead::ExtendedValidator` set at :1332), so it never
     /// transmits one. Nexus's Settings field can hold one, and the JS8 gate refuses it with the
@@ -2010,7 +2055,8 @@ mod tests {
 
     /// Only a transmission's START asks. JS8Call sends the frames after a message's first
     /// through `stopTx` → `prepareNextMessageFrame` (:4825), which never asks again: a message
-    /// already on the air finishes, and the next one does not start.
+    /// already on the air finishes, and the next one does not start. Its refusal drops it, as
+    /// JS8Call's `on_stopTxButton_clicked` → `resetMessage` clears the queue (:7396, :5240-5243).
     #[test]
     fn a_js8_message_on_the_air_finishes_when_the_locator_goes_and_the_next_does_not_start() {
         let mut e = hb_engine("EN52", 5, 1500.0);
@@ -2044,8 +2090,8 @@ mod tests {
         );
         let st = e.js8_state();
         assert!(
-            !st.queue.is_empty() && st.queue.iter().all(|q| q.display.ends_with("SECOND")),
-            "the second message waits, unsent: {:?}",
+            st.queue.is_empty(),
+            "the second message is dropped when its start is refused: {:?}",
             st.queue
         );
         assert_eq!(
