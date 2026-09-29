@@ -1016,7 +1016,12 @@ impl Station {
     /// `origin`. Shared so a change to the wire text can never drift between them.
     fn compose_cq(&self, idx: u8, origin: Origin) -> Result<OutMsg, ComposeError> {
         let cqs = crate::proto::alphabet::CQS[(idx & 7) as usize];
-        let line = format!("{cqs} {}", self.cfg.grid);
+        // The 4-character square, as JS8Call's CQ carries it (its default CQ text is
+        // `CQ CQ CQ <MYGRID4>`, and `sendCQ` falls back to `my_grid().left(4)`,
+        // mainwindow.cpp:6344): a longer locator spills into a data frame that keys on the
+        // next period.
+        let grid4: String = self.cfg.grid.chars().take(4).collect();
+        let line = format!("{cqs} {grid4}");
         let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
         Ok(OutMsg {
             origin,
@@ -2147,6 +2152,72 @@ mod tests {
             Some(136_000 + 300_000),
             "the next cycle after it, plus the interval"
         );
+    }
+
+    /// Every frame the station keys over six periods from `from_ms`, as it reads on the air.
+    fn keyed_wire(s: &mut Station, from_ms: u64) -> Vec<(Frame, bool, bool)> {
+        (0..6u64)
+            .filter_map(|k| drain(s, from_ms + k * 15_000))
+            .map(|f| {
+                let (frame, i3) = crate::proto::frame::decode_word(&f.word, f.speed)
+                    .expect("what the station keys decodes");
+                (frame, i3.first, i3.last)
+            })
+            .collect()
+    }
+
+    /// One `CQ CQ CQ <grid>` frame from KD9TAW, first and last: a whole CQ on the air.
+    fn one_cq_frame(grid: &str) -> Vec<(Frame, bool, bool)> {
+        let cq = Frame::Heartbeat {
+            call: "KD9TAW".into(),
+            grid: Some(grid.into()),
+            is_cq: true,
+            idx: 0,
+        };
+        vec![(cq, true, true)]
+    }
+
+    /// The CQ carries the 4-character square, as JS8Call's does: its default CQ text is
+    /// `CQ CQ CQ <MYGRID4>` (Configuration.cpp:1860; the macro is `my_grid().left(4)`,
+    /// mainwindow.cpp:7024), and `sendCQ` falls back to `my_grid().left(4)` when that text is
+    /// empty (:6344). Given the whole 6-character locator, the CQ grammar stops at the square,
+    /// the locator spills into a data frame, and every CQ keyed on two periods in a row.
+    #[test]
+    fn a_clicked_cq_with_a_six_character_locator_is_one_frame_carrying_the_square() {
+        let mut c = cfg();
+        c.grid = "EN52HW".into();
+        let mut s = Station::new(c);
+        s.call_cq(0, 0).unwrap();
+        assert_eq!(
+            keyed_wire(&mut s, 0),
+            one_cq_frame("EN52"),
+            "one CQ, one frame, the 4-character square"
+        );
+    }
+
+    /// …and so is a CQ the repeat schedule sends: both buttons compose through `compose_cq`.
+    #[test]
+    fn a_repeated_cq_with_a_six_character_locator_is_one_frame_carrying_the_square() {
+        let mut c = cfg();
+        c.grid = "EN52HW".into();
+        c.cq_interval_min = 1;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 0, 0);
+        s.tick(60_000);
+        assert_eq!(
+            keyed_wire(&mut s, 60_000),
+            one_cq_frame("EN52"),
+            "one repeated CQ, one frame, the 4-character square"
+        );
+    }
+
+    /// A 4-character locator was already right and stays exactly as it was.
+    #[test]
+    fn a_cq_with_a_four_character_locator_is_unchanged() {
+        let mut s = Station::new(cfg()); // EN52
+        s.call_cq(0, 0).unwrap();
+        assert_eq!(keyed_wire(&mut s, 0), one_cq_frame("EN52"));
     }
 
     #[test]

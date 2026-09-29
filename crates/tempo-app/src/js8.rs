@@ -1649,6 +1649,32 @@ mod tests {
         );
     }
 
+    /// The clicked CQ on the real path: with a 6-character locator in Settings it is ONE over
+    /// (JS8Call's CQ carries `my_grid().left(4)`, mainwindow.cpp:6344), booked with the square.
+    #[test]
+    fn a_js8_cq_with_a_six_character_locator_keys_one_over() {
+        let mut e = hb_engine("EN52HW", 0, 1500.0);
+        e.js8_call_cq(0).expect("CQ queued");
+        let overs = run_js8_loop(&mut e, 60);
+        assert_eq!(
+            overs.len(),
+            1,
+            "one CQ over in the minute after the click, got {overs:?}"
+        );
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(
+            booked,
+            vec!["KD9TAW: @ALLCALL CQ CQ CQ EN52".to_string()],
+            "…booked once, with the square it carried"
+        );
+    }
+
     /// Interval 0 is JS8Call's single press: one heartbeat, once (`on_hbMacroButton_toggled`,
     /// :6326).
     #[test]
