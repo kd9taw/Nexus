@@ -192,13 +192,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **⊞ Panels ▸ Undo last change** and **Reset layout** cover the column dividers. **⊞ Panels ▸
   Side rail on the left** moves the rail (Stations in Classic; Band Activity and Rx Frequency in
   Roster) to the left of the window. A layout you set before this opens exactly as you left it.
-- **Phone and CW: arrange the panes.** ⊞ Panels on the Phone and CW cockpits now starts with an
+- **Phone, CW and JS8: arrange the panes.** ⊞ Panels on these three cockpits now starts with an
   **Arrange** section: the screen's three columns, each listing the panes on screen in it, and
   beside each pane ▲ ▼ to move it up or down in its column and ◀ ▶ to move it into the column beside
-  it. Phone's voice keyer moves up and down only: it keeps its column, so a message being sent or a
-  recording in progress is never cut off by a move. The log form stays at the foot of its column,
-  and CW's Rig controls stay at the top of the middle one. On a narrower window the second column
-  follows the first. **Undo last change** and **Reset layout** cover a move
+  it. Phone's voice keyer and JS8's log move up and down only: each keeps its column, so a message
+  being sent, a recording in progress or a half-typed contact is never cut off by a move. Phone's
+  and CW's log form stays at the foot of its column, and CW's Rig controls stay at the top of the
+  middle one. A divider between two panes stays with them while they stand together. On a narrower
+  window the second column follows the first. **Undo last change** and **Reset layout** cover a move
   like any other change, and each window keeps its own arrangement. Until you move something, each
   cockpit looks exactly as it did.
 - **APRS: a wider station list, and the map on either side.** A divider between the map and the

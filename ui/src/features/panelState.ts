@@ -1006,6 +1006,19 @@ export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   view: 'js8',
   panelIds: JS8_PANEL_IDS,
+  // ⊞ Arrange (layout L3): the pane region's stock grouping, as Js8Cockpit renders it — the two
+  // decode surfaces lead, Stations and the inbox in the middle, the log alone in the last column.
+  // JS8'S LOG HAS AN ID (it is ⊞-hideable), so it is listed, and it is PINNED (D9): the log form
+  // holds a half-typed contact, which a change of column would remount and lose. It moves up and
+  // down in its column only.
+  arrange: {
+    columns: {
+      a: ['activity', 'offsets'],
+      b: ['stations', 'inbox'],
+      log: ['log'],
+    },
+    pinned: ['log'],
+  },
 }
 
 /** Connect's removable panes (close + resize, operator-approved 2026-09-13) — its seven
