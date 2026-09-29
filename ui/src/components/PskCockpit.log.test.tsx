@@ -76,6 +76,7 @@ vi.mock('../api', () => ({
   lookupParkLive: vi.fn(async () => null),
   searchParks: vi.fn(async () => []),
   setCwPeerInfo: vi.fn(async () => {}),
+  setLogFormGrid: vi.fn(async () => {}),
   openQrzPage: vi.fn(async () => {}),
 }))
 vi.mock('../toast', () => ({

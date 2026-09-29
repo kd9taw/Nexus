@@ -54,6 +54,7 @@ const api = vi.hoisted(() => ({
   resolveEntity: vi.fn(async () => null),
   searchParks: vi.fn(async () => []),
   setCwPeerInfo: vi.fn(async () => {}),
+  setLogFormGrid: vi.fn(async () => {}),
 }))
 vi.mock('../api', () => api)
 vi.mock('./MapView', () => ({ MapView: () => null }))

@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -631,6 +631,23 @@ export function LogEntry({
       cwNameFilled.current = false
     }
   }, [logCall])
+
+  // The grid this form holds for its call, typed or filled in from the callbook, handed to the
+  // engine so pointing the rotator at this call aims at the station rather than the centre of its
+  // country (a tester was sent 20° wide by the country centre). Only a real square, and a clear
+  // only for a call it was given a square for, so typing a call costs nothing. A browser's form
+  // tells the station nothing: the station resolves its own bearing.
+  const toldGridRef = useRef<{ call: string; grid: string } | null>(null)
+  useEffect(() => {
+    if (remoteMode) return
+    const call = logCall.trim().toUpperCase()
+    const typed = logGrid.trim().toUpperCase()
+    const grid = isValidLoggedGrid(typed) ? typed : ''
+    const told = toldGridRef.current
+    if (!call || (told?.call === call && told.grid === grid) || (!grid && told?.call !== call)) return
+    toldGridRef.current = { call, grid }
+    void setLogFormGrid(call, grid).catch(() => {})
+  }, [logCall, logGrid, remoteMode])
 
   // Prefill the park field from a hunted spot (snap.hunt = the activator's program+ref). Keyed on
   // the reference string so it fires when a NEW park is hunted, not on every snapshot poll.

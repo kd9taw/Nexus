@@ -303,6 +303,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pointing the rotator at a callsign aims at the station, not the middle of its country.** The
+  → button on a cockpit's rotor strip, the ↗ on Needed rows and the other point-at buttons used to
+  turn the beam to the centre of the station's country: from JO21EV that is 207° for EC1DD, whose
+  own grid is at 227°, and 299° for AA1AA instead of 291°. They now aim at the station itself when
+  Nexus already knows where it is: the grid in the log form (typed, or filled in from the
+  callbook), a grid the station sent on FT8, FT4 or JS8 this session, what a callbook lookup
+  returned, or the grid on your last contact with it. A closer location, such as a six-character
+  grid or the callbook's own position, is used only when it lies inside the square the station is
+  sending, so a callbook address never overrides where a portable station says it is. Nothing is
+  looked up when you point. The message after pointing says what the bearing was taken to: the
+  station's grid, its callbook position, or the centre of its country when nothing closer is known.
+  The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
+  aims at the country centre.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

@@ -37,7 +37,8 @@ vi.mock('../api', async (importOriginal) => {
     getDeclination: vi.fn(async () => null),
     getSatTrackStatus: vi.fn(async () => null),
     getSatTransponder: vi.fn(async () => null),
-    pointRotatorAtCall: vi.fn(async () => 47),
+    // What the command answers: the bearing, and what it was taken to (here the entity centre).
+    pointRotatorAtCall: vi.fn(async () => ({ bearing: 47, to: 'country', grid: null, country: 'Japan' })),
   }
 })
 vi.mock('../toast', () => ({
@@ -102,7 +103,7 @@ describe('the Phone cockpit beams the long way round when LP is pressed', () => 
     await waitFor(() => expect(point).toHaveBeenCalledTimes(1))
     expect(point, 'LP slewed the short path').toHaveBeenCalledWith('JA1ABC', true)
     await waitFor(() =>
-      expect(pushToast).toHaveBeenCalledWith(t('shell.rotator.pointedLong', { bearing: 47, call: 'JA1ABC' }), 'info'),
+      expect(pushToast).toHaveBeenCalledWith(t('shell.rotator.pointedLong', { bearing: 47, call: 'JA1ABC', to: t('rotor.pointed.to.country', { country: 'Japan' }) }), 'info'),
     )
   })
 
@@ -113,7 +114,7 @@ describe('the Phone cockpit beams the long way round when LP is pressed', () => 
     await waitFor(() => expect(point).toHaveBeenCalledTimes(1))
     expect(point).toHaveBeenCalledWith('JA1ABC', false)
     await waitFor(() =>
-      expect(pushToast).toHaveBeenCalledWith(t('cw.rotator.pointed', { call: 'JA1ABC', bearing: 47 }), 'info'),
+      expect(pushToast).toHaveBeenCalledWith(t('cw.rotator.pointed', { call: 'JA1ABC', bearing: 47, to: t('rotor.pointed.to.country', { country: 'Japan' }) }), 'info'),
     )
   })
 })

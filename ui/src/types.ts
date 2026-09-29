@@ -2519,6 +2519,16 @@ export interface QrzLookup {
   lon?: number | null
 }
 
+/** What a point-at-call aimed at (`point_rotator_at_call`): the bearing, and what it was taken
+ *  to — the station's own grid (`grid` names it), the position its callbook gives, or, when
+ *  Nexus knows neither, the centre of its country (`country` names it). The toast says which. */
+export interface PointedAt {
+  bearing: number
+  to: 'grid' | 'position' | 'country'
+  grid: string | null
+  country: string | null
+}
+
 /** Result of a QRZ Logbook push (one-QSO upload). `result` is the outcome tag;
  *  `duplicate` is the benign "already in your QRZ logbook". */
 export interface QrzPushResult {

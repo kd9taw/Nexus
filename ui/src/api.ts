@@ -45,6 +45,7 @@ import type {
   ModeRequest,
   NeedAlert,
   QrzLookup,
+  PointedAt,
   QrzPushResult,
   RouteMode,
   RoutingRule,
@@ -2250,10 +2251,19 @@ export async function pointRotator(azDeg: number): Promise<void> {
   return invoke('point_rotator', { azDeg })
 }
 
-/** Point the rotator at a callsign's DXCC entity; resolves to the bearing it pointed to.
- *  `longPath` takes the reciprocal — the same great circle the other way. */
-export async function pointRotatorAtCall(call: string, longPath = false): Promise<number> {
-  return invoke<number>('point_rotator_at_call', { call, longPath })
+/** Point the rotator at a callsign's station: its own grid or callbook position when Nexus
+ *  knows one, else the centre of its country. Resolves to the bearing and what it was taken to
+ *  (a browser gets nothing back: the station resolves it). `longPath` takes the reciprocal — the
+ *  same great circle the other way. */
+export async function pointRotatorAtCall(call: string, longPath = false): Promise<PointedAt> {
+  return invoke<PointedAt>('point_rotator_at_call', { call, longPath })
+}
+
+/** The grid the log form holds for the call it is logging — typed, or filled in from the
+ *  callbook — so pointing the rotator at that call aims at the station. `''` forgets it for
+ *  that call. Fire-and-forget, like `setCwPeerInfo`. */
+export async function setLogFormGrid(call: string, grid: string): Promise<void> {
+  await invoke('set_log_form_grid', { call, grid })
 }
 
 /** Current rotator azimuth (degrees), or null if rotctld is unset/unreachable. */

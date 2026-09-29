@@ -14054,21 +14054,130 @@ async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
     }
 }
 
-/// Point the rotator at a callsign's DXCC entity — the great-circle bearing from your
-/// grid. Returns the bearing pointed to (degrees) for UI feedback.
+/// What a point-at-call took its bearing to — what the toast names, so the operator can tell a
+/// bearing to the station from one to its country.
+#[derive(Debug, Clone, PartialEq)]
+enum AimedAt {
+    /// A locator for the station itself.
+    Grid(String),
+    /// The position the station's callbook entry vouches for.
+    Position,
+    /// The centre of the station's DXCC entity: nothing closer is known.
+    Country(&'static str),
+}
+
+/// A point-at-call's short-path bearing (degrees true) and what it was taken to.
+#[derive(Debug, Clone, PartialEq)]
+struct Aim {
+    bearing: f64,
+    to: AimedAt,
+}
+
+/// Every place Nexus already knows `call`'s station to be, MOST TRUSTED FIRST — the order
+/// [`propagation::geo::best_fix`] refines within: the log form's grid, the grids the station sent
+/// this session, the callbook's answer (its locator, then the position it vouched for), the grid
+/// on its newest logged contact. The engine keeps them ([`tempo_app::engine::StationGrids`]);
+/// none of them asks the network.
+fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+    use propagation::geo::StationFix;
+    let grids = eng.station_grids(call);
+    let mut fixes = Vec::new();
+    fixes.extend(grids.log_form.map(StationFix::Grid));
+    fixes.extend(grids.heard.into_iter().map(StationFix::Grid));
+    if let Some(book) = grids.callbook {
+        fixes.extend(book.grid.map(StationFix::Grid));
+        fixes.extend(
+            book.position
+                .map(|(lat, lon)| StationFix::Position(lat, lon)),
+        );
+    }
+    fixes.extend(grids.logged.map(StationFix::Grid));
+    fixes
+}
+
+/// The bearing from the operator's own grid, at its full precision, to `call`'s station: to the
+/// best of `fixes` ([`station_fixes`]), and only when none is known to the centre of its DXCC
+/// entity.
+///
+/// ⭐ **The country centre was the only answer until 2026-09-29**, and it is 20° out from the
+/// Netherlands to Galicia: a tester at JO21EV was sent to 207° for EC1DD, whose own grid is at
+/// 227° (QRZ says 227), and to 299° for AA1AA, whose own is at 291°. Sicily matched only because
+/// it is an entity of its own.
+fn aim_at_call(
+    mygrid: &str,
+    call: &str,
+    fixes: Vec<propagation::geo::StationFix>,
+) -> Result<Aim, String> {
+    use propagation::geo::{bearing_deg, best_fix, maidenhead_to_latlon, StationFix};
+    let me = maidenhead_to_latlon(mygrid.trim())
+        .ok_or("Set your grid square in Settings so a bearing can be computed.")?;
+    if let Some(fix) = best_fix(fixes) {
+        if let Some(at) = fix.latlon() {
+            let to = match fix {
+                StationFix::Grid(g) => AimedAt::Grid(g.trim().to_ascii_uppercase()),
+                StationFix::Position(..) => AimedAt::Position,
+            };
+            return Ok(Aim {
+                bearing: bearing_deg(me, at),
+                to,
+            });
+        }
+    }
+    let info = propagation::dxcc::resolve(call)
+        .ok_or_else(|| format!("Couldn't locate {call} (unknown callsign)."))?;
+    Ok(Aim {
+        bearing: bearing_deg(me, (info.lat, info.lon)),
+        to: AimedAt::Country(info.entity),
+    })
+}
+
+/// What `point_rotator_at_call` pointed at: the bearing, and what it was taken to, so the toast
+/// can say whether that was the station or only its country.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PointedAtDto {
+    /// Degrees true, on the path asked for.
+    bearing: f64,
+    /// `"grid"` (the station's locator, in `grid`), `"position"` (its callbook's coordinates) or
+    /// `"country"` (the centre of the DXCC entity in `country`).
+    to: &'static str,
+    grid: Option<String>,
+    country: Option<String>,
+}
+
+impl PointedAtDto {
+    fn new(bearing: f64, to: AimedAt) -> Self {
+        let (to, grid, country) = match to {
+            AimedAt::Grid(g) => ("grid", Some(g), None),
+            AimedAt::Position => ("position", None, None),
+            AimedAt::Country(c) => ("country", None, Some(c.to_string())),
+        };
+        PointedAtDto {
+            bearing,
+            to,
+            grid,
+            country,
+        }
+    }
+}
+
+/// Point the rotator at a callsign's station — the great-circle bearing from your grid to the
+/// best location Nexus has for it ([`aim_at_call`]). Returns the bearing and what it was taken
+/// to, for the toast.
 #[tauri::command]
 async fn point_rotator_at_call(
     state: State<'_, SharedEngine>,
     call: String,
     long_path: Option<bool>,
-) -> Result<f64, String> {
+) -> Result<PointedAtDto, String> {
     #[cfg(feature = "radio")]
     {
-        let (host, mygrid) = {
+        let (host, mygrid, fixes) = {
             let eng = engine_lock(&state);
             (
                 effective_rotator_addr(eng.settings()),
                 eng.settings().mygrid.clone(),
+                station_fixes(&eng, &call),
             )
         };
         let Some(host) = host else {
@@ -14077,11 +14186,8 @@ async fn point_rotator_at_call(
                     .to_string(),
             );
         };
-        let me = propagation::geo::maidenhead_to_latlon(mygrid.trim())
-            .ok_or("Set your grid square in Settings so a bearing can be computed.")?;
-        let info = propagation::dxcc::resolve(&call)
-            .ok_or_else(|| format!("Couldn't locate {call} (unknown callsign)."))?;
-        let short = propagation::geo::bearing_deg(me, (info.lat, info.lon));
+        let aim = aim_at_call(&mygrid, &call, fixes)?;
+        let short = aim.bearing;
         // ⭐ LONG PATH IS THE SAME GREAT CIRCLE THE OTHER WAY, so it is the reciprocal exactly
         // — no second computation and nothing to drift apart. `rem_euclid` rather than `%`
         // because `%` keeps the sign in Rust and a negative azimuth is not a heading.
@@ -14099,12 +14205,171 @@ async fn point_rotator_at_call(
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
-        Ok(bearing)
+        Ok(PointedAtDto::new(bearing, aim.to))
     }
     #[cfg(not(feature = "radio"))]
     {
         let _ = (state, call, long_path);
         Err("radio support is not built into this binary".to_string())
+    }
+}
+
+/// The grid the log form holds for the call it is logging — typed, or filled in from the
+/// callbook — so the rotator's point-at-call aims at that station (`Engine::set_log_form_grid`).
+/// A blank grid forgets it for that call. Fire-and-forget, like `set_cw_peer_info`.
+#[tauri::command(async)]
+fn set_log_form_grid(
+    state: State<'_, SharedEngine>,
+    call: String,
+    grid: String,
+) -> Result<(), String> {
+    engine_lock(&state).set_log_form_grid(&call, &grid);
+    Ok(())
+}
+
+#[cfg(test)]
+mod point_at_call_tests {
+    //! The point-at-call bearing, on a tester's own numbers (2026-09-29, relayed by the
+    //! operator): from JO21EV, QRZ gives EC1DD 227°, IT9IJF 151° and AA1AA 291°; Nexus gave
+    //! 207°, 151° and 299° — the centres of Spain, Sicily and the United States. IN52TK (Galicia)
+    //! and FN42KH (Boston) stand in for "a known 6-character grid": they are where QRZ's own
+    //! bearings from JO21EV land (227.4° and 290.6°).
+    use super::*;
+    use tempo_app::engine::{CallbookFix, Engine};
+    use tempo_core::logbook::{Logbook, QsoRecord};
+
+    const ME: &str = "JO21EV";
+
+    /// The great-circle bearing from the tester's grid to `grid`'s centre, computed here.
+    fn bearing_to(grid: &str) -> f64 {
+        propagation::geo::bearing_deg(
+            propagation::geo::maidenhead_to_latlon(ME).unwrap(),
+            propagation::geo::maidenhead_to_latlon(grid).unwrap(),
+        )
+    }
+
+    /// Degrees between two bearings, the short way round.
+    fn apart(a: f64, b: f64) -> f64 {
+        ((a - b + 540.0).rem_euclid(360.0) - 180.0).abs()
+    }
+
+    fn aim(eng: &Engine, call: &str) -> Aim {
+        aim_at_call(ME, call, station_fixes(eng, call)).expect("a bearing")
+    }
+
+    fn logged(call: &str, grid: &str) -> QsoRecord {
+        let mut parsed = Logbook::new();
+        parsed.import_adif(&format!(
+            "<CALL:{}>{call}<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>104000\
+             <GRIDSQUARE:{}>{grid}<EOR>",
+            call.len(),
+            grid.len()
+        ));
+        let mut r = QsoRecord::clone(&parsed.records()[0]);
+        r.id = None;
+        r
+    }
+
+    #[test]
+    fn a_station_nexus_knows_nothing_about_is_aimed_at_its_country_as_before() {
+        let eng = Engine::new("KD9TAW", ME, 0);
+        for (call, country, tester_saw) in [
+            ("EC1DD", "Spain", 207.0),
+            ("IT9IJF", "Sicily", 151.0),
+            ("AA1AA", "United States", 299.0),
+        ] {
+            let a = aim(&eng, call);
+            assert_eq!(a.to, AimedAt::Country(country), "{call}");
+            assert!(
+                apart(a.bearing, tester_saw) < 1.0,
+                "{call}: {:.1}° is the bearing the tester saw ({tester_saw}°)",
+                a.bearing
+            );
+        }
+    }
+
+    #[test]
+    fn the_callbook_answer_the_log_form_showed_aims_at_the_station() {
+        // The tester's case: the Phone log form looked EC1DD up (QRZ filled in the grid), and
+        // the beam went to the centre of Spain anyway.
+        let mut eng = Engine::new("KD9TAW", ME, 0);
+        eng.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: None,
+            },
+        );
+        let a = aim(&eng, "EC1DD");
+        assert_eq!(a.to, AimedAt::Grid("IN52TK".into()));
+        assert!(
+            apart(a.bearing, bearing_to("IN52TK")) < 1.0,
+            "{:.1}°",
+            a.bearing
+        );
+        assert!(
+            apart(a.bearing, 227.0) < 1.0,
+            "QRZ's own 227°, not 207°: {:.1}°",
+            a.bearing
+        );
+    }
+
+    #[test]
+    fn a_grid_typed_into_the_log_form_aims_at_the_station() {
+        let mut eng = Engine::new("KD9TAW", ME, 0);
+        eng.set_log_form_grid("AA1AA", "FN42KH");
+        let a = aim(&eng, "AA1AA");
+        assert_eq!(a.to, AimedAt::Grid("FN42KH".into()));
+        assert!(
+            apart(a.bearing, 291.0) < 1.0,
+            "QRZ's 291°, not 299°: {:.1}°",
+            a.bearing
+        );
+        // Another call's form says nothing about this one.
+        assert_eq!(aim(&eng, "EC1DD").to, AimedAt::Country("Spain"));
+        // IT9IJF is unchanged: nothing is known for it but its entity, which is Sicily's.
+        assert_eq!(aim(&eng, "IT9IJF").to, AimedAt::Country("Sicily"));
+    }
+
+    #[test]
+    fn a_grid_logged_with_the_station_before_aims_at_it() {
+        let mut eng = Engine::new("KD9TAW", ME, 0);
+        eng.log_qso(logged("EC1DD", "IN52TK"));
+        assert_eq!(aim(&eng, "EC1DD").to, AimedAt::Grid("IN52TK".into()));
+    }
+
+    #[test]
+    fn the_callbook_position_sharpens_the_square_it_lies_in_and_nothing_else() {
+        let mut eng = Engine::new("KD9TAW", ME, 0);
+        let (lat, lon) = propagation::geo::maidenhead_to_latlon("IN52TK").unwrap();
+        eng.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: Some((lat + 0.01, lon + 0.02)),
+            },
+        );
+        assert_eq!(aim(&eng, "EC1DD").to, AimedAt::Position);
+        // The operator copied a different square off the air — the station is portable. What
+        // they typed wins over the callbook's home address, however much finer that is.
+        eng.set_log_form_grid("EC1DD", "IN73");
+        assert_eq!(aim(&eng, "EC1DD").to, AimedAt::Grid("IN73".into()));
+        // …and clearing the box hands the aim back to the callbook.
+        eng.set_log_form_grid("EC1DD", "");
+        assert_eq!(aim(&eng, "EC1DD").to, AimedAt::Position);
+    }
+
+    #[test]
+    fn the_long_path_is_the_reciprocal_of_the_station_bearing() {
+        let mut eng = Engine::new("KD9TAW", ME, 0);
+        eng.set_log_form_grid("AA1AA", "FN42KH");
+        let short = aim(&eng, "AA1AA").bearing;
+        let dto = PointedAtDto::new((short + 180.0).rem_euclid(360.0), aim(&eng, "AA1AA").to);
+        assert!(apart(dto.bearing, bearing_to("FN42KH") + 180.0) < 1e-9);
+        assert_eq!(
+            (dto.to, dto.grid.as_deref(), dto.country),
+            ("grid", Some("FN42KH"), None)
+        );
     }
 }
 
@@ -22228,6 +22493,24 @@ fn note_lookup_name(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::Qrz
     }
 }
 
+/// The same lookup's location, for the rotator's point-at-call (`Engine::note_callbook_fix`), so
+/// pointing at a station the operator just looked up aims at the station rather than its
+/// country — and never makes a lookup of its own. The locator only when it IS one: QRZ answers
+/// the field with whatever the station typed into its profile ("EN52/EN53", free text).
+fn note_lookup_fix(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzLookupDto) {
+    let grid = dto
+        .grid
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| propagation::geo::is_logged_grid(g))
+        .map(str::to_string);
+    let fix = tempo_app::engine::CallbookFix {
+        grid,
+        position: dto.lat.zip(dto.lon),
+    };
+    engine_lock(engine).note_callbook_fix(call, fix);
+}
+
 /// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
 /// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
 /// no stored password) or has **no match**, the lookup falls through to the FREE
@@ -22310,6 +22593,7 @@ async fn qrz_lookup(
                 }
                 if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
                     note_lookup_name(&state, &call, &dto);
+                    note_lookup_fix(&state, &call, &dto);
                     return Ok(*dto);
                 }
             }
@@ -22335,6 +22619,7 @@ async fn qrz_lookup(
                 };
                 if let Some(dto) = attempt? {
                     note_lookup_name(&state, &call, &dto);
+                    note_lookup_fix(&state, &call, &dto);
                     return Ok(dto);
                 }
                 // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
@@ -29466,6 +29751,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             probe_cat_ports,
             point_rotator,
             stop_rotator,
+            set_log_form_grid,
             discover_flex,
             get_sat_schedule,
             get_sat_pass_needs,
