@@ -98,8 +98,11 @@ export class ApplicationStreamRelay {
       // Revocation, a topic change or hibernation retires the old watch epoch.
       if (!this.watch || message.watchId !== this.watch.id) return
       if (message.requestId !== this.watch.credit.id) throw new Error('invalidApplicationCredit')
-      const elapsed = now - this.watch.credit.at
-      if (elapsed < 0 || elapsed >= APPLICATION_TIMEOUT_MS) throw new Error('expiredApplicationBatch')
+      // The credit was timed on this relay's own clock, which reads the host's wall clock and can step
+      // back. An answer that reads as arriving before its credit is that step, never the station's
+      // doing, so it counts as no time at all; only the upper bound refuses a batch.
+      const elapsed = Math.max(0, now - this.watch.credit.at)
+      if (elapsed >= APPLICATION_TIMEOUT_MS) throw new Error('expiredApplicationBatch')
       const updates = streamUpdates(message.updates, message.requestId, this.version)
       const next = updates.map(update => {
         if (!this.watch!.topics.includes(update.command)) throw new Error('unrequestedApplicationTopic')
@@ -153,8 +156,9 @@ export class ApplicationStreamRelay {
       let update: StreamUpdate
       if (entry.update.type === 'applicationError') update = { ...entry.update, requestId: b.credit.id }
       else {
-        const age = now - entry.at
-        if (age < 0 || age >= APPLICATION_TIMEOUT_MS) continue
+        // Taken in on this relay's own clock, so a sample that reads as newer than now is a clock step.
+        const age = Math.max(0, now - entry.at)
+        if (age >= APPLICATION_TIMEOUT_MS) continue
         const sample = entry.update
         update = sample.baseRevision !== null && b.revisions.get(topic) === sample.baseRevision
           ? { ...sample, requestId: b.credit.id, ageMs: Math.ceil(age) }
