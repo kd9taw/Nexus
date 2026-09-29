@@ -1359,6 +1359,7 @@ export const DE: PartialCatalog = {
   "settings.tabs.configurations": "Konfig",
   "settings.save.callsignFirst": "Vor dem Speichern das Rufzeichen im Reiter „Station“ eintragen.",
   "settings.save.fdPositionName": "Diese Position im Reiter „Contest“ benennen, bevor ein Club-Event gehostet oder betreten wird — die Club-Bandtafel zeigt diesen Namen.",
+  "settings.save.js8GroupCannotJoin": "{{group}} ist eine Gruppe, der man nicht beitreten kann. Vor dem Speichern unter JS8 im Reiter „Digital“ aus den Gruppen entfernen.",
   "settings.save.checkRadio": "Die Einstellungen des Funkgeräts prüfen.",
   "settings.save.failed": "Einstellungen konnten nicht gespeichert werden.",
   "settings.betaUpdates.failed": "Update-Kanal konnte nicht geändert werden",

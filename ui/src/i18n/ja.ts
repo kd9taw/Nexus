@@ -3125,6 +3125,7 @@ export const JA: PartialCatalog = {
   "settings.configurations.reset.hint": "無線機、オーディオデバイス、コールサイン、各種設定を消去します。<b>ログブックには影響しません</b>。保存済みパスワードはキーチェーンに残ります（個別の削除は「ログと連携」で行えます）。元に戻せないため、先にバックアップしてください。",
   "settings.save.callsignFirst": "保存する前に「局情報」タブでコールサインを入力してください。",
   "settings.save.fdPositionName": "クラブイベントをホストまたは参加する前に、「コンテスト」タブでこのポジションに名前を付けてください。クラブのバンドボードにこの名前が表示されます。",
+  "settings.save.js8GroupCannotJoin": "{{group}} は参加できないグループです。保存する前に「Digital」タブの JS8 の「グループ」から外してください。",
   "settings.save.checkRadio": "無線機の設定を確認してください。",
   "settings.save.failed": "設定を保存できませんでした。",
   "settings.backup.restore.confirm.title": "現在の設定を {{file}} で置き換えますか？",

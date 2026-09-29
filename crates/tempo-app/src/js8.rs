@@ -91,11 +91,14 @@ impl Engine {
                 0 => 0,
                 m => m.max(5),
             },
+            // A group JS8Call will not let be joined (@APRSIS, @JS8NET) is never joined here,
+            // whatever put it in Settings: an older Nexus accepted one, and the Remote can write
+            // the list. Settings keeps it as written, and the panel refuses a save that adds one.
             groups: s
                 .js8_groups
                 .iter()
                 .map(|g| g.trim().to_ascii_uppercase())
-                .filter(|g| !g.is_empty())
+                .filter(|g| !g.is_empty() && ::js8::proto::callsign::may_join_group(g))
                 .collect(),
             info: s.js8_info.clone(),
             status: s.js8_status.clone(),
@@ -229,7 +232,9 @@ impl Engine {
                 hb: self.js8_hb_on && live,
                 cq: self.js8_station.cq_on() && live,
             },
-            idle_minutes: self.js8_station.idle_minutes(),
+            idle_minutes: self
+                .js8_station
+                .idle_minutes(tempo_core::timing::now_unix_ms() as u64),
             idle_limit_min: self.js8_station.config().idle_watchdog_min,
             idle_tripped,
             activity: self.js8_activity.iter().cloned().collect(),
@@ -326,7 +331,7 @@ impl Engine {
         // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
         // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
         // (:5310), and with TX on it says why (the alert at :5265).
-        let no_locator = self.js8_no_locator();
+        let no_locator = self.js8_no_usable_locator();
         if !self.tx_enabled() || no_locator {
             let mut dropped = false;
             if let Some(p) = self.js8_station.pending_reply() {
@@ -615,11 +620,13 @@ impl Engine {
         }
     }
 
-    /// Settings holds no locator. Empty is JS8Call's test (`my_grid().trimmed().isEmpty()`,
-    /// mainwindow.cpp:5264); its Settings dialog refuses to save a malformed one
-    /// (Configuration.cpp:2443), so it never meets one at transmit time.
-    fn js8_no_locator(&self) -> bool {
-        self.settings.mygrid.trim().is_empty()
+    /// Settings holds no locator JS8Call would transmit with. JS8Call refuses to start with an
+    /// empty one (`my_grid().trimmed().isEmpty()`, mainwindow.cpp:5264) and its Settings dialog
+    /// refuses to save a malformed one (Configuration.cpp:2443), so between them it sends
+    /// neither. Nexus's Settings field can hold either, so the gate refuses both, by JS8Call's
+    /// own rule (`is_station_locator`) on the trimmed text it stores (Configuration.cpp:2749).
+    fn js8_no_usable_locator(&self) -> bool {
+        !::js8::proto::grid::is_station_locator(self.settings.mygrid.trim())
     }
 
     /// JS8Call's `ensureCallsignSet` (mainwindow.cpp:5257-5271), which its Enter asks before
@@ -630,7 +637,7 @@ impl Engine {
                 ::js8::proto::compose::ComposeError::NoCallsign,
             ));
         }
-        if self.js8_no_locator() {
+        if self.js8_no_usable_locator() {
             return Err(JS8_NO_LOCATOR.to_string());
         }
         Ok(())
@@ -835,16 +842,21 @@ impl Engine {
             self.set_transmitting(false);
             return None;
         }
-        // …and no transmission STARTS without a locator, as in JS8Call: `startTx`
-        // (mainwindow.cpp:4768) → `ensureCreateMessageReady` → `ensureCallsignSet` (:5309,
-        // :5264-5268). The frames after a message's first go out through `stopTx` →
+        // …and no transmission STARTS without a locator JS8Call would accept, as in JS8Call:
+        // `startTx` (mainwindow.cpp:4768) → `ensureCreateMessageReady` → `ensureCallsignSet`
+        // (:5309, :5264-5268). The frames after a message's first go out through `stopTx` →
         // `prepareNextMessageFrame` (:4825), which never asks again, so a message already on
         // the air finishes. Refused before `next_frame`: nothing is released, popped or keyed,
         // and `js8_tick` drops a reply or heartbeat that falls due meanwhile.
-        if self.js8_no_locator() {
+        if self.js8_no_usable_locator() {
             let queue = self.js8_station.queue();
             if queue.first().is_none_or(|next| next.first) {
                 if !queue.is_empty() {
+                    // …and everything waiting is dropped, as JS8Call's refusal does
+                    // (`on_stopTxButton_clicked` → `resetMessage` → `resetMessageTransmitQueue`,
+                    // :5310 → :7396 → :5383-5391), so nothing old goes out once a locator is
+                    // set. The CQ repeat and the heartbeat keep their schedules.
+                    self.js8_station.drop_queue();
                     self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
                 }
                 self.set_transmitting(false);
@@ -1901,6 +1913,88 @@ mod tests {
         );
     }
 
+    /// The refusal drops everything waiting to go, as JS8Call's does (`resetMessageTransmitQueue`,
+    /// mainwindow.cpp:5383-5391: its frame and message queues), so a locator set afterwards sends
+    /// nothing old. The CQ repeat's schedule is its own: the call it queued is dropped with the
+    /// rest, and the repeat stays armed for its next time.
+    #[test]
+    fn a_start_refused_for_the_locator_drops_the_queue_and_nothing_old_goes_out_later() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_send(None, "FIRST".into()).expect("queues");
+        e.js8_send(None, "SECOND".into()).expect("queues");
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.settings.mygrid = "EN5".into(); // a slip in Settings
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let refused = run_js8_loop_from(&mut e, t0, 75); // the CQ repeat queues its call at 60 s
+        assert!(refused.is_empty(), "nothing keys: {refused:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the queue was dropped at the refusal: {:?}",
+            st.queue
+        );
+        assert!(
+            st.cq_on && st.cq_next_at_ms.is_some_and(|next| next > t0 + 75_000),
+            "the CQ repeat keeps its schedule: {:?}",
+            st.cq_next_at_ms
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
+        );
+        e.settings.mygrid = "EN52".into();
+        let later = run_js8_loop_from(&mut e, t0 + 75_000, 20);
+        assert!(
+            later.is_empty(),
+            "setting the locator sends nothing old: {later:?}"
+        );
+    }
+
+    /// JS8Call never holds a malformed locator: its Settings dialog refuses to save one
+    /// (Configuration.cpp:2443, the `Maidenhead::ExtendedValidator` set at :1332), so it never
+    /// transmits one. Nexus's Settings field can hold one, and the JS8 gate refuses it with the
+    /// same words as no locator. JS8Call's rule accepts 4 to 12 characters in whole pairs, in
+    /// either case.
+    #[test]
+    fn js8_refuses_a_malformed_locator_as_it_refuses_none() {
+        for grid in [
+            "EN5",
+            "EN52H",
+            "ZZ99",
+            "EN52HW1",
+            "EN52 HW",
+            "BP51AD95RF00A",
+        ] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            assert_eq!(
+                e.js8_send(None, "TEST".into()),
+                Err(NO_LOCATOR.to_string()),
+                "{grid:?} is refused"
+            );
+        }
+        for grid in ["en52", " EN52HW ", "EN52HW12", "BP51AD95RF", "BP51AD95RF00"] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            if let Err(err) = e.js8_send(None, "TEST".into()) {
+                panic!("control: {grid:?} is a locator JS8Call accepts, got {err}");
+            }
+        }
+    }
+
+    /// …and it starts nothing on the air either.
+    #[test]
+    fn a_malformed_locator_keys_nothing() {
+        let mut e = hb_engine("EN5", 0, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let overs = run_js8_loop(&mut e, 40);
+        assert!(
+            overs.is_empty(),
+            "nothing keys with the locator EN5: {overs:?}"
+        );
+    }
+
     /// Automatic traffic meets the same refusal when its transmission would start (`startTx` →
     /// `ensureCreateMessageReady` → `ensureCallsignSet`, :4768 → :5309), and the
     /// `on_stopTxButton_clicked` that follows (:5310) drops it: the reply is gone and the
@@ -1964,7 +2058,8 @@ mod tests {
 
     /// Only a transmission's START asks. JS8Call sends the frames after a message's first
     /// through `stopTx` → `prepareNextMessageFrame` (:4825), which never asks again: a message
-    /// already on the air finishes, and the next one does not start.
+    /// already on the air finishes, and the next one does not start. Its refusal drops it, as
+    /// JS8Call's `on_stopTxButton_clicked` → `resetMessage` clears the queue (:7396, :5240-5243).
     #[test]
     fn a_js8_message_on_the_air_finishes_when_the_locator_goes_and_the_next_does_not_start() {
         let mut e = hb_engine("EN52", 5, 1500.0);
@@ -1998,8 +2093,8 @@ mod tests {
         );
         let st = e.js8_state();
         assert!(
-            !st.queue.is_empty() && st.queue.iter().all(|q| q.display.ends_with("SECOND")),
-            "the second message waits, unsent: {:?}",
+            st.queue.is_empty(),
+            "the second message is dropped when its start is refused: {:?}",
             st.queue
         );
         assert_eq!(
@@ -2159,6 +2254,74 @@ mod tests {
             queue.first().map(|q| q.display.as_str()),
             Some("KD9TAW: QTH EN52, EN52HW TO BE EXACT"),
             "the queued message carries the locator"
+        );
+    }
+
+    // ===== the idle count (JS8Call's <MYIDLE>) =====
+
+    /// The cockpit's idle chip ("Idle 12/60 min") counts the whole minutes since the operator's
+    /// last act, the count JS8Call's idle timer keeps (mainwindow.cpp:10969-10979).
+    #[test]
+    fn the_js8_idle_count_is_the_minutes_since_the_operators_last_act() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let now = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(now - 12 * 60_000 - 5_000);
+        assert_eq!(
+            e.js8_state().idle_minutes,
+            12,
+            "twelve minutes since the last act"
+        );
+        e.js8_send(None, "TEST".into()).expect("queues");
+        assert_eq!(e.js8_state().idle_minutes, 0, "an operator send resets it");
+    }
+
+    // ===== groups that cannot be joined =====
+
+    /// JS8Call will not let @APRSIS or @JS8NET be joined (`isGroupAllowed`, varicode.cpp:1314-1320,
+    /// asked when a group is added and when Settings is saved, Configuration.cpp:1016, :2450). A
+    /// settings file written by a Nexus that accepted one still loads, and the station does not
+    /// join it: a query to @APRSIS draws no automatic reply, while one to a real group does.
+    #[test]
+    fn a_stored_aprsis_or_js8net_group_is_not_joined() {
+        let older =
+            r#"{"mycall":"KD9TAW","mygrid":"EN52","js8Groups":["@APRSIS","@ares","@JS8NET"]}"#;
+        let settings: Settings = serde_json::from_str(older).expect("an older settings file loads");
+        assert_eq!(
+            settings.js8_groups,
+            vec!["@APRSIS", "@ares", "@JS8NET"],
+            "the file's list is kept as written"
+        );
+        let mut e = Engine::with_settings(settings);
+        e.js8_enter();
+        assert_eq!(
+            e.js8_station.config().groups,
+            vec!["@ARES".to_string()],
+            "only the group that can be joined is joined"
+        );
+        let query = |to: &str| Frame::Directed {
+            from: CallRef::Base("W1AW".to_string()),
+            to: CallRef::parse(to).expect("a group"),
+            cmd: Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        let slot = now_unix_secs() / 15;
+        e.js8_ingest(
+            &[row(&query("@APRSIS"), whole(), Js8Speed::Normal, 1200.0)],
+            slot,
+        );
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "a query to @APRSIS draws no automatic reply"
+        );
+        e.js8_ingest(
+            &[row(&query("@ARES"), whole(), Js8Speed::Normal, 1200.0)],
+            slot,
+        );
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: a query to a joined group is answered"
         );
     }
 }

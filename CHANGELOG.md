@@ -254,6 +254,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** Saving Settings
+  with either in the JS8 Groups field is refused with "… is a group that cannot be joined", as
+  JS8Call's Settings refuses it. Messages can still be sent to both. If an earlier Nexus saved one
+  in your settings, it stays in the file and in the field but is not joined, so traffic to it gets
+  no automatic replies. Other changes still save, and the next edit of the Groups field asks you
+  to take it out.
+
+- **JS8: a HEARING? reply no longer names the station that asked, as in JS8Call.** A station asking
+  who you hear used to find its own call in your reply, usually first, taking one of the four
+  places. The reply now lists the four stations you heard most recently, not counting the one
+  asking.
+
 - **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
   do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
   offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
@@ -279,6 +291,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saying where to set it, and an automatic reply or heartbeat that comes due is dropped, with the
   same message in the JS8 cockpit. A message already going out when the locator is cleared still
   finishes.
+
+- **JS8: a malformed locator stops JS8 transmitting, as a missing one does.** JS8 used to send
+  with whatever was typed in the Grid field, so a slip such as "EN5" made every heartbeat go out as
+  two frames. JS8 now takes only a locator JS8Call's own Settings would accept: 4 to 12 characters
+  in whole pairs (EN52, EN52HW, EN52HW12 and so on), in upper or lower case. Anything else is
+  refused with the same message as no locator. FT8 and FT4 keep their own rule.
+
+- **JS8: what is waiting to go is dropped when a missing or malformed locator stops it, as in
+  JS8Call.** Messages queued when the locator was cleared or mistyped, a repeating CQ's call
+  among them, used to wait and go out the moment a locator was set, however long afterwards. They
+  are now dropped when the start is refused, as JS8Call drops its queue. A repeating CQ and the
+  heartbeat stay armed and carry on at their next times once the locator is fixed.
 
 - **JS8: the free spot for a heartbeat or its acknowledgement is chosen from everything heard,
   as in JS8Call.** A spot used to count as taken only when a station whose callsign had been
@@ -366,6 +390,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect, is unchanged.
 
 ### Fixed
+
+- **JS8: the Band activity by offset pane groups Fast and Turbo signals as JS8Call does.** A
+  station drifting a little at Fast or Turbo could show as two rows, because the pane joined
+  decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's
+  own tolerances, and keeps 10 Hz at Normal and Slow.
+
+- **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
+  STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8
+  cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
+  opened JS8, and the reply writes it as JS8Call does: "IDLE 5M", "IDLE 1H", "IDLE 2D".
 
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because

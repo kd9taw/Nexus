@@ -5369,6 +5369,7 @@ export const FR: PartialCatalog = {
   "settings.satellites.vfoMap.failed": "Impossible de confirmer l'affectation des VFO",
   "settings.save.callsignFirst": "Saisissez votre indicatif dans l'onglet Station avant d'enregistrer.",
   "settings.save.fdPositionName": "Nommez cette position dans l'onglet Concours avant d'héberger un événement de club ou d'en rejoindre un : le tableau des bandes du club affiche ce nom.",
+  "settings.save.js8GroupCannotJoin": "{{group}} est un groupe qu'on ne peut pas rejoindre. Retirez-le des Groupes, sous JS8 dans l'onglet Digital, avant d'enregistrer.",
   "settings.save.checkRadio": "Vérifiez les réglages de la radio.",
   "settings.save.failed": "Impossible d'enregistrer les réglages.",
   "settings.search.empty": "Rien ne correspond à “{{query}}”. Essayez les mots portés par le contrôle — “carte son”, “port COM”, “WPM”.",

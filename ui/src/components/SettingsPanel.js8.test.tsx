@@ -8,7 +8,7 @@
 // settings.json degrades to "all four" rather than to nothing. HB on/off is deliberately NOT
 // a setting (session-only, spec G3) and this file asserts its absence.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -183,4 +183,41 @@ describe('Settings ▸ Digital ▸ JS8', () => {
       .map((s) => s.getAttribute('aria-label') ?? s.closest('label')?.textContent ?? '')
     expect(names.some((n) => /^heartbeat$|send heartbeats/i.test(n))).toBe(false)
   })
+
+  // JS8Call will not let @APRSIS or @JS8NET be joined: "%1 is a group that cannot be joined"
+  // (Configuration.cpp:1017 on adding one, :2451 on saving Settings; isGroupAllowed,
+  // varicode.cpp:1314-1320).
+  it('refuses to save @APRSIS or @JS8NET as a group, and says why', async () => {
+    for (const group of ['@APRSIS', '@JS8NET']) {
+      const fs = await openJs8()
+      fireEvent.change(control(fs, 'Groups'), { target: { value: `@FUN, ${group.slice(1).toLowerCase()}` } })
+      await clickSave()
+      await waitFor(() =>
+        expect(screen.queryByRole('alert')?.textContent ?? '', `${group}: the reason`).toContain(
+          `${group} is a group that cannot be joined`,
+        ),
+      )
+      expect(api.get('setSettings'), `${group}: nothing saved`).not.toHaveBeenCalled()
+      cleanup()
+    }
+  })
+
+  it('a settings file that already holds one still loads, and an unrelated save goes through', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, ...js8Defaults, js8Groups: ['@APRSIS'], mycall: 'KD9TAW', mygrid: 'EN52' } as never),
+    )
+    const fs = await openJs8()
+    expect((control(fs, 'Groups') as HTMLInputElement).value, 'it loads as it was').toBe('@APRSIS')
+    fireEvent.change(control(fs, 'Idle watchdog (minutes)'), { target: { value: '30' } })
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings'), 'an unrelated change still saves').toHaveBeenCalled())
+  })
 })
+
+/** The footer Save (`type="submit"`); other sections carry their own "Save …" buttons. */
+async function clickSave() {
+  const save = (await screen.findAllByRole('button', { name: 'Save' })).find(
+    (b) => (b as HTMLButtonElement).type === 'submit',
+  )!
+  fireEvent.click(save)
+}
