@@ -12565,6 +12565,12 @@ impl Transport {
         tempo_app::settings::rig_conn_is_omnirig(&self.rig_conn)
     }
 
+    /// Would asking this link's CAT daemon for `RFPOWER` WRITE the radio's power (#381)? Only a
+    /// Hamlib daemon's can, so an OmniRig link, which answers from its own rig file, never does.
+    fn rfpower_read_writes_power(&self) -> bool {
+        !self.is_omnirig() && crate::rigmodels::hamlib_rfpower_read_writes_power(self.rig_model)
+    }
+
     /// Which OmniRig slot this transport drives.
     fn omnirig_slot(&self) -> crate::omnirig::RigSlot {
         crate::omnirig::RigSlot::from_setting(self.omnirig_slot)
@@ -13438,6 +13444,9 @@ fn finish_cat_open(rig: &mut Rig, t: &Transport) -> CatProbe {
 /// Probe a CAT rig by reading its frequency, mapping failures to a concrete,
 /// operator-actionable message (rigctld unreachable vs. rig not answering).
 fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
+    // Every CAT open passes here before its first read, so this is where a connection learns the
+    // one question it must never ask: on these radios a READ of the power sets it (#381).
+    rig.set_rfpower_read_refused(t.rfpower_read_writes_power());
     let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
@@ -17488,6 +17497,96 @@ mod tests {
             "still owed after its tick"
         );
         assert!(!t.take_owed(HeavyRead::Mode, true), "paid");
+    }
+
+    /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to
+    /// 5 watts … Does the same on RTTY."
+    ///
+    /// Nothing in Nexus sets 5 W. The write is Hamlib's, inside a READ: 4.7.1's
+    /// `kenwood_get_level(RIG_LEVEL_RFPOWER)` calls `kenwood_get_power_minmax(…, restore = 0)`
+    /// on the first read after a connect and after every mode change, which sends
+    /// `PC;PC000;PC;PC255;PC;PC000;` and never puts the power back. Kenwood's manual says an
+    /// out-of-range `PC` is entered as the minimum or the maximum, so the radio goes to full
+    /// power for an instant and is left at 5 W, while Hamlib hands back the level it read
+    /// first. Executed against a fake TS-590S that clamps as the manual says: 80 W before one
+    /// `l RFPOWER`, 5 W after, and `0.8` returned.
+    ///
+    /// Every CAT connection is opened through [`probe_cat`] before its first read, so that is
+    /// where it must learn that it may never ask this.
+    #[test]
+    fn a_ts590s_connection_never_asks_hamlib_for_its_rf_power() {
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut s = test_settings();
+        s.rig_model = 2031; // Hamlib's TS-590S
+        let t = Transport::from_settings(&s);
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        let _ = probe_cat(&mut rig, &t);
+        assert!(
+            rig.read_level("RFPOWER").is_err(),
+            "reading RF power on this radio writes it: the read must be refused"
+        );
+        assert_eq!(
+            rig.read_meter_f32("RFPOWER"),
+            None,
+            "…by the raw reader too, which the Remote power checks use"
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "l RFPOWER"),
+            "…before it reaches the daemon: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            rig.read_level("MICGAIN").ok(),
+            Some(0.5),
+            "every other level still reads"
+        );
+    }
+
+    /// The same through the radio loop: a heavy poll on a TS-590S reads everything it always did
+    /// except RF power, and writes no power either. The TS-480, whose Hamlib backend reads power
+    /// with a plain `PC;`, is the positive control: it is still asked.
+    #[test]
+    fn the_heavy_poll_leaves_rf_power_alone_on_a_rig_whose_read_writes_it() {
+        for (model, asked) in [(2031u32, false), (2028, true)] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let mut backend = MockBackend::new();
+            let (addr, log) = mock_slow_rigctld(0);
+            let mut s = test_settings();
+            s.rig_model = model;
+            let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+            let _ = probe_cat(&mut rig, &Transport::from_settings(&s));
+            let mut state = loop_state();
+            read_back_scene(&engine, &mut state);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            log.lock().unwrap().clear();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100_000.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let sent = log.lock().unwrap().clone();
+            assert_eq!(
+                sent.iter().any(|l| l == "l RFPOWER"),
+                asked,
+                "model {model}: is RF power read? wire {sent:?}"
+            );
+            assert!(
+                !sent.iter().any(|l| l.starts_with("L RFPOWER")),
+                "model {model}: no power is written by a poll: {sent:?}"
+            );
+            assert!(
+                sent.iter().any(|l| l == "l MICGAIN"),
+                "model {model}: the rest of the poll still runs: {sent:?}"
+            );
+        }
     }
 
     #[test]

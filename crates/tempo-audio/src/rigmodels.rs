@@ -335,6 +335,45 @@ pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
     !matches!(model / 1000, ICOM_BACKEND | KENWOOD_BACKEND)
 }
 
+/// Does Hamlib WRITE this radio's power to answer a READ of it (`get_level RFPOWER`)? (#381)
+///
+/// ⚠️ A READ THAT WRITES. `rigs/kenwood/kenwood.c`, `kenwood_get_level`: the `RIG_LEVEL_RFPOWER`
+/// arm calls `kenwood_get_power_minmax(…, restore = 0)` on the first read after a connect and on
+/// the first after every mode change. That sends `PC;PC000;PC;PC255;PC;PC000;` — read, set 0,
+/// read, set 255, read, set 0 — to learn the power range, and with `restore = 0` nothing puts the
+/// power back. Kenwood's TS-590S PC command reference (`PC`): a value below the minimum is entered
+/// as the minimum and one above the maximum as the maximum. So the radio goes to full power for an
+/// instant and is left at its floor, 5 W on a TS-590S, and Hamlib answers with the level it read
+/// FIRST, so nothing on screen disagrees. Nexus's heavy poll asks for RFPOWER every 750 ms, and
+/// every mode change (FT8, RTTY) set it off again.
+///
+/// MEASURED, not read off the source: Hamlib 4.7.1 (the version Nexus bundles), every
+/// Kenwood-protocol model 2001–2057 driven against a fake radio that clamps `PC` as Kenwood's
+/// manual says, one `l RFPOWER` each, the wire checked for a power set inside the read. These
+/// fourteen wrote. The rest either read with a plain `PC;`/`ZZPC;` (TS-480, TS-570D/S, TS-870S,
+/// TS-890S, TS-990S, the K3/K3S/KX2/KX3/K4, FLEX-6xxx, PowerSDR, Thetis, PiHPSDR, TX-500) or
+/// refuse the read. Only `kenwood_get_level` reaches the probe, and every backend that calls it is
+/// in that range. ⚠️ Re-measure when the bundled Hamlib changes.
+pub fn hamlib_rfpower_read_writes_power(model: u32) -> bool {
+    matches!(
+        model,
+        2001 // TS-50S
+            | 2003 // TS-450S
+            | 2014 // TS-2000 (and the SDR programs that answer as one)
+            | 2021 // Elecraft K2
+            | 2022 // TS-930
+            | 2030 // TRC-80
+            | 2031 // TS-590S
+            | 2037 // TS-590SG
+            | 2046 // Hilberling PT-8000A
+            | 2051 // SDRplay SDRuno
+            | 2052 // QRP Labs QCX/QDX
+            | 2053 // BG2FX FX4
+            | 2055 // DL2MAN (tr)uSDX
+            | 2056 // SDR Console
+    )
+}
+
 /// Catalog entries where **the program is the rig**: CAT is served by an application on a PC
 /// (or by the radio's own Ethernet API), over TCP or a virtual COM pair. None of them is ever
 /// a USB device that enumerates with a descriptor.
@@ -1406,6 +1445,27 @@ mod tests {
                 "model {model} decodes to backend {backend}"
             );
         }
+    }
+
+    /// #381: the fourteen models whose Hamlib RFPOWER read writes the radio's power, held to the
+    /// measurement together with the models the same run found reading it cleanly.
+    #[test]
+    fn the_radios_whose_power_read_writes_their_power_are_the_measured_fourteen() {
+        for m in [
+            2001, 2003, 2014, 2021, 2022, 2030, 2031, 2037, 2046, 2051, 2052, 2053, 2055, 2056,
+        ] {
+            assert!(hamlib_rfpower_read_writes_power(m), "{m}: its read writes");
+        }
+        // Read with a plain PC; or ZZPC; in the same run.
+        for m in [
+            2004, 2010, 2016, 2028, 2029, 2036, 2039, 2040, 2041, 2043, 2044, 2045, 2047, 2048,
+            2050, 2054,
+        ] {
+            assert!(!hamlib_rfpower_read_writes_power(m), "{m}: reads cleanly");
+        }
+        // Not Kenwood-protocol backends at all: the Yaesu FTX-1 of #385 and an IC-7300.
+        assert!(!hamlib_rfpower_read_writes_power(1051));
+        assert!(!hamlib_rfpower_read_writes_power(3073));
     }
 
     #[test]

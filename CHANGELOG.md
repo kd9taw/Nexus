@@ -364,6 +364,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers quickly is read exactly as before. Not yet checked on the air: on an FTX-1, the
   S-meter should move within a few seconds of connecting, and the Receiver pane should show RF,
   NB, NR, the notches, AGC and SQL.
+- **Nexus no longer turns a TS-590S down to 5 W (#381).** Nexus reads the radio's power back so
+  the power slider follows the radio's own knob. On some radios the Hamlib driver answers that
+  read by setting the power to learn its range: it turns the radio up to full power for an
+  instant and then leaves it at its minimum, 5 W on a TS-590S. It did this on every connect and
+  after every mode change, so switching to FT8 or RTTY did it again. Nexus no longer asks these
+  radios for their power: the Kenwood TS-590S, TS-590SG, TS-2000, TS-50S, TS-450S and TS-930, the
+  TRC-80, the Elecraft K2, the Hilberling PT-8000A, the QRP Labs QCX/QDX, the (tr)uSDX, the FX4,
+  SDRuno and SDR Console. A power you set in Nexus still goes to the radio and still stays under
+  your per-mode limits. On these radios the slider no longer follows the knob, so a power turned
+  up at the radio is not pulled back under a limit. Not yet checked on the air: on a TS-590S, set
+  80 W at the radio, connect Nexus, and switch to FT8 and then RTTY; the radio should still be at
+  80 W.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

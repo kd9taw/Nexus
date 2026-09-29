@@ -523,6 +523,9 @@ pub struct Rig {
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
     /// loop (and the fast dial poll) for 2.5 s. Default false (serial / local).
     slow_transport: bool,
+    /// Never ask this daemon for `RFPOWER`: its Hamlib backend WRITES the radio's power to answer
+    /// (#381, [`crate::rigmodels::hamlib_rfpower_read_writes_power`]). Default false.
+    rfpower_read_refused: bool,
     #[cfg(test)]
     before_remote_write: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -558,6 +561,7 @@ impl Rig {
             serial: None,
             keyed: false,
             slow_transport: false,
+            rfpower_read_refused: false,
             #[cfg(test)]
             before_remote_write: None,
         }
@@ -568,6 +572,18 @@ impl Rig {
     /// slow reply isn't cut off; leave default (false) for serial rigs so a stalled read is bounded.
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
+    }
+    /// Refuse every `RFPOWER` read on this link, because answering one writes the radio's power
+    /// (#381). Writes are untouched: a power the operator sets still goes out.
+    pub fn set_rfpower_read_refused(&mut self, refused: bool) {
+        self.rfpower_read_refused = refused;
+    }
+    /// Is `l <name>` a read this link must never send? The two readers that form that line,
+    /// [`Self::read_level`] and [`Self::read_meter_f32_within`], both ask, because the radio's
+    /// power is read through each: the heavy poll and the tune level through the first, the
+    /// Remote level checks through the second.
+    fn refuses_level_read(&self, name: &str) -> bool {
+        self.rfpower_read_refused && name == "RFPOWER"
     }
     /// Change how this rig is keyed WITHOUT touching its (already-open) CAT control channel. Used by
     /// the dual-radio handoff: a monitor rig is opened read-only (`PttMode::Vox`), so when it's adopted
@@ -1190,9 +1206,18 @@ impl Rig {
     /// Only valid with a CAT control channel.
     /// Read a rig LEVEL (e.g. "RFPOWER" → 0.0–1.0) via rigctld `l NAME`.
     /// CAT-only; errors on FakeIt/none like `read_freq`.
+    ///
+    /// ⚠️ `RFPOWER` is refused, without a byte on the wire, on a link marked
+    /// [`Self::set_rfpower_read_refused`] — see [`Self::refuses_level_read`].
     pub fn read_level(&mut self, name: &str) -> std::io::Result<f32> {
         if self.control.is_none() {
             return Err(std::io::Error::other("not a CAT rig"));
+        }
+        if self.refuses_level_read(name) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "RF power is not read on this radio: its Hamlib driver sets the power to answer",
+            ));
         }
         let reply = self.command(&format!("l {name}\n"))?;
         reply
@@ -1241,6 +1266,9 @@ impl Rig {
     /// waited for. `None` = the transport's normal deadline.
     pub fn read_meter_f32_within(&mut self, name: &str, deadline_ms: Option<u64>) -> Option<f32> {
         self.control.as_ref()?;
+        if self.refuses_level_read(name) {
+            return None;
+        }
         let reply = self
             .command_with_deadline(&format!("l {name}\n"), deadline_ms)
             .ok()?;
@@ -2076,6 +2104,37 @@ mod tests {
             "the next command must read its OWN answer, not the stray passband"
         );
         assert_eq!(*log.lock().unwrap(), ["m", "l RFPOWER"]);
+    }
+
+    /// #381: on a link whose Hamlib driver SETS the power to answer a read of it, neither reader
+    /// sends `l RFPOWER` — the heavy poll and the tune level read through `read_level`, the Remote
+    /// level checks through `read_meter_f32` — while every other level still reads and a power
+    /// the operator sets still goes out.
+    #[test]
+    fn a_refused_rf_power_read_sends_nothing_and_leaves_the_rest_of_the_radio_alone() {
+        let (addr, log) = mock_rigctld(|line| match line {
+            "l RFPOWER" | "l MICGAIN" => "0.500\n".to_string(),
+            _ => "RPRT 0\n".to_string(),
+        });
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        rig.set_rfpower_read_refused(true);
+        assert!(rig.read_level("RFPOWER").is_err(), "read_level refuses");
+        assert_eq!(
+            rig.read_meter_f32("RFPOWER"),
+            None,
+            "the raw reader refuses"
+        );
+        assert_eq!(
+            rig.read_level("MICGAIN").ok(),
+            Some(0.5),
+            "other levels read"
+        );
+        rig.set_power(0.8).unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["l MICGAIN", "L RFPOWER 0.800"],
+            "no power read on the wire, and the operator's power write went out"
+        );
     }
 
     /// **AND WHEN THE STRAGGLER MISSES ITS WINDOW, THE SOCKET IS DIRTY** (CI flake, diagnosed
