@@ -195,6 +195,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
+  do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
+  offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
+  heartbeat's, and the Activity pane shows it there. Unlike the heartbeat, it does this even when
+  your own offset is 1000 Hz or lower, as in JS8Call.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as

@@ -26,10 +26,11 @@
 //!   offset, as `sendHeartbeat` does, mainwindow.cpp:6256). A periodic heartbeat is due one
 //!   interval after the next transmit cycle (:6311) and `next_frame` releases it at the boundary
 //!   of that period; the end of every message and directed traffic to me re-base it the same
-//!   way (:3706). Replies/ACKs never QSY (`FreqHint::Dial`).
+//!   way (:3706). Replies and ACKs never QSY (`FreqHint::Dial`); the HB-ACK is the exception.
 //! - HB-ACK (default off): only with HB + autoreply + `hb_ack`, an empty outbox and no QSO pause,
-//!   answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`. An incoming `HEARTBEAT SNR` is
-//!   never answered (no ack-of-an-ack loop).
+//!   answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`, on a free heartbeat spot picked
+//!   as the heartbeat's is but with no own-offset rule (`sendHeartbeatAck`, :6299). An incoming
+//!   `HEARTBEAT SNR` is never answered (no ack-of-an-ack loop).
 //! - Autoreply: only to my own call, `@ALLCALL`, and joined groups; only the autoreply subset
 //!   (`Command::is_autoreply`, = upstream `autoreply_cmds {0,2,3,4,6,9,10,11,12,13,14,16,30}`);
 //!   `@ALLCALL` replies are rate-limited to one per station per `allcall_reply_interval_ms`.
@@ -115,9 +116,9 @@ pub enum Origin {
     CqRepeat,
 }
 
-/// Where a frame wants to transmit. `HbSubband` is the heartbeat's free offset in 500..1000 Hz
-/// (`find_free_freq_offset`), picked once per message; everything else stays on the dial
-/// (replies/ACK/HB-ack never QSY).
+/// Where a frame wants to transmit. `HbSubband` is a free heartbeat spot in 500..1000 Hz
+/// (`find_free_freq_offset`), picked once per message, for a heartbeat or an HB-ACK; everything
+/// else stays on the dial (replies and ACKs never QSY).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FreqHint {
     Dial,
@@ -557,7 +558,10 @@ impl Station {
         if let Some(id) = self.stored_for(&to) {
             text.push_str(&format!(" MSG ID {id}"));
         }
-        self.schedule_reply(Origin::HbAck, &to, &text, FreqHint::Dial, now_ms, actions);
+        // On a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
+        // (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299); `next_frame` picks it.
+        let spot = FreqHint::HbSubband(0.0);
+        self.schedule_reply(Origin::HbAck, &to, &text, spot, now_ms, actions);
     }
 
     fn autoreply(
@@ -1449,7 +1453,11 @@ mod tests {
         );
         let f = drain(&mut s, 5000).expect("HB-ack after the delay");
         assert_eq!(f.origin, Origin::HbAck);
-        assert_eq!(f.freq_hint, FreqHint::Dial, "an HB-ack never QSYs");
+        assert_eq!(
+            f.freq_hint,
+            FreqHint::HbSubband(500.0),
+            "an HB-ack goes on a free heartbeat spot (sendHeartbeatAck, mainwindow.cpp:6299)"
+        );
         assert_eq!(f.display, "KD9TAW: W1AW HEARTBEAT SNR -05");
         // An incoming HEARTBEAT SNR is never answered (no ack-of-an-ack). The heartbeat is a
         // periodic one not yet due, so nothing of our own is scheduled in the window and
@@ -2301,6 +2309,28 @@ mod tests {
                 grid: Some("EN52".into()),
             }),
             "the typed message's announcement carries the square"
+        );
+    }
+
+    /// An HB-ACK goes on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
+    /// (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299), not on the dial.
+    #[test]
+    fn an_hb_ack_goes_on_a_free_heartbeat_spot() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        c.hb_interval_min = 5; // our own heartbeat is not due in this window
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        s.on_event(&heartbeat("W1AW", -5), 1000);
+        let mut rng = || 3u32; // the first draw: 500 + 50 × 3
+        let f = s
+            .next_frame(5000, &|_| false, &mut rng)
+            .expect("the HB-ACK after its countdown");
+        assert_eq!(f.origin, Origin::HbAck, "precondition: the HB-ACK");
+        assert_eq!(
+            f.freq_hint,
+            FreqHint::HbSubband(650.0),
+            "the HB-ACK goes on a free heartbeat spot"
         );
     }
 

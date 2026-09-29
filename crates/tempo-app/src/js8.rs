@@ -861,13 +861,17 @@ impl Engine {
         }
         // f0: the operator's TX offset, or the station's HB sub-band pick — an AUDIO
         // offset only. JS8Call's `sendHeartbeat` (mainwindow.cpp:6279) keeps an operator at
-        // or below 1000 Hz on their own offset; its `heartbeat_anywhere` has no Nexus
+        // or below 1000 Hz on their own offset; `sendHeartbeatAck` (:6299) has no such rule,
+        // so an HB-ACK always takes the pick. Its `heartbeat_anywhere` has no Nexus
         // setting, and upstream it defaults off, which is this. A pick outside 500–1000 Hz
         // cannot come from a correct station; fall back to the operator's offset rather
         // than trust it.
+        let own_offset = self.tx_offset_hz() <= 1000.0;
         let f0 = match tf.freq_hint {
             FreqHint::Dial => self.tx_offset_hz(),
-            FreqHint::HbSubband(_) if self.tx_offset_hz() <= 1000.0 => self.tx_offset_hz(),
+            FreqHint::HbSubband(_) if tf.origin == Origin::Heartbeat && own_offset => {
+                self.tx_offset_hz()
+            }
             FreqHint::HbSubband(f) if (500.0..=1000.0).contains(&f) => f,
             FreqHint::HbSubband(_) => self.tx_offset_hz(),
         };
@@ -1672,6 +1676,40 @@ mod tests {
             booked,
             vec!["KD9TAW: @ALLCALL CQ CQ CQ EN52".to_string()],
             "…booked once, with the square it carried"
+        );
+    }
+
+    /// An HB-ACK keys on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
+    /// (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299), and is booked there. Unlike
+    /// the heartbeat's (`sendHeartbeat`, :6279), that pick has no "at or below 1000 Hz, stay on
+    /// your own offset" rule, so an operator at 777 Hz still gets a spot (777 is never one).
+    #[test]
+    fn a_js8_hb_ack_keys_on_a_free_heartbeat_spot_not_the_operators_offset() {
+        let mut e = hb_engine("EN52", 30, 777.0); // our own heartbeat is 30 min away
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB-ack on");
+        e.js8_ingest(
+            &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 1200.0)],
+            now_unix_secs() / 15,
+        );
+        let overs = run_js8_loop(&mut e, 60);
+        let [(_, f0)] = overs[..] else {
+            panic!("one HB-ACK over, got {overs:?}");
+        };
+        assert!(
+            f0 != 777.0 && (500.0..=950.0).contains(&f0) && f0 % 50.0 == 0.0,
+            "the HB-ACK keys on a free heartbeat spot, not the operator's 777 Hz: {f0}"
+        );
+        let row = e
+            .js8_state()
+            .activity
+            .last()
+            .cloned()
+            .expect("the over's row");
+        assert_eq!(
+            (row.text.as_str(), row.freq_hz),
+            ("KD9TAW: W1AW HEARTBEAT SNR -07", f0),
+            "…and it is booked where it keyed"
         );
     }
 
