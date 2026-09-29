@@ -25492,7 +25492,14 @@ tr.sel .aprs-sym {
    map is the point, and the controls belong beside it. */
 .aprs-body {
   display: grid;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  /* THE RAIL'S WIDTH (layout L7). The rail's track reads `--aprs-rail-w`, written inline on the
+     body only once the operator sizes the rail (components/AprsRailSeam), and always written
+     `min(<px>px, max(50%, 420px))` (features/aprsRail), so a stored width is clamped by the layout
+     itself on load, on every resize and on every zoom change. Unset, the track is the stock rail:
+     420 px, the fixed maximum the grid pays out before the map's 1fr sees any space. The floor is
+     the divider's 260 px (it was 320): a floor binds only on a body under 432 px, which is the
+     one-column xs stack below, where this template never applies. */
+  grid-template-columns: minmax(260px, var(--aprs-rail-w, 420px)) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--space-3);
   /* flex:1 + min-height:0 only mean anything because the `.layout.single:has()` rule above
@@ -25500,6 +25507,38 @@ tr.sel .aprs-sym {
      the map has no height to resolve against. */
   min-height: 0;
   flex: 1;
+  /* The containing block of the rail's width divider (`.aprs-railseam` below), and of nothing
+     else: every other positioned box in the body has its own (`.aprs-map`, `.aprs-sym`). */
+  position: relative;
+}
+/* THE MAP ON THE LEFT (layout L7): the map goes first by `order` only — the tree, and the rail's
+   forms and list in it, stay where they are — and the template mirrors so the rail keeps its
+   width track. In :where() so it stays (0,1,0): the xs stack (0,2,0) must win whatever side the
+   operator picked, as it does over Connect's rails. */
+.aprs-body:where([data-map='left']) {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--aprs-rail-w, 420px));
+}
+.aprs-body:where([data-map='left']) > .aprs-map {
+  order: -1;
+}
+/* THE RAIL'S WIDTH DIVIDER: an absolutely positioned child of the body, placed by `grid-column`
+   on the second track and pulled back over the gap before it — the full height of the body, 12 px
+   wide, centred on the gap, covering neither the rail nor the map. With the map on the left the
+   rail is that second track, so the same gap holds it. */
+.aprs-body > .aprs-railseam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  grid-column: 2 / 3;
+  grid-row: 1;
+  left: calc(var(--space-3) / -2 - 6px);
+  width: 12px;
+  margin: 0;
+}
+/* The sm tier keeps the two columns, so it keeps their divider: the app-wide rule that hides
+   every divider at sm and xs is about layouts that stack there. xs stacks APRS too, and hides it. */
+[data-viewport='sm'] .aprs-body > .pane-splitter {
+  display: block;
 }
 .aprs-rail {
   display: flex;
@@ -25518,6 +25557,20 @@ tr.sel .aprs-sym {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+}
+/* The map-side switch (layout L7): a chip in the map's top-right corner, over the map rather than
+   in the header, where one more chip wraps the row at some widths and takes a line from the body.
+   Below the station card (z 30), which may cover it while a station is open. */
+.aprs-map-side {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 20;
+  background: var(--panel);
+}
+/* On, it is the header chips' `.active`, laid on the panel so the map never shows through. */
+.aprs-map-side.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
 }
 /* "Nothing plotted" is a NORMAL state — status and message packets carry no
    position at all — so it is named rather than left as an empty planet. */

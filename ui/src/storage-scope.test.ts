@@ -26,6 +26,10 @@ import { PALETTE_ROLES } from './features/paletteRoles'
 export const PER_SURFACE = [
   'neededFilters',
   'nexus-ui-scale-mode',
+  // APRS's body (layout L7): the station list column's width and the side the map stands on —
+  // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
+  'nexus.aprs.mapSide',
+  'nexus.aprs.railWidth',
   'nexus.awardsTab',
   'nexus.connect.config',
   'nexus.connect.globe3d.layers',

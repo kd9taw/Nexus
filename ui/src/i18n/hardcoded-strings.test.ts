@@ -377,6 +377,8 @@ const MIGRATED = [
   'components/Toasts.tsx',
   // Splitter.tsx and SplitterSeam.tsx sat here until PaneSeam replaced both (layout L1).
   'components/PaneSeam.tsx',
+  // APRS's station list width divider (layout L7): born migrated, its name is the caller's.
+  'components/AprsRailSeam.tsx',
   'components/LinkPill.tsx',
   'components/panes/CockpitPaneFrame.tsx',
   'features/profiles.ts',

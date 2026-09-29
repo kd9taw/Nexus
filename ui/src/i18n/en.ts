@@ -7439,6 +7439,11 @@ export const EN = {
   'aprs.retune.title.noCoverage':
     "This radio doesn't cover {{freq}} MHz — RF APRS needs a VHF radio.",
   'aprs.dial.title': "The rig's current dial / band / mode (this view hides the top bar's readout)",
+  // The body's layout (layout L7): the divider between the station list column and the map, and
+  // the switch that puts the map on the left.
+  'aprs.rail.width.label': 'Station list column width',
+  'aprs.mapLeft.label': 'Map on the left',
+  'aprs.mapLeft.title': 'Show the map on the left of the station list, or back on the right',
   // Monitor arms the DECODER on the receive audio. Three states, because "decoding" and
   // "may ack by itself" are different things — the ack still needs TX on.
   'aprs.monitor.label.auto': '● Monitoring (auto)',
