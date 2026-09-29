@@ -96,6 +96,27 @@ pub fn unpack_grid15(v: u16) -> Option<String> {
     Some(deg2grid4(dlong, dlat))
 }
 
+/// JS8Call's rule for the station's own locator, the settings dialog's
+/// `Maidenhead::ExtendedValidator` (Configuration.cpp:1332; `valid<2,6>` and `invalidIndex`,
+/// Maidenhead.hpp:48-115): two to six whole pairs, each in its own range whatever the case.
+/// Field A-R, square 0-9, subsquare A-X, extended 0-9, then APRS's two more, A-X and 0-9. So
+/// 4, 6, 8, 10 or 12 characters.
+pub fn is_station_locator(s: &str) -> bool {
+    let b = s.as_bytes();
+    if !b.len().is_multiple_of(2) || !(4..=12).contains(&b.len()) {
+        return false;
+    }
+    b.iter().enumerate().all(|(i, &c)| {
+        let u = c.to_ascii_uppercase();
+        match i {
+            0 | 1 => (b'A'..=b'R').contains(&u),
+            2 | 3 | 6 | 7 | 10 | 11 => u.is_ascii_digit(),
+            4 | 5 | 8 | 9 => (b'A'..=b'X').contains(&u),
+            _ => false,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +176,44 @@ mod tests {
             assert_eq!(unpack_grid15(v), None, "{v}");
         }
         assert_eq!((NBASEGRID, NUSERGRID, NMAXGRID), (32400, 32410, 32767));
+    }
+
+    /// JS8Call's own examples for the validator (Maidenhead.hpp:117-144), every one of them, and
+    /// one more: 14 characters whose last pair would pass as a subsquare.
+    #[test]
+    fn the_station_locator_rule_is_js8calls() {
+        for good in [
+            "AA00",
+            "AA00AA",
+            "AA00AA00",
+            "BP51AD95RF",
+            "BP51AD95RF00",
+            "aa00",
+            "AA00aa",
+            "RR00XX",
+        ] {
+            assert!(is_station_locator(good), "{good:?} is valid");
+        }
+        for bad in [
+            "",
+            "A",
+            "0",
+            "AA00 ",
+            " AA00",
+            "00",
+            "aa00a",
+            "AA00ZZA",
+            "!@#$%^",
+            "123456",
+            "AA00ZZ",
+            "ss00XX",
+            "rr00yy",
+            "AAA1aa",
+            "BP51AD95RF00A",
+            "BP51AD95RF0000",
+            "BP51AD95RF00AB",
+        ] {
+            assert!(!is_station_locator(bad), "{bad:?} is not");
+        }
     }
 }

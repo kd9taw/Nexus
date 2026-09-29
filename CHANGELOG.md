@@ -275,6 +275,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same message in the JS8 cockpit. A message already going out when the locator is cleared still
   finishes.
 
+- **JS8: a malformed locator stops JS8 transmitting, as a missing one does.** JS8 used to send
+  with whatever was typed in the Grid field, so a slip such as "EN5" made every heartbeat go out as
+  two frames. JS8 now takes only a locator JS8Call's own Settings would accept: 4 to 12 characters
+  in whole pairs (EN52, EN52HW, EN52HW12 and so on), in upper or lower case. Anything else is
+  refused with the same message as no locator. FT8 and FT4 keep their own rule.
+
 - **JS8: the free spot for a heartbeat or its acknowledgement is chosen from everything heard,
   as in JS8Call.** A spot used to count as taken only when a station whose callsign had been
   decoded was heard there in the last 30 seconds. Now every decoded frame counts, including the

@@ -328,7 +328,7 @@ impl Engine {
         // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
         // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
         // (:5310), and with TX on it says why (the alert at :5265).
-        let no_locator = self.js8_no_locator();
+        let no_locator = self.js8_no_usable_locator();
         if !self.tx_enabled() || no_locator {
             let mut dropped = false;
             if let Some(p) = self.js8_station.pending_reply() {
@@ -617,11 +617,13 @@ impl Engine {
         }
     }
 
-    /// Settings holds no locator. Empty is JS8Call's test (`my_grid().trimmed().isEmpty()`,
-    /// mainwindow.cpp:5264); its Settings dialog refuses to save a malformed one
-    /// (Configuration.cpp:2443), so it never meets one at transmit time.
-    fn js8_no_locator(&self) -> bool {
-        self.settings.mygrid.trim().is_empty()
+    /// Settings holds no locator JS8Call would transmit with. JS8Call refuses to start with an
+    /// empty one (`my_grid().trimmed().isEmpty()`, mainwindow.cpp:5264) and its Settings dialog
+    /// refuses to save a malformed one (Configuration.cpp:2443), so between them it sends
+    /// neither. Nexus's Settings field can hold either, so the gate refuses both, by JS8Call's
+    /// own rule (`is_station_locator`) on the trimmed text it stores (Configuration.cpp:2749).
+    fn js8_no_usable_locator(&self) -> bool {
+        !::js8::proto::grid::is_station_locator(self.settings.mygrid.trim())
     }
 
     /// JS8Call's `ensureCallsignSet` (mainwindow.cpp:5257-5271), which its Enter asks before
@@ -632,7 +634,7 @@ impl Engine {
                 ::js8::proto::compose::ComposeError::NoCallsign,
             ));
         }
-        if self.js8_no_locator() {
+        if self.js8_no_usable_locator() {
             return Err(JS8_NO_LOCATOR.to_string());
         }
         Ok(())
@@ -837,13 +839,13 @@ impl Engine {
             self.set_transmitting(false);
             return None;
         }
-        // …and no transmission STARTS without a locator, as in JS8Call: `startTx`
-        // (mainwindow.cpp:4768) → `ensureCreateMessageReady` → `ensureCallsignSet` (:5309,
-        // :5264-5268). The frames after a message's first go out through `stopTx` →
+        // …and no transmission STARTS without a locator JS8Call would accept, as in JS8Call:
+        // `startTx` (mainwindow.cpp:4768) → `ensureCreateMessageReady` → `ensureCallsignSet`
+        // (:5309, :5264-5268). The frames after a message's first go out through `stopTx` →
         // `prepareNextMessageFrame` (:4825), which never asks again, so a message already on
         // the air finishes. Refused before `next_frame`: nothing is released, popped or keyed,
         // and `js8_tick` drops a reply or heartbeat that falls due meanwhile.
-        if self.js8_no_locator() {
+        if self.js8_no_usable_locator() {
             let queue = self.js8_station.queue();
             if queue.first().is_none_or(|next| next.first) {
                 if !queue.is_empty() {
@@ -1900,6 +1902,48 @@ mod tests {
             blank.js8_send(None, "TEST".into()),
             Err("Set your callsign in Settings before transmitting JS8.".to_string()),
             "with neither, the callsign is asked for first, as in ensureCallsignSet"
+        );
+    }
+
+    /// JS8Call never holds a malformed locator: its Settings dialog refuses to save one
+    /// (Configuration.cpp:2443, the `Maidenhead::ExtendedValidator` set at :1332), so it never
+    /// transmits one. Nexus's Settings field can hold one, and the JS8 gate refuses it with the
+    /// same words as no locator. JS8Call's rule accepts 4 to 12 characters in whole pairs, in
+    /// either case.
+    #[test]
+    fn js8_refuses_a_malformed_locator_as_it_refuses_none() {
+        for grid in [
+            "EN5",
+            "EN52H",
+            "ZZ99",
+            "EN52HW1",
+            "EN52 HW",
+            "BP51AD95RF00A",
+        ] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            assert_eq!(
+                e.js8_send(None, "TEST".into()),
+                Err(NO_LOCATOR.to_string()),
+                "{grid:?} is refused"
+            );
+        }
+        for grid in ["en52", " EN52HW ", "EN52HW12", "BP51AD95RF", "BP51AD95RF00"] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            if let Err(err) = e.js8_send(None, "TEST".into()) {
+                panic!("control: {grid:?} is a locator JS8Call accepts, got {err}");
+            }
+        }
+    }
+
+    /// …and it starts nothing on the air either.
+    #[test]
+    fn a_malformed_locator_keys_nothing() {
+        let mut e = hb_engine("EN5", 0, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let overs = run_js8_loop(&mut e, 40);
+        assert!(
+            overs.is_empty(),
+            "nothing keys with the locator EN5: {overs:?}"
         );
     }
 
