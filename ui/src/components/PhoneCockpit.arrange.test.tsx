@@ -193,6 +193,8 @@ describe('Phone renders the placement', () => {
     render(<Live />)
     await tier(1200)
     expect(rendered()).toEqual([['bandActivity', 'voiceKeyer', 'receiver', 'transmitter'], ['log']])
+    await tier(900)
+    expect(rendered(), 'one track stacks the same two groups').toEqual([['bandActivity', 'voiceKeyer', 'receiver', 'transmitter'], ['log']])
     await tier(1800)
     expect(rendered()).toEqual([['bandActivity', 'voiceKeyer'], ['receiver', 'transmitter'], ['log']])
   })
@@ -219,20 +221,24 @@ describe('THE FIBER-IDENTITY SWEEP: no arrangement remounts the log form or the 
     const moves: PaneMove[] = ['up', 'down', 'left', 'right']
     const next = rng(20260929)
     let applied = 0
+    const seen = new Set<number>()
     for (let step = 0; step < 50; step++) {
       const id = ids[Math.floor(next() * ids.length)]
       const move = moves[Math.floor(next() * moves.length)]
       const before = JSON.stringify(api!.layout.place ?? null)
       act(() => api!.movePane!(id, move, shown))
       if (JSON.stringify(api!.layout.place ?? null) !== before) applied++
-      if (step % 7 === 3) await tier(next() < 0.5 ? 1200 : 1800)
+      // One, two or three tracks (classifyRegionCols: under 1080, under 1700, wider).
+      if (step % 7 === 3) await tier([900, 1200, 1800][Math.floor(next() * 3)])
       const tracks = Number(region().getAttribute('data-cols')) as 1 | 2 | 3
+      seen.add(tracks)
       expect(rendered(), `step ${step}: ${id} ${move} — the region is not the placement`).toEqual(expected(tracks))
       expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), `step ${step}: ${id} ${move} remounted the log form`).toBe(true)
       expect(document.querySelector('[data-testid="vk-stub"]')!.isSameNode(vk0), `step ${step}: ${id} ${move} remounted the voice keyer`).toBe(true)
       expect(cols()[0].contains(vk0), `step ${step}: the voice keyer left the leading column`).toBe(true)
     }
     // The sweep must have MOVED things, or it proved nothing.
+    expect([...seen].sort(), 'the flips never reached every tier').toEqual([1, 2, 3])
     expect(applied, 'too few of the random moves changed the placement').toBeGreaterThan(15)
   })
 })
