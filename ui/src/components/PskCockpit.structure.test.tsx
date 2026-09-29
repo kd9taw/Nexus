@@ -383,8 +383,10 @@ describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)
 // ── THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6) ─────────────────────────
 // RTTY's, for the same shell — with the REAL panel record; boxes stubbed (jsdom lays nothing out).
 describe('PSK: the divider between the transcript and the log strip', () => {
+  let live: PanelLayoutApi<PskPanelId> | null = null
   function Live() {
     const panels = usePanelLayout(PSK_PANELS)
+    live = panels
     return <PskCockpit snap={snap} panels={panels} />
   }
   async function mountLive() {
@@ -425,6 +427,28 @@ describe('PSK: the divider between the transcript and the log strip', () => {
     expect(stored().share).toEqual({ stream: a })
     expect(Number(pane('stream').style.getPropertyValue('--pane-share'))).toBeCloseTo(a * 1.25, 10)
     expect(Number(pane('log').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.25, 10)
+  })
+
+  it('Undo takes back one divider move and Reset layout the whole split (what ⊞ Panels calls)', async () => {
+    // The header — where ⊞ Panels lives — is stubbed in this suite, so the record's own undo and
+    // reset are called: the menu's Undo and Reset buttons are exactly those two (PskCockpit's
+    // `onUndo={panels.undo}` / `onReset={panels.reset}`).
+    await mountLive()
+    box(pane('stream'), 100, 200)
+    box(pane('log'), 312, 300)
+    fireEvent.keyDown(divider()!, { key: 'ArrowDown' })
+    const [first] = seamShares(200 / 500 + 0.05)
+    box(pane('stream'), 100, 225)
+    box(pane('log'), 337, 275)
+    fireEvent.keyDown(divider()!, { key: 'ArrowDown' })
+    expect(stored().share.stream).toBeCloseTo(seamShares(225 / 500 + 0.05)[0], 10)
+    act(() => live!.undo())
+    expect(stored().share, 'Undo did not take back the last move').toEqual({ stream: first })
+    expect(Number(pane('stream').style.getPropertyValue('--pane-share'))).toBeCloseTo(first * 1.25, 10)
+    act(() => live!.reset())
+    expect(stored().share, 'Reset layout kept the split').toEqual({})
+    expect(pane('stream').style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('log').style.getPropertyValue('--pane-share')).toBe('')
   })
 
   it('with the transcript hidden there is no divider and the log strip is the stock pane', async () => {

@@ -269,8 +269,10 @@ describe('RttyCockpit pane shell', () => {
 // With the REAL panel record. jsdom lays nothing out, so a key's step is taken from stubbed boxes;
 // the real layout (the pair's floors following the split in a short window) is measured in Chrome.
 describe('RTTY: the divider between the transcript and the log strip', () => {
+  let live: PanelLayoutApi<RttyPanelId> | null = null
   function Live() {
     const panels = usePanelLayout(RTTY_PANELS)
+    live = panels
     return <RttyCockpit snap={snap} panels={panels} />
   }
   async function mountLive() {
@@ -321,6 +323,28 @@ describe('RTTY: the divider between the transcript and the log strip', () => {
     expect(Number(pane('log').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.25, 10)
     fireEvent.keyDown(divider()!, { key: 'Backspace' })
     expect(stored().share).toEqual({})
+    expect(pane('log').style.getPropertyValue('--pane-share')).toBe('')
+  })
+
+  it('Undo takes back one divider move and Reset layout the whole split (what ⊞ Panels calls)', async () => {
+    // The header — where ⊞ Panels lives — is stubbed in this suite, so the record's own undo and
+    // reset are called: the menu's Undo and Reset buttons are exactly those two (RttyCockpit's
+    // `onUndo={panels.undo}` / `onReset={panels.reset}`).
+    await mountLive()
+    box(pane('stream'), 100, 200)
+    box(pane('log'), 312, 300)
+    fireEvent.keyDown(divider()!, { key: 'ArrowDown' })
+    const [first] = seamShares(200 / 500 + 0.05)
+    box(pane('stream'), 100, 225)
+    box(pane('log'), 337, 275)
+    fireEvent.keyDown(divider()!, { key: 'ArrowDown' })
+    expect(stored().share.stream).toBeCloseTo(seamShares(225 / 500 + 0.05)[0], 10)
+    act(() => live!.undo())
+    expect(stored().share, 'Undo did not take back the last move').toEqual({ stream: first })
+    expect(Number(pane('stream').style.getPropertyValue('--pane-share'))).toBeCloseTo(first * 1.25, 10)
+    act(() => live!.reset())
+    expect(stored().share, 'Reset layout kept the split').toEqual({})
+    expect(pane('stream').style.getPropertyValue('--pane-share')).toBe('')
     expect(pane('log').style.getPropertyValue('--pane-share')).toBe('')
   })
 
