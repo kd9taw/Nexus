@@ -69,6 +69,7 @@ import {
   JS8,
   JS8_COMMANDS,
   JS8_CQS,
+  JS8_GRID,
   JS8_QUICK_QUERIES,
   JS8_SPEEDS,
   JS8_SPEED_LIST,
@@ -377,6 +378,17 @@ export function Js8Cockpit({
       if (s) setJs8(s)
     })
   }
+  // JS8Call's query menu sends a station your locator in one click, `<call> GRID <my_grid()>`
+  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657); so is the button, and
+  // the engine refuses a send with no locator whatever the button says.
+  const sendMyGrid = (call: string) => {
+    if (!canControl) return
+    if (refuseIfUnready()) return
+    const grid = (snapRef.current?.mygrid ?? '').trim().toUpperCase()
+    void withErrorToast(() => js8SendCommand(call, JS8_GRID.id, grid), t('js8.toast.command.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
   const setSpeed = (idx: number) => {
     if (!canControl) {
       if (js8 && JS8_SPEEDS[js8.speed].idx !== idx) decoderSettings.change({ action: 'decoder.js8Speed', expectedSpeed: JS8_SPEEDS[js8.speed].idx, speed: idx })
@@ -442,6 +454,7 @@ export function Js8Cockpit({
   const activityPin = usePinnedScroll<HTMLDivElement>()
   const units = useUnits()
   const myGrid = snap?.mygrid ?? ''
+  const ownGrid = myGrid.trim().toUpperCase()
 
   // ONE row per offset, from the same activity feed (js8Vocab.bandActivityByOffset) — the
   // pane adds no engine state, it reads the decodes the transcript already carries.
@@ -761,6 +774,15 @@ export function Js8Cockpit({
                     {q.label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="cw-macro js8-query js8-send-grid"
+                  disabled={!canControl || !ownGrid}
+                  onClick={() => sendMyGrid(h.call)}
+                  title={ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined}
+                >
+                  {ownGrid ? `${JS8_GRID.label} ${ownGrid}` : JS8_GRID.label}
+                </button>
               </span>
             </div>
             )

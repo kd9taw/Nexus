@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,189 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,190 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -101,7 +101,7 @@ word in, and use only that word in the CSV.
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 135 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 121 | The Settings screen and every reference to it. | |
-| grid | 113 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
+| grid | 114 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 106 | Sound cards, levels, routing. | |
 | station | 104 | Both your own station and the one you are working. | |
 | port | 97 | Serial and network ports. | |

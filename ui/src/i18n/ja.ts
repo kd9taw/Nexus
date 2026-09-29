@@ -5160,6 +5160,7 @@ export const JA: PartialCatalog = {
   "js8.station.empty": "まだ局を受信していません — ハートビートと CQ がデコードされると一覧が埋まります",
   "js8.station.select.title": "{{call}} 宛てに書く（宛先欄とログ欄を埋めます）",
   "js8.station.query.title": "{{call}} に {{cmd}} を送る — 相手の自動応答が有効なら自動で返答します",
+  "js8.station.sendGrid.title": "自局のグリッド {{grid}} を {{call}} に送る",
   "js8.station.stored": "この局宛てに {{count}} 件のメッセージを保管中",
   "js8.station.pin.title": "{{call}} をこのリストの先頭に固定",
   "js8.station.unpin.title": "{{call}} の固定を解除 — 受信順に戻ります",
