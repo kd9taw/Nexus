@@ -8078,6 +8078,7 @@ export const EN = {
   // menu, because that is what each surface shipped; two keys rather than one re-cased.
   'rtty.pane.stream.title': 'Decoded text',
   'rtty.pane.log.title': 'Log',
+  'rtty.seam.streamLog.label': 'Decoded text / Log',
   'rtty.stream.title':
     "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
   'rtty.arm.on.label': 'RX armed',
@@ -8208,6 +8209,7 @@ export const EN = {
   // ── PSK ▸ the decoded-text pane ─────────────────────────────────────────────────────
   'psk.pane.log.title': 'Log',
   'psk.pane.stream.title': 'Decoded text',
+  'psk.seam.streamLog.label': 'Decoded text / Log',
   'psk.stream.title':
     "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",
   'psk.arm.on.label': 'RX armed',

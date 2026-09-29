@@ -14,11 +14,12 @@
 // auto-arm wiring (engine-owned policy, called once per activation edge).
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { PskCockpit } from './PskCockpit'
 import * as api from '../api'
 import type { AppSnapshot, PskState } from '../types'
 import type { PanelLayoutApi, PskPanelId } from '../features/panelState'
+import { PSK_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
 
 const state: { current: PskState } = {
   current: {
@@ -143,7 +144,8 @@ describe('PskCockpit pane shell', () => {
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
     expect(shell).not.toBeNull()
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.cockpit-txdock']
+    // `.pane-splitter`: the transcript | log strip divider (layout L6), with a record — see its block.
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -362,7 +364,8 @@ describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)
     state.current = { ...state.current, mode: 'qpsk31', reverse: false }
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.cockpit-txdock']
+    // `.pane-splitter`: the transcript | log strip divider (layout L6), with a record — see its block.
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -371,5 +374,60 @@ describe('PSK sub-mode selector + QPSK sideband reverse (Keyboard Modes Phase 3)
     }
     expect(document.querySelector('.cockpit-txdock .psk-rev')).toBeNull()
     expect(document.querySelector('.cockpit-txdock .psk-mode-select')).toBeNull()
+  })
+})
+
+// ── THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6) ─────────────────────────
+// RTTY's, for the same shell — with the REAL panel record; boxes stubbed (jsdom lays nothing out).
+describe('PSK: the divider between the transcript and the log strip', () => {
+  function Live() {
+    const panels = usePanelLayout(PSK_PANELS)
+    return <PskCockpit snap={snap} panels={panels} />
+  }
+  async function mountLive() {
+    const r = render(<Live />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    return r
+  }
+  const pane = (id: string) => document.querySelector<HTMLElement>(`main.psk-cockpit > [data-pane="${id}"]`)!
+  const divider = () => screen.queryByRole('separator', { name: 'Decoded text / Log' })
+  const stored = () => JSON.parse(localStorage.getItem(panelStorageKey('psk')) ?? '{"share":{}}')
+  const box = (el: HTMLElement, top: number, h: number) => {
+    el.getBoundingClientRect = () => ({ top, bottom: top + h, height: h, left: 0, right: 900, width: 900, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+  }
+  beforeEach(() => localStorage.clear())
+
+  it('sits between the two frames only while both render and a record keeps the split', async () => {
+    await mountLive()
+    const sep = divider()
+    expect(sep, 'no divider between the transcript and the log').not.toBeNull()
+    expect(sep!.previousElementSibling).toBe(pane('stream'))
+    expect(sep!.nextElementSibling).toBe(pane('log'))
+    cleanup()
+    await renderCockpit()
+    expect(divider(), 'no record (the Remote observer): no divider').toBeNull()
+  })
+
+  it('stock panes are untouched; a key stores the transcript’s share and the frames carry the grows', async () => {
+    await mountLive()
+    expect(pane('stream').style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('log').getAttribute('style')).toContain('var(--pane-share, 1.5) 1 0')
+    box(pane('stream'), 100, 200)
+    box(pane('log'), 312, 300)
+    fireEvent.keyDown(divider()!, { key: 'ArrowUp' })
+    const [a, b] = seamShares(200 / 500 - 0.05)
+    expect(stored().share).toEqual({ stream: a })
+    expect(Number(pane('stream').style.getPropertyValue('--pane-share'))).toBeCloseTo(a * 1.25, 10)
+    expect(Number(pane('log').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.25, 10)
+  })
+
+  it('with the transcript hidden there is no divider and the log strip is the stock pane', async () => {
+    localStorage.setItem(panelStorageKey('psk'), JSON.stringify({ v: 2, state: { stream: 'removed' }, share: { stream: 1.7 } }))
+    await mountLive()
+    expect(divider()).toBeNull()
+    expect(pane('log').style.minHeight).toBe('var(--cockpit-fill-min, 0)')
   })
 })

@@ -16,10 +16,11 @@
 // the auto-sequencer row, Stop, the compose bar) renders in the dock and never inside a
 // pane; the ⊞ menu still hides exactly the stream; and no region is introduced.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { RttyCockpit } from './RttyCockpit'
 import type { AppSnapshot, RttyState } from '../types'
 import type { PanelLayoutApi, RttyPanelId } from '../features/panelState'
+import { RTTY_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
 
 const state: { current: RttyState } = {
   current: {
@@ -136,7 +137,10 @@ describe('RttyCockpit pane shell', () => {
     state.current = { ...state.current, keyerError: 'no FSK port' }
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.cockpit-txdock']
+    // `.pane-splitter`: the divider between the transcript and the log strip (layout L6), a shell
+    // child between the two frames when there is a record to keep the split in — the census with a
+    // record is in the divider's own block below.
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.pane-frame', '.pane-splitter', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -254,5 +258,80 @@ describe('RttyCockpit pane shell', () => {
     })
     expect(document.querySelector('[data-pane="stream"]')).not.toBeNull()
     expect(document.querySelector('.cockpit-txdock .cw-send-btn')).not.toBeNull()
+  })
+})
+
+// ── THE DIVIDER BETWEEN THE TRANSCRIPT AND THE LOG STRIP (layout L6) ─────────────────────────
+// With the REAL panel record. jsdom lays nothing out, so a key's step is taken from stubbed boxes;
+// the real layout (the pair's floors following the split in a short window) is measured in Chrome.
+describe('RTTY: the divider between the transcript and the log strip', () => {
+  function Live() {
+    const panels = usePanelLayout(RTTY_PANELS)
+    return <RttyCockpit snap={snap} panels={panels} />
+  }
+  async function mountLive() {
+    const r = render(<Live />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    return r
+  }
+  const pane = (id: string) => document.querySelector<HTMLElement>(`main.rtty-cockpit > [data-pane="${id}"]`)!
+  const divider = () => screen.queryByRole('separator', { name: 'Decoded text / Log' })
+  const stored = () => JSON.parse(localStorage.getItem(panelStorageKey('rtty')) ?? '{"share":{}}')
+  const box = (el: HTMLElement, top: number, h: number) => {
+    el.getBoundingClientRect = () => ({ top, bottom: top + h, height: h, left: 0, right: 900, width: 900, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+  }
+  beforeEach(() => localStorage.clear())
+
+  it('sits between the two frames, a shell child, only while both render and a record keeps the split', async () => {
+    await mountLive()
+    const sep = divider()
+    expect(sep, 'no divider between the transcript and the log').not.toBeNull()
+    expect(sep!.previousElementSibling).toBe(pane('stream'))
+    expect(sep!.nextElementSibling).toBe(pane('log'))
+    expect(sep!.parentElement!.matches('main.rtty-cockpit')).toBe(true)
+    expect(sep!.tabIndex).toBe(0)
+    cleanup()
+    await renderCockpit()
+    expect(divider(), 'no record to keep the split in (the Remote observer): no divider').toBeNull()
+  })
+
+  it('panes nobody has divided are the stock panes: their weights as the grow, the stock floor', async () => {
+    await mountLive()
+    expect(pane('stream').style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('stream').getAttribute('style')).toContain('var(--pane-share, 1) 1 0')
+    expect(pane('log').getAttribute('style')).toContain('var(--pane-share, 1.5) 1 0')
+    expect(pane('log').style.minHeight).toBe('min(calc(var(--cockpit-fill-min, 0px) * var(--pane-share, 1.25) / 1.25), 100%)')
+  })
+
+  it('a key stores the transcript’s share only; the frames carry grows that keep the pair’s stock total', async () => {
+    await mountLive()
+    box(pane('stream'), 100, 200)
+    box(pane('log'), 312, 300)
+    fireEvent.keyDown(divider()!, { key: 'ArrowDown' })
+    const [a, b] = seamShares(200 / 500 + 0.05)
+    expect(stored().share, 'the log strip has no id: only the transcript’s share is stored').toEqual({ stream: a })
+    expect(Number(pane('stream').style.getPropertyValue('--pane-share'))).toBeCloseTo(a * 1.25, 10)
+    expect(Number(pane('log').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.25, 10)
+    fireEvent.keyDown(divider()!, { key: 'Backspace' })
+    expect(stored().share).toEqual({})
+    expect(pane('log').style.getPropertyValue('--pane-share')).toBe('')
+  })
+
+  it('a stored split comes back on the next start, the log’s half derived from the transcript’s', async () => {
+    localStorage.setItem(panelStorageKey('rtty'), JSON.stringify({ v: 2, state: {}, share: { stream: 0.6 } }))
+    await mountLive()
+    expect(Number(pane('stream').style.getPropertyValue('--pane-share'))).toBeCloseTo(0.75, 10)
+    expect(Number(pane('log').style.getPropertyValue('--pane-share'))).toBeCloseTo(1.75, 10)
+  })
+
+  it('with the transcript hidden there is no divider, and the log strip is the stock pane whatever split is stored', async () => {
+    localStorage.setItem(panelStorageKey('rtty'), JSON.stringify({ v: 2, state: { stream: 'removed' }, share: { stream: 0.6 } }))
+    await mountLive()
+    expect(divider()).toBeNull()
+    expect(pane('log').style.getPropertyValue('--pane-share')).toBe('')
+    expect(pane('log').style.minHeight).toBe('var(--cockpit-fill-min, 0)')
   })
 })
