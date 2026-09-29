@@ -1469,6 +1469,11 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Share
                         refusal.reason
                     ),
                 );
+                // Count the commit that turned it back before anyone hears of the refusal, so
+                // the change planned again starts from a count that holds that commit. Answered
+                // first, the new plan could be taken before this writer's next look, and turned
+                // back once more by the count moving under it.
+                watch_foreign(&db, &mut seen_version, &seq, shared);
                 settle(shared, &unresolved, highest_ok, lost.first().copied(), None);
                 resolve(&job.slot, Err(refusal));
             }
@@ -3135,6 +3140,74 @@ mod tests {
             comment_of(&stored(&scratch.db()), &id).as_deref(),
             Some("an older window"),
             "the other window's change stands"
+        );
+    }
+
+    /// ⛔ A CHANGE TURNED BACK IS ANSWERED ONLY ONCE THE COMMIT THAT TURNED IT BACK IS COUNTED.
+    /// The store refused it because another window committed to its rows. The writer looks at that
+    /// commit before it answers, so the change planned again starts from a count that holds it.
+    /// Answered first, the plan made again could be taken before the writer looked, and the count
+    /// then moved under it: planned a third time, as two of tempo-app's tests saw under load.
+    ///
+    /// Seen without a clock: the writer's looks are held where a look has seen another window's
+    /// commit, and A's writer is kept busy from that commit to the refusal (a write of its own
+    /// waits behind the other window's open transaction, and A's change queues behind it), so the
+    /// one look that can reach the hold is the one that follows the refusal. When it does, A's
+    /// change is not answered yet.
+    #[test]
+    fn a_change_turned_back_is_answered_after_the_commit_that_turned_it_back_is_counted() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let t = a.submit(change(1, vec![rec("W1AW", 1)]));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("seeded");
+        let read = read_back(&scratch.db(), 1);
+        let id = read.id.expect("an id").to_string();
+        let held = a.hold_looks();
+
+        // The other window changes the row in a transaction it keeps open, so A's next write
+        // waits for the lock, and A's change queues behind that write.
+        let other = stored(&scratch.db());
+        other
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("the other window takes the lock");
+        other
+            .execute("UPDATE qso SET comment = 'theirs' WHERE id = ?1", [&id])
+            .expect("and changes the row");
+        let waiting = a.submit(change(2, vec![rec("K5XYZ", 2)]));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !matches!(a.status().state, WriteState::Retrying { .. }) {
+            assert!(
+                Instant::now() < deadline,
+                "premise: A's writer waits for the lock"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let ours = a.submit(over(3, &read, commented(&read, "ours")));
+        other
+            .execute_batch("COMMIT")
+            .expect("the other window commits");
+
+        assert!(
+            held.reached(Duration::from_secs(30)),
+            "premise: A's writer looks at the other window's commit"
+        );
+        assert!(
+            !ours.is_resolved(),
+            "A's change is not answered before its writer has counted the commit that turned it \
+             back"
+        );
+        drop(held);
+        let refused = outcome(&a, &ours).expect_err("A's change is turned back");
+        assert!(refused.conflict, "as a conflict: {refused:?}");
+        assert_eq!(
+            a.foreign_commits(),
+            1,
+            "and the commit that turned it back is counted"
+        );
+        assert_eq!(
+            outcome(&a, &waiting),
+            Ok(()),
+            "A's own write waited, and landed"
         );
     }
 
