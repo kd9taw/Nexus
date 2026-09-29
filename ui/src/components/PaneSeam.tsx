@@ -519,10 +519,12 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
       const z = elZoom(a)
       const flo = (fl[0] * z) / (sa + sb)
       const fhi = 1 - (fl[1] * z) / (sa + sb)
-      // Floors the pair cannot both keep (a grid already overflowing) narrow nothing.
-      if (flo <= fhi) {
-        lo = Math.max(lo, flo)
-        hi = Math.min(hi, fhi)
+      // Both panes ON their floors meet at one split (to rounding — measured at 1024×768 with a
+      // stored layout at the far end, the two ends came out a hair crossed), and the divider stays
+      // there. Floors the pair cannot both keep (a grid already overflowing) narrow nothing.
+      if (flo <= fhi + 1e-6) {
+        lo = Math.max(lo, Math.min(flo, fhi))
+        hi = Math.min(hi, Math.max(flo, fhi))
       }
     }
     return { f: sa / (sa + sb), lo, hi }

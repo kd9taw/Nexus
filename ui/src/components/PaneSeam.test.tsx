@@ -540,6 +540,14 @@ describe('a SPLIT divider', () => {
     expect(other.sep.getAttribute('aria-valuemin')).toBe('40')
     fireEvent.keyDown(other.sep, { key: 'Home' })
     expect(other.onCommit).toHaveBeenLastCalledWith(...seamShares(0.4))
+    // Both panes ON their floors (300 and 200 of 500, a hair crossed by rounding): the divider
+    // stays where it is, rather than moving a split the grid would pay for from a third pane.
+    cleanup()
+    const pinned = mount('x', true, 1, undefined, [300.0000001, 200])
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((x) => pinned.sep.getAttribute(x))).toEqual(['60', '60', '60'])
+    fireEvent.keyDown(pinned.sep, { key: 'ArrowRight' })
+    const [av] = pinned.onCommit.mock.lastCall!
+    expect(av, 'the step moved a pair already on both floors').toBeCloseTo(seamShares(0.6)[0], 6)
   })
 
   it('the keyboard steps from where the panes ARE; Home/End stop at the share floor; reset is the host’s', () => {
