@@ -12770,6 +12770,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// message, NOT the raw wire chunk frames. Ring-capped. (poll_tx skips own-TX for
     /// free-text frames so they don't double / show "A13DE KD9TAW".)
     fn record_own_tx(&mut self, text: String) {
+        self.record_own_tx_at(text, self.tx_offset_hz);
+    }
+
+    /// [`Self::record_own_tx`] for an over that keyed away from the TX offset (a JS8
+    /// heartbeat's sub-band slot): the row sits where the over actually went.
+    fn record_own_tx_at(&mut self, text: String, freq_hz: f32) {
         const OWN_TX_RING: usize = 30;
         // Diagnostic trace. An operator reported (2026-08-18) their own calls not appearing in
         // the Rx-Frequency pane on one band and appearing after a QSY — an intermittent nobody
@@ -12780,14 +12786,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // names the wiper.
         tempo_core::applog::info(
             "tx",
-            &format!(
-                "over recorded: {:?} at {} Hz",
-                text, self.tx_offset_hz as i32
-            ),
+            &format!("over recorded: {:?} at {} Hz", text, freq_hz as i32),
         );
         self.own_tx.push_back(OwnTx {
             text,
-            freq_hz: self.tx_offset_hz,
+            freq_hz,
             when_unix: now_unix_secs(),
             band: self.settings.band.clone(),
         });
@@ -44425,7 +44428,8 @@ mod tests {
     /// Booking happens at PLAN time (the beacon / QSO precedent): one own-TX row in the
     /// Rx-Frequency feed, one `mine` row in the JS8 activity ring, and — when ALL.TXT is on —
     /// exactly one `Tx` line stamped with the PERIOD START the caller hands in (alltxt.rs:
-    /// never round the wall clock), mode JS8, SNR/DT zero, audio = our TX offset.
+    /// never round the wall clock), mode JS8, SNR/DT zero, audio = the offset the caller
+    /// hands in (the TX offset here).
     #[test]
     fn js8_note_tx_done_books_one_row_and_one_all_txt_line() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -44433,7 +44437,11 @@ mod tests {
         e.settings.write_all_txt = true;
         e.set_tx_offset(1500.0);
         let period_start_ms = js8_slot_now() * 15_000;
-        e.js8_note_tx_done("KD9TAW: @HB HEARTBEAT EN52", period_start_ms);
+        e.js8_note_tx_done(
+            "KD9TAW: @HB HEARTBEAT EN52",
+            period_start_ms,
+            e.tx_offset_hz(),
+        );
         let lines = e.take_all_txt_pending();
         assert_eq!(lines.len(), 1, "one Tx line: {lines:?}");
         assert!(
@@ -44459,7 +44467,11 @@ mod tests {
         assert_eq!(st.activity.last().map(|r| r.at_ms), Some(period_start_ms));
         // ALL.TXT off: still the rows, no line.
         e.settings.write_all_txt = false;
-        e.js8_note_tx_done("KD9TAW: @ALLCALL CQ CQ CQ EN52", period_start_ms + 15_000);
+        e.js8_note_tx_done(
+            "KD9TAW: @ALLCALL CQ CQ CQ EN52",
+            period_start_ms + 15_000,
+            e.tx_offset_hz(),
+        );
         assert!(e.take_all_txt_pending().is_empty());
         assert_eq!(
             e.snapshot()

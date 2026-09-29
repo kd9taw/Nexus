@@ -288,6 +288,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
+  six-character locator in Settings, every heartbeat went out on two periods in a row, because
+  the last two characters spilled into a second frame. It now carries the four-character square,
+  as JS8Call's does, and is one frame. The Activity pane, Band Activity and ALL.TXT showed each
+  heartbeat at your own offset even though it was sent between 500 and 1000 Hz; they now show
+  the offset it was sent on. If your offset is 1000 Hz or lower, the heartbeat now stays on it,
+  as in JS8Call; above that it takes a free spot between 500 and 999 Hz by JS8Call's rule. The
+  timer counts as JS8Call's does: the first heartbeat goes one interval after the next period
+  starts, each one after that an interval and one period later, and anything you send, or a
+  message addressed to you, restarts the count. Stop TX, the TX switch, the watchdogs and
+  heartbeat acknowledgements are unchanged. Not yet checked on the air: turn HB on with a
+  5-minute interval and check that one heartbeat goes out about five minutes later, shown in the
+  Activity pane at an offset between 500 and 1000 Hz.
 - **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits

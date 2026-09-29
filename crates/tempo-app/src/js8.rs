@@ -708,18 +708,20 @@ impl Engine {
     /// Book a JS8 over at PLAN time — the beacon and QSO arms' rule, and for the same
     /// reason: the plan is the transmit decision, and `commit_tx` refuses only the
     /// microsecond races (JS8's build is pure Rust). Three records: the own-TX row for the
-    /// Rx-Frequency feed (`record_own_tx`), a `mine` row in the JS8 activity ring the
+    /// Rx-Frequency feed (`record_own_tx_at`), a `mine` row in the JS8 activity ring the
     /// cockpit's activity pane reads, and — when ALL.TXT is on — the `Tx` line in the
-    /// FT/beacon writers' shape (SNR/DT 0, audio = our TX offset, into the shared ALL.TXT
+    /// FT/beacon writers' shape (SNR/DT 0, audio = `f0`, into the shared ALL.TXT
     /// buffer with the same 5000-line cap). `now_ms` is the PERIOD START of the over
     /// (slot × period), not the wall clock: alltxt.rs's rule is that only the slot knows
-    /// which period an over belongs to.
-    pub(crate) fn js8_note_tx_done(&mut self, plan_display: &str, now_ms: u64) {
-        self.record_own_tx(plan_display.to_string());
+    /// which period an over belongs to. `f0` is the offset the over KEYED at, a heartbeat's
+    /// sub-band slot included: JS8Call moves `freq()` there before it shows the frame
+    /// (`setFreqOffsetForRestore`, mainwindow.cpp:9681), so all three records sit there.
+    pub(crate) fn js8_note_tx_done(&mut self, plan_display: &str, now_ms: u64, f0: f32) {
+        self.record_own_tx_at(plan_display.to_string(), f0);
         self.js8_activity.push_back(Js8ActivityRow {
             at_ms: now_ms,
             speed: self.js8_tx_speed(),
-            freq_hz: self.tx_offset_hz,
+            freq_hz: f0,
             snr_db: 0,
             dt_s: 0.0,
             from: self.settings.mycall.trim().to_ascii_uppercase(),
@@ -742,7 +744,7 @@ impl Engine {
                     "JS8",
                     0,
                     0.0,
-                    self.tx_offset_hz,
+                    f0,
                     plan_display,
                 ));
             let len = self.station.all_txt_pending.len();
@@ -786,10 +788,11 @@ impl Engine {
         }
         let period_ms = u64::from(speed.period_s()) * 1000;
         let period_start_ms = slot.saturating_mul(period_ms);
-        // JS8Call's "free HB slot" rule: no activity within one signal bandwidth in the
-        // last 30 s. Snapshot the heard table first — the station is borrowed mutably
-        // by `next_frame` below.
-        let bw = 8.0 * speed.tone_spacing_hz();
+        // JS8Call's "free HB slot" rule, `isFreqOffsetFree(f, 50)` (mainwindow.cpp:5566): nothing
+        // heard within 50 Hz in the last 30 s. The 50 is `findFreeFreqOffset(500, 1000, 50)`'s
+        // own argument at every speed, not the signal's bandwidth. Snapshot the heard table
+        // first — the station is borrowed mutably by `next_frame` below.
+        let bw = 50.0;
         let heard: Vec<(f32, u64)> = self
             .js8_station
             .heard()
@@ -857,17 +860,22 @@ impl Engine {
             return None;
         }
         // f0: the operator's TX offset, or the station's HB sub-band pick — an AUDIO
-        // offset only. A pick outside 500–1000 Hz cannot come from a correct station;
-        // fall back to the operator's offset rather than trust it.
+        // offset only. JS8Call's `sendHeartbeat` (mainwindow.cpp:6279) keeps an operator at
+        // or below 1000 Hz on their own offset; its `heartbeat_anywhere` has no Nexus
+        // setting, and upstream it defaults off, which is this. A pick outside 500–1000 Hz
+        // cannot come from a correct station; fall back to the operator's offset rather
+        // than trust it.
         let f0 = match tf.freq_hint {
             FreqHint::Dial => self.tx_offset_hz(),
+            FreqHint::HbSubband(_) if self.tx_offset_hz() <= 1000.0 => self.tx_offset_hz(),
             FreqHint::HbSubband(f) if (500.0..=1000.0).contains(&f) => f,
             FreqHint::HbSubband(_) => self.tx_offset_hz(),
         };
-        // Book the over (station bookkeeping: Last sent, HB timer, idle counter; own-TX
-        // row; activity row; ALL.TXT Tx line) — plan time, on the period-start axis.
+        // Book the over (station bookkeeping: Last sent, idle counter; own-TX row; activity
+        // row; ALL.TXT Tx line) — plan time, on the period-start axis. The heartbeat timer
+        // re-based itself in `next_frame` when the message's last frame went.
         self.js8_station.note_tx_done(&tf, period_start_ms);
-        self.js8_note_tx_done(&tf.display, period_start_ms);
+        self.js8_note_tx_done(&tf.display, period_start_ms, f0);
         self.set_transmitting(true);
         Some(TxPlan {
             slot,
@@ -1439,5 +1447,219 @@ mod tests {
             .stations
             .iter()
             .any(|h| h.call == "W0IND" && h.speed == Js8Speed::Turbo));
+    }
+
+    // ===== the heartbeat against JS8Call (the 2026-09-29 report) =====
+
+    /// A JS8 engine on 20 m with the TX latch up, the heartbeat interval `hb_min`, the
+    /// operator's locator `grid` and TX offset `offset_hz`. The heartbeat is not armed.
+    fn hb_engine(grid: &str, hb_min: u16, offset_hz: f32) -> Engine {
+        let mut e = Engine::new("KD9TAW", grid, 0);
+        e.settings.js8_hb_interval_min = hb_min;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_frequency(14.078, "20m", "USB");
+        e.set_tx_offset(offset_hz);
+        e.set_tx_enabled(true);
+        e
+    }
+
+    /// The radio loop's JS8 shape, from now on: the once-a-second `js8_tick` and, at every
+    /// period boundary, the transmit decision (`poll_tx`'s plan → build → commit, the plan
+    /// kept for its offset). Returns (period start, f0) for each over that keyed.
+    fn run_js8_loop(e: &mut Engine, secs: u64) -> Vec<(u64, f32)> {
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let mut last = t0 / period_ms;
+        let mut overs = Vec::new();
+        for k in 0..=secs {
+            let t = t0 + k * 1000;
+            e.js8_tick(t);
+            let slot = t / period_ms;
+            if slot == last {
+                continue;
+            }
+            last = slot;
+            let Some(plan) = e.plan_tx(slot) else {
+                continue;
+            };
+            let TxWaveform::Js8 { f0, .. } = &plan.waveform else {
+                panic!("a JS8 plan carries the typed waveform");
+            };
+            let f0 = *f0;
+            let wave = plan.waveform.build();
+            if !e.commit_tx(&plan, wave, slot).is_empty() {
+                overs.push((slot * period_ms, f0));
+            }
+        }
+        overs
+    }
+
+    /// "Then it sends it on every frame." On the real path, from arming until well past the
+    /// first heartbeat, exactly ONE heartbeat over keys. The operator's locator in Settings may
+    /// be six characters; JS8Call's heartbeat carries four (`my_grid().left(4)`), and the rest
+    /// used to spill into a second frame that keyed on the next period.
+    #[test]
+    fn a_due_js8_heartbeat_keys_exactly_once_in_the_periods_after_it() {
+        for grid in ["EN52", "EN52HW"] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+            let overs = run_js8_loop(&mut e, 8 * 60);
+            assert_eq!(
+                overs.len(),
+                1,
+                "{grid}: one heartbeat over in the eight minutes after arming, got {overs:?}"
+            );
+        }
+    }
+
+    /// "The first send appears to be wherever you are." The heartbeat KEYED in the 500–1000 Hz
+    /// sub-band, but every record of it carried the operator's own offset: the Activity row
+    /// (and so the Band Activity by offset pane), the Rx-Frequency own-TX row and the ALL.TXT
+    /// `Tx` line. JS8Call moves `freq()` to the heartbeat's offset before the frame is shown
+    /// (`setFreqOffsetForRestore`, :9681, then `displayTextForFreq(…, freq(), …)`, :5538).
+    #[test]
+    fn a_js8_heartbeat_is_booked_at_the_offset_it_keyed() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.write_all_txt = true;
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on"); // interval 0: the next period
+        let overs = run_js8_loop(&mut e, 20);
+        let [(start, f0)] = overs[..] else {
+            panic!("one heartbeat over, got {overs:?}");
+        };
+        assert!(
+            (500.0..=1000.0).contains(&f0),
+            "keyed in the sub-band, clear of the operator's 1500 Hz: {f0}"
+        );
+        let row = e
+            .js8_state()
+            .activity
+            .last()
+            .cloned()
+            .expect("the over's row");
+        assert_eq!(
+            (row.mine, row.freq_hz),
+            (true, f0),
+            "the Activity row sits where the over keyed"
+        );
+        let own = e
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .rfind(|d| d.mine)
+            .expect("the own-TX row");
+        assert_eq!(own.freq_hz, f0, "…and so does the Rx-Frequency own-TX row");
+        let want = crate::alltxt::all_txt_line(
+            start / 1000,
+            14.078,
+            true,
+            "JS8",
+            0,
+            0.0,
+            f0,
+            "KD9TAW: @HB HEARTBEAT EN52",
+        );
+        assert_eq!(
+            e.station.all_txt_pending.last(),
+            Some(&want),
+            "…and the ALL.TXT Tx line"
+        );
+    }
+
+    /// JS8Call's `sendHeartbeat` (:6279-6281): an operator at or below 1000 Hz beacons on their
+    /// own offset; only above it does the heartbeat move to a free sub-band offset.
+    #[test]
+    fn a_js8_heartbeat_keys_on_the_operators_offset_at_or_below_1000_hz() {
+        for (offset, own) in [(777.0, true), (1000.0, true), (1001.0, false)] {
+            let mut e = hb_engine("EN52", 0, offset);
+            e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+            let overs = run_js8_loop(&mut e, 20);
+            let [(_, f0)] = overs[..] else {
+                panic!("{offset} Hz: one heartbeat over, got {overs:?}");
+            };
+            if own {
+                assert_eq!(
+                    f0, offset,
+                    "at {offset} Hz the heartbeat keys on the operator's offset"
+                );
+            } else {
+                assert!(
+                    (500.0..1000.0).contains(&f0),
+                    "above 1000 Hz it moves to a free sub-band offset: {f0}"
+                );
+            }
+        }
+    }
+
+    /// The free-offset test is JS8Call's `isFreqOffsetFree(f, 50)` (:5566): nothing heard within
+    /// 50 Hz in the last 30 s. The 50 is `findFreeFreqOffset(500, 1000, 50)`'s literal argument
+    /// at every speed, not the signal's bandwidth, so at Turbo (160 Hz wide) a station heard at
+    /// 700 Hz keeps the heartbeat off 700 and not off its neighbours.
+    #[test]
+    fn a_heard_station_keeps_the_js8_heartbeat_off_fifty_hertz_around_it_at_every_speed() {
+        let mut offsets = std::collections::BTreeSet::new();
+        for seed in 1..=40u32 {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            e.js8_set_speed(3).expect("Turbo");
+            let slot = now_unix_secs() / 6 + 1;
+            e.js8_ingest(
+                &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Turbo, 700.0)],
+                slot - 1,
+            );
+            e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+            e.js8_tick(tempo_core::timing::now_unix_ms() as u64);
+            e.js8_rng = seed.wrapping_mul(2_654_435_761) | 1;
+            let plan = e.plan_tx(slot).expect("the heartbeat");
+            let TxWaveform::Js8 { f0, .. } = &plan.waveform else {
+                panic!("a JS8 plan carries the typed waveform");
+            };
+            offsets.insert(*f0 as u32);
+        }
+        assert!(
+            !offsets.contains(&700),
+            "control: never on the station heard there, {offsets:?}"
+        );
+        assert!(
+            offsets.iter().any(|f| (550..=850).contains(f) && *f != 700),
+            "only 50 Hz either side of 700 is busy, so its neighbours are used: {offsets:?}"
+        );
+    }
+
+    /// Symptom 1 is JS8Call's behaviour and stays: turning the heartbeat on with a 5-minute
+    /// interval keys NOTHING until one interval after the next transmit cycle
+    /// (`on_hbMacroButton_toggled`, :6319), and then keys in exactly that period.
+    #[test]
+    fn a_js8_heartbeat_turned_on_keys_nothing_until_one_interval_after_the_next_cycle() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        // JS8Call's `nextTransmitCycle()`: whole seconds, the NEXT 15 s boundary, + 1 s.
+        let cycle = |t: u64| (t / 1000 / 15 * 15 + 15 + 1) * 1000;
+        let before = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let after = tempo_core::timing::now_unix_ms() as u64;
+        let next = e.js8_state().hb_next_at_ms.expect("scheduled");
+        assert!(
+            [cycle(before), cycle(after)].contains(&(next - 300_000)),
+            "the countdown ends one interval after the next transmit cycle: {next}, armed {before}..{after}"
+        );
+        let overs = run_js8_loop(&mut e, 6 * 60);
+        assert_eq!(
+            overs.iter().map(|o| o.0).collect::<Vec<_>>(),
+            vec![next - 1_000],
+            "nothing before, then the heartbeat in the period one interval after the next cycle"
+        );
+    }
+
+    /// Interval 0 is JS8Call's single press: one heartbeat, once (`on_hbMacroButton_toggled`,
+    /// :6326).
+    #[test]
+    fn an_on_demand_js8_heartbeat_keys_once() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let overs = run_js8_loop(&mut e, 3 * 60);
+        assert_eq!(
+            overs.len(),
+            1,
+            "one heartbeat in three minutes, got {overs:?}"
+        );
     }
 }
