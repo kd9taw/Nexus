@@ -11702,8 +11702,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
 }
 /* 3-D QSO globe band atop the Logbook. Lives INSIDE .log-scroll so it scrolls away
-   with the list — prominent on arrival, full-height log once you scroll down. Height
-   must match GLOBE_BAND_H in Logbook.tsx (the virtualizer's scrollMargin). */
+   with the list — prominent on arrival, full-height log once you scroll down. Where the
+   rows start below it is MEASURED (Logbook.tsx's listOffset, the virtualizer's
+   scrollMargin), so its height is free to change. */
 .log-globe-band {
   position: relative;
   height: 320px;
@@ -11711,6 +11712,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   overflow: hidden;
   border-bottom: 1px solid var(--border);
   background: radial-gradient(ellipse at 50% 60%, rgba(30, 44, 62, 0.55), transparent 75%);
+}
+/* THE OPERATOR'S GLOBE HEIGHT (layout L7): once the divider under the band is moved, the band is
+   `--log-globe-h`, a % of the scroller the divider paints on `.log-scroll` and fits into it on
+   load and on every resize (features/paneSeam LOG_GLOBE_*). The stock floor goes with the stock
+   height: the divider's own is 8em. */
+.log-globe-band[data-sized] {
+  height: var(--log-globe-h);
+  min-height: 0;
+}
+/* The divider itself: in the flow between the band and the sticky search/header block, taking no
+   height of its own at any spacing scale (its box and its two negative margins are the same
+   token, so the rows start exactly where they did), and over the sticky block's top edge, which
+   is positioned at z 3. */
+.log-scroll > .pane-splitter.horizontal {
+  position: relative;
+  z-index: 4;
+  height: calc(2 * var(--space-1));
+}
+/* The sm tier keeps the band and the table, so it keeps their divider; xs hides it with every
+   other divider. */
+[data-viewport='sm'] .log-scroll > .pane-splitter {
+  display: block;
 }
 .qso-globe {
   position: absolute;

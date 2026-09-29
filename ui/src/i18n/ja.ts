@@ -788,6 +788,7 @@ export const JA: PartialCatalog = {
   "logbook.form.updated": "{{call}}を更新しました",
   "logbook.form.logFailed": "QSOを記録できませんでした",
   "logbook.globe.loading": "地球儀を読み込み中…",
+  "logbook.globe.height.label": "地球儀の高さ",
   "logbook.search.placeholder": "コール／グリッド／バンド／モード／日付で検索…",
   "logbook.search.clear": "クリア",
   "logbook.filter.needsConfirmation.label": "要コンファーム",

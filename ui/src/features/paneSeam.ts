@@ -121,6 +121,13 @@ export const CONNECT_STRIP_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
 export const CONNECT_STRIP_SPLIT_MAX: SplitClamp = Infinity
 export const CONNECT_STRIP_MAX_SHARE = 0.5
 
+/** The Logbook's globe band once sized (layout L7), from its own rules (`.log-globe-band`,
+ *  `.log-globe-band[data-sized]`): an 8em floor (the band's readout and band picker over a globe
+ *  still worth looking at) and no ceiling of its own — the divider's default 90 % of the scroller
+ *  holds, and the band scrolls away with the list. Stock, the band is 320 px. */
+export const LOG_GLOBE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
+export const LOG_GLOBE_SPLIT_MAX: SplitClamp = Infinity
+
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */
 export function parseSplitPct(raw: string | null): number | null {

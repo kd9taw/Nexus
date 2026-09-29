@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { APRS_RAIL_MIN, APRS_RAIL_STOCK } from './features/aprsRail'
 
-// THE OWN-GRID VIEWS' DIVIDERS (layout L7): APRS's station list width. Computes the cascade winner
+// THE OWN-GRID VIEWS' DIVIDERS (layout L7): APRS's station list width and the Logbook's globe band.
+// Computes the cascade winner
 // of every property a divider depends on, for the element as it renders — its data attributes and
 // the <html> [data-viewport] tier — never a regex over the sheet (a dead selector passes those;
 // that is how two dead fixes shipped).
@@ -303,4 +304,47 @@ describe('APRS: the station list column and the map', () => {
         else expect(display, 'two columns stand at this tier, so their divider does').not.toBe('none')
       })
     }
+})
+
+// ── The Logbook's globe band ─────────────────────────────────────────────────────────────────
+
+const logScroll = (vp: string): El[] => [html(vp), { cls: ['log-table', 'logbook-table'] }, { cls: ['log-scroll'] }]
+
+/** A length the sheet writes with the spacing tokens, in px at the tier's `--space-scale` (1 above
+ *  sm, 0.94 at sm): `--space-N` is `calc(<4N>px * var(--space-scale))` on <html>. */
+function spacePx(v: string, scale: number): number {
+  const expr = v
+    .replace(/var\(--space-(\d)\)/g, (_, n) => String(4 * Number(n) * scale))
+    .replace(/calc\(/g, '(')
+    .replace(/px/g, '')
+  if (!/^[\d\s.()*/+-]+$/.test(expr)) throw new Error(`not a spacing expression: ${v}`)
+  return Function(`return (${expr})`)() as number
+}
+
+describe('the Logbook: the globe band and its divider', () => {
+  it('the stock band is the sheet’s 320 px until the operator sizes it; sized, it is the divider’s height and the stock floor goes', () => {
+    const bandIn = (sized: boolean): El[] => [...logScroll('md'), { cls: ['log-globe-band'], attrs: sized ? { 'data-sized': '' } : {} }]
+    expect(value(bandIn(false), 'height')).toBe('320px')
+    expect(value(bandIn(false), 'min-height')).toBe('320px')
+    expect(value(bandIn(true), 'height')).toBe('var(--log-globe-h)')
+    expect(value(bandIn(true), 'min-height')).toBe('0')
+  })
+
+  for (const [vp, scale] of [['md', 1], ['lg', 1], ['sm', 0.94]] as const)
+    it(`[data-viewport=${vp}] the divider takes no height of its own, so the rows start where they did, and sits over the sticky block`, () => {
+      const seam = [...logScroll(vp), { cls: ['pane-splitter', 'horizontal'] }]
+      const h = spacePx(value(seam, 'height')!, scale)
+      // `margin: <block> <inline>` — the block half is the top and bottom margin.
+      const block = spacePx(tracks(value(seam, 'margin')!)[0], scale)
+      expect(h + 2 * block, `height ${h} with margins ${block} at scale ${scale}`).toBeCloseTo(0, 9)
+      expect(h, 'still a grab line').toBeGreaterThan(0)
+      expect(value(seam, 'position')).toBe('relative')
+      const sticky = Number(value([...logScroll(vp), { cls: ['log-sticky'] }], 'z-index'))
+      expect(Number(value(seam, 'z-index')), 'under the sticky block, half of it would be unreachable').toBeGreaterThan(sticky)
+      expect(value(seam, 'display') ?? 'block', 'the band and the table stand at this tier').not.toBe('none')
+    })
+
+  it('xs hides the divider with every other one', () => {
+    expect(value([...logScroll('xs'), { cls: ['pane-splitter', 'horizontal'] }], 'display')).toBe('none')
+  })
 })

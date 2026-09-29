@@ -1990,6 +1990,7 @@ export const DE: PartialCatalog = {
   "logbook.form.updated": "{{call}} aktualisiert",
   "logbook.form.logFailed": "QSO konnte nicht geloggt werden",
   "logbook.globe.loading": "Globus wird geladen…",
+  "logbook.globe.height.label": "Höhe des Globus",
   "logbook.search.placeholder": "Suche: Rufzeichen / Locator / Band / Mode / Datum…",
   "logbook.search.clear": "Leeren",
   "logbook.filter.needsConfirmation.label": "Bestätigung fehlt",

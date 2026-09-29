@@ -1263,6 +1263,7 @@
 "3","logbook.form.updated","Updated {{call}}","","{{call}}",""
 "3","logbook.form.logFailed","Could not log QSO","","QSO","Short label on: Logbook view. The same English text ""Could not log QSO"" is used by 2 different keys (e.g. shell.log.failed) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "3","logbook.globe.loading","Loading globe…","","",""
+"3","logbook.globe.height.label","Globe height","","","The accessible name of the divider under the 3-D globe at the top of the Logbook. A screen reader reads it, and it appears inside the divider's tooltip (paneSeam.title). Dragging the divider, or pressing the arrow keys on it, makes the globe taller or shorter. Use the same word for 'globe' as in logbook.globe.loading."
 "3","logbook.search.placeholder","Search call / grid / band / mode / date…","","",""
 "3","logbook.search.clear","Clear","","","Short label on: Logbook view. The same English text ""Clear"" is used by 11 different keys (e.g. logEntry.clear.label, needed.filter.clear.label, spots.filter.clear.label) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "3","logbook.filter.needsConfirmation.label","needs confirmation","","",""

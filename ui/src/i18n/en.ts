@@ -1196,6 +1196,8 @@ export const EN = {
   // The table. Column headers name a CONCEPT and are prose; every value under them is a
   // token. `{{query}}` is what the operator typed, inserted verbatim.
   'logbook.globe.loading': 'Loading globe…',
+  // The divider under the globe band (layout L7); its tooltip is paneSeam.title.
+  'logbook.globe.height.label': 'Globe height',
   'logbook.search.placeholder': 'Search call / grid / band / mode / date…',
   'logbook.search.clear': 'Clear',
   'logbook.filter.needsConfirmation.label': 'needs confirmation',

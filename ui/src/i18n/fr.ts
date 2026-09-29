@@ -2034,6 +2034,7 @@ export const FR: PartialCatalog = {
   "logbook.globe.count.all": { "one": "{{count}} locator contacté", "other": "{{count}} locators contactés" },
   "logbook.globe.count.band": { "one": "{{count}} locator sur {{band}}", "other": "{{count}} locators sur {{band}}" },
   "logbook.globe.loading": "Chargement du globe…",
+  "logbook.globe.height.label": "Hauteur du globe",
   "logbook.globe.spin.pause": "⏸ Rotation",
   "logbook.globe.spin.play": "▶ Rotation",
   "logbook.globe.spin.start.title": "Démarrer la rotation lente",
