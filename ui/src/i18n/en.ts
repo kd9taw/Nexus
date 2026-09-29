@@ -9326,8 +9326,8 @@ export const EN = {
   // themselves live in the cockpits and move with them.
   'shell.tx.announce.on': 'Transmitting',
   'shell.tx.announce.off': 'Receiving',
-  'shell.rail.stations.aria': 'Resize stations panel (double-click to reset)',
-  'shell.rail.waterfall.aria': 'Resize waterfall pane (double-click to reset)',
+  'shell.rail.stations.label': 'stations panel width',
+  'shell.rail.waterfall.label': 'waterfall panel width',
   'shell.bandActivity.title': 'Band Activity — heard on the band',
   'shell.roam.aria': 'Roam settings',
   'shell.roam.close.aria': 'Close Roam settings',
@@ -9686,10 +9686,10 @@ export const EN = {
   'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
 
   // ── Drag handles ────────────────────────────────────────────────────────────────────
-  // One entry for both handles (`Splitter` sizes a panel, `SplitterSeam` splits two): the
-  // tooltip makes the same statement about the same gesture, and `{{label}}` — the
-  // separator's accessible name — is what says which handle it is.
-  'splitter.title': 'Drag to resize ({{label}})',
+  // One entry for every divider (PaneSeam: a strip's height, the split between two panes, a
+  // rail's width): the tooltip makes the same statement about the same gestures, and
+  // `{{label}}` — the separator's accessible name — is what says which divider it is.
+  'paneSeam.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click or press Backspace to reset.',
 
   // ── The theme cards ─────────────────────────────────────────────────────────────────
   // Each card: the theme's name, and under it a one-line personality in radio terms. The
@@ -9705,6 +9705,31 @@ export const EN = {
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
   'theme.system.line': 'Follows your computer, light or dark',
+  // The built-in themes (features/skins.ts): two groups of cards after the three above, each card
+  // a theme's name and its one-line personality. The names are the operator's (2026-09-27, "Keep
+  // these names"); the ids are invariant tokens. LCD, VFD and OLED are display types.
+  'theme.family.rig': 'Rig looks',
+  'theme.family.modern': 'Modern',
+  'theme.amberLcd.label': 'Amber LCD',
+  'theme.amberLcd.line': 'Black chassis, amber digits, warm-white lit keys',
+  'theme.greenLcd.label': 'Green LCD',
+  'theme.greenLcd.line': 'Black chassis, green phosphor digits',
+  'theme.blueVfd.label': 'Blue VFD',
+  'theme.blueVfd.line': 'Deep navy chassis, blue-white fluorescent digits',
+  'theme.silver.label': 'Silver chassis',
+  'theme.silver.line': 'Pale silver front, white panels, dark scopes and meters',
+  'theme.midnight.label': 'Midnight',
+  'theme.midnight.line': 'True black for OLED and dark rooms, cyan lit',
+  'theme.slate.label': 'Slate',
+  'theme.slate.line': 'Soft blue-grey editor dark, low glare',
+  'theme.lagoon.label': 'Lagoon',
+  'theme.lagoon.line': 'Deep teal dark with soft sea-green inks',
+  'theme.ember.label': 'Ember',
+  'theme.ember.line': 'Warm sepia dark with amber digits and aqua keys',
+  'theme.nebula.label': 'Nebula',
+  'theme.nebula.line': 'Violet-tinted dark with lavender keys and digits',
+  'theme.paper.label': 'Paper',
+  'theme.paper.line': 'Warm cream page, white panels, ink-blue keys — low glare',
 
   // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
   // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on
@@ -9736,6 +9761,9 @@ export const EN = {
   'palette.preset.gold': 'Gold',
   'palette.preset.yellow': 'Yellow',
   'palette.preset.sky': 'Sky',
+  // On a built-in theme (Settings ▸ Appearance ▸ Theme), the Accent's and the Readout's standard
+  // chip is the theme's own colour rather than the standard one, and says so.
+  'palette.preset.themeOwn': 'Theme’s own',
 
   // ── The waterfall palette picker ────────────────────────────────────────────────────
   // Two wordings, and the difference is load-bearing: an UNSCOPED picker drives the master

@@ -33,6 +33,7 @@ import { StationDataContext } from '../stationAccess'
 import { PALETTE_ROLES } from '../features/paletteRoles'
 import {
   BASE_MODES,
+  SENTINEL_MODES,
   baseOf,
   chainOf,
   contrast,
@@ -77,9 +78,10 @@ const TEXT_MIN = 4.5
 const STATE_MIN = 3
 /** What a cockpit header can sit on. */
 const BACKDROPS = ['--bg', '--panel', '--bg-elev'] as const
-/** Every base mode under every OK preset: the good-state green is the OK role's. */
+/** Every base mode under every OK preset: the good-state green is the OK role's. The base modes
+ *  include the built-in themes MODES carries as the worst case of each base (SENTINEL_MODES). */
 const OK = PALETTE_ROLES.find((r) => r.id === 'ok')!
-const MODES: Mode[] = BASE_MODES.flatMap((b) => OK.presets.map((p, i) => (i === 0 ? b : withRoles(b, { ok: p.id }))))
+const MODES: Mode[] = [...BASE_MODES, ...SENTINEL_MODES].flatMap((b) => OK.presets.map((p, i) => (i === 0 ? b : withRoles(b, { ok: p.id }))))
 
 const linked = (over: Partial<AmpStatus> = {}): AmpStatus =>
   ({
@@ -220,9 +222,11 @@ describe('every button that says Operate reads, in both themes', () => {
     expect(leftToTheBrowser([...desktop, ...quick, nav])).toEqual([])
   })
 
+  // Twenty base modes (the eight standard ones and three worst-case themes' four each) under three
+  // OK presets, on two sheets: about 3.5 s on a loaded box, so the budget is explicit.
   it('every button letters at 4.5:1 on its own face, locked or not, in every mode, under every OK preset', () => {
     expect(unreadable([...desktop, ...quick, nav])).toEqual([])
-  })
+  }, 20_000)
 
   it('Operate keeps the good-state colour on its border, 3:1 from any surface the header sits on', () => {
     for (const b of desktop.filter((x) => x.operate)) {
@@ -250,6 +254,8 @@ describe('every button that says Operate reads, in both themes', () => {
     }
   })
 
+  // The same sweep as above (every mode, every OK preset), run twice: 1.6 s alone, 4.5–5.1 s under the
+  // full suite on a loaded box, so the budget is explicit here too.
   it('FIRES: the strip as it shipped is caught, and so is a green word on a themed face', () => {
     // Before 2026-09-27: `.amp-strip button` set only font-size, line-height and padding, and
     // `.amp-op.on` a green ink and border; there was no disabled rule.
@@ -274,5 +280,5 @@ describe('every button that says Operate reads, in both themes', () => {
     ]
     const found = unreadable(desktop.map((b) => ({ ...b, rules: greenWord })))
     expect(found.some((m) => m.startsWith('cockpit header Operate light on')), found.join('\n')).toBe(true)
-  })
+  }, 20_000)
 })

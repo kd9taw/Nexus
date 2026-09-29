@@ -16,6 +16,7 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FeaturesApi } from '../useFeatures'
 import type { Motion } from '../useMotion'
 import { DEFAULT_SELECTION } from '../features/paletteRoles'
+import { SKINS, type SkinId } from '../features/skins'
 import { LOGBOOK_GLOBE_KEY } from '../features/logbookGlobe'
 import { FT_PALETTE_SCOPE, WF_PALETTE_KEY } from '../waterfallPalette'
 import { EN } from '../i18n'
@@ -50,7 +51,15 @@ const features = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel(props: { motion?: Motion; onMotionChange?: (m: Motion) => void } = {}) {
+function renderPanel(
+  props: {
+    motion?: Motion
+    onMotionChange?: (m: Motion) => void
+    onThemeChange?: (t: 'light' | 'dark' | 'system') => void
+    skin?: SkinId | null
+    onSkinChange?: (id: SkinId | null) => void
+  } = {},
+) {
   return render(
     <SettingsPanel
       target="appearance"
@@ -144,6 +153,27 @@ describe('Settings ▸ Appearance: the Display sections', () => {
     for (const k of ['theme', 'contrast', 'night', 'field'] as const) {
       expect(rowLabels(w), `${k} is still in Workspace`).not.toContain(EN[`settings.workspace.${k}.label`])
     }
+  })
+
+  it('the theme cards are the gallery: the standard three, then Rig looks and Modern, picked with their base', async () => {
+    const onThemeChange = vi.fn()
+    const onSkinChange = vi.fn()
+    renderPanel({ onThemeChange, skin: 'slate', onSkinChange })
+    const s = await sectionNamed('settings.theme.legend')
+    const rig = within(s).getByRole('group', { name: EN['theme.family.rig'] })
+    const modern = within(s).getByRole('group', { name: EN['theme.family.modern'] })
+    const E = EN as unknown as Record<string, string>
+    expect(within(rig).getAllByRole('button').map((b) => b.textContent)).toEqual(
+      SKINS.filter((x) => x.family === 'rig').map((x) => E[x.labelKey] + E[x.lineKey]),
+    )
+    expect(within(modern).getAllByRole('button')).toHaveLength(SKINS.filter((x) => x.family === 'modern').length)
+    expect(within(modern).getByRole('button', { name: EN['theme.slate.label'] }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(rig).getByRole('button', { name: EN['theme.silver.label'] }))
+    expect(onThemeChange).toHaveBeenLastCalledWith('light')
+    expect(onSkinChange).toHaveBeenLastCalledWith('silver')
+    fireEvent.click(within(s).getByRole('button', { name: EN['theme.dark.label'] }))
+    expect(onThemeChange).toHaveBeenLastCalledWith('dark')
+    expect(onSkinChange).toHaveBeenLastCalledWith(null)
   })
 
   it('Waterfall & scopes holds both palette pickers, on the same keys the cockpit pickers write', async () => {

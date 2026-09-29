@@ -32,8 +32,8 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
-import { SplitterSeam } from './SplitterSeam'
+import { PaneSeam } from './PaneSeam'
+import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
@@ -889,8 +889,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // The last output power the rig actually measured — see the transmit contract below.
   const lastPoW = useRef<number | null>(null)
   const scopeRef = useRef<HTMLDivElement>(null)
-  // Cockpit root: the scope-height splitter measures + writes its CSS var here.
-  const cockpitRef = useRef<HTMLElement>(null)
+  // The scope strip its height divider sizes: the divider sets its CSS var on the strip's
+  // container (this cockpit's root) and measures the range the layout honours (on a short window
+  // the pane region's floor stops the strip below its own max-height).
+  const scopePanelRef = useRef<HTMLElement>(null)
   useWheelTune(scopeRef, {
     remoteFrequency: true,
     radioId: snap.activeRadioId,
@@ -1373,7 +1375,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
     (auxPresent || hasNeededPane) && (hasBandPane || hasSpotsPane) ? 3 : leadPresent ? 2 : 1,
   )
-  // The divider between the two feeds measures and repaints their frames (SplitterSeam).
+  // The divider between the two feeds measures and repaints their frames (PaneSeam).
   const spotsFrameRef = useRef<HTMLElement>(null)
   const neededFrameRef = useRef<HTMLElement>(null)
 
@@ -1739,11 +1741,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       <>
         {spotsPane}
         {hasSpotsPane && hasNeededPane && cols === 2 && panels && (
-          <SplitterSeam
+          <PaneSeam
             above={spotsFrameRef}
             below={neededFrameRef}
             varName="--pane-share"
             onCommit={(av, bv) => panels.setShares({ spots: av, needed: bv })}
+            onReset={() => panels.setShares({ spots: null, needed: null })}
             label={t('phone.seam.spotsNeeded.label')}
           />
         )}
@@ -2243,7 +2246,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   )
 
   return (
-    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef}>
+    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -2445,7 +2448,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           the dock below, none of them reachable from the ⊞ menu. */}
       {shown('scope') && (
         <>
-      <section hidden={!details} className={`ph-scope-panel${!details ? ' ph-scope-panel--quiet' : ''}`}>
+      <section hidden={!details} className={`ph-scope-panel${!details ? ' ph-scope-panel--quiet' : ''}`} ref={scopePanelRef}>
         <div className="ph-scope-head">
           {(() => {
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native
@@ -2566,10 +2569,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           />
         </div>
       </section>
-      {details && <Splitter
+      {details && <PaneSeam
         axis="y"
         varName="--ph-scope-h"
-        target={cockpitRef}
+        strip={scopePanelRef}
         storageKey="nexus.split.phone.scope"
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}

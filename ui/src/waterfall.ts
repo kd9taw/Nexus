@@ -4,6 +4,7 @@
 // independently of the canvas.
 
 import { sampleLut, type ColormapName } from './colormaps'
+import { skinOf } from './features/skins'
 import { SingleFlightLatch } from './singleFlight'
 import type { MessageKey } from './i18n'
 import type { Tier } from './types'
@@ -1209,11 +1210,13 @@ export const MASTER_PALETTES: { value: ColormapName | 'auto'; label: string; lab
 ]
 
 /** Resolve the waterfall colormap: an explicit palette choice wins; `'auto'` (or an
- * unknown/stale value) falls back to the theme's default map — or, at night (useNight.ts), to
- * Amber CRT, in either theme. Night never overrides a palette picked by name. */
-export function resolveColormap(palette: string, theme: string, night = false): ColormapName {
+ * unknown/stale value) falls back to the theme's map — a built-in theme's own (features/skins.ts,
+ * `skin` being the one painting now), else the standard theme's default — or, at night
+ * (useNight.ts), to Amber CRT, in every theme. Neither Night nor a theme ever overrides a palette
+ * picked by name. */
+export function resolveColormap(palette: string, theme: string, night = false, skin: string | null = null): ColormapName {
   const explicit = WATERFALL_PALETTES.some((p) => p.value === palette && p.value !== 'auto')
-  return explicit ? (palette as ColormapName) : night ? 'amber-crt' : themeColormap(theme)
+  return explicit ? (palette as ColormapName) : night ? 'amber-crt' : (skinOf(skin)?.waterfall ?? themeColormap(theme))
 }
 
 /** FST4's symbol length per period (s) as WSJT-X's PLOTTER has it. See `markerWidthHz`: three of

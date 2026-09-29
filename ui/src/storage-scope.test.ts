@@ -85,6 +85,9 @@ export const PER_SURFACE = [
   'nexus.waterfall.flow',
   'nexus.waterfall.zoom',
   'tempo-left-rail-w',
+  // Which Tempo rail the operator set last — the one that keeps its width when the pair must give
+  // (usePaneWidths.fitRails). A statement about THIS window's two widths, like them.
+  'tempo-rail-last',
   'tempo-right-rail-w',
 ]
 
@@ -135,6 +138,9 @@ const SHARED = [
   'nexus-palette-cyan',
   'nexus-palette-ok',
   'nexus-palette-readout',
+  // The built-in theme (Settings ▸ Appearance ▸ Theme; useSkin.ts): part of the theme, the same
+  // class, so a pop-out paints the theme the window that opened it paints.
+  'nexus-skin',
   'nexus-motion',
   'nexus-ui-scale-cap',
   'nexus.connect.chaseDefault.v1',
@@ -329,7 +335,7 @@ const INDIRECT: Record<string, string[]> = {
   // unscoped layout key — which no test could catch, since its literal would not be in the
   // classification either.
   'features/paneLayout.ts:spec': [],
-  'components/Splitter.tsx:storageKey': [
+  'components/PaneSeam.tsx:storageKey': [
     'nexus.split.operate.waterfall',
     'nexus.split.cw.scope',
     'nexus.split.phone.scope',

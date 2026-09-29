@@ -9,7 +9,8 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
 import { contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
@@ -1479,7 +1480,8 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }, [running])
 
-  // Settings round-trip for the bonus checklist (same pattern as specialOp in OperateCockpit).
+  // The settings as they were when the view opened: what the scoring panel and the operator field
+  // DISPLAY. Never the base of a save — see `saveScoringPatch`.
   const [nativeSettings, setSettingsState] = useState<Settings | null>(null)
   const settings = observation ?? nativeSettings
   useEffect(() => {
@@ -1542,16 +1544,20 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   }
 
   // One optimistic writer for every scoring field on this panel (earned list, plan list,
-  // power multiplier) — the shape the single bonus checkbox already used. Each patches ONE
-  // field of the settings the panel is holding, so the three controls cannot write over
+  // power multiplier). Each edit names ONE field, so the three controls cannot write over
   // each other's state, and the power chips edit the very same `fdPowerMult` the Settings
   // panel does rather than a second copy of it.
-  const saveScoringPatch = async (patch: Partial<Settings>) => {
+  //
+  // ⚠️ SAVED OVER THE LIVE SETTINGS, NEVER OVER THIS VIEW'S COPY. The copy is as old as the
+  // view, and a save of `{ ...copy, ...edit }` wrote every field changed elsewhere since back
+  // to what it was: simultaneous radios on again after "use one radio", the previous operator
+  // after a seat swap in the pop-out scoreboard, the old dial after the rig was retuned. The
+  // copy only mirrors the edit, so the display does not wait on a round trip.
+  const saveScoringPatch = async (edit: (s: Settings) => Partial<Settings>) => {
     if (observed || !nativeSettings) return
-    const updated: Settings = { ...nativeSettings, ...patch }
-    setSettingsState(updated)
+    setSettingsState({ ...nativeSettings, ...edit(nativeSettings) })
     try {
-      await setSettings(updated)
+      await patchSettings(edit)
     } catch {
       // Revert optimistic update on failure
       setSettingsState(nativeSettings)
@@ -1561,15 +1567,15 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     list.includes(id) ? list.filter((b) => b !== id) : [...list, id]
   /** Confirm / un-confirm a bonus. THIS is the list the score is made of. */
   const toggleEarned = (id: string) =>
-    saveScoringPatch({ fdBonuses: toggle(settings?.fdBonuses ?? [], id) })
+    saveScoringPatch((s) => ({ fdBonuses: toggle(s.fdBonuses ?? [], id) }))
   /** Put a bonus on the chase list (or take it off). Never touches the score. */
   const togglePlanned = (id: string) =>
-    saveScoringPatch({ fdBonusesPlanned: toggle(settings?.fdBonusesPlanned ?? [], id) })
-  const setPowerMult = (mult: number) => saveScoringPatch({ fdPowerMult: mult })
+    saveScoringPatch((s) => ({ fdBonusesPlanned: toggle(s.fdBonusesPlanned ?? [], id) }))
+  const setPowerMult = (mult: number) => saveScoringPatch(() => ({ fdPowerMult: mult }))
 
   // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
   // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path drops the TX
-  // queue and re-derives the TX cycle from this component's settings snapshot (#54). Since
+  // queue and re-derives the TX cycle from the saved struct (#54). Since
   // #100 it no longer resets the operating mode, but those two still land on a live contact.
   // The engine trims + uppercases.
   const saveOperator = async (call: string) => {

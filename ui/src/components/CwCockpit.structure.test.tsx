@@ -21,7 +21,7 @@
 // Heavy children are stubbed: this asserts the SHELL's structure, not pane behaviour.
 // jsdom has no layout, so widths are stubbed the way useRegionCols.test.tsx does.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
 import type { CwPanelId, PanelLayoutApi } from '../features/panelState'
@@ -655,5 +655,53 @@ describe('CwCockpit TX meters are pinned, not flashed', () => {
     expect(meters()!.textContent).toContain('45 W')
     expect(meters()!.classList.contains('idle')).toBe(true)
     expect(meters()!.textContent).not.toContain('readings appear on transmit')
+  })
+})
+
+// ── THE SCOPE DIVIDER (layout L1, PaneSeam) ─────────────────────────────────────────────────
+// The CW twin of Phone's: keyboard-reachable, announced, and a stored height restored clamped.
+// jsdom: the shell gets a size; 16 px font → 8em = 128 px; no --vh-eff → 0.45 · 768 = 345.6 px.
+describe('the scope divider answers the keyboard (PaneSeam)', () => {
+  function layOut(boxes: Record<string, { top?: number; left?: number; width?: number; height?: number }>) {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      for (const [sel, b] of Object.entries(boxes)) {
+        if (!this.matches(sel)) continue
+        const { top = 0, left = 0, width = 800, height = 0 } = b
+        return { top, left, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect
+      }
+      return real.call(this)
+    })
+  }
+  const shell = () => document.querySelector<HTMLElement>('main.cw-cockpit')!
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.style.removeProperty('--vh-eff')
+    document.documentElement.style.removeProperty('--ui-zoom')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('focusable, announces its height, and steps, jumps and resets to its own 13 % default', async () => {
+    layOut({ 'main.cw-cockpit': { height: 1000 } })
+    await renderCockpit()
+    const sep = screen.getByRole('separator', { name: 'scope height' })
+    expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => sep.getAttribute(a))).toEqual(['130', '128', '346'])
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(shell().style.getPropertyValue('--cw-scope-h')).toBe(`${(146 / 1000) * 100}%`)
+    expect(localStorage.getItem('nexus.split.cw.scope')).toBe(String((146 / 1000) * 100))
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('346')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(shell().style.getPropertyValue('--cw-scope-h')).toBe('13%')
+    expect(localStorage.getItem('nexus.split.cw.scope')).toBe('13')
+  })
+
+  it('a height stored by an earlier build is restored, clamped against this window, and kept', async () => {
+    localStorage.setItem('nexus.split.cw.scope', '75')
+    layOut({ 'main.cw-cockpit': { height: 1000 } })
+    await renderCockpit()
+    expect(screen.getByRole('separator', { name: 'scope height' }).getAttribute('aria-valuenow')).toBe('346')
+    expect(localStorage.getItem('nexus.split.cw.scope'), 'the clamp is apply-side only').toBe('75')
   })
 })

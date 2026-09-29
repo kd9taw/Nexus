@@ -40,6 +40,7 @@ import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCe
 import type { ScopeTuneRequest } from '../useScopeTune'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { useNightActive } from '../useNight'
+import { useSkinActive } from '../useSkin'
 import { WaterfallHistory } from '../waterfallHistory'
 import { drawDss } from '../dss'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
@@ -223,12 +224,15 @@ export function PhoneScope({
   // CRT at night — useNight.ts).
   const [palette] = useWaterfallPalette()
   const night = useNightActive()
+  // …and on a built-in theme, Auto is the theme's own palette.
+  const skin = useSkinActive()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number | null>(null)
   const txRef = useRef(transmitting)
   const themeRef = useRef(theme)
   const paletteRef = useRef(palette)
   const nightRef = useRef(night)
+  const skinRef = useRef(skin)
   const activeRef = useRef(active)
   const viewLoRef = useRef(viewLoHz)
   const viewHiRef = useRef(viewHiHz)
@@ -237,7 +241,7 @@ export function PhoneScope({
   const sidebandRef = useRef(sideband)
   const dialRef = useRef(dialHz)
   const onFeedRef = useRef(onFeed)
-  const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night)))
+  const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
   // Retained waterfall-band history (bottom region only). Same model as the FT waterfall:
   // the hot path scrolls a retained RGBA buffer (no getImageData readback), and a palette/
   // resize change re-renders the accumulated history instead of losing it. No pause UI here
@@ -324,6 +328,7 @@ export function PhoneScope({
   themeRef.current = theme
   paletteRef.current = palette
   nightRef.current = night
+  skinRef.current = skin
   activeRef.current = active
   viewLoRef.current = viewLoHz
   viewHiRef.current = viewHiHz
@@ -341,9 +346,9 @@ export function PhoneScope({
   traceHoldRef.current = traceHoldMs
 
   useLayoutEffect(() => {
-    lutRef.current = bakeLut(resolveColormap(palette, theme, night))
+    lutRef.current = bakeLut(resolveColormap(palette, theme, night, skin))
     rebuildRef.current?.() // recolor the accumulated waterfall history in the new palette
-  }, [palette, theme, night])
+  }, [palette, theme, night, skin])
 
   // Unmount safety: a mid-drag nav away must not leave the edge-scan rAF running.
   useEffect(
@@ -800,7 +805,7 @@ export function PhoneScope({
       // ---- Panadapter trace (top region): held spectrum (see hold above), colored ----
       ctx.fillStyle = `rgb(${lut[0]},${lut[1]},${lut[2]})` // clear trace region to floor color
       ctx.fillRect(0, 0, Wd, traceHd)
-      const name = resolveColormap(paletteRef.current, themeRef.current, nightRef.current)
+      const name = resolveColormap(paletteRef.current, themeRef.current, nightRef.current, skinRef.current)
       const gk = `${name}:${traceHd}`
       if (!gradCache || gk !== gradKey) {
         const c0 = sampleLut(name, 0.3)

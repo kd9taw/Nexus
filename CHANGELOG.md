@@ -193,6 +193,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsign heard in a picture's ID). A station with no rotator sees nothing new, and the strip
   asks the rotator nothing while its screen is not the one showing. On the Remote page it behaves
   as it does on the Phone, CW and FT screens.
+- **Ten ready-made themes.** Settings ▸ Appearance ▸ Theme now shows ten more themes below Light,
+  Dark and System, each card with its name, a line on its character and a swatch of its colours.
+  **Rig looks**: **Amber LCD** (black chassis, amber digits), **Green LCD**, **Blue VFD** and
+  **Silver chassis**. **Modern**: **Midnight** (true black, for OLED screens and dark rooms),
+  **Slate**, **Lagoon**, **Ember**, **Nebula** and **Paper** (a warm cream page). Silver chassis and
+  Paper are light themes and the rest are dark. Every one is checked for contrast in every mode,
+  exactly like Light and Dark: the scopes and meters stay dark, and the transmit red, the ON AIR
+  sign, alerts, and the signal and Needed colours are the same in every theme. High contrast keeps
+  its own look whatever the theme, Night dims each theme in its own colours, and a colour you pick
+  in **Colours** wins over the theme's (that row calls the theme's colour **Theme's own**). On a
+  theme, the band name on the band chip, the Logbook globe's band picker and the Field Day band
+  board is lettered in the theme's text colour, with the band's colour on its border or underline,
+  as in Light. A waterfall or scope on the **Auto** palette takes the theme's own palette (Amber
+  CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue VFD, Cividis on Paper…); Night still
+  turns it Amber CRT, and a palette you picked by name never changes. On a dark theme the map's
+  land, sea and coastlines take the theme's colours too; the light themes keep the usual dark map.
+  Pick Light, Dark or System to go back. The theme is remembered per computer, and your backup carries it with the rest of
+  the look.
+- **Every divider you can drag now also works from the keyboard.** This covers the dividers
+  under the scope in Phone and CW and under the waterfall in Operate, the one between Band
+  Activity and Rx Frequency (Roster) or between the Rx Frequency column and the Stations list
+  (Classic) in Operate, the one between Spots and Needed in Phone, and the two beside
+  Tempo's conversation. Tab reaches each divider, and a thin accent ring shows which one has
+  the keyboard. The arrow keys move it (hold Shift for a bigger step). Home and End take it to
+  either end, and Backspace or a double-click puts it back to where it started. A screen reader
+  says each divider's name and its position. The layouts you have saved open exactly where you
+  left them.
 
 ### Changed
 
@@ -222,6 +249,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme. It is now a deeper gold in the dark theme and a duller, brass-like gold in the light
   theme, clearly apart from both in each, and it still passes the same readability checks as the
   others. Amber and Yellow look exactly as before, and nothing changes unless you picked Gold.
+- **Teal and Mint no longer look alike in the light theme.** In Settings ▸ Appearance ▸ Colours,
+  the OK / green choices Teal and Mint were almost the same colour in the light theme, and Mint was
+  close to Green as well. Teal is now a deeper, slightly bluer teal there and Mint a touch lighter,
+  so the three greens are clearly apart, and they pass the same readability checks as before, on
+  every built-in theme too. Teal still stays furthest from the reds for a red-green colour-blind
+  operator. The dark theme is unchanged, and nothing changes unless you picked Teal or Mint.
 - **Density's middle setting is called Standard.** It was labelled Comfortable while Density had
   two choices; Comfortable is now the roomier setting beside it. Whichever you had picked stays
   picked, and nothing on the screen moves.
@@ -252,6 +285,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
+  colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
+  you picked. The dark theme is unchanged.
 - **The top bar's TX plate lights for every transmission.** It lit only for FT8/FT4-style timed
   overs, so during a Phone over, CW, RTTY, PSK or SSTV, a tune carrier, or with the mic keyed at
   the radio itself, it read a green RX while the cockpit's ON AIR sign was red. It now shows TX
@@ -282,6 +318,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings file but not in the window you went on to operate in, so the next setting you changed
   there turned it back on, and the picker returned at the next launch. The window now keeps the
   choice too.
+- **Saving in one place no longer undoes a change made in another.** The Contest view's bonus and
+  power chips, switching CW macro sets, and Save in Settings each saved a copy of every setting,
+  taken when that screen opened. Whatever had changed since, anywhere else, went back: "use one
+  radio" turned simultaneous radios on again, a seat swap made in the pop-out scoreboard was undone,
+  and the radio was sent back to the frequency it was on when the screen opened. Each now saves only
+  what you changed there, over the settings as they are at that moment.
 - **The band chip's band name is readable in the light theme.** The band chip (the top bar, the
   cockpit headers, Phone's and CW's band picker, and Settings ▸ Station) spelled the band name in
   the band's own colour, which barely shows on a light background: 20m's green read about 1.5:1.
@@ -311,6 +353,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the theme you picked. With Nexus in the light theme on a computer set to dark, or the other way
   round, some of their words could not be read. They now follow Nexus's theme. Nothing changes
   when your computer's setting matches the theme, which it always does with the System theme.
+- **POTA's Start and Download and the Satellites ⧉ look like the rest of Nexus.** They were still
+  plain grey browser buttons with a raised edge beside Nexus's own buttons. Start and Download now
+  match the Import buttons next to them, and Start still looks greyed out until you type a park
+  reference. The Satellites ⧉, which opens Satellites in its own window, matches the refresh chip
+  beside it and stays where it was.
+- **The watch list's × can be read in the dark theme.** In Settings ▸ Spots & Alerts, the red ×
+  that removes a watch-list entry sat on a grey box drawn by the browser, and in the dark theme it
+  could hardly be seen. It now sits on the panel's colour, like the SSTV overlay's remove, and reads
+  clearly in both themes and on every built-in theme.
 - **Keys that could go blank now always show their words.** SSTV's manual-receive Start, the
   SSTV picture viewer's Previous, Next and Save, JS8's station queries, inbox Read and Delete,
   Cancel and Drop, and the Remote page's Refresh, retry and SSTV Save keys took the colour of
@@ -356,6 +407,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they reached the station, and the message said the command was not confirmed. They reach the
   station again and turn the antenna the short way, as before 1.15.0. **LP** stays on the desktop.
   Nothing changes at the station.
+- **The park fills in for every POTA or SOTA activator you click.** Clicking a second activator's
+  spot while the first one's park was still in the log strip could leave the park box empty,
+  though the hunt line above it named the park. Whether it happened depended on timing, which is
+  why some parks filled and others did not. With no callbook, the first activator's park could
+  stay in the box instead and be logged on the second contact. The box now takes the park of the
+  station you clicked, and a park you type yourself for the station you are working is still
+  kept. A park filled in from a spot leaves the box when you type a different station's call,
+  even if that spot's hunt has moved on or ended, so it is never logged on someone else's
+  contact. An activator spotted again at another park fills the new park. An activator spotted
+  with a portable suffix (KE7G/P) now fills too, a prefix form
+  (VE7/KE7G) no longer shows the "call ≠ hunt" warning, and two different portable stations
+  (KE7G/P and KF7XYZ/P) are no longer taken for the same one. Clicking a station also tells your
+  own call apart the same way, so an operator signing VE7/ followed by their call can work other
+  VE7/ stations.
+- **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
+  divider could be dragged past the height the screen can actually give the scope. The extra
+  distance was dead: dragging back up moved nothing until the pointer had come all the way
+  back. Operate's waterfall divider did the same near its limit. In CW the divider jumped
+  ahead of the pointer as soon as you dragged it. Each of these dividers now stops exactly
+  where the scope or waterfall stops, and follows the pointer at any UI scale. The Tempo
+  dividers now follow the pointer when the UI scale is not 100 %. A saved scope or waterfall
+  height is fitted to the window whenever the window changes size, and when you first open
+  Operate after starting Nexus in another section.
+- **Tempo's side panels no longer squeeze the conversation out.** Panel widths saved on a wide
+  monitor, or panels dragged wide on a big window that was then made smaller, could leave the
+  conversation between the stations list and the waterfall with no width at all. The two
+  panels now always leave it at least 360 pixels, about a phone's width. When they have to
+  give way, the panel you moved last keeps its width. A double-click on one of these dividers
+  now resets only that panel; Reset layout still resets both.
 
 ### Corrections to 1.15.0
 
