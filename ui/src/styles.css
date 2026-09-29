@@ -766,8 +766,11 @@ button.nb-chip:hover {
 .ba-row:hover {
   background: var(--bg-elev);
 }
-.ba-row.is-closed {
-  opacity: 0.5;
+/* A closed band recedes by its INK, not by fading the row: at half opacity every word in it, the
+   pill's "Closed" and the faint reason included, fell below the 4.5:1 lettering floor. The pill dims
+   its own letters (.bc-state.is-closed); the band name follows. */
+.ba-row.is-closed .ba-band {
+  color: var(--text-dim);
 }
 .ba-band {
   font-family: var(--font-mono);

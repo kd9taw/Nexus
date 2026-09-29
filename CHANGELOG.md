@@ -266,6 +266,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places. The reply now lists the four stations you heard most recently, not counting the one
   asking.
 
+- **A band says the same thing everywhere.** The map's Band conditions list, the Band Advisor,
+  the band menu and the NOW bar now show the same word and the same colour for each band.
+  - A band you are hearing now is Open and green, even when the propagation model calls it
+    closed. A summer Es opening on 10 m or 6 m used to show a grey "Open".
+  - The NOW bar says what the band menu says. For a band the model calls open but nobody has
+    heard yet it now says "20m open" (it used to say "quiet"). It says "marginal" where the list
+    says Marginal. A closed band shows in grey instead of red.
+  - The Band Advisor's word is the same outlined word as the list's. A closed band's row is no
+    longer faded to half strength, which made its text too faint to read; its band name and word
+    are dimmer instead.
+
 - **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
   do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
   offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
