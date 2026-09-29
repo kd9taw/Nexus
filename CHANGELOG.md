@@ -155,6 +155,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either end, and Backspace or a double-click puts it back to where it started. A screen reader
   says each divider's name and its position. The layouts you have saved open exactly where you
   left them.
+- **Phone, CW and JS8: drag the columns wider or narrower.** When one of these cockpits shows two
+  or three columns, a divider on the left edge of the log column sets how wide the log is, and
+  with three columns a second divider shares the width between the other two. Drag them, or Tab
+  to one and use the arrow keys (Shift for a bigger step, Home and End for either end, Backspace
+  or a double-click for the standard width). The log column stays between its usual minimum and
+  half the width of the panes; a width you set on a big monitor comes back there, and on a
+  smaller window it is simply narrowed to fit. On a narrow window, where the panes stack in one
+  column, there are no column dividers. **⊞ Panels ▸ Reset layout** puts the standard columns
+  back, and **Undo last change** undoes one divider move. Moving a divider never reloads the
+  log form or the voice keyer, so a half-typed contact stays where it is.
+- **JS8: resize the panes and the waterfall.** A divider between Activity and Band activity and
+  another between Stations and Inbox share the height between each pair, and a divider under the
+  waterfall sets its height, from the mouse or the keyboard like every other divider. The
+  waterfall opens at about the size it had before; the height you set is kept, and fitted to the
+  window when it changes size.
 
 ### Changed
 
