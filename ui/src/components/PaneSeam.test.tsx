@@ -380,6 +380,18 @@ describe('a SPLIT divider', () => {
     expect(sep.getAttribute('aria-orientation')).toBe('horizontal')
   })
 
+  it('re-announces the split when a pane changes size with no window resize (the UI scale, a neighbour)', async () => {
+    const { a, sep } = mount('y')
+    expect(sep.getAttribute('aria-valuenow')).toBe('60')
+    // The pane above stops at a floor: 200 of 400 now, and nothing resized the window.
+    rectOf(a, () => ({ top: 100, height: 200 }))
+    resized(a)
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(sep.getAttribute('aria-valuenow'), 'the divider still announces the split it opened with').toBe('50')
+  })
+
   it('a drag maps the pointer to its place in the pair, paints live, and commits once', () => {
     const { a, b, sep, onCommit } = mount('y')
     fireEvent.pointerDown(sep, { clientY: 405, pointerId: 1, button: 0 })

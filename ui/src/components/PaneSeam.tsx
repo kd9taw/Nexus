@@ -485,19 +485,27 @@ function SplitSeam({ above, below, varName, onCommit, onReset, label, axis = 'y'
     later.current = requestAnimationFrame(() => setMeasured(measure()))
   }, [measure])
   // Measured once the commit is done, on every window resize (where a column's floor can start or
-  // stop binding), and after each commit of the divider's own (below). Not in a layout effect: the
-  // pane after the divider (Rx Frequency under its seam, Classic's Stations aside) has no ref yet
-  // while the divider's layout effects run. Only the announced value waits for it — a key or a
-  // drag measures at the moment it acts. A ratio needs no clamp against the box: the record's
-  // shares are clamped on load (coercePanelLayout) and on every write (seamShares).
+  // stop binding), whenever either pane changes size by itself, and after each commit of the
+  // divider's own (below). The panes' own sizes are observed because a floor starts binding with
+  // no window resize at all: a neighbour arriving after the first layout (measured in Chrome at
+  // 1024×768: RTTY's waterfall came in 34 ms after the cockpit, took its 25 % from the pair and
+  // left both panes at their floors, 50 %, while the divider still announced the stock 40 % it had
+  // measured), a neighbour's divider, a pane shown beside them. Not in a layout effect: the pane
+  // after the divider (Rx Frequency under its seam, Classic's Stations aside) has no ref yet while
+  // the divider's layout effects run. Only the announced value waits for it — a key or a drag
+  // measures at the moment it acts. A ratio needs no clamp against the box: the record's shares
+  // are clamped on load (coercePanelLayout) and on every write (seamShares).
   useEffect(() => {
     setMeasured(measure())
     window.addEventListener('resize', remeasure)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => remeasure())
+    for (const el of [above.current, below.current]) if (el) ro?.observe(el)
     return () => {
       window.removeEventListener('resize', remeasure)
+      ro?.disconnect()
       cancelAnimationFrame(later.current)
     }
-  }, [measure, remeasure])
+  }, [measure, remeasure, above, below])
 
   const clampF = (f: number) => Math.min(SPLIT_HI, Math.max(SPLIT_LO, f))
   /** The painted properties, as [element, property] pairs. */
