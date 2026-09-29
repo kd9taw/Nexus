@@ -369,6 +369,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS8: the Band activity by offset pane groups Fast and Turbo signals as JS8Call does.** A
+  station drifting a little at Fast or Turbo could show as two rows, because the pane joined
+  decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's
+  own tolerances, and keeps 10 Hz at Normal and Slow.
+
 - **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
   STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8
   cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
