@@ -7821,7 +7821,7 @@ export const EN = {
 
   // The rotor's two answers. `{{call}}` is a callsign, `{{deg}}` a bearing and `{{error}}`
   // the backend's own refusal — all three pass through verbatim.
-  'operate.rotor.pointed': 'Rotator → {{call}}: {{deg}}°',
+  'operate.rotor.pointed': 'Rotator → {{call}}: {{deg}}° ({{to}})',
   'operate.rotor.failed': 'Rotator: {{error}}',
 
   // ── Operate ▸ the merged operating strip ────────────────────────────────────────────
@@ -8798,7 +8798,7 @@ export const EN = {
   'cw.filter.failed': 'Could not set filter width',
   // `{{call}}` is a callsign, `{{bearing}}` a heading in degrees and `{{error}}` the engine's
   // own words — all three arrive invariant.
-  'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}°',
+  'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}° ({{to}})',
   'cw.rotator.failed': 'Rotator: {{error}}',
   'cw.record.start.aria': 'Record QSO audio',
   'cw.record.stop.aria': 'Stop recording this QSO',
@@ -9479,8 +9479,8 @@ export const EN = {
   'shell.recall.done.setMode': '{{name}} — {{freq}} MHz · set {{mode}} on the rig',
   'shell.net.reminder': 'Net {{until}}: {{name}} — {{freq}} {{mode}}',
   'shell.net.tune': 'Tune',
-  'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}})',
-  'shell.rotator.pointedLong': '↗ Pointing antenna long path to {{bearing}}° ({{call}})',
+  'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}}, {{to}})',
+  'shell.rotator.pointedLong': '↗ Pointing antenna long path to {{bearing}}° ({{call}}, {{to}})',
   'shell.rotator.failed': "Couldn't point the antenna at {{call}}",
   // `WSJT-X`, `JTDX` and `MSHV` are program names and `:2237` their agreed UDP port.
   'shell.source.companion': 'Source: {{source}} — listening for WSJT-X/JTDX/MSHV on :2237',
@@ -9914,6 +9914,13 @@ export const EN = {
   // magnetic marks, `WMM`, `AOS`/`LOS`, `az`, `rotctld` and the SAT/ROTOR plates. The ■ buttons
   // on both surfaces stop ROTATION and the satellite track — never a transmission.
   'rotor.stop.failed': 'Rotator stop: {{error}}',
+  // What a point-at-call's bearing was taken to, the `{{to}}` at the end of every "pointing
+  // antenna" toast: the station's own grid, the position its callbook entry gives, or only the
+  // centre of its country (a tester was sent 20° wide by that and could not tell). `{{grid}}` is
+  // a Maidenhead locator and `{{country}}` a DXCC entity name, both interpolated verbatim.
+  'rotor.pointed.to.grid': 'their grid {{grid}}',
+  'rotor.pointed.to.position': 'their callbook position',
+  'rotor.pointed.to.country': 'the centre of {{country}}: no grid known for them',
 
   'rotor.strip.aria': 'Rotator',
   'rotor.strip.az.title': 'Rotator at {{deg}}° true',
@@ -9971,7 +9978,7 @@ export const EN = {
   'rotor.strip.lost.silent': 'Rotator not answering',
   'rotor.strip.lost.stopped': 'Rotator stopped answering',
   'rotor.strip.lost.silent.title':
-    'A rotator is configured but not answering — check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
+    "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it. If it is, check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log",
   'rotor.strip.lost.stopped.title':
     'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
   'rotor.strip.lost.open.aria': '{{state}} — open the rotator settings',
@@ -10048,6 +10055,10 @@ export const EN = {
   'rotor.pane.stop.title': 'Stop rotation NOW',
   'rotor.pane.hint': 'click the rose or type a bearing · headings are TRUE',
   'rotor.pane.hint.noPosition': 'no position from this rotator — pointing and STOP still work',
+  // Nothing answered the read at all: the controller is off or unplugged, or rotctld is not
+  // running (a tester read "Error 61" here). Shown as the hint and as the readout's tooltip.
+  'rotor.pane.notAnswering':
+    "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────

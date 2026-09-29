@@ -44,6 +44,7 @@ vi.mock('../api', () => ({
   resolveEntity: vi.fn(() => Promise.resolve(null)),
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
+  setLogFormGrid: vi.fn(() => Promise.resolve()),
 }))
 
 /** The rig, for every arm: 20 m, phone. Whatever band and mode class a wording names, it can

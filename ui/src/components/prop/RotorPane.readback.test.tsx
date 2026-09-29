@@ -15,10 +15,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { RotorPane } from './RotorPane'
+import { StationControlContext } from '../../stationAccess'
+import { t } from '../../i18n'
+import type { RotatorState } from '../../types'
+
+/** The DCU-1 case: rotctld answers, and the backend has no position to give, for ever. */
+const DCU1: RotatorState = { azDeg: null, reading: 'noPosition' }
 
 const api = vi.hoisted(() => ({
-  // The DCU-1 case: `p` is refused, so the poll yields null for ever.
+  // The browser's read (a hosted page keeps it); the desktop pane polls readRotatorState.
   readRotator: vi.fn((): Promise<number | null> => Promise.resolve(null)),
+  readRotatorState: vi.fn(
+    (): Promise<{ azDeg: number | null; reading: string } | null> =>
+      Promise.resolve({ azDeg: null, reading: 'noPosition' }),
+  ),
   pointRotator: vi.fn(() => Promise.resolve()),
   stopRotator: vi.fn(() => Promise.resolve()),
   getDeclination: vi.fn((): Promise<number | null> => Promise.resolve(null)),
@@ -32,6 +42,7 @@ vi.mock('../../toast', () => ({ pushToast: vi.fn() }))
 beforeEach(() => {
   vi.clearAllMocks()
   api.readRotator.mockImplementation(() => Promise.resolve(null))
+  api.readRotatorState.mockImplementation(() => Promise.resolve(DCU1))
   api.pointRotator.mockImplementation(() => Promise.resolve())
   api.stopRotator.mockImplementation(() => Promise.resolve())
   api.getDeclination.mockImplementation(() => Promise.resolve(null))
@@ -81,9 +92,10 @@ describe('a station with no rotator at all', () => {
     api.getSettings.mockImplementation(() =>
       Promise.resolve({ rotatorModel: 0, rotatorHost: '' } as never),
     )
+    api.readRotatorState.mockImplementation(() => Promise.resolve(null))
     const { container } = render(<RotorPane />)
     // Give the settings read and the first poll a chance to land before concluding.
-    await waitFor(() => expect(api.readRotator).toHaveBeenCalled())
+    await waitFor(() => expect(api.readRotatorState).toHaveBeenCalled())
     expect(container.querySelector('.rotor-pane')).toBeNull()
   })
 
@@ -98,9 +110,40 @@ describe('a station with no rotator at all', () => {
 
 describe('a rotator that does answer is unchanged', () => {
   it('draws the needle and the true bearing', async () => {
-    api.readRotator.mockImplementation(() => Promise.resolve(213))
+    api.readRotatorState.mockImplementation(() => Promise.resolve({ azDeg: 213, reading: 'position' }))
     const { container } = render(<RotorPane />)
     await waitFor(() => expect(screen.queryByText(/213°T/)).not.toBeNull())
     expect(container.querySelectorAll('.rotor-needle:not(.target)').length).toBe(1)
+  })
+})
+
+describe('a controller that is switched off (a tester read "Error 61" on every command)', () => {
+  it('says the controller is not answering, not that pointing still works', async () => {
+    api.readRotatorState.mockImplementation(() => Promise.resolve({ azDeg: null, reading: 'notAnswering' }))
+    const { container } = render(<RotorPane />)
+    await waitFor(() => expect(screen.queryByText(t('rotor.pane.notAnswering'))).not.toBeNull())
+    expect(screen.queryByText(t('rotor.pane.hint.noPosition'))).toBeNull()
+    expect(screen.getByText(/—°T/).closest('[title]')?.getAttribute('title')).toBe(t('rotor.pane.notAnswering'))
+    // …and STOP is still there: the pane never hides it.
+    expect(screen.getByRole('button', { name: /stop/i })).not.toBeNull()
+    expect(container.querySelectorAll('.rotor-needle:not(.target)').length).toBe(0)
+  })
+
+  it('the DCU-1, which answers with no position, keeps its own words', async () => {
+    render(<RotorPane />)
+    await waitFor(() => expect(screen.queryByText(t('rotor.pane.hint.noPosition'))).not.toBeNull())
+    expect(screen.queryByText(t('rotor.pane.notAnswering'))).toBeNull()
+  })
+})
+
+describe('a browser on Nexus Remote', () => {
+  it('keeps the read it always had', async () => {
+    render(
+      <StationControlContext.Provider value={false}>
+        <RotorPane />
+      </StationControlContext.Provider>,
+    )
+    await waitFor(() => expect(api.readRotator).toHaveBeenCalled())
+    expect(api.readRotatorState).not.toHaveBeenCalled()
   })
 })

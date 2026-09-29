@@ -1795,6 +1795,33 @@ pub const PENDING_LOG_QUEUE_CAP: usize = 64;
 /// looks up a few dozen stations; the oldest answer is dropped first.
 const CALLBOOK_NAMES_CAP: usize = 64;
 
+/// Where a callbook lookup placed a station: its locator, when the answer is one, and the
+/// position the callbook vouched for, when it did (the lookup refuses QRZ's own grid-derived and
+/// country-centre coordinates, so a position here is the station's). The rotator's
+/// point-at-call reads it rather than aiming at the country centre.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallbookFix {
+    pub grid: Option<String>,
+    pub position: Option<(f64, f64)>,
+}
+
+/// Everything the engine knows about where a station is, source by source, MOST TRUSTED FIRST —
+/// the order the rotator's point-at-call refines within. None of it asks the network: the operator
+/// typed it, the station sent it, or a lookup already answered it. See [`Engine::station_grids`].
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct StationGrids {
+    /// The grid the log form holds for the call (typed, or filled in from the callbook). A
+    /// contest exchange that carries a grid arrives here: it is the box the operator copies it to.
+    pub log_form: Option<String>,
+    /// Grids the station sent this session: its FT8/FT4/FT1/WSPR frames (the roster, which also
+    /// learns the grid of an FT exchange), then its JS8 frames (the heard list).
+    pub heard: Vec<String>,
+    /// Where a callbook lookup answered this session placed it.
+    pub callbook: Option<CallbookFix>,
+    /// The grid on its newest logged contact.
+    pub logged: Option<String>,
+}
+
 /// Seconds between two CATCH-UP uploads (see [`UploadOrigin::CatchUp`]). Live contacts
 /// are never subject to this.
 ///
@@ -2743,6 +2770,14 @@ pub struct Engine {
     /// contact carries the NAME the operator already saw on the callsign card — never a new
     /// network call from the logging path.
     callbook_names: VecDeque<(String, String)>,
+    /// Where those same lookups placed each station, `(CALL, fix)`, newest last, bounded by
+    /// [`CALLBOOK_NAMES_CAP`]: the rotator's point-at-call aims at it instead of the country
+    /// centre, and never makes a lookup of its own. See [`CallbookFix`].
+    callbook_fixes: VecDeque<(String, CallbookFix)>,
+    /// The grid the log form holds for the call it is logging, `(CALL, grid)`: typed by the
+    /// operator, or filled in from the callbook. Pushed by the frontend and keyed to the call,
+    /// like `cw_peer_call`, so a form left on another station never aims the beam.
+    log_form_grid: Option<(String, String)>,
     /// One-shot: the operator hit Abort — the radio loop calls `rig.stop_morse` and
     /// clears the queue, then resets this.
     cw_abort: bool,
@@ -4844,6 +4879,8 @@ impl Engine {
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
             callbook_names: VecDeque::new(),
+            callbook_fixes: VecDeque::new(),
+            log_form_grid: None,
             cw_abort: false,
             manual_ptt: false,
             rf_power: None,
@@ -8423,6 +8460,90 @@ impl Engine {
             .map(|(_, name)| name.clone())
     }
 
+    /// Remember where a callbook lookup placed `call`, replacing an earlier answer for the same
+    /// call — the location twin of [`Self::note_callbook_name`], bounded the same way. An answer
+    /// with neither a locator nor a position is ignored, so it cannot wipe one already known.
+    pub fn note_callbook_fix(&mut self, call: &str, fix: CallbookFix) {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        let grid = fix
+            .grid
+            .map(|g| g.trim().to_string())
+            .filter(|g| !g.is_empty());
+        if call.is_empty() || (grid.is_none() && fix.position.is_none()) {
+            return;
+        }
+        self.callbook_fixes.retain(|(c, _)| *c != call);
+        if self.callbook_fixes.len() >= CALLBOOK_NAMES_CAP {
+            self.callbook_fixes.pop_front();
+        }
+        let fix = CallbookFix {
+            grid,
+            position: fix.position,
+        };
+        self.callbook_fixes.push_back((call, fix));
+    }
+
+    /// Where a lookup answered this session placed exactly this call, if one did. Exact call,
+    /// as for the name: `W1AW/P` is not where `W1AW`'s callbook entry says.
+    fn callbook_fix(&self, call: &str) -> Option<&CallbookFix> {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        self.callbook_fixes
+            .iter()
+            .rev()
+            .find(|(c, _)| *c == call)
+            .map(|(_, fix)| fix)
+    }
+
+    /// Record the grid the log form holds for `call`. A blank grid forgets it, but only for the
+    /// same call: a form that moved on to another station has nothing to say about this one.
+    pub fn set_log_form_grid(&mut self, call: &str, grid: &str) {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        let grid = grid.trim();
+        if call.is_empty() {
+            return;
+        }
+        if grid.is_empty() {
+            if self.log_form_grid.as_ref().is_some_and(|(c, _)| *c == call) {
+                self.log_form_grid = None;
+            }
+            return;
+        }
+        self.log_form_grid = Some((call, grid.to_string()));
+    }
+
+    /// The grid the log form holds for exactly this call, if it holds one.
+    fn log_form_grid(&self, call: &str) -> Option<&str> {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        self.log_form_grid
+            .as_ref()
+            .filter(|(c, _)| *c == call)
+            .map(|(_, g)| g.as_str())
+    }
+
+    /// Where the engine knows `call`'s station to be, source by source ([`StationGrids`]).
+    pub fn station_grids(&self, call: &str) -> StationGrids {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        let mut heard: Vec<String> = self
+            .roster_grid(&call)
+            .map(str::to_string)
+            .into_iter()
+            .collect();
+        if let Some(g) = self
+            .js8_heard()
+            .iter()
+            .find(|h| h.call.eq_ignore_ascii_case(&call))
+            .and_then(|h| h.grid.clone())
+        {
+            heard.push(g);
+        }
+        StationGrids {
+            log_form: self.log_form_grid(&call).map(str::to_string),
+            heard,
+            callbook: self.callbook_fix(&call).cloned(),
+            logged: self.logged_grid(&call),
+        }
+    }
+
     /// Expand a CW macro WITHOUT queuing it — the cockpit's reply preview.
     pub fn preview_cw(&self, text: &str) -> String {
         self.expand_cw(text)
@@ -8896,6 +9017,13 @@ impl Engine {
             .roster
             .get(call)
             .and_then(|h| h.grid.as_deref())
+    }
+
+    /// The grid this station's newest logged contact carries, if that row has one — the log's
+    /// half of [`Self::dx_grid_resolved`], for a caller outside a QSO (the rotator's
+    /// point-at-call). A lookup keyed on the call, never a guess.
+    fn logged_grid(&self, call: &str) -> Option<String> {
+        self.station.newest_logged_grid(call)
     }
     /// Adopt the rig's reported mic gain (radio-loop poll). Observed-only.
     pub fn observe_rig_mic_gain(&mut self, frac: f32) {
@@ -34876,6 +35004,64 @@ mod tests {
         assert_eq!(log[0].name.as_deref(), Some("Dave"));
         // No lookup for this call: no name — never a borrowed one.
         assert_eq!(e.qso_record("N0CALL".into(), None, None).name, None);
+    }
+
+    /// The rotator's point-at-call aims at the station, not its country (a tester's report,
+    /// 2026-09-29): every place the engine already knows it to be, source by source, most
+    /// trusted first, and keyed to the exact call.
+    #[test]
+    fn station_grids_gathers_what_the_engine_knows_for_exactly_that_call() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert_eq!(
+            e.station_grids("EC1DD"),
+            StationGrids::default(),
+            "nothing known yet"
+        );
+
+        e.set_log_form_grid("ec1dd", " IN52TK ");
+        e.ingest_decodes_for_test(&[dec_snr("CQ EC1DD IN52", -6)], 1);
+        e.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: Some((42.44, -8.37)),
+            },
+        );
+        let mut rec = e.qso_record("EC1DD".into(), None, None);
+        rec.grid = Some("IN52".into());
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.station_grids("ec1dd"),
+            StationGrids {
+                log_form: Some("IN52TK".into()),
+                heard: vec!["IN52".into()],
+                callbook: Some(CallbookFix {
+                    grid: Some("IN52TK".into()),
+                    position: Some((42.44, -8.37)),
+                }),
+                logged: Some("IN52".into()),
+            }
+        );
+        // Another station's answers are not this one's.
+        assert_eq!(e.station_grids("EC1DE"), StationGrids::default());
+
+        // A blank grid in the form forgets it, but only for its own call: a form that moved
+        // on to another station says nothing about this one.
+        e.set_log_form_grid("EA1XYZ", "");
+        assert_eq!(e.station_grids("EC1DD").log_form.as_deref(), Some("IN52TK"));
+        e.set_log_form_grid("EC1DD", "");
+        assert_eq!(e.station_grids("EC1DD").log_form, None);
+
+        // A callbook answer with no location cannot wipe the one already known.
+        e.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("  ".into()),
+                position: None,
+            },
+        );
+        assert!(e.station_grids("EC1DD").callbook.is_some());
     }
 
     /// Sibling of the NewState defect, same class: a QSO that logs with a BLANK grid can never

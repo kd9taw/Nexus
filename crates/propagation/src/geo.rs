@@ -146,6 +146,84 @@ pub fn is_logged_grid(s: &str) -> bool {
         && (b.len() < 8 || (b[6].is_ascii_digit() && b[7].is_ascii_digit()))
 }
 
+/// Where one source puts a station: a locator it sent or was logged with, or a position a
+/// callbook vouched for. What a rotator's point-at-call aims at, in place of the station's
+/// country (a country centre is off by 20° from the Netherlands to Galicia).
+#[derive(Debug, Clone, PartialEq)]
+pub enum StationFix {
+    /// A Maidenhead locator, 4, 6 or 8 characters ([`is_logged_grid`]).
+    Grid(String),
+    /// Latitude and longitude, in degrees.
+    Position(f64, f64),
+}
+
+impl StationFix {
+    /// The point a bearing is taken to: a locator's centre, or the position itself. `None` for
+    /// a locator that is not one, or a position off the globe.
+    pub fn latlon(&self) -> Option<(f64, f64)> {
+        match self {
+            StationFix::Grid(g) if is_logged_grid(g) => maidenhead_to_latlon(g),
+            StationFix::Grid(_) => None,
+            StationFix::Position(lat, lon) => (lat.is_finite()
+                && lon.is_finite()
+                && (-90.0..=90.0).contains(lat)
+                && (-180.0..=180.0).contains(lon))
+            .then_some((*lat, *lon)),
+        }
+    }
+
+    /// How closely this pins the station down: a position, then a 6- or 8-character locator
+    /// (read to 6: [`maidenhead_to_latlon`] stops at the subsquare), then a 4-character square.
+    fn precision(&self) -> u8 {
+        match self {
+            StationFix::Position(..) => 3,
+            StationFix::Grid(g) if g.trim().len() >= 6 => 2,
+            StationFix::Grid(_) => 1,
+        }
+    }
+
+    /// Does this fix lie inside `wider`'s square? Only a locator has an area to lie inside.
+    fn within(&self, wider: &StationFix) -> bool {
+        let StationFix::Grid(g) = wider else {
+            return false;
+        };
+        let (Some((lat, lon)), Some((clat, clon))) = (self.latlon(), wider.latlon()) else {
+            return false;
+        };
+        // The square's own size about its centre: 1° × 2° for four characters, 2.5′ × 5′ for six.
+        let (h, w) = if g.trim().len() >= 6 {
+            (2.5 / 60.0, 5.0 / 60.0)
+        } else {
+            (1.0, 2.0)
+        };
+        (lat - clat).abs() <= h / 2.0 && (lon - clon).abs() <= w / 2.0
+    }
+}
+
+/// The best of `fixes`, which come MOST TRUSTED FIRST: the first usable one, replaced by a more
+/// precise one only where that one lies inside it.
+///
+/// ⚠️ **Precision alone is the wrong rule.** A 6-character square logged in 2019 is finer than
+/// the 4-character square a station sends today, and wrong when the callsign has moved (a
+/// DXpedition call used again from another island, an operator portable away from the square
+/// their callbook gives). So a finer fix may only REFINE the fix that is trusted more, never
+/// overrule it: a callbook position inside the square the station is sending sharpens the aim,
+/// a callbook position somewhere else is ignored.
+pub fn best_fix(fixes: impl IntoIterator<Item = StationFix>) -> Option<StationFix> {
+    let mut best: Option<StationFix> = None;
+    for fix in fixes {
+        if fix.latlon().is_none() {
+            continue;
+        }
+        best = match best {
+            None => Some(fix),
+            Some(b) if fix.precision() > b.precision() && fix.within(&b) => Some(fix),
+            keep => keep,
+        };
+    }
+    best
+}
+
 /// Compass octant (N, NE, …) for a bearing in degrees — for plain-language
 /// "point NW" guidance.
 pub fn compass_octant(bearing: f64) -> &'static str {
@@ -416,5 +494,67 @@ mod tests {
         ] {
             assert!(!is_logged_grid(bad), "{bad:?} is not a logged square");
         }
+    }
+
+    fn grid(g: &str) -> StationFix {
+        StationFix::Grid(g.to_string())
+    }
+
+    #[test]
+    fn best_fix_takes_the_trusted_fix_and_sharpens_it_only_from_inside() {
+        // Heard IN52 on the air, and the callbook knows the subsquare and the station's exact
+        // position, both inside it: the aim sharpens all the way to the position.
+        let at = maidenhead_to_latlon("IN52TK").unwrap();
+        let exact = StationFix::Position(at.0 + 0.01, at.1 - 0.01);
+        let chosen = best_fix([grid("IN52"), grid("IN52TK"), exact.clone()]);
+        assert_eq!(chosen, Some(exact));
+
+        // The callbook places the station somewhere else (their home square) while it sends a
+        // different one today: the square it sends wins, however much finer the callbook's is.
+        let chosen = best_fix([
+            grid("IN73"),
+            grid("IN52TK"),
+            StationFix::Position(at.0, at.1),
+        ]);
+        assert_eq!(chosen, Some(grid("IN73")));
+
+        // A coarser fix never replaces a finer, trusted one.
+        assert_eq!(
+            best_fix([grid("FN42KH"), grid("FN42")]),
+            Some(grid("FN42KH"))
+        );
+    }
+
+    #[test]
+    fn best_fix_skips_what_is_not_a_location() {
+        // QRZ answers its grid field with whatever the operator typed into their profile — a
+        // rover's "EN52/EN53" or a callsign-shaped string is not a square, and neither is a
+        // position off the globe. None of them may be aimed at, and none of them may block the
+        // next fix in line.
+        let chosen = best_fix([
+            grid("EN52/EN53"),
+            grid("OL20ABC"),
+            StationFix::Position(f64::NAN, 10.0),
+            StationFix::Position(95.0, 10.0),
+            grid("en52"),
+        ]);
+        assert_eq!(chosen, Some(grid("en52")));
+        assert_eq!(best_fix([]), None);
+        assert_eq!(best_fix([grid("EN5X")]), None);
+    }
+
+    #[test]
+    fn a_square_contains_its_own_subsquares_and_nothing_next_door() {
+        let square = grid("IN52");
+        assert!(grid("IN52AA").within(&square) && grid("IN52XX").within(&square));
+        assert!(!grid("IN53AA").within(&square) && !grid("IN42XX").within(&square));
+        let sub = grid("IN52TK");
+        assert!(
+            grid("IN52TK55").within(&sub),
+            "an 8-character square inside its 6"
+        );
+        assert!(!grid("IN52TL").within(&sub));
+        // A position has no area: nothing lies inside one.
+        assert!(!grid("IN52TK").within(&StationFix::Position(42.4, -8.4)));
     }
 }

@@ -1124,6 +1124,20 @@ mod tests {
         assert!(st.queue.is_empty() && st.pending_reply.is_none() && st.activity.is_empty());
     }
 
+    /// A JS8 heartbeat's grid is somewhere the station told us it is: the rotator's point-at-call
+    /// reads it from the heard list (`Engine::station_grids`), after the roster's.
+    #[test]
+    fn a_heard_js8_grid_reaches_the_point_at_call() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        assert!(e.station_grids("EC1DD").heard.is_empty());
+        e.js8_ingest(
+            &[row(&hb("EC1DD", "IN52"), whole(), Js8Speed::Normal, 1500.0)],
+            4,
+        );
+        assert_eq!(e.station_grids("ec1dd").heard, vec!["IN52".to_string()]);
+    }
+
     /// The RX chain end to end: `Decode.raw` → `RawDecode` → `Reassembler` → `Station`, with the
     /// activity pane and the heard list populated. B7 removed the receive-only override, so a
     /// query addressed to me now schedules a SHOWN autoreply countdown (autoreply is JS8Call's

@@ -442,6 +442,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
   opened JS8, and the reply writes it as JS8Call does: "IDLE 5M", "IDLE 1H", "IDLE 2D".
 
+- **A rotator controller switched on after Nexus comes online by itself.** Nexus runs Hamlib's
+  rotator program for you, and that program quits at once when the controller's port is not
+  there, which is what a USB controller that is still switched off looks like. Nexus used to start
+  it again only when you saved Settings or switched radios, so every command failed with
+  "Connection refused (os error 61)" until you did. Now it tries again every 5 seconds while a
+  rotator is set up, and the rotator answers a few seconds after you switch it on, with nothing to
+  save. The Connections log says once that it could not start, not every 5 seconds. While the
+  controller is off, a command says "The rotator controller isn't answering. Is it switched on and
+  plugged in?", and the Rotor pane and the rotor strip say the same, where the pane used to say
+  that pointing and STOP still work. A rotator that answers but reports no position, such as the
+  Hy-Gain DCU-1, keeps its own message. An external rotctld that refuses the connection is named by
+  its address.
+- **Pointing the rotator at a callsign aims at the station, not the middle of its country.** The
+  → button on a cockpit's rotor strip, the ↗ on Needed rows and the other point-at buttons used to
+  turn the beam to the centre of the station's country: from JO21EV that is 207° for EC1DD, whose
+  own grid is at 227°, and 299° for AA1AA instead of 291°. They now aim at the station itself when
+  Nexus already knows where it is: the grid in the log form (typed, or filled in from the
+  callbook), a grid the station sent on FT8, FT4 or JS8 this session, what a callbook lookup
+  returned, or the grid on your last contact with it. A closer location, such as a six-character
+  grid or the callbook's own position, is used only when it lies inside the square the station is
+  sending, so a callbook address never overrides where a portable station says it is. Nothing is
+  looked up when you point. The message after pointing says what the bearing was taken to: the
+  station's grid, its callbook position, or the centre of its country when nothing closer is known.
+  The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
+  aims at the country centre.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

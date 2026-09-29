@@ -31,6 +31,7 @@ vi.mock('../api', () => ({
   resolveEntity: vi.fn(() => Promise.resolve(null)),
   searchParks: vi.fn(() => Promise.resolve([])),
   setCwPeerInfo: vi.fn(() => Promise.resolve()),
+  setLogFormGrid: vi.fn(() => Promise.resolve()),
 }))
 
 const snap = {

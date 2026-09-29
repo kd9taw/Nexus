@@ -44,6 +44,7 @@ vi.mock('../api', async (importOriginal) => {
     lookupParkLive: vi.fn(async () => null),
     searchParks: vi.fn(async () => []),
     setCwPeerInfo: vi.fn(async () => {}),
+    setLogFormGrid: vi.fn(async () => {}),
     logQso: vi.fn(async (rec: unknown) => rec),
     // The logbook never answers: the recall card is not what this file is about.
     askLog: vi.fn(() => new Promise(() => {})),

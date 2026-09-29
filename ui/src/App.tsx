@@ -170,7 +170,8 @@ import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
+import { pointedTo } from './components/rotorPointAt'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
@@ -2028,8 +2029,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Point the antenna rotator at a needed call (great-circle bearing from your grid).
   const handlePointAntenna = useCallback(async (call: string, longPath = false) => {
     try {
-      // A browser gets no bearing back: the station resolves it.
-      const bearing: number | null | undefined = await pointRotatorAtCall(call, longPath)
+      // A browser gets nothing back: the station resolves it.
+      const pointed: PointedAt | null | undefined = await pointRotatorAtCall(call, longPath)
       // ⚠️ THE TOAST NAMES THE PATH. A heading with no path is half an answer — the same
       // reason `azimuthTitle` says "short path" out loud on every bearing Nexus displays.
       //
@@ -2040,12 +2041,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // …and the PARAMS are object literals at each call site for the same reason: the
       // guard counts a call site unreadable when the key OR the params come from a
       // variable, so hoisting them into `where` traded one unreadable site for another.
+      // …and what the bearing was taken to: the station's grid, or only its country's centre.
       pushToast(
-        bearing == null
+        pointed == null
           ? t('remote.b1.rotatorPointing', { call })
           : longPath
-            ? t('shell.rotator.pointedLong', { bearing: Math.round(bearing), call })
-            : t('shell.rotator.pointed', { bearing: Math.round(bearing), call }),
+            ? t('shell.rotator.pointedLong', { bearing: Math.round(pointed.bearing), call, to: pointedTo(pointed) })
+            : t('shell.rotator.pointed', { bearing: Math.round(pointed.bearing), call, to: pointedTo(pointed) }),
         'success',
         3000,
       )

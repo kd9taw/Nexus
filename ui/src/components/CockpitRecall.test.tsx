@@ -116,6 +116,7 @@ vi.mock('../api', async (importOriginal) => {
     resolveEntity: vi.fn(async () => null),
     searchParks: vi.fn(async () => []),
     setCwPeerInfo: vi.fn(async () => {}),
+    setLogFormGrid: vi.fn(async () => {}),
     // PhoneCockpit
     setPtt: vi.fn(async () => {}),
     setRfPower: vi.fn(async () => {}),
