@@ -672,7 +672,9 @@ export function usePanelLayout<P extends string>(
     (id: P, move: PaneMove, shown: (id: P) => boolean) =>
       setHist((h) => {
         if (!spec.arrange) return h
-        const place = movePlacedPane(spec.arrange, h.cur.place, h.cur.colOrder, id, move, shown)
+        // ◀ ▶ go to the neighbouring column ON SCREEN, and no cockpit renders a stored column order
+        // yet (features/panelPlace): the stock one is what the operator sees.
+        const place = movePlacedPane(spec.arrange, h.cur.place, undefined, id, move, shown)
         if (!place) return h
         const cur: PanelLayout<P> = { ...h.cur, v: 2, place }
         savePanelLayout(key, cur)

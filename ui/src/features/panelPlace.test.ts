@@ -230,6 +230,17 @@ describe('the hook moves a pane in one undoable step', () => {
     expect(result.current.layout.cols).toBeUndefined()
   })
 
+  it('◀ ▶ follow the columns ON SCREEN: a stored column order, which no cockpit renders yet, does not steer them', () => {
+    localStorage.setItem(KEY, JSON.stringify({ v: 2, state: {}, share: {}, colOrder: ['b', 'a', 'log'] }))
+    const { result } = hook()
+    expect(result.current.layout.colOrder, 'the record keeps it').toEqual(['b', 'a', 'log'])
+    // On screen Band Activity is in the left-most column, so there is no column to its left.
+    act(() => result.current.movePane!('bandActivity', 'left', all))
+    expect(result.current.layout.place).toBeUndefined()
+    act(() => result.current.movePane!('bandActivity', 'right', all))
+    expect(placedColumns(SPEC, result.current.layout.place).b).toContain('bandActivity')
+  })
+
   it('only a vocabulary that arranges offers a move at all', () => {
     const { result } = renderHook(() => usePanelLayout(RTTY_PANELS, 'main'))
     expect(result.current.movePane).toBeUndefined()

@@ -83,7 +83,9 @@ export function ArrangePanes<P extends string>({ spec, layout, shown, labels, on
                             aria-label={moveName(move, labels[id])}
                             aria-describedby={pinnedId}
                             title={moveName(move, labels[id])}
-                            disabled={!canMovePane(spec, layout.place, layout.colOrder, id, move, shown)}
+                            // The columns on screen are a | b | log: no cockpit renders a stored
+                            // column order yet, so the moves follow the stock one (as the hook's do).
+                            disabled={!canMovePane(spec, layout.place, undefined, id, move, shown)}
                             onClick={() => onMove(id, move)}
                           >
                             {glyph}
