@@ -1021,6 +1021,8 @@ export const ES: PartialCatalog = {
   "connect.layout.listFirst.title": "Las listas de caza y de spots en dos columnas anchas, con un mapa pequeño entre ellas y la fila inferior cerrada",
   "connect.layout.dashboard.label": "Tablero",
   "connect.layout.dashboard.title": "Siete paneles a la vez alrededor de un mapa más pequeño: las condiciones a la izquierda, la actividad a la derecha y lo que viene abajo",
+  "connect.layout.frame.label": "Marco",
+  "connect.layout.frame.title": "Dos paneles a cada lado de un mapa a toda altura, para un panel de control en su propia pantalla: a la izquierda las condiciones de banda y el clima espacial, a la derecha quién te oye y qué cazar",
   "connect.layout.replaces": "Elegir una reemplaza tu propia disposición. «Deshacer el último cambio» la recupera.",
   "connect.slot.pick.aria": "Elegir qué muestra el slot {{slot}}",
   "connect.slot.pick.title": "Elegir qué muestra este slot",

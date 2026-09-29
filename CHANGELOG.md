@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same monitor, in the same place and at the same size, maximized if you left it maximized. If
   that monitor is gone it opens in the middle of your main screen, sized to fit it. The TV page
   has the same bar.
+- **Connect: a Frame layout.** **⊞ Panels ▸ Layout** has a fourth choice, **Frame**: two panes down
+  each side of a map that runs the full height, Band Advisor over Space Wx on the left and Getting
+  Out over Chase on the right, in 400 px columns. Like the other layouts it changes nothing until
+  you pick it.
 - **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
   **Stay behind** button. Pressed, the window stays behind your other windows even when you click
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers

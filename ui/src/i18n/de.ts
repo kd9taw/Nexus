@@ -4695,6 +4695,8 @@ export const DE: PartialCatalog = {
   "connect.layout.listFirst.title": "Die Jagd- und Spot-Listen in zwei breiten Spalten, dazwischen eine kleine Karte, die untere Reihe geschlossen",
   "connect.layout.dashboard.label": "Übersicht",
   "connect.layout.dashboard.title": "Sieben Bereiche auf einmal um eine kleinere Karte: links die Bedingungen, rechts die Aktivität, unten was kommt",
+  "connect.layout.frame.label": "Rahmen",
+  "connect.layout.frame.title": "Zwei Bereiche an jeder Seite einer Karte in voller Höhe, für ein Dashboard auf einem eigenen Bildschirm: links Bandbedingungen und Weltraumwetter, rechts wer dich hört und was es zu jagen gibt",
   "connect.layout.replaces": "Eine Auswahl ersetzt deine eigene Anordnung. „Letzte Änderung rückgängig“ holt sie zurück.",
   "connect.pane.advisory.title": "Bedingungen",
   "connect.pane.bandAdvisor.title": "Band-Berater",

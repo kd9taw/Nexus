@@ -82,15 +82,16 @@ you make things is remembered per window, and a saved width is trimmed to fit a
 smaller screen. **Reset layout** returns Connect to exactly how it first opened,
 including which pane sits in each slot.
 
-**Layouts.** The Panels menu opens with three ready-made arrangements of the same
+**Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one
-of the three, or **Custom** once you have moved or resized anything yourself.
+of the four, or **Custom** once you have moved or resized anything yourself.
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|
 | Map first | Conditions, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
 | List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
 | Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
+| Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height | 400 px |
 
 A layout applies only when you pick it, and nothing snaps back afterwards: change a
 pane or a width and the menu reads Custom. Over an arrangement of your own the menu

@@ -1,5 +1,6 @@
 // Connect layout presets — Map first, List first and Dashboard (the UI look-and-feel redesign,
-// 2026-09-26). Pure (no JSX, no storage), so every rule unit-tests without React.
+// 2026-09-26), and Frame (the dashboard window's wall-display layout). Pure (no JSX, no storage),
+// so every rule unit-tests without React.
 //
 // A preset is a WHOLE ARRANGEMENT over the machinery Connect already has, and nothing else:
 //   · which pane sits in each slot (features/connectConfig — the permutation grid);
@@ -23,7 +24,7 @@ import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, type PaneId, type SlotId } from './c
 import { RAIL_MAX, RAIL_MIN, type RailWidths } from './connectRails'
 import type { PanelLayout } from './panelState'
 
-export const CONNECT_PRESET_IDS = ['mapFirst', 'listFirst', 'dashboard'] as const
+export const CONNECT_PRESET_IDS = ['mapFirst', 'listFirst', 'dashboard', 'frame'] as const
 export type ConnectPresetId = (typeof CONNECT_PRESET_IDS)[number]
 
 export interface ConnectLayout {
@@ -115,6 +116,25 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
       bottom3: 'greyline',
     },
     hidden: [],
+    rails: { left: 400, right: 400 },
+  },
+  // FRAME — the wall-display layout for the dashboard window: two boxes down each side of a map
+  // that runs the full height, the arrangement a station keeps on a screen of its own. Its columns
+  // top to bottom: band conditions over the solar numbers on the left, who is hearing you (PSK
+  // Reporter's side of it) over what to chase on the right. The bottom row is closed so the map
+  // takes the height; the default's other panes wait in it. 400 px columns read across a desk and
+  // leave the map 800 px in the dashboard window's 1600.
+  frame: {
+    slots: {
+      left1: 'bandAdvisor',
+      left2: 'spacewx',
+      right1: 'getout',
+      right2: 'chase',
+      bottom1: 'openings',
+      bottom2: 'outlook',
+      bottom3: 'advisory',
+    },
+    hidden: STRIP,
     rails: { left: 400, right: 400 },
   },
 }

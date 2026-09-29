@@ -7199,6 +7199,9 @@ export const EN = {
   'connect.layout.listFirst.title': 'The chase and spot lists in two wide columns, with a small map between them and the bottom row closed',
   'connect.layout.dashboard.label': 'Dashboard',
   'connect.layout.dashboard.title': 'Seven panes open at once around a smaller map: conditions on the left, activity on the right, what is coming along the bottom',
+  // The dashboard window's wall-display layout: a frame of panes around a full-height map.
+  'connect.layout.frame.label': 'Frame',
+  'connect.layout.frame.title': 'Two panes down each side of a map that runs the full height, for a dashboard on a screen of its own: band conditions and space weather on the left, who is hearing you and what to chase on the right',
   'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
 
   // Pane names, as they read in the picker and in each pane's header.

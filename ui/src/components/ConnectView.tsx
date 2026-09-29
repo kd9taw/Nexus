@@ -117,6 +117,7 @@ const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => 
   mapFirst: { label: () => t('connect.layout.mapFirst.label'), title: () => t('connect.layout.mapFirst.title') },
   listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
   dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
+  frame: { label: () => t('connect.layout.frame.label'), title: () => t('connect.layout.frame.title') },
 }
 
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
@@ -495,7 +496,7 @@ export function ConnectView({
     ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
   } as React.CSSProperties
 
-  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard. Which one is on
+  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame. Which one is on
   // screen is READ BACK from the placement, the panel record and the stored rail widths — never
   // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
   const layoutNow = connectLayoutNow({ slots, panels: panels.layout, rails: widths.pref })
