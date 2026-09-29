@@ -4413,6 +4413,7 @@ export const JA: PartialCatalog = {
   "connect.rail.right.width": "右パネル列の幅",
   "connect.rail.left.split": "左パネルの分割",
   "connect.rail.right.split": "右パネルの分割",
+  "connect.strip.height.label": "下パネル行の高さ",
   "connect.rail.handle.title": "ドラッグまたは矢印キーでサイズ変更({{label}})。ダブルクリックでリセット。",
   "connect.layout.heading": "レイアウト",
   "connect.layout.standard": "標準",

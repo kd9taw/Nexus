@@ -1009,6 +1009,7 @@ export const FR: PartialCatalog = {
   "connect.rail.right.width": "Largeur de la colonne de panneaux de droite",
   "connect.rail.left.split": "Partage entre les panneaux de gauche",
   "connect.rail.right.split": "Partage entre les panneaux de droite",
+  "connect.strip.height.label": "Hauteur de la rangée de panneaux du bas",
   "connect.rail.handle.title": "Glisser, ou utiliser les flèches, pour redimensionner ({{label}}). Double-clic pour réinitialiser.",
   "connect.layout.heading": "Disposition",
   "connect.layout.standard": "Standard",

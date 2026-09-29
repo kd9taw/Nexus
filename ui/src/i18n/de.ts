@@ -4676,6 +4676,7 @@ export const DE: PartialCatalog = {
   "connect.rail.right.width": "Breite der rechten Bereichsspalte",
   "connect.rail.left.split": "Aufteilung zwischen den linken Bereichen",
   "connect.rail.right.split": "Aufteilung zwischen den rechten Bereichen",
+  "connect.strip.height.label": "Höhe der unteren Bereichszeile",
   "connect.rail.handle.title": "Ziehen oder mit den Pfeiltasten die Größe ändern ({{label}}). Doppelklick setzt zurück.",
   "connect.layout.heading": "Layout",
   "connect.layout.standard": "Standard",

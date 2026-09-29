@@ -112,6 +112,15 @@ export const SSTV_STAGE_SPLIT_MAX: SplitClamp = (g) => 0.7 * g.vhEff
 export const TX_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
 export const TX_SPLIT_MAX: SplitClamp = Infinity
 
+/** Connect's bottom strip once sized (layout L7), from its own rules (`.connect`'s
+ *  `grid-auto-rows`, `.connect-strip[data-sized] > .pane-frame`): a 4em floor (a pane's title bar and
+ *  a line of it), no ceiling of its own, and never more than half the grid (`CONNECT_STRIP_MAX_SHARE`,
+ *  the divider's `maxShare`): the map above it keeps the larger share. Stock, the strip is its
+ *  tallest pane capped at 30 % of the effective viewport; that height is where the divider starts. */
+export const CONNECT_STRIP_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
+export const CONNECT_STRIP_SPLIT_MAX: SplitClamp = Infinity
+export const CONNECT_STRIP_MAX_SHARE = 0.5
+
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */
 export function parseSplitPct(raw: string | null): number | null {

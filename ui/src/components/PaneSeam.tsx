@@ -209,6 +209,10 @@ export interface StripSeamProps {
   defaultPct: number | null
   /** Accessible name. */
   label: string
+  /** The most of its container the strip may take, as a share (default 0.9, the drag's bound since
+   *  Splitter). A strip that shares its container with something that must keep its room says so
+   *  here: Connect's bottom strip, which leaves the map at least half of the grid (layout L7). */
+  maxShare?: number
 }
 
 /** The container's CONTENT box along the axis, in CSS px: a flex item's % basis resolves against
@@ -281,7 +285,7 @@ interface StripBox {
   hi: number
 }
 
-function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false }: StripSeamProps) {
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9 }: StripSeamProps) {
   const container = () => strip.current?.parentElement ?? null
   // The operator's PREFERENCE as stored (null: none, and the sheet's own size stands — only for a
   // strip whose default is the sheet's). A re-clamp never writes it. `undefined` = not read yet.
@@ -314,7 +318,7 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     if (!(span > 0)) return null
     const g = splitGeom(el, z)
     let lo = resolveClamp(min, g)
-    let hi = Math.min(resolveClamp(max, g), 0.9 * span)
+    let hi = Math.min(resolveClamp(max, g), maxShare * span)
     const honoured = honouredRange(strip.current!, el, varName, axis, z, ownSize)
     if (honoured) {
       lo = Math.max(lo, honoured[0])

@@ -950,10 +950,14 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
     const rows = lastOn('grid-template-rows')
     const auto = lastOn('grid-auto-rows')
     expect(rows, '.connect: no grid-template-rows declared').not.toBeNull()
+    // …unless the OPERATOR has sized the strip (layout L7): its divider writes `--cn-strip-h`, and
+    // the row is then exactly the height asked for — not a cap that pays out. Unset, the row is the
+    // `auto` this guard has always required, and any other spelling (a fixed max, a bare length, a
+    // different fallback) still fails here.
     expect(
       auto,
-      '.connect: the strip row is implicit, so grid-auto-rows IS its track — and it must be auto',
-    ).toBe('auto')
+      '.connect: the strip row is implicit, so grid-auto-rows IS its track — and unsized it must be auto',
+    ).toBe('var(--cn-strip-h, auto)')
     // Paren-aware top-level track split (minmax(a, b) is one track).
     const tracks: string[] = []
     let depth = 0

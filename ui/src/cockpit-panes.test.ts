@@ -624,6 +624,11 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
    *  now COMPUTES for this exact chain instead of regex-matching. */
   const SIZED_OK = new Map<string, Set<string>>([
     ['.connect-strip > .pane-frame', new Set(['max-height'])],
+    // Once the operator sizes the strip (layout L7) the ROW is its height (`.connect`'s
+    // grid-auto-rows) and this lifts the cap so the panes fill it — each still scrolls inside its
+    // own `.pane-body`; in the xs stack the same cap as above comes back.
+    ['.connect-strip[data-sized] > .pane-frame', new Set(['max-height'])],
+    ["[data-viewport='xs'] .connect-strip[data-sized] > .pane-frame", new Set(['max-height'])],
   ])
 
   /** A flex-basis that leaves the frame's height to the grid/column. Anything else is the
