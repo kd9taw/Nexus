@@ -94,6 +94,13 @@ export function resolveClamp(c: SplitClamp, g: SplitGeom): number {
 export const SCOPE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
 export const SCOPE_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 
+/** The clamps of JS8's waterfall strip (layout L2), in the sheet's units, from its own rule
+ *  (`.js8-cockpit .waterfall-wrap`): the YIELDING floor the keyboard cockpits' waterfalls share —
+ *  8em where there is room, never more than 28 % of the effective viewport — and the scope's
+ *  45 % ceiling. cockpit-shells.test.ts computes both sides at three geometries. */
+export const WATERFALL_SPLIT_MIN: SplitClamp = (g) => Math.min(8 * g.fontPx, 0.28 * g.vhEff)
+export const WATERFALL_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
+
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */
 export function parseSplitPct(raw: string | null): number | null {

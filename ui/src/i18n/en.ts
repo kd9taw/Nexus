@@ -8292,6 +8292,7 @@ export const EN = {
   'js8.seam.auxWidth.label': 'Stations column width',
   'js8.seam.activityOffsets.label': 'Activity / Band activity',
   'js8.seam.stationsInbox.label': 'Stations / Inbox',
+  'js8.waterfall.splitter.label': 'waterfall height',
   'js8.panel.activity.title':
     'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
   // Appended to the tooltip above rather than folded into it: a translated catalog keeps its

@@ -5129,6 +5129,7 @@ export const JA: PartialCatalog = {
   "js8.seam.auxWidth.label": "局リスト列の幅",
   "js8.seam.activityOffsets.label": "アクティビティ / バンドアクティビティ",
   "js8.seam.stationsInbox.label": "局リスト / 受信箱",
+  "js8.waterfall.splitter.label": "ウォーターフォールの高さ",
   "js8.panel.activity.title": "有効な全速度でデコードされた全フレーム — E/A/B/C が速度（Slow/Normal/Fast/Turbo）、続いてオフセット、SNR、メッセージ。薄い行は信頼度の低いコピー、斜体の行は最終フレームなしで閉じたものです。",
   "js8.panel.activity.differs": "JS8Call が二つに分けているものを一つにまとめています。こちらは時刻順の連続ログです。バンドアクティビティ枠には、同じデコードがオフセットごとに1行ずつ、DT 付きでまとまります。",
   "js8.panel.activity.empty": "受信中… 有効な全速度でデコードされたフレームがここに表示されます",

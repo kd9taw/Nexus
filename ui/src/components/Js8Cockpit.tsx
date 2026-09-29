@@ -18,6 +18,7 @@ import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { PaneSeam } from './PaneSeam'
 import { regionColsStyle } from '../features/paneColumns'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { JS8_PANEL_IDS, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
@@ -423,6 +424,8 @@ export function Js8Cockpit({
   // share and its floor follows it (CockpitPaneFrame `split`). Activity weighs 2 and Band activity
   // 1, so their divider paints grows of share × 1.5: the pair keeps its stock total of 3, and at
   // two columns, where Stations and Inbox share the column, they stay exactly where they were.
+  // The waterfall strip, for the divider under it (its height; layout L2).
+  const wfRef = useRef<HTMLDivElement>(null)
   const activityFrameRef = useRef<HTMLElement>(null)
   const offsetsFrameRef = useRef<HTMLElement>(null)
   const stationsFrameRef = useRef<HTMLElement>(null)
@@ -985,9 +988,13 @@ export function Js8Cockpit({
 
       {/* THE BAND WATERFALL — ⊞-hideable (SCOPE_PANEL_ID). The RX/TX cursors are the engine's
           audio offsets: a click sets RX, right-click/Shift TX, Ctrl/Command both.
-          It hosts no stop control and no sender. */}
+          It hosts no stop control and no sender. Its divider (layout L2) sits under it, a shell
+          child like Phone's and CW's scope dividers, and goes with it when the strip is hidden:
+          the stored height stays, so ticking the waterfall back brings back the height set. */}
       {shown('scope') && (
+        <>
         <Waterfall
+          stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={js8PanelLabels().scope}
           theme={theme}
@@ -1013,6 +1020,17 @@ export function Js8Cockpit({
                 .catch(() => {})
           }}
         />
+        <PaneSeam
+          axis="y"
+          varName="--js8-wf-h"
+          strip={wfRef}
+          storageKey="nexus.split.js8.waterfall"
+          min={WATERFALL_SPLIT_MIN}
+          max={WATERFALL_SPLIT_MAX}
+          defaultPct={25}
+          label={t('js8.waterfall.splitter.label')}
+        />
+        </>
       )}
 
       {js8?.lastError && (

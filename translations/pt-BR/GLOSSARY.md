@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,176 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,177 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -123,7 +123,7 @@ word in, and use only that word in the CSV.
 | entity | 37 | A DXCC entity. Not the same thing as a country — the distinction matters to the award. | |
 | section | 36 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
 | cluster | 34 | The DX cluster. | |
-| waterfall | 38 | The scrolling spectrum display. | |
+| waterfall | 39 | The scrolling spectrum display. | |
 | contact | 32 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |

@@ -11,7 +11,7 @@
 // view-entry wiring (`js8_enter`, once per activation edge, RX only).
 //
 // jsdom has no layout, so region widths are stubbed the way useRegionCols.test.tsx does.
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
@@ -88,7 +88,10 @@ vi.mock('./CockpitHeader', () => ({
     <header className="cockpit-header">{p.modeIndicator}</header>
   ),
 }))
-vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
+// The strip's box reaches its divider through `stripRef` (layout L2), so the stub forwards it.
+vi.mock('./Waterfall', () => ({
+  Waterfall: (p: { stripRef?: Ref<HTMLDivElement> }) => <div className="waterfall-wrap" ref={p.stripRef} />,
+}))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 
 const js8Enter = api.js8Enter as ReturnType<typeof vi.fn>
@@ -169,7 +172,8 @@ describe('Js8Cockpit pane shell', () => {
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.js8-cockpit')!
     expect(shell).not.toBeNull()
-    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.cw-keyer-warn', '.cockpit-panes', '.cockpit-txdock']
+    // The waterfall's divider (layout L2) is the scope divider's shell-child kind in Phone and CW.
+    const ALLOWED = ['.cockpit-header', '.waterfall-wrap', '.pane-splitter', '.cw-keyer-warn', '.cockpit-panes', '.cockpit-txdock']
     for (const el of Array.from(shell.children)) {
       expect(
         ALLOWED.some((s) => el.matches(s)),
@@ -489,5 +493,70 @@ describe('Js8Cockpit dividers between panes', () => {
     expect(seam(/^Activity \/ Band activity$/)).toBeNull()
     expect(pane('activity').style.getPropertyValue('--pane-share'), 'a lone pane took a split share').toBe('')
     expect(pane('activity').style.minHeight, 'a lone pane took a split floor').toBe('var(--cockpit-fill-min, 0)')
+  })
+})
+
+// ── THE WATERFALL'S DIVIDER (layout L2) ───────────────────────────────────────────────────────
+// JS8 had no way to size its waterfall. Now a strip divider under it, the Phone/CW scope divider's
+// kind: focusable, arrows/Home/End/Backspace, its height announced in CSS px, stored per surface
+// and clamped on load. jsdom lays nothing out, so the shell's box is stubbed; the clamps are
+// the sheet's (WATERFALL_SPLIT_MIN/MAX), at jsdom's 16 px font and 768 px window.
+describe('the JS8 waterfall divider', () => {
+  function layOut(boxes: Record<string, { height: number }>) {
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      for (const [sel, b] of Object.entries(boxes)) {
+        if (!this.matches(sel)) continue
+        return { top: 0, left: 0, width: 800, height: b.height, right: 800, bottom: b.height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      return real.call(this)
+    })
+  }
+  const shell = () => document.querySelector<HTMLElement>('main.js8-cockpit')!
+  const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((a) => el.getAttribute(a))
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.style.removeProperty('--vh-eff')
+    document.documentElement.style.removeProperty('--ui-zoom')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('sits under the waterfall, focusable, announcing its height, and steps, jumps and resets', async () => {
+    layOut({ 'main.js8-cockpit': { height: 1000 } })
+    await renderCockpit()
+    const sep = screen.getByRole('separator', { name: 'waterfall height' })
+    expect(sep.previousElementSibling?.classList.contains('waterfall-wrap'), 'the divider is not under the strip').toBe(true)
+    expect(sep.tabIndex, 'a divider only a mouse can reach').toBe(0)
+    // 25 % of the shell; 8em at 16 px (under 28 % of the window); 45 % of the 768 px window.
+    expect(aria(sep)).toEqual(['250', '128', '346'])
+    fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(shell().style.getPropertyValue('--js8-wf-h')).toBe(`${(266 / 1000) * 100}%`)
+    expect(localStorage.getItem('nexus.split.js8.waterfall')).toBe(String((266 / 1000) * 100))
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('346')
+    fireEvent.keyDown(sep, { key: 'Home' })
+    expect(sep.getAttribute('aria-valuenow')).toBe('128')
+    fireEvent.keyDown(sep, { key: 'Backspace' })
+    expect(shell().style.getPropertyValue('--js8-wf-h')).toBe('25%')
+    expect(localStorage.getItem('nexus.split.js8.waterfall')).toBe('25')
+  })
+
+  it('a stored height is restored, clamped against this window, and kept for a bigger one', async () => {
+    localStorage.setItem('nexus.split.js8.waterfall', '30')
+    layOut({ 'main.js8-cockpit': { height: 1000 } })
+    const first = await renderCockpit()
+    expect(shell().style.getPropertyValue('--js8-wf-h')).toBe('30%')
+    first.unmount()
+    localStorage.setItem('nexus.split.js8.waterfall', '75')
+    await renderCockpit()
+    expect(screen.getByRole('separator', { name: 'waterfall height' }).getAttribute('aria-valuenow')).toBe('346')
+    expect(localStorage.getItem('nexus.split.js8.waterfall'), 'the clamp is apply-side only').toBe('75')
+  })
+
+  it('goes with the waterfall when the operator hides it, and the stored height stays', async () => {
+    localStorage.setItem('nexus.split.js8.waterfall', '30')
+    await renderCockpit({ panels: fakePanels(['scope']) })
+    expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
+    expect(localStorage.getItem('nexus.split.js8.waterfall')).toBe('30')
   })
 })
