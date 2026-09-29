@@ -1,4 +1,5 @@
 import { afterEach } from 'vitest'
+import { cleanup } from '@testing-library/react'
 
 /** Vitest setup — runs before every test file.
  *
@@ -112,4 +113,20 @@ const moduleResets = new Set<() => void>()
 ;(globalThis as { __nexusTestResets?: Set<() => void> }).__nexusTestResets = moduleResets
 afterEach(() => {
   for (const reset of moduleResets) reset()
+})
+
+/** WHAT A TEST RENDERS IS UNMOUNTED WHEN THE TEST ENDS. React Testing Library registers this
+ *  cleanup itself only when the framework puts `afterEach` on the global scope, and this suite
+ *  runs Vitest without `globals` (vite.config.ts), so nothing ever unmounted a `render` or a
+ *  `renderHook`: each stayed mounted to the end of its file, 143 of them across 20 files when this
+ *  was measured (2026-09-29). A mounted hook keeps its listeners, timers and animation frames. A
+ *  later test's resize reached every earlier test's hook, and a frame that fired as a file ended
+ *  scheduled a React commit that ran after the teardown had removed `window`: "window is not
+ *  defined", originated in src/usePaneWidths.test.ts, with every test green. This is the cleanup
+ *  RTL documents for a framework without globals.
+ *
+ *  Registered after the module resets, so it runs before them: what unmounting does to a module
+ *  cache is reset along with everything else. */
+afterEach(() => {
+  cleanup()
 })
