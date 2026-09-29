@@ -1115,13 +1115,19 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       .finally(() => setRecBusy(false))
   }
 
-  // Spacebar = push-to-talk (hold), unless typing in a field.
+  // Spacebar = push-to-talk (hold), unless typing in a field or pressing a control in the ⊞ menu.
   useEffect(() => {
     if (!control) return // observation owns no PTT; mounting/leaving it cannot unkey the station
     const isField = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
+    // THE ⊞ POPOVER IS BUTTONS (⊞ Arrange's moves, Undo, Reset), and Space is how a keyboard presses
+    // a focused button. As a talk key there it keyed the rig AND swallowed the press, so inside
+    // the popover Space presses the button, as it does everywhere else in a browser (operator
+    // ruling, 2026-09-29). The PRESS only: the release below is untouched, so an over keyed from
+    // outside still unkeys when Space comes up with focus in the menu.
+    const inPanelsMenu = (t: EventTarget | null) => t instanceof Element && t.closest('.panels-menu-pop') != null
     const down = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat && !isField(e.target) && !lock) {
+      if (e.code === 'Space' && !e.repeat && !isField(e.target) && !inPanelsMenu(e.target) && !lock) {
         e.preventDefault()
         key(true)
       }

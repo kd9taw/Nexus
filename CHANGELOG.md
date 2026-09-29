@@ -231,6 +231,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Phone: Space presses the buttons in ⊞ Panels.** When a button in the ⊞ Panels menu has the
+  focus (an Arrange move, **Undo last change** or **Reset layout**), Space now presses it, as it
+  does anywhere else. Before, Space keyed the transmitter there and the button did nothing.
+  Everywhere else in Phone, Space is still push-to-talk. Letting go of Space still unkeys, wherever
+  the focus has moved.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as

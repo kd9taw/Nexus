@@ -64,7 +64,7 @@
 // reaching the bridge is not `halt_tx` unkeying a rig. That is `reference-tx-safety-invariants`
 // territory and belongs to the Rust suites.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react'
+import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AppSnapshot } from './types'
@@ -320,6 +320,54 @@ const STOP_TX = /^stop tx$/i
 const TUNE = /^tune$|^tuning…$/i
 const TX_LATCH = /^▼ tx on$|^■ tx off$/i
 
+// ── Space and the ⊞ menu (Phone) ────────────────────────────────────────────────────────────
+const SPACE = { code: 'Space', key: ' ' }
+
+/** Phone's ⊞ Panels, opened; returns the popover on screen. */
+async function openPanels(): Promise<HTMLElement> {
+  fireEvent.click(onScreenButton(/^⊞ panels/i))
+  return waitFor(() => {
+    const pop = [...document.querySelectorAll<HTMLElement>('.panels-menu-pop')].find((p) => p.closest('[hidden]') == null)
+    expect(pop, 'the ⊞ popover did not open').toBeDefined()
+    return pop!
+  })
+}
+
+/** The first ⊞ Arrange move that can act. A disabled button takes no focus and no key, so pressing
+ *  one would prove nothing. */
+function liveArrangeButton(pop: HTMLElement): HTMLButtonElement {
+  const b = [...pop.querySelectorAll<HTMLButtonElement>('.panels-arrange button')].find((x) => !x.disabled)
+  expect(b, 'no live ⊞ Arrange button: these tests would be pressing nothing').toBeDefined()
+  return b!
+}
+
+/** What an action put on the transmit path, when the right answer may be NOTHING. `fire` waits
+ *  for a command and would time out on a silent action. The key handlers call the api
+ *  synchronously, so a short settle is enough; the mutation controls in the L3 report show this
+ *  sees a send when there is one. */
+async function sentBy(action: () => unknown): Promise<string[]> {
+  const m = mark()
+  await action()
+  await new Promise((r) => setTimeout(r, 30))
+  return firedSince(m)
+}
+
+/** Space pressed and released on a focused control, the way a browser delivers it: keydown, a
+ *  moment held, keyup. jsdom performs no default actions, so the click a browser gives a focused
+ *  button for an UNCANCELLED Space is dispatched here. Returns whether the control was pressed
+ *  (Chrome's own activation is measured in the L3 report). */
+async function spaceOn(el: HTMLElement): Promise<boolean> {
+  el.focus()
+  const down = fireEvent.keyDown(el, SPACE)
+  await new Promise((r) => setTimeout(r, 10))
+  const up = fireEvent.keyUp(el, SPACE)
+  if (down && up) fireEvent.click(el)
+  return down && up
+}
+
+/** Phone's stored arrangement: what an Arrange move, Undo and Reset each change. */
+const phonePlace = (): unknown => JSON.parse(localStorage.getItem('nexus.panels.phone.main') ?? 'null')?.place
+
 // ────────────────────────────────────────────────────────────────────────────────────────────
 describe('Phone', () => {
   beforeEach(() => mountOn('phone'))
@@ -350,8 +398,88 @@ describe('Phone', () => {
     ])
   })
 
+  // SPACE INSIDE THE ⊞ MENU (layout L3, ruling R7). Space is this cockpit's talk key on every
+  // target but a field. Inside the ⊞ Panels popover it presses the focused control instead, as
+  // Space does everywhere else in a browser: ⊞ Arrange is a grid of buttons, with Undo and Reset
+  // beside it. ONLY THE PRESS is exempt. The release still asks one question, "are we keyed?", so
+  // an over keyed from outside the menu unkeys wherever focus has gone by the release
+  // (reference-tx-safety-invariants: an unkey a guard can swallow is a stuck transmitter).
+  describe('Space inside the ⊞ menu presses the menu, never the transmitter', () => {
+    it('an Arrange move, Undo and Reset each act, and nothing reaches the transmit path', async () => {
+      const pop = await openPanels()
+      let pressed = false
+      expect(await sentBy(async () => (pressed = await spaceOn(liveArrangeButton(pop)))), 'Space on an Arrange move').toEqual([])
+      expect(pressed, 'Space on an Arrange move was cancelled').toBe(true)
+      expect(phonePlace(), 'the Arrange move did not happen').toBeDefined()
+      const undo = within(pop).getByRole('button', { name: 'Undo last change' })
+      expect(await sentBy(async () => (pressed = await spaceOn(undo))), 'Space on Undo').toEqual([])
+      expect(pressed, 'Space on Undo was cancelled').toBe(true)
+      expect(phonePlace(), 'Undo did not take the move back').toBeUndefined()
+      await spaceOn(liveArrangeButton(pop))
+      expect(phonePlace()).toBeDefined()
+      const reset = within(pop).getByRole('button', { name: 'Reset layout' })
+      expect(await sentBy(async () => (pressed = await spaceOn(reset))), 'Space on Reset').toEqual([])
+      expect(pressed, 'Space on Reset was cancelled').toBe(true)
+      expect(phonePlace(), 'Reset did not restore the stock arrangement').toBeUndefined()
+    })
+
+    it('CONTROL: on a button outside the popover (the ⊞ trigger, Tune) Space keys exactly as before', async () => {
+      await openPanels()
+      for (const outside of [onScreenButton(/^⊞ panels/i), onScreenButton(TUNE)]) {
+        let pressed = true
+        const sent = await sentBy(async () => (pressed = await spaceOn(outside)))
+        expect(sent, `Space on ${outside.textContent}`).toEqual(['set_ptt {"on":true}', 'set_ptt {"on":false}'])
+        expect(pressed, `Space pressed ${outside.textContent} as a button`).toBe(false)
+      }
+    })
+
+    it('held from outside and released inside the popover, it UNKEYS: onto a button or a ⊞ checkbox', async () => {
+      const pop = await openPanels()
+      const checkbox = pop.querySelector<HTMLInputElement>('input[type="checkbox"]')
+      expect(checkbox, 'no ⊞ entry checkbox in the popover').not.toBeNull()
+      for (const inside of [liveArrangeButton(pop), checkbox!]) {
+        ;(document.activeElement as HTMLElement | null)?.blur()
+        expect(await fire(() => fireEvent.keyDown(document.body, SPACE))).toEqual(['set_ptt {"on":true}'])
+        inside.focus()
+        expect(await fire(() => fireEvent.keyUp(inside, SPACE)), `released on ${inside.tagName}`).toEqual(['set_ptt {"on":false}'])
+      }
+    })
+
+    it('auto-repeat inside the popover during an over neither re-keys nor unkeys it', async () => {
+      const pop = await openPanels()
+      const inside = liveArrangeButton(pop)
+      expect(await fire(() => fireEvent.keyDown(document.body, SPACE))).toEqual(['set_ptt {"on":true}'])
+      inside.focus()
+      const repeats = () => {
+        for (let i = 0; i < 5; i++) fireEvent.keyDown(inside, { ...SPACE, repeat: true })
+      }
+      expect(await sentBy(repeats), 'the held key repeating inside the popover').toEqual([])
+      expect(await fire(() => fireEvent.keyUp(inside, SPACE))).toEqual(['set_ptt {"on":false}'])
+    })
+  })
+
   it("the voice keyer's ■ Stop sends stop_voice (a pane-resident convenience, not the line)", async () => {
     expect(await fire(() => fireEvent.click(onScreenButton(/^■ stop$/i)))).toEqual(['stop_voice'])
+  })
+})
+
+// With TX switched off, Phone's talk key turns TX back on instead of keying (`key(true)`'s second
+// refusal). Inside the ⊞ menu it must not do that either.
+describe('Phone, TX switched off', () => {
+  beforeEach(async () => {
+    snapshot.radio.txEnabled = false
+    await mountOn('phone')
+  })
+  afterEach(() => {
+    snapshot.radio.txEnabled = true
+  })
+
+  it('Space inside the ⊞ menu does not turn TX back on; on the ⊞ trigger it does, as before', async () => {
+    const pop = await openPanels()
+    expect(await sentBy(() => spaceOn(liveArrangeButton(pop))), 'Space on an Arrange move').toEqual([])
+    expect(await sentBy(() => spaceOn(onScreenButton(/^⊞ panels/i))), 'Space on the ⊞ trigger').toEqual([
+      'set_tx_enabled {"enabled":true}',
+    ])
   })
 })
 
