@@ -9226,6 +9226,24 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-alerts">
             <legend>{t('settings.alerts.legend')}</legend>
             <div className="settings-grid">
+              {/* #391: the corner's pop-ups. ON unless the file says false, so an old settings
+                  file keeps them; what still pops up with them off is `popsUpWhenOff` (toast.ts). */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.popups.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.popupNotifications !== false}
+                    className={`toggle${form.popupNotifications !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('popupNotifications', form.popupNotifications === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.popups.hint')}</span>
+              </div>
+
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.alerts.myCall.label')}</span>

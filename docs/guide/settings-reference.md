@@ -1293,6 +1293,11 @@ a new one is genuinely an event.
 
 *Alerts in Nexus 1.10.3. New grid and Rare grid continue to the right.*
 
+- **Pop-up notifications** — the messages in the bottom-right corner, on unless you turn them
+  off. Off, the confirmations (Logged QSO, Saved, a QSY) and the alerts (a new DXCC, a station
+  calling you, a band opening, space weather, a DXpedition you chase coming on) stop popping up.
+  Their sounds are unchanged. Errors, notices about transmitting, the radio or the log, and any
+  message with a button (an alarm's Stop, an Undo, an update's Download) still pop up.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
 - **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. "Loud alert on a

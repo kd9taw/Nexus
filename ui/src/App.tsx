@@ -51,7 +51,7 @@ import {
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
-import { withErrorToast, pushToast, dismissToast } from './toast'
+import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
@@ -838,7 +838,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             openingAlertRef.current.set(key, tnow)
             const spec = openingToastSpec(o)
             if (spec.beepHz != null) doubleBeep(spec.beepHz)
-            pushToast(spec.message, spec.kind, spec.ttlMs, spec.prominent ? { prominent: true } : {})
+            pushToast(spec.message, spec.kind, spec.ttlMs, spec.prominent ? { alert: true, prominent: true } : { alert: true })
           }
           // Honest-state: surface non-live propagation in the Now-Bar lane.
           if (p.source === 'offline') {
@@ -1084,6 +1084,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     if (remote) setSettings(remote.settings)
   }, [remote?.settings])
+  // #391: the corner pop-ups follow the setting. A settings file without it (and the Remote page,
+  // which is never sent it) keeps them on, as they always were.
+  useEffect(() => {
+    setPopupNotifications(settings?.popupNotifications !== false)
+  }, [settings?.popupNotifications])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes.

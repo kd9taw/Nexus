@@ -384,7 +384,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier',
       // The geographic alert scope (#174). An operator narrowing their alerts searches for the
       // PLACE ("europe", "country"), never for the word the label uses.
-      'continent', 'europe', 'country', 'entity', 'dxcc', 'region', 'only'],
+      'continent', 'europe', 'country', 'entity', 'dxcc', 'region', 'only',
+      // The pop-up switch (#391), in the words of the report: "how do I turn off the popup
+      // notifications in the bottom right". The search is punctuation-blind, so 'popup' covers
+      // 'pop-up' too.
+      'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------

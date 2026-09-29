@@ -22,6 +22,7 @@ describe('processFlare (edge-triggered flare heads-up)', () => {
     expect(toasts.mock.calls[0][0]).toContain('M2.0')
     expect(toasts.mock.calls[0][0]).toContain('R1')
     expect(toasts.mock.calls[0][1]).toBe('info')
+    expect(toasts.mock.calls[0][3], 'a flare is an alert (#391)').toMatchObject({ alert: true })
     expect(beeps).not.toHaveBeenCalled()
     processFlare(3e-5) // still tier 1 → silent
     processFlare(1.2e-5)
@@ -32,7 +33,7 @@ describe('processFlare (edge-triggered flare heads-up)', () => {
     processFlare(6e-5) // M6 (tier 2)
     expect(beeps).toHaveBeenCalledTimes(1)
     expect(toasts).toHaveBeenCalledTimes(1)
-    expect(toasts.mock.calls[0][3]).toMatchObject({ prominent: true })
+    expect(toasts.mock.calls[0][3]).toMatchObject({ alert: true, prominent: true })
     processFlare(2e-4) // X2 (tier 3) — the escalation re-alert
     expect(toasts).toHaveBeenCalledTimes(2)
     expect(toasts.mock.calls[1][0]).toContain('X2.0')

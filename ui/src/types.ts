@@ -3956,6 +3956,10 @@ export interface Settings {
   /** Beep when a park is freshly spotted on the air (App's own poll of
    *  get_ota_map_spots, gated on this — see potaAlert.ts). Off by default. */
   potaNewActivationAlert?: boolean
+  /** #391: pop-up notifications in the bottom-right corner. Ships ON; `false` takes the
+   *  confirmations and the alerts out of the corner (`popsUpWhenOff` in toast.ts says what stays).
+   *  Optional: a station without the field, or the Remote page, which is never sent it, is ON. */
+  popupNotifications?: boolean
   /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */

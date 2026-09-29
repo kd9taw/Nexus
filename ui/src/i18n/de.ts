@@ -422,6 +422,8 @@ export const DE: PartialCatalog = {
   "monitor.scenario.catLost": "Funkgerät · Verbindung verloren",
   "monitor.scenario.noAmp": "Zweites Funkgerät · ohne Endstufe",
   "settings.alerts.legend": "Alarme",
+  "settings.alerts.popups.label": "Pop-up-Benachrichtigungen",
+  "settings.alerts.popups.hint": "Die Meldungen unten rechts. Ausgeschaltet erscheinen Bestätigungen wie „QSO geloggt“ und Alarme wie ein neues DXCC, eine Station, die Sie ruft, eine Bandöffnung oder Weltraumwetter nicht mehr. Töne bleiben unverändert. Fehler, Meldungen zum Senden, zum Funkgerät oder zum Log und jede Meldung mit einer Schaltfläche, etwa „Alarm stoppen“, erscheinen weiterhin.",
   "settings.alerts.myCall.label": "Mein Rufzeichen",
   "settings.alerts.myCall.hint": "Ton + Blinken, wenn jemand Sie direkt ruft.",
   "settings.alerts.confirmTier.label": "Bestätigungs-Chancen",

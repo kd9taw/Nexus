@@ -1973,6 +1973,8 @@ export const JA: PartialCatalog = {
   "settings.pounce.threshold.atnoOrZone": "ニューエンティティまたはCQゾーン",
   "settings.pounce.threshold.atnoZoneOrState": "ニューエンティティ・ゾーン・米国州",
   "settings.alerts.legend": "アラート",
+  "settings.alerts.popups.label": "ポップアップ通知",
+  "settings.alerts.popups.hint": "右下に表示されるメッセージです。オフにすると、「QSOを記録しました」などの確認と、新しいDXCC、自局への呼び出し、バンドオープン、宇宙天気などのアラートはポップアップしなくなります。音は変わりません。エラー、送信・無線機・ログに関するお知らせ、「アラーム停止」などのボタンがあるメッセージは引き続き表示されます。",
   "settings.alerts.myCall.label": "自局コール",
   "settings.alerts.myCall.hint": "自局宛ての呼び出しがあるとビープとフラッシュで知らせます。",
   "settings.alerts.confirmTier.label": "コンファーム機会",

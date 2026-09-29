@@ -2299,6 +2299,12 @@ pub struct Settings {
     /// Beep when a park is freshly spotted on the air — App's own poll of
     /// `get_ota_map_spots`, gated on this setting (no poll at all while off).
     pub pota_new_activation_alert: bool,
+    /// Pop-up notifications in the bottom-right corner (#391). Off takes the confirmations and
+    /// the alerts out of the corner; every error, every notice (a refusal or a change on the
+    /// transmit path, the rig or the log) and anything with a button still pops up
+    /// (`popsUpWhenOff`, ui/src/toast.ts). On by default, and a settings file from before the
+    /// field loads it on, so the corner is as it always was until the operator turns it off.
+    pub popup_notifications: bool,
     /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
     /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
     /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
@@ -4326,6 +4332,7 @@ impl Default for Settings {
             // worth chasing (not per-decode spam, which we never alert on).
             alert_new: true,
             pota_new_activation_alert: false,
+            popup_notifications: true,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             // Empty = every continent and every entity alerts, which is precisely the behaviour
@@ -8826,6 +8833,60 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("parsecPresenceStopp") && !declares("parsecStop"));
+    }
+
+    /// #391's pop-up switch — ships ON (the corner as it always was), its exact wire key, an
+    /// upgrader's file loading it ON through the real load path, off surviving a save and a load,
+    /// and the TS mirror read out of `types.ts` itself.
+    ///
+    /// ON IS THE SAFE SIDE: a file from before the field must never silence the corner, because
+    /// the corner is where an error about the transmitter, the rig or the log is said.
+    #[test]
+    fn popup_notifications_ship_on_wire_key_old_file_round_trip_and_ts_mirror() {
+        let s = Settings::default();
+        assert!(s.popup_notifications, "ships ON — today's corner");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"popupNotifications\":true"),
+            "missing wire key in {json}"
+        );
+
+        let dir = scratch_dir("popups");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // An upgrader's file predates the key.
+        std::fs::write(&path, r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            Settings::load(&path).popup_notifications,
+            "an old settings file turned the pop-ups off"
+        );
+        let mut off = Settings::default();
+        off.popup_notifications = false;
+        off.save(&path).unwrap();
+        assert!(
+            !Settings::load(&path).popup_notifications,
+            "off came back on"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("popupNotifications"),
+            "ui/src/types.ts Settings is missing `popupNotifications`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("popupNotificationss") && !declares("popups"));
     }
 
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.

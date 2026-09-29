@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A switch for the pop-ups in the bottom-right corner (#391).** Settings ▸ Spots & Alerts ▸
+  Alerts ▸ **Pop-up notifications**, on unless you turn it off. Off, the confirmations (Logged QSO,
+  Saved, a QSY, an upload to QRZ) and the alerts (a new DXCC, a station calling you, a band
+  opening, space weather, a DXpedition you chase coming on) stop popping up; their sounds are
+  unchanged. What must be seen still pops up: every error, every notice about transmitting, the
+  radio or the log (TX locked, nothing to log, TX turned back on), and every message with a
+  button, such as an alarm's Stop, an Undo or an update's Download. Pop-out windows follow the
+  same switch; the Remote page's own pop-ups are unchanged.
 - **The mouse wheel moves the Phone cockpit's sliders (#384).** Point at a slider and scroll. AF
   gain, RF gain, squelch, noise reduction, mic gain, the speech processor, the monitor and the Sub
   receiver's levels move 2% a notch, RF power 1%, the manual notch 10 Hz, the Icom scope reference
