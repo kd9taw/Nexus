@@ -72,7 +72,9 @@ import { PanelsMenu } from './PanelsMenu'
 import { WATERFALL_DETACHED_KEY, type OperatePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
+  CLASSIC_FLOOR,
   CLASSIC_VARS,
+  ROSTER_FLOOR,
   ROSTER_SCALE,
   ROSTER_VARS,
   classicCommit,
@@ -678,6 +680,7 @@ export function OperateCockpit({
         varName="--op-roster"
         columnVars={railOnLeft ? [ROSTER_VARS[1], ROSTER_VARS[0]] : ROSTER_VARS}
         scale={ROSTER_SCALE}
+        floors={railOnLeft ? [ROSTER_FLOOR[1], ROSTER_FLOOR[0]] : ROSTER_FLOOR}
         className="op-colseam op-colseam-2"
         // The Call Roster's share is stored; the rail's is the rest of 2 (operateColumns).
         onCommit={(av, bv) => panels.setShares({ callRoster: railOnLeft ? bv : av })}
@@ -702,6 +705,7 @@ export function OperateCockpit({
         varName="--op-col"
         columnVars={[CLASSIC_VARS[i], CLASSIC_VARS[j]]}
         scale={classicScale(widths, i, j)}
+        floors={[CLASSIC_FLOOR[i], CLASSIC_FLOOR[j]]}
         className={`op-colseam op-colseam-${n + 2}`}
         onCommit={(av, bv) => panels.setCols?.(classicCommit(widths, i, j, av, bv))}
         onReset={() => panels.setCols?.(classicReset(widths, i, j) ?? { a: null, b: null })}

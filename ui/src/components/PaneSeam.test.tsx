@@ -409,7 +409,7 @@ describe('a STRIP divider over a strip that comes AFTER it (after)', () => {
 })
 
 describe('a SPLIT divider', () => {
-  function mount(axis: 'x' | 'y', columns = false, scale?: number, columnVars?: [string, string]) {
+  function mount(axis: 'x' | 'y', columns = false, scale?: number, columnVars?: [string, string], floors?: [number, number]) {
     const a = document.createElement('div')
     const b = document.createElement('div')
     const grid = document.createElement('div')
@@ -429,6 +429,7 @@ describe('a SPLIT divider', () => {
         label="pair"
         scale={scale}
         columnVars={columnVars}
+        floors={floors}
       />,
     )
     return { a, b, grid, onCommit, onReset, sep: view.getByRole('separator', { name: 'pair' }) }
@@ -520,6 +521,25 @@ describe('a SPLIT divider', () => {
     fireEvent(window, new Event('pointercancel'))
     expect(grid.style.getPropertyValue('--ba')).toBe('')
     expect(grid.style.getPropertyValue('--q')).toBe('0.9fr')
+  })
+
+  it('with floors, it stops where a pane reaches its own: the announced range, End and a drag all stop there', () => {
+    // 300 + 200 px on screen; the second pane floors at 150 px, so the split goes no further than
+    // 350 / 500. Past it the grid would freeze that track and take the rest from a third.
+    const { sep, onCommit } = mount('x', true, 1, undefined, [0, 150])
+    expect(['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map((x) => sep.getAttribute(x))).toEqual(['60', '8', '70'])
+    fireEvent.keyDown(sep, { key: 'End' })
+    expect(onCommit).toHaveBeenLastCalledWith(...seamShares(0.7))
+    fireEvent.pointerDown(sep, { clientX: 405, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 590, pointerId: 1 })
+    fireEvent.pointerUp(window, { clientX: 590, pointerId: 1 })
+    expect(onCommit).toHaveBeenLastCalledWith(...seamShares(0.7))
+    // The first pane's floor, likewise, at the other end.
+    cleanup()
+    const other = mount('x', true, 1, undefined, [200, 0])
+    expect(other.sep.getAttribute('aria-valuemin')).toBe('40')
+    fireEvent.keyDown(other.sep, { key: 'Home' })
+    expect(other.onCommit).toHaveBeenLastCalledWith(...seamShares(0.4))
   })
 
   it('the keyboard steps from where the panes ARE; Home/End stop at the share floor; reset is the host’s', () => {

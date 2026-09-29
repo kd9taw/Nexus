@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { CLASSIC_FR, CLASSIC_VARS, ROSTER_FR, ROSTER_VARS } from './features/operateColumns'
+import { CLASSIC_FLOOR, CLASSIC_FR, CLASSIC_VARS, ROSTER_FLOOR, ROSTER_FR, ROSTER_VARS } from './features/operateColumns'
 
 // Guards the DECODE-FIRST Classic rebuild (2026-08, field feedback from an advanced DX
 // operator): the Classic lower region is a THREE-column grid — Band Activity | the
@@ -518,6 +518,11 @@ function gridChain(mode: 'classic' | 'roster', viewport: string | null, dataCols
   }
   return chain
 }
+/** A track's floor in px, read off `minmax(<floor>, …)` (`0` is 0). */
+function trackFloor(track: string): number | null {
+  const m = /^minmax\((\d+(?:\.\d+)?)(px)?,/.exec(track.replace(/\s+/g, ''))
+  return m && (m[2] === 'px' || m[1] === '0') ? parseFloat(m[1]) : null
+}
 /** A track's token and its fallback, read off `minmax(<floor>, var(--token, <n>fr))`. */
 function trackToken(track: string): [string, number] | null {
   const m = /var\((--[a-z0-9-]+),\s*([\d.]+)fr\)/.exec(track)
@@ -525,9 +530,12 @@ function trackToken(track: string): [string, number] | null {
 }
 
 describe("Operate's column dividers read the sheet's own tracks (layout L5)", () => {
-  it('Classic at three columns: each track reads its divider token, and its default is the dividers’ own', () => {
+  it('Classic at three columns: each track reads its divider token, and its default and floor are the dividers’ own', () => {
     const win = winner(gridChain('classic', 'lg', 'three'), 'grid-template-columns')!
     expect(splitTracks(win.value).map(trackToken), `\`${win.selector}\``).toEqual(CLASSIC_VARS.map((v, i) => [v, CLASSIC_FR[i]]))
+    expect(splitTracks(win.value).map(trackFloor), 'a divider would stop short of, or past, a floor').toEqual([...CLASSIC_FLOOR])
+    const left = winner(gridChain('classic', 'lg', 'three', true), 'grid-template-columns')!
+    expect(splitTracks(left.value).map(trackFloor)).toEqual([2, 0, 1].map((i) => CLASSIC_FLOOR[i]))
   })
 
   it('Classic with the rail on the left: the same three tracks, mirrored (Stations first)', () => {
@@ -560,6 +568,8 @@ describe("Operate's column dividers read the sheet's own tracks (layout L5)", ()
     expect(splitTracks(right.value).map(trackToken), `\`${right.selector}\``).toEqual(ROSTER_VARS.map((v, i) => [v, ROSTER_FR[i]]))
     const left = winner(gridChain('roster', 'lg', 'two', true), 'grid-template-columns')!
     expect(splitTracks(left.value).map(trackToken), `\`${left.selector}\``).toEqual([1, 0].map((i) => [ROSTER_VARS[i], ROSTER_FR[i]]))
+    expect(splitTracks(right.value).map(trackFloor)).toEqual([...ROSTER_FLOOR])
+    expect(splitTracks(left.value).map(trackFloor)).toEqual([ROSTER_FLOOR[1], ROSTER_FLOOR[0]])
   })
 
   it('the rail goes first by `order` only while the grid says so', () => {

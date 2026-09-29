@@ -430,8 +430,10 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
     expect(panels.setCols).toHaveBeenLastCalledWith(classicCommit(stock, 1, 2, a, b))
     const stored = vi.mocked(panels.setCols!).mock.lastCall![0] as { a: number; b: number }
     expect(storedFractions(stored)[0], 'Band Activity moved').toBeCloseTo(CLASSIC_FR[0] / (CLASSIC_FR[0] + CLASSIC_FR[1] + CLASSIC_FR[2]), 12)
+    // End stops where Stations reaches its 260 px floor (of the pair's 800), not at the share
+    // floor: past it the grid would freeze Stations and take the rest from Band Activity.
     key(sep, 'End')
-    expect(panels.setCols).toHaveBeenLastCalledWith(classicCommit(stock, 1, 2, ...seamShares(1)))
+    expect(panels.setCols).toHaveBeenLastCalledWith(classicCommit(stock, 1, 2, ...seamShares(1 - 260 / 800)))
     fireEvent.doubleClick(sep)
     // From the sheet's own widths, the pair's reset IS the sheet: nothing to store.
     expect(panels.setCols).toHaveBeenLastCalledWith({ a: null, b: null })
@@ -500,8 +502,10 @@ describe('Operate dividers answer the keyboard (PaneSeam)', () => {
     const sep = screen.getByRole('separator', { name: 'Call Roster / side rail' })
     expect(sep.tabIndex).toBe(0)
     expect(sep.getAttribute('aria-valuenow')).toBe('60')
+    // The side rail floors at 360 of the pair's 1000: the step stops there, at 64 %.
+    expect(sep.getAttribute('aria-valuemax')).toBe('64')
     key(sep, 'ArrowRight')
-    expect(panels.setShares).toHaveBeenLastCalledWith({ callRoster: seamShares(0.6 + 0.05)[0] })
+    expect(panels.setShares).toHaveBeenLastCalledWith({ callRoster: seamShares(1 - 360 / 1000)[0] })
     key(sep, 'Backspace')
     expect(panels.setShares).toHaveBeenLastCalledWith({ callRoster: null })
   })

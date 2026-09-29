@@ -41,6 +41,14 @@ export const ROSTER_SCALE = (ROSTER_FR[0] + ROSTER_FR[1]) / 2
  *  sheet now writes 115fr: its pair is painted ×100, the same proportions. */
 const LEGACY_UNIT = 100
 
+/** The sheet's own floors for Classic's columns, CSS px (the templates' `minmax(<floor>, …)`), in
+ *  the same order: a divider stops where either of its pair reaches its floor (PaneSeam
+ *  `floors`), because past it the grid would freeze that track and take the rest of the move
+ *  from the third column. */
+export const CLASSIC_FLOOR = [0, 300, 260] as const
+/** Roster's (the Call Roster, the side rail). */
+export const ROSTER_FLOOR = [0, 360] as const
+
 /** The grid tokens of Classic's three columns, in the same order. */
 export const CLASSIC_VARS = ['--op-col-ba', '--op-col-a', '--op-col-b'] as const
 /** Roster's two. */
