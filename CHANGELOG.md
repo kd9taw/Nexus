@@ -214,6 +214,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when no locator is set, and an @ALLCALL QUERY MSGS gets an answer only when a message is
   waiting for that station (at most once every 15 minutes), never a NO.
 
+- **JS8: nothing is transmitted until Settings has your locator, as in JS8Call.** With the Grid
+  field in Settings (Operator & Radio) empty, JS8 used to transmit anyway, and heartbeats and CQs
+  went out without your square. Now Send, CQ and the query buttons are refused with a message
+  saying where to set it, and an automatic reply or heartbeat that comes due is dropped, with the
+  same message in the JS8 cockpit. A message already going out when the locator is cleared still
+  finishes.
+
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
   between them, so the panes and columns beside each one get back 12 px (8 px in Operate), as

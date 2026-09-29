@@ -906,19 +906,21 @@ impl Station {
     /// which clears the queue and re-bases the heartbeat (`resetAutomaticIntervalTransmissions
     /// (false, false)`, :7397 → `resetHeartbeatTimer`, :3720). An on-demand heartbeat (interval
     /// 0) is simply dropped. "Due" is `checkRepeat`'s test, `secsTo(next) <= 0`: under a second
-    /// before `next`. The engine calls this while its TX latch is down.
-    pub fn drop_due_heartbeat(&mut self, now_ms: u64) {
+    /// before `next`. The engine calls this while its TX latch is down or Settings has no
+    /// locator (`ensureCallsignSet`, :5309, fails the same way). True when one was dropped.
+    pub fn drop_due_heartbeat(&mut self, now_ms: u64) -> bool {
         let Some(next) = self.hb_next_ms else {
-            return;
+            return false;
         };
         if !self.hb_on || now_ms + 1000 <= next {
-            return;
+            return false;
         }
         self.hb_next_ms = if self.cfg.hb_interval_min == 0 {
             None
         } else {
             Some(self.hb_due_after(now_ms))
         };
+        true
     }
 
     /// A periodic heartbeat's next deadline: `nextTransmitCycle()` + the interval
@@ -2604,13 +2606,16 @@ mod tests {
         c.hb_interval_min = 5;
         let mut s = Station::new(c);
         s.set_hb(true, 67_250); // due at 376 s
-        s.drop_due_heartbeat(375_000);
+        assert!(
+            !s.drop_due_heartbeat(375_000),
+            "not dropped a whole second early"
+        );
         assert_eq!(
             s.hb_next_ms(),
             Some(376_000),
             "a whole second early is not due yet"
         );
-        s.drop_due_heartbeat(375_001);
+        assert!(s.drop_due_heartbeat(375_001), "dropped once due");
         assert_eq!(
             s.hb_next_ms(),
             Some(391_000 + 300_000),
@@ -2625,7 +2630,7 @@ mod tests {
     fn an_on_demand_heartbeat_pressed_while_tx_is_off_is_dropped() {
         let mut s = Station::new(cfg()); // interval 0
         s.set_hb(true, 1_000);
-        s.drop_due_heartbeat(1_000);
+        assert!(s.drop_due_heartbeat(1_000), "dropped");
         assert_eq!(s.hb_next_ms(), None, "the on-demand heartbeat is dropped");
         assert!(drain(&mut s, 15_000).is_none(), "and nothing is queued");
     }

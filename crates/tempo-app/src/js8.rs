@@ -39,6 +39,11 @@ const JS8_LOW_CONF: f32 = 0.17;
 const JS8_SEEN_CAP: usize = 64;
 /// JS8Call's @ALLCALL reply cap: one reply per station per 15 minutes.
 const JS8_ALLCALL_INTERVAL_MS: u64 = 15 * 60 * 1000;
+/// JS8Call starts no transmission without a locator in Settings (`ensureCallsignSet`,
+/// mainwindow.cpp:5264-5268, "Please enter your grid locator in the settings."). The words are
+/// the FT gate's (`structured_tx_ready`).
+const JS8_NO_LOCATOR: &str =
+    "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
 /// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
@@ -318,16 +323,25 @@ impl Engine {
         // arming TX ten minutes later must not fire a reply to a query nobody is waiting
         // for. The countdown was shown the whole time (the cockpit's "would have replied"
         // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
-        if !self.tx_enabled() {
+        // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
+        // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
+        // (:5310), and with TX on it says why (the alert at :5265).
+        let no_locator = self.js8_no_locator();
+        if !self.tx_enabled() || no_locator {
+            let mut dropped = false;
             if let Some(p) = self.js8_station.pending_reply() {
                 if p.fires_at_ms <= now_ms {
                     self.js8_station.cancel_pending_reply();
+                    dropped = true;
                 }
             }
             // …and a heartbeat that falls due is dropped and its interval re-based, so turning
             // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
             // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
-            self.js8_station.drop_due_heartbeat(now_ms);
+            dropped |= self.js8_station.drop_due_heartbeat(now_ms);
+            if dropped && no_locator && self.tx_enabled() {
+                self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
+            }
         }
         let actions = self.js8_station.tick(now_ms);
         self.js8_handle_actions(actions);
@@ -581,6 +595,27 @@ impl Engine {
         }
     }
 
+    /// Settings holds no locator. Empty is JS8Call's test (`my_grid().trimmed().isEmpty()`,
+    /// mainwindow.cpp:5264); its Settings dialog refuses to save a malformed one
+    /// (Configuration.cpp:2443), so it never meets one at transmit time.
+    fn js8_no_locator(&self) -> bool {
+        self.settings.mygrid.trim().is_empty()
+    }
+
+    /// JS8Call's `ensureCallsignSet` (mainwindow.cpp:5257-5271), which its Enter asks before
+    /// anything is queued (:749): a callsign first, then a locator. Every operator send asks it.
+    fn js8_identity_set(&self) -> Result<(), String> {
+        if self.settings.mycall.trim().is_empty() {
+            return Err(Self::js8_compose_error(
+                ::js8::proto::compose::ComposeError::NoCallsign,
+            ));
+        }
+        if self.js8_no_locator() {
+            return Err(JS8_NO_LOCATOR.to_string());
+        }
+        Ok(())
+    }
+
     /// Operator send: `to` is a callsign or @group (None = plain text, which compose
     /// prefixes with "MYCALL: " — identity on the wire, spec invariant 10). An operator
     /// verb: on success it restarts the wall-clock watchdog. Never arms TX.
@@ -593,11 +628,12 @@ impl Engine {
             ),
             None => None,
         };
-        let r = self
-            .js8_station
-            .send(to_ref.as_ref(), text.trim(), now_ms)
-            .map(|_| ())
-            .map_err(Self::js8_compose_error);
+        let r = self.js8_identity_set().and_then(|()| {
+            self.js8_station
+                .send(to_ref.as_ref(), text.trim(), now_ms)
+                .map(|_| ())
+                .map_err(Self::js8_compose_error)
+        });
         self.js8_after_verb(&r);
         r
     }
@@ -609,11 +645,12 @@ impl Engine {
             .ok_or_else(|| format!("{to} is not a callsign or @group JS8 can address"))?;
         let command =
             ::js8::Command::from_id(cmd).ok_or_else(|| format!("unknown JS8 command {cmd}"))?;
-        let r = self
-            .js8_station
-            .send_command(&to_ref, command, arg.trim(), now_ms)
-            .map(|_| ())
-            .map_err(Self::js8_compose_error);
+        let r = self.js8_identity_set().and_then(|()| {
+            self.js8_station
+                .send_command(&to_ref, command, arg.trim(), now_ms)
+                .map(|_| ())
+                .map_err(Self::js8_compose_error)
+        });
         self.js8_after_verb(&r);
         r
     }
@@ -621,10 +658,11 @@ impl Engine {
     /// CQ (`idx` into the CQS table: 0 "CQ CQ CQ" … 7 "CQ"). Counts as Operator origin.
     pub fn js8_call_cq(&mut self, idx: u8) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
-        let r = self
-            .js8_station
-            .call_cq(idx, now_ms)
-            .map_err(Self::js8_compose_error);
+        let r = self.js8_identity_set().and_then(|()| {
+            self.js8_station
+                .call_cq(idx, now_ms)
+                .map_err(Self::js8_compose_error)
+        });
         self.js8_after_verb(&r);
         r
     }
@@ -763,18 +801,35 @@ impl Engine {
     /// (`!tx_enabled || tuning || !tx_allowed()`, `tier_is_rx_only`, operating mode
     /// Digital), so `tx_enabled` — the FIRST operator act — is already true here.
     ///
-    /// Order: identity gate → decode-only refusal → one-frame-per-period latch → station
-    /// outbox → origin gate (the SECOND act, re-read at plan time every slot) → wall-clock
-    /// watchdog (all origins but Heartbeat) → f0 → book → plan. Nothing here moves the dial
-    /// (invariant 9). Booking is at plan time, the beacon / QSO arms' rule.
+    /// Order: identity gate (a callsign for every frame, a locator for a message's first) →
+    /// decode-only refusal → one-frame-per-period latch → station outbox → origin gate (the
+    /// SECOND act, re-read at plan time every slot) → wall-clock watchdog (all origins but
+    /// Heartbeat) → f0 → book → plan. Nothing here moves the dial (invariant 9). Booking is at
+    /// plan time, the beacon / QSO arms' rule.
     pub fn plan_js8_tx(&mut self, slot: u64) -> Option<TxPlan> {
         // Identity, fail-closed: Js8Mode declares `structured_identity`, so a blank or
-        // unparsable MYCALL refuses here (`needs_grid = false` — JS8 frames carry the
-        // grid optionally; NMAXGRID means "no grid"). `proto::compose` additionally
-        // refuses a MYCALL that cannot be base-packed, before anything is queued.
+        // unparsable MYCALL refuses here (`needs_grid = false`: the FT gate's 4-or-6-character
+        // grid rule is not JS8Call's, whose locator rule follows). `proto::compose`
+        // additionally refuses a MYCALL that cannot be base-packed, before anything is queued.
         if self.structured_tx_ready(false).is_err() {
             self.set_transmitting(false);
             return None;
+        }
+        // …and no transmission STARTS without a locator, as in JS8Call: `startTx`
+        // (mainwindow.cpp:4768) → `ensureCreateMessageReady` → `ensureCallsignSet` (:5309,
+        // :5264-5268). The frames after a message's first go out through `stopTx` →
+        // `prepareNextMessageFrame` (:4825), which never asks again, so a message already on
+        // the air finishes. Refused before `next_frame`: nothing is released, popped or keyed,
+        // and `js8_tick` drops a reply or heartbeat that falls due meanwhile.
+        if self.js8_no_locator() {
+            let queue = self.js8_station.queue();
+            if queue.first().is_none_or(|next| next.first) {
+                if !queue.is_empty() {
+                    self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
+                }
+                self.set_transmitting(false);
+                return None;
+            }
         }
         let speed = self.js8_tx_speed();
         // Decode-only refusal, in the planner and not the builder (the FT arms' rule):
@@ -943,6 +998,7 @@ mod tests {
     fn queue_copy_budget_counts_remaining_frames_instead_of_messages() {
         let mut e = Engine::with_settings(Settings {
             mycall: "N0CALL".into(),
+            mygrid: "AA00".into(),
             ..Default::default()
         });
         e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
@@ -1758,6 +1814,174 @@ mod tests {
             overs.len(),
             1,
             "one heartbeat in three minutes, got {overs:?}"
+        );
+    }
+
+    // ===== no locator in Settings: JS8Call transmits nothing =====
+
+    /// The refusal the operator reads, word for word.
+    const NO_LOCATOR: &str =
+        "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
+
+    /// `SNR?` from `from` to my call, as it decodes.
+    fn snr_query_to_me(from: &str) -> modes::Decode {
+        let query = Frame::Directed {
+            from: CallRef::Base(from.to_string()),
+            to: CallRef::Base("KD9TAW".to_string()),
+            cmd: Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        row(&query, whole(), Js8Speed::Normal, 1200.0)
+    }
+
+    /// JS8Call's Enter asks `ensureCallsignSet` before anything is queued (mainwindow.cpp:749),
+    /// and with no locator that refuses (:5264-5268, "Please enter your grid locator in the
+    /// settings."). Every operator send refuses, queues nothing and says where the locator goes.
+    #[test]
+    fn js8_sends_refuse_with_no_locator_and_say_where_to_set_it() {
+        for grid in ["", "  "] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            let refused = Err(NO_LOCATOR.to_string());
+            assert_eq!(
+                e.js8_send(None, "TEST".into()),
+                refused,
+                "{grid:?}: a message"
+            );
+            let snr = Command::SnrQuery.id();
+            let query = e.js8_send_command("W1AW".into(), snr, String::new());
+            assert_eq!(query, refused, "{grid:?}: a directed query");
+            assert_eq!(e.js8_call_cq(0), refused, "{grid:?}: a CQ");
+            let st = e.js8_state();
+            assert!(
+                st.queue.is_empty(),
+                "{grid:?}: nothing queued: {:?}",
+                st.queue
+            );
+            assert_eq!(
+                st.last_error.as_deref(),
+                Some(NO_LOCATOR),
+                "{grid:?}: the cockpit says why"
+            );
+        }
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_send(None, "TEST".into())
+            .expect("control: with a locator the same send queues");
+        let mut blank = Engine::new("", "", 0);
+        blank.js8_enter();
+        assert_eq!(
+            blank.js8_send(None, "TEST".into()),
+            Err("Set your callsign in Settings before transmitting JS8.".to_string()),
+            "with neither, the callsign is asked for first, as in ensureCallsignSet"
+        );
+    }
+
+    /// Automatic traffic meets the same refusal when its transmission would start (`startTx` →
+    /// `ensureCreateMessageReady` → `ensureCallsignSet`, :4768 → :5309), and the
+    /// `on_stopTxButton_clicked` that follows (:5310) drops it: the reply is gone and the
+    /// heartbeat re-based to the next cycle + the interval (:7397 → :3720). So setting the
+    /// locator afterwards sends nothing stale.
+    #[test]
+    fn with_no_locator_js8_keys_nothing_and_drops_what_falls_due() {
+        let mut e = hb_engine("", 5, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: autoreply is on, and a reply counts down"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 6 * 60); // through the reply and the heartbeat
+        assert!(overs.is_empty(), "nothing keys with no locator: {overs:?}");
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none(),
+            "the reply was dropped when it fell due"
+        );
+        assert_eq!(
+            st.hb_next_at_ms,
+            Some(due + 315_000),
+            "the heartbeat was dropped and re-based to the next cycle + the interval"
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
+        );
+        e.settings.mygrid = "EN52".into();
+        e.js8_apply_station_config();
+        let after = run_js8_loop_from(&mut e, t0 + 6 * 60 * 1000, 2 * 60);
+        assert!(
+            after.is_empty(),
+            "setting the locator sends nothing stale: {after:?}"
+        );
+    }
+
+    /// With TX off, JS8Call's `ensureCanTransmit` refuses first (:5304) and the locator's alert
+    /// never comes: the heartbeat is dropped as Q6's is, and nothing is said.
+    #[test]
+    fn with_tx_off_a_heartbeat_dropped_with_no_locator_says_nothing() {
+        let mut e = hb_engine("", 5, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.set_tx_enabled(false);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        run_js8_loop_from(&mut e, t0, 6 * 60);
+        let st = e.js8_state();
+        assert_eq!(
+            st.hb_next_at_ms,
+            Some(due + 315_000),
+            "control: the heartbeat was dropped and re-based"
+        );
+        assert_eq!(st.last_error, None, "TX off refuses first, and silently");
+    }
+
+    /// Only a transmission's START asks. JS8Call sends the frames after a message's first
+    /// through `stopTx` → `prepareNextMessageFrame` (:4825), which never asks again: a message
+    /// already on the air finishes, and the next one does not start.
+    #[test]
+    fn a_js8_message_on_the_air_finishes_when_the_locator_goes_and_the_next_does_not_start() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .expect("queues");
+        e.js8_send(None, "SECOND".into()).expect("queues");
+        let queue = e.js8_state().queue;
+        let long = queue
+            .iter()
+            .filter(|q| q.display.ends_with("FRAMES"))
+            .count();
+        assert!(
+            long > 1,
+            "control: the first message is multi-frame: {queue:?}"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let first = run_js8_loop_from(&mut e, t0, 15); // exactly one period boundary
+        assert_eq!(first.len(), 1, "control: the first frame keyed");
+        e.settings.mygrid = String::new(); // the locator goes while the message is on the air
+        let rest = run_js8_loop_from(&mut e, t0 + 15_000, 5 * 60);
+        assert!(
+            rest.len() >= long - 1,
+            "the message on the air finishes: {} of {} more frames",
+            rest.len(),
+            long - 1
+        );
+        assert_eq!(
+            rest.len(),
+            long - 1,
+            "…and the next one never starts: {rest:?}"
+        );
+        let st = e.js8_state();
+        assert!(
+            !st.queue.is_empty() && st.queue.iter().all(|q| q.display.ends_with("SECOND")),
+            "the second message waits, unsent: {:?}",
+            st.queue
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
         );
     }
 }
