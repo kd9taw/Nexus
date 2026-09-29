@@ -177,10 +177,17 @@ describe('JS8 renders the placement', () => {
     await mount()
     await tier(1800)
     expect(seamsIn(cols()[0]).length, 'Activity | Band activity, stock').toBe(1)
+    // The operator's split between them, carried on both frames while they are a pair.
+    act(() => api!.setShares({ activity: 1.3, offsets: 0.7 }))
+    const shareOf = (id: string) => document.querySelector<HTMLElement>(`[data-pane="${id}"]`)!.style.getPropertyValue('--pane-share')
+    expect(shareOf('activity')).not.toBe('')
     act(() => api!.movePane!('offsets', 'right', () => true))
-    // Band activity moved under the inbox: the pair is apart, so no divider between them anywhere.
+    // Band activity moved under the inbox: the pair is apart, so no divider between them anywhere,
+    // and neither frame carries the pair's share (its floor would follow a divider that is not there).
     expect(rendered()).toEqual([['activity'], ['stations', 'inbox', 'offsets'], ['log']])
     expect(cols().flatMap(seamsIn).filter((l) => /activity/i.test(l ?? '')), 'a divider for a pair that is not one').toEqual([])
+    expect(shareOf('activity'), 'Activity still sized as half of a pair').toBe('')
+    expect(shareOf('offsets'), 'Band activity still sized as half of a pair').toBe('')
     // Stations | Inbox are still adjacent and keep theirs.
     expect(seamsIn(cols()[1]).length).toBe(1)
   })
