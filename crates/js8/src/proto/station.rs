@@ -593,7 +593,7 @@ impl Station {
                 "{from} INFO {}",
                 self.expand_grid_macros(&self.cfg.info)
             )),
-            Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text())),
+            Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text(now_ms))),
             Command::HearingQuery => Some(format!("{from} HEARING {}", self.hearing_text())),
             Command::Nack | Command::Ack => None, // acks are logged, not answered
             _ => None,
@@ -776,9 +776,14 @@ impl Station {
             .map(|e| e.id)
     }
 
-    fn status_text(&self) -> String {
+    /// A set STATUS, or JS8Call's default, "IDLE <MYIDLE> VERSION <MYVERSION>"
+    /// (Configuration.cpp:1858), with Nexus for the version.
+    fn status_text(&self, now_ms: u64) -> String {
         if self.cfg.status.is_empty() {
-            format!("IDLE {} VERSION Nexus", self.idle_minutes())
+            format!(
+                "IDLE {} VERSION Nexus",
+                idle_since(self.idle_minutes(now_ms))
+            )
         } else {
             clamp_str(&self.expand_grid_macros(&self.cfg.status), MAX_INFO_LEN)
         }
@@ -1357,8 +1362,17 @@ impl Station {
             })
     }
 
-    pub fn idle_minutes(&self) -> u16 {
-        0
+    /// Whole minutes since the operator last acted: every operator send and entering the tier
+    /// (`mark_active`), the baseline the idle watchdog reads. It is the count JS8Call's
+    /// once-a-minute `incrementIdleTimer` keeps and its UI activity resets (mainwindow.cpp:
+    /// 10969-10979). A station never marked active has no baseline and reads 0, as JS8Call's
+    /// count starts at 0.
+    pub fn idle_minutes(&self, now_ms: u64) -> u16 {
+        if self.last_activity_ms == 0 {
+            return 0;
+        }
+        let minutes = now_ms.saturating_sub(self.last_activity_ms) / 60_000;
+        u16::try_from(minutes).unwrap_or(u16::MAX)
     }
 
     pub fn idle_tripped(&self) -> bool {
@@ -1391,6 +1405,22 @@ impl Station {
         self.heard = s.heard;
         self.allcall_replied = s.allcall_replied.into_iter().collect();
         self.next_inbox_id = s.next_inbox_id.max(1);
+    }
+}
+
+/// JS8Call's `<MYIDLE>` for an idle count: `since()` of the last activity (mainwindow.cpp:
+/// 121-130), upper-cased, with "NOW" read as "0M" (:7018-7019). The count is whole minutes, so
+/// `since()`'s seconds branch never applies.
+fn idle_since(minutes: u16) -> String {
+    let secs = u64::from(minutes) * 60;
+    if secs >= 86_400 {
+        format!("{}D", secs / 86_400)
+    } else if secs >= 3_600 {
+        format!("{}H", secs / 3_600)
+    } else if secs >= 60 {
+        format!("{}M", secs / 60)
+    } else {
+        "0M".to_string()
     }
 }
 
@@ -3127,5 +3157,48 @@ mod tests {
         assert!(acts
             .iter()
             .any(|a| matches!(a, StationAction::Relayed { .. })));
+    }
+
+    /// The STATUS? reply's text when STATUS is not set: JS8Call's default status, "IDLE <MYIDLE>
+    /// VERSION <MYVERSION>" (Configuration.cpp:1858). <MYIDLE> is `since()` of the operator's
+    /// last activity, upper-cased, "NOW" read as "0M" (mainwindow.cpp:7018-7019, :121-130), and
+    /// the idle count is whole minutes since the operator last acted (:10969-10979).
+    #[test]
+    fn a_status_reply_says_how_long_the_operator_has_been_idle() {
+        let t0 = 3_600_000_000; // the operator's last act
+        for (idle_ms, want) in [
+            (30_000, "IDLE 0M"),
+            (5 * 60_000 + 30_000, "IDLE 5M"),
+            (95 * 60_000, "IDLE 1H"),
+            (49 * 3_600_000, "IDLE 2D"),
+        ] {
+            let mut s = Station::new(cfg()); // STATUS not set
+            s.mark_active(t0);
+            let at = t0 + idle_ms;
+            s.on_event(
+                &directed("W1AW", "KD9TAW", Some(Command::StatusQuery), None, "", -7),
+                at,
+            );
+            assert_eq!(
+                drain(&mut s, at + 5_000).map(|f| f.display),
+                Some(format!("KD9TAW: W1AW STATUS {want} VERSION Nexus")),
+                "{idle_ms} ms idle"
+            );
+        }
+    }
+
+    /// The idle count is whole minutes since the last operator act, and 0 before the station has
+    /// a baseline (a fresh station, before the operator enters JS8), as JS8Call's starts at 0.
+    #[test]
+    fn the_idle_count_is_whole_minutes_since_the_last_act() {
+        let mut s = Station::new(cfg());
+        assert_eq!(s.idle_minutes(3_600_000_000), 0, "no baseline yet");
+        s.mark_active(3_600_000_000);
+        assert_eq!(s.idle_minutes(3_600_000_000 + 59_999), 0, "under a minute");
+        assert_eq!(
+            s.idle_minutes(3_600_000_000 + 7 * 60_000),
+            7,
+            "seven minutes"
+        );
     }
 }

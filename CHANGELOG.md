@@ -352,6 +352,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
+  STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8
+  cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
+  opened JS8, and the reply writes it as JS8Call does: "IDLE 5M", "IDLE 1H", "IDLE 2D".
+
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

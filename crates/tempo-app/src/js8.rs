@@ -229,7 +229,9 @@ impl Engine {
                 hb: self.js8_hb_on && live,
                 cq: self.js8_station.cq_on() && live,
             },
-            idle_minutes: self.js8_station.idle_minutes(),
+            idle_minutes: self
+                .js8_station
+                .idle_minutes(tempo_core::timing::now_unix_ms() as u64),
             idle_limit_min: self.js8_station.config().idle_watchdog_min,
             idle_tripped,
             activity: self.js8_activity.iter().cloned().collect(),
@@ -2160,5 +2162,23 @@ mod tests {
             Some("KD9TAW: QTH EN52, EN52HW TO BE EXACT"),
             "the queued message carries the locator"
         );
+    }
+
+    // ===== the idle count (JS8Call's <MYIDLE>) =====
+
+    /// The cockpit's idle chip ("Idle 12/60 min") counts the whole minutes since the operator's
+    /// last act, the count JS8Call's idle timer keeps (mainwindow.cpp:10969-10979).
+    #[test]
+    fn the_js8_idle_count_is_the_minutes_since_the_operators_last_act() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let now = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(now - 12 * 60_000 - 5_000);
+        assert_eq!(
+            e.js8_state().idle_minutes,
+            12,
+            "twelve minutes since the last act"
+        );
+        e.js8_send(None, "TEST".into()).expect("queues");
+        assert_eq!(e.js8_state().idle_minutes, 0, "an operator send resets it");
     }
 }
