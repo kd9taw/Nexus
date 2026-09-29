@@ -2,9 +2,10 @@
 //!
 //! A PURE state machine: it never sees audio, never keys, never reads a clock or an RNG of its
 //! own. The engine drives it — `on_event` routes one reassembler event through JS8Call's gating
-//! chain, `tick(now_ms)` advances the heartbeat schedule and the idle watchdog, and the operator
-//! verbs (`send`, `send_command`, `call_cq`, `heartbeat_now`, …) enqueue intent. Everything the
-//! station wants to transmit leaves through EXACTLY ONE seam:
+//! chain, `tick(now_ms)` advances the CQ repeat and the idle watchdog (a due heartbeat is
+//! released by `next_frame`), and the operator verbs (`send`, `send_command`, `call_cq`,
+//! `heartbeat_now`, …) enqueue intent. Everything the station wants to transmit leaves through
+//! EXACTLY ONE seam:
 //!
 //! ```text
 //!     next_frame(period_start_ms, busy, rng) -> Option<TxFrame>
@@ -19,9 +20,13 @@
 //!
 //! Behaviours (each verified against upstream and the approved defaults — autoreply ON, relay ON,
 //! HB-ack OFF, HB on-demand):
-//! - Heartbeat: `MYCALL: HEARTBEAT GRID` as a type-000 frame on a random free 50 Hz slot in
-//!   500..=1000 Hz (`FreqHint::HbSubband`); the interval timer resets when directed traffic to me
-//!   is displayed (mainwindow.cpp:7740). Replies/ACKs never QSY (`FreqHint::Dial`).
+//! - Heartbeat: `MYCALL: HEARTBEAT GRID4` (the 4-character square) as ONE type-000 frame, at an
+//!   offset picked once per message by JS8Call's `findFreeFreqOffset(500, 1000, 50)`
+//!   (`FreqHint::HbSubband`; the engine keeps an operator at or below 1000 Hz on their own
+//!   offset, as `sendHeartbeat` does, mainwindow.cpp:6256). A periodic heartbeat is due one
+//!   interval after the next transmit cycle (:6311) and `next_frame` releases it at the boundary
+//!   of that period; the end of every message and directed traffic to me re-base it the same
+//!   way (:3706). Replies/ACKs never QSY (`FreqHint::Dial`).
 //! - HB-ACK (default off): only with HB + autoreply + `hb_ack`, an empty outbox and no QSO pause,
 //!   answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`. An incoming `HEARTBEAT SNR` is
 //!   never answered (no ack-of-an-ack loop).
@@ -106,8 +111,9 @@ pub enum Origin {
     CqRepeat,
 }
 
-/// Where a frame wants to transmit. `HbSubband` is a random free 50 Hz slot, 500..=1000 Hz;
-/// everything else stays on the dial (replies/ACK/HB-ack never QSY).
+/// Where a frame wants to transmit. `HbSubband` is the heartbeat's free offset in 500..1000 Hz
+/// (`find_free_freq_offset`), picked once per message; everything else stays on the dial
+/// (replies/ACK/HB-ack never QSY).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FreqHint {
     Dial,
@@ -794,28 +800,12 @@ impl Station {
                 self.trip_idle(&mut actions);
             }
         }
-        // heartbeat schedule
-        if self.hb_on && self.outbox.is_empty() && self.pending.is_empty() {
-            if let Some(next) = self.hb_next_ms {
-                if now_ms >= next {
-                    let _ = self.enqueue_heartbeat(now_ms);
-                    if self.cfg.hb_interval_min > 0 {
-                        self.bump_hb_schedule(now_ms);
-                    } else {
-                        // interval 0 = "on demand" = ONCE: clear the schedule so this does not
-                        // re-enqueue every drain cycle, and the cockpit shows no stuck past
-                        // `hb_next_ms`. Re-arming (`set_hb`) schedules the next on-demand HB.
-                        self.hb_next_ms = None;
-                    }
-                }
-            }
-        }
-        // CQ repeat schedule — the heartbeat's shape exactly (JS8Call runs both off one
-        // 1 Hz `checkRepeat`, mainwindow.cpp:5718). A SCHEDULE, never a queue: it enqueues
-        // only into an EMPTY outbox with nothing pending, so a slow drain can never let CQs
-        // pile up, and `bump_cq_schedule` re-bases on NOW, so a missed window is skipped
-        // rather than replayed. If a heartbeat took this tick, the CQ simply waits for the
-        // next one — one frame per period is the whole rule.
+        // CQ repeat schedule (JS8Call runs it off the same 1 Hz `checkRepeat` as the heartbeat,
+        // mainwindow.cpp:5723). A SCHEDULE, never a queue: it enqueues only into an EMPTY
+        // outbox with nothing pending, so a slow drain can never let CQs pile up, and
+        // `bump_cq_schedule` re-bases on NOW, so a missed window is skipped rather than
+        // replayed. If anything is queued, the CQ simply waits for the next tick — one frame
+        // per period is the whole rule.
         if self.cq_on && self.outbox.is_empty() && self.pending.is_empty() {
             if let Some(next) = self.cq_next_ms {
                 if now_ms >= next {
@@ -848,12 +838,20 @@ impl Station {
     }
 
     fn bump_hb_schedule(&mut self, now_ms: u64) {
-        // Only reschedules a PERIODIC heartbeat; at interval 0 ("on demand") it is a no-op, so
-        // a call from `on_event` (RX resets the HB timer) cannot cancel a pending on-demand HB.
-        // The interval-0 "fire once" clear lives in `tick`, right after the heartbeat fires.
+        // JS8Call's `resetHeartbeatTimer(false)` (mainwindow.cpp:3720). Only reschedules a
+        // PERIODIC heartbeat; at interval 0 ("on demand") it is a no-op, so a call from
+        // `on_event` (RX resets the HB timer) cannot cancel a pending on-demand HB. The
+        // interval-0 "fire once" clear lives in `next_frame`, right after the HB is released.
         if self.hb_on && self.cfg.hb_interval_min > 0 {
-            self.hb_next_ms = Some(now_ms + self.cfg.hb_interval_min as u64 * 60 * 1000);
+            self.hb_next_ms = Some(self.hb_due_after(now_ms));
         }
+    }
+
+    /// A periodic heartbeat's next deadline: `nextTransmitCycle()` + the interval
+    /// (`on_hbMacroButton_toggled`, mainwindow.cpp:6319).
+    fn hb_due_after(&self, now_ms: u64) -> u64 {
+        next_transmit_cycle_ms(now_ms, u64::from(self.cfg.speed.period_s()))
+            + u64::from(self.cfg.hb_interval_min) * 60 * 1000
     }
 
     /// Re-base the CQ repeat on NOW. Deliberately `now + interval`, never
@@ -867,8 +865,9 @@ impl Station {
 
     // ---- the single TX seam -----------------------------------------------------------------
 
-    /// Once per period: release any pending reply whose countdown elapsed, then dispense the
-    /// outbox head's next frame. THE ONLY method that hands out a `TxFrame`.
+    /// Once per period: release any pending reply whose countdown elapsed and a heartbeat due
+    /// in this period, then dispense the outbox head's next frame. THE ONLY method that hands
+    /// out a `TxFrame`.
     pub fn next_frame(
         &mut self,
         period_start_ms: u64,
@@ -890,11 +889,35 @@ impl Station {
                 i += 1;
             }
         }
+        // A heartbeat due in THIS period goes out in it. Its deadline is a period boundary
+        // + 1 s; JS8Call's 1 Hz `checkRepeat` (mainwindow.cpp:5723) fires within a second after
+        // that boundary and its late-start rule (`guiUpdate`, :4512) keys it in the same period.
+        // Nexus keys at the boundary, so the boundary releases it. A SCHEDULE, never a queue:
+        // only into an EMPTY outbox with nothing pending.
+        if self.hb_on && self.outbox.is_empty() && self.pending.is_empty() {
+            if let Some(next) = self.hb_next_ms {
+                if period_start_ms + 1000 >= next {
+                    let _ = self.enqueue_heartbeat(period_start_ms);
+                    if self.cfg.hb_interval_min == 0 {
+                        // interval 0 = "on demand" = ONCE: clear the schedule so this does not
+                        // re-enqueue every period, and the cockpit shows no stuck past
+                        // `hb_next_ms`. Re-arming (`set_hb`) schedules the next on-demand HB.
+                        self.hb_next_ms = None;
+                    }
+                }
+            }
+        }
         let head = self.outbox.front_mut()?;
         let (frame, i3) = head.frames.get(head.cursor)?.clone();
         let word = encode_frame(&frame, i3, self.cfg.speed).ok()?;
+        // The heartbeat's offset is picked ONCE and the whole message keys there (JS8Call
+        // picks it in `sendHeartbeat`, :6277): the first frame picks, the rest keep it.
         let freq_hint = match head.freq_hint {
-            FreqHint::HbSubband(_) => FreqHint::HbSubband(pick_hb_slot(busy, rng)),
+            FreqHint::HbSubband(f) if head.cursor > 0 => FreqHint::HbSubband(f),
+            FreqHint::HbSubband(_) => {
+                head.freq_hint = FreqHint::HbSubband(find_free_freq_offset(busy, rng));
+                head.freq_hint
+            }
             other => other,
         };
         let tx = TxFrame {
@@ -910,6 +933,11 @@ impl Station {
         head.cursor += 1;
         if head.cursor >= head.frames.len() {
             self.outbox.pop_front();
+            // A whole message has gone out, whatever it was: JS8Call's `stopTx` calls
+            // `on_stopTxButton_clicked` after the last frame of every message (:4832), and that
+            // re-bases the heartbeat (`resetAutomaticIntervalTransmissions(false, false)`,
+            // :7397). The next cycle after this period's start is the next one after its end.
+            self.bump_hb_schedule(period_start_ms);
         }
         Some(tx)
     }
@@ -1014,7 +1042,11 @@ impl Station {
     }
 
     fn enqueue_heartbeat(&mut self, _now_ms: u64) -> Result<(), ComposeError> {
-        let line = format!("HEARTBEAT {}", self.cfg.grid);
+        // The 4-character square, as JS8Call sends it (`my_grid().left(4)`, mainwindow.cpp:6258):
+        // the heartbeat frame carries no more, and a longer locator spills into a data frame
+        // that keys on the next period.
+        let grid4: String = self.cfg.grid.chars().take(4).collect();
+        let line = format!("HEARTBEAT {grid4}");
         let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
         let out = OutMsg {
             origin: Origin::Heartbeat,
@@ -1030,8 +1062,14 @@ impl Station {
     pub fn set_hb(&mut self, on: bool, now_ms: u64) {
         self.hb_on = on;
         if on {
-            // next HB fires now (on-demand) or after the interval.
-            self.hb_next_ms = Some(now_ms + self.cfg.hb_interval_min as u64 * 60 * 1000);
+            // On demand (interval 0): the next period. Periodic: one interval after the NEXT
+            // transmit cycle, so the button counts down before the first one
+            // (`on_hbMacroButton_toggled`, mainwindow.cpp:6319).
+            self.hb_next_ms = Some(if self.cfg.hb_interval_min == 0 {
+                now_ms
+            } else {
+                self.hb_due_after(now_ms)
+            });
         } else {
             self.hb_next_ms = None;
         }
@@ -1238,18 +1276,35 @@ impl Station {
     }
 }
 
-/// Pick a random free 50 Hz slot in 500..=1000 Hz (11 slots): step through pseudo-random slots
-/// until `busy` reports one clear, else fall back to the drawn slot (upstream never blocks).
-fn pick_hb_slot(busy: &dyn Fn(f32) -> bool, rng: &mut dyn FnMut() -> u32) -> f32 {
-    let mut chosen = 500.0 + (rng() % 11) as f32 * 50.0;
-    for _ in 0..11 {
-        let slot = 500.0 + (rng() % 11) as f32 * 50.0;
-        if !busy(slot) {
-            return slot;
+/// JS8Call's `findFreeFreqOffset(500, 1000, 50)` (mainwindow.cpp:5592), the heartbeat's call,
+/// draw for draw: ten tries at a random one of `(1000 − 500) / 50 = 10` slots (500..=950, so
+/// 1000 Hz is never drawn), then ten tries at a random whole hertz in 500..=999, then 500
+/// (upstream never blocks). `busy` is `!isFreqOffsetFree(f, 50)`.
+fn find_free_freq_offset(busy: &dyn Fn(f32) -> bool, rng: &mut dyn FnMut() -> u32) -> f32 {
+    const FMIN: u32 = 500;
+    const FMAX: u32 = 1000;
+    const BW: u32 = 50;
+    let nslots = (FMAX - FMIN) / BW;
+    for _ in 0..nslots {
+        let f = (FMIN + BW * (rng() % nslots)) as f32;
+        if !busy(f) {
+            return f;
         }
-        chosen = slot;
     }
-    chosen
+    for _ in 0..nslots {
+        let f = (FMIN + rng() % (FMAX - FMIN)) as f32;
+        if !busy(f) {
+            return f;
+        }
+    }
+    FMIN as f32
+}
+
+/// JS8Call's `nextTransmitCycle()` (mainwindow.cpp:3690): drop the milliseconds, round UP to the
+/// next period boundary (`roundUp`, :169, moves on even from an exact boundary), add one second.
+fn next_transmit_cycle_ms(now_ms: u64, period_s: u64) -> u64 {
+    let secs = now_ms / 1000;
+    (secs / period_s * period_s + period_s + 1) * 1000
 }
 
 fn is_query_msg(m: &Message) -> bool {
@@ -1369,10 +1424,13 @@ mod tests {
         assert_eq!(f.origin, Origin::HbAck);
         assert_eq!(f.freq_hint, FreqHint::Dial, "an HB-ack never QSYs");
         assert_eq!(f.display, "KD9TAW: W1AW HEARTBEAT SNR -05");
-        // An incoming HEARTBEAT SNR is never answered (no ack-of-an-ack).
+        // An incoming HEARTBEAT SNR is never answered (no ack-of-an-ack). The heartbeat is a
+        // periodic one not yet due, so nothing of our own is scheduled in the window and
+        // anything drained would be a reply.
         let mut s2 = Station::new({
             let mut c = cfg();
             c.hb_ack = true;
+            c.hb_interval_min = 5;
             c
         });
         s2.set_hb(true, 0);
@@ -1391,8 +1449,11 @@ mod tests {
             drain(&mut s2, 100000).is_none(),
             "HEARTBEAT SNR draws no reply"
         );
-        // hb_ack off → nothing.
-        let mut s3 = Station::new(cfg());
+        // hb_ack off → nothing (the same not-yet-due periodic heartbeat).
+        let mut s3 = Station::new(StationConfig {
+            hb_interval_min: 5,
+            ..cfg()
+        });
         s3.set_hb(true, 0);
         s3.on_event(&heartbeat("W1AW", -5), 1000);
         assert!(drain(&mut s3, 100000).is_none());
@@ -1645,8 +1706,8 @@ mod tests {
         assert!(s.hb_on(), "the heartbeat is not stopped");
         assert_eq!(
             s.hb_next_ms(),
-            Some(60_000 + 5 * 60 * 1000),
-            "…only pushed out one interval"
+            Some(76_000 + 5 * 60 * 1000),
+            "…only pushed out: the next transmit cycle + one interval"
         );
     }
 
@@ -1915,8 +1976,176 @@ mod tests {
         );
         assert_eq!(
             after,
-            3 * 60 * 1000 + 5 * 60 * 1000,
-            "deferred to now + interval (HeartbeatQSOPause)"
+            196_000 + 5 * 60 * 1000,
+            "deferred to the next transmit cycle + interval (HeartbeatQSOPause)"
+        );
+    }
+
+    /// JS8Call sends the 4-character square (`my_grid().left(4)`, mainwindow.cpp:6258), so a
+    /// heartbeat is ONE frame. Given the whole 6-character locator, the heartbeat grammar
+    /// stops at the square (no word boundary follows it), the locator spills into a data
+    /// frame, and every heartbeat keyed on two periods in a row.
+    #[test]
+    fn a_heartbeat_with_a_six_character_locator_is_one_frame_carrying_the_square() {
+        let mut c = cfg();
+        c.grid = "EN52HW".into();
+        let mut s = Station::new(c);
+        s.heartbeat_now(0).unwrap();
+        let keyed: Vec<(bool, bool, String)> = (0..6u64)
+            .filter_map(|k| drain(&mut s, k * 15_000))
+            .map(|f| (f.first, f.last, f.display))
+            .collect();
+        assert_eq!(
+            keyed,
+            vec![(true, true, "KD9TAW: @HB HEARTBEAT EN52".to_string())],
+            "one heartbeat, one frame, the 4-character square"
+        );
+    }
+
+    /// JS8Call picks the heartbeat's offset ONCE, in `sendHeartbeat` (:6277), and the whole
+    /// message goes out there (`processTxQueue` → `setFreqOffsetForRestore`, :9681). A
+    /// heartbeat with a proper square is one frame, but a locator that is not one still spills
+    /// into a data frame (in JS8Call too), and that frame must key where the first did or no
+    /// receiver can join the two.
+    #[test]
+    fn a_heartbeat_message_keys_every_frame_at_one_offset() {
+        let mut c = cfg();
+        c.grid = "XX".into(); // not a square: the heartbeat grammar leaves it to a data frame
+        let mut s = Station::new(c);
+        s.heartbeat_now(0).unwrap();
+        let mut n = 0u32;
+        let mut rng = move || {
+            n += 1;
+            n - 1
+        };
+        let first = s.next_frame(0, &|_| false, &mut rng).expect("frame 1");
+        let second = s.next_frame(15_000, &|_| false, &mut rng).expect("frame 2");
+        assert!(
+            first.first && !first.last && second.last,
+            "precondition: a two-frame heartbeat"
+        );
+        assert_eq!(second.freq_hint, first.freq_hint, "one message, one offset");
+    }
+
+    /// The heartbeat's offset is JS8Call's `findFreeFreqOffset(500, 1000, 50)` (:5592), draw
+    /// for draw: ten tries at one of `(1000 − 500) / 50 = 10` slots (500..=950, so 1000 Hz is
+    /// never drawn), then ten tries at any whole hertz in 500..=999, then 500.
+    #[test]
+    fn the_heartbeat_offset_is_js8calls_find_free_freq_offset() {
+        fn pick(busy: &dyn Fn(f32) -> bool, draw: u32) -> f32 {
+            let mut s = Station::new(cfg());
+            s.heartbeat_now(0).unwrap();
+            let mut rng = move || draw;
+            match s
+                .next_frame(0, busy, &mut rng)
+                .expect("the heartbeat")
+                .freq_hint
+            {
+                FreqHint::HbSubband(f) => f,
+                other => panic!("a heartbeat rides the sub-band hint, got {other:?}"),
+            }
+        }
+        let free = |_: f32| false;
+        let slots: Vec<f32> = (0..20).map(|k| pick(&free, k)).collect();
+        let want: Vec<f32> = (0..20).map(|k| 500.0 + 50.0 * (k % 10) as f32).collect();
+        assert_eq!(slots, want, "ten slots, 500..=950; 1000 Hz is never drawn");
+        let on_a_slot = |f: f32| f % 50.0 == 0.0;
+        assert_eq!(
+            pick(&on_a_slot, 123),
+            623.0,
+            "every slot busy: the second pass takes 500 + draw % 500"
+        );
+        assert_eq!(pick(&|_| true, 7), 500.0, "nothing free anywhere: 500");
+    }
+
+    /// The schedule is JS8Call's arithmetic, not "now + interval". `nextTransmitCycle()`
+    /// (:3690) drops the milliseconds, rounds UP to the next period boundary (`roundUp`, :169,
+    /// moves on even from an exact boundary) and adds one second; the interval goes on top.
+    /// Arming (`on_hbMacroButton_toggled`, :6319) and directed traffic to me
+    /// (`resetAutomaticIntervalTransmissions(true, false)`, :8333 → `resetHeartbeatTimer`,
+    /// :3720) both land there. Normal: 15 s periods.
+    #[test]
+    fn the_heartbeat_schedule_is_the_next_transmit_cycle_plus_the_interval() {
+        let mut c = cfg();
+        c.hb_interval_min = 5;
+        let mut s = Station::new(c);
+        s.set_hb(true, 67_250); // 7.25 s into the period that began at 60 s
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(76_000 + 300_000),
+            "armed mid-period: the 75 s boundary + 1 s + 5 min"
+        );
+        s.set_hb(true, 75_000);
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(91_000 + 300_000),
+            "armed ON a boundary: roundUp still moves to the next one"
+        );
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            100_400,
+        );
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(106_000 + 300_000),
+            "directed traffic re-bases on the same rule"
+        );
+    }
+
+    /// ONE heartbeat per interval, in the period JS8Call keys it. JS8Call's deadline is always
+    /// a period boundary + 1 s. Its 1 Hz `checkRepeat` (:5723) fires in the first second after
+    /// that boundary (`secsTo` truncates) and the late-start rule (`guiUpdate`, :4512) keys it
+    /// in the SAME period. The end of each over then re-bases the next heartbeat to the
+    /// following cycle + the interval (`stopTx` → `on_stopTxButton_clicked`, :4832 → :7397), so
+    /// they go out an interval and a period apart, and never on consecutive periods.
+    #[test]
+    fn a_periodic_heartbeat_keys_once_per_interval_in_the_period_js8call_keys_it() {
+        let mut c = cfg();
+        c.hb_interval_min = 5;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_hb(true, 67_250); // due at 376 s
+        let mut keyed = Vec::new();
+        for slot in 0..120u64 {
+            // half an hour: one plan per 15 s period, the engine's 1 Hz tick in between
+            let start = slot * 15_000;
+            if let Some(f) = drain(&mut s, start) {
+                assert_eq!(f.origin, Origin::Heartbeat, "only heartbeats are queued");
+                s.note_tx_done(&f, start);
+                keyed.push(start);
+            }
+            for sec in 0..15 {
+                s.tick(start + sec * 1000);
+            }
+        }
+        assert_eq!(
+            keyed,
+            vec![375_000, 690_000, 1_005_000, 1_320_000, 1_635_000],
+            "one interval after the next cycle, then every interval + one period"
+        );
+    }
+
+    /// …and the end of ANY message re-bases the heartbeat, not only its own: JS8Call's
+    /// `stopTx` calls `on_stopTxButton_clicked` after the last frame of every message
+    /// (:4832), which calls `resetHeartbeatTimer(false)` (:7397 → :3720).
+    #[test]
+    fn the_end_of_any_message_re_bases_the_periodic_heartbeat() {
+        let mut c = cfg();
+        c.hb_interval_min = 5;
+        let mut s = Station::new(c);
+        s.set_hb(true, 67_250); // due at 376 s
+        let w1aw = CallRef::Base("W1AW".into());
+        s.send_command(&w1aw, Command::SnrQuery, "", 120_000)
+            .unwrap();
+        let f = drain(&mut s, 120_000).expect("the operator's message");
+        assert!(
+            f.first && f.last,
+            "precondition: one frame, so that was its end"
+        );
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(136_000 + 300_000),
+            "the next cycle after it, plus the interval"
         );
     }
 
