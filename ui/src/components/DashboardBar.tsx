@@ -16,8 +16,9 @@
 //
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
-// LIVE DATA. A cached or partial one keeps its last real numbers and says so, in the chip the
-// panes already use.
+// LIVE DATA. A cached or partial one keeps its last real numbers and says so, in the panes' words
+// on a chip of the bar's own (styles.css `.dash-prov`: the panes' chip letters its warning in a
+// colour that reads under 4.5:1 on this bar in the light theme).
 import { useEffect, useState, type ReactNode } from 'react'
 import type { PropagationSnapshot, SpaceWxView } from '../types'
 import { aImpact, kpImpact, sfiImpact, xrayImpact } from '../propViz'
@@ -126,7 +127,7 @@ export function DashboardBar({ call, grid, prop, clock, children }: Props) {
         ))}
       </ul>
       {prov && (
-        <span className={`dash-prov prop-prov prov-${prov.cls}`} title={t('connect.prov.title')}>
+        <span className="dash-prov" data-prov={prov.cls} title={t('connect.prov.title')}>
           {prov.label}
         </span>
       )}

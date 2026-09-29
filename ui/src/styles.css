@@ -26856,6 +26856,20 @@ tr.sel .aprs-sym {
   padding: 0;
   list-style: none;
 }
+/* The provenance chip (cached, partial, no live data): the warning on its EDGE, the word in the
+   bar's ink. Not the panes' `.prop-prov`, which letters its warning in the warning colour: that
+   measured 4.23:1 on this bar in the light theme, under the 4.5:1 floor. An edge is held to 3:1
+   (DashboardBar.contrast.test.tsx computes both in every theme and mode). */
+.dash-prov {
+  flex: none;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--alert-warning);
+  color: var(--text);
+}
 /* The surface's own chips and the Stay behind toggle, pushed to the end of the line. */
 .dash-end {
   display: inline-flex;
