@@ -117,7 +117,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
     const stationHeaders = { 'x-nexus-application-version': '1',...(ftOperating||stream?{'x-nexus-operation-ft-version':'1'}:{}),...(stream?{'x-nexus-stream-version':'1'}:{}),...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
-    let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
+    let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0, applicationFramesSent=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
     browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
     browser.on('Fetch.requestPaused', (event,session) => { void (async()=>{
@@ -157,6 +157,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       if (event.response.opcode !== 1) return
       try {
         const message = JSON.parse(event.response.payloadData)
+        if (typeof message.type === 'string' && message.type.startsWith('application')) applicationFramesSent++
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && APPLICATION_VERSIONS.includes(message.version)))) {}
         else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3,4,5].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl','stopTransmit'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId,action:message.request.action?.action,on:message.request.action?.on})}
@@ -829,7 +830,16 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       try{
         await geometry(1280,800)
         await evaluate(`window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.violatedDirective+' '+e.blockedURI));true`)
+        // REMOVAL STAGE 3: a returning operator's browser can still hold the old workspace's receipt for
+        // this station, a command it never saw settle. The stream commands nothing and carries none of it:
+        // loaded, its session polled for that command's result, the relay refused it by name, and the
+        // page's lease lane stopped for good. Asserted before the stream is started, where that bit.
+        const streamLane=['state','acquire','heartbeat','release','stopTransmit'],outbound=()=>operationWire.filter(w=>w.direction==='out').map(w=>w.type)
+        await evaluate(`localStorage.setItem('nexus.remote.pending-control.${pair.stationId}',JSON.stringify({version:1,operationId:crypto.randomUUID(),action:{action:'decoder.clear',receiver:'cw'}}));true`)
         await click(button('Stream Nexus'))
+        await until(`!!document.querySelector('.remote-stream-app')`,15000)
+        await sleep(2000)
+        assert.deepEqual(outbound().filter(type=>!streamLane.includes(type)),[],'nothing of the old command path leaves the page, even holding the old workspace\'s receipt')
         await until(`!!document.querySelector('.remote-stream-app')&&!!${button('Start the stream')}`,15000)
         assert.equal(offers.length,0,'A3: nothing is offered before the operator starts it, even with station control available')
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'stream-ready.png'),Buffer.from(shot.data,'base64'))}
@@ -935,6 +945,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`)
         for(let i=0;i<30&&!closes.length;i++)await sleep(100)
         assert.equal(closes.length,1,'the station is told the stream ended')
+        // REMOVAL STAGE 3, the whole session: the stream took its lease and sent its Stop on the operation
+        // lane and used nothing else of it, and never opened the retired application lane.
+        for(let i=0;i<30&&!outbound().includes('release');i++)await sleep(100)
+        assert.deepEqual(outbound().filter(type=>!streamLane.includes(type)),[],'the stream used the lease lane and Stop, and nothing of the old command path')
+        for(const type of ['acquire','heartbeat','stopTransmit','release'])assert.ok(outbound().includes(type),`control: the stream's ${type} left the page`)
+        assert.equal(applicationFramesSent,0,'no application frame left the page')
         // POSITIVE CONTROL for the CSP listener above: a request the policy forbids is reported, so the
         // empty list really meant "nothing violated", not "nothing was listening".
         await evaluate(`fetch('https://example.invalid/').catch(()=>{});true`)
@@ -942,7 +958,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
-        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation, only the lease lane and Stop on the socket (${outbound().length} requests, holding the old workspace's receipt)`)
       }finally{
         shackLive=false
         await Promise.allSettled([signalling,trickle])
