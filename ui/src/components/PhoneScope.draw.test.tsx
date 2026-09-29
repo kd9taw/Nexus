@@ -492,3 +492,42 @@ describe('Night (Settings ▸ Appearance ▸ Workspace ▸ Night)', () => {
     expect(lastStops()).toEqual(stopsOf('turbo'))
   })
 })
+
+describe('a built-in theme (Settings ▸ Appearance ▸ Theme)', () => {
+  // Operator pick of 2026-09-27, "Yes, on Auto": an Auto scope paints the theme's own palette
+  // (features/skins.ts); a palette picked by name stays put. Observed on the trace gradient.
+  const stopsOf = (name: ColormapName) => {
+    const [c0, c1, c2] = [0.3, 0.7, 1.0].map((t) => sampleLut(name, t))
+    return [`rgba(${c0[0]},${c0[1]},${c0[2]},0.45)`, `rgba(${c1[0]},${c1[1]},${c1[2]},0.8)`, `rgba(${c2[0]},${c2[1]},${c2[2]},0.95)`]
+  }
+  const skin = (id: string) =>
+    act(async () => {
+      document.documentElement.setAttribute('data-skin', id)
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+  const lastStops = () => gradients[gradients.length - 1]?.stops
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-skin')
+    localStorage.removeItem('nexus.waterfall.palette')
+  })
+
+  it('an Auto scope repaints in the theme’s palette when the theme comes on', async () => {
+    localStorage.setItem('nexus.waterfall.palette', 'auto')
+    render(<PhoneScope transmitting={false} theme="dark" traceHoldMs={TRACE_HOLD_MS.fast} />)
+    await runFrames(300)
+    expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
+    expect(lastStops(), 'Auto on the standard dark theme').toEqual(stopsOf('inferno'))
+    await skin('blue-vfd')
+    await runFrames(300)
+    expect(lastStops()).toEqual(stopsOf('blue'))
+  })
+
+  it('a palette picked by name stays put', async () => {
+    localStorage.setItem('nexus.waterfall.palette', 'turbo')
+    render(<PhoneScope transmitting={false} theme="dark" traceHoldMs={TRACE_HOLD_MS.fast} />)
+    await runFrames(300)
+    await skin('amber-lcd')
+    await runFrames(300)
+    expect(lastStops()).toEqual(stopsOf('turbo'))
+  })
+})

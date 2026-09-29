@@ -57,8 +57,7 @@ import { RotorStrip } from './RotorStrip'
 import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
-import { Splitter } from './Splitter'
-import { SplitterSeam } from './SplitterSeam'
+import { PaneSeam } from './PaneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
@@ -377,8 +376,10 @@ export function OperateCockpit({
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
   const receiverSettings = useReceiverSettings(snap, tier)
-  // Container the waterfall-height splitter measures + writes its CSS var on.
-  const bodyRef = useRef<HTMLDivElement>(null)
+  // The waterfall strip its height divider sizes: the divider sets its CSS var on the strip's
+  // container (.cockpit-body) and measures the range the layout honours (the sheet caps the strip
+  // at 60 % of the body).
+  const wfRef = useRef<HTMLElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
   // below) + the seam that splits them. A sole survivor auto-fills because flex-grow is
   // share-driven (`--pane-share`), so deleting Band Activity grows Rx Frequency to fill.
@@ -1301,7 +1302,7 @@ export function OperateCockpit({
           the QSO strip's; its protected controls (period, Skip Tx1, next-Ns, HOUND
           badge, rotor) merged INTO the strip below. ~42px of the reported blank gray
           space lived here. */}
-      <div className="cockpit-body" ref={bodyRef}>
+      <div className="cockpit-body">
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
         {wfState === 'popped' && (
@@ -1316,7 +1317,7 @@ export function OperateCockpit({
         )}
         {wfState === 'docked' && (
           <>
-            <section className="cockpit-waterfall panel">
+            <section className="cockpit-waterfall panel" ref={wfRef}>
               {tier === 'MSK144' ? (
                 /* MSK144 is a TIME display, not a frequency one — every signal sits at
                  * 1500 Hz and lives for milliseconds, so the waterfall shows one unmoving
@@ -1354,10 +1355,10 @@ export function OperateCockpit({
                 />
               )}
             </section>
-            <Splitter
+            <PaneSeam
               axis="y"
               varName="--cockpit-wf-h"
-              target={bodyRef}
+              strip={wfRef}
               storageKey="nexus.split.operate.waterfall"
               min={88}
               max={420}
@@ -1515,11 +1516,12 @@ export function OperateCockpit({
                     </div>
                   )}
                   {shown('bandActivity') && shown('rxfreq') && (
-                    <SplitterSeam
+                    <PaneSeam
                       above={decodesSideRef}
                       below={rxfreqRef}
                       varName="--pane-share"
                       onCommit={(av, bv) => panels.setShares({ bandActivity: av, rxfreq: bv })}
+                      onReset={() => panels.setShares({ bandActivity: null, rxfreq: null })}
                       label={t('operate.seam.bandActivityRxFreq.label')}
                     />
                   )}
@@ -1655,13 +1657,14 @@ export function OperateCockpit({
                       only at data-cols='three' (at 'two' the drag would be visually
                       dead while still rewriting the persisted shares). */}
                   {dataCols === 'three' && (
-                    <SplitterSeam
+                    <PaneSeam
                       above={qsocolRef}
                       below={classicSideRef}
                       axis="x"
                       columnsOn={lowerClassicRef}
                       varName="--op-col"
                       onCommit={(av, bv) => panels.setShares({ txmsgs: av, stations: bv })}
+                      onReset={() => panels.setShares({ txmsgs: null, stations: null })}
                       label={t('operate.seam.qsocolStations.label')}
                     />
                   )}

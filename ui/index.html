@@ -50,6 +50,17 @@
             var pick = localStorage.getItem('nexus-palette-' + role)
             if (PALETTE[role].indexOf(pick) !== -1) d.setAttribute('data-' + role, pick)
           }
+          // The built-in themes (Settings ▸ Appearance ▸ Theme; useSkin.ts is the runtime copy): a
+          // theme rides on its base, so it seeds only while the page is that base, and only an id the
+          // table knows. The standard themes are NO attribute. These ids mirror features/skins.ts by
+          // base; index-preseed.test.ts holds the two copies together theme by theme.
+          var SKINS = {
+            dark: ['amber-lcd', 'green-lcd', 'blue-vfd', 'midnight', 'slate', 'lagoon', 'ember', 'nebula'],
+            light: ['silver', 'paper'],
+          }
+          var base = d.getAttribute('data-theme') || 'dark'
+          var skin = localStorage.getItem('nexus-skin')
+          if (Object.prototype.hasOwnProperty.call(SKINS, base) && SKINS[base].indexOf(skin) !== -1) d.setAttribute('data-skin', skin)
           // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS, the
           // per-surface natural fit model, keys nexus-ui-scale-mode /
           // nexus-ui-scale-cap): a pinned Manual scale applies directly (capped in a
@@ -118,20 +129,57 @@
           // Initial size class from EFFECTIVE width (mirror classifyViewport() in
           // src/useViewport.ts) so the first paint is already at the right breakpoint.
           d.setAttribute('data-viewport', ew < 768 ? 'xs' : ew < 1100 ? 'sm' : ew < 1600 ? 'md' : ew < 2400 ? 'lg' : 'xl')
-          // Rail preseed, clamped with usePaneWidths' exact bounds (left ≥220 ≤40%
-          // effW, right ≥260 ≤60% effW): the stored px may come from a bigger monitor,
-          // and replaying it raw zeroed the center pane until React re-clamped.
-          // Nothing stored (a never-dragged install) seeds the hook's proportional
-          // default (0.18/0.22 · effW, same clamps) — skipping the seed left the :root
-          // 300/360px fallbacks up for the first paint, so EVERY launch jumped when
-          // React published the real default (~319px wider at 3440w). Storage itself
-          // stays untouched either way (writes happen only on operator commit/reset).
-          var lw = Number(localStorage.getItem('tempo-left-rail-w'))
-          if (!(lw > 0)) lw = Math.round(ew * 0.18)
-          d.style.setProperty('--left-rail-w', Math.max(220, Math.min(Math.round(ew * 0.4), lw)) + 'px')
-          var rw = Number(localStorage.getItem('tempo-right-rail-w'))
-          if (!(rw > 0)) rw = Math.round(ew * 0.22)
-          d.style.setProperty('--right-rail-w', Math.max(260, Math.min(Math.round(ew * 0.6), rw)) + 'px')
+          // Rail preseed: a copy of usePaneWidths' fitRails, held to it by
+          // index-preseed.test.ts. Each rail within its own bounds (left ≥220 ≤40% effW,
+          // right ≥260 ≤60% effW), then the PAIR within what the conversation between
+          // them leaves (effW less 160 px of chrome and its 360 px floor, rounded down):
+          // the stored px may come from a bigger monitor, and two rails clamped only
+          // one by one could add up to the whole window. If the pair does not fit, the
+          // rail set last (tempo-rail-last) keeps its width, else both shrink in
+          // proportion; below the floors both hold 220/260. Nothing stored (a
+          // never-dragged install) seeds the hook's proportional default (0.18/0.22 ·
+          // effW) — skipping the seed left the :root 300/360px fallbacks up for the first
+          // paint, so EVERY launch jumped when React published the real default (~319px
+          // wider at 3440w). Storage itself stays untouched either way (writes happen
+          // only on operator commit/reset).
+          var lp = Number(localStorage.getItem('tempo-left-rail-w'))
+          var rp = Number(localStorage.getItem('tempo-right-rail-w'))
+          var ls = isFinite(lp) && lp > 0
+          var rs = isFinite(rp) && rp > 0
+          var rlast = localStorage.getItem('tempo-rail-last')
+          var lw = Math.max(220, Math.min(Math.round(ew * 0.4), ls ? lp : Math.round(ew * 0.18)))
+          var rw = Math.max(260, Math.min(Math.round(ew * 0.6), rs ? rp : Math.round(ew * 0.22)))
+          var room = Math.floor(ew - 160 - 360)
+          if (lw + rw > room) {
+            if (room < 480) {
+              lw = 220
+              rw = 260
+            } else {
+              var ranchor = (rlast === 'left' && ls) || (rlast === 'right' && rs) ? rlast : ls && !rs ? 'left' : rs && !ls ? 'right' : null
+              if (ranchor === 'left') {
+                lw = Math.min(lw, room - 260)
+                rw = Math.max(260, Math.min(rw, room - lw))
+              } else if (ranchor === 'right') {
+                rw = Math.min(rw, room - 220)
+                lw = Math.max(220, Math.min(lw, room - rw))
+              } else {
+                var rk = room / (lw + rw)
+                var sl = Math.floor(lw * rk)
+                var sr = Math.floor(rw * rk)
+                if (sl < 220) {
+                  sl = 220
+                  sr = Math.min(rw, room - 220)
+                } else if (sr < 260) {
+                  sr = 260
+                  sl = Math.min(lw, room - 260)
+                }
+                lw = sl
+                rw = sr
+              }
+            }
+          }
+          d.style.setProperty('--left-rail-w', lw + 'px')
+          d.style.setProperty('--right-rail-w', rw + 'px')
         } catch (e) {}
       })()
     </script>

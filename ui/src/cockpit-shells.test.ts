@@ -6,7 +6,7 @@ import {
   SCOPE_SPLIT_MAX,
   SCOPE_SPLIT_MIN,
   type SplitClamp,
-} from './components/Splitter'
+} from './features/paneSeam'
 
 // Guards the DEFICIT VALVE (2026-07-30 layout assessment, mechanism C1/C2): every
 // non-Operate cockpit shell must resolve to `overflow-y: auto` so a genuine vertical
@@ -594,6 +594,56 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
   }
 })
 
+/** Final flex-shrink a block computes (longhand + shorthand, in-block order). */
+function blockShrink(body: string): number | null {
+  let shrink: number | null = null
+  for (const decl of body.split(';')) {
+    let m = /^\s*flex-shrink\s*:\s*([\d.]+)/.exec(decl)
+    if (m) {
+      shrink = parseFloat(m[1])
+      continue
+    }
+    m = /^\s*flex\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+    if (!m) continue
+    const v = m[1]
+    if (v === 'none' || v === 'initial') shrink = v === 'none' ? 0 : 1
+    else if (v === 'auto') shrink = 1
+    else {
+      const parts = v.split(/\s+/)
+      // flex: <grow> [<shrink>? <basis>?] — a second NUMBER is the shrink; one value
+      // or <grow> <basis> leaves shrink at its shorthand default of 1.
+      shrink = parts.length >= 2 && /^[\d.]+$/.test(parts[1]) ? parseFloat(parts[1]) : 1
+    }
+  }
+  return shrink
+}
+
+describe('a strip divider keeps its 8 px in an overfull column (winning flex-shrink is 0)', () => {
+  // The divider under a scope or waterfall strip (PaneSeam, `.pane-splitter.horizontal`) is a flex
+  // item of the strip's column. With the default `flex: 0 1 auto` it gave up its own height when
+  // the column overran: measured in Chrome at 1024×768, Phone's thinned to 4.8 CSS px when dragged
+  // past the scope's ceiling. And PaneSeam measures the strip's ceiling by painting a basis no box
+  // can take, which collapsed the divider to 0.02 px and read a ceiling 8 px above the one the
+  // strip really stops at. Pinned, like the split divider (`.pane-splitter.seam`): it never shrinks.
+  const STRIPS: Array<[string, string[]]> = [
+    ['phone-cockpit', []],
+    ['cw-cockpit', []],
+    ['operate-cockpit', ['cockpit-body']],
+  ]
+  for (const [shell, between] of STRIPS) {
+    it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
+      const chain = [...shellChain(shell), ...between.map((c) => new Set([c])), new Set(['pane-splitter', 'horizontal'])]
+      const win = winningValue(chain, blockShrink)
+      expect(win, `.${shell} .pane-splitter.horizontal: no rule declares its flex — it shrinks by default`).not.toBeNull()
+      expect(
+        win!.value,
+        `\`${win!.selector}\` leaves the ${shell} strip divider shrinkable (flex-shrink ${win!.value}): it ` +
+          'thins in an overfull column, and the strip ceiling PaneSeam measures comes out its own height too high.',
+      ).toBe(0)
+    })
+  }
+})
+
 describe('the scope splitter drag is respected (winning flex-grow is 0)', () => {
   // The Splitter (PhoneCockpit.tsx ~728 / CwCockpit) drives --ph-scope-h / --cw-scope-h
   // as the scope's flex-BASIS. A basis only sets the rendered height while flex-grow
@@ -625,30 +675,6 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
   // winner for each row that keys the rig, so loosening either layer alone fails a test
   // (fix-round D4, 2026-07-31). Chains include .cockpit-txdock as the parent; its own
   // sizing rules live in the other sheet, which this scan deliberately cannot see.
-
-  /** Final flex-shrink a block computes (longhand + shorthand, in-block order). */
-  function blockShrink(body: string): number | null {
-    let shrink: number | null = null
-    for (const decl of body.split(';')) {
-      let m = /^\s*flex-shrink\s*:\s*([\d.]+)/.exec(decl)
-      if (m) {
-        shrink = parseFloat(m[1])
-        continue
-      }
-      m = /^\s*flex\s*:\s*(\S[^]*?)\s*$/.exec(decl)
-      if (!m) continue
-      const v = m[1]
-      if (v === 'none' || v === 'initial') shrink = v === 'none' ? 0 : 1
-      else if (v === 'auto') shrink = 1
-      else {
-        const parts = v.split(/\s+/)
-        // flex: <grow> [<shrink>? <basis>?] — a second NUMBER is the shrink; one value
-        // or <grow> <basis> leaves shrink at its shorthand default of 1.
-        shrink = parts.length >= 2 && /^[\d.]+$/.test(parts[1]) ? parseFloat(parts[1]) : 1
-      }
-    }
-    return shrink
-  }
 
   const ROWS: Array<[string, string, string[]]> = [
     ['phone-cockpit', 'ph-ptt-row', ['ph-ptt-row']],
@@ -1061,17 +1087,17 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
   ]
   const DECLARED: Record<string, SplitClamp> = { SCOPE_SPLIT_MIN, SCOPE_SPLIT_MAX }
 
-  /** The `<Splitter …/>` that drives `varName`, as prop → source expression. */
+  /** The `<PaneSeam …/>` that drives `varName`, as prop → source expression. */
   function splitterProps(src: string, varName: string): Record<string, string> {
     const at = src.indexOf(`varName="${varName}"`)
-    expect(at, `no <Splitter varName="${varName}" …> in the source`).toBeGreaterThan(-1)
-    const el = src.slice(src.lastIndexOf('<Splitter', at), src.indexOf('/>', at))
+    expect(at, `no <PaneSeam varName="${varName}" …> in the source`).toBeGreaterThan(-1)
+    const el = src.slice(src.lastIndexOf('<PaneSeam', at), src.indexOf('/>', at))
     const out: Record<string, string> = {}
     for (const m of el.matchAll(/(\w+)=\{([^{}]*)\}/g)) out[m[1]] = m[2].trim()
     return out
   }
 
-  /** Resolve a declared clamp to CSS px the way Splitter.tsx does: an exported
+  /** Resolve a declared clamp to CSS px the way PaneSeam does: an exported
    *  SplitClamp by name, else a px literal. */
   function declaredPx(expr: string | undefined, g: Geom): number | null {
     if (expr === undefined) return null
@@ -1111,7 +1137,7 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
               `${prop}: ${sheet!.value} }\` honours ${want}px at font ${g.fontPx}px / --vh-eff ` +
               `${g.vhEff}px. The ${Math.abs(got! - want!).toFixed(1)}px of disagreement is DEAD ` +
               'TRAVEL at that end of the drag — declare the clamp in the sheet\'s own units ' +
-              '(SCOPE_SPLIT_MIN / SCOPE_SPLIT_MAX in Splitter.tsx).',
+              '(SCOPE_SPLIT_MIN / SCOPE_SPLIT_MAX in features/paneSeam.ts).',
           ).toBeCloseTo(want!, 6)
         }
       })

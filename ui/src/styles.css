@@ -3651,6 +3651,576 @@ body.resizing-row {
   /* The light --need-* inks do NOT live here — see the palette further down. */
 }
 
+/* ---- THEMES: the built-in themes (Settings ▸ Appearance ▸ Theme; features/skins.ts) ---------
+   Operator picks, 2026-09-27: "All ten", "Keep locked inks", "Per-theme Night", "HC wins
+   surfaces". A theme is an axis over a BASE, never a third `data-theme`: `data-skin='<id>'` sits on
+   <html> beside its base's own `data-theme`, so every [data-theme] component rule in this sheet
+   still applies, and it is ABSENT for Dark, Light and System. A theme retunes the surfaces, the
+   three inks, the accent family, the frequency readout and the display-well trio, and a dark
+   theme also brings the map's basemap (MAP BASEMAP, below, is the standard one). It never
+   declares a locked colour (TX and the ON AIR sign, the critical orange, the status and need
+   sets) or an OK, Amber or Cyan role colour: the signal colours stay the base theme's.
+
+   HERE, BEFORE FIELD MODE, ON PURPOSE. By day a theme's block is (0,2,0) and outranks the (0,1,0)
+   palettes above; at night its (0,3,0) block outranks the (0,2,0) NIGHT defaults. Every block
+   after this point that ties it wins by source order, which is the precedence wanted: High
+   contrast (0,2,0) and High contrast + Night (0,3,0) take the surfaces and inks, so there is one
+   high-contrast look whatever the theme, and each colour-role preset (0,2,0; its night block
+   0,3,0) takes the accent or the readout. A theme is the theme's default; an explicit pick or a
+   readability mode is stronger.
+
+   WELLS. A dark theme's display wells ARE the theme, so each dark block also names
+   `[data-skin='…'] .well` (the dark palette's own pattern). A light theme's wells stay the dark
+   instrument palette and take only its accent and readout.
+
+   The values are features/skins.ts's. styles-skins.test.ts resolves this cascade for every theme
+   in each of its base modes and under every colour-role set, at <html> and inside a well, and
+   fails on a value that is not the table's, a token a theme may not declare, or anything under
+   the floors every theme is held to. Plain hexes, never color-mix(): the map and the canvases
+   read these tokens as strings. */
+/* Amber LCD — black chassis, amber digits, warm-white lit keys */
+[data-theme='dark'][data-skin='amber-lcd'],
+[data-skin='amber-lcd'] .well {
+  --bg: #0c0a07;
+  --panel: #14110c;
+  --bg-elev: #1a160f;
+  --bg-elev-2: #221c13;
+  --border: #3a3020;
+  --border-soft: #2a2418;
+  --text: #f0e6d2;
+  --text-dim: #bfae90;
+  --text-faint: #9a8b70;
+  --accent: #e9dcc3;
+  --accent-ink: #1c1408;
+  --focus-ring: #e9dcc3;
+  --bubble-mine: #565a3a;
+  --bubble-mine-text: #f7efe0;
+  --bubble-theirs: #221c13;
+  --bubble-theirs-text: #f0e6d2;
+  --readout: #fdbe45;
+  --well-bg: #0c0a07;
+  --well-ink: #f0e6d2;
+  --well-grid: #3d3424;
+  --map-ocean: #171310;
+  --map-land: #3a3122;
+  --map-land-globe: #241e14;
+  --map-coast: #8a7a55;
+  --map-state: #5f5440;
+  --map-rim: #3a3020;
+  --map-ocean-lit: #2a241a;
+  --map-ocean-deep: #0a0806;
+}
+[data-theme='dark'][data-night='1'][data-skin='amber-lcd'],
+[data-night='1'][data-skin='amber-lcd'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #c0b49b;
+  --accent-ink: #1c1408;
+  --focus-ring: #c0b49b;
+  --bubble-mine: #444728;
+  --bubble-mine-text: #c8c0b2;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #d9ad48;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #332c23;
+}
+/* Green LCD — black chassis, green phosphor digits */
+[data-theme='dark'][data-skin='green-lcd'],
+[data-skin='green-lcd'] .well {
+  --bg: #070a08;
+  --panel: #0e130f;
+  --bg-elev: #131a14;
+  --bg-elev-2: #1a231b;
+  --border: #24382a;
+  --border-soft: #1a2a1e;
+  --text: #dfeadf;
+  --text-dim: #a3b7a6;
+  --text-faint: #86998a;
+  --accent: #cfe3d1;
+  --accent-ink: #0c1a10;
+  --focus-ring: #cfe3d1;
+  --bubble-mine: #2f5a3d;
+  --bubble-mine-text: #eaf6ec;
+  --bubble-theirs: #1a231b;
+  --bubble-theirs-text: #dfeadf;
+  --readout: #70ec90;
+  --well-bg: #070a08;
+  --well-ink: #dfeadf;
+  --well-grid: #26382b;
+  --map-ocean: #0c1410;
+  --map-land: #22382a;
+  --map-land-globe: #152419;
+  --map-coast: #6f9a7a;
+  --map-state: #4a6b55;
+  --map-rim: #24382a;
+  --map-ocean-lit: #173226;
+  --map-ocean-deep: #060a08;
+}
+[data-theme='dark'][data-night='1'][data-skin='green-lcd'],
+[data-night='1'][data-skin='green-lcd'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #a7baa9;
+  --accent-ink: #0c1a10;
+  --focus-ring: #a7baa9;
+  --bubble-mine: #1d482c;
+  --bubble-mine-text: #bbc7bd;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #62c77b;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #312a21;
+}
+/* Blue VFD — deep navy chassis, blue-white fluorescent digits */
+[data-theme='dark'][data-skin='blue-vfd'],
+[data-skin='blue-vfd'] .well {
+  --bg: #06090f;
+  --panel: #0c1220;
+  --bg-elev: #111a2d;
+  --bg-elev-2: #182440;
+  --border: #263a5e;
+  --border-soft: #1b2b47;
+  --text: #e6eefc;
+  --text-dim: #93a1bb;
+  --text-faint: #8393b3;
+  --accent: #7fb6ff;
+  --accent-ink: #061a3a;
+  --focus-ring: #7fb6ff;
+  --bubble-mine: #2a4d8a;
+  --bubble-mine-text: #eaf2ff;
+  --bubble-theirs: #182440;
+  --bubble-theirs-text: #e6eefc;
+  --readout: #8dc8ff;
+  --well-bg: #06090f;
+  --well-ink: #e6eefc;
+  --well-grid: #2a3f66;
+  --map-ocean: #0b1a33;
+  --map-land: #2a3a55;
+  --map-land-globe: #182640;
+  --map-coast: #7f97bd;
+  --map-state: #546b8f;
+  --map-rim: #263a5e;
+  --map-ocean-lit: #1a3660;
+  --map-ocean-deep: #05091a;
+}
+[data-theme='dark'][data-night='1'][data-skin='blue-vfd'],
+[data-night='1'][data-skin='blue-vfd'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #5f94db;
+  --accent-ink: #061a3a;
+  --focus-ring: #5f94db;
+  --bubble-mine: #193b76;
+  --bubble-mine-text: #bbc3cf;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #6aa4d9;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #3c352c;
+}
+/* Silver chassis — brushed-silver front panel, white displays, dark LCD digits */
+[data-theme='light'][data-skin='silver'] {
+  --bg: #e2e6eb;
+  --panel: #f9fafb;
+  --bg-elev: #f9fafb;
+  --bg-elev-2: #f3f5f7;
+  --border: #9aa3ad;
+  --border-soft: #b9c1ca;
+  --text: #1b1f24;
+  --text-dim: #4a525c;
+  --text-faint: #5b636d;
+  --accent: #3b5a7a;
+  --accent-ink: #ffffff;
+  --focus-ring: #3b5a7a;
+  --bubble-mine: #3b5a7a;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #e6e9ed;
+  --bubble-theirs-text: #1b1f24;
+  --readout: #143d6b;
+}
+[data-skin='silver'] .well {
+  --accent: #a9c0d8;
+  --accent-ink: #0b1a2a;
+  --focus-ring: #a9c0d8;
+  --readout: #9ccbff;
+}
+[data-theme='light'][data-night='1'][data-skin='silver'] {
+  --bg: #eae4da;
+  --panel: #fcf9f1;
+  --bg-elev: #fcf9f1;
+  --bg-elev-2: #f8f4ed;
+  --border: #a39a90;
+  --border-soft: #bfb7ae;
+  --text: #201c17;
+  --text-dim: #554f48;
+  --text-faint: #5f5851;
+  --accent: #325171;
+  --accent-ink: #ffffff;
+  --focus-ring: #325171;
+  --bubble-mine: #325171;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #e2dfdb;
+  --bubble-theirs-text: #201c17;
+  --readout: #0c3664;
+}
+[data-night='1'][data-skin='silver'] .well {
+  --accent: #879db4;
+  --accent-ink: #0b1a2a;
+  --focus-ring: #879db4;
+  --readout: #78a6d8;
+}
+/* Midnight — true black for OLED and dark rooms, cyan lit */
+[data-theme='dark'][data-skin='midnight'],
+[data-skin='midnight'] .well {
+  --bg: #000000;
+  --panel: #0a0a0c;
+  --bg-elev: #101014;
+  --bg-elev-2: #17171c;
+  --border: #2a2a33;
+  --border-soft: #1c1c22;
+  --text: #ececf1;
+  --text-dim: #a9a9b6;
+  --text-faint: #8a8a98;
+  --accent: #4cc9f0;
+  --accent-ink: #06222c;
+  --focus-ring: #4cc9f0;
+  --bubble-mine: #1f5d73;
+  --bubble-mine-text: #eaf7fc;
+  --bubble-theirs: #17171c;
+  --bubble-theirs-text: #ececf1;
+  --readout: #4cc9f0;
+  --well-bg: #000000;
+  --well-ink: #ececf1;
+  --well-grid: #2a2a33;
+  --map-ocean: #05070c;
+  --map-land: #1a1f24;
+  --map-land-globe: #111518;
+  --map-coast: #5a6570;
+  --map-state: #3d464f;
+  --map-rim: #1e242b;
+  --map-ocean-lit: #0f1a26;
+  --map-ocean-deep: #000000;
+}
+[data-theme='dark'][data-night='1'][data-skin='midnight'],
+[data-night='1'][data-skin='midnight'] .well {
+  --bg: #000000;
+  --panel: #080706;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #42a7c7;
+  --accent-ink: #001620;
+  --focus-ring: #42a7c7;
+  --bubble-mine: #124658;
+  --bubble-mine-text: #bdc9ce;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #42a7c7;
+  --well-bg: #000000;
+  --well-ink: #bfb4a5;
+  --well-grid: #29231c;
+}
+/* Slate — soft blue-grey editor dark, low glare */
+[data-theme='dark'][data-skin='slate'],
+[data-skin='slate'] .well {
+  --bg: #14181f;
+  --panel: #1b2029;
+  --bg-elev: #222833;
+  --bg-elev-2: #2a3140;
+  --border: #3f4859;
+  --border-soft: #323a49;
+  --text: #e5ebf3;
+  --text-dim: #a6b2c2;
+  --text-faint: #9aa7b8;
+  --accent: #88c4d6;
+  --accent-ink: #0e2a33;
+  --focus-ring: #88c4d6;
+  --bubble-mine: #3e6f7f;
+  --bubble-mine-text: #eef8fb;
+  --bubble-theirs: #2a3140;
+  --bubble-theirs-text: #e5ebf3;
+  --readout: #66cff8;
+  --well-bg: #14181f;
+  --well-ink: #e5ebf3;
+  --well-grid: #3f4859;
+  --map-ocean: #1b2330;
+  --map-land: #3a4656;
+  --map-land-globe: #26303d;
+  --map-coast: #8797aa;
+  --map-state: #5c6d82;
+  --map-rim: #3a4656;
+  --map-ocean-lit: #283a4f;
+  --map-ocean-deep: #0f141b;
+}
+[data-theme='dark'][data-night='1'][data-skin='slate'],
+[data-night='1'][data-skin='slate'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #66a1b3;
+  --accent-ink: #0e2a33;
+  --focus-ring: #66a1b3;
+  --bubble-mine: #275968;
+  --bubble-mine-text: #bfc8cb;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #3dabd2;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #443c33;
+}
+/* Lagoon — deep teal dark with soft sea-green inks */
+[data-theme='dark'][data-skin='lagoon'],
+[data-skin='lagoon'] .well {
+  --bg: #001a20;
+  --panel: #02252d;
+  --bg-elev: #063039;
+  --bg-elev-2: #0b3a44;
+  --border: #1a5560;
+  --border-soft: #0f434e;
+  --text: #e3eeeb;
+  --text-dim: #9fb9b3;
+  --text-faint: #8aa5a1;
+  --accent: #66d1d6;
+  --accent-ink: #04252a;
+  --focus-ring: #66d1d6;
+  --bubble-mine: #135a63;
+  --bubble-mine-text: #e6f7f7;
+  --bubble-theirs: #0b3a44;
+  --bubble-theirs-text: #e3eeeb;
+  --readout: #66e2ea;
+  --well-bg: #001a20;
+  --well-ink: #e3eeeb;
+  --well-grid: #1a5560;
+  --map-ocean: #04303a;
+  --map-land: #1e4a3d;
+  --map-land-globe: #123328;
+  --map-coast: #6fa39a;
+  --map-state: #4d7a72;
+  --map-rim: #1a5560;
+  --map-ocean-lit: #0f4a56;
+  --map-ocean-deep: #001318;
+}
+[data-theme='dark'][data-night='1'][data-skin='lagoon'],
+[data-night='1'][data-skin='lagoon'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #3eadb2;
+  --accent-ink: #04252a;
+  --focus-ring: #3eadb2;
+  --bubble-mine: #004851;
+  --bubble-mine-text: #b7c8c8;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #37bbc3;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #474037;
+}
+/* Ember — warm sepia dark with amber digits and aqua keys */
+[data-theme='dark'][data-skin='ember'],
+[data-skin='ember'] .well {
+  --bg: #1a1613;
+  --panel: #221d19;
+  --bg-elev: #2a2420;
+  --bg-elev-2: #332c27;
+  --border: #4a3f37;
+  --border-soft: #3a322c;
+  --text: #efe3d0;
+  --text-dim: #c2b39c;
+  --text-faint: #a3947e;
+  --accent: #89c4c0;
+  --accent-ink: #0d2624;
+  --focus-ring: #89c4c0;
+  --bubble-mine: #3f6360;
+  --bubble-mine-text: #eaf5f4;
+  --bubble-theirs: #332c27;
+  --bubble-theirs-text: #efe3d0;
+  --readout: #f5b83d;
+  --well-bg: #1a1613;
+  --well-ink: #efe3d0;
+  --well-grid: #4a3f37;
+  --map-ocean: #1f1b18;
+  --map-land: #4a3d2f;
+  --map-land-globe: #2e261e;
+  --map-coast: #a08a6a;
+  --map-state: #6f5f4c;
+  --map-rim: #4a3f37;
+  --map-ocean-lit: #33291f;
+  --map-ocean-deep: #0f0c0a;
+}
+[data-theme='dark'][data-night='1'][data-skin='ember'],
+[data-night='1'][data-skin='ember'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #67a29e;
+  --accent-ink: #0d2624;
+  --focus-ring: #67a29e;
+  --bubble-mine: #2c4f4c;
+  --bubble-mine-text: #bbc6c5;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #d9ad48;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #3e362e;
+}
+/* Nebula — violet-tinted dark with lavender keys and digits */
+[data-theme='dark'][data-skin='nebula'],
+[data-skin='nebula'] .well {
+  --bg: #16151e;
+  --panel: #1e1c28;
+  --bg-elev: #262333;
+  --bg-elev-2: #2f2b3f;
+  --border: #47415f;
+  --border-soft: #38334d;
+  --text: #eee9fb;
+  --text-dim: #a69dbf;
+  --text-faint: #9990b4;
+  --accent: #b79bfa;
+  --accent-ink: #22183a;
+  --focus-ring: #b79bfa;
+  --bubble-mine: #56477f;
+  --bubble-mine-text: #f4f2fd;
+  --bubble-theirs: #2f2b3f;
+  --bubble-theirs-text: #eee9fb;
+  --readout: #bf9bfc;
+  --well-bg: #16151e;
+  --well-ink: #eee9fb;
+  --well-grid: #47415f;
+  --map-ocean: #1a1730;
+  --map-land: #3a3255;
+  --map-land-globe: #26213d;
+  --map-coast: #8c7fc0;
+  --map-state: #5f568a;
+  --map-rim: #47415f;
+  --map-ocean-lit: #2b2652;
+  --map-ocean-deep: #0c0a18;
+}
+[data-theme='dark'][data-night='1'][data-skin='nebula'],
+[data-night='1'][data-skin='nebula'] .well {
+  --bg: #090604;
+  --panel: #0f0b08;
+  --bg-elev: #110d0a;
+  --bg-elev-2: #191410;
+  --border: #302822;
+  --border-soft: #201b16;
+  --text: #bfb4a5;
+  --text-dim: #9d9284;
+  --text-faint: #8a8073;
+  --accent: #8c75ca;
+  --accent-ink: #170c2b;
+  --focus-ring: #8c75ca;
+  --bubble-mine: #403461;
+  --bubble-mine-text: #c6c4cf;
+  --bubble-theirs: #191410;
+  --bubble-theirs-text: #bfb4a5;
+  --readout: #9e80d0;
+  --well-bg: #090604;
+  --well-ink: #bfb4a5;
+  --well-grid: #423a32;
+}
+/* Paper — warm cream page, white panels, ink-blue keys — low glare */
+[data-theme='light'][data-skin='paper'] {
+  --bg: #ede7d8;
+  --panel: #fcfaf5;
+  --bg-elev: #fcfaf5;
+  --bg-elev-2: #f7f5f0;
+  --border: #c9c0ab;
+  --border-soft: #ddd5c2;
+  --text: #2b2618;
+  --text-dim: #5b5445;
+  --text-faint: #6a6353;
+  --accent: #23629f;
+  --accent-ink: #ffffff;
+  --focus-ring: #23629f;
+  --bubble-mine: #23629f;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #f1ece0;
+  --bubble-theirs-text: #2b2618;
+  --readout: #1f5a90;
+}
+[data-skin='paper'] .well {
+  --accent: #7dc4ff;
+  --accent-ink: #06222c;
+  --focus-ring: #7dc4ff;
+  --readout: #7dc4ff;
+}
+[data-theme='light'][data-night='1'][data-skin='paper'] {
+  --bg: #eae4da;
+  --panel: #fcf9f1;
+  --bg-elev: #fcf9f1;
+  --bg-elev-2: #f8f4ed;
+  --border: #c5bcb0;
+  --border-soft: #d6cec3;
+  --text: #26211a;
+  --text-dim: #554f48;
+  --text-faint: #5f5851;
+  --accent: #175894;
+  --accent-ink: #ffffff;
+  --focus-ring: #175894;
+  --bubble-mine: #175894;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #efe9df;
+  --bubble-theirs-text: #26211a;
+  --readout: #145186;
+}
+[data-night='1'][data-skin='paper'] .well {
+  --accent: #5aa0d9;
+  --accent-ink: #06222c;
+  --focus-ring: #5aa0d9;
+  --readout: #5aa0d9;
+}
+
 /* ---- FIELD MODE: HIGH-CONTRAST TOKENS (data-contrast='high') -----------
    The outdoor/POTA treatment (field report 2026-08-09: "very difficult to see
    outdoors, even shaded, light or dark mode"). Sun on the panel adds a constant
@@ -3875,6 +4445,35 @@ body.resizing-row {
   color: var(--well-ink);
 }
 
+/* ---- MAP BASEMAP: the map's land and sea (MapView.tsx; features/skins.ts STANDARD_MAP) -------
+   The map bakes its basemap from these tokens: the sea, the land (darker on the globe), the
+   coastlines, the US state borders, the globe's rim and its lit and deep ocean. The standard
+   basemap is dark in BOTH themes on purpose (a map should read as a map, as HamClock's and
+   Geochron's do), so both themes declare the same values, per the layout contract. A dark
+   built-in theme brings its own in its THEMES block; a light one keeps these. Plain hexes: the
+   canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
+:root,
+[data-theme='dark'] {
+  --map-ocean: #0f2334;
+  --map-land: #364a3c;
+  --map-land-globe: #1c2b2a;
+  --map-coast: #6f8a98;
+  --map-state: #4d6675;
+  --map-rim: #2a4254;
+  --map-ocean-lit: #1c4a66;
+  --map-ocean-deep: #06101c;
+}
+[data-theme='light'] {
+  --map-ocean: #0f2334;
+  --map-land: #364a3c;
+  --map-land-globe: #1c2b2a;
+  --map-coast: #6f8a98;
+  --map-state: #4d6675;
+  --map-rim: #2a4254;
+  --map-ocean-lit: #1c4a66;
+  --map-ocean-deep: #06101c;
+}
+
 /* ---- COLOUR ROLES: the operator's picks (Settings ▸ Appearance ▸ Colours) ------------------
    Operator picks, 2026-09-26: "Presets first, hex later" and "Agent picks, you review". Five
    roles, each a named job a colour does, with a few pre-checked presets:
@@ -4034,9 +4633,9 @@ body.resizing-row {
   --band-open: #49d9b9;
 }
 [data-theme='light'][data-ok='teal'] {
-  --snr-strong: #007e68;
-  --rx: #007e68;
-  --band-open: #007e68;
+  --snr-strong: #167469;
+  --rx: #167469;
+  --band-open: #167469;
 }
 [data-theme='dark'][data-ok='mint'],
 [data-ok='mint'] .well {
@@ -4045,9 +4644,9 @@ body.resizing-row {
   --band-open: #84eeb3;
 }
 [data-theme='light'][data-ok='mint'] {
-  --snr-strong: #0d8557;
-  --rx: #0d8557;
-  --band-open: #0d8557;
+  --snr-strong: #1b8662;
+  --rx: #1b8662;
+  --band-open: #1b8662;
 }
 
 /* Amber */
@@ -4424,8 +5023,9 @@ h2 {
   min-width: 0;
 }
 
-/* Draggable pane splitters. Pointer-driven (mouse/touch/pen); they write the
-   --left-rail-w / --right-rail-w CSS vars live during a drag. */
+/* The pane dividers (components/PaneSeam.tsx). Dragged (mouse/touch/pen) or moved from the
+   keyboard (arrows, Home/End, Backspace); the rail ones write the --left-rail-w /
+   --right-rail-w CSS vars live during a drag. */
 .pane-splitter {
   cursor: col-resize;
   width: 8px;
@@ -4444,8 +5044,15 @@ h2 {
   grid-area: split;
 }
 .pane-splitter:hover,
+.pane-splitter:focus-visible,
 body.resizing .pane-splitter {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* A focused divider shows where the keys will act. The ring is drawn inside the box, so a
+   neighbour cannot clip it (the .connect-sep pattern). */
+.pane-splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 body.resizing {
   cursor: col-resize;
@@ -5671,6 +6278,48 @@ select optgroup {
 }
 .theme-card.active .theme-card-line {
   color: inherit;
+}
+/* THE GALLERY — the built-in themes (features/skins.ts) after the three standard cards, in two
+   named groups, "Rig looks" and "Modern". One grid for all three groups, so the cards line up in
+   columns and wrap by the field's width and the text size: at 1024x768 or with Larger text a row
+   holds fewer cards and never clips one. A built-in theme's card adds a swatch of its page, panel,
+   accent and readout, drawn from the table (each chip's `--chip`, set inline), at the card's foot
+   so the swatches of a row line up. */
+.theme-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.theme-gallery .theme-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9em, 1fr));
+}
+.theme-gallery .theme-card {
+  min-width: 0;
+  max-width: none;
+}
+.theme-family {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.theme-family-name {
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.theme-card-swatch {
+  display: flex;
+  gap: 3px;
+  margin-top: auto;
+  padding-top: var(--space-1);
+}
+.theme-card-swatch > span {
+  width: 1.2em;
+  height: 1.2em;
+  border-radius: 3px;
+  background: var(--chip);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 /* Settings ▸ Appearance ▸ Colours: a role's name with its Reset beside it, so the preset chips
    below always get the whole width (a Reset after four chips wrapped on its own at 1920). */
@@ -8333,9 +8982,15 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text);
   cursor: pointer;
 }
-.pota-parklist-import:hover {
+.pota-parklist-import:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Start and Download wear this look too. Start is disabled until a park is typed, and the browser
+   greyed it only while it drew the button itself. */
+.pota-parklist-import:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 /* Persistent Sent/Rcvd captions on the two RST boxes — the placeholders were hidden behind the
    default "59", so the send vs receive side was unlabeled. */
@@ -9160,14 +9815,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    the same fix ("Same small fix as the chip"; the dark theme and the globe's drawing unchanged):
    the select keeps its band on its border, and the board's name, which has no border, on an
    underline in its band's colour (its inline text-decoration-color). The board marks only a name
-   lettered in its band's colour with `data-band-ink`, so a clash keeps its alarm ink. */
+   lettered in its band's colour with `data-band-ink`, so a clash keeps its alarm ink.
+   EVERY BUILT-IN THEME (`[data-skin]`, features/skins.ts) takes the light theme's treatment. The
+   palette reads as lettering only on the standard dark theme's surfaces: on the lighter raised
+   surfaces of Slate, Lagoon, Ember and Nebula the band names fell to 3.7-4.4:1, and a theme may
+   not re-ink a band. One rule for the whole gallery, so a theme never letters a band name in a
+   colour it was not measured against. */
 [data-theme='light'] .band-menu-trigger,
 [data-theme='light'] .freq-control.full .freq-channel,
 [data-theme='light'] .qso-globe-band-pick,
-[data-theme='light'] [data-band-occupancy] [data-band-ink] {
+[data-theme='light'] [data-band-occupancy] [data-band-ink],
+[data-skin] .band-menu-trigger,
+[data-skin] .freq-control.full .freq-channel,
+[data-skin] .qso-globe-band-pick,
+[data-skin] [data-band-occupancy] [data-band-ink] {
   color: var(--text) !important;
 }
-[data-theme='light'] [data-band-occupancy] [data-band-ink] {
+[data-theme='light'] [data-band-occupancy] [data-band-ink],
+[data-skin] [data-band-occupancy] [data-band-ink] {
   text-decoration-line: underline;
   text-decoration-thickness: 0.15em;
   text-underline-offset: 0.25em;
@@ -11627,7 +12292,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--state-weak);
   font-size: calc(16px * var(--text-scale));
   line-height: 1;
-  padding: 0 var(--space-1);
+  /* A face of its own, as the SSTV overlay's remove has: the browser's grey read 1.57:1 under this
+     red in the dark theme. The same box as the browser's 2px border (1px of it moves into the
+     padding), on the panel's colour, where the red clears 4.5:1 in every theme. */
+  padding: 1px calc(var(--space-1) + 1px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 .watchlist-remove:hover {
   color: #fff;
@@ -15390,8 +16061,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* Waterfall: a SHORT full-width strip (a glance tool), not a tall column — the
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
-  /* Height is operator-resizable (the Splitter under it drives --cockpit-wf-h and
-     clamps 88–420 px); 22% stays the untouched default. `flex-shrink:1` + no px
+  /* Height is operator-resizable (the PaneSeam under it drives --cockpit-wf-h and
+     clamps 88–420 px, and to what this rule honours); 22% stays the untouched default. `flex-shrink:1` + no px
      floor + a max lets it YIELD on short windows instead of starving the lists
      below — the fit-scale keeps it a comfortable size at normal sizes. */
   flex: 0 1 var(--cockpit-wf-h, 22%);
@@ -15434,7 +16105,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    the promoted Rx-Frequency column (decode pane + Tx1–Tx6 machine) | the Stations
    roster. The WSJT-X pair takes ~75% of the width; every track is minmax so no
    min-content floor can force horizontal blow-out. Columns 2/3 consume the
-   --op-col-a/-b fr tokens the column seam (SplitterSeam axis='x') paints on this
+   --op-col-a/-b fr tokens the column seam (a PaneSeam, axis='x') paints on this
    container, so the operator tunes the pair/roster balance by drag; undragged,
    the 0.95fr/0.72fr defaults apply. Tighter 8px gap (density pass). */
 .cockpit-lower.classic {
@@ -15808,7 +16479,7 @@ button.cq-skiptx1.on {
   flex-direction: column;
   gap: var(--space-2);
 }
-/* Column seam (SplitterSeam axis='x'): a full-height grab line over the 8px grid
+/* Column seam (a PaneSeam, axis='x'): a full-height grab line over the 8px grid
    gap between the pair column and the roster. Drags paint --op-col-a/-b on the
    grid container; commit persists via panels.setShares (clamped on load). */
 .cockpit-qsocol > .pane-splitter.col-seam {
@@ -17457,6 +18128,12 @@ button.cq-skiptx1.on {
   background: var(--state-ok);
   padding: 1px 6px;
   border-radius: 999px;
+}
+/* The light theme's amber is a mid-tone: its page colour read 3.6:1 on it as lettering, and
+   3.45-3.5:1 on the Silver and Paper themes' greyer and warmer pages. Black reads 4.8:1 or better
+   on every Amber preset, by day and at night; the dark theme keeps its dark page-coloured letters. */
+[data-theme='light'] .opening-new {
+  color: #000000;
 }
 .opening-mode {
   font-weight: 600;
@@ -21039,7 +21716,7 @@ button.sat-chip:disabled {
   flex: 1;
 }
 
-/* --- Operator-resizable sub-panels (Splitter.tsx) --- */
+/* --- Operator-resizable sub-panels (PaneSeam.tsx) --- */
 /* Per-cockpit scope heights: scoped vars so dragging one cockpit's scope never
    resizes the other (they share .ph-scope-panel). The splitter clamps 100–420 px. */
 .cw-cockpit .ph-scope-panel {
@@ -21073,15 +21750,20 @@ button.sat-chip:disabled {
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
-/* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. */
+/* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. It never
+   shrinks: as a default flex item it gave its own 8 px to an overfull column (thinning to
+   ~5 px under a scope dragged to its ceiling), and PaneSeam's measured ceiling, taken with
+   the strip at a basis no box can take, read the divider's height too high
+   (cockpit-shells.test.ts). */
 .pane-splitter.horizontal {
+  flex: 0 0 auto;
   cursor: row-resize;
   width: auto;
   height: 8px;
   margin: calc(var(--space-1) * -1) 0;
   align-self: stretch;
 }
-/* Sibling-seam variant (SplitterSeam): the grab line BETWEEN two share-driven flex panes in
+/* Sibling-seam variant (a PaneSeam split): the grab line BETWEEN two share-driven flex panes in
    a column. Fixed — never grows or shrinks, so it stays a clean divider while the panes it
    splits do the flexing. */
 .pane-splitter.seam {
@@ -23414,9 +24096,12 @@ button.sat-chip:disabled {
   font-size: calc(15px * var(--text-scale));
   line-height: 1;
   /* A face of its own: the browser's grey read 1.57:1 under this red in the dark theme even on a
-     dark computer. The same box as the browser's 2px border (1px of it moves into the padding). */
+     dark computer. The same box as the browser's 2px border (1px of it moves into the padding).
+     The panel's colour, not the compose box's raised one showing through: on the lighter raised
+     surfaces of the Slate and Lagoon themes the red read 4.2-4.4:1, and on the panel it clears
+     4.5:1 in every theme (in the standard ones the two are all but the same colour). */
   padding: 1px calc(var(--space-1) + 1px);
-  background: transparent;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }

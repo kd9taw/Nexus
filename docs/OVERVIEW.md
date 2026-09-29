@@ -279,7 +279,7 @@ Features, where one pick shapes the feature set via a dependency-aware feature r
 everything stays toggleable later. Declaring a US license class (Technician /
 General / Extra) activates a real transmit lockout against the Part 97 sub-band table (including
 the 2026 60 m rules); non-US operators select Open. Panels tear off into separate OS windows for
-multi-monitor shacks; Light, Dark and System themes, a text size setting and UI scale from 65% to 175%.
+multi-monitor shacks; Light, Dark and System themes and ten ready-made ones (rig looks such as Amber LCD, and softer modern ones), a text size setting and UI scale from 65% to 175%.
 
 ## The Tempo chat layer — TempoFast and TempoDeep
 

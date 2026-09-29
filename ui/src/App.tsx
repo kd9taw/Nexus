@@ -66,6 +66,7 @@ import { foldRetiredWantedList } from './features/watchlistFold'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
+import { useSkin } from './useSkin'
 import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
@@ -85,7 +86,8 @@ import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alert
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
+import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
+import { PaneSeam } from './components/PaneSeam'
 import { TopBar } from './components/TopBar'
 import { StationList } from './components/StationList'
 import { Conversation } from './components/Conversation'
@@ -155,6 +157,7 @@ import {
 } from './features/memories'
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
+import { sameCall } from './callsign'
 import { processFlare, effectiveXray } from './flareAlert'
 import { processPotaAlert } from './features/potaAlert'
 import { processStorm, processStormForecast } from './stormAlert'
@@ -280,6 +283,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const spotsRead = useRemoteCollection('spots')
   const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
   const [theme, setTheme, themeChoice] = useTheme()
+  // The built-in themes (Settings ▸ Appearance ▸ Theme): App is the one writer of `data-skin`,
+  // and Settings is handed the theme and the setter, the same way it gets the theme.
+  const [skin, setSkin] = useSkin(theme)
   // The contrast axis: field mode (outdoor/POTA) and the standing high-contrast preference
   // (#215). Both set data-contrast on <html>; only field mode is handed to useScale, because
   // only it carries the larger auto-fit. Global — facts about the station, like the theme.
@@ -317,8 +323,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
-  const { commitLeft, commitRight, resetWidths } = usePaneWidths(scale)
-  const layoutRef = useRef<HTMLElement>(null)
+  const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
+    usePaneWidths(scale)
   const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
@@ -1387,7 +1393,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // the self-QSO, but without this the command still returns a snapshot and
       // we'd flash a FALSE "Working KD9TAW" success toast.
       const me = mycallRef.current.trim().toUpperCase()
-      if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
+      if (me && sameCall(call, me)) {
         pushToast(t('shell.ownCall', { call }), 'info', 2500)
         return
       }
@@ -1759,7 +1765,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // Same own-call guard as handleCall — the engine no-ops on a self-target
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
-    if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
+    if (me && sameCall(call, me)) {
       pushToast(t('shell.ownCall', { call }), 'info', 2500)
       return
     }
@@ -2711,37 +2717,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     />
   )
 
-  // Pane resize: dragging a splitter writes the rail-width CSS var directly each
-  // frame (no React re-render), then commits (clamp + persist) on pointer-up.
-  // One Pointer-Events path covers mouse, touch, and pen.
-  const startResize =
-    (side: 'left' | 'right') => (e: React.PointerEvent<HTMLDivElement>) => {
-      const el = layoutRef.current
-      if (!el) return
-      e.preventDefault()
-      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-      const rect = el.getBoundingClientRect()
-      const GAP = 12 // .layout padding; keeps the rail edge under the pointer
-      const root = document.documentElement.style
-      document.body.classList.add('resizing')
-      const widthFor = (clientX: number) =>
-        side === 'right' ? rect.right - GAP - clientX : clientX - rect.left - GAP
-      const move = (ev: PointerEvent) => {
-        const w = widthFor(ev.clientX)
-        root.setProperty(side === 'right' ? '--right-rail-w' : '--left-rail-w', `${
-          side === 'right' ? clampRight(w) : clampLeft(w)
-        }px`)
-      }
-      const up = (ev: PointerEvent) => {
-        if (side === 'right') commitRight(widthFor(ev.clientX))
-        else commitLeft(widthFor(ev.clientX))
-        window.removeEventListener('pointermove', move)
-        window.removeEventListener('pointerup', up)
-        document.body.classList.remove('resizing')
-      }
-      window.addEventListener('pointermove', move)
-      window.addEventListener('pointerup', up)
-    }
+  // The rail dividers (PaneSeam): a drag paints the rail-width CSS var on <html> directly each
+  // frame (no React re-render), then commits (clamp + persist) once, on release; the arrows,
+  // Home/End and Backspace do the same from the keyboard.
+  const paintRail = (name: '--left-rail-w' | '--right-rail-w') => (px: number) =>
+    document.documentElement.style.setProperty(name, `${px}px`)
 
   const waterfallRail = (
     <aside className="right-rail panel">
@@ -2778,29 +2758,34 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // only narrows on the sm/xs collapse. (This used to claim a `data-layout`
   // top-strip alternative — there was no writer and no CSS behind it.)
   const threePane = (center: JSX.Element, header?: JSX.Element) => (
-    <main
-      className={`layout${header ? ' has-tempo-header' : ''}`}
-      data-three-pane
-      ref={layoutRef}
-    >
+    <main className={`layout${header ? ' has-tempo-header' : ''}`} data-three-pane>
       {header && <div className="grid-header">{header}</div>}
       <div className="grid-stations">{stationsPanel}</div>
-      <div
-        className="pane-splitter left"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('shell.rail.stations.aria')}
-        onPointerDown={startResize('left')}
-        onDoubleClick={resetWidths}
+      <PaneSeam
+        axis="x"
+        className="left"
+        label={t('shell.rail.stations.label')}
+        value={leftW}
+        min={LEFT_MIN}
+        max={leftMax}
+        grows={1}
+        onPaint={paintRail('--left-rail-w')}
+        onCommit={commitLeft}
+        onReset={resetLeft}
       />
       <div className="grid-center">{center}</div>
-      <div
-        className="pane-splitter right"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('shell.rail.waterfall.aria')}
-        onPointerDown={startResize('right')}
-        onDoubleClick={resetWidths}
+      {/* This divider is the waterfall rail's LEFT edge: moving it left widens the rail. */}
+      <PaneSeam
+        axis="x"
+        className="right"
+        label={t('shell.rail.waterfall.label')}
+        value={rightW}
+        min={RIGHT_MIN}
+        max={rightMax}
+        grows={-1}
+        onPaint={paintRail('--right-rail-w')}
+        onCommit={commitRight}
+        onReset={resetRight}
       />
       <div className="grid-waterfall">{waterfallRail}</div>
     </main>
@@ -3042,6 +3027,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onRerunWizard={() => setShowWizard(true)}
             theme={themeChoice}
             onThemeChange={setTheme}
+            skin={skin}
+            onSkinChange={setSkin}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}

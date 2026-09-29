@@ -259,6 +259,50 @@ describe('Night (Settings ▸ Appearance ▸ Workspace ▸ Night)', () => {
   })
 })
 
+describe('a built-in theme (Settings ▸ Appearance ▸ Theme)', () => {
+  // Operator pick of 2026-09-27, "Yes, on Auto": an Auto waterfall paints the theme's own palette
+  // (features/skins.ts). The attribute is set the way useSkin sets it, and the event is its own.
+  const skin = (id: string | null) =>
+    act(async () => {
+      if (id) document.documentElement.setAttribute('data-skin', id)
+      else document.documentElement.removeAttribute('data-skin')
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+  const legend = (root: ParentNode) => (root.querySelector('.wf-legend-bar') as HTMLElement).style.background
+  const byName = (palette: string) => {
+    localStorage.setItem('nexus.waterfall.palette', palette)
+    const r = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    const out = legend(r.container)
+    r.unmount()
+    return out
+  }
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-skin')
+    localStorage.removeItem('nexus.waterfall.palette')
+  })
+
+  it('an Auto waterfall takes the theme’s palette, and the standard one back when the theme goes', async () => {
+    const GREEN = byName('sdr-green')
+    expect(GREEN, 'CONTROL: the legend paints a gradient').toMatch(/^linear-gradient/)
+    localStorage.setItem('nexus.waterfall.palette', 'auto')
+    const { container } = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    const standard = legend(container)
+    expect(standard, 'CONTROL: Auto on the standard dark theme is not already SDR Green').not.toBe(GREEN)
+    await skin('green-lcd')
+    expect(legend(container)).toBe(GREEN)
+    await skin(null)
+    expect(legend(container)).toBe(standard)
+  })
+
+  it('never overrides a palette picked by name', async () => {
+    localStorage.setItem('nexus.waterfall.palette', 'turbo')
+    const { container } = render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" />)
+    const turbo = legend(container)
+    await skin('amber-lcd')
+    expect(legend(container)).toBe(turbo)
+  })
+})
+
 describe('no TX/RX marker literal survives in the canvas code', () => {
   // The literals the markers used to be. A copy of one anywhere in the UI source means a marker
   // (or a named cursor standing in for one) has gone back to ignoring the theme. Styles are not

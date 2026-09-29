@@ -1955,6 +1955,16 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   **System** follows your computer's own light or dark setting and changes when it
   does; Dark is the default. Either way, the top bar's **Field** chip boosts
   contrast and size on top of the theme you picked.
+  Below them are ten ready-made themes, each card with a swatch of its colours. **Rig
+  looks**: Amber LCD, Green LCD, Blue VFD and Silver chassis. **Modern**: Midnight
+  (true black), Slate, Lagoon, Ember, Nebula and Paper. Silver chassis and Paper are
+  light themes and the rest are dark. Picking **Light**, **Dark** or **System** again
+  goes back to a standard theme. Every theme is checked for contrast like the standard
+  two: the scopes and meters stay dark, and the transmit red, the ON AIR sign, alerts,
+  and the signal and Needed colours are the same in every theme. **High contrast** keeps
+  its own look whatever the theme, **Night** dims each theme in its own colours, and a
+  colour you pick in **Colours** wins over the theme's. On a dark theme the map's land,
+  sea and coastlines take the theme's colours; the light themes keep the usual dark map.
 - **High contrast** — Off or On. Strengthens text against its background in
   whichever theme you are using, and changes nothing else — the interface stays
   exactly the size you have set it. This is the one to reach for if the screen
@@ -2017,7 +2027,11 @@ same thing.
 **Turbo** is the default for both, and a palette you picked stays picked.
 **Cividis** is the colour-blind-safe choice: it looks almost the same to
 red-green colour-blind eyes as to everyone else. **Auto** follows the theme, and
-turns Amber CRT while Night is on. Remembered per computer.
+turns Amber CRT while Night is on. On one of the ready-made themes, Auto is that
+theme's own palette: Amber CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue
+VFD, Viridis on Silver chassis, Slate and Lagoon, Cividis on Paper and Inferno on
+the rest. A palette you picked by name never changes with the theme. Remembered per
+computer.
 
 ### Map & globe
 

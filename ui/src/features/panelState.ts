@@ -467,8 +467,10 @@ export interface PanelLayoutApi<P extends string> {
   /** Set one pane's flex share (clamped to at least MIN_SHARE). */
   setShare: (id: P, value: number) => void
   /** Set several panes' shares in ONE undoable step — a seam drag redistributes the two
-   *  adjacent panes it sits between atomically (a single save + one undo entry). */
-  setShares: (updates: Partial<Record<P, number>>) => void
+   *  adjacent panes it sits between atomically (a single save + one undo entry). A `null`
+   *  CLEARS a pane's share, so it goes back to its stock proportion: the sheet's default,
+   *  which the record never holds (Operate's Band Activity is 1.6 : 1) — a divider's reset. */
+  setShares: (updates: Partial<Record<P, number | null>>) => void
   /** Restore the layout as it was before the last change (one level deep). */
   undo: () => void
   canUndo: boolean
@@ -544,11 +546,13 @@ export function usePanelLayout<P extends string>(
     [apply],
   )
   const setShares = useCallback(
-    (updates: Partial<Record<P, number>>) =>
+    (updates: Partial<Record<P, number | null>>) =>
       apply((cur) => {
         const share: Partial<Record<P, number>> = { ...cur.share }
         for (const [id, v] of Object.entries(updates)) {
-          if (typeof v === 'number' && Number.isFinite(v)) {
+          if (v === null) {
+            delete share[id as P]
+          } else if (typeof v === 'number' && Number.isFinite(v)) {
             share[id as P] = Math.max(MIN_SHARE, v)
           }
         }

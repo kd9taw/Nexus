@@ -90,12 +90,14 @@ const subscribe = (onChange: () => void) => {
   window.addEventListener(PALETTE_EVENT, onChange)
   return () => window.removeEventListener(PALETTE_EVENT, onChange)
 }
-// Night (useNight.ts) retunes the same kind of token without being a role, and fires the same
-// event, so it is part of the key: a canvas that cached a day colour must repaint at dusk.
+// Night (useNight.ts) and the built-in themes (useSkin.ts) retune the same kind of token without
+// being roles, and fire the same event, so they are part of the key: a canvas that cached a day
+// colour must repaint at dusk, and one that cached a theme's must repaint when the theme changes.
 const snapshot = () =>
-  [...PALETTE_ROLES.map((r) => r.attr), 'data-night'].map((a) => document.documentElement.getAttribute(a) ?? '').join('|')
+  [...PALETTE_ROLES.map((r) => r.attr), 'data-night', 'data-skin'].map((a) => document.documentElement.getAttribute(a) ?? '').join('|')
 
-/** A string that changes exactly when a colour attribute on <html> does: a colour role, or Night. */
+/** A string that changes exactly when a colour attribute on <html> does: a colour role, Night, or
+ *  a built-in theme. */
 export function usePaletteKey(): string {
   return useSyncExternalStore(subscribe, snapshot, snapshot)
 }

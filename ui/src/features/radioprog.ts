@@ -6,6 +6,7 @@
 
 import type { ProgChannel, RepeaterRecord } from '../types'
 import type { Memory } from './memories'
+import { baseCall } from '../callsign'
 
 /** Per-radio channel-name display caps (the header "Max name" select). */
 export const NAME_CAPS = [
@@ -72,7 +73,7 @@ export function deriveNames(
   cap: number,
 ): string[] {
   // Strip /R-style suffixes — the base call is what operators call the machine.
-  const calls = rows.map((r) => sanitizeName(r.callsign.split('/')[0] ?? '', cap))
+  const calls = rows.map((r) => sanitizeName(baseCall(r.callsign), cap))
   const counts = new Map<string, number>()
   for (const c of calls) {
     if (c) counts.set(c, (counts.get(c) ?? 0) + 1)
@@ -182,7 +183,7 @@ export function rigRepeaterParams(c: ProgChannel): {
  * export), and the tail keeps a club's 2 m and 70 cm machines apart in the
  * cockpit strip. Falls back to the record's own name when there's no callsign. */
 export function favoriteName(c: ProgChannel): string {
-  const call = (c.source?.callsign ?? '').split('/')[0]?.trim().toUpperCase() ?? ''
+  const call = baseCall(c.source?.callsign ?? '')
   return call ? `${call} ${freqTail(c.rxMhz)}` : c.name
 }
 

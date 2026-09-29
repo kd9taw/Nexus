@@ -1167,3 +1167,46 @@ fn a5_after_dtls_a_mismatched_certificate_ends_the_session_before_any_input_or_p
         "control: the hold reaches the PTT"
     );
 }
+
+/// ★ P5: a streamed page hears the station while a browser Listens on the relay, both through the
+/// station's one encoder. Before the fan-out, the stream's `audio` channel was refused `audioInUse`
+/// while the Listen lane held the feed's one reader.
+#[cfg(feature = "radio")]
+#[test]
+fn the_stream_hears_the_station_while_the_listen_lane_does() {
+    use crate::remote_service::audio::{AudioLane, ReceiveFanout};
+    use tempo_audio::receive_encode::{DetachedFeed, FRAME_MS};
+    let now = Instant::now();
+    let mut f = fixture(now);
+    let feed = DetachedFeed::new(48_000);
+    let receive = ReceiveFanout::new(feed.feed.clone());
+    f.station.audio = Some(receive.clone());
+    // The relay's Listen lane is already listening.
+    let mut listen = AudioLane::default();
+    listen
+        .start(&receive, SESSION, DEVICE, &f.lease, now)
+        .unwrap();
+    let mut streaming = verified_stream(&f, now);
+    let said: Value = serde_json::from_str(&streaming.audio_open(now)).unwrap();
+    assert_eq!(
+        said,
+        serde_json::json!({"type": "audioState", "listening": true}),
+        "the stream was refused while the Listen lane listened"
+    );
+    // Both are fed, bundle for bundle.
+    let tick = 48_000 * FRAME_MS as usize / 1000;
+    let (mut heard, mut streamed) = (0, 0);
+    for k in 0..30 {
+        let at = now + Duration::from_millis(FRAME_MS * k as u64);
+        let tone: Vec<f32> = (0..tick)
+            .map(|i| 0.3 * (((k * tick + i) as f32) * 0.09).sin())
+            .collect();
+        feed.publish(at, &tone);
+        heard += usize::from(listen.poll(at, true).message.is_some());
+        streamed += usize::from(streaming.audio_due(at).is_some());
+    }
+    assert!(
+        heard >= 8 && streamed == heard,
+        "the Listen lane sent {heard} bundles and the stream {streamed}"
+    );
+}

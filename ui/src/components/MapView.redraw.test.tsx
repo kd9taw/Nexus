@@ -39,6 +39,7 @@ vi.mock('../mapGeo', async (importOriginal) => {
 
 import { MapView } from './MapView'
 import { PALETTE_EVENT } from '../usePaletteRoles'
+import { MAP_TOKENS, SKINS, STANDARD_MAP } from '../features/skins'
 
 class RO {
   observe() {}
@@ -48,6 +49,8 @@ class RO {
 
 /** Per-canvas call counts, by context method name. */
 const calls = new WeakMap<HTMLCanvasElement, Map<string, number>>()
+/** Every fill and stroke colour any canvas was handed, in order: what the map painted with. */
+const inks: string[] = []
 function recordingContext(canvas: HTMLCanvasElement) {
   const counts = new Map<string, number>()
   calls.set(canvas, counts)
@@ -59,11 +62,13 @@ function recordingContext(canvas: HTMLCanvasElement) {
       return (..._args: unknown[]) => {
         counts.set(String(k), (counts.get(String(k)) ?? 0) + 1)
         if (k === 'measureText') return { width: 0 }
-        return { addColorStop() {} }
+        // A gradient's stops are colours the map paints with too (the globe's sea).
+        return { addColorStop: (_at: number, colour: unknown) => void (typeof colour === 'string' && inks.push(colour)) }
       }
     },
     set: (t, k, v) => {
       t[k] = v
+      if ((k === 'fillStyle' || k === 'strokeStyle') && typeof v === 'string') inks.push(v)
       return true
     },
   })
@@ -72,6 +77,7 @@ function recordingContext(canvas: HTMLCanvasElement) {
 beforeEach(() => {
   localStorage.clear()
   basemapCalls.n = 0
+  inks.length = 0
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   const ctxs = new WeakMap<HTMLCanvasElement, unknown>()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
@@ -244,5 +250,44 @@ describe('MapView redraws when a colour role changes (Settings ▸ Appearance �
       window.dispatchEvent(new Event(PALETTE_EVENT))
     })
     expect(redraws(r.container)).toBe(first)
+  })
+})
+
+describe('the base map is the theme’s (Settings ▸ Appearance ▸ Theme)', () => {
+  // The basemap's colours are tokens (styles.css MAP BASEMAP); a dark built-in theme brings its
+  // own (features/skins.ts). jsdom loads no sheet, so a token is set the way the sheet would
+  // resolve it, on <html>, and the theme attribute and event are useSkin's.
+  const root = document.documentElement
+  afterEach(() => {
+    for (const t of MAP_TOKENS) root.style.removeProperty(t)
+    root.removeAttribute('data-skin')
+  })
+
+  it('with no sheet it paints the standard basemap', async () => {
+    await act(async () => {
+      render(<MapView {...props(ROSTER)} />)
+    })
+    // The map opens on the globe: its sea is a gradient of three of them, its land the globe's.
+    for (const t of ['--map-ocean', '--map-ocean-lit', '--map-ocean-deep', '--map-land-globe', '--map-rim'] as const) {
+      expect(inks, t).toContain(STANDARD_MAP[t])
+    }
+  })
+
+  it('a built-in theme re-bakes the cached base map in its own land and sea', async () => {
+    await act(async () => {
+      render(<MapView {...props(ROSTER)} />)
+    })
+    const projected = basemapCalls.n
+    const lagoon = SKINS.find((x) => x.id === 'lagoon')!.map!
+    expect(inks, 'CONTROL: the standard sea is not already Lagoon’s').not.toContain(lagoon['--map-ocean'])
+    await act(async () => {
+      for (const [t, v] of Object.entries(lagoon)) root.style.setProperty(t, v)
+      root.setAttribute('data-skin', 'lagoon')
+      window.dispatchEvent(new Event(PALETTE_EVENT))
+    })
+    expect(basemapCalls.n, 'the base map was not re-baked').toBeGreaterThan(projected)
+    for (const t of ['--map-ocean', '--map-ocean-lit', '--map-ocean-deep', '--map-land-globe', '--map-rim'] as const) {
+      expect(inks, t).toContain(lagoon[t])
+    }
   })
 })
