@@ -12565,10 +12565,16 @@ impl Transport {
         tempo_app::settings::rig_conn_is_omnirig(&self.rig_conn)
     }
 
-    /// Would asking this link's CAT daemon for `RFPOWER` WRITE the radio's power (#381)? Only a
-    /// Hamlib daemon's can, so an OmniRig link, which answers from its own rig file, never does.
-    fn rfpower_read_writes_power(&self) -> bool {
-        !self.is_omnirig() && crate::rigmodels::hamlib_rfpower_read_writes_power(self.rig_model)
+    /// What this link's CAT daemon must never be sent, because the radio's Hamlib driver turns it
+    /// into a different command (#381, #385; [`crate::rigmodels::hamlib_never_send`]). Only a
+    /// Hamlib daemon's driver can, so an OmniRig link, which answers from its own rig file, is
+    /// sent everything.
+    fn hamlib_never_send(&self) -> &'static [(crate::rig::HamlibVerb, &'static str)] {
+        if self.is_omnirig() {
+            &[]
+        } else {
+            crate::rigmodels::hamlib_never_send(self.rig_model)
+        }
     }
 
     /// Which OmniRig slot this transport drives.
@@ -13444,9 +13450,10 @@ fn finish_cat_open(rig: &mut Rig, t: &Transport) -> CatProbe {
 /// Probe a CAT rig by reading its frequency, mapping failures to a concrete,
 /// operator-actionable message (rigctld unreachable vs. rig not answering).
 fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
-    // Every CAT open passes here before its first read, so this is where a connection learns the
-    // one question it must never ask: on these radios a READ of the power sets it (#381).
-    rig.set_rfpower_read_refused(t.rfpower_read_writes_power());
+    // Every CAT open passes here before its first read, so this is where a connection learns what
+    // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
+    // that is MOX and its tuner button that is a menu write (#385).
+    rig.set_never_send(t.hamlib_never_send());
     let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
@@ -17587,6 +17594,128 @@ mod tests {
                 "model {model}: the rest of the poll still runs: {sent:?}"
             );
         }
+    }
+
+    /// ⭐ FAILING-FIRST, THE FTX-1 COMMAND SET (#385). Hamlib 4.7.1's FTX-1 driver (model 1051)
+    /// turns three of Nexus's tokens into commands Yaesu's FTX-1 CAT reference defines as
+    /// something else — executed against a fake FTX-1 and read off the wire:
+    ///  * `MON` → `MX` (`ftx1_tx.c`, "Set TX Monitor (MX P1;)"). Yaesu: **MX is MOX**. `U MON 1`
+    ///    sends `MX1;` and the radio TRANSMITS, past every guard Nexus has, because to Nexus it
+    ///    is a DSP switch. `u MON` reads the MOX state.
+    ///  * `MONITOR_GAIN` → `ML0` (`ftx1_audio.c`, P1 taken as the VFO). Yaesu: `ML0` is the
+    ///    monitor's ON/OFF and the level is `ML1`, so the read is a switch shown as a level and
+    ///    a write puts 000-100 into the switch.
+    ///  * `TUNER` → `EX030104`: menu OPERATION SETTING › GENERAL › TUNER SELECT (INT / INT FAST /
+    ///    EXT / ATAS). The ATU button's `U TUNER 2` is clamped to 1 and rewrites the operator's
+    ///    tuner type to INT (FAST), tunes nothing, and the radio "took it".
+    ///
+    /// None is new, but the heavy poll never reached `u MON` or `l MONITOR_GAIN` on this radio
+    /// before its reads started getting their turn (#385), and a reachable reading makes its
+    /// control live. So the connection, like the TS-590S's RF power read (#381), must never
+    /// send them — every other FTX-1 command maps as Yaesu's table says and still goes out.
+    #[test]
+    fn an_ftx1_connection_never_sends_what_its_hamlib_driver_turns_into_mox_or_a_menu_write() {
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut s = test_settings();
+        s.rig_model = 1051; // Hamlib's FTX-1
+        let t = Transport::from_settings(&s);
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        let _ = probe_cat(&mut rig, &t);
+        log.lock().unwrap().clear();
+        assert!(
+            rig.set_func("MON", true).is_err(),
+            "U MON 1 is MX1 — MOX ON, the transmitter"
+        );
+        assert_eq!(
+            rig.read_func("MON"),
+            None,
+            "u MON reads MOX, not the monitor"
+        );
+        assert!(
+            rig.read_level("MONITOR_GAIN").is_err(),
+            "l MONITOR_GAIN reads the monitor's on/off, not its level"
+        );
+        assert!(
+            rig.set_monitor_gain(0.5).is_err(),
+            "L MONITOR_GAIN writes a level into the monitor's on/off"
+        );
+        assert_eq!(rig.read_func("TUNER"), None, "u TUNER reads a menu");
+        assert!(
+            matches!(
+                rig.set_func_value("TUNER", ATU_START_TUNE),
+                FuncSet::Refused(_)
+            ),
+            "U TUNER 2 rewrites the TUNER SELECT menu — and nothing went out, so it is a refusal"
+        );
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "none of it reached the daemon: {:?}",
+            log.lock().unwrap()
+        );
+        // The rest of the radio is driven as before.
+        rig.set_func("VOX", true).unwrap();
+        assert_eq!(rig.read_func("NB"), Some(false));
+        assert_eq!(*log.lock().unwrap(), ["U VOX 1", "u NB"]);
+    }
+
+    /// …and through the radio loop: a MON switch request and an ATU press on an FTX-1 put
+    /// nothing on the wire. The engine accepts both, as it does today (a `set_rig_func
+    /// "monitor"` call, and a tuner the base's `u TUNER` probe reported off).
+    #[test]
+    fn the_loop_never_sends_an_ftx1_its_monitor_switch_or_its_tuner_menu() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut s = test_settings();
+        s.rig_model = 1051;
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        let _ = probe_cat(&mut rig, &Transport::from_settings(&s));
+        {
+            let mut e = engine.lock().unwrap();
+            e.request_rig_func("monitor", true);
+            e.observe_rig_tuner(Some(false), true);
+            e.set_tx_enabled(true);
+            e.atu_tune().expect("the engine accepts the press");
+        }
+        let mut state = loop_state();
+        read_back_scene(&engine, &mut state);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        log.lock().unwrap().clear();
+        // With TX armed the first tick asserts the commanded mode (`M PKTUSB`) and skips the
+        // heavy poll, which is where both requests are applied; the next one runs it.
+        let mut now = 100_000.0;
+        for _ in 0..3 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            now += 1_000.0;
+            if log.lock().unwrap().iter().any(|l| l == "f") {
+                break;
+            }
+        }
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            !sent.iter().any(|l| l.starts_with("U MON")),
+            "the monitor switch is MOX on this driver: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("U TUNER")),
+            "the ATU press is a TUNER SELECT menu write on this driver: {sent:?}"
+        );
+        assert!(
+            sent.iter().any(|l| l == "f"),
+            "the poll ran (positive control): {sent:?}"
+        );
     }
 
     #[test]

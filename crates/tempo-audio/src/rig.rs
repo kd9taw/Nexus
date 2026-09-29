@@ -523,11 +523,37 @@ pub struct Rig {
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
     /// loop (and the fast dial poll) for 2.5 s. Default false (serial / local).
     slow_transport: bool,
-    /// Never ask this daemon for `RFPOWER`: its Hamlib backend WRITES the radio's power to answer
-    /// (#381, [`crate::rigmodels::hamlib_rfpower_read_writes_power`]). Default false.
-    rfpower_read_refused: bool,
+    /// The (verb, token) pairs never sent on this link, because the radio's Hamlib driver turns
+    /// them into a different command than the radio's own manual defines — see
+    /// [`crate::rigmodels::hamlib_never_send`]. Empty by default.
+    never_send: &'static [(HamlibVerb, &'static str)],
     #[cfg(test)]
     before_remote_write: Option<Box<dyn FnOnce() + Send>>,
+}
+
+/// What a rigctld line asks: read or write a LEVEL, read or write a FUNC. The short and long
+/// spellings (`l` and `\get_level`, …) are one verb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HamlibVerb {
+    GetLevel,
+    SetLevel,
+    GetFunc,
+    SetFunc,
+}
+
+impl HamlibVerb {
+    /// The verb and the token a command line carries, or `None` for any other line.
+    pub fn of_line(line: &str) -> Option<(HamlibVerb, &str)> {
+        let mut words = line.split_whitespace();
+        let verb = match words.next()? {
+            "l" | "\\get_level" => Self::GetLevel,
+            "L" | "\\set_level" => Self::SetLevel,
+            "u" | "\\get_func" => Self::GetFunc,
+            "U" | "\\set_func" => Self::SetFunc,
+            _ => return None,
+        };
+        Some((verb, words.next()?))
+    }
 }
 
 /// Does this read error mean "nothing was read, try again" rather than "the stream is broken"?
@@ -561,7 +587,7 @@ impl Rig {
             serial: None,
             keyed: false,
             slow_transport: false,
-            rfpower_read_refused: false,
+            never_send: &[],
             #[cfg(test)]
             before_remote_write: None,
         }
@@ -573,17 +599,27 @@ impl Rig {
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
     }
-    /// Refuse every `RFPOWER` read on this link, because answering one writes the radio's power
-    /// (#381). Writes are untouched: a power the operator sets still goes out.
-    pub fn set_rfpower_read_refused(&mut self, refused: bool) {
-        self.rfpower_read_refused = refused;
+    /// Name the (verb, token) pairs this link must never send (#381, #385). Everything else is
+    /// sent as before, so a power or a switch the radio's driver maps correctly still goes out.
+    pub fn set_never_send(&mut self, refused: &'static [(HamlibVerb, &'static str)]) {
+        self.never_send = refused;
     }
-    /// Is `l <name>` a read this link must never send? The two readers that form that line,
-    /// [`Self::read_level`] and [`Self::read_meter_f32_within`], both ask, because the radio's
-    /// power is read through each: the heavy poll and the tune level through the first, the
-    /// Remote level checks through the second.
-    fn refuses_level_read(&self, name: &str) -> bool {
-        self.rfpower_read_refused && name == "RFPOWER"
+    /// Why `line` must not be sent on this link, or `None` when it may. Asked where EVERY
+    /// single-line command passes ([`Self::command_lines`]) — the heavy poll, the tune level,
+    /// the operator's own sets and the Remote checks alike — so no reader or writer can form one
+    /// around it.
+    fn refused_line(&self, line: &str) -> Option<String> {
+        let (verb, token) = HamlibVerb::of_line(line)?;
+        self.never_send
+            .iter()
+            .any(|&(v, t)| v == verb && t == token)
+            .then(|| {
+                format!(
+                    "`{}` is never sent to this radio: its Hamlib driver turns it into a different \
+                     command",
+                    line.trim()
+                )
+            })
     }
     /// Change how this rig is keyed WITHOUT touching its (already-open) CAT control channel. Used by
     /// the dual-radio handoff: a monitor rig is opened read-only (`PttMode::Vox`), so when it's adopted
@@ -703,6 +739,11 @@ impl Rig {
         permission: Option<&WritePermission>,
         expected_lines: usize,
     ) -> std::io::Result<String> {
+        // Before the stream is touched: a refused line never reached the wire, so it is neither a
+        // link failure nor a reason to drop the connection below.
+        if let Some(why) = self.refused_line(line) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, why));
+        }
         match self.command_inner(line, deadline_ms, permission, expected_lines) {
             Ok(reply) => Ok(reply),
             Err(e) => {
@@ -1207,17 +1248,11 @@ impl Rig {
     /// Read a rig LEVEL (e.g. "RFPOWER" → 0.0–1.0) via rigctld `l NAME`.
     /// CAT-only; errors on FakeIt/none like `read_freq`.
     ///
-    /// ⚠️ `RFPOWER` is refused, without a byte on the wire, on a link marked
-    /// [`Self::set_rfpower_read_refused`] — see [`Self::refuses_level_read`].
+    /// ⚠️ A level this link must never read errors without a byte on the wire — see
+    /// [`Self::set_never_send`].
     pub fn read_level(&mut self, name: &str) -> std::io::Result<f32> {
         if self.control.is_none() {
             return Err(std::io::Error::other("not a CAT rig"));
-        }
-        if self.refuses_level_read(name) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "RF power is not read on this radio: its Hamlib driver sets the power to answer",
-            ));
         }
         let reply = self.command(&format!("l {name}\n"))?;
         reply
@@ -1266,9 +1301,6 @@ impl Rig {
     /// waited for. `None` = the transport's normal deadline.
     pub fn read_meter_f32_within(&mut self, name: &str, deadline_ms: Option<u64>) -> Option<f32> {
         self.control.as_ref()?;
-        if self.refuses_level_read(name) {
-            return None;
-        }
         let reply = self
             .command_with_deadline(&format!("l {name}\n"), deadline_ms)
             .ok()?;
@@ -1312,7 +1344,14 @@ impl Rig {
             // Nothing was written, so nothing is acting on it — a refusal, not uncertainty.
             return FuncSet::Refused("not a CAT rig".into());
         }
-        match self.command(&func_line(token, value)) {
+        let line = func_line(token, value);
+        // Refused before the wire, so nothing is acting on it: a refusal, like the one above, and
+        // never the `Uncertain` below — which would stand an FT QSO down for a tune-up that never
+        // started (the FTX-1's `U TUNER` is a menu write, #385).
+        if let Some(why) = self.refused_line(&line) {
+            return FuncSet::Refused(why);
+        }
+        match self.command(&line) {
             Ok(reply) if reply_ok(&reply) => FuncSet::Ok,
             // The rig ANSWERED, and said no. That is a fact about the radio.
             Ok(reply) => FuncSet::Refused(match rprt_code(&reply) {
@@ -2117,7 +2156,7 @@ mod tests {
             _ => "RPRT 0\n".to_string(),
         });
         let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
-        rig.set_rfpower_read_refused(true);
+        rig.set_never_send(&[(HamlibVerb::GetLevel, "RFPOWER")]);
         assert!(rig.read_level("RFPOWER").is_err(), "read_level refuses");
         assert_eq!(
             rig.read_meter_f32("RFPOWER"),
@@ -2134,6 +2173,65 @@ mod tests {
             *log.lock().unwrap(),
             ["l MICGAIN", "L RFPOWER 0.800"],
             "no power read on the wire, and the operator's power write went out"
+        );
+    }
+
+    /// The refusal matches the VERB and the whole TOKEN of a line, in either spelling — and
+    /// nothing else. `l RF` is RF gain, not `l RFPOWER`; a read refusal does not block the write;
+    /// a Sub-receiver line names `Sub`, not the level.
+    #[test]
+    fn a_refusal_matches_the_verb_and_the_whole_token_only() {
+        use HamlibVerb::*;
+        assert_eq!(
+            HamlibVerb::of_line("l RFPOWER\n"),
+            Some((GetLevel, "RFPOWER"))
+        );
+        assert_eq!(
+            HamlibVerb::of_line("\\set_func MON 1\n"),
+            Some((SetFunc, "MON"))
+        );
+        assert_eq!(
+            HamlibVerb::of_line("L Sub RF 0.5\n"),
+            Some((SetLevel, "Sub"))
+        );
+        assert_eq!(HamlibVerb::of_line("f\n"), None);
+        assert_eq!(HamlibVerb::of_line("T 1\n"), None);
+        let mut rig = Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Vox);
+        rig.set_never_send(&[(GetLevel, "RFPOWER"), (SetFunc, "MON")]);
+        assert!(rig.refused_line("l RFPOWER\n").is_some());
+        assert!(rig.refused_line("\\get_level RFPOWER\n").is_some());
+        assert!(rig.refused_line("U MON 1\n").is_some());
+        assert!(
+            rig.refused_line("l RF\n").is_none(),
+            "RF gain is not RF power"
+        );
+        assert!(
+            rig.refused_line("L RFPOWER 0.8\n").is_none(),
+            "the write is not refused"
+        );
+        assert!(
+            rig.refused_line("u MON\n").is_none(),
+            "nor the read of a refused write"
+        );
+    }
+
+    /// A refused func write is a REFUSAL: nothing went out, so nothing is acting on it. The ATU
+    /// path stands an FT QSO down on `Ok` and on `Uncertain`, never on `Refused` — so calling a
+    /// line that never left `Uncertain` would stand a QSO down for a tune-up that never started.
+    #[test]
+    fn a_refused_func_write_is_a_refusal_not_an_uncertain_write() {
+        let (addr, log) = mock_rigctld(|_| "RPRT 0\n".to_string());
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        rig.set_never_send(&[(HamlibVerb::SetFunc, "TUNER")]);
+        assert!(matches!(
+            rig.set_func_value("TUNER", ATU_START_TUNE),
+            FuncSet::Refused(_)
+        ));
+        assert!(matches!(rig.set_func_value("VOX", 1), FuncSet::Ok));
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["U VOX 1"],
+            "only the allowed line went out"
         );
     }
 

@@ -374,6 +374,48 @@ pub fn hamlib_rfpower_read_writes_power(model: u32) -> bool {
     )
 }
 
+/// The rigctld (verb, token) pairs Nexus must NEVER send to this model's Hamlib driver, because
+/// the driver turns them into something other than what the radio's own CAT manual defines. The
+/// connection refuses them before a byte is written ([`crate::rig::Rig::set_never_send`]).
+///
+/// **Yaesu FTX-1 (1051)** — executed against a fake FTX-1 answering in the formats of Yaesu's
+/// FTX-1 CAT reference, the wire read per command. The funcs NB, NR, ANF, COMP, VOX and MN, the
+/// levels RFPOWER, MICGAIN, COMP, NOTCHF, AF, RF, SQL, ATT, PREAMP, NR, AGC and STRENGTH, and PTT,
+/// mode, VFO and dial all map as Yaesu's table says. These three do not:
+///  * `MON` → `MX` (`rigs/yaesu/ftx1/ftx1_tx.c`, "Set TX Monitor (MX P1;)"). Yaesu: **MX is
+///    MOX.** `U MON 1` sends `MX1;` and the radio transmits, past every guard Nexus has, because
+///    to Nexus it is a DSP switch. `u MON` reads the MOX state.
+///  * `MONITOR_GAIN` → `ML0` (`ftx1_audio.c` takes P1 for the VFO). Yaesu: `ML0` is the
+///    monitor's on/off and `ML1` its level, so a read shows the switch as a level and a write puts
+///    000-100 into the switch.
+///  * `TUNER` → `EX030104`, the TUNER SELECT menu (INT / INT FAST / EXT / ATAS). `U TUNER 2` is
+///    clamped to 1: it sets the tuner type to INT (FAST) and tunes nothing. The read answers from
+///    the same menu, so refusing it also takes away an ATU button that could only do that.
+///
+/// **The fourteen of [`hamlib_rfpower_read_writes_power`]** — the RF power READ only: their SET
+/// ends at the commanded value, so a power the operator asks for still goes out.
+///
+/// ⚠️ Measured on Hamlib 4.7.1, the version Nexus bundles; re-measure when that changes.
+pub fn hamlib_never_send(model: u32) -> &'static [(crate::rig::HamlibVerb, &'static str)] {
+    use crate::rig::HamlibVerb::{GetFunc, GetLevel, SetFunc, SetLevel};
+    const FTX1: &[(crate::rig::HamlibVerb, &str)] = &[
+        (GetFunc, "MON"),
+        (SetFunc, "MON"),
+        (GetLevel, "MONITOR_GAIN"),
+        (SetLevel, "MONITOR_GAIN"),
+        (GetFunc, "TUNER"),
+        (SetFunc, "TUNER"),
+    ];
+    const RFPOWER_READ: &[(crate::rig::HamlibVerb, &str)] = &[(GetLevel, "RFPOWER")];
+    if model == 1051 {
+        FTX1
+    } else if hamlib_rfpower_read_writes_power(model) {
+        RFPOWER_READ
+    } else {
+        &[]
+    }
+}
+
 /// Catalog entries where **the program is the rig**: CAT is served by an application on a PC
 /// (or by the radio's own Ethernet API), over TCP or a virtual COM pair. None of them is ever
 /// a USB device that enumerates with a descriptor.
@@ -1466,6 +1508,30 @@ mod tests {
         // Not Kenwood-protocol backends at all: the Yaesu FTX-1 of #385 and an IC-7300.
         assert!(!hamlib_rfpower_read_writes_power(1051));
         assert!(!hamlib_rfpower_read_writes_power(3073));
+    }
+
+    /// The never-send table: the FTX-1's three mis-mapped tokens in both directions, the RF power
+    /// READ alone on the fourteen, and nothing for a radio whose driver maps what Nexus sends.
+    #[test]
+    fn the_never_send_table_is_the_measured_one() {
+        use crate::rig::HamlibVerb::{GetFunc, GetLevel, SetFunc, SetLevel};
+        let ftx1 = hamlib_never_send(1051);
+        for pair in [
+            (GetFunc, "MON"),
+            (SetFunc, "MON"),
+            (GetLevel, "MONITOR_GAIN"),
+            (SetLevel, "MONITOR_GAIN"),
+            (GetFunc, "TUNER"),
+            (SetFunc, "TUNER"),
+        ] {
+            assert!(ftx1.contains(&pair), "FTX-1: {pair:?}");
+        }
+        assert_eq!(ftx1.len(), 6, "and nothing else on the FTX-1: {ftx1:?}");
+        assert_eq!(hamlib_never_send(2031), &[(GetLevel, "RFPOWER")], "TS-590S");
+        assert_eq!(hamlib_never_send(2014), &[(GetLevel, "RFPOWER")], "TS-2000");
+        for m in [2028, 2041, 2029, 2036, 1042, 3073] {
+            assert!(hamlib_never_send(m).is_empty(), "{m} is sent everything");
+        }
     }
 
     #[test]

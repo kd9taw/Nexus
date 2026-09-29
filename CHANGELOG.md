@@ -376,6 +376,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up at the radio is not pulled back under a limit. Not yet checked on the air: on a TS-590S, set
   80 W at the radio, connect Nexus, and switch to FT8 and then RTTY; the radio should still be at
   80 W.
+- **Yaesu FTX-1: Nexus no longer sends the three commands its Hamlib driver gets wrong (#385).**
+  Checked against Yaesu's own FTX-1 CAT reference, the Hamlib driver Nexus uses for the FTX-1
+  turns three of Nexus's controls into different commands. The monitor switch becomes MOX, which
+  makes the radio transmit. The monitor level becomes the monitor's on/off switch. The ATU button
+  changes the radio's TUNER SELECT menu to INT (FAST) and tunes nothing. No control in Nexus sent
+  the monitor switch yet, but the ATU button did, and the monitor level would have now that the
+  radio's settings are all read. On an FTX-1, Nexus now sends none of the three: there is no ATU
+  button (press TUNE on the radio), and the Transmitter pane lists MON under "Not on this radio"
+  although the radio has a monitor, so set it on the radio. Everything else is sent as before.
+  Not yet checked on the air: on an FTX-1, there should be no ATU button and no MON slider, and
+  the radio's TUNER SELECT menu should stay as you set it.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
