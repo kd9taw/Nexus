@@ -9940,7 +9940,7 @@ export const EN = {
   'rotor.strip.lost.silent': 'Rotator not answering',
   'rotor.strip.lost.stopped': 'Rotator stopped answering',
   'rotor.strip.lost.silent.title':
-    'A rotator is configured but not answering — check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
+    "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it. If it is, check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log",
   'rotor.strip.lost.stopped.title':
     'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
   'rotor.strip.lost.open.aria': '{{state}} — open the rotator settings',
@@ -10017,6 +10017,10 @@ export const EN = {
   'rotor.pane.stop.title': 'Stop rotation NOW',
   'rotor.pane.hint': 'click the rose or type a bearing · headings are TRUE',
   'rotor.pane.hint.noPosition': 'no position from this rotator — pointing and STOP still work',
+  // Nothing answered the read at all: the controller is off or unplugged, or rotctld is not
+  // running (a tester read "Error 61" here). Shown as the hint and as the readout's tooltip.
+  'rotor.pane.notAnswering':
+    "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────

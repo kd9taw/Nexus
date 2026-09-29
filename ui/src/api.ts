@@ -46,6 +46,7 @@ import type {
   NeedAlert,
   QrzLookup,
   PointedAt,
+  RotatorState,
   QrzPushResult,
   RouteMode,
   RoutingRule,
@@ -2279,6 +2280,12 @@ export async function stopRotator(): Promise<void> {
 
 export async function readRotator(): Promise<number | null> {
   return invoke<number | null>('read_rotator')
+}
+
+/** The Rotor pane's poll: where the rotator is and what the read found, `null` with no rotator
+ *  configured. Desktop only: a browser reads the station's heading through its own collection. */
+export async function readRotatorState(): Promise<RotatorState | null> {
+  return invoke<RotatorState | null>('read_rotator_state')
 }
 
 /** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).

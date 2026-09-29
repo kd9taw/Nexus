@@ -3916,6 +3916,7 @@ mod logbook_startup_tests {
             "start_cluster_feeds(",
             "start_pskr_feed(",
             "sync_rotctld(",
+            "supervise_rotctld(",
             "build_app(",
         ] {
             assert!(
@@ -13790,11 +13791,42 @@ async fn probe_cat_ports(
     }
 }
 
-/// The spawned rotctld daemon (integrated rotator) + the params it was
-/// spawned with, so a settings change respawns only when something changed.
+/// The params the integrated rotctld is spawned with (model, serial port, baud, TCP port), so a
+/// settings change respawns only when something changed.
 type RotctldParams = (u32, String, u32, u16);
-static ROTCTLD: Mutex<Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>> =
-    Mutex::new(None);
+
+/// The integrated rotctld, and what its supervisor remembers between reconciles.
+struct RotctldOwner {
+    /// The running daemon and the params it was spawned with.
+    daemon: Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>,
+    /// The params whose start failed and was REPORTED on the Connections log — one line per
+    /// episode, however many times [`rotctld_tick`] tries again. Cleared when a daemon comes up
+    /// or the rotator is unconfigured; a change of params is a new episode.
+    failing: Option<RotctldParams>,
+}
+static ROTCTLD: Mutex<RotctldOwner> = Mutex::new(RotctldOwner {
+    daemon: None,
+    failing: None,
+});
+
+/// What one reconcile of the integrated rotctld did — so the supervisor's rules can be held to
+/// in a test, with the real daemon.
+#[derive(Debug, PartialEq, Eq)]
+enum RotctldSync {
+    /// Running with the right params; nothing done.
+    Running,
+    /// A daemon was started and was still there after its first moment.
+    Started,
+    /// A start failed: the spawn itself, or a daemon that exited at once — what a controller
+    /// that is switched off looks like, because its USB serial port does not exist yet.
+    /// `reported` is whether THIS attempt wrote the Connections line: only an episode's first.
+    StartFailed { reported: bool },
+    /// The daemon was stopped: the rotator was unconfigured, or an external rotctld now
+    /// overrides it.
+    Stopped,
+    /// Nothing configured and nothing running.
+    Idle,
+}
 /// Fallback local port for the integrated daemon — rotctld's own upstream default, used when a
 /// radio profile carries no allocated port (a settings file older than per-radio ports).
 const ROTCTLD_PORT: u16 = 4533;
@@ -13855,14 +13887,81 @@ fn sync_rotctld(engine: &SharedEngine) {
     profile_sync::with_current(
         &ROTCTLD,
         || engine_lock(engine).settings().clone(),
-        |owner, settings| sync_rotctld_owned(owner, &settings),
+        |owner, settings| {
+            sync_rotctld_owned(owner, &settings);
+        },
     );
 }
 
-fn sync_rotctld_owned(
-    g: &mut Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>,
+/// How often the supervisor starts a configured integrated rotctld that is not running
+/// ([`rotctld_tick`]). Seconds, not a poll: each attempt spawns a process and waits a quarter
+/// second to see it stay up.
+const ROTCTLD_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Keep a configured integrated rotctld running, on its own.
+///
+/// ⭐ **A controller switched on after Nexus never came online** (a tester's report,
+/// 2026-09-29: macOS, an ARCO Junior on USB, "Error 61" on every command). rotctld EXITS when it
+/// cannot open its port, and a controller that is off has no USB serial port yet; the reconcile
+/// ran only on a Settings save, a radio switch and at startup, so the daemon stayed dead until
+/// one of those happened, and every command met a refused connection. This retries every
+/// [`ROTCTLD_RETRY`] while a rotator is configured and its daemon is not running, through the
+/// same reconcile as a save — so every guarantee it gives holds (never two daemons, the
+/// per-radio port, kill-on-drop) — and says so on the Connections log once per episode, not
+/// once per try. It stops for good when Nexus quits.
+fn supervise_rotctld(engine: SharedEngine) {
+    let spawned = std::thread::Builder::new()
+        .name("rotctld-supervisor".into())
+        .spawn(move || loop {
+            std::thread::sleep(ROTCTLD_RETRY);
+            if tempo_audio::service::SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            profile_sync::with_current(
+                &ROTCTLD,
+                || engine_lock(&engine).settings().clone(),
+                |owner, settings| {
+                    rotctld_tick(owner, &settings, tempo_audio::rigctld_proc::spawn_rotctld);
+                },
+            );
+        });
+    if let Err(e) = spawned {
+        conn_log(
+            "Rotator",
+            "error",
+            format!(
+                "could not start the rotator supervisor ({e}) — a controller switched on after \
+                 Nexus will need a Settings save to come online"
+            ),
+        );
+    }
+}
+
+/// One supervisor tick: reconcile only when a daemon is wanted and is not running, so a healthy
+/// daemon costs one lock and one `try_wait`. `None` when there was nothing to do.
+fn rotctld_tick(
+    owner: &mut RotctldOwner,
     st: &Settings,
-) {
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<tempo_audio::rigctld_proc::RigctldProc>,
+) -> Option<RotctldSync> {
+    let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
+    let running = owner
+        .daemon
+        .as_mut()
+        .is_some_and(|(proc, _)| proc.is_alive());
+    (want && !running).then(|| reconcile_rotctld(owner, st, spawn))
+}
+
+fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
+    reconcile_rotctld(owner, st, tempo_audio::rigctld_proc::spawn_rotctld)
+}
+
+/// The reconcile itself, with the spawn handed in so a test can count its attempts.
+fn reconcile_rotctld(
+    owner: &mut RotctldOwner,
+    st: &Settings,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<tempo_audio::rigctld_proc::RigctldProc>,
+) -> RotctldSync {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
         st.rotator_model,
@@ -13870,15 +13969,18 @@ fn sync_rotctld_owned(
         st.rotator_baud,
         rotctld_port_for(st),
     );
+    // One Connections line per episode: a failure of params already reported is a retry.
+    let report = owner.failing.as_ref() != Some(&params);
+    let g = &mut owner.daemon;
     // Liveness is a `&mut` question (`try_wait`), so it is asked BEFORE the match rather than in
     // a pattern guard. A daemon that died takes the respawn path, which is SAFE here for the
     // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
     // race, no motion is in flight (the mast stopped when the daemon did), and a fresh one is
-    // the only route back. It cannot loop, either — this function runs on a settings save, a
-    // radio switch and at startup, never on a timer.
+    // the only route back. It cannot run away, either: a save, a radio switch and startup call
+    // this, and the supervisor calls it every ROTCTLD_RETRY only while the daemon is down.
     let running = g.as_mut().map(|(proc, p)| (*p == params, proc.is_alive()));
     match (running, want) {
-        (Some((true, true)), true) => {} // running, with the right params
+        (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
         (was, true) => {
             if let (Some((_, false)), Some((proc, _))) = (was, g.as_mut()) {
                 conn_log(
@@ -13893,8 +13995,7 @@ fn sync_rotctld_owned(
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
-            match tempo_audio::rigctld_proc::spawn_rotctld(params.0, &params.1, params.2, params.3)
-            {
+            match spawn(params.0, &params.1, params.2, params.3) {
                 Ok(mut proc) => {
                     let port = params.3;
                     // Give it the moment it takes to fail. A rotctld that cannot open the port
@@ -13917,30 +14018,39 @@ fn sync_rotctld_owned(
                             ),
                         );
                         *slot = Some((proc, params));
+                        owner.failing = None;
+                        RotctldSync::Started
                     } else {
                         // Hamlib's own words, chosen by the same ranker the CAT status pill
                         // uses. They name the actual cause — wrong model, port that is not
                         // there, port already open, a `-C` value it will not parse — and every
                         // one of them was being discarded.
-                        conn_log(
-                            "Rotator",
-                            "error",
-                            tempo_audio::service::with_daemon_error(
-                                format!(
-                                    "rotctld could not start for model {} on {} @ {} — the \
-                                     rotator will not answer. Check the port and that the baud \
-                                     matches what this model needs.",
-                                    params.0,
-                                    if params.1.is_empty() {
-                                        "(no port set)"
-                                    } else {
-                                        &params.1
-                                    },
-                                    params.2
+                        if report {
+                            conn_log(
+                                "Rotator",
+                                "error",
+                                tempo_audio::service::with_daemon_error(
+                                    format!(
+                                        "rotctld could not start for model {} on {} @ {} — the \
+                                         rotator will not answer. Is the controller switched on \
+                                         and plugged in? Nexus keeps trying every {} s. If it \
+                                         is, check the port and that the baud matches what this \
+                                         model needs.",
+                                        params.0,
+                                        if params.1.is_empty() {
+                                            "(no port set)"
+                                        } else {
+                                            &params.1
+                                        },
+                                        params.2,
+                                        ROTCTLD_RETRY.as_secs()
+                                    ),
+                                    &proc.said(),
                                 ),
-                                &proc.said(),
-                            ),
-                        );
+                            );
+                        }
+                        owner.failing = Some(params);
+                        RotctldSync::StartFailed { reported: report }
                     }
                 }
                 Err(e) => {
@@ -13949,11 +14059,15 @@ fn sync_rotctld_owned(
                     // directory (os error 2)" — no cause, no cure — while the rig's rigctld
                     // twin had long named "brew install hamlib" for the identical fault
                     // (mac QA audit, 2026-08-17).
-                    conn_log(
-                        "Rotator",
-                        "error",
-                        tempo_audio::rigctld_proc::hamlib_missing("rotctld", &e),
-                    );
+                    if report {
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            tempo_audio::rigctld_proc::hamlib_missing("rotctld", &e),
+                        );
+                    }
+                    owner.failing = Some(params);
+                    RotctldSync::StartFailed { reported: report }
                 }
             }
         }
@@ -13968,8 +14082,244 @@ fn sync_rotctld_owned(
             };
             conn_log("Rotator", "info", why);
             *g = None;
+            owner.failing = None;
+            RotctldSync::Stopped
         }
-        (None, false) => {}
+        (None, false) => {
+            owner.failing = None;
+            RotctldSync::Idle
+        }
+    }
+}
+
+#[cfg(test)]
+mod rotctld_supervisor_tests {
+    //! A rotator controller switched on after Nexus comes online on its own (a tester's report,
+    //! 2026-09-29: macOS, an ARCO Junior on USB, "Error 61" on every command until a Settings
+    //! save). Driven with the REAL rotctld (the dummy model, which needs no serial port): holding
+    //! its TCP port makes the daemon exit at once, exactly as it does when a switched-off
+    //! controller's serial port is missing, and letting the port go is the controller being
+    //! switched on — with no Settings change in between.
+    use super::*;
+    use std::cell::Cell;
+    use std::net::TcpListener;
+    use tempo_app::settings::RadioProfile;
+
+    /// Is there a rotctld to drive? On a box without Hamlib this test would prove nothing, so it
+    /// says so on the real stderr and skips; on GitHub Actions, whose test-tauri job installs
+    /// libhamlib-utils for exactly this, a missing daemon is a failure.
+    fn rotctld_here() -> bool {
+        let found = std::process::Command::new("rotctld")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !found {
+            assert!(
+                std::env::var_os("GITHUB_ACTIONS").is_none_or(|v| v.is_empty()),
+                "no rotctld on PATH, but CI installs libhamlib-utils so this suite is real"
+            );
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "!! NOT RUN, and NOT A PASS: the rotctld supervisor tests need rotctld on PATH"
+            );
+        }
+        found
+    }
+
+    /// A station whose integrated rotctld runs `model` on TCP `port`.
+    fn station(port: u16, model: u32) -> Settings {
+        Settings {
+            rotator_model: model,
+            rotator_host: String::new(),
+            rotator_port: String::new(),
+            active_radio: 0,
+            radios: vec![RadioProfile {
+                id: 0,
+                rotctld_port: port,
+                ..RadioProfile::default()
+            }],
+            ..Settings::default()
+        }
+    }
+
+    fn owner() -> RotctldOwner {
+        RotctldOwner {
+            daemon: None,
+            failing: None,
+        }
+    }
+
+    #[test]
+    fn a_controller_switched_on_later_comes_online_without_a_settings_save() {
+        if !rotctld_here() {
+            return;
+        }
+        let off = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = off.local_addr().expect("its port").port();
+        let st = station(port, 1);
+        let mut owner = owner();
+        let tries = Cell::new(0u32);
+        let spawn = |m: u32, p: &str, b: u32, t: u16| {
+            tries.set(tries.get() + 1);
+            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t)
+        };
+
+        // Launch with the controller off: the start fails and the Connections log says so.
+        assert_eq!(
+            reconcile_rotctld(&mut owner, &st, spawn),
+            RotctldSync::StartFailed { reported: true }
+        );
+        // The supervisor tries again on its own — and quietly, once the episode is reported.
+        for _ in 0..2 {
+            assert_eq!(
+                rotctld_tick(&mut owner, &st, spawn),
+                Some(RotctldSync::StartFailed { reported: false })
+            );
+        }
+        assert_eq!(tries.get(), 3);
+
+        // The controller is switched on. The next tick brings the daemon up: same settings.
+        drop(off);
+        assert_eq!(
+            rotctld_tick(&mut owner, &st, spawn),
+            Some(RotctldSync::Started)
+        );
+        assert!(
+            tempo_audio::rotator::read_position(&format!("127.0.0.1:{port}")).is_ok(),
+            "the rotator answers now"
+        );
+        // A daemon that is running is left alone: no spawn, one liveness check.
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert_eq!(tries.get(), 4);
+        assert!(owner.failing.is_none(), "the episode is over");
+    }
+
+    #[test]
+    fn a_rotator_unconfigured_or_overridden_stops_the_retries() {
+        if !rotctld_here() {
+            return;
+        }
+        let off = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = off.local_addr().expect("its port").port();
+        let mut owner = owner();
+        let tries = Cell::new(0u32);
+        let spawn = |m: u32, p: &str, b: u32, t: u16| {
+            tries.set(tries.get() + 1);
+            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t)
+        };
+        assert_eq!(
+            reconcile_rotctld(&mut owner, &station(port, 1), spawn),
+            RotctldSync::StartFailed { reported: true }
+        );
+
+        // The operator removes the rotator in Settings while its controller is still off: the
+        // save's reconcile ends the episode, and the supervisor never tries again.
+        let removed = station(port, 0);
+        assert_eq!(
+            reconcile_rotctld(&mut owner, &removed, spawn),
+            RotctldSync::Idle
+        );
+        for _ in 0..3 {
+            assert_eq!(rotctld_tick(&mut owner, &removed, spawn), None);
+        }
+        // An external rotctld overriding the model is not the integrated daemon's to start.
+        let mut external = station(port, 1);
+        external.rotator_host = "10.0.0.5:4533".into();
+        assert_eq!(rotctld_tick(&mut owner, &external, spawn), None);
+        assert_eq!(tries.get(), 1, "no attempt after the first");
+
+        // A new failure after that is a new episode, and is reported again.
+        assert_eq!(
+            reconcile_rotctld(&mut owner, &station(port, 1), spawn),
+            RotctldSync::StartFailed { reported: true }
+        );
+        drop(off);
+    }
+
+    #[test]
+    fn a_command_that_reaches_no_rotctld_says_what_to_check() {
+        let gone = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = gone.local_addr().expect("its address").to_string();
+        drop(gone);
+        let refused = || tempo_audio::rotator::stop(&addr).expect_err("nothing is listening");
+        let words = rotator_error(refused(), "");
+        assert!(
+            words.contains("switched on") && !words.contains("os error"),
+            "the integrated daemon's refusal is the controller, in plain words: {words}"
+        );
+        let words = rotator_error(refused(), "10.0.0.5:4533");
+        assert!(words.contains("10.0.0.5:4533"), "{words}");
+        // Any other failure keeps its own words, which already name their cause.
+        let silent =
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "the rotator did not answer");
+        assert_eq!(rotator_error(silent, ""), "the rotator did not answer");
+    }
+
+    #[test]
+    fn the_pane_can_tell_a_silent_controller_from_one_with_no_position() {
+        if !rotctld_here() {
+            return;
+        }
+        // A rotator that answers: its position.
+        let spot = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = spot.local_addr().expect("its port").port();
+        drop(spot);
+        let mut owner = owner();
+        assert_eq!(
+            sync_rotctld_owned(&mut owner, &station(port, 1)),
+            RotctldSync::Started
+        );
+        let answering = rotator_state(&format!("127.0.0.1:{port}"));
+        assert_eq!(answering.reading, "position");
+        assert!(answering.az_deg.is_some());
+        drop(owner);
+        // Nothing listening: the controller is off, or rotctld is not running.
+        assert_eq!(
+            rotator_state(&format!("127.0.0.1:{port}")),
+            RotatorStateDto {
+                az_deg: None,
+                reading: "notAnswering"
+            }
+        );
+        // A backend with no position to give (the Hy-Gain DCU-1 answers every `p` this way)
+        // is not a silent controller: pointing and STOP still work there.
+        let dcu1 = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = dcu1.local_addr().expect("its address").to_string();
+        let daemon = std::thread::spawn(move || {
+            use std::io::{BufRead, Write};
+            let (mut sock, _) = dcu1.accept().expect("the read connects");
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(sock.try_clone().expect("clone")).read_line(&mut line);
+            let _ = sock.write_all(b"RPRT -11\n");
+        });
+        assert_eq!(
+            rotator_state(&addr),
+            RotatorStateDto {
+                az_deg: None,
+                reading: "noPosition"
+            }
+        );
+        daemon.join().expect("the stand-in daemon");
+    }
+}
+/// What an operator is told when a rotator command reaches no rotctld at all, in place of the
+/// socket's own words — "Connection refused (os error 61)" is what a tester read on macOS, with
+/// a controller that had been switched on after Nexus. For the integrated daemon a refusal is
+/// almost always that controller: rotctld exits without its port, and `supervise_rotctld` is
+/// starting it again. For an external rotctld nothing is listening at the address typed in
+/// Settings. Every other failure keeps its own words, which already name their cause.
+fn rotator_error(e: std::io::Error, external_host: &str) -> String {
+    if e.kind() != std::io::ErrorKind::ConnectionRefused {
+        return e.to_string();
+    }
+    match external_host.trim() {
+        "" => "The rotator controller isn't answering. Is it switched on and plugged in? Nexus \
+               keeps trying to reach it."
+            .to_string(),
+        host => format!("Nothing answers at {host}. Is the rotctld there running?"),
     }
 }
 
@@ -13978,9 +14328,12 @@ fn sync_rotctld_owned(
 async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<(), String> {
     #[cfg(feature = "radio")]
     {
-        let host = {
+        let (host, external) = {
             let eng = engine_lock(&state);
-            effective_rotator_addr(eng.settings())
+            (
+                effective_rotator_addr(eng.settings()),
+                eng.settings().rotator_host.clone(),
+            )
         };
         let Some(host) = host else {
             return Err(
@@ -13991,7 +14344,7 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
         tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, az_deg))
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())
+            .map_err(|e| rotator_error(e, &external))
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -14032,9 +14385,12 @@ async fn discover_flex() -> Result<Vec<FlexRadioDto>, String> {
 async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
     #[cfg(feature = "radio")]
     {
-        let host = {
+        let (host, external) = {
             let eng = engine_lock(&state);
-            effective_rotator_addr(eng.settings())
+            (
+                effective_rotator_addr(eng.settings()),
+                eng.settings().rotator_host.clone(),
+            )
         };
         let Some(host) = host else {
             return Err(
@@ -14045,7 +14401,7 @@ async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
         tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::stop(&host))
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())
+            .map_err(|e| rotator_error(e, &external))
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -14172,10 +14528,11 @@ async fn point_rotator_at_call(
 ) -> Result<PointedAtDto, String> {
     #[cfg(feature = "radio")]
     {
-        let (host, mygrid, fixes) = {
+        let (host, external, mygrid, fixes) = {
             let eng = engine_lock(&state);
             (
                 effective_rotator_addr(eng.settings()),
+                eng.settings().rotator_host.clone(),
                 eng.settings().mygrid.clone(),
                 station_fixes(&eng, &call),
             )
@@ -14204,7 +14561,7 @@ async fn point_rotator_at_call(
         tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, bearing))
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| rotator_error(e, &external))?;
         Ok(PointedAtDto::new(bearing, aim.to))
     }
     #[cfg(not(feature = "radio"))]
@@ -14370,6 +14727,60 @@ mod point_at_call_tests {
             (dto.to, dto.grid.as_deref(), dto.country),
             ("grid", Some("FN42KH"), None)
         );
+    }
+}
+
+/// Where the rotator is, and what the read found — the Rotor pane's poll, which has to tell
+/// three stations apart: a rotator that reported its position; one whose backend has none to
+/// give (the Hy-Gain DCU-1: pointing and STOP still work); and one where nothing answered at all
+/// (the controller is off or unplugged, or rotctld is not running), which the pane must not call
+/// "pointing still works".
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RotatorStateDto {
+    /// Degrees, as the rotator reports them; `None` unless `reading` is `"position"`.
+    az_deg: Option<f64>,
+    /// `"position"`, `"noPosition"` or `"notAnswering"`.
+    reading: &'static str,
+}
+
+/// Read the rotator at `addr` for [`RotatorStateDto`].
+fn rotator_state(addr: &str) -> RotatorStateDto {
+    match tempo_audio::rotator::read_position(addr) {
+        Ok((az, _)) => RotatorStateDto {
+            az_deg: Some(az),
+            reading: "position",
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => RotatorStateDto {
+            az_deg: None,
+            reading: "noPosition",
+        },
+        Err(_) => RotatorStateDto {
+            az_deg: None,
+            reading: "notAnswering",
+        },
+    }
+}
+
+/// The Rotor pane's poll ([`RotatorStateDto`]); `None` when no rotator is configured.
+#[tauri::command]
+async fn read_rotator_state(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<RotatorStateDto>, String> {
+    #[cfg(feature = "radio")]
+    {
+        let host = with_engine(&state, |eng| effective_rotator_addr(eng.settings())).await?;
+        let Some(host) = host else {
+            return Ok(None);
+        };
+        tauri::async_runtime::spawn_blocking(move || Some(rotator_state(&host)))
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Ok(None)
     }
 }
 
@@ -27862,8 +28273,10 @@ pub fn run() {
     // The APRS-IS feed is independent of the APRS RF decoder's arm state by design, so it comes
     // up here with the other network feeds rather than when the APRS view is entered.
     sync_aprs_is_feed(&engine);
-    // Integrated rotator: launch the bundled rotctld when a model is configured.
+    // Integrated rotator: launch the bundled rotctld when a model is configured, and keep it
+    // running — a controller switched on later comes online on its own (`supervise_rotctld`).
     sync_rotctld(&engine);
+    supervise_rotctld(engine.clone());
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
@@ -29765,6 +30178,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             sat_track_status,
             point_rotator_at_call,
             read_rotator,
+            read_rotator_state,
             cw_decode,
             set_ai_cw,
             set_unassisted_mode,
@@ -34233,7 +34647,7 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 16] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 17] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
@@ -34243,6 +34657,7 @@ mod tests {
         "get_settings",
         "get_sat_transponder",
         "read_rotator",
+        "read_rotator_state",
         "get_aprs_heard",
         "get_aprs_health",
         "get_aprs_stations",

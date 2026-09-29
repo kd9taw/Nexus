@@ -303,6 +303,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rotator controller switched on after Nexus comes online by itself.** Nexus runs Hamlib's
+  rotator program for you, and that program quits at once when the controller's port is not
+  there, which is what a USB controller that is still switched off looks like. Nexus used to start
+  it again only when you saved Settings or switched radios, so every command failed with
+  "Connection refused (os error 61)" until you did. Now it tries again every 5 seconds while a
+  rotator is set up, and the rotator answers a few seconds after you switch it on, with nothing to
+  save. The Connections log says once that it could not start, not every 5 seconds. While the
+  controller is off, a command says "The rotator controller isn't answering. Is it switched on and
+  plugged in?", and the Rotor pane and the rotor strip say the same, where the pane used to say
+  that pointing and STOP still work. A rotator that answers but reports no position, such as the
+  Hy-Gain DCU-1, keeps its own message. An external rotctld that refuses the connection is named by
+  its address.
 - **Pointing the rotator at a callsign aims at the station, not the middle of its country.** The
   → button on a cockpit's rotor strip, the ↗ on Needed rows and the other point-at buttons used to
   turn the beam to the centre of the station's country: from JO21EV that is 207° for EC1DD, whose

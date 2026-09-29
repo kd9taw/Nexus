@@ -223,6 +223,11 @@ pub fn stop(addr: &str) -> std::io::Result<()> {
 /// rotator that cannot be pointed. Model 403 (Hy-Gain DCU-1/DCU-1X) has no `get_position` at
 /// all in the bundled Hamlib and answers `p` with `RPRT -11` while taking `P` perfectly, so a
 /// caller must not turn this failure into "no rotator".
+///
+/// That answer — `RPRT -11`, or `RPRT -4`, Hamlib's "not available" and "not implemented" — is
+/// [`std::io::ErrorKind::Unsupported`], so the Rotor pane can tell a rotator that has no
+/// position to give from one that did not answer at all (a controller that is off, a rotctld
+/// that is not running).
 pub fn read_position(addr: &str) -> std::io::Result<(f64, Option<f64>)> {
     let reply = ask(addr, "p\n", 2, POLL_DEADLINE_MS)?;
     let mut nums = reply.lines().map(str::trim).filter(|l| !l.is_empty());
@@ -230,10 +235,18 @@ pub fn read_position(addr: &str) -> std::io::Result<(f64, Option<f64>)> {
         .next()
         .and_then(|l| l.parse::<f64>().ok())
         .ok_or_else(|| {
-            std::io::Error::other(format!(
-                "the rotator does not report its position: {:?}",
-                reply.trim()
-            ))
+            let kind = if matches!(reply.trim(), "RPRT -11" | "RPRT -4") {
+                std::io::ErrorKind::Unsupported
+            } else {
+                std::io::ErrorKind::Other
+            };
+            std::io::Error::new(
+                kind,
+                format!(
+                    "the rotator does not report its position: {:?}",
+                    reply.trim()
+                ),
+            )
         })?;
     Ok((az, nums.next().and_then(|l| l.parse::<f64>().ok())))
 }
@@ -442,6 +455,21 @@ mod tests {
             e.to_string().contains("does not report its position"),
             "{e}"
         );
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::Unsupported,
+            "a backend with none to give"
+        );
+        // …while a read the controller did not answer is not that: Hamlib's timeout, and a
+        // daemon that is not there at all.
+        let (addr, _rx) = stage(Behave::Say("RPRT -5\n"));
+        let e = read_position(&addr).expect_err("a timeout is not a position");
+        assert_ne!(e.kind(), std::io::ErrorKind::Unsupported, "{e}");
+        let gone = TcpListener::bind("127.0.0.1:0").expect("a port");
+        let addr = gone.local_addr().expect("its address").to_string();
+        drop(gone);
+        let e = read_position(&addr).expect_err("nothing is listening");
+        assert_ne!(e.kind(), std::io::ErrorKind::Unsupported, "{e}");
         // …and the convenience wrapper still degrades to None for the 2 s polls.
         let (addr, _rx) = stage(Behave::Say("RPRT -11\n"));
         assert_eq!(read_azimuth(&addr), None);
