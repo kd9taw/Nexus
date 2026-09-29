@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { MonitorApp } from '../remote-monitor/MonitorApp'
@@ -35,16 +35,16 @@ const APPROVAL_WARNING_MS = 7 * 86400000
 // parse failure - has no name worth showing, so it falls back to the generic message.
 const reason = (cause: unknown) => cause instanceof RemoteError ? cause.code : 'remoteUnavailable'
 function AccountViewport() { useViewport(1, true); return null }
-const BrowserApplication = lazy(() => import('./BrowserApplication').then(module => ({ default: module.BrowserApplication })))
+// REMOVAL STAGE 3 (the change plan's §4.4, operator 2026-09-27: the old page is removed): this page
+// no longer mounts the workspace (`BrowserApplication`). A station is watched (the monitor) or
+// streamed. The workspace's code stays in the tree, unused, until Stage 4 deletes it.
 export function RemoteApp() {
   const [client, setClient] = useState<BrowserClient | null>(null)
   const [ready, setReady] = useState(false)
   const [configured, setConfigured] = useState(true)
   const [session, setSession] = useState<AccountSession | null>(null)
   const [connection, setConnection] = useState<HostedConnection | null>(null)
-  const [workspace, setWorkspace] = useState(false)
-  // The station name while the stream is the open view, or null. A view of its own: it shares the
-  // connection and its lease/Stop core with the workspace and nothing else.
+  // The station name while the stream is the open view, or null; otherwise the open view is the monitor.
   const [streaming, setStreaming] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -120,12 +120,12 @@ export function RemoteApp() {
     finally { setBusy(false) }
   }
   async function refresh() { if (client) setSession(await client.post<AccountSession>('session')) }
-  function open(stationId: string, application: boolean, stream: string | null = null) {
-    // The stream rides the application socket: its signalling and the lease it is offered under
-    // travel there.
+  function open(stationId: string, stream: string | null = null) {
+    // The stream rides the socket's operation lane: its signalling and the lease it is offered under
+    // travel there. The monitor needs neither.
     // A5: the stream's offer is signed with this browser's key for the station.
     const device = session?.stations.find(station => station.id === stationId)?.device
-    const next = new HostedConnection(client!, stationId, application || stream !== null, undefined,
+    const next = new HostedConnection(client!, stationId, stream !== null, undefined,
       device ? { id: device.id, key: () => deviceKey(stationId) } : undefined)
     // A refused ticket is final: the trial ended mid-session, the station or this browser was
     // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
@@ -137,14 +137,11 @@ export function RemoteApp() {
       setError(cause.code === 'signInRequired' ? 'signInRequired' : 'sessionEnded')
       void refresh().catch(() => {})
     }
-    setWorkspace(application); setStreaming(stream); setConnection(next); next.start()
+    setStreaming(stream); setConnection(next); next.start()
   }
   const leave = () => { connection?.stop(); setConnection(null) }
   const signOutOfSession = () => { connection?.stop(); setConnection(null); setSession(null); void client?.signOut() }
   if (connection && streaming !== null) return <StreamView connection={connection} station={streaming} disconnect={leave} signOut={signOutOfSession} />
-  if (connection && workspace) return <Suspense fallback={<p role="status">{t('monitor.connecting')}</p>}>
-    <BrowserApplication connection={connection} disconnect={leave} signOut={signOutOfSession} />
-  </Suspense>
   // The observer-only browser is the one this control is most for: watching a frequency and
   // nothing else is exactly the thing a background tab would otherwise quietly stop doing.
   if (connection) return <MonitorApp source={connection.source} navigation={<>
@@ -297,11 +294,10 @@ export function RemoteApp() {
               <p className="rm-warning">{t('remote.thisBrowserApprovalEnding', { until: utcDate(station.device.renewsUntil ?? station.device.expires_at) })}</p>}
             {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })}</p>}
             <div className="remote-actions">
-            <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => open(station.id, true)}>{t('remote.openNexus')}</button>
-            <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false)}>{t('remote.observe')}</button>
             {/* Only from a service that carries the stream's signalling; the station's own Nexus says
                 whether it can stream once the view is open. */}
-            {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false, station.name)}>{t('remote.stream.open')}</button>}
+            {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary" disabled={busy || !entitled} onClick={() => open(station.id, station.name)}>{t('remote.stream.open')}</button>}
+            <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id)}>{t('remote.observe')}</button>
             <button className="remote-button" disabled={busy} onClick={() => void act(async () => {
               await client?.post(`stations/${station.id}/forget-device`); await refresh()
             })}>{t('remote.forgetBrowser')}</button>

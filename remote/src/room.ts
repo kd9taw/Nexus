@@ -1,7 +1,7 @@
 // One hibernating room per station. Socket attachments carry admission and bounded
 // ordering/ACK state; neither D1 nor Durable Object storage receives observations.
 import { entitledCommand, OperationRelay, type OperationCheckpoint } from '../../ui/src/remote-web/operation-relay'
-import { OPERATION_REQUEST_BYTES } from '../../ui/src/remote-web/operation-protocol'
+import { OPERATION_REQUEST_BYTES, operationId } from '../../ui/src/remote-web/operation-protocol'
 import { OPERATION_ENTITLEMENT_CHECK_MS, OPERATION_ENTITLEMENT_MS } from '../../ui/src/remote-web/operation-limits'
 import { parseOperationVersion } from '../../ui/src/remote-web/operation-version'
 import { DurableObject } from 'cloudflare:workers'
@@ -20,6 +20,14 @@ import { STREAM_ENTITLEMENT_CHECK_MS, StreamRelay } from '../../ui/src/remote-we
 
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
+/** REMOVAL STAGE 3 (the change plan's §4.4; the operator's picks 2026-09-27: the old page "Remove
+ *  entirely", "Now, alongside the PoC"). The Remote page watches or streams a station and nothing else,
+ *  so this room stops forwarding the old page's lanes. On the operation lane only the lease and Stop
+ *  still travel, because the stream takes its lease and sends its Stop here; every other request (the
+ *  command path, its exports and its result reads) is refused by name and reaches no station. The
+ *  application lane is offered no station at all (`syncApplication`). Stations are untouched: they are
+ *  simply not asked. The relays' code stays until stage 4 deletes it. */
+const RELAYED_OPERATIONS = new Set(['state', 'acquire', 'heartbeat', 'release', 'stopTransmit'])
 type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number }
 type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint; commandUntil?: number }
 type Attachment = StationAttachment | BrowserAttachment
@@ -298,6 +306,14 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     }
     if(parsed&&typeof parsed==='object'&&typeof parsed.type==='string'&&parsed.type.startsWith('operation')){
       if(attachment.role==='station')this.operations.receiveStation(parsed)
+      else if (parsed.type === 'operationRequest' && !RELAYED_OPERATIONS.has(String((parsed.request as { type?: unknown } | null)?.type))) {
+        // Removal stage 3: refused by name ('stationUnsupported', which every shipped page parses),
+        // never forwarded. Nothing about the relay changed, so there is nothing to checkpoint.
+        const requestId = (parsed.request as { requestId?: unknown } | null)?.requestId
+        if (!operationId(requestId)) { ws.close(1008, 'invalidOperation'); await this.disconnected(ws); return }
+        peer.send(JSON.stringify({ type: 'operationResponse', requestId, error: 'stationUnsupported' }))
+        return
+      }
       else {
         // The entitlement is re-read HERE, before the relay is asked, so that the relay's gate
         // stays synchronous: every decision it makes about rate, conflict and pending state runs
@@ -481,7 +497,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer,
         commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true }]
     })
-    this.application.sync(station, observers, now)
+    // Removal stage 3: the application lane is offered no station, so the relay answers every page on
+    // it itself (a hello with version 0, a read with a named refusal) and never asks a station.
+    this.application.sync(null, observers, now)
     this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0}:null,observers,now)
     this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1 } : null, observers)
     this.stream.sync(station ? { peer: station.peer, supported: this.streamVersions.get(stationSocket!) === 1 } : null, observers)

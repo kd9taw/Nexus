@@ -31,6 +31,7 @@ afterEach(() => {
   vi.useRealTimers(); vi.unstubAllGlobals(); sockets = []
   delete (document as { hidden?: unknown }).hidden
   delete (document as { visibilityState?: unknown }).visibilityState
+  delete (navigator as { locks?: unknown }).locks
   localStorage.clear()
 })
 /** jsdom reports a visible tab and has no way to change it; shadow both readings and announce it
@@ -326,6 +327,79 @@ const controllingState = () => ({ stationBootId: crypto.randomUUID(), allowed: t
   commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a' })
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const operationRequests = (socket: Socket): any[] => socket.sent.map(value => JSON.parse(value)).filter(m => m.type === 'operationRequest').map(m => m.request)
+// REMOVAL STAGE 3 (the change plan's §4.4): the stream's session opens the operation lane (its lease
+// and Stop) and nothing of the retired application lane. CONTROL: the operation lane still opens.
+it('opens the operation lane for a stream session, and never the retired application lane', async () => {
+  const { remote, socket } = await connection(true, 4)
+  try {
+    socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(operationRequests(socket)[0]?.type, 'control: the lease and Stop lane opened').toBe('state')
+    const application = socket.sent.map(value => JSON.parse(value)).filter(m => String(m.type).startsWith('application'))
+    expect(application, 'no application frame leaves the page').toEqual([])
+  } finally { remote.stop() }
+})
+// REMOVAL STAGE 3: a browser that used the old workspace can still hold its receipt for this station:
+// a command whose outcome it never learned, in localStorage. The stream commands nothing, so its
+// session must carry none of it. Loaded, a pending control makes the operation client poll for its
+// `result`, the stage-3 relay refuses that by name (`stationUnsupported`), and the refusal stops the
+// client's polling for good: the lease goes, and the stream with it. The lock is the browser's Web
+// Locks API, which every supported browser has and jsdom does not (removed again in afterEach);
+// without it the store refuses before anything is sent, and this would pass for the wrong reason.
+const STREAM_LANE = ['state', 'acquire', 'heartbeat', 'release', 'stopTransmit']
+async function streamAfterTheOldPage() {
+  const held = new Set<string>()
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (name: string, _options: object, run: (lock: object | null) => unknown) => {
+    if (held.has(name)) return run(null)
+    held.add(name)
+    try { return await run({ name }) } finally { held.delete(name) }
+  } } })
+  const stationId = crypto.randomUUID()
+  localStorage.setItem(`nexus.remote.pending-control.${stationId}`,
+    JSON.stringify({ version: 1, operationId: crypto.randomUUID(), action: { action: 'decoder.clear', receiver: 'cw' } }))
+  const { remote, socket } = await connection(true, 4, stationId)
+  // A page that has been open a while, as every real one has by the time it streams, so the first
+  // tick is the lease's own read and not the catch-up of a clock that starts at zero.
+  await vi.advanceTimersByTimeAsync(2000)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  const state = controllingState()
+  const answered = new Set<string>()
+  // The stage-3 relay: the station answers the lease's reads; anything else is refused by name.
+  const relay = async (ms: number) => {
+    for (let at = 0; at < ms; at += 250) {
+      await vi.advanceTimersByTimeAsync(250)
+      for (const request of operationRequests(socket)) if (!answered.has(request.requestId)) {
+        answered.add(request.requestId)
+        socket.receive({ type: 'operationResponse', requestId: request.requestId,
+          ...(request.type === 'state' || request.type === 'heartbeat' ? { value: state } : { error: 'stationUnsupported' }) })
+      }
+    }
+  }
+  try {
+    const opened = operationRequests(socket)[0]
+    expect(opened?.type, 'precondition: the lease lane opened with its own read').toBe('state')
+    answered.add(opened.requestId)
+    socket.receive({ type: 'operationResponse', requestId: opened.requestId, value: state })
+    expect(remote.operations.getSnapshot().state?.phase, 'precondition: this browser controls the station').toBe('controlling')
+  } catch (error) { remote.stop(); throw error }
+  await relay(4000)
+  return { remote, socket, state, relay }
+}
+it('a stream session sends nothing of the old command path, even holding the old workspace\'s receipt', async () => {
+  const { remote, socket } = await streamAfterTheOldPage()
+  try {
+    expect(operationRequests(socket).map(r => r.type).filter(type => !STREAM_LANE.includes(type)), 'no result read for the old page\'s command').toEqual([])
+  } finally { remote.stop() }
+})
+it('a stream session\'s lease keeps renewing through the stage-3 relay after the old workspace', async () => {
+  const { remote, socket, state, relay } = await streamAfterTheOldPage()
+  try {
+    const before = operationRequests(socket).length
+    await relay(2000)
+    expect(operationRequests(socket).slice(before), 'the lease is still renewed').toContainEqual(expect.objectContaining({ type: 'heartbeat', leaseId: state.leaseId }))
+    expect(remote.operations.getSnapshot().state?.phase).toBe('controlling')
+  } finally { remote.stop() }
+})
 async function controlled() {
   const { remote, socket } = await connection(true, 4)
   socket.receive({ type: 'session', sessionId: crypto.randomUUID() })

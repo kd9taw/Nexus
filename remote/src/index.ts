@@ -3,7 +3,7 @@ import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, browserOrigin, c
   lifetime, native, proof, publicKey, rate, Refusal, renewsUntil, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
-import { APPLICATION_VERSION, negotiatedApplicationVersion } from './application-version'
+import { negotiatedApplicationVersion } from './application-version'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
 export { StationRoom } from './room'
@@ -38,7 +38,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: APPLICATION_VERSION,
+    // No `applicationVersion`: the old page's application lane is retired (removal stage 3, the
+    // change plan's §4.4), and a page that cannot see the number never opens it. The operation lane
+    // stays: the stream takes its lease and sends its Stop there.
     operationVersion: 2,
     operationMaxVersion: 3,
     operationFtVersion: 1,

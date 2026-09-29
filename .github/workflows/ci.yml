@@ -430,17 +430,22 @@ jobs:
   #
   # It was one step of 47.7 minutes inside a 50-minute job, which made `remote-web` the
   # workflow's second-longest job and, once the Rust job was split, would have been its
-  # critical path. The suite is 28 independent full-browser scenarios — 17 application
+  # critical path. The suite was 28 independent full-browser scenarios — 17 application
   # versions plus 11 feature scenarios, each doing PKCE, local device approval,
   # observation and viewport checks — and node:test runs tests within a file in series.
   #
-  # Nothing is skipped and no scenario was deleted. The shards PARTITION the same 28.
+  # REMOVAL STAGE 3 (the change plan's §4.4) retired the 27 that drove the old workspace,
+  # which the Remote page no longer offers (every scenario but `stream`): the suite is
+  # `stream` and a new `monitor` scenario now (sign-in, pairing, device approval and the
+  # observer view at every layout, the first half of each retired one;
+  # remote/test/browser.test.mjs lists what retired), a few minutes in ONE shard. The
+  # matrix stays so the shard guard below keeps meaning something if it ever grows again.
   #
   # The count is stated LITERALLY below and must equal the matrix length. `strategy.job-total`
   # would derive it and was tried first, but `scripts/gates` cannot expand a runtime context,
   # so it marked the step BLOCKED and the sweep stopped running locally altogether. A literal
-  # keeps it runnable here: gates expands `matrix.shard`, lists all three shards, and together
-  # they still run all 28 scenarios on this box.
+  # keeps it runnable here: gates expands `matrix.shard`, lists every shard, and together they
+  # still run every scenario on this box.
   #
   # Stating it twice is a desync risk, so it is GUARDED, not trusted:
   # `scripts/gates.test.mjs` asserts the matrix length equals the NEXUS_BROWSER_SHARDS this
@@ -464,7 +469,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -496,7 +501,7 @@ jobs:
       - name: Compiled browser sign-in, approval, observation and responsive layouts
         env:
           NEXUS_BROWSER_SHARD: ${{ matrix.shard }}
-          NEXUS_BROWSER_SHARDS: "3"   # must equal the matrix length above — guarded by scripts/gates.test.mjs
+          NEXUS_BROWSER_SHARDS: "1"   # must equal the matrix length above — guarded by scripts/gates.test.mjs
           NEXUS_REMOTE_BROWSER_ARTIFACTS: browser-artifacts
         run: |
           google-chrome --version

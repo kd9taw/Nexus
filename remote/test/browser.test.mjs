@@ -62,7 +62,16 @@ const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
 // shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
 // was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
-const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true}]
+// REMOVAL STAGE 3 (the change plan's §4.4; the operator's picks 2026-09-27: the old page "Remove
+// entirely", "Now, alongside the PoC"): the Remote page watches or streams a station and no longer
+// offers the workspace. RETIRED with the workspace: the 17 application-version scenarios (v1-v17) and
+// the ten that operate through it (operations, FT operating, session layout, quick layout and its CW
+// mode, contact continuity, DX work, radio selection, routed decoder, routed workspace). Their bodies
+// stay below, unreachable, until stage 4 deletes them with the code they drove. REMAINING: `monitor`
+// (sign-in, pairing, device approval, the observer view and its layouts; the first half of every
+// retired scenario) and `stream`.
+const RETIRED_SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true}]
+const SCENARIOS = [{applicationVersion:NEWEST_APPLICATION_VERSION,operating:false,monitor:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true}]
 
 // Shard selection. Unset means shard 0 of 1 — i.e. EVERYTHING — so a local run,
 // `npm --prefix remote run test:browser` and `scripts/gates` all keep full coverage. CI
@@ -81,8 +90,8 @@ const SHARD_SCENARIOS = SCENARIOS.filter((_, index) => index % SHARDS === SHARD)
 if (SHARDS === 1 && SHARD_SCENARIOS.length !== SCENARIOS.length) throw new Error('unsharded run must select every scenario')
 console.log(`# browser shard ${SHARD} of ${SHARDS}: running ${SHARD_SCENARIOS.length} of ${SCENARIOS.length} scenarios`)
 
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream} of SHARD_SCENARIOS) test(`compiled hosted browser ${stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
-  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating,stream,monitor} of SHARD_SCENARIOS) test(`compiled hosted browser ${monitor?'monitor':stream?'stream':ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+  const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, monitor?'monitor':stream?'stream':ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
@@ -108,7 +117,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     assert.equal(shell.status,200)
     assert.match(await shell.text(), /Nexus Remote/)
     const stationHeaders = { 'x-nexus-application-version': '1',...(ftOperating||stream?{'x-nexus-operation-ft-version':'1'}:{}),...(stream?{'x-nexus-stream-version':'1'}:{}),...(operating?{'x-nexus-operation-version':'2','x-nexus-operation-max-version':'3'}:{}), ...(applicationVersion >= 2 ? { 'x-nexus-application-stream-version': '2' } : {}), ...(applicationVersion >= 3 ? { 'x-nexus-application-query-version': '1' } : {}), ...(applicationVersion >= 4 ? { 'x-nexus-application-recall-version': '1' } : {}), ...(applicationVersion >= 5 ? { 'x-nexus-application-keyboard-version': '1' } : {}), ...(applicationVersion >= 6 ? { 'x-nexus-application-insights-version': '1' } : {}), ...(applicationVersion >= 7 ? { 'x-nexus-application-dxpeditions-version': '1' } : {}), ...(applicationVersion >= 8 ? { 'x-nexus-application-memories-version': '1' } : {}), ...(applicationVersion >= 9 ? { 'x-nexus-application-ota-version': '1' } : {}), ...(applicationVersion >= 10 ? { 'x-nexus-application-field-day-version': '1' } : {}), ...(applicationVersion >= 11 ? { 'x-nexus-application-js8-version': '1' } : {}), ...(applicationVersion >= 12 ? {'x-nexus-application-station-modes-version':'1'} : {}), ...(applicationVersion >= 13 ? {'x-nexus-application-navigation-version':'1'} : {}), ...(applicationVersion >= 14 ? {'x-nexus-application-configuration-version':'1'} : {}) }
-    let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0
+    let code=null, oauth=null, exchanges=0, providerFailure=false, exceptions=0, acknowledgements=0, unexpectedMessages=0, applicationFramesSent=0
     const applicationTraffic = { reads: 0, acks: 0, subscriptions: 0, batches: 0, bytes: 0, byCommand: {}, maxResponseBytes: 0 }
     browser.on('Runtime.exceptionThrown', event=>{exceptions++; console.error(event.exceptionDetails?.exception?.description ?? 'Browser runtime exception')})
     browser.on('Fetch.requestPaused', (event,session) => { void (async()=>{
@@ -148,6 +157,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       if (event.response.opcode !== 1) return
       try {
         const message = JSON.parse(event.response.payloadData)
+        if (typeof message.type === 'string' && message.type.startsWith('application')) applicationFramesSent++
         if (message.type === 'ack' && Object.keys(message).sort().join(',') === 'epoch,sequence,type') acknowledgements++
         else if (message.type === 'applicationHello' && (Object.keys(message).length === 1 || (Object.keys(message).length === 2 && APPLICATION_VERSIONS.includes(message.version)))) {}
         else if(message.type==='operationRequest'&&((Object.keys(message).length===2)||Object.keys(message).length===3&&[2,3,4,5].includes(message.operationVersion))&&['state','acquire','heartbeat','release','result','logManual','stationControl','stopTransmit'].includes(message.request?.type)){if(!operating)assert.equal(message.request.type,'state');operationWire.push({at:performance.now(),direction:'out',type:message.request.type,requestId:message.request.requestId,action:message.request.action?.action,on:message.request.action?.on})}
@@ -820,7 +830,16 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       try{
         await geometry(1280,800)
         await evaluate(`window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.violatedDirective+' '+e.blockedURI));true`)
+        // REMOVAL STAGE 3: a returning operator's browser can still hold the old workspace's receipt for
+        // this station, a command it never saw settle. The stream commands nothing and carries none of it:
+        // loaded, its session polled for that command's result, the relay refused it by name, and the
+        // page's lease lane stopped for good. Asserted before the stream is started, where that bit.
+        const streamLane=['state','acquire','heartbeat','release','stopTransmit'],outbound=()=>operationWire.filter(w=>w.direction==='out').map(w=>w.type)
+        await evaluate(`localStorage.setItem('nexus.remote.pending-control.${pair.stationId}',JSON.stringify({version:1,operationId:crypto.randomUUID(),action:{action:'decoder.clear',receiver:'cw'}}));true`)
         await click(button('Stream Nexus'))
+        await until(`!!document.querySelector('.remote-stream-app')`,15000)
+        await sleep(2000)
+        assert.deepEqual(outbound().filter(type=>!streamLane.includes(type)),[],'nothing of the old command path leaves the page, even holding the old workspace\'s receipt')
         await until(`!!document.querySelector('.remote-stream-app')&&!!${button('Start the stream')}`,15000)
         assert.equal(offers.length,0,'A3: nothing is offered before the operator starts it, even with station control available')
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'stream-ready.png'),Buffer.from(shot.data,'base64'))}
@@ -926,6 +945,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await until(`document.querySelector('.remote-stream-app')?.dataset.streamPhase==='idle'&&!document.querySelector('.remote-stream-video')?.srcObject`)
         for(let i=0;i<30&&!closes.length;i++)await sleep(100)
         assert.equal(closes.length,1,'the station is told the stream ended')
+        // REMOVAL STAGE 3, the whole session: the stream took its lease and sent its Stop on the operation
+        // lane and used nothing else of it, and never opened the retired application lane.
+        for(let i=0;i<30&&!outbound().includes('release');i++)await sleep(100)
+        assert.deepEqual(outbound().filter(type=>!streamLane.includes(type)),[],'the stream used the lease lane and Stop, and nothing of the old command path')
+        for(const type of ['acquire','heartbeat','stopTransmit','release'])assert.ok(outbound().includes(type),`control: the stream's ${type} left the page`)
+        assert.equal(applicationFramesSent,0,'no application frame left the page')
         // POSITIVE CONTROL for the CSP listener above: a request the policy forbids is reported, so the
         // empty list really meant "nothing violated", not "nothing was listening".
         await evaluate(`fetch('https://example.invalid/').catch(()=>{});true`)
@@ -933,7 +958,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok((await evaluate('window.__csp')).some(v=>v.startsWith('connect-src')),'control: a forbidden fetch is reported as a connect-src violation')
         assert.equal(exceptions,0,'the stream view raised no runtime exception')
         assert.equal(unexpectedMessages,0,'only reviewed messages left the browser socket')
-        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation`)
+        console.log(`Compiled browser stream: offer under the held lease, live VP8 picture, heartbeat with decodedFrameAt, pointer and key input, held PTT (${holds.length} holds), a held key and a held button re-asserted (${keyHeld.length} and ${buttonHeld.length}), Stop both ways, Stop TX reachable at 12 layouts, no CSP violation, only the lease lane and Stop on the socket (${outbound().length} requests, holding the old workspace's receipt)`)
       }finally{
         shackLive=false
         await Promise.allSettled([signalling,trickle])
@@ -960,6 +985,15 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     await click(`document.querySelector('.rm-amp-strip')`)
     if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-observer.png'),Buffer.from(shot.data,'base64'))}
     await click(button('Disconnect and return to stations'))
+    // REMOVAL STAGE 3: the station card offers watching and streaming, and not the old workspace.
+    await until(`!!${button('Observe station')}`)
+    if(monitor){
+      assert.equal(await evaluate(`!!${button('Open Nexus')}`),false,'the old workspace is not offered')
+      assert.equal(await evaluate(`!!${button('Stream Nexus')}`),true,'control: the stream is offered on the same card')
+      assert.equal(exceptions,0,'the page raised no runtime exception')
+      console.log('Compiled browser monitor: PKCE sign-in, pairing, device approval, the observer view at every layout, and no workspace offered')
+      return
+    }
     await until(`!!${button('Open Nexus')}`)
     await geometry(1280,800)
     await click(button('Open Nexus'))

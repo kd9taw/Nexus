@@ -1,5 +1,3 @@
-import { pendingLogStorage } from './operation-storage'
-import { pendingControlStorage } from './control-storage'
 import { OperationClient } from './operation-client'
 import { OPERATION_EXPORT_RESPONSE_BYTES, OPERATION_REQUEST_BYTES } from './operation-protocol'
 import { advertisedOperationVersion, parseOperationVersion } from './operation-version'
@@ -246,10 +244,14 @@ export class HostedConnection {
       if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
       this.socket.send(message)
     }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
+    // REMOVAL STAGE 3: the one session on this lane is the stream's, and it commands nothing, so it
+    // carries none of the old workspace's receipts. Loaded, a control the old page never saw settle is
+    // polled for as a `result`, which the relay now refuses by name, and that refusal ends the client's
+    // polling and the lease with it. The receipts stay in this browser's storage, untouched.
     this.operations = new OperationClient(message=>{
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.socket.send(message)
-    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1,pendingControlStorage(()=>localStorage,stationId))
+    },applicationMode&&client.operationVersion>=1,()=>performance.now(),undefined,parseOperationVersion(client.operationVersion)??1)
     this.audio = new AudioLink(message => {
       const text = JSON.stringify(message)
       // Its own budget, deliberately small: a listen request is ~130 bytes and this is
@@ -460,7 +462,9 @@ export class HostedConnection {
           }
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
-            if (this.applicationMode) { this.application.open(); this.operations.open() }
+            // REMOVAL STAGE 3 (the change plan's §4.4): the application lane is retired and never
+            // opened; the stream takes its lease and sends its Stop on the operation lane.
+            if (this.applicationMode) this.operations.open()
             this.sessionId = message.sessionId
             // A session proves the SERVICE is reachable, so this connection starts counting
             // towards its reconnect credit here rather than only when a data frame lands. Those

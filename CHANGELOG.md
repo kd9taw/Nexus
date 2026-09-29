@@ -180,6 +180,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Remote: the page watches your station and streams it; the old controls are gone.** Each station
+  on the Remote page offers **Stream Nexus**, which shows Nexus at the shack live in your browser.
+  **Stop TX**, **Hold PTT** and **Listen** are on the stream. **Observe station** still shows the
+  station's readings, and works on a phone. The old in-browser copy of Nexus's panes and controls
+  (opened with **Open Nexus**) is no longer offered, and the service no longer carries its commands.
+  Nothing changes at the shack: pairing, approving a browser and turning Remote on and off work as
+  before.
 - **ON AIR is now a solid red sign you cannot miss.** While the rig is keyed, the TX state in the
   cockpit header (Phone, CW, RTTY, PSK, SSTV, JS8 and Tempo), Operate's **▲ TRANSMITTING** in the
   QSO strip and the **TX** plate in the top bar all show as a steady red pill with white lettering

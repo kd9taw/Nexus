@@ -287,7 +287,6 @@ export const ES: PartialCatalog = {
   "remote.approveInShackNamed": "«{{station}}» está vinculada a tu cuenta y espera aprobación en Nexus, en la caseta. Compara allí el ID de cuenta y apruébala. El código sirve unos {{minutes}} minutos más.",
   "remote.licenses": "Licencias y créditos",
   "remote.nativeIntro": "Vincula esta estación a tu cuenta remota. Al aprobar la vinculación, Remote se activa y se autoriza el navegador desde el que vinculaste; autoriza aquí cualquier otro navegador. Mientras Remote esté activado, los navegadores autorizados reciben datos de estación, contactos, radio y amplificador.",
-  "remote.openNexus": "Abrir Nexus",
   "remote.browserWorkspace": "Nexus Remote",
   "remote.quick.name": "Operación rápida",
   "remote.quick.full": "Nexus completo",

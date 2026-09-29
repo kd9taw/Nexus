@@ -244,7 +244,6 @@ export const EN = {
   "remote.approveInShackNamed": "\"{{station}}\" is linked to your account and waiting for approval in Nexus at the shack. Match the account ID there and approve it. The code is good for about {{minutes}} more minutes.",
   "remote.licenses": "Licenses and credits",
   "remote.nativeIntro": "Pair this station with your Remote account. Approving the pairing turns Remote on and approves the browser you paired from; approve any other browser here. While Remote is on, approved browsers receive your station, contact, radio and amplifier data.",
-  "remote.openNexus": "Open Nexus",
   "remote.browserWorkspace": "Nexus Remote",
   "remote.quick.name": "Quick Operate",
   "remote.quick.full": "Full Nexus",
