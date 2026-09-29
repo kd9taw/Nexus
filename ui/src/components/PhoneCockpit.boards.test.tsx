@@ -485,9 +485,12 @@ describe('the divider between the two panes', () => {
     }
     await width(1200)
     expect(region.getAttribute('data-cols')).toBe('2')
-    // Between the two, in the same column.
+    // Between the two, in the same column — and marked as a column's divider, the class the sheet
+    // keys its in-gap margins on (styles.css `.in-column`; cockpit-shells.test.ts computes the net).
     expect(sep()!.previousElementSibling).toBe(pane('spots'))
     expect(sep()!.nextElementSibling).toBe(pane('needed'))
+    expect(sep()!.parentElement!.classList.contains('cockpit-col')).toBe(true)
+    expect(sep()!.classList.contains('in-column'), 'the divider takes a 12 px gap of its own').toBe(true)
     // Tier 3 puts Needed under the strips in the middle column: nothing to split, no divider.
     await width(1800)
     expect(region.getAttribute('data-cols')).toBe('3')

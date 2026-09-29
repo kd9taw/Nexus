@@ -706,37 +706,66 @@ function spacePx(v: string, scale: number): number | null {
   return new Function(`return (${expr})`)() as number
 }
 
-describe('an L6 divider costs its column nothing: its margins give back the gap it adds', () => {
-  // Each divider is one more flex child of its shell, so it adds one more gap. Its own box nets 0
-  // (8 px tall, -4 px each side), and in RTTY, PSK and SSTV its block margins also take back that
-  // gap, so it sits in the gap its neighbours already had. Measured in Chrome before this: RTTY's
-  // log strip lost 23 px at 1024×768 to two dividers, and SSTV's growing stage lost 6 px at
-  // 2560×1440, which dropped a picture in flight from 4× to 3×. Computed at the spacing scale the
-  // dividers render at, 1: `--space-scale` drops below 1 only at the sm/xs viewports, and those
-  // hide every divider (`[data-viewport='sm'] .pane-splitter { display: none }`).
-  for (const shell of ['rtty-cockpit', 'psk-cockpit', 'sstv-view']) {
-    it(`.${shell}: a divider's height, both margins and the shell's gap sum to zero`, () => {
-      const chain = [...shellChain(shell), new Set(['pane-splitter', 'horizontal'])]
-      const gap = winningValue(shellChain(shell), (b) => {
-        let g: string | null = null
-        for (const decl of b.split(';')) {
-          const m = /^\s*(gap|row-gap)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
-          if (m) g = splitSpaces(m[2])[0]
-        }
-        return g
-      })
+describe('a y divider costs its column nothing: its margins give back the gap it adds', () => {
+  // Each divider is one more flex child of its column, so it adds one more gap. Its own box nets 0
+  // (8 px tall, -4 px each side), and its block margins also take back that gap, so it sits in the
+  // gap its neighbours already had. Measured in Chrome before this: RTTY's log strip lost 23 px at
+  // 1024×768 to two dividers, and SSTV's growing stage lost 6 px at 2560×1440, which dropped a
+  // picture in flight from 4× to 3× (layout L6); Phone, CW, JS8 and Operate took the same rule in
+  // L5 (ruling D-C). Computed at the spacing scale the dividers render at, 1: `--space-scale` drops
+  // below 1 only at the sm/xs viewports, and those hide every divider
+  // (`[data-viewport='sm'] .pane-splitter { display: none }`).
+  const gapOf = (b: string) => {
+    let g: string | null = null
+    for (const decl of b.split(';')) {
+      const m = /^\s*(gap|row-gap)\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+      if (m) g = splitSpaces(m[2])[0]
+    }
+    return g
+  }
+  /** A pane-grid column's gap. `.cockpit-col` lives in cockpit-panes.css, which this file does not
+   *  parse and styles.css may not name; its one rule is a flat selector, so its gap is read there. */
+  const columnGap = (): { value: string; selector: string } | null => {
+    const sheet = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    let v: string | null = null
+    for (const m of sheet.matchAll(/(^|})\s*\.cockpit-col\s*\{([^}]*)\}/g)) v = gapOf(m[2]) ?? v
+    return v == null ? null : { value: v, selector: '.cockpit-col (cockpit-panes.css)' }
+  }
+  const OPERATE = shellChain('operate-cockpit')
+  const BODY = [...OPERATE, new Set(['cockpit-body'])]
+  const SIDE = [...BODY, new Set(['cockpit-lower', 'roster']), new Set(['cockpit-side'])]
+  /** [what, the column's chain (null: a pane-grid column), the divider's own classes] */
+  const CASES: Array<[string, Array<Set<string>> | null, Array<Set<string>>, string[]]> = [
+    ...['rtty-cockpit', 'psk-cockpit', 'sstv-view', 'phone-cockpit', 'cw-cockpit', 'js8-cockpit'].map(
+      (shell): [string, Array<Set<string>>, Array<Set<string>>, string[]] => [`.${shell}`, shellChain(shell), shellChain(shell), ['pane-splitter', 'horizontal']],
+    ),
+    ...['phone-cockpit', 'js8-cockpit'].map(
+      (shell): [string, null, Array<Set<string>>, string[]] => [
+        `.${shell} .cockpit-col`,
+        null,
+        [...shellChain(shell), new Set(['cockpit-panes']), new Set(['cockpit-col'])],
+        ['pane-splitter', 'horizontal', 'seam', 'in-column'],
+      ],
+    ),
+    ['.operate-cockpit .cockpit-body', BODY, BODY, ['pane-splitter', 'horizontal']],
+    ['.operate-cockpit .cockpit-side', SIDE, SIDE, ['pane-splitter', 'horizontal', 'seam']],
+  ]
+  for (const [what, columnChain, parent, own] of CASES) {
+    it(`${what}: a divider's height, both margins and the column's gap sum to zero`, () => {
+      const chain = [...parent, new Set(own)]
+      const gap = columnChain ? winningValue(columnChain, gapOf) : columnGap()
       const height = winningValue(chain, blockLonghand('height'))
       const top = winningValue(chain, blockMargin('top'))
       const bottom = winningValue(chain, blockMargin('bottom'))
-      expect(gap && height && top && bottom, `.${shell}: gap, height or a margin is not declared`).toBeTruthy()
+      expect(gap && height && top && bottom, `${what}: gap, height or a margin is not declared`).toBeTruthy()
       const px = [gap!, height!, top!, bottom!].map((w) => spacePx(w.value, 1))
       expect(px.every((x) => x !== null), `unreadable: ${[gap, height, top, bottom].map((w) => w!.value).join(' | ')}`).toBe(true)
       const [g, h, t, b] = px as number[]
       expect(
         h + t + b + g,
-        `.${shell}: the divider takes ${(h + t + b + g).toFixed(2)} px of the column (height ${h}, margins ` +
-          `${t} / ${b} from \`${top!.selector}\` / \`${bottom!.selector}\`, gap ${g}): a layout nobody has ` +
-          'divided is no longer the one it was.',
+        `${what}: the divider takes ${(h + t + b + g).toFixed(2)} px of the column (height ${h}, margins ` +
+          `${t} / ${b} from \`${top!.selector}\` / \`${bottom!.selector}\`, gap ${g} from \`${gap!.selector}\`): ` +
+          'a layout nobody has divided is no longer the one it was.',
       ).toBeCloseTo(0, 6)
     })
   }

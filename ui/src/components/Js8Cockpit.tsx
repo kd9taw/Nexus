@@ -859,6 +859,7 @@ export function Js8Cockpit({
       onCommit={(a, b) => panels.setShares({ activity: a, offsets: b })}
       onReset={() => panels.setShares({ activity: null, offsets: null })}
       label={t('js8.seam.activityOffsets.label')}
+      className="in-column"
     />
   )
   const heardSeam = heardPair && panels && (
@@ -869,6 +870,7 @@ export function Js8Cockpit({
       onCommit={(a, b) => panels.setShares({ stations: a, inbox: b })}
       onReset={() => panels.setShares({ stations: null, inbox: null })}
       label={t('js8.seam.stationsInbox.label')}
+      className="in-column"
     />
   )
 

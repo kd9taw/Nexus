@@ -21769,21 +21769,31 @@ button.sat-chip:disabled {
 .pane-splitter.seam {
   flex: 0 0 auto;
 }
-/* RTTY's, PSK's and SSTV's dividers (layout L6) sit IN the gap that was already there. A divider
-   is one more flex child of the shell, and one more child costs the column one more gap: 12 px
-   on top of its own net 0 (the 8 px box and its -4 px margins above). Measured in Chrome at the
-   first cut, that cost was a changed stock layout: RTTY's log strip lost 23 px at 1024×768 to its
-   two dividers and PSK's waterfall 22 px, and SSTV's growing stage lost 6 px at 2560×1440, enough
-   to drop a picture in flight from 4× to 3×. These margins give the added gap back (half of it
-   each side, on top of the base rule's own half-height overlap), so the divider is centred in the
-   gap between its neighbours and takes nothing from the column. Exact at the spacing scale the
-   dividers render at: `--space-scale` drops below 1 only at the sm/xs viewports, which hide every
-   divider. Phone's, CW's, JS8's and Operate's dividers still take their gap (cockpit-shells.test.ts
-   computes the net for these three). */
+/* EVERY y DIVIDER SITS IN THE GAP THAT WAS ALREADY THERE (layout L6 for RTTY, PSK and SSTV; L5,
+   ruling D-C, for Phone, CW, JS8 and Operate). A divider is one more flex child of its column,
+   and one more child costs the column one more gap on top of its own net 0 (the 8 px box and
+   its -4 px margins above). Measured in Chrome, that cost was a changed stock layout: RTTY's log
+   strip lost 23 px at 1024×768 to its two dividers and PSK's waterfall 22 px, and SSTV's growing
+   stage lost 6 px at 2560×1440, enough to drop a picture in flight from 4× to 3×. These margins
+   give the added gap back (half of it each side, on top of the base rule's own half-height
+   overlap), so a divider is centred in the gap between its neighbours and takes nothing from the
+   column. Each rule names the gap it gives back: the cockpit shells' and the pane grid's columns'
+   (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
+   a column carry `in-column` instead), and Operate's body and side rail (8 px).
+   Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
+   sm/xs viewports, which hide every divider. cockpit-shells.test.ts computes each net. */
 .layout.single.rtty-cockpit > .pane-splitter.horizontal,
 .layout.single.psk-cockpit > .pane-splitter.horizontal,
-.layout.single.sstv-view > .pane-splitter.horizontal {
+.layout.single.sstv-view > .pane-splitter.horizontal,
+.layout.single.phone-cockpit > .pane-splitter.horizontal,
+.layout.single.cw-cockpit > .pane-splitter.horizontal,
+.layout.single.js8-cockpit > .pane-splitter.horizontal,
+.pane-splitter.horizontal.in-column {
   margin-block: calc(-0.5 * var(--space-3) - var(--space-1));
+}
+.cockpit-body > .pane-splitter.horizontal,
+.cockpit-side > .pane-splitter.horizontal {
+  margin-block: calc(-0.5 * var(--space-2) - var(--space-1));
 }
 
 /* --- MiniSpectrum: compact live spectrum (Settings audio check + Connect pane) --- */

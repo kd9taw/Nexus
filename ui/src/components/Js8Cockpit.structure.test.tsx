@@ -450,6 +450,12 @@ describe('Js8Cockpit dividers between panes', () => {
     await tier(region, 1800)
     expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
     expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
+    // A column's dividers, marked as such: the class the sheet keys their in-gap margins on
+    // (styles.css `.in-column`; cockpit-shells.test.ts computes the net).
+    for (const name of [/^Activity \/ Band activity$/, /^Stations \/ Inbox$/]) {
+      expect(seam(name)!.parentElement!.classList.contains('cockpit-col')).toBe(true)
+      expect(seam(name)!.classList.contains('in-column'), `${name} takes a 12 px gap of its own`).toBe(true)
+    }
     // Two columns: all four in the leading column, each divider still between its own pair.
     await tier(region, 1200)
     expect(region.getAttribute('data-cols')).toBe('2')
