@@ -288,6 +288,15 @@ describe('APRS: the station list column and the map', () => {
     })
   }
 
+  it('xs wins over the map side by SPECIFICITY, not by where the rules happen to sit in the sheet', () => {
+    // Move every map-side rule after everything else: a stack that held only by source order would
+    // come apart the day someone reorders the sheet (the Connect rails' :where() lesson).
+    const last = Math.max(...RULES.map((r) => r.order))
+    const reordered = RULES.map((r) => (r.selector.includes("data-map='left'") ? { ...r, order: r.order + last } : r))
+    const cols = winner(reordered, aprsBody('xs', true), 'grid-template-columns')!
+    expect(tracks(cols.value), `\`${cols.selector}\` wins at xs`).toEqual(['minmax(0, 1fr)'])
+  })
+
   const seam = (vp: string, mapLeft = false): El[] => [...aprsBody(vp, mapLeft), { cls: ['pane-splitter', 'aprs-railseam'] }]
 
   for (const vp of TIERS)

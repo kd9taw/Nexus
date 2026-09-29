@@ -16,8 +16,10 @@ const KEY = 'nexus.split.logbook.globe'
 const SCROLL_H = 500
 const BAND_H = 320
 
-/** Every element a ResizeObserver was asked to watch. */
-let watched: Element[] = []
+/** Every ResizeObserver made, with its callback and the elements it watches. */
+let observers: Array<{ cb: () => void; els: Element[] }> = []
+/** Reads of the rows' offset (the Logbook's list-offset measurement is the only reader). */
+let offsetReads = 0
 beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
@@ -66,14 +68,29 @@ const aria = (el: HTMLElement) => ['aria-valuenow', 'aria-valuemin', 'aria-value
 const realRect = HTMLElement.prototype.getBoundingClientRect
 beforeEach(() => {
   localStorage.clear()
-  watched = []
+  observers = []
+  offsetReads = 0
   globalThis.ResizeObserver = class {
+    entry: { cb: () => void; els: Element[] }
+    constructor(cb: () => void) {
+      this.entry = { cb, els: [] }
+      observers.push(this.entry)
+    }
     observe(el: Element) {
-      watched.push(el)
+      this.entry.els.push(el)
     }
     unobserve() {}
-    disconnect() {}
+    disconnect() {
+      this.entry.els = []
+    }
   } as unknown as typeof ResizeObserver
+  Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('log-rows')) offsetReads++
+      return 0
+    },
+  })
   HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
     const box = (height: number) => ({ x: 0, y: 0, left: 0, top: 0, width: 900, height, right: 900, bottom: height, toJSON() {} }) as DOMRect
     if (this.classList.contains('log-scroll')) return box(SCROLL_H)
@@ -129,9 +146,14 @@ describe('the Logbook’s globe | table divider', () => {
     expect(localStorage.getItem(KEY)).toBe('95')
   })
 
-  it('the rows’ offset is re-measured when the band changes size (the band is observed)', async () => {
+  it('the rows’ offset is re-measured when the band alone changes size', async () => {
     const c = await mount()
-    expect(watched, 'a band resized by its divider would leave the list offset stale').toContain(band(c))
+    // What a divider move is to the page: the band's box changes, the scroller's does not. Only
+    // the observers watching the band fire. (The divider's own observer watches the band too, and
+    // does not measure the rows: counting a watcher would not tell the two apart, a read does.)
+    offsetReads = 0
+    act(() => observers.filter((o) => o.els.includes(band(c)!)).forEach((o) => o.cb()))
+    expect(offsetReads, 'a band resized by its divider would leave the list offset stale').toBeGreaterThan(0)
   })
 
   it('no band, no divider: the globe switched off takes both', async () => {
