@@ -54,6 +54,13 @@
 //! chunks. A contest QSO therefore waits at most one chunk, and a stamp on a row the import is
 //! also writing waits for the import, as it must.
 //!
+//! **A purge is the one write that is never chunked.** It was one statement (`clear`), one
+//! transaction over the whole log, and a contest QSO logged meanwhile waited for it. The
+//! operator's Clear now names its rows (the contacts its window held, [`RemoveLater`]) and is
+//! written the same way, in one transaction (`Job::whole`), which holds the lock about as long
+//! as the statement did: 1.65 s against 1.5 s at 150,000 contacts. In chunks it took 28.6 s
+//! against the statement's 2.1 s, each chunk rewriting every index page its rows sat on.
+//!
 //! ⚠️ **Chunking gives up whole-import atomicity, and that is a real behaviour change.** Today
 //! an import is one atomic file rewrite: a crash leaves the old log. Here a crash mid-import
 //! leaves a prefix of it. That is the price §v3.13/R8 names for keeping one database, and the
@@ -74,7 +81,8 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Rows one transaction may carry.
+/// Rows one transaction may carry, but for a purge, which is one transaction whatever its size
+/// (see the module header).
 ///
 /// A latency budget, not a throughput one: an interactive write waits for at most the chunk
 /// in progress, so a chunk must commit well inside the 50 ms a contest QSO's insert is
@@ -141,10 +149,11 @@ pub struct Change {
     pub priority: Priority,
     /// Drop every row first — in one statement, whatever `remove` names.
     pub clear: bool,
-    /// Rows the log no longer holds. A purge's are not written: `clear` drops every row in one
-    /// statement. The process that sent it keeps the rows it took out, and a re-send after the
-    /// writer gave the purge up takes out exactly those — listed on the writer's thread when the
-    /// sender holds them as an index ([`RemoveLater`]).
+    /// Rows the log no longer holds. A `clear` purge's are not written: it drops every row in
+    /// one statement. The process that sent it keeps the rows it took out, and a re-send after
+    /// the writer gave the purge up takes out exactly those — listed on the writer's thread when
+    /// the sender holds them as an index ([`RemoveLater`]), as the operator's Clear is from its
+    /// first send.
     pub remove: Vec<RecordId>,
     /// Rows as the log now holds them.
     pub upsert: Vec<RowWrite>,
@@ -689,9 +698,10 @@ type CopyRequest = (
 
 /// Rows a change takes out that its sender does not list: named by a function the writer calls on
 /// its own thread when the change arrives, so the list is made in the order the change was sent,
-/// and never under the lock the sender sends from (SPEC-2 v3 §4.11). A purge the writer gave up
-/// on is sent again as the rows it took out, which is the whole log's ids ([`LogWriter::
-/// submit_removing_later`]).
+/// and never under the lock the sender sends from (SPEC-2 v3 §4.11). The operator's Clear is sent
+/// as the rows its window held, and a purge the writer gave up on is sent again as the rows it
+/// took out ([`LogWriter::submit_removing_later`]). Either is written in one transaction, as the
+/// one statement a purge was.
 pub struct RemoveLater(pub Box<dyn FnOnce() -> Vec<RecordId> + Send>);
 
 impl std::fmt::Debug for RemoveLater {
@@ -797,7 +807,7 @@ impl LogWriter {
 
     /// [`Self::submit`] for a change that also takes out the rows `later` names, listed on the
     /// writer's thread when the change arrives: a list the size of the log the sender never
-    /// makes under its lock.
+    /// makes under its lock. A purge: written in one transaction, however many rows it names.
     pub fn submit_removing_later(&self, change: Change, later: RemoveLater) -> Ticket {
         self.submit_as(change, |c, slot| Msg::WriteRemovingLater(c, slot, later))
     }
@@ -1099,6 +1109,13 @@ struct Job {
     /// expectation is let go once the chunk that wrote it is in: a later chunk of the same change
     /// that takes the row again finds it as the change itself left it.
     expect: HashMap<RecordId, sqlite::Expect>,
+    /// Written in ONE transaction, however many rows it has: a purge that names its rows
+    /// ([`RemoveLater`]), as the one statement it stands in for was. In chunks, each chunk
+    /// rewrote every index page its rows sat on, so a purge of 150,000 contacts took 28.6 s
+    /// against the statement's 2.1 s; whole, it takes the store's lock about as long as the
+    /// statement did (1.65 s against 1.5 s), and a contact logged meanwhile waits for it, as it
+    /// waited for the statement.
+    whole: bool,
     cursor: Cursor,
 }
 
@@ -1128,7 +1145,18 @@ impl Job {
             slot,
             touched,
             expect: c.expect.into_iter().collect(),
+            whole: false,
             cursor: Cursor::default(),
+        }
+    }
+
+    /// A purge that names its rows: `c` and the rows `later` lists, here on the writer's thread,
+    /// written in one transaction ([`Job::whole`]).
+    fn removing_later(mut c: Change, slot: Arc<Slot>, later: RemoveLater) -> Job {
+        c.remove.extend((later.0)());
+        Job {
+            whole: true,
+            ..Job::new(c, slot)
         }
     }
 
@@ -1168,9 +1196,15 @@ struct Chunk<'a> {
 /// watermark that ran ahead of the rows would be a cache key that lies, where one that lags
 /// only costs a rebuild. The change's `log_meta` keys ride with them, for the same reason.
 fn plan(job: &Job) -> Chunk<'_> {
+    // A whole job's one chunk is all of it ([`Job::whole`]).
+    let rows = if job.whole {
+        job.remove.len() + job.upsert.len()
+    } else {
+        CHUNK_ROWS
+    };
     let from = job.cursor.removed;
-    let removed = (from + CHUNK_ROWS).min(job.remove.len());
-    let budget = CHUNK_ROWS - (removed - from);
+    let removed = (from + rows).min(job.remove.len());
+    let budget = rows - (removed - from);
     let up_from = job.cursor.upserted;
     let upserted = if removed == job.remove.len() {
         (up_from + budget).min(job.upsert.len())
@@ -1318,10 +1352,9 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Share
                     unresolved.insert(c.rev);
                     queue.push_back(Job::new(*c, slot));
                 }
-                Ok(Msg::WriteRemovingLater(mut c, slot, later)) => {
-                    c.remove.extend((later.0)());
+                Ok(Msg::WriteRemovingLater(c, slot, later)) => {
                     unresolved.insert(c.rev);
-                    queue.push_back(Job::new(*c, slot));
+                    queue.push_back(Job::removing_later(*c, slot, later));
                 }
                 Ok(Msg::Copy(request)) => copies.push_back(request),
                 Ok(Msg::Foreign(reply)) => looks.push(reply),
@@ -1356,10 +1389,9 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, gone: &Receiver<Gone>, shared: &Share
                     unresolved.insert(c.rev);
                     queue.push_back(Job::new(*c, slot));
                 }
-                Ok(Msg::WriteRemovingLater(mut c, slot, later)) => {
-                    c.remove.extend((later.0)());
+                Ok(Msg::WriteRemovingLater(c, slot, later)) => {
                     unresolved.insert(c.rev);
-                    queue.push_back(Job::new(*c, slot));
+                    queue.push_back(Job::removing_later(*c, slot, later));
                 }
                 Ok(Msg::Copy(request)) => copies.push_back(request),
                 Ok(Msg::Foreign(reply)) => looks.push(reply),
@@ -2382,10 +2414,12 @@ mod tests {
         );
     }
 
-    /// A purge is ONE statement. Its effects name every row in the log, and turning those
-    /// into addressed deletes would be the single-transaction bulk write §v3.13/R8 forbids. The
-    /// change names them all the same, for the re-send of a purge the writer gave up, and the
-    /// writer writes none of them.
+    /// A `clear` purge is ONE statement. Its effects name every row in the log, and the change
+    /// names them all the same, for the re-send of a purge the writer gave up; the writer writes
+    /// none of them one by one. Turning them into addressed deletes was read here as the
+    /// single-transaction bulk write §v3.13/R8 forbids. A purge that names its rows is now
+    /// exactly that, measured to hold the lock as long as this statement does (module header;
+    /// [`a_purge_that_names_its_rows_is_one_transaction`]).
     #[test]
     fn a_purge_is_one_statement_and_not_a_delete_per_row() {
         let mut log = Logbook::new();
@@ -2429,6 +2463,66 @@ mod tests {
         let purge = w.submit(change);
         w.wait_durable(&purge, Duration::from_secs(60)).expect("ok");
         assert_eq!(rows(&stored(&scratch.db())), 0);
+    }
+
+    /// ⛔ A PURGE THAT NAMES ITS ROWS IS ONE TRANSACTION, however many it names. The operator's
+    /// Clear takes out the rows its window held, by id ([`RemoveLater`]), where it once dropped
+    /// every row in one statement. Written in the usual chunks, a large log's purge rewrote every
+    /// index page it touched once per chunk: 150,000 contacts took 28.6 s where the statement took
+    /// 2.1 s (release, `tests/log_bench.rs` in tempo-app). In one transaction the same deletes cost
+    /// what the statement did. Seen here without a clock: a purge the store refuses at its very
+    /// end takes out NOTHING, where chunked, the chunks before the refusal would stand.
+    #[test]
+    fn a_purge_that_names_its_rows_is_one_transaction() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let n = CHUNK_ROWS as u64 * 2 + 10;
+        let seed = w.submit(change(1, (0..n).map(|k| rec("W1AW", k)).collect()));
+        w.wait_durable(&seed, Duration::from_secs(60))
+            .expect("seeded");
+        let ids: Vec<RecordId> = (0..n).map(|k| rec("W1AW", k).id.expect("an id")).collect();
+
+        // The purge's last row is one the store refuses (it has no id): the refusal comes after
+        // every row the purge names has been taken out, in whatever transactions that took.
+        let mut orphan = (*rec("K5XYZ", 99_999)).clone();
+        orphan.id = None;
+        let listed = ids.clone();
+        let refused = w.submit_removing_later(
+            Change {
+                rev: 2,
+                upsert: vec![RowWrite::new(Arc::new(orphan))],
+                ..Change::default()
+            },
+            RemoveLater(Box::new(move || listed)),
+        );
+        assert!(
+            w.wait_durable(&refused, Duration::from_secs(60)).is_err(),
+            "premise: the store refuses the purge at its last row"
+        );
+        let left = rows(&stored(&scratch.db()));
+        assert_eq!(
+            left,
+            n as i64,
+            "and the purge takes out nothing: {} of its {n} rows were taken out in transactions \
+             of their own before the refusal",
+            n as i64 - left
+        );
+
+        // CONTROL: the same purge with nothing wrong in it takes out every row it names.
+        let ok = w.submit_removing_later(
+            Change {
+                rev: 3,
+                ..Change::default()
+            },
+            RemoveLater(Box::new(move || ids)),
+        );
+        w.wait_durable(&ok, Duration::from_secs(60))
+            .expect("purged");
+        assert_eq!(
+            rows(&stored(&scratch.db())),
+            0,
+            "CONTROL: every row it names is taken out"
+        );
     }
 
     /// A delete takes the row's children with it, and an upsert REPLACES them rather than

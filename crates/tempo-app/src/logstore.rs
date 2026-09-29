@@ -758,9 +758,10 @@ impl LogStore {
     /// [`Self::submit`] for a purge — a `clear` change that names no row — with `taken`, the hot
     /// index as it stood, for the rows it took out (SPEC-2 v3 C19, §4.11): held as the purge's
     /// rows, moved and never listed, so the purge costs the Engine lock the same whatever the
-    /// log's size. The store takes out exactly those rows, listed on the writer's thread — the
-    /// contacts this window had when the operator cleared the log — and never every row: a
-    /// contact another window logged meanwhile survives it (the operator's ruling of 2026-09-28).
+    /// log's size. The store takes out exactly those rows, listed on the writer's thread and taken
+    /// out in one transaction — the contacts this window had when the operator cleared the log —
+    /// and never every row: a contact another window logged meanwhile survives it (the
+    /// operator's ruling of 2026-09-28).
     /// `None` for `taken` when the index could not say (it had not followed the log): then the
     /// store drops every row, as a purge always did, and holds none of them, so one the writer
     /// gives up on is sent again as nothing, never as every row.
