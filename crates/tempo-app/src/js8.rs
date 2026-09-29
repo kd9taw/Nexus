@@ -2144,4 +2144,21 @@ mod tests {
             assert!(!overs.is_empty(), "{to}: and it keys");
         }
     }
+
+    // ===== <MYGRID4> / <MYGRID12> =====
+
+    /// The operator's send reaches the station with JS8Call's grid macros still in it, and goes out
+    /// with them replaced by Settings' locator (`buildMacroValues`, mainwindow.cpp:7024-7025).
+    #[test]
+    fn a_js8_send_goes_out_with_the_grid_macros_replaced() {
+        let mut e = hb_engine("EN52hw", 0, 1500.0);
+        e.js8_send(None, "QTH <MYGRID4>, <MYGRID12> TO BE EXACT".into())
+            .expect("queues");
+        let queue = e.js8_state().queue;
+        assert_eq!(
+            queue.first().map(|q| q.display.as_str()),
+            Some("KD9TAW: QTH EN52, EN52HW TO BE EXACT"),
+            "the queued message carries the locator"
+        );
+    }
 }

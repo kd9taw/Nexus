@@ -589,7 +589,10 @@ impl Station {
             Command::GridQuery if self.cfg.grid.is_empty() => None,
             Command::InfoQuery if self.cfg.info.is_empty() => None,
             Command::GridQuery => Some(format!("{from} GRID {}", self.cfg.grid)),
-            Command::InfoQuery => Some(format!("{from} INFO {}", self.cfg.info)),
+            Command::InfoQuery => Some(format!(
+                "{from} INFO {}",
+                self.expand_grid_macros(&self.cfg.info)
+            )),
             Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text())),
             Command::HearingQuery => Some(format!("{from} HEARING {}", self.hearing_text())),
             Command::Nack | Command::Ack => None, // acks are logged, not answered
@@ -777,8 +780,22 @@ impl Station {
         if self.cfg.status.is_empty() {
             format!("IDLE {} VERSION Nexus", self.idle_minutes())
         } else {
-            clamp_str(&self.cfg.status, MAX_INFO_LEN)
+            clamp_str(&self.expand_grid_macros(&self.cfg.status), MAX_INFO_LEN)
         }
+    }
+
+    /// JS8Call's `<MYGRID4>` and `<MYGRID12>` (`buildMacroValues`, mainwindow.cpp:7024-7025): the
+    /// locator's first 4 and first 12 characters, upper-cased, stand wherever the token does
+    /// (`replaceMacros`, :181-194, which walks its map in key order, `<MYGRID12>` first). JS8Call's
+    /// editor has upper-cased the text by then; the token is matched here whatever its case, for
+    /// the same result. Its other macros are not Nexus's, and their tokens are left as typed.
+    fn expand_grid_macros(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for (token, n) in [("<MYGRID12>", 12), ("<MYGRID4>", 4)] {
+            let value: String = self.cfg.grid.chars().take(n).collect();
+            out = replace_ignoring_ascii_case(&out, token, &value.to_ascii_uppercase());
+        }
+        out
     }
 
     fn hearing_text(&self) -> String {
@@ -1043,7 +1060,8 @@ impl Station {
         now_ms: u64,
     ) -> Result<usize, ComposeError> {
         self.mark_active(now_ms);
-        let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, to, text, self.cfg.speed)?;
+        let text = self.expand_grid_macros(text);
+        let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, to, &text, self.cfg.speed)?;
         let n = seq.len();
         let out = OutMsg {
             origin: Origin::Operator,
@@ -1064,6 +1082,7 @@ impl Station {
     ) -> Result<usize, ComposeError> {
         self.mark_active(now_ms);
         let word = cmd.text().trim();
+        let arg = self.expand_grid_macros(arg);
         let line = if arg.is_empty() {
             format!("{} {word}", to.render())
         } else {
@@ -1373,6 +1392,22 @@ impl Station {
         self.allcall_replied = s.allcall_replied.into_iter().collect();
         self.next_inbox_id = s.next_inbox_id.max(1);
     }
+}
+
+/// Every non-overlapping `token` in `text`, found left to right whatever its ASCII case, replaced
+/// by `value` (`QString::replace`, as JS8Call's `replaceMacros` calls it). ASCII case-folding moves
+/// no byte, so an offset found in the folded copy is an offset in `text`.
+fn replace_ignoring_ascii_case(text: &str, token: &str, value: &str) -> String {
+    let folded = text.to_ascii_uppercase();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (at, _) in folded.match_indices(token) {
+        out.push_str(&text[last..at]);
+        out.push_str(value);
+        last = at + token.len();
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// JS8Call's `findFreeFreqOffset(500, 1000, 50)` (mainwindow.cpp:5592), the heartbeat's call,
@@ -2664,6 +2699,66 @@ mod tests {
                 "{to}: the same frames as the line typed with it"
             );
         }
+    }
+
+    /// A station whose locator is `grid`, with INFO and STATUS set.
+    fn macro_station(grid: &str, info: &str, status: &str) -> Station {
+        Station::new(StationConfig {
+            grid: grid.into(),
+            info: info.into(),
+            status: status.into(),
+            ..cfg()
+        })
+    }
+
+    /// The reply the station schedules to `cmd` from W1AW, as it goes out.
+    fn reply_to(s: &mut Station, cmd: Command) -> Option<String> {
+        s.on_event(&directed("W1AW", "KD9TAW", Some(cmd), None, "", -7), 1000);
+        drain(s, 5000).map(|f| f.display)
+    }
+
+    /// JS8Call answers INFO? and STATUS? with the text's macros replaced (`replaceMacros`,
+    /// mainwindow.cpp:8845, :8855), `<MYGRID4>` and `<MYGRID12>` among them: the locator's first 4
+    /// and first 12 characters, upper-cased (`buildMacroValues`, :7024-7025; `replaceMacros`,
+    /// :181-194). An 8-character locator tells the two apart.
+    #[test]
+    fn info_and_status_replies_expand_the_grid_macros() {
+        let mut s = macro_station("EN52hw12", "QTH <MYGRID4> LOC <MYGRID12>", "");
+        assert_eq!(
+            reply_to(&mut s, Command::InfoQuery).as_deref(),
+            Some("KD9TAW: W1AW INFO QTH EN52 LOC EN52HW12"),
+            "INFO? is answered with the macros replaced"
+        );
+        let mut s = macro_station("EN52hw12", "", "PORTABLE IN <MYGRID4>");
+        assert_eq!(
+            reply_to(&mut s, Command::StatusQuery).as_deref(),
+            Some("KD9TAW: W1AW STATUS PORTABLE IN EN52"),
+            "STATUS? is answered with the macros replaced"
+        );
+    }
+
+    /// Everything the operator sends is framed with its macros replaced: JS8Call runs the message
+    /// box through `replaceMacros` whenever it frames it (`appendMessage`, :5345, from
+    /// `prepareNextMessageFrame`, :5492). Its editor has upper-cased the text by then, so a token
+    /// typed in lower case is replaced here too.
+    #[test]
+    fn a_sent_message_expands_the_grid_macros() {
+        let mut s = macro_station("EN52HW12", "", "");
+        s.send(None, "MY GRID IS <mygrid12>", 0).unwrap();
+        assert_eq!(
+            drain(&mut s, 0).map(|f| f.display).as_deref(),
+            Some("KD9TAW: MY GRID IS EN52HW12"),
+            "a typed message"
+        );
+        let mut s = macro_station("EN52HW12", "", "");
+        let w1aw = CallRef::Base("W1AW".into());
+        s.send_command(&w1aw, Command::Msg, "QRV FROM <MYGRID4>", 0)
+            .unwrap();
+        assert_eq!(
+            drain(&mut s, 0).map(|f| f.display).as_deref(),
+            Some("KD9TAW: W1AW MSG QRV FROM EN52"),
+            "a command's text"
+        );
     }
 
     /// An HB-ACK goes on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
