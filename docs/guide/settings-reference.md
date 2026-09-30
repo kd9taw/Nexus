@@ -283,6 +283,15 @@ Baud continue across to the right.*
 - **PTT Method** — "How transmit is keyed": CAT (via rigctld), Serial RTS, Serial
   DTR, or VOX (no keying). PTT and CAT are independent axes — VOX PTT with full
   CAT control is a valid setup.
+- **Transmit audio source (CAT PTT)** — appears on CAT PTT for a radio whose
+  Hamlib driver can key either of its audio inputs (the Kenwood TS-480, TS-590S,
+  TS-590SG, TS-890S and TS-990S, the Yaesu FTDX-5000, the ELAD FDM-DUO and a few
+  more). **Front/Mic** is how Nexus has always keyed the radio. **Rear/Data** keys
+  its data input instead (Hamlib's data transmit: `TX1;` on a Kenwood), for a sound
+  card on the rear DATA or ACC jack, such as a SignaLink, or on the radio's own USB
+  audio. The symptom it cures: the radio keys but sends no audio from Nexus, while
+  VOX works. The Phone cockpit's PTT and an FSK keyline key as they always have.
+  Per radio.
 - **PTT Serial Port** — appears on RTS/DTR. The COM port your keying line is on,
   for an SO2R controller (u2R/MK2R) that routes PTT separately from CAT. Blank =
   keying shares the CAT port, which is how a single-cable interface like a

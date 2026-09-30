@@ -1287,6 +1287,9 @@ pub struct RadioConfig {
     /// The operator's Icom DATA-mode choice (D1/D2/D3) for this radio. 1 = today's
     /// behaviour; see `RadioProfile::icom_data_mode`.
     pub icom_data_mode: u8,
+    /// The active radio's "Transmit audio source (CAT PTT)" — `"front"` (today's `T 1`) or
+    /// `"rear"`; see `RadioProfile::tx_audio_source` and [`cat_ptt_mode`].
+    pub tx_audio_source: String,
     pub rig_model: u32,
     /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
     /// (`Settings::cat_rts_keys_ptt`). Carried in the STARTUP SEED, not left to the first
@@ -1345,6 +1348,7 @@ impl Default for RadioConfig {
             ptt_method: "vox".to_string(),
             radio_label: String::new(),
             icom_data_mode: 1,
+            tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             rig_model: 0,
             cat_rts_keys_ptt: false,
             serial_port: String::new(),
@@ -2080,6 +2084,10 @@ impl Transport {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
             icom_data_mode: p.icom_data_mode,
+            // A monitor never keys, but an ADOPTED one does (`set_ptt_mode(ptt_mode_for(…))`),
+            // and `rig_differs` compares this, so a Rear/Data radio's pooled connection must
+            // carry it or it could never be adopted.
+            tx_audio_source: p.tx_audio_source.clone(),
             ptt_method: p.ptt_method.clone(),
             rig_model: p.rig_model,
             serial_port: p.serial_port.clone(),
@@ -8850,8 +8858,10 @@ impl RadioLoop {
                             }
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                                 if need_key {
+                                    // Keyed with `ptt_plain`: FSK's tones are the keyed line, not
+                                    // audio, so a Rear/Data radio (#381) keys it as it always has.
                                     self.publish_tx_intent_now(); // before keying
-                                    ptt_err = rig.ptt(true).is_err();
+                                    ptt_err = rig.ptt_plain(true).is_err();
                                 }
                                 k.send(bits.clone(), baud);
                                 self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
@@ -8971,8 +8981,9 @@ impl RadioLoop {
                             // PTT immediately before the bits start; the computed
                             // duration rides tx_until_ms so the existing expiry
                             // unkeys the moment the final stop bit ends (+ tail).
+                            // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
                             self.publish_tx_intent_now(); // before keying
-                            ptt_err = rig.ptt(true).is_err();
+                            ptt_err = rig.ptt_plain(true).is_err();
                             k.send(bits.clone(), baud);
                             let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
@@ -9570,7 +9581,11 @@ impl RadioLoop {
                 }
                 // Report only a KEYING failure (a failed unkey is the watchdog's job); a clean
                 // key or any unkey clears our own PTT status.
-                let ptt_failed = rig.ptt(ptt).is_err();
+                //
+                // `ptt_plain`, not `ptt`: this is the operator talking into the radio's own
+                // microphone (or a broker client's key), so a Rear/Data radio (#381) keys it as it
+                // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
+                let ptt_failed = rig.ptt_plain(ptt).is_err();
                 self.report_ptt(engine, ptt && ptt_failed);
                 self.manual_ptt_applied = ptt;
             }
@@ -12394,6 +12409,9 @@ struct Transport {
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
     icom_data_mode: u8,
+    /// "Transmit audio source (CAT PTT)" (#381), the stored word — see [`cat_ptt_mode`], which
+    /// decides whether it keys the DATA input on this radio at all.
+    tx_audio_source: String,
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
@@ -12416,6 +12434,7 @@ impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
             icom_data_mode: c.icom_data_mode,
+            tx_audio_source: c.tx_audio_source.clone(),
             radio_label: LogLabel(if c.radio_label.is_empty() {
                 radio_label("", c.rig_model)
             } else {
@@ -12463,6 +12482,7 @@ impl Transport {
     fn from_settings(s: &Settings) -> Self {
         Self {
             icom_data_mode: s.icom_data_mode,
+            tx_audio_source: s.tx_audio_source.clone(),
             radio_label: LogLabel(
                 s.radios
                     .iter()
@@ -12528,6 +12548,10 @@ impl Transport {
     /// changed (PTT method, rig model, serial port, baud, rigctld TCP port).
     fn rig_differs(&self, o: &Transport) -> bool {
         self.ptt_method != o.ptt_method
+            // The audio source is part of how PTT keys, so it rebuilds exactly as the PTT method
+            // does. Compared by what it DOES, so an unknown word and "front" are the same key.
+            || tempo_app::settings::tx_audio_source_is_rear(&self.tx_audio_source)
+                != tempo_app::settings::tx_audio_source_is_rear(&o.tx_audio_source)
             || self.rig_model != o.rig_model
             || self.serial_port != o.serial_port
             || self.ptt_serial_port != o.ptt_serial_port
@@ -13074,7 +13098,7 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
         return PttMode::Cat;
     }
     match t.ptt_method.as_str() {
-        "cat" if t.cat_available() => PttMode::Cat,
+        "cat" if t.cat_available() => cat_ptt_mode(t),
         "rts" => PttMode::Serial {
             port: t.ptt_port().to_string(),
             line: SerialLine::Rts,
@@ -13087,6 +13111,27 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
     }
 }
 
+/// How a CAT-PTT transport keys: the radio's DATA input ([`PttMode::CatData`], `T 3`) when the
+/// operator chose "Transmit audio source (CAT PTT): Rear/Data" (#381) for a radio whose Hamlib
+/// driver has mic/data PTT ([`crate::rigmodels::PTT_MIC_DATA_RIGS`]), and plain
+/// [`PttMode::Cat`] (`T 1`, what every release sent) in every other case.
+///
+/// ⚠️ ONE PLACE, TWO CALLERS. `ptt_mode_for` and `open_rig` both use this, for the reason
+/// `keys_on_the_cat_port` gives: the day they disagreed, an adopted radio keyed differently from a
+/// freshly opened one. Only a Hamlib daemon can honour the choice — the OmniRig shim keys from
+/// its own rig file and the native CI-V daemon from Icom's own PTT — so neither is ever given it.
+fn cat_ptt_mode(t: &Transport) -> PttMode {
+    if tempo_app::settings::tx_audio_source_is_rear(&t.tx_audio_source)
+        && crate::rigmodels::hamlib_ptt_mic_data(t.rig_model)
+        && !t.is_omnirig()
+        && native_civ_addr(t).is_none()
+    {
+        PttMode::CatData
+    } else {
+        PttMode::Cat
+    }
+}
+
 /// Build the [`Rig`] for a transport and report its connection status. For CAT,
 /// launches the bundled `rigctld`, sets the dial/mode, and probes by reading the
 /// frequency back; for serial PTT it opens the control line; for VOX `cat_ok` is
@@ -13095,7 +13140,7 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
     match t.ptt_method.as_str() {
         // CAT PTT: control + keying both over the CAT daemon (rigctld, the native CI-V
         // daemon, or the OmniRig shim — `cat_available` is what says one can exist).
-        "cat" if t.cat_available() => open_cat(t, PttMode::Cat, allow_coexist, None),
+        "cat" if t.cat_available() => open_cat(t, cat_ptt_mode(t), allow_coexist, None),
         "cat" => (
             Rig::vox(),
             None,
@@ -16313,12 +16358,14 @@ mod tests {
         assert!(!base.rig_differs(&base.clone()));
 
         // Each CAT-affecting field triggers a rebuild ("CAT reconnects on Save").
-        let mutations: [fn(&mut Settings); 5] = [
+        let mutations: [fn(&mut Settings); 6] = [
             |s| s.ptt_method = "vox".to_string(),
             |s| s.rig_model = 311,
             |s| s.serial_port = "/dev/ttyUSB1".to_string(),
             |s| s.baud = 19200,
             |s| s.rigctld_port = 4533,
+            // Rear/Data (#381) is part of how PTT keys, so it rebuilds as the PTT method does.
+            |s| s.tx_audio_source = "rear".to_string(),
         ];
         for mutate in mutations {
             let mut s = test_settings();
@@ -16332,6 +16379,10 @@ mod tests {
         // An audio-only change must NOT rebuild the rig.
         let mut s = test_settings();
         s.audio_in = "Other Card".to_string();
+        assert!(!base.rig_differs(&Transport::from_settings(&s)));
+        // …nor does a transmit-audio-source word that keys exactly as Front/Mic does.
+        let mut s = test_settings();
+        s.tx_audio_source = String::new();
         assert!(!base.rig_differs(&Transport::from_settings(&s)));
     }
 
@@ -17715,6 +17766,223 @@ mod tests {
         assert!(
             sent.iter().any(|l| l == "f"),
             "the poll ran (positive control): {sent:?}"
+        );
+    }
+
+    /// `s` as a settings file carrying `"txAudioSource": source` (or none at all) would load:
+    /// through serde, the way `settings.json` is read.
+    fn with_tx_audio_source(s: Settings, source: Option<&str>) -> Settings {
+        let mut v = serde_json::to_value(&s).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        match source {
+            Some(src) => {
+                obj.insert("txAudioSource".into(), serde_json::json!(src));
+            }
+            None => {
+                obj.remove("txAudioSource");
+            }
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// Key and unkey a rig built the way the loop builds one for `s`, and return the wire.
+    fn key_and_release(s: Settings) -> Vec<String> {
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut rig = Rig::with_control(Some(addr), ptt_mode_for(&Transport::from_settings(&s)));
+        rig.ptt(true).unwrap();
+        rig.ptt(false).unwrap();
+        let wire = log.lock().unwrap().clone();
+        wire
+    }
+
+    /// ⭐ FAILING-FIRST, #381 (TS-590S + a SignaLink): "Transmit audio source (CAT PTT): Rear/Data".
+    ///
+    /// Nexus's CAT key-down is `T 1`, Hamlib's `RIG_PTT_ON`, and on a TS-590S that is `TX;`.
+    /// Kenwood's PC command reference: "TX … 0: SEND (normal transmission using the MIC input),
+    /// 1: DATA SEND (ACC2/USB input) … If no P1 parameter is specified, it is set to 0 (SEND)."
+    /// A SignaLink on ACC2 was never transmitted. WSJT-X keys `RIG_PTT_ON_DATA` — rigctld `T 3`,
+    /// `TX1;` on this radio (executed against Hamlib 4.7.1) — when the operator picks Rear/Data on
+    /// a radio whose driver has mic/data PTT. Nexus now does the same. The release is `T 0` either
+    /// way, exactly as before.
+    #[test]
+    fn a_rear_data_ts590s_keys_its_data_input_and_releases_as_before() {
+        let mut s = test_settings();
+        s.rig_model = 2031; // Hamlib's TS-590S: RIG_PTT_RIG_MICDATA
+        assert_eq!(
+            key_and_release(with_tx_audio_source(s, Some("rear"))),
+            ["T 3", "T 0"],
+            "Rear/Data keys the DATA input (T 3 = RIG_PTT_ON_DATA) and releases with T 0"
+        );
+    }
+
+    /// …and every station that has not chosen Rear/Data, or whose radio cannot, keys exactly as
+    /// it always has: an old settings file, Front/Mic, a value Nexus does not know, a radio whose
+    /// Hamlib driver has no mic/data PTT, an OmniRig link (its own rig file keys the radio), and a
+    /// radio keyed by a serial line on its CAT port (a line has no audio source).
+    #[test]
+    fn front_mic_and_every_radio_that_cannot_choose_key_exactly_as_today() {
+        let mut s = test_settings();
+        s.rig_model = 2031;
+        for (source, why) in [
+            (None, "an old settings file loads as Front/Mic"),
+            (Some("front"), "Front/Mic"),
+            (Some("REAR-ish"), "a value Nexus does not know is Front/Mic"),
+        ] {
+            assert_eq!(
+                key_and_release(with_tx_audio_source(s.clone(), source)),
+                ["T 1", "T 0"],
+                "{why}"
+            );
+        }
+        for (model, why) in [
+            (1042, "FTDX10"),
+            (1051, "FTX-1"),
+            (3073, "IC-7300"),
+            (1033, "VX-1700, whose driver's DATA key is a stub"),
+        ] {
+            let mut other = s.clone();
+            other.rig_model = model;
+            assert_eq!(
+                key_and_release(with_tx_audio_source(other, Some("rear"))),
+                ["T 1", "T 0"],
+                "{why}: no working mic/data PTT, so Rear/Data is not offered or used"
+            );
+        }
+        let mut omni = s.clone();
+        omni.rig_conn = "omnirig".into();
+        let omni = with_tx_audio_source(omni, Some("rear"));
+        assert_eq!(
+            ptt_mode_for(&Transport::from_settings(&omni)),
+            PttMode::Cat,
+            "OmniRig keys from its own rig file"
+        );
+        let mut line = s.clone();
+        line.ptt_method = "rts".into();
+        let line = with_tx_audio_source(line, Some("rear"));
+        assert!(
+            keys_on_the_cat_port(&Transport::from_settings(&line)),
+            "scene"
+        );
+        assert_eq!(
+            ptt_mode_for(&Transport::from_settings(&line)),
+            PttMode::Cat,
+            "a keying line on the CAT port stays line keying"
+        );
+    }
+
+    /// The two keys at the [`Rig`]: `ptt` for a transmission whose audio Nexus plays, `ptt_plain`
+    /// for one whose audio it does not (the operator's microphone, an FSK keyline). They differ
+    /// only on a Rear/Data radio and only on the way down; every release is `T 0`, whichever key
+    /// opened the over, so no unkey path (Stop TX, the watchdog, a teardown) changes.
+    #[test]
+    fn only_a_rear_data_radio_keys_nexus_audio_differently_and_only_on_the_way_down() {
+        for (mode, audio_down) in [(PttMode::Cat, "T 1"), (PttMode::CatData, "T 3")] {
+            let (addr, log) = mock_slow_rigctld(0);
+            let mut rig = Rig::with_control(Some(addr), mode.clone());
+            rig.ptt(true).unwrap();
+            rig.ptt(false).unwrap();
+            rig.ptt_plain(true).unwrap();
+            rig.ptt_plain(false).unwrap();
+            // Crossed: an over keyed by one is released by the other.
+            rig.ptt(true).unwrap();
+            rig.ptt_plain(false).unwrap();
+            rig.ptt_plain(true).unwrap();
+            rig.ptt(false).unwrap();
+            assert!(!rig.keyed, "{mode:?}: released");
+            assert_eq!(
+                *log.lock().unwrap(),
+                [audio_down, "T 0", "T 1", "T 0", audio_down, "T 0", "T 1", "T 0"],
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// Through the radio loop, the two kinds of key-down a Rear/Data radio sees. A transmission
+    /// whose audio Nexus plays — the Tune carrier here, and every FT, RTTY-AFSK, PSK, SSTV, APRS,
+    /// voice-keyer and soundcard-CW over beside it — keys the DATA input. The Phone cockpit's own
+    /// PTT is the operator talking into the radio's microphone, so it keys exactly as before: a
+    /// Rear/Data radio must not go silent in Phone. A CAT broker client's key rides the same
+    /// path and keys as before too: the broker hands the engine a key, not the client's verb.
+    #[test]
+    fn on_a_rear_data_radio_tune_keys_the_data_input_and_the_phone_ptt_the_microphone() {
+        let mut s = test_settings();
+        s.rig_model = 2031;
+        let rear = with_tx_audio_source(s, Some("rear"));
+        // One loop step against a fresh mock rigctld, returning the wire and the loop state.
+        let step_once = |engine: &Arc<Mutex<Engine>>| {
+            let (addr, log) = mock_slow_rigctld(0);
+            let mut rig =
+                Rig::with_control(Some(addr), ptt_mode_for(&Transport::from_settings(&rear)));
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    0.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let wire = log.lock().unwrap().clone();
+            (wire, state)
+        };
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tune(true);
+        let (tune, state) = step_once(&engine);
+        assert!(state.tuning_keyed, "scene: the tune keyed");
+        assert!(
+            tune.iter().any(|l| l == "T 3") && !tune.iter().any(|l| l == "T 1"),
+            "the tune carrier Nexus plays goes out of the DATA input: {tune:?}"
+        );
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+            assert!(e.manual_ptt(), "scene: the operator holds the Phone PTT");
+        }
+        let (phone, state) = step_once(&engine);
+        assert!(
+            state.manual_ptt_applied,
+            "scene: the loop keyed the Phone PTT"
+        );
+        assert!(
+            phone.iter().any(|l| l == "T 1") && !phone.iter().any(|l| l == "T 3"),
+            "the Phone PTT keys the microphone, as it always has: {phone:?}"
+        );
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.cat_broker_ptt = true;
+            e.apply_settings(settings);
+            e.set_tx_enabled(true);
+            assert!(
+                e.broker_ptt(true),
+                "scene: a broker client is granted the key"
+            );
+            assert!(
+                e.manual_ptt(),
+                "scene: the broker's key rides the manual PTT"
+            );
+        }
+        let (broker, state) = step_once(&engine);
+        assert!(
+            state.manual_ptt_applied,
+            "scene: the loop keyed the broker's PTT"
+        );
+        assert!(
+            broker.iter().any(|l| l == "T 1") && !broker.iter().any(|l| l == "T 3"),
+            "a broker client's key is keyed as it always was: {broker:?}"
         );
     }
 
@@ -26939,6 +27207,7 @@ mod tests {
         Transport {
             radio_label: LogLabel(radio_label("", 1035)),
             icom_data_mode: 1,
+            tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             ptt_method: "cat".to_string(),
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),

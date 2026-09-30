@@ -44064,6 +44064,7 @@ mod tests {
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: p.icom_data_mode,
+            tx_audio_source: p.tx_audio_source.clone(),
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),

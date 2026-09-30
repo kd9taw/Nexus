@@ -2197,6 +2197,11 @@ export interface RadioProfilePatch {
    * on every edit of the rig form. A default on the backend hides drift instead of catching it,
    * which is why the guard below now reads this interface directly. */
   icomDataMode: number
+  /** "Transmit audio source (CAT PTT)" for THIS radio (#381): 'front' keys as every release has
+   * (`T 1`), 'rear' keys the DATA input (`T 3`). Rust defaults it for an old settings file but NOT
+   * on the patch, so a form that dropped it would fail the Save loudly rather than quietly put a
+   * SignaLink radio back on Front/Mic. */
+  txAudioSource: string
   /** THIS radio's amplifier, per-radio because the amp is wired to a radio, not to the station.
    * Absent here these had no serde default, so the patch did not silently drop them — it failed
    * to deserialize at all and took the whole Save with it. */
@@ -3120,6 +3125,14 @@ export async function getPortlessRigModels(): Promise<number[]> {
  *  be read, and the caution is simply not shown. */
 export async function getCatCwUnprovenRigModels(): Promise<number[]> {
   return invoke<number[]>('get_cat_cw_unproven_rig_models')
+}
+
+/** Models whose Hamlib CAT PTT can choose the radio's MIC or DATA input — the only ones Settings
+ *  offers "Transmit audio source (CAT PTT): Rear/Data" on (#381). The set is measured from the
+ *  bundled Hamlib and lives in Rust (`rigmodels::PTT_MIC_DATA_RIGS`); fetched, not copied here.
+ *  An empty array means the rule could not be read, and no radio is offered the choice. */
+export async function getPttMicDataRigModels(): Promise<number[]> {
+  return invoke<number[]>('get_ptt_mic_data_rig_models')
 }
 
 /** One keystroke to a configured SPE amplifier. The set is closed at the Rust boundary; an

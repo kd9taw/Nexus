@@ -45,6 +45,12 @@ pub enum PttMode {
     /// Key via the CAT control channel (rigctld `T`). Requires a control channel;
     /// with none configured this no-ops (like VOX).
     Cat,
+    /// [`PttMode::Cat`], keying the radio's DATA input — "Transmit audio source (CAT PTT):
+    /// Rear/Data" (#381), WSJT-X's choice. A transmission whose audio Nexus plays keys with
+    /// `T 3` ([`ptt_data_line`], Hamlib's `RIG_PTT_ON_DATA`: `TX1;` on a TS-590S, DATA SEND from
+    /// ACC2/USB); anything keyed through [`Rig::ptt_plain`] still keys `T 1`, and every release
+    /// is `T 0` exactly as for `Cat`.
+    CatData,
     /// No CAT keying — rely on the rig's VOX (audio-triggered TX).
     #[default]
     Vox,
@@ -63,6 +69,11 @@ const PTT_DEADLINE_MS: u64 = 700;
 /// rigctld command line for PTT.
 pub fn ptt_line(on: bool) -> String {
     format!("T {}\n", on as u8)
+}
+/// rigctld command line to key the radio's DATA input: `T 3`, Hamlib's `RIG_PTT_ON_DATA` (#381).
+/// Only a key-down: whatever keyed the radio, the release is [`ptt_line`]`(false)`.
+pub fn ptt_data_line() -> String {
+    "T 3\n".to_string()
 }
 /// rigctld command line to set the dial frequency (Hz).
 pub fn freq_line(hz: u64) -> String {
@@ -975,8 +986,28 @@ impl Rig {
     /// gate keeps firing and the idle self-heal in the radio loop retries until the
     /// radio actually releases — one transient CAT failure can no longer latch PTT
     /// until the radio is rebooted.
+    ///
+    /// This is the key for a transmission whose audio Nexus plays, so on a Rear/Data radio
+    /// ([`PttMode::CatData`]) its key-down is `T 3`, the DATA input. [`Self::ptt_plain`] is the
+    /// key for one whose audio it does not play.
     #[track_caller]
     pub fn ptt(&mut self, on: bool) -> std::io::Result<()> {
+        self.key(on, true)
+    }
+
+    /// [`Self::ptt`] for a transmission whose audio Nexus does NOT play: the operator's own voice
+    /// at the radio's microphone (the Phone cockpit's PTT, and the CAT broker's key, which rides
+    /// it) and an FSK keyline, whose tones are the keyed line rather than audio. It keys exactly as
+    /// `ptt` does except on a Rear/Data radio ([`PttMode::CatData`]), where `ptt` keys the DATA
+    /// input and this keys with `T 1`, as every release has: the Rear/Data choice (#381) is about
+    /// where Nexus's own audio enters the radio, so it leaves these as they were. Release: `T 0`.
+    #[track_caller]
+    pub fn ptt_plain(&mut self, on: bool) -> std::io::Result<()> {
+        self.key(on, false)
+    }
+
+    #[track_caller]
+    fn key(&mut self, on: bool, nexus_audio: bool) -> std::io::Result<()> {
         // Diagnostic: name the exact caller of every PTT change. A CI-V capture that shows an
         // unexplained unkey mid-TX can then be traced to the precise line that dropped it —
         // this is how the IC-9700 flicker's true source gets pinned instead of inferred. Cheap
@@ -999,6 +1030,8 @@ impl Rig {
                         PttMode::Vox => "VOX".to_string(),
                         PttMode::Serial { .. } => "serial line".to_string(),
                         PttMode::Cat => "CAT".to_string(),
+                        PttMode::CatData if nexus_audio => "CAT (data)".to_string(),
+                        PttMode::CatData => "CAT".to_string(),
                     }
                 ),
             );
@@ -1009,13 +1042,20 @@ impl Rig {
         let result = match &self.ptt_mode {
             PttMode::Vox => Ok(()),
             PttMode::Serial { .. } => self.serial_ptt(on),
-            PttMode::Cat => {
+            PttMode::Cat | PttMode::CatData => {
                 if self.control.is_none() {
                     Ok(()) // CAT keying chosen but no CAT channel → VOX fallback
                 } else {
+                    // The one difference Rear/Data makes: the KEY-DOWN of a transmission whose
+                    // audio Nexus plays goes to the DATA input. Every release is the same `T 0`.
+                    let line = if on && nexus_audio && self.ptt_mode == PttMode::CatData {
+                        ptt_data_line()
+                    } else {
+                        ptt_line(on)
+                    };
                     // PTT is time-critical: a fixed 700 ms deadline (not the slow-transport
                     // 2.5 s read window) so the un-key can't hang the radio loop.
-                    match self.command_with_deadline(&ptt_line(on), Some(PTT_DEADLINE_MS)) {
+                    match self.command_with_deadline(&line, Some(PTT_DEADLINE_MS)) {
                         Ok(reply) if reply_ok(&reply) || reply.is_empty() => Ok(()),
                         Ok(reply) => Err(std::io::Error::other(format!(
                             "rigctld PTT error: {reply:?}"

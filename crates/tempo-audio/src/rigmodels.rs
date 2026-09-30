@@ -374,6 +374,48 @@ pub fn hamlib_rfpower_read_writes_power(model: u32) -> bool {
     )
 }
 
+/// The Hamlib models whose CAT PTT can choose the radio's MIC or DATA input
+/// (`RIG_PTT_RIG_MICDATA`), and so the only ones Settings offers "Transmit audio source (CAT PTT):
+/// Rear/Data" on (#381). Rear/Data keys with rigctld `T 3`, `RIG_PTT_ON_DATA`, which such a driver
+/// sends as a DATA transmit — `TX1;` on a Kenwood, whose manual reads "1: DATA SEND (ACC2/USB
+/// input)"; a driver without the capability has nothing to send it as. WSJT-X asks the same caps
+/// field before it offers its own Rear/Data.
+///
+/// MEASURED over every model of the bundled Hamlib 4.7.1 by `scripts/gen-hamlib-ptt-micdata.mjs`
+/// (the `ptt_type` value of `rigctl -m <model> -L`; `--dump-caps` cannot show it, see the script),
+/// into `tests/fixtures/hamlib_ptt_micdata.json`, which the test holds this list to, less
+/// [`PTT_DATA_NEVER_KEYS`]. Model 2 is NET rigctl, which passes `T 3` on to the rigctld at the
+/// other end. On the FTDX-5000 (1032) Hamlib keys the DATA input by writing the radio's menu 103
+/// first (`EX1031;` then `TX1;`, `rigs/yaesu/newcat.c:2191-2206`), and a plain `T 1` does not
+/// write it back.
+pub const PTT_MIC_DATA_RIGS: &[u32] = &[
+    2,     // Hamlib NET rigctl
+    1032,  // Yaesu FTDX-5000
+    2028,  // Kenwood TS-480
+    2031,  // Kenwood TS-590S
+    2037,  // Kenwood TS-590SG
+    2039,  // Kenwood TS-990S
+    2041,  // Kenwood TS-890S
+    2046,  // Hilberling PT-8000A
+    2053,  // BG2FX FX4/C/CR/L
+    2055,  // DL2MAN (tr)uSDX
+    3086,  // Icom IC-F8101
+    33001, // ELAD FDM-DUO
+];
+
+/// Measured mic/data models NOT offered Rear/Data, because their driver's DATA key can never key.
+/// The Vertex Standard VX-1700 (1033) declares mic/data PTT, but Hamlib 4.7.1's driver answers a
+/// DATA key in SSB or RTTY with `vx1700_set_ptt_gps_jack`, a stub marked FIXME that returns
+/// `-RIG_EINVAL` whatever it is asked (`rigs/yaesu/vx1700.c:938-952`), and refuses it in every
+/// other mode: `T 3` can never key it, so offering Rear/Data would offer a radio that never
+/// transmits.
+pub const PTT_DATA_NEVER_KEYS: &[u32] = &[1033];
+
+/// Can this model's Hamlib CAT PTT choose MIC or DATA? See [`PTT_MIC_DATA_RIGS`].
+pub fn hamlib_ptt_mic_data(model: u32) -> bool {
+    PTT_MIC_DATA_RIGS.contains(&model)
+}
+
 /// The rigctld (verb, token) pairs Nexus must NEVER send to this model's Hamlib driver, because
 /// the driver turns them into something other than what the radio's own CAT manual defines. The
 /// connection refuses them before a byte is written ([`crate::rig::Rig::set_never_send`]).
@@ -1508,6 +1550,59 @@ mod tests {
         // Not Kenwood-protocol backends at all: the Yaesu FTX-1 of #385 and an IC-7300.
         assert!(!hamlib_rfpower_read_writes_power(1051));
         assert!(!hamlib_rfpower_read_writes_power(3073));
+    }
+
+    /// `PTT_MIC_DATA_RIGS` is exactly what the bundled Hamlib reports, generated and not typed:
+    /// every model of 4.7.1 read, and the mic/data ones listed.
+    #[test]
+    fn the_mic_data_ptt_rigs_are_exactly_the_measured_ones() {
+        use std::collections::BTreeSet;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hamlib_ptt_micdata.json"))
+                .expect("the fixture parses");
+        assert!(
+            fixture["hamlib"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("Hamlib 4.7.1 ")),
+            "the fixture comes from the bundled Hamlib 4.7.1: {}",
+            fixture["hamlib"]
+        );
+        assert!(
+            fixture["models"].as_u64().is_some_and(|n| n >= 300),
+            "every model was read, not a handful: {}",
+            fixture["models"]
+        );
+        assert_eq!(
+            fixture["unread"].as_array().map(Vec::len),
+            Some(0),
+            "no model went unread"
+        );
+        let measured: BTreeSet<u32> = fixture["micData"]
+            .as_array()
+            .expect("the fixture's micData")
+            .iter()
+            .map(|r| r["model"].as_u64().expect("a model") as u32)
+            .collect();
+        let listed: BTreeSet<u32> = PTT_MIC_DATA_RIGS.iter().copied().collect();
+        let never: BTreeSet<u32> = PTT_DATA_NEVER_KEYS.iter().copied().collect();
+        assert!(
+            never.is_subset(&measured),
+            "an exclusion names a model the fixture does not measure as mic/data: {never:?}"
+        );
+        assert_eq!(
+            listed,
+            &measured - &never,
+            "PTT_MIC_DATA_RIGS must be the fixture less PTT_DATA_NEVER_KEYS — run \
+             `node scripts/gen-hamlib-ptt-micdata.mjs`"
+        );
+        // The radios of #381 and #385, by name, so a mis-typed number cannot hide in the set.
+        assert!(hamlib_ptt_mic_data(2031), "TS-590S");
+        assert!(!hamlib_ptt_mic_data(1051), "FTX-1");
+        assert!(!hamlib_ptt_mic_data(1042), "FTDX10");
+        assert!(
+            !hamlib_ptt_mic_data(1033),
+            "VX-1700: its DATA key is a stub"
+        );
     }
 
     /// The never-send table: the FTX-1's three mis-mapped tokens in both directions, the RF power

@@ -16661,6 +16661,24 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
     }
 }
 
+/// Models whose Hamlib CAT PTT can choose the radio's MIC or DATA input — the only ones the Rig &
+/// CAT settings offer "Transmit audio source (CAT PTT): Rear/Data" on (#381). See
+/// [`tempo_audio::rigmodels::PTT_MIC_DATA_RIGS`] for the measurement.
+///
+/// An empty result means "could not be determined" (built without the `radio` feature), and the
+/// form offers no choice, so every radio keys Front/Mic as it always has.
+#[tauri::command]
+fn get_ptt_mic_data_rig_models() -> Vec<u32> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::PTT_MIC_DATA_RIGS.to_vec()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Ask a configured amplifier for one thing: `"bandDown"`, `"bandUp"` or `"operate"`.
 ///
 /// ⛔ THREE INTENTS, AND THE SET IS CLOSED. An unrecognised name is refused rather than
@@ -28189,6 +28207,14 @@ pub fn run() {
             .find(|r| r.id == settings.active_radio)
             .map(|r| r.icom_data_mode)
             .unwrap_or(settings.icom_data_mode),
+        // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
+        // startup transport keys as the one every tick after it derives from settings.
+        tx_audio_source: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.tx_audio_source.clone())
+            .unwrap_or_else(|| settings.tx_audio_source.clone()),
         rig_model: settings.rig_model,
         // The operator's name for the active radio, so the STARTUP CAT line names it. Without
         // this the first line of every log said "model 1042" while every later line said
@@ -30302,6 +30328,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_all_rig_models,
             get_portless_rig_models,
             get_cat_cw_unproven_rig_models,
+            get_ptt_mic_data_rig_models,
             amp_command,
             get_band_plan,
             set_license_class,

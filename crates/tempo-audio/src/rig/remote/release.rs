@@ -42,7 +42,8 @@ impl Rig {
             }
             match &self.ptt_mode {
                 PttMode::Vox => {}
-                PttMode::Cat => {
+                // Rear/Data (#381) changes only the key-down; the release is the same `T 0`.
+                PttMode::Cat | PttMode::CatData => {
                     let reply = self
                         .command_permitted(
                             &crate::rig::ptt_line(false),
