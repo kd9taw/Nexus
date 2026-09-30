@@ -1173,6 +1173,12 @@ const RTTY_REFUSED_PRIVILEGES: &str = "RTTY not sent: this frequency is outside 
      them.";
 const RTTY_AUTO_REFUSED: &str = "RTTY auto-sequencer stopped — a transmission was refused (the \
      TX gate closed mid-QSO).";
+/// …and the PSK cockpit's, when [`Engine::poll_psk_one`] drops refused overs.
+const PSK_REFUSED_TX_OFF: &str = "PSK stopped: transmit was turned off, so what was still \
+     queued was dropped, not held for later. Send it again when you are ready.";
+const PSK_REFUSED_PRIVILEGES: &str = "PSK not sent: this frequency is outside your license \
+     privileges, so what was queued was dropped, not held for later. Send it again from inside \
+     them.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -3235,7 +3241,8 @@ pub struct Engine {
     /// FIFO of PSK31 messages to transmit (operator-initiated, varicode-
     /// filtered). Filled ONLY by [`Engine::psk_send_text`]; the radio loop
     /// keys one at a time via [`Engine::poll_psk_one`] (gated on tx_enabled +
-    /// privileges + the Keyboard section + not-tuning). Stop/halt clears it.
+    /// privileges + the Keyboard section + not-tuning; a message the first two
+    /// refuse is dropped there, never held). Stop/halt clears it.
     psk_queue: VecDeque<String>,
     /// One-shot: abort PSK TX now (the radio loop flushes the audio ring and
     /// unkeys on its next tick). Mirrors `rtty_abort`.
@@ -3256,7 +3263,8 @@ pub struct Engine {
     /// actually in flight; the cockpit's TX indicator). Mirrors `rtty_sending`.
     psk_sending: bool,
     /// The last TX failure to surface in the cockpit (PTT refused, the
-    /// ceiling's why-did-it-unkey note). Mirrors `rtty_keyer_error`.
+    /// ceiling's why-did-it-unkey note, or why refused overs were dropped,
+    /// `poll_psk_one`). Mirrors `rtty_keyer_error`.
     psk_keyer_error: Option<String>,
     /// APRS (AFSK-1200 / AX.25) RX decoder arm state + HOW it was armed (session-only, never
     /// persisted). See [`AprsArm`] — the distinction gates the auto-ack, so it is TX-safety state.
@@ -7498,12 +7506,11 @@ impl Engine {
             // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
             // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
             // their aborts — and a section change is not an operator pressing TX Off: the over
-            // in flight finishes. PSK's queued overs are HELD across a section change and key
-            // when the operator returns to them. CW's and RTTY's are not held: with the latch
-            // down, the loop's next `poll_cw_one` / `poll_rtty_one` drops them and says so, as
-            // it drops every refused send (operator, 2026-09-30). So: lower the latch,
-            // bump the gate generation (an over planned while armed must not commit), and
-            // nothing else. One bit changes, and it is the operator's.
+            // in flight finishes. What CW, RTTY and PSK still have queued is not held: with the
+            // latch down, the loop's next `poll_cw_one` / `poll_rtty_one` / `poll_psk_one` drops
+            // it and says so, as it drops every refused send (operator, 2026-09-30). So: lower
+            // the latch, bump the gate generation (an over planned while armed must not commit),
+            // and nothing else. One bit changes, and it is the operator's.
             if self.tx_enabled {
                 tempo_core::applog::info("tx", "transmit disarmed by leaving a manual mode");
             }
@@ -17110,19 +17117,38 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.drop_psk_latch();
     }
 
-    /// Pop the next queued PSK MESSAGE for the radio loop to key, or `None`
-    /// while any TX gate is down (the queue is then HELD — nothing keys
-    /// unexpectedly). One message per call; the loop paces on the real
-    /// rendered duration. The wall-clock TX watchdog trips BEFORE handing a
-    /// message out, exactly as [`Self::poll_rtty_one`] does.
+    /// Pop the next queued PSK MESSAGE for the radio loop to key, or `None`.
+    /// A refused over is DROPPED, never held, exactly as [`Self::poll_rtty_one`]
+    /// drops one (operator, 2026-09-30): with TX off, or with this section's
+    /// emission outside the licence's privileges at the dial, the queue is
+    /// cleared, the log says why once and the cockpit's warning line says so.
+    /// HELD while another section or a tune carrier owns the rig. One message
+    /// per call; the loop paces on the real rendered duration. The wall-clock
+    /// TX watchdog trips BEFORE handing a message out, exactly as
+    /// [`Self::poll_rtty_one`] does.
     pub fn poll_psk_one(&mut self) -> Option<String> {
         use crate::settings::OperatingMode;
-        if !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.settings.operating_mode != OperatingMode::Keyboard
-            || self.psk_queue.is_empty()
-        {
+        if self.psk_queue.is_empty() {
+            return None;
+        }
+        let in_section = self.settings.operating_mode == OperatingMode::Keyboard;
+        let refused = if !self.tx_enabled {
+            Some(("transmit is off", PSK_REFUSED_TX_OFF))
+        } else if in_section && !self.tx_allowed() {
+            Some((
+                "the dial is outside the licence's privileges",
+                PSK_REFUSED_PRIVILEGES,
+            ))
+        } else {
+            None
+        };
+        if let Some((why, notice)) = refused {
+            tempo_core::applog::info("tx", &format!("PSK not keyed: {why} (dropped)"));
+            self.psk_queue.clear();
+            self.psk_keyer_error = Some(notice.to_string());
+            return None;
+        }
+        if self.tuning || !in_section {
             return None;
         }
         let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
@@ -25935,13 +25961,136 @@ mod tests {
                 "no FT8 keying while the Keyboard section owns the rig"
             );
         }
-        // And vice versa: the PSK queue is HELD while Digital owns the rig.
+        // And vice versa: the PSK queue keys nothing while Digital owns the rig, even with
+        // TX armed there (FT8's own TX On), so it is the section that holds it.
         e.psk_send_text("cq test").unwrap();
         e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
         assert_eq!(
             e.poll_psk_one(),
             None,
             "no PSK keying while Digital owns the rig"
+        );
+    }
+
+    /// Another section owning the rig is a HOLD, not a refusal, for PSK as for RTTY
+    /// (`an_rtty_over_waiting_while_phone_owns_the_rig_is_held_not_dropped`).
+    #[test]
+    fn a_psk_over_waiting_while_phone_owns_the_rig_is_held_not_dropped() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("keyboard", false);
+        e.set_frequency(14.070, "20m", "USB");
+        e.psk_send_text("cq cq").unwrap();
+        e.psk_send_text("de w9xyz").unwrap();
+        assert_eq!(e.poll_psk_one().as_deref(), Some("cq cq"));
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled(), "precondition: Phone keeps TX armed");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.070 is no phone frequency"
+        );
+        assert_eq!(e.poll_psk_one(), None, "nothing PSK keys in Phone");
+        e.set_operating_mode("keyboard", false);
+        assert_eq!(
+            e.poll_psk_one().as_deref(),
+            Some("de w9xyz"),
+            "held by the section, not refused: it keys back in PSK"
+        );
+        assert_eq!(e.psk_state().keyer_error, None, "and nothing was dropped");
+    }
+
+    /// ⛔ A REFUSED PSK OVER IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Same drop rule"),
+    /// as a refused RTTY over is. Leaving the PSK section for FT8 lowers the latch and kept the
+    /// overs typed ahead, and they keyed the moment the operator came back.
+    #[test]
+    fn a_psk_over_refused_with_tx_off_is_dropped_and_does_not_key_when_tx_comes_back() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("keyboard", false); // arms TX, as a manual mode does
+        e.psk_send_text("cq cq").unwrap();
+        e.psk_send_text("de w9xyz").unwrap(); // typed ahead, behind the first
+        assert_eq!(
+            e.poll_psk_one().as_deref(),
+            Some("cq cq"),
+            "control: the first over keys"
+        );
+        e.set_operating_mode("digital", false); // the latch drops, the queue stays
+        assert!(!e.tx_enabled(), "precondition: TX is off");
+        assert_eq!(e.poll_psk_one(), None, "nothing keys with TX off");
+        e.set_operating_mode("keyboard", false); // back to PSK, which arms TX on entry
+        assert!(e.tx_enabled(), "precondition: TX is on again");
+        assert_eq!(
+            e.poll_psk_one(),
+            None,
+            "nothing refused keys when TX comes back"
+        );
+        assert_eq!(
+            e.psk_state().keyer_error.as_deref(),
+            Some(PSK_REFUSED_TX_OFF),
+            "the PSK cockpit says the rest was dropped"
+        );
+        e.psk_send_text("73").unwrap();
+        assert_eq!(
+            e.poll_psk_one().as_deref(),
+            Some("73"),
+            "a send made once TX is on keys as before"
+        );
+    }
+
+    /// …and outside the licence's privileges, then a same-band tune back in. One notice per
+    /// refusal, not one per poll.
+    #[test]
+    fn a_psk_over_refused_outside_privileges_is_dropped_and_does_not_key_after_a_tune_in() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("keyboard", false);
+        e.set_frequency(14.070, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.070 is inside a General's data"
+        );
+        e.psk_send_text("cq cq").unwrap();
+        e.psk_send_text("de w9xyz").unwrap();
+        assert_eq!(
+            e.poll_psk_one().as_deref(),
+            Some("cq cq"),
+            "control: the first over keys"
+        );
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.020 is Extra-only, outside a General's privileges"
+        );
+        assert_eq!(e.poll_psk_one(), None, "nothing keys outside privileges");
+        e.set_frequency(14.070, "20m", "USB"); // a same-band tune back in
+        assert_eq!(
+            e.poll_psk_one(),
+            None,
+            "nothing refused keys after the tune in"
+        );
+        assert_eq!(
+            e.psk_state().keyer_error.as_deref(),
+            Some(PSK_REFUSED_PRIVILEGES),
+            "the PSK cockpit says it was dropped"
+        );
+        // Cleared (as the loop does once an over keys), the notice is not raised again by
+        // polls that find nothing queued, however long a refusal lasts.
+        e.set_psk_keyer_error(None);
+        e.set_frequency(14.020, "20m", "USB");
+        for _ in 0..3 {
+            assert_eq!(e.poll_psk_one(), None);
+        }
+        assert_eq!(
+            e.psk_state().keyer_error,
+            None,
+            "polls with nothing queued raise nothing"
+        );
+        e.set_frequency(14.070, "20m", "USB");
+        e.psk_send_text("73").unwrap();
+        assert_eq!(
+            e.poll_psk_one().as_deref(),
+            Some("73"),
+            "a send made inside the privileges keys as before"
         );
     }
 

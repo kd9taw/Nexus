@@ -454,16 +454,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back inside your privileges. It is now dropped, and the CW screen's warning line says why. A
   message you send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer
   and its speed work as they did.
-- **RTTY: an over that could not go out is dropped, not sent later on its own.** The same rule as
-  CW. When RTTY could not be sent because transmit was off (for example after leaving the RTTY
-  screen for FT8 with more typed ahead) or the frequency was outside your license privileges, what
-  was still waiting used to be held, and it went out by itself as soon as transmitting was allowed
-  again. It is now dropped, and the RTTY screen's warning line says why. If one of those overs
-  belonged to an auto-sequencer QSO, the auto QSO stops and says so, as it already did when an
-  over could not be queued. An over left waiting when you move to the Phone, CW or PSK screen,
-  where transmit stays on, is still held for your return, as before. Overs you send once
-  transmitting is allowed go out exactly as before, and Stop TX, the watchdog and continuous TX
-  work as they did.
+- **RTTY and PSK: an over that could not go out is dropped, not sent later on its own.** The same
+  rule as CW. When RTTY or PSK could not be sent because transmit was off (for example after
+  leaving the RTTY or PSK screen for FT8 with more typed ahead) or the frequency was outside your
+  license privileges, what was still waiting used to be held, and it went out by itself as soon as
+  transmitting was allowed again. It is now dropped, and that screen's warning line says why. If
+  one of those RTTY overs belonged to an auto-sequencer QSO, the auto QSO stops and says so, as it
+  already did when an over could not be queued. An over left waiting when you move to another
+  screen where transmit stays on (Phone, CW, RTTY or PSK) is still held for your return, as
+  before. Overs you send once transmitting is allowed go out exactly as before, and Stop TX, the
+  watchdog and continuous TX work as they did.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched

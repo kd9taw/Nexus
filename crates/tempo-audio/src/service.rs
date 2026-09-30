@@ -24824,6 +24824,91 @@ mod tests {
         );
     }
 
+    /// ⛔ …and a refused PSK over, the same rule on the same loop. PSK has no transcript echo,
+    /// so what radiated is the audio the loop played.
+    #[test]
+    fn a_psk_over_refused_with_tx_off_never_keys_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("keyboard", false);
+            e.psk_send_text("CQ").unwrap();
+            e.psk_send_text("DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "control: the first over keys");
+        engine.lock().unwrap().set_operating_mode("digital", false);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 5_000.0);
+        assert!(!rig.keyed, "precondition: the first over has ended");
+        let aired = backend.played.len();
+        engine.lock().unwrap().set_operating_mode("keyboard", false); // TX armed again
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 6_000.0);
+        assert_eq!(
+            backend.played.len(),
+            aired,
+            "nothing refused keys when TX comes back"
+        );
+        assert!(
+            engine.lock().unwrap().psk_state().keyer_error.is_some(),
+            "the PSK cockpit is told the rest was dropped"
+        );
+        engine.lock().unwrap().psk_send_text("73").unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 7_000.0);
+        assert!(
+            backend.played.len() > aired,
+            "a send made once TX is on keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().psk_state().keyer_error,
+            None,
+            "…and the over that keys clears the notice"
+        );
+    }
+
+    /// …and outside the licence's privileges, then a same-band tune back in.
+    #[test]
+    fn a_psk_over_refused_outside_privileges_never_keys_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("keyboard", false);
+            e.set_frequency(14.070, "20m", "USB");
+            e.psk_send_text("CQ").unwrap();
+            e.psk_send_text("DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "control: the first over keys");
+        engine.lock().unwrap().set_frequency(14.020, "20m", "USB");
+        assert!(
+            !engine.lock().unwrap().tx_allowed(),
+            "precondition: 14.020 is outside a General's privileges"
+        );
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 5_000.0);
+        let aired = backend.played.len();
+        engine.lock().unwrap().set_frequency(14.070, "20m", "USB");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 6_000.0);
+        assert_eq!(
+            backend.played.len(),
+            aired,
+            "nothing refused keys after the tune in"
+        );
+        assert!(
+            engine.lock().unwrap().psk_state().keyer_error.is_some(),
+            "the PSK cockpit is told it was dropped"
+        );
+        engine.lock().unwrap().psk_send_text("73").unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 7_000.0);
+        assert!(
+            backend.played.len() > aired,
+            "a send made inside the privileges keys as before"
+        );
+    }
+
     #[cfg(feature = "serial")]
     #[test]
     fn an_rtty_over_whose_fsk_keyline_never_opens_is_never_echoed() {
