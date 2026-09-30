@@ -818,6 +818,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the update prompt's Install and restart (or Download) button lettered near-black on its blue.
   In every light theme the chip's word now takes the theme's text colour, with the green or amber
   kept on its border, and the button letters in white. The dark themes look exactly as before.
+- **Connect's coloured words are easy to read in the light themes.** Connect letters a word in
+  green, amber, red or grey to say how things stand: the Band Advisor's Open / Marginal / Closed,
+  Band Outlook's Excellent / Good / Fair and its mode chips, the band names in the 24-hour chart
+  and the Best Band table, the Space Wx lines and scale chips, the Kp outlook's storm line, the
+  Chase panes' need chips and "open now" lines, the openings' band names, Getting Out's reports,
+  and the satellite, rotor and amplifier panes' warnings. In every light theme those words were
+  hard to read. They now take the theme's text colour, and the colour stays beside them: as an
+  underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
+  Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
+  as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

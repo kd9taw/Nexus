@@ -1,7 +1,8 @@
 // Best-band-to-region recommender (the B2 hero pane's Expert view). Ranked region → best
 // band table, operator-anchored. Colored + worded through the SAME dualStateLabel /
 // modeledVar / tierVar the Band Advisor uses, so it never disagrees with the ladder.
-import { dualStateLabel, modeledVar, tierVar } from '../../propViz'
+import type { CSSProperties } from 'react'
+import { dualStateLabel, modeledVar, stateInkKind, tierVar } from '../../propViz'
 import type { RegionBest } from '../../types'
 import { t } from '../../i18n'
 
@@ -29,7 +30,12 @@ export function BestBandTable({
             <span className="bbt-region">
               {r.octant} {r.region}
             </span>
-            <span className="bbt-band" style={{ color }}>
+            {/* A state colour rides as `--state-ink`, lettered per theme by the sheet. */}
+            <span
+              className="bbt-band"
+              data-state-ink={stateInkKind(color) ?? undefined}
+              style={(stateInkKind(color) ? { '--state-ink': color } : { color }) as CSSProperties}
+            >
               {r.band}
             </span>
             <span className="bbt-state">{ds.word}</span>
