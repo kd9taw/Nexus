@@ -467,6 +467,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station's grid, its callbook position, or the centre of its country when nothing closer is known.
   The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
   aims at the country centre.
+- **Turning the beam keeps an az/el rotator's elevation where it is.** On a rotator with an
+  elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A interface, every azimuth move
+  made by hand also sent the elevation to 0°: a click on the Rotor pane's compass, a typed bearing,
+  the ↗ on a Needed row and the → and LP buttons on a rotor strip each laid the antenna flat on the
+  horizon. Nexus now reads where the antenna is and sends its elevation back with the new bearing.
+  It asks the rotator's control program (Hamlib's rotctld) whether the rotator has an elevation
+  axis rather than going by its name, so an azimuth-only rotator, such as a Rotor-EZ, a DCU-1, a
+  SPID Rot1Prog or a Green Heron RT-21, gets exactly the command it always did. If that program is
+  too busy to answer, the move is refused with a message saying so rather than guessed. A
+  satellite pass steers both axes as before. Turning the beam from Nexus Remote in a browser still
+  sends the elevation to 0°.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

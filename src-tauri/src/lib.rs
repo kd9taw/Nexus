@@ -14323,7 +14323,9 @@ fn rotator_error(e: std::io::Error, external_host: &str) -> String {
     }
 }
 
-/// Point the antenna rotator at an absolute azimuth (degrees) via rotctld.
+/// Point the antenna rotator at an absolute azimuth (degrees) via rotctld — keeping an az/el
+/// rotator's ELEVATION where it is (`tempo_audio::rotator::point_keeping`). It used to send
+/// `P <az> 0`, which drives the elevation to 0 on every move of the beam.
 #[tauri::command]
 async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<(), String> {
     #[cfg(feature = "radio")]
@@ -14341,10 +14343,12 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
                     .to_string(),
             );
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, az_deg))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| rotator_error(e, &external))
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::rotator::point_keeping(&host, Some(az_deg), None)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| rotator_error(e, &external))
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -14558,10 +14562,13 @@ async fn point_rotator_at_call(
         } else {
             short
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, bearing))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| rotator_error(e, &external))?;
+        // The elevation stays where it is, as for every manual azimuth move (`point_rotator`).
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::rotator::point_keeping(&host, Some(bearing), None)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| rotator_error(e, &external))?;
         Ok(PointedAtDto::new(bearing, aim.to))
     }
     #[cfg(not(feature = "radio"))]
@@ -14727,6 +14734,43 @@ mod point_at_call_tests {
             (dto.to, dto.grid.as_deref(), dto.country),
             ("grid", Some("FN42KH"), None)
         );
+    }
+}
+
+#[cfg(test)]
+mod manual_pointing_tests {
+    //! Every command that moves the rotator BY HAND keeps the axis it is not given where the
+    //! rotator reports it (`tempo_audio::rotator::point_keeping`, whose own tests drive Hamlib's
+    //! real GS-232B backend and dummy). The satellite pass's azimuth-only `rotator::point` sends
+    //! `P <az> 0`, which on an az/el mount is an ELEVATION of zero: every turn of the beam used
+    //! to lay a G-5500's antenna on the horizon. Source-scanned, like the registration tests:
+    //! which function a command calls is the property under test, and no type sees it.
+
+    /// The body of the top-level `async fn name(…)` in lib.rs.
+    fn body(src: &str, name: &str) -> String {
+        src.split_once(&format!("\nasync fn {name}("))
+            .unwrap_or_else(|| panic!("the command {name} must exist"))
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0
+            .to_string()
+    }
+
+    #[test]
+    fn a_manual_move_keeps_the_axis_it_was_not_given() {
+        let src = include_str!("lib.rs");
+        for name in ["point_rotator", "point_rotator_at_call"] {
+            let body = body(src, name);
+            assert!(
+                body.contains("tempo_audio::rotator::point_keeping("),
+                "{name} must keep the axis it is not given (point_keeping)"
+            );
+            assert!(
+                !body.contains("tempo_audio::rotator::point("),
+                "{name} sends `P <az> 0`, the elevation of zero, on every move"
+            );
+        }
     }
 }
 
