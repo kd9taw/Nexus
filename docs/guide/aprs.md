@@ -176,7 +176,9 @@ key: the **Send beacon** button, the **Send message** button, and an automatic
 ack. All three pass the same gate first — TX enabled, the frequency inside your
 license privileges, and nothing else already owning the transmitter (a slot over,
 a tune carrier, a held mic, the voice keyer, CW, RTTY or SSTV). A refusal names
-its reason rather than failing quietly.
+its reason rather than failing quietly. So does a drop: what was queued and had
+not keyed yet when transmit went off, or when the dial left your privileges, is
+dropped rather than sent later, and the status line says why.
 
 **The automatic ack — the only thing here that can key with nobody asking —
 needs two independent operator acts.** You must have armed Monitor *yourself*
@@ -385,10 +387,10 @@ anything**, and nothing was uploaded to make this picture — the figures are a 
 
 - **This screen has no stop control, and one is not hiding on the top bar.**
   APRS hides the app-wide TX cluster, and its own **TX Off** is an *arm* latch,
-  not a kill: it holds the queue, so a beacon you have queued but that has not
-  keyed yet will not go out, but nothing on this screen cuts a burst already
-  keying. The burst is short — one packet at 1200 baud — and PTT drops on its own
-  when it plays out. Practically, decide before you press Send; there is no
+  not a kill: it drops the queue, so a beacon you have queued but that has not
+  keyed yet will not go out, then or when TX comes back on, but nothing on this
+  screen cuts a burst already keying. The burst is short — one packet at 1200
+  baud — and PTT drops on its own when it plays out. Practically, decide before you press Send; there is no
   taking it back mid-air from here.
 - **The send gate does not check the dial.** A beacon or a message is refused when TX is off,
   when the dial is outside your licence privileges, or when something else holds the

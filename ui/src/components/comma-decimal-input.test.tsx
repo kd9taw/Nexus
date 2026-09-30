@@ -65,6 +65,7 @@ vi.mock('../api', () => ({
     lastReject: null,
   })),
   getAprsStations: vi.fn(async () => ({ stations: [], ttlMin: 60, fadeAfterMin: 20 })),
+  getAprsTxNotice: vi.fn(async () => null),
   getSettings: vi.fn(async () => ({ mygrid: 'EM28' })),
   postSpot: vi.fn(async () => {}),
 }))

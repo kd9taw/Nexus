@@ -70,7 +70,8 @@
        SSTV — Stop (.sstv-tx-bar, disabled={!sending}) and the TX-enable latch (same mechanism
          as RTTY, via sstv_abort).
        APRS — no vocabulary at all, so the rule holds by construction; and note that APRS
-         renders no stop control, its TX On/Off being an arm latch that only holds the queue.
+         renders no stop control, its TX On/Off being an arm latch (turning it off drops what
+         is still queued).
      The TopBar's TX cluster backstops none of them: App hides it in Operate and in
      Phone/CW/RTTY/SSTV/APRS, so every cockpit stands on its own controls.
 

@@ -263,6 +263,9 @@ impl Publisher {
                 Command::Sstv => {
                     super::sstv::preflight(&eng)?;
                     let mut state = crate::sstv_state_dto(&eng);
+                    // The desktop's drop notice stays on the desktop: the hosted page reads this
+                    // sample against an exact key list, and one key it lacks refuses the sample.
+                    state.tx_notice = None;
                     let class = eng.settings().license_class;
                     let captured_at_ms = super::now_ms();
                     drop(eng);
@@ -607,6 +610,64 @@ mod tests {
         let engine = shared.lock().unwrap();
         assert_eq!(serde_json::to_value(engine.settings()).unwrap(), settings);
         assert!(!engine.snapshot().radio.tx_enabled);
+    }
+    /// The desktop's SSTV drop notice never reaches the hosted page. `remote-web/sstv.ts` reads
+    /// this sample against an exact key list and refuses one with a key it lacks, so while a
+    /// notice stands on the desktop the sample's keys must still be exactly the page's.
+    #[test]
+    fn the_sstv_sample_keeps_the_pages_exact_keys_while_a_drop_notice_stands() {
+        use std::sync::{Arc, Mutex};
+        let mut engine = tempo_app::engine::Engine::with_settings(Default::default());
+        engine.set_license_class("extra");
+        engine.set_frequency(14.290, "20m", "USB");
+        engine.set_operating_mode("phone", false);
+        engine
+            .sstv_send(vec![0.0; 24_000], "PD-120".into())
+            .expect("scene guard: the picture is accepted");
+        engine.set_frequency(14.050, "20m", "USB");
+        assert!(
+            engine.poll_sstv_tx().is_none(),
+            "scene guard: refused outside the privileges"
+        );
+        let local = serde_json::to_value(crate::sstv_state_dto(&engine)).unwrap();
+        assert!(
+            local["txNotice"].is_string(),
+            "scene guard: the desktop is told why"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Sstv, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        let mut keys: Vec<&str> = reply["data"]["state"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        let mut page = vec![
+            "armed",
+            "mode",
+            "linesDone",
+            "linesTotal",
+            "previewRgbBase64",
+            "previewWidth",
+            "previewHeight",
+            "hedrShiftHz",
+            "gallery",
+            "health",
+            "sending",
+            "txMode",
+            "txProgress",
+            "txElapsedSecs",
+            "txTotalSecs",
+        ];
+        page.sort_unstable();
+        assert_eq!(
+            keys, page,
+            "the Remote sample's keys are not exactly the page's"
+        );
     }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {

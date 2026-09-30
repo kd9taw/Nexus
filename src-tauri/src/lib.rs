@@ -15370,6 +15370,15 @@ async fn get_aprs_health(
     with_engine(&state, |eng| eng.aprs_health()).await
 }
 
+/// Why what was queued for APRS was last dropped instead of sent (TX off, or outside the licence's
+/// privileges), for the cockpit's status line; `None` once a frame keys. A read of its own, polled
+/// beside the health: the other APRS reads are also the Remote's (`remote_service::aprs`), and the
+/// hosted page checks them against exact key lists.
+#[tauri::command]
+async fn get_aprs_tx_notice(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
+    with_engine(&state, |eng| eng.aprs_tx_notice().map(str::to_string)).await
+}
+
 /// The APRS STATION roster — what the map and the station list draw, plus the aging thresholds
 /// that produced it.
 ///
@@ -15963,6 +15972,12 @@ struct SstvStateDto {
     /// Seconds of key-down elapsed / total for the in-flight image.
     tx_elapsed_secs: f32,
     tx_total_secs: f32,
+    /// Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
+    /// or outside the licence's privileges): the cockpit's warning line. Absent otherwise.
+    /// DESKTOP ONLY: the Remote strips it (`remote_service::application`), because the hosted
+    /// page reads this sample against an exact key list and refuses one with a key it lacks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_notice: Option<String>,
 }
 
 fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
@@ -15993,6 +16008,7 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
         tx_progress,
         tx_elapsed_secs,
         tx_total_secs,
+        tx_notice: eng.sstv_tx_notice().map(str::to_string),
     }
 }
 
@@ -30497,6 +30513,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             aprs_auto_arm,
             get_aprs_heard,
             get_aprs_health,
+            get_aprs_tx_notice,
             get_aprs_is_status,
             get_aprs_stations,
             aprs_send_beacon,
@@ -34982,7 +34999,7 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 17] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 18] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
@@ -34995,6 +35012,7 @@ mod tests {
         "read_rotator_state",
         "get_aprs_heard",
         "get_aprs_health",
+        "get_aprs_tx_notice",
         "get_aprs_stations",
         "get_aprs_is_status",
         "update_install_block",

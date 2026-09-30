@@ -77,9 +77,9 @@
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
 //                the rule holds there by construction. Say what that does and does not buy:
 //                APRS renders NO stop control. Its TX On/Off is an arm latch —
-//                set_tx_enabled does not clear aprs_tx_queue (only halt_tx does, engine.rs
-//                ~6856) and arms no APRS abort; poll_aprs_tx merely HOLDS the queue while the
-//                latch is down. Nothing on that screen cuts a beacon already keying.
+//                set_tx_enabled(false) drops what aprs_tx_queue still holds, with a notice
+//                (poll_aprs_tx drops it the same way on a refusal; halt_tx clears it), and
+//                arms no APRS abort. Nothing on that screen cuts a beacon already keying.
 //   The app-wide TopBar TX cluster is NOT a backstop for any of them: App hides it in Operate
 //   (hideTxControls) and in Phone/CW/RTTY/SSTV/APRS (hideDigitalChrome). Every cockpit stands
 //   on its own controls.

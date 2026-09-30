@@ -263,8 +263,9 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   `sstv_abort`, which the audio loop turns into flush + unkey while an over is keying, and it stays a
   *button* through those overs because `radio.transmitting` is the slot-TX indicator alone. APRS is a
   seventh cockpit with no vocabulary at all, so the rule holds by construction — and it renders no stop
-  control; its TX On/Off is an arm latch that only holds the queue. The TopBar's TX cluster backstops
-  none of them — App hides it in Operate and in Phone/CW/RTTY/PSK/SSTV/APRS — so each cockpit stands on
+  control; its TX On/Off is an arm latch, and turning it off drops what is still queued.
+  The TopBar's TX cluster backstops none of them — App hides it in Operate and in
+  Phone/CW/RTTY/PSK/SSTV/APRS — so each cockpit stands on
   its own. **The sweeps do not match this census one for one** (the claim that they did was false for
   four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop
   TX/Esc-Stop macro/Tune/latch, PSK's Stop TX/Esc-Stop macro/Tune/latch and SSTV's Stop/latch (the one
