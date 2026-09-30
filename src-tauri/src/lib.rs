@@ -26472,12 +26472,122 @@ struct RadioProgProject {
     channels: Vec<propagation::memchan::Channel>,
 }
 
-fn load_radioprog() -> RadioProgFile {
-    std::fs::read_to_string(radioprog_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+/// The `version` this build writes, and the newest it reads.
+const RADIOPROG_VERSION: u32 = 1;
+
+/// `radioprog.json` read strictly: `Ok(None)` when there is no file, `Err` when there is one this
+/// build cannot use (unreadable, not JSON, a value or a `version` it does not know).
+///
+/// A field this build does not know is NOT a failure: serde ignores it, so a file from a newer
+/// Nexus that only ADDED fields reads as it always has.
+fn radioprog_read(path: &Path) -> Result<Option<RadioProgFile>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let file: RadioProgFile = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if file.version > RADIOPROG_VERSION {
+        return Err(format!(
+            "version {} is newer than this Nexus reads",
+            file.version
+        ));
+    }
+    Ok(Some(file))
 }
+
+/// What Program tells the operator about a projects file it could not read.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RadioProgFileNotice {
+    /// Where that file is now: the name it was moved aside to, or its own path when it could not
+    /// be moved.
+    path: String,
+    /// The move failed, so the file is still `radioprog.json` and no save writes over it.
+    kept_in_place: bool,
+}
+
+/// This run's notice about the projects file, for [`radioprog_file_notice`]. It stays for the
+/// session; the file it names stays for good.
+static RADIOPROG_NOTICE: Mutex<Option<RadioProgFileNotice>> = Mutex::new(None);
+
+fn remember_radioprog_notice(notice: &Option<RadioProgFileNotice>) {
+    if let (Some(n), Ok(mut slot)) = (notice, RADIOPROG_NOTICE.lock()) {
+        *slot = Some(n.clone());
+    }
+}
+
+/// A new name beside `path` for an unreadable projects file: `radioprog.unreadable-YYYYMMDD-HHMMSS
+/// .json` (UTC), numbered on when that name is taken, so a later set-aside never replaces an
+/// earlier one (a rename onto an existing file replaces it, on every platform). `None` when every
+/// name is taken, which leaves the file where it is.
+fn radioprog_aside_path(path: &Path, now: i64) -> Option<PathBuf> {
+    let (y, mo, d, h, mi, s) = tempo_core::logbook::datetime_utc(now.max(0) as u64);
+    let stem = format!("radioprog.unreadable-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}");
+    let dir = path.parent()?;
+    (1..=100)
+        .map(|n| match n {
+            1 => dir.join(format!("{stem}.json")),
+            n => dir.join(format!("{stem}-{n}.json")),
+        })
+        .find(|candidate| !candidate.exists())
+}
+
+/// `radioprog.json` for Program, and whether anything about it has to be said.
+///
+/// A file that is there but cannot be read is NEVER treated as an empty one. That was this
+/// loader's old shape (`from_str(..).ok().unwrap_or_default()`), and the empty result was the next
+/// save's input: the working list saves itself moments after any change, so a corrupt file, one
+/// cut short, or one from a newer Nexus lost every project. Instead the file is moved aside to a
+/// new timestamped name beside it, never deleted, and a fresh one starts. If it cannot be moved,
+/// it stays where it is and `writable` is false, so no save writes over it.
+struct RadioProgOpened {
+    file: RadioProgFile,
+    notice: Option<RadioProgFileNotice>,
+}
+
+impl RadioProgOpened {
+    fn writable(&self) -> bool {
+        !self.notice.as_ref().is_some_and(|n| n.kept_in_place)
+    }
+}
+
+fn radioprog_open(path: &Path, now: i64) -> RadioProgOpened {
+    let reason = match radioprog_read(path) {
+        Ok(file) => {
+            return RadioProgOpened {
+                file: file.unwrap_or_default(),
+                notice: None,
+            }
+        }
+        Err(reason) => reason,
+    };
+    let moved =
+        radioprog_aside_path(path, now).filter(|aside| std::fs::rename(path, aside).is_ok());
+    eprintln!(
+        "tempo: {} could not be read ({reason}); {}",
+        path.display(),
+        match &moved {
+            Some(aside) => format!("kept as {}", aside.display()),
+            None => "could not move it aside, so Program will not save over it".to_string(),
+        }
+    );
+    RadioProgOpened {
+        file: RadioProgFile::default(),
+        notice: Some(RadioProgFileNotice {
+            path: moved
+                .as_deref()
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned(),
+            kept_in_place: moved.is_none(),
+        }),
+    }
+}
+
+/// Why a save is refused while an unreadable projects file sits where it would be written.
+const RADIOPROG_NOT_SAVED: &str =
+    "radioprog.json could not be read and could not be moved aside, so it was not saved over";
 
 /// The ONE writer of `radioprog.json`. `path` is a parameter rather than `radioprog_path()` so a
 /// test can point it at a scratch file — the remote curation path (`remote_service::operations::
@@ -26487,34 +26597,334 @@ fn store_radioprog(path: &Path, f: &RadioProgFile) -> Result<(), String> {
     std::fs::write(path, json).map_err(|e| format!("couldn't save programming projects: {e}"))
 }
 
-/// All saved programming projects.
-#[tauri::command]
-fn radioprog_list_projects() -> Result<Vec<RadioProgProject>, String> {
-    Ok(load_radioprog().projects)
+/// The projects at `path`, and the notice when the file there could not be read.
+fn radioprog_list_at(
+    path: &Path,
+    now: i64,
+) -> (Vec<RadioProgProject>, Option<RadioProgFileNotice>) {
+    let opened = radioprog_open(path, now);
+    (opened.file.projects, opened.notice)
 }
 
-/// Create/update one project (upsert by id; stamps updatedUtc, and createdUtc on first save).
-#[tauri::command]
-fn radioprog_save_project(mut project: RadioProgProject) -> Result<(), String> {
-    let mut f = load_radioprog();
-    f.version = 1;
-    project.updated_utc = now_unix();
+/// Upsert one project into the file at `path` (stamps updatedUtc, and createdUtc on first save).
+fn radioprog_save_at(
+    path: &Path,
+    mut project: RadioProgProject,
+    now: i64,
+) -> (Result<(), String>, Option<RadioProgFileNotice>) {
+    let opened = radioprog_open(path, now);
+    if !opened.writable() {
+        return (Err(RADIOPROG_NOT_SAVED.into()), opened.notice);
+    }
+    let mut f = opened.file;
+    f.version = RADIOPROG_VERSION;
+    project.updated_utc = now;
     if let Some(existing) = f.projects.iter_mut().find(|p| p.id == project.id) {
         project.created_utc = existing.created_utc;
         *existing = project;
     } else {
-        project.created_utc = now_unix();
+        project.created_utc = now;
         f.projects.push(project);
     }
-    store_radioprog(&radioprog_path(), &f)
+    (store_radioprog(path, &f), opened.notice)
+}
+
+/// Drop one project from the file at `path` (a missing id is a no-op success).
+fn radioprog_delete_at(
+    path: &Path,
+    id: &str,
+    now: i64,
+) -> (Result<(), String>, Option<RadioProgFileNotice>) {
+    let opened = radioprog_open(path, now);
+    if !opened.writable() {
+        return (Err(RADIOPROG_NOT_SAVED.into()), opened.notice);
+    }
+    let mut f = opened.file;
+    f.projects.retain(|p| p.id != id);
+    (store_radioprog(path, &f), opened.notice)
+}
+
+/// All saved programming projects.
+#[tauri::command]
+fn radioprog_list_projects() -> Result<Vec<RadioProgProject>, String> {
+    let (projects, notice) = radioprog_list_at(&radioprog_path(), now_unix());
+    remember_radioprog_notice(&notice);
+    Ok(projects)
+}
+
+/// Create/update one project (upsert by id; stamps updatedUtc, and createdUtc on first save).
+#[tauri::command]
+fn radioprog_save_project(project: RadioProgProject) -> Result<(), String> {
+    let (saved, notice) = radioprog_save_at(&radioprog_path(), project, now_unix());
+    remember_radioprog_notice(&notice);
+    saved
 }
 
 /// Delete one project by id (missing id is a no-op success).
 #[tauri::command]
 fn radioprog_delete_project(id: String) -> Result<(), String> {
-    let mut f = load_radioprog();
-    f.projects.retain(|p| p.id != id);
-    store_radioprog(&radioprog_path(), &f)
+    let (deleted, notice) = radioprog_delete_at(&radioprog_path(), &id, now_unix());
+    remember_radioprog_notice(&notice);
+    deleted
+}
+
+/// This run's notice about `radioprog.json`, when Program found it unreadable: Program shows it,
+/// naming where the file is.
+#[tauri::command]
+fn radioprog_file_notice() -> Option<RadioProgFileNotice> {
+    RADIOPROG_NOTICE.lock().ok().and_then(|n| n.clone())
+}
+
+#[cfg(test)]
+mod radioprog_file_tests {
+    //! `radioprog.json` on the desktop's own load and save path, the one the Program commands
+    //! run: an unreadable file is kept byte for byte and never saved over, and the notice names
+    //! where it is; a file that only ADDS fields reads as it always has; no file is a first run.
+    use super::*;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "radioprog.unreadable-20260930-142233.json";
+
+    /// A unique scratch directory; the name carries the test's own label.
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-radioprog-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn project(id: &str, channels: usize) -> RadioProgProject {
+        RadioProgProject {
+            id: id.into(),
+            name: "My channels".into(),
+            channels: (0..channels)
+                .map(|i| propagation::memchan::Channel {
+                    id: format!("manual:{i}"),
+                    name: format!("CH{i}"),
+                    rx_mhz: 146.94,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A file as this build writes it.
+    fn file_bytes(projects: Vec<RadioProgProject>) -> Vec<u8> {
+        serde_json::to_vec(&RadioProgFile {
+            version: 1,
+            projects,
+        })
+        .unwrap()
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn ids(projects: &[RadioProgProject]) -> Vec<&str> {
+        projects.iter().map(|p| p.id.as_str()).collect()
+    }
+
+    /// Two projects, as this build writes them, for the unreadable files below to start from.
+    fn two_projects() -> String {
+        String::from_utf8(file_bytes(vec![
+            project("working", 3),
+            project("denver-trip", 2),
+        ]))
+        .unwrap()
+    }
+
+    /// A file that is there but cannot be read is kept, byte for byte, under a new name beside
+    /// it; the save that follows (the working list saves itself moments after any change) starts
+    /// a new file and does not touch the kept one; and the notice names where the kept file is.
+    fn assert_kept_and_never_saved_over(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("unreadable");
+        let path = dir.join("radioprog.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (projects, notice) = radioprog_list_at(&path, NOW);
+        let (saved, _) = radioprog_save_at(&path, project("working", 1), NOW + 1);
+        assert!(saved.is_ok(), "{what}: the new list saves: {saved:?}");
+
+        let kept = holding(&dir, &bytes);
+        assert_eq!(
+            kept,
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable file must survive the save, byte for byte, moved aside"
+        );
+        assert_eq!(
+            notice,
+            Some(RadioProgFileNotice {
+                path: dir.join(ASIDE).to_string_lossy().into_owned(),
+                kept_in_place: false,
+            }),
+            "{what}: Program is told where the file is"
+        );
+        assert!(projects.is_empty(), "{what}: nothing is read out of it");
+        let (after, again) = radioprog_list_at(&path, NOW + 2);
+        assert_eq!((ids(&after), again), (vec!["working"], None), "{what}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_projects_file_cut_short_is_kept_and_never_saved_over() {
+        let whole = two_projects().into_bytes();
+        assert_kept_and_never_saved_over("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a tone mode from a later build.
+    #[test]
+    fn a_projects_file_with_a_value_this_build_does_not_know_is_kept_and_never_saved_over() {
+        let unknown_value =
+            two_projects().replacen("\"toneMode\":\"none\"", "\"toneMode\":\"dtcsrx\"", 1);
+        assert!(
+            unknown_value.contains("dtcsrx"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept_and_never_saved_over("an unknown value", unknown_value.into_bytes());
+    }
+
+    #[test]
+    fn a_projects_file_from_a_newer_version_is_kept_and_never_saved_over() {
+        let newer_version = two_projects().replacen("\"version\":1", "\"version\":2", 1);
+        assert!(newer_version.contains("\"version\":2"));
+        assert_kept_and_never_saved_over("a newer version", newer_version.into_bytes());
+    }
+
+    /// A newer Nexus that only ADDED fields writes a file this build still reads: the fields are
+    /// ignored, nothing is moved, and there is nothing to say.
+    #[test]
+    fn a_file_whose_only_news_is_fields_reads_as_it_always_has() {
+        let dir = scratch("added-fields");
+        let path = dir.join("radioprog.json");
+        let bytes = String::from_utf8(file_bytes(vec![project("working", 2), project("trip", 1)]))
+            .unwrap()
+            .replacen("\"projects\":", "\"aFileField\":7,\"projects\":", 1)
+            .replacen("\"radiusKm\":", "\"aProjectField\":true,\"radiusKm\":", 1)
+            .replacen("\"rxMhz\":", "\"aChannelField\":\"x\",\"rxMhz\":", 1)
+            .into_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+        let (projects, notice) = radioprog_list_at(&path, NOW);
+        assert_eq!(
+            (ids(&projects), notice),
+            (vec!["working", "trip"], None),
+            "read as it always has, with nothing to say"
+        );
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![path.clone()],
+            "left where it is"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// No file at all is a first run: nothing to show, nothing to say, and the first save makes it.
+    #[test]
+    fn no_file_is_a_first_run() {
+        let dir = scratch("first-run");
+        let path = dir.join("radioprog.json");
+        let (projects, notice) = radioprog_list_at(&path, NOW);
+        assert!(
+            projects.is_empty() && notice.is_none(),
+            "no file: nothing to show and nothing to say"
+        );
+        let (saved, notice) = radioprog_save_at(&path, project("working", 1), NOW);
+        assert!(saved.is_ok() && notice.is_none(), "the first save makes it");
+        let (projects, _) = radioprog_list_at(&path, NOW);
+        assert_eq!(ids(&projects), vec!["working"]);
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no file set aside"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A file that cannot be moved aside (its folder refuses the rename) stays where it is, and
+    /// then every save and delete REFUSES rather than write over it; the notice says so.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_moved_aside_is_never_saved_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("stuck");
+        let path = dir.join("radioprog.json");
+        let bytes = b"{ this is not json".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // CONTROL: a user the permissions do not bind (root) could rename anyway; the premise of
+        // this test would not hold, so say so instead of passing on nothing.
+        if std::fs::write(dir.join("probe"), b"").is_ok() {
+            let _ = std::fs::remove_file(dir.join("probe"));
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            eprintln!("skipped: this user can write a read-only folder, so no rename fails here");
+            return;
+        }
+        let (projects, listed) = radioprog_list_at(&path, NOW);
+        let (saved, _) = radioprog_save_at(&path, project("working", 1), NOW + 1);
+        let (deleted, _) = radioprog_delete_at(&path, "working", NOW + 2);
+        let after = std::fs::read(&path).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(after, bytes, "the unreadable file must never be saved over");
+        assert_eq!(
+            (saved, deleted),
+            (
+                Err(RADIOPROG_NOT_SAVED.into()),
+                Err(RADIOPROG_NOT_SAVED.into())
+            )
+        );
+        assert_eq!(
+            listed,
+            Some(RadioProgFileNotice {
+                path: path.to_string_lossy().into_owned(),
+                kept_in_place: true,
+            })
+        );
+        assert!(projects.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A second unreadable file never replaces one set aside earlier: the new one takes the next
+    /// free name (a rename onto an existing file would replace it).
+    #[test]
+    fn a_second_unreadable_file_never_replaces_the_first_one_kept() {
+        let dir = scratch("second");
+        let path = dir.join("radioprog.json");
+        let first = b"{ the first unreadable file".to_vec();
+        let second = b"{ the second one".to_vec();
+        std::fs::write(dir.join(ASIDE), &first).unwrap();
+        std::fs::write(&path, &second).unwrap();
+        let (_, notice) = radioprog_list_at(&path, NOW);
+        let next = dir.join("radioprog.unreadable-20260930-142233-2.json");
+        assert_eq!(
+            holding(&dir, &second),
+            vec![next.clone()],
+            "the second one kept, beside it"
+        );
+        assert_eq!(
+            holding(&dir, &first),
+            vec![dir.join(ASIDE)],
+            "the first one untouched"
+        );
+        assert_eq!(
+            notice.map(|n| n.path),
+            Some(next.to_string_lossy().into_owned()),
+            "the notice names the second one"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// Render a channel list to an export format: "chirp" (the CHIRP generic CSV, analog rows only)
@@ -30754,6 +31164,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             radioprog_list_projects,
             radioprog_save_project,
             radioprog_delete_project,
+            radioprog_file_notice,
             export_channels,
             set_activation,
             clear_activation,

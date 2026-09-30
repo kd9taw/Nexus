@@ -60,7 +60,7 @@ import type {
 } from './types'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
-import type { RepeaterSearchResult, GeoCandidate, RadioProgProject, ProgChannel } from './types'
+import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { WatchKind } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
@@ -3431,6 +3431,12 @@ export async function setRepeaterbookToken(token: string): Promise<void> {
 /** All saved programming projects (radioprog.json beside settings.json). */
 export async function radioprogListProjects(): Promise<RadioProgProject[]> {
   return invoke<RadioProgProject[]>('radioprog_list_projects')
+}
+
+/** This run's notice about the saved-projects file, when Program could not read it: where the
+ * file is kept, and whether it could be moved aside (if not, saving is refused). */
+export async function radioprogFileNotice(): Promise<RadioProgFileNotice | null> {
+  return invoke<RadioProgFileNotice | null>('radioprog_file_notice')
 }
 
 /** Create/update one programming project (upsert by id). */
