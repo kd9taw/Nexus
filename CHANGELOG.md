@@ -659,6 +659,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clear log removes only the contacts this window had.** With two windows on one data folder,
   Clear log also removed any contact the other window had logged since this window last took
   the log in. It now removes exactly the contacts this window had when you pressed it.
+- **A contact the other window logs while this one starts is no longer missed.** With two
+  windows on one data folder, a contact the other window logged or changed while this window
+  was starting up could be missing from this window's duplicate check, worked-before marks and
+  badges until the other window changed something else. It now arrives a moment later, like any
+  other change the other window makes.
 - **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
   colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
   you picked. The dark theme is unchanged.

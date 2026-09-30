@@ -452,10 +452,13 @@ fn open_reporting_with(
     // holds are what the station's minter draws clear of ([`crate::station::StationCore`]).
     let HotBuild { entity } = hot.unwrap_or(HotBuild { entity: None });
     let bound = crate::engine::now_unix_secs().saturating_sub(crate::engine::SESSION_READ_WINDOW);
-    let (index, recent) = db
+    // And where the writer counts other windows' commits from: this same picture, so one that
+    // lands after it — during this open, before the writer runs — is counted, and the next poll
+    // takes it in ([`writer::Baseline`]).
+    let (index, recent, baseline) = db
         .in_one_snapshot(|db| {
             let index = HotIndex::from_store(db, &StationKeys(entity.as_deref()))?;
-            Ok((index, rows_since(db, bound)?))
+            Ok((index, rows_since(db, bound)?, writer::Baseline::of(db)))
         })
         .map_err(OpenError::Store)?;
     let hot = Prebuilt {
@@ -495,9 +498,17 @@ fn open_reporting_with(
     // unless one has changed — now that the launch no longer loads `log.adi` itself.
     Logbook::sweep_safety_copies(log_path);
 
-    let writer = Arc::new(LogWriter::start(db));
-    let synced_foreign = writer.foreign_commits();
-    let synced_index = writer.foreign_index_moves();
+    // Tests only: another window's commit, landing between the attach's read and the writer.
+    #[cfg(test)]
+    tests::after_the_attach_read();
+    let writer = Arc::new(LogWriter::start_from(db, baseline));
+    // Tests only: another window's commit, counted by the writer before the counts are read.
+    #[cfg(test)]
+    tests::after_the_writer_starts(&writer);
+    // Nothing taken in yet: the index is the picture the writer counts from, so every commit it
+    // counts, by now or later, is one the index does not hold. (Read from the writer here, one it
+    // had already counted would pass as taken in.)
+    let (synced_foreign, synced_index) = (0, 0);
     // Opens nothing yet: a session that never reads the store costs nothing for it.
     let reader = Arc::new(LogReader::new(&db_path));
     // The mirror pictures the store itself, streamed off a read connection (SPEC-2 v3 C15).
@@ -2001,6 +2012,36 @@ pub(crate) mod tests {
     use tempo_core::logbook::{
         adif_header, adif_record_own_log, sqlite::WriteHold, QslVia, QsoEdit,
     };
+
+    // What a test has land inside a store's open on this thread: another window's commit after
+    // the attach's read ([`after_the_attach_read`]), or once the writer has started
+    // ([`after_the_writer_starts`]). (Plain comments: doc comments cannot attach through
+    // `thread_local!`.)
+    #[allow(clippy::type_complexity)]
+    mod open_gaps {
+        use super::LogWriter;
+        thread_local! {
+            pub(super) static AFTER_READ: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+                const { std::cell::RefCell::new(None) };
+            pub(super) static AFTER_START: std::cell::RefCell<Option<Box<dyn FnOnce(&LogWriter)>>> =
+                const { std::cell::RefCell::new(None) };
+        }
+    }
+
+    /// The store's open, between the attach's read and the writer's start: what a test put there.
+    pub(super) fn after_the_attach_read() {
+        if let Some(f) = open_gaps::AFTER_READ.with(|g| g.borrow_mut().take()) {
+            f();
+        }
+    }
+
+    /// The store's open, once the writer has started and before its counts are read: what a test
+    /// put there.
+    pub(super) fn after_the_writer_starts(writer: &LogWriter) {
+        if let Some(f) = open_gaps::AFTER_START.with(|g| g.borrow_mut().take()) {
+            f(writer);
+        }
+    }
 
     /// A data folder of the test's own, gone with the value.
     pub(crate) struct Dir(pub(crate) PathBuf);
@@ -5650,6 +5691,75 @@ pub(crate) mod tests {
             Some("B's note")
         );
         index_is_the_stores(&b, &d, "B's index followed it");
+    }
+
+    /// ⛔ ANOTHER WINDOW'S CHANGE, MADE WHILE THIS WINDOW OPENS, REACHES THIS WINDOW'S INDEX. A window
+    /// builds its hot index from one read of the store as it opens. Another window's commit that
+    /// lands after that read and before the window's writer starts is not in the index, so the
+    /// writer must count it and the next poll take it in. The writer used to take its starting
+    /// point only when its thread first ran, after such a commit, and so never counted it: the
+    /// window's duplicate guard, B4 and badges went on answering without the other window's
+    /// change until that window changed some other row.
+    #[test]
+    fn another_windows_change_made_while_this_window_opens_reaches_its_index() {
+        let d = Dir::new("open-gap-read");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut edited = find(&a, "K3ABC").expect("held");
+        let id = edited.id.expect("an id");
+        edited.band = "40m".into();
+        open_gaps::AFTER_READ.with(|g| {
+            *g.borrow_mut() = Some(Box::new(move || {
+                assert!(a.update_qso(id, edited), "A edits the contact");
+                flush(&a);
+            }))
+        });
+        let mut b = engine_on_store(&d);
+        assert!(
+            open_gaps::AFTER_READ.with(|g| g.borrow().is_none()),
+            "premise: A's edit landed inside B's open"
+        );
+        assert!(
+            eventually(|| b.log_store_foreign_pending()),
+            "B counts A's edit, which the read B opened on does not hold"
+        );
+        assert!(b.take_in_shared_log(), "B takes A's edit in");
+        index_is_the_stores(&b, &d, "B's index is the store's, A's edit included");
+    }
+
+    /// ⛔ AND ONE ITS WRITER HAS ALREADY COUNTED BY THE TIME THE WINDOW READS ITS COUNTS. The counts a
+    /// window starts from are its read's: every commit its writer counts is one its index does
+    /// not hold, whether counted by then or not, and is taken in on the next poll — never passed
+    /// over as seen.
+    #[test]
+    fn another_windows_change_counted_before_the_window_reads_its_counts_is_still_taken_in() {
+        let d = Dir::new("open-gap-start");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut edited = find(&a, "K3ABC").expect("held");
+        let id = edited.id.expect("an id");
+        edited.band = "40m".into();
+        open_gaps::AFTER_START.with(|g| {
+            *g.borrow_mut() = Some(Box::new(move |writer: &LogWriter| {
+                assert!(a.update_qso(id, edited), "A edits the contact");
+                flush(&a);
+                assert!(
+                    eventually(|| writer.foreign_commits() >= 1),
+                    "premise: B's writer has counted A's edit before B reads its counts"
+                );
+            }))
+        });
+        let mut b = engine_on_store(&d);
+        assert!(
+            open_gaps::AFTER_START.with(|g| g.borrow().is_none()),
+            "premise: A's edit landed inside B's open"
+        );
+        assert!(
+            eventually(|| b.log_store_foreign_pending()),
+            "B still has A's edit to take in"
+        );
+        assert!(b.take_in_shared_log(), "B takes A's edit in");
+        index_is_the_stores(&b, &d, "B's index is the store's, A's edit included");
     }
 
     /// ⛔ THE FILLS ARE THE STORE'S, AND ANOTHER WINDOW'S CHANGE KEEPS THEM. The fills are in the
