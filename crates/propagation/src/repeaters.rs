@@ -184,9 +184,40 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
 
 // ── hearham ─────────────────────────────────────────────────────────────────
 
+/// The mode words a hearham `mode` value is made of. The directory joins them with `/`
+/// ("YSF/FM", "P25/NFM") or `+` ("FM+YSF"), and a few values run them together with no
+/// separator ("D-STARDMR", "P25YSFD-STARNXDNDMR/FM"): every distinct value in the
+/// directory, 29 of them, was counted on 2026-09-30. No word is a prefix of another, so a
+/// scan takes the one word that fits. A piece holding anything else is dropped whole
+/// rather than guessed at. Expects the value already upper-cased.
+fn hearham_mode_words(mode: &str) -> Vec<&'static str> {
+    const WORDS: [&str; 14] = [
+        "FM", "NFM", "DMR", "D-STAR", "DSTAR", "YSF", "C4FM", "FUSION", "P25", "NXDN", "M17",
+        "AX25", "ATV", "TV",
+    ];
+    let mut out = Vec::new();
+    for piece in mode.split(['/', '+']) {
+        let mut rest = piece.trim();
+        let mut words = Vec::new();
+        while let Some(w) = WORDS.iter().find(|w| rest.starts_with(**w)) {
+            words.push(*w);
+            rest = &rest[w.len()..];
+        }
+        if rest.is_empty() {
+            out.extend(words);
+        }
+    }
+    out
+}
+
 /// Parse the hearham.com `/api/repeaters/v1` payload (bare array; `frequency` +
 /// `offset` in Hz as integers; tones as strings — `"0.00"`/`""` = none, and DMR
 /// rows carry the color code as `"CC2"` in `encode`).
+///
+/// `mode` can name several modes ([`hearham_mode_words`]). A machine is FM when any
+/// of them is FM or NFM (or the mode is empty), and each digital flag comes from its
+/// own word, so "YSF/FM" is an FM machine that is also Fusion. A mode the record has
+/// no field for (P25, NXDN, M17, …) sets nothing and never makes a machine FM.
 pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
     rows.iter()
@@ -200,9 +231,11 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
             let offset_hz = jf64(v, "offset").unwrap_or(0.0);
             let output_mhz = freq_hz / 1e6;
             let mode = jstr(v, "mode").to_ascii_uppercase();
+            let words = hearham_mode_words(&mode);
+            let names = |any: &[&str]| words.iter().any(|w| any.contains(w));
             let enc = jstr(v, "encode");
             let dec = jstr(v, "decode");
-            let is_dmr = mode == "DMR" || cc_code(&enc).is_some();
+            let is_dmr = names(&["DMR"]) || cc_code(&enc).is_some();
             Some(RepeaterRecord {
                 source: RepeaterSource::Hearham,
                 source_id: jstr(v, "id"),
@@ -217,10 +250,10 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 city: jstr(v, "city"),
                 county: String::new(),
                 state: String::new(),
-                fm: mode == "FM" || mode.is_empty(),
+                fm: mode.is_empty() || names(&["FM", "NFM"]),
                 dmr: is_dmr,
-                dstar: mode == "D-STAR" || mode == "DSTAR",
-                fusion: mode == "FUSION" || mode == "YSF" || mode == "C4FM",
+                dstar: names(&["D-STAR", "DSTAR"]),
+                fusion: names(&["YSF", "C4FM", "FUSION"]),
                 dmr_color_code: cc_code(&enc),
                 bandwidth_khz: None,
                 operational: jf64(v, "operational").unwrap_or(1.0) != 0.0,
@@ -674,6 +707,133 @@ mod tests {
         assert!(recs.iter().any(|r| r.callsign.is_empty()));
         // Non-operational rows are flagged, not dropped.
         assert!(recs.iter().any(|r| !r.operational));
+    }
+
+    /// One hearham row in the `/api/repeaters/v1` shape (the fixture's fields), carrying
+    /// `mode` and `encode` exactly as the directory writes them. The mode strings in the tests
+    /// below are the directory's own (every distinct value, counted 2026-09-30); the rest of the
+    /// row is filler.
+    fn hh_row(mode: &str, encode: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
+        );
+        let mut recs = parse_hearham_json(&json);
+        assert_eq!(recs.len(), 1, "the {mode:?} row did not parse");
+        recs.remove(0)
+    }
+
+    /// The flags a record carries, by name — what Program reads: `fm` decides whether the
+    /// machine is listed by default and can be added, the others pick its badge.
+    fn flag_names(r: &RepeaterRecord) -> Vec<&'static str> {
+        [
+            (r.fm, "FM"),
+            (r.dmr, "DMR"),
+            (r.dstar, "D-STAR"),
+            (r.fusion, "YSF"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect()
+    }
+
+    /// Every case whose parsed flags differ from the expected ones, so a failure names each
+    /// mode string at once rather than stopping at the first.
+    fn wrong_flags(cases: &[(&str, &[&str])]) -> Vec<String> {
+        cases
+            .iter()
+            .filter_map(|&(mode, want)| {
+                let got = flag_names(&hh_row(mode, "100.0"));
+                (got != want).then(|| format!("{mode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect()
+    }
+
+    /// A hearham mode that names FM beside a digital mode is an FM machine that ALSO keeps the
+    /// digital mode. Reading only an exact "FM" left these with no flag at all, so Program hid
+    /// them and could not add them (315 "YSF/FM", 32 "DMR/FM", 18 "D-STAR/FM" rows, and the
+    /// run-together forms, on 2026-09-30).
+    #[test]
+    fn a_hearham_mode_naming_fm_beside_a_digital_mode_is_fm_and_keeps_it() {
+        let wrong = wrong_flags(&[
+            ("YSF/FM", &["FM", "YSF"]),
+            ("FM/YSF", &["FM", "YSF"]),
+            ("FM+YSF", &["FM", "YSF"]),
+            ("DMR/FM", &["FM", "DMR"]),
+            ("D-STAR/FM", &["FM", "D-STAR"]),
+            ("YSFD-STAR/FM", &["FM", "D-STAR", "YSF"]),
+            ("P25YSFD-STARNXDNDMR/FM", &["FM", "DMR", "D-STAR", "YSF"]),
+            ("P25YSFD-STARM17NXDNDMR/FM", &["FM", "DMR", "D-STAR", "YSF"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "FM beside a digital mode");
+
+        // The DMR colour code still arrives in `encode` on such a row: it stays a colour code
+        // (never a CTCSS tone), and the machine programs as FM.
+        let r = hh_row("DMR/FM", "CC1");
+        assert!(r.fm && r.dmr, "DMR/FM with CC1: {:?}", flag_names(&r));
+        assert_eq!(r.dmr_color_code, Some(1));
+        assert_eq!(r.ctcss_enc_hz, None);
+        assert_eq!(to_channel(&r).mode, ChanMode::Fm);
+    }
+
+    /// "NFM" is narrow FM, so an NFM machine is an FM machine. Nothing in the model exports a
+    /// narrow channel yet (`to_channel` never writes `ChanMode::Nfm`), so it programs as FM.
+    #[test]
+    fn a_hearham_nfm_machine_is_fm() {
+        let wrong = wrong_flags(&[
+            ("NFM", &["FM"]),
+            ("P25/NFM", &["FM"]),
+            ("DMR/NFM", &["FM", "DMR"]),
+            ("NXDN/NFM", &["FM"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "NFM");
+        assert_eq!(to_channel(&hh_row("NFM", "100.0")).mode, ChanMode::Fm);
+    }
+
+    /// FM beside a mode the record has no field for (P25, NXDN, M17) is still FM.
+    #[test]
+    fn a_hearham_mode_naming_fm_beside_an_unrecorded_mode_is_fm() {
+        let wrong = wrong_flags(&[
+            ("P25/FM", &["FM"]),
+            ("NXDN/FM", &["FM"]),
+            ("M17/FM", &["FM"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "FM beside P25/NXDN/M17");
+    }
+
+    /// A mode without FM in it stays digital-only (not listed by default, not addable), with
+    /// each digital mode it names read, the run-together forms included. "C4FM" is Fusion: the
+    /// letters FM inside a token are not FM.
+    #[test]
+    fn a_hearham_mode_without_fm_stays_digital_and_names_each_mode() {
+        let wrong = wrong_flags(&[
+            ("DMR", &["DMR"]),
+            ("D-STAR", &["D-STAR"]),
+            ("DSTAR", &["D-STAR"]),
+            ("YSF", &["YSF"]),
+            ("C4FM", &["YSF"]),
+            ("FUSION", &["YSF"]),
+            ("DMR/DSTAR", &["DMR", "D-STAR"]),
+            ("P25/D-STAR", &["D-STAR"]),
+            ("D-STARDMR", &["DMR", "D-STAR"]),
+            ("P25YSFD-STARNXDNDMR", &["DMR", "D-STAR", "YSF"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "digital-only modes");
+    }
+
+    /// A mode the record has no field for is never FM on its own, and a plain or empty mode is
+    /// FM, as before.
+    #[test]
+    fn a_hearham_mode_with_no_field_is_never_fm_on_its_own() {
+        let wrong = wrong_flags(&[
+            ("P25", &[]),
+            ("NXDN", &[]),
+            ("AX25", &[]),
+            ("ATV", &[]),
+            ("TV", &[]),
+            ("FM", &["FM"]),
+            ("", &["FM"]),
+        ]);
+        assert_eq!(wrong, Vec::<String>::new(), "modes with no field");
     }
 
     /// The shared-access path serves rows narrowed to the fields below, while

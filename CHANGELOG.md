@@ -447,6 +447,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
+  directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
+  `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
+  machines, most of them in Florida, New England, Missouri and Minnesota, were hidden unless the
+  digital filter was on, and could not be added to a channel list. They are now listed and can be
+  added, starred and exported as FM channels, and a `YSF/FM` machine keeps its +YSF badge. An `NFM`
+  machine is programmed as ordinary FM, since Program does not write narrow channels yet.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
