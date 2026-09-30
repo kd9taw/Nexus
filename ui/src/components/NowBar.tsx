@@ -4,7 +4,7 @@
 // NAMES (Cluster, Phone, PSKR — the services' own). What moved is the prose around them.
 import type { ReactNode } from 'react'
 import { Activity, Radio, SignalHigh, Target } from 'lucide-react'
-import { t, type MessageKey } from '../i18n'
+import { t } from '../i18n'
 import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
 import { azimuthLabel, backendAzimuth } from '../grid'
@@ -132,18 +132,13 @@ function NbChip({
  */
 
 // THE BAND CHIP SAYS WHAT THE BAND MENU AND THE MAP'S LIST SAY: the band's condition comes from
-// the one cell they draw (bandConditions.ts over propViz `bandConditionCell`), in the bar's own
-// words, and the chip's class comes from the cell's colour. It used to say what the activity tier
+// the one cell they draw (bandConditions.ts over propViz `bandConditionCell`), in the cell's own
+// word, and the chip's class comes from the cell's colour. It used to say what the activity tier
 // said: "quiet" for a band the model calls open and nobody has heard yet (the list: "Open · none
 // heard"), and a closed band in the alert red. Now a band is green, amber or grey here exactly
 // where it is there, and a closed band recedes. Unknown or stale data prints an ellipsis, never a
-// word. The words resolve when they are READ, so the table is not frozen to whichever locale
-// loaded this module first.
-const BAND_WORD: Record<'open' | 'marginal' | 'closed', { wordKey: MessageKey }> = {
-  open: { wordKey: 'nowbar.band.open' },
-  marginal: { wordKey: 'nowbar.band.marginal' },
-  closed: { wordKey: 'nowbar.band.closed' },
-}
+// word. Open, Marginal and Closed are TOKENS, like the band name beside them: the backend's
+// English word in every language (operator, 2026-09-29), so there is no catalog entry for them.
 const BAND_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok' }
 
 export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true }: Props) {
@@ -179,7 +174,7 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
     : ''
 
   // Band open? No data, stale data or an offline snapshot prints an ellipsis — a glyph, not a word.
-  const bandWord = condition.state === 'unknown' ? '…' : t(BAND_WORD[condition.state].wordKey)
+  const bandWord = condition.state === 'unknown' ? '…' : condition.word
   const bandCls = condition.state === 'unknown' ? 'weak' : (BAND_CLASS[condition.color ?? ''] ?? 'weak')
 
   // Getting out? — PSK Reporter spots OF me on this band.

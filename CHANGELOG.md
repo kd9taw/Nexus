@@ -354,9 +354,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the band menu and the NOW bar now show the same word and the same colour for each band.
   - A band you are hearing now is Open and green, even when the propagation model calls it
     closed. A summer Es opening on 10 m or 6 m used to show a grey "Open".
-  - The NOW bar says what the band menu says. For a band the model calls open but nobody has
-    heard yet it now says "20m open" (it used to say "quiet"). It says "marginal" where the list
-    says Marginal. A closed band shows in grey instead of red.
+  - The NOW bar says what the band menu says, in the same word. For a band the model calls open
+    but nobody has heard yet it now says "20m Open" (it used to say "quiet"), and "20m Marginal"
+    where the list says Marginal. A closed band shows in grey instead of red.
+  - Open, Marginal and Closed are shown in English in every language, like the band names, on
+    the list, the Band Advisor, the band menu, the NOW bar and the band tiles. The NOW bar used
+    to put them in the interface's language.
   - The Band Advisor's word is the same outlined word as the list's. A closed band's row is no
     longer faded to half strength, which made its text too faint to read; its band name and word
     are dimmer instead.

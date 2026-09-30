@@ -9616,9 +9616,6 @@ export const EN = {
   'nowbar.age.mins': '{{mins}}m',
   'nowbar.age.hours': '{{hours}}h',
   'nowbar.band.label': 'Band',
-  'nowbar.band.open': 'open',
-  'nowbar.band.marginal': 'marginal',
-  'nowbar.band.closed': 'closed',
   // The chip's own tooltip, used only when the advisory carries no reason of its own (that
   // reason is backend prose, interpolated as data — it moves in phase 3).
   'nowbar.band.title.connect': 'Open Connect — the map + nowcast',

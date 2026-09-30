@@ -14,6 +14,10 @@
 //
 // The fixture bands DISAGREE on purpose: a test whose model and observation agree cannot tell
 // "colour by the word" from "colour by the model".
+//
+// THE WORDS ARE TOKENS (operator, 2026-09-29: "Keep English tokens … the same English word in every
+// language"). Open, Marginal and Closed are the backend's words and are shown as they come, like a
+// band name: no surface translates them, so every surface says the same word in every language.
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { BandConditionStrip } from './BandConditionStrip'
@@ -21,6 +25,11 @@ import { BandAdvisor } from './BandAdvisor'
 import { NowBar } from '../NowBar'
 import { publishBandConditions, useBandConditions } from '../../bandConditions'
 import { bandConditionCell } from '../../propViz'
+import { installCatalog, setLocale } from '../../i18n'
+import { DE } from '../../i18n/de'
+import { ES } from '../../i18n/es'
+import { FR } from '../../i18n/fr'
+import { JA } from '../../i18n/ja'
 import type { AppSnapshot, BandReport, PropagationSnapshot } from '../../types'
 
 const report = (band: string, modeled: BandReport['modeled'], tier: BandReport['tier']): BandReport =>
@@ -91,14 +100,13 @@ describe('one band, one word, one colour', () => {
     }
   })
 
-  it('the band menu and the NOW bar say the same, the NOW bar in its own words, and a closed band is not red', () => {
+  it('the band menu and the NOW bar say the same word, the backend’s, and a closed band is not red', () => {
     let lookup: ReturnType<typeof useBandConditions> | null = null
     function Probe() {
       lookup = useBandConditions()
       return null
     }
     render(<Probe />)
-    const NOW_WORD = { Open: 'open', Marginal: 'marginal', Closed: 'closed' } as const
     const NOW_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok', 'var(--band-closed)': 'weak' }
     for (const [band, , , word, colour] of CASES) {
       const menu = lookup!(band)
@@ -109,12 +117,40 @@ describe('one band, one word, one colour', () => {
         <NowBar snap={snap} prop={PROP} feedHealth={null} connectEnabled={false} dxpedEnabled={false} onNavigate={() => {}} />,
       ).container
       const chip = [...bar.querySelectorAll<HTMLElement>('.nb-chip')].find((c) => c.querySelector('.nb-v')?.textContent?.startsWith(band))!
-      expect([band, chip.querySelector('.nb-v')!.textContent]).toEqual([band, `${band} ${NOW_WORD[word]}`])
+      expect([band, chip.querySelector('.nb-v')!.textContent]).toEqual([band, `${band} ${word}`])
       const cls = [...chip.classList].filter((c) => c !== 'nb-chip')
       expect([band, cls]).toEqual([band, [NOW_CLASS[colour]]])
       expect(cls, `${band}: a closed band's chip is red`).not.toContain('bad')
       cleanup()
       render(<Probe />)
+    }
+  })
+})
+
+describe('the band words are tokens, like the band names', () => {
+  afterEach(() => setLocale('en'))
+
+  it('in German, Spanish, French and Japanese the NOW bar says the band menu’s English word', () => {
+    for (const [locale, catalog] of [['de', DE], ['es', ES], ['fr', FR], ['ja', JA]] as const) {
+      installCatalog(locale, catalog)
+      setLocale(locale)
+      for (const [band, , , word] of CASES) {
+        let lookup: ReturnType<typeof useBandConditions> | null = null
+        function Probe() {
+          lookup = useBandConditions()
+          return null
+        }
+        render(<Probe />)
+        expect([locale, band, lookup!(band).word], 'control: the menu says the backend’s word').toEqual([locale, band, word])
+        cleanup()
+        const snap = { radio: { band } } as unknown as AppSnapshot
+        const bar = render(
+          <NowBar snap={snap} prop={PROP} feedHealth={null} connectEnabled={false} dxpedEnabled={false} onNavigate={() => {}} />,
+        ).container
+        const chip = [...bar.querySelectorAll<HTMLElement>('.nb-chip')].find((c) => c.querySelector('.nb-v')?.textContent?.startsWith(band))!
+        expect([locale, chip.querySelector('.nb-v')!.textContent]).toEqual([locale, `${band} ${word}`])
+        cleanup()
+      }
     }
   })
 })
