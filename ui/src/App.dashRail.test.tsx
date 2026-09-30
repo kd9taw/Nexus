@@ -9,7 +9,7 @@
 //   · never beside a view that is not an operating cockpit (Connect already is these boxes; Tempo's
 //     conversation fits its own two rails against the whole window);
 //   · a click in the rail never selects a station app-wide — the selected station is the one a CW
-//     macro's `!` sends.
+//     macro's `!` sends — and a Spots row in it works the spot through the board's own Work.
 // The one-poll claim is DashRail.feeds.test.tsx; each cockpit's stop controls beside the rail are
 // DashRail.stopLine.test.tsx.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -199,5 +199,87 @@ describe('a click in the rail never changes the station the cockpit is working',
     await act(async () => {})
     expect(api.selectPeer, 'a click in the rail selected a station app-wide').not.toHaveBeenCalled()
     expect(rail.querySelector('[data-pane="selection"] .cs-call')?.textContent).toBe('K1ABC')
+  })
+
+  it('a Spots row selects inside the rail too, then works the spot through the board’s own Work, keying nothing', async () => {
+    // A row click on the Spots board is a select and a Work. In the rail the select is the rail's own;
+    // the Work is the board's (a QSY and its cockpit), after which that cockpit arms the station it
+    // was handed, as a Work from every board does.
+    const K1CW = {
+      call: 'K1CW', entity: 'United States', zone: 5, state: null, band: '20m', freqMhz: 14.025, mode: 'CW',
+      submode: 'CW', spotter: 'W3LPL', corroborators: [], ageSecs: 30, comment: '', licensed: true, spotterLocal: true,
+    }
+    vi.mocked(api.getAllSpots).mockResolvedValue([K1CW] as unknown as Awaited<ReturnType<typeof api.getAllSpots>>)
+    try {
+      localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+      localStorage.setItem(
+        'nexus.dashrail.config',
+        JSON.stringify({ slots: { rail1: 'selection', rail2: 'spots', rail3: 'spacewx', rail4: 'getout' } }),
+      )
+      await mountOn('cw')
+      const rail = railEl()!
+      const row = await waitFor(() => {
+        const r = [...rail.querySelectorAll<HTMLElement>('[data-pane="spots"] .sp-row')].find(
+          (x) => x.querySelector('.np-call')?.textContent === 'K1CW',
+        )
+        if (!r) throw new Error('the rail’s Spots box does not list the spot')
+        return r
+      })
+      // The transmit verbs a Work could reach; a switch keys only when set ON (a release is a `false`).
+      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq'] as const
+      const SWITCHES = ['setPtt', 'setTune', 'setTxEnabled'] as const
+      for (const fn of [api.selectPeer, api.workSpot, ...VERBS.map((v) => api[v]), ...SWITCHES.map((v) => api[v])]) {
+        vi.mocked(fn).mockClear()
+      }
+      await act(async () => {
+        fireEvent.click(row)
+      })
+      await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
+      await act(async () => {})
+      expect(document.querySelector('.view-crash'), 'the cockpit the Work opened crashed').toBeNull()
+      expect(vi.mocked(api.workSpot).mock.calls, 'the Work is not the board’s own').toEqual([['cw', 14.025, '20m', 'K1CW', undefined]])
+      const worked = vi.mocked(api.workSpot).mock.invocationCallOrder[0]
+      expect(
+        vi.mocked(api.selectPeer).mock.invocationCallOrder.filter((n) => n < worked),
+        'the click selected the station app-wide',
+      ).toEqual([])
+      expect(rail.querySelector('[data-pane="selection"] .cs-call')?.textContent, 'the rail’s own selection').toBe('K1CW')
+      expect(row.classList.contains('selected'), 'the rail’s Spots box marks the row it selected').toBe(true)
+      for (const v of VERBS) expect(api[v], `the Work keyed through ${v}`).not.toHaveBeenCalled()
+      for (const v of SWITCHES) {
+        expect(vi.mocked(api[v]).mock.calls.filter(([on]) => on === true), `the Work turned ${v} on`).toEqual([])
+      }
+    } finally {
+      vi.mocked(api.getAllSpots).mockImplementation(async () => [])
+    }
+  })
+
+  it('a POTA / SOTA box’s HUNT tags the hunt and works the activator through the board’s own path, keying nothing', async () => {
+    const K9ABC = {
+      program: 'POTA', reference: 'US-1000', name: 'Test park', activator: 'K9ABC', freqKhz: 14285, mode: 'SSB',
+      spotter: null, comment: null, grid: null, newPark: false, bandOpen: false, huntedToday: false,
+    }
+    vi.mocked(api.getOtaSpots).mockImplementation((async (program: string) => (program === 'POTA' ? [K9ABC] : [])) as never)
+    try {
+      localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ cw: true }))
+      localStorage.setItem(
+        'nexus.dashrail.config',
+        JSON.stringify({ slots: { rail1: 'clock', rail2: 'pota', rail3: 'spacewx', rail4: 'getout' } }),
+      )
+      await mountOn('cw')
+      const hunt = await waitFor(() => within(railEl()!).getByRole('button', { name: 'Hunt K9ABC' }))
+      for (const fn of [api.selectPeer, api.workSpot, api.setHuntTarget, api.setPtt, api.setTxEnabled]) vi.mocked(fn).mockClear()
+      await act(async () => {
+        fireEvent.click(hunt)
+      })
+      await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
+      expect(vi.mocked(api.setHuntTarget).mock.calls, 'the hunt was not tagged as the board tags it').toEqual([['K9ABC', 'POTA', 'US-1000']])
+      expect(vi.mocked(api.workSpot).mock.calls, 'the QSY is not the board’s own').toEqual([['phone', 14.285, '20m', 'K9ABC', undefined]])
+      for (const v of ['setPtt', 'setTxEnabled'] as const) {
+        expect(vi.mocked(api[v]).mock.calls.filter(([on]) => on === true), `the hunt turned ${v} on`).toEqual([])
+      }
+    } finally {
+      vi.mocked(api.getOtaSpots).mockImplementation(async () => [])
+    }
   })
 })

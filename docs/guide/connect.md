@@ -130,7 +130,9 @@ on a large window, about 1600 px wide at your zoom (a 1366×768 laptop at its us
 qualifies), and the cockpit beside it is never narrower than it is on a 1024×768 screen, so a
 saved width is trimmed to fit. On a smaller window the rail stays hidden, and the ⊞ Panels entry
 keeps your choice and says why. The rail has no transmit control, and clicking a station in it
-selects that station in the rail only, never the station your cockpit is working. It reads the
+selects that station in the rail only, never the station your cockpit is working. A **Spots** or
+**POTA / SOTA** box works a spot there as it does on Connect: a click on a spot, or on **HUNT**,
+moves the radio to the station and opens its screen. Nothing transmits. The rail reads the
 same live data Connect does, and within a window the two share each request, so nothing is
 fetched twice.
 

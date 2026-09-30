@@ -3652,6 +3652,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             rigBand={snap.radio.band ?? null}
             onWorkSpot={handleWorkMapSpot}
             onPoint={(settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined}
+            // The Spots and POTA/SOTA boxes are the two boards themselves, lent as they are to
+            // Connect (the rail never stands on the Remote page, so the hunt wiring is always native).
+            spotsFeed={{ rows: allSpots, board: spotsBoard }}
+            otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
             onHide={() => setRailOn(railSection, false)}
             scale={scale}
           />

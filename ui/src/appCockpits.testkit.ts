@@ -129,6 +129,15 @@ export function appApiAnswers(): Record<string, unknown> {
     getKpForecast: vi.fn(async () => ({ points: [] })),
     getSolarIndices: vi.fn(async () => ({ days: [] })),
     getPathOutlook: vi.fn(async () => null),
+    // The rail's Spots and POTA/SOTA boxes: a Work's and a hunt's answers, the log prefill the cockpit
+    // a Work opens looks up, and the POTA/SOTA board's own reads (a suite gives it its spots).
+    workSpot: vi.fn(async () => APP_SNAPSHOT),
+    setHuntTarget: vi.fn(async () => APP_SNAPSHOT),
+    resolveEntity: vi.fn(async () => null),
+    getOtaSpots: vi.fn(async () => []),
+    getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
+    parksCount: vi.fn(async () => 0),
+    huntedParksCount: vi.fn(async () => 0),
     // Phone and CW.
     getCatCwUnprovenRigModels: vi.fn(async () => []),
     getVoiceMessages: vi.fn(async () => []),

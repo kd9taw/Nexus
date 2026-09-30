@@ -196,7 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both work from the keyboard too. The rail appears only on a large window (about 1600 px wide at
   your zoom, which includes a 1366×768 laptop at its usual 85 %), and the cockpit beside it is
   never narrower than it is on a 1024×768 screen. Clicking a station in the rail selects it in the
-  rail only, never the station your cockpit is working, and the rail has no transmit control.
+  rail only, never the station your cockpit is working, and the rail has no transmit control. A
+  **Spots** or **POTA / SOTA** box in the rail works a spot as it does on Connect: a click on a
+  spot, or on **HUNT**, moves the radio to the station and opens its screen. Nothing transmits.
   Within a window, Connect's boxes, the rail's and the alerts share one request per feed: the rail
   asks for what the same boxes on Connect ask for, and opening Connect no longer asks for the
   X-ray reading and the DXpedition windows twice. On a window 2400 px wide or wider, Operate's QSO strip keeps its two rows while

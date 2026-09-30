@@ -7,9 +7,20 @@
 // cockpits (off by default, per section, the doors, the stop line) is App.dashRail.test.tsx.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { PropagationSnapshot } from '../types'
+import type { AppSnapshot, OtaSpot, PropagationSnapshot, SpotRow } from '../types'
 
-const fx = vi.hoisted(() => ({ clockThrows: false }))
+// The boards the window lends the Spots and POTA/SOTA boxes, so the sweep reads their controls too.
+// No call or comment here carries a standalone "CQ" or "TX": a row's accessible name can carry its
+// comment, and the sweep's words are whole words, so such a spot would fail it on data.
+const fx = vi.hoisted(() => ({
+  clockThrows: false,
+  ota: [
+    {
+      program: 'POTA', reference: 'US-1000', name: 'Test park', activator: 'K9ABC', freqKhz: 14285, mode: 'SSB',
+      spotter: null, comment: 'thanks for the park', grid: null, newPark: false, bandOpen: false, huntedToday: false,
+    },
+  ] as OtaSpot[],
+}))
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -44,6 +55,11 @@ vi.mock('../api', async (importOriginal) => {
     readRotatorState: vi.fn(async () => null),
     getDeclination: vi.fn(async () => null),
     getSatTrackStatus: vi.fn(async () => null),
+    // The POTA/SOTA box's own reads (it self-fetches, as its screen does).
+    getOtaSpots: vi.fn(async (program: string) => (program === 'POTA' ? fx.ota : [])),
+    getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
+    parksCount: vi.fn(async () => 0),
+    huntedParksCount: vi.fn(async () => 0),
   }
 })
 vi.mock('./prop/ClockPane', async (importOriginal) => {
@@ -60,6 +76,7 @@ vi.mock('./prop/ClockPane', async (importOriginal) => {
 import { DashRail } from './DashRail'
 import { publishDashRailSwitch } from './dashRailSwitch'
 import { PANE_IDS } from '../features/connectConfig'
+import { APP_SNAPSHOT } from '../appCockpits.testkit'
 
 const LIVE: PropagationSnapshot = {
   advisory: { headline: 'Bands are fair', bands: [], banners: [] },
@@ -70,6 +87,11 @@ const LIVE: PropagationSnapshot = {
   asOf: Math.floor(Date.now() / 1000),
 } as unknown as PropagationSnapshot
 
+const SPOT = {
+  call: 'K1CW', entity: 'United States', zone: 5, state: null, band: '20m', freqMhz: 14.025, mode: 'CW', submode: 'CW',
+  spotter: 'W3LPL', corroborators: [], ageSecs: 30, comment: 'up 1', licensed: true, spotterLocal: true,
+} as unknown as SpotRow
+
 const props = (over: Partial<Parameters<typeof DashRail>[0]> = {}) => ({
   section: 'operate',
   myGrid: 'EN52',
@@ -77,6 +99,8 @@ const props = (over: Partial<Parameters<typeof DashRail>[0]> = {}) => ({
   stations: [],
   prop: LIVE,
   needByCall: new Map(),
+  spotsFeed: { rows: [SPOT], board: { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: vi.fn(), onWork: vi.fn() } },
+  otaBoard: { snap: APP_SNAPSHOT as unknown as AppSnapshot, onHunt: vi.fn(), onSnap: vi.fn() },
   onHide: vi.fn(),
   ...over,
 })
@@ -140,7 +164,7 @@ describe('the rail renders no transmit control, whichever box is in which slot',
   const controls = (name?: RegExp) =>
     ROLES.flatMap((role) => within(rail()).queryAllByRole(role, name ? { name } : undefined))
 
-  // All 26 boxes, four at a time: every one of them sits in the rail once.
+  // All 28 boxes, four at a time: every one of them sits in the rail once.
   const groups: string[][] = []
   for (let i = 0; i < PANE_IDS.length; i += 4) groups.push([...PANE_IDS.slice(i, i + 4)])
 
