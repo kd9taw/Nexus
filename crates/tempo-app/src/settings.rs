@@ -8678,6 +8678,27 @@ mod tests {
         );
     }
 
+    /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the
+    /// operator's Settings Save, in the panel. The file keeps it: every background save (window
+    /// places, band and rig state, through `SettingsWriter`, which calls `save`) writes it back
+    /// as it is, and it loads as it was. The engine never joins it either way.
+    #[test]
+    fn a_legacy_js8_group_is_saved_and_loaded_as_it_is() {
+        let dir = scratch_dir("js8_legacy_group");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let s = Settings {
+            js8_groups: vec!["@APRSIS".into(), "@ARES".into(), "@JS8NET".into()],
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).js8_groups,
+            vec!["@APRSIS", "@ARES", "@JS8NET"],
+            "a background save keeps the groups as they are"
+        );
+    }
+
     /// The high-SWR cutoff's two fields — defaults, the exact camelCase wire keys, an
     /// upgrader's file, the read-time clamp, and the TS mirror read out of `types.ts` itself.
     ///

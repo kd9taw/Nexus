@@ -3151,14 +3151,17 @@ export function SettingsPanel({
       setPosNameInvalid(true)
       return
     }
-    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: its Settings refuses the save
-    // ("%1 is a group that cannot be joined", Configuration.cpp:2449-2453). ON THE CHANGE, as the
-    // position name above: a settings file from a Nexus that accepted one loads and is not
-    // refused on an unrelated save, and the engine never joins it either way.
-    const js8Groups = form.js8Groups ?? []
-    const js8GroupsChanged = js8Groups.join(',') !== (savedRef.current?.js8Groups ?? []).join(',')
-    const unjoinable = js8Groups.find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
-    if (js8GroupsChanged && unjoinable) {
+    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: while either is in the Groups
+    // field its Settings refuses OK, whatever else changed ("%1 is a group that cannot be joined",
+    // Configuration.cpp:2449-2453, asked by accept() at :2595), reading the field upper-cased. So
+    // does this Save, a settings file from a Nexus that accepted one included. Only this Save:
+    // the switches here that save on the click, a cockpit's own settings and the backend's own
+    // writers (window places, band and rig state) never pass through it, and the engine never
+    // joins the group either way.
+    const unjoinable = (form.js8Groups ?? [])
+      .map((g) => g.trim().toUpperCase())
+      .find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
+    if (unjoinable) {
       setTab('digital')
       setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
       return

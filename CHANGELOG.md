@@ -285,12 +285,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** Saving Settings
-  with either in the JS8 Groups field is refused with "… is a group that cannot be joined", as
-  JS8Call's Settings refuses it. Messages can still be sent to both. If an earlier Nexus saved one
-  in your settings, it stays in the file and in the field but is not joined, so traffic to it gets
-  no automatic replies. Other changes still save, and the next edit of the Groups field asks you
-  to take it out.
+- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
+  in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
+  group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.
+  Messages can still be sent to both. If an earlier Nexus saved one in your settings, it stays in
+  the file and in the field but is not joined, so traffic to it gets no automatic replies, and
+  your next Save asks you to take it out. Nothing that saves by itself is held up: window places,
+  band and radio state, and the switches that save when you click them.
 
 - **JS8: a HEARING? reply no longer names the station that asked, as in JS8Call.** A station asking
   who you hear used to find its own call in your reply, usually first, taking one of the four
