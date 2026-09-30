@@ -2830,6 +2830,24 @@ body.resizing-row {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The entity and its beam heading, one group (`.chase-where`), spaced as the row's own items are. Where
+   the first line has no room for them, the head is stamped `data-split` (prop/chaseSplit.ts) and the
+   group takes the line under it, at full width; the chip, the call, the ↗ and the age stay on the first
+   line. Chrome measured "South Orkney Is." cut to 47 px at 100 % in a 300 px Chase box, and gone at
+   160 %. */
+.chase-where {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.chase-head[data-split] {
+  flex-wrap: wrap;
+}
+.chase-head[data-split] > .chase-where {
+  order: 1;
+  flex: 1 0 100%;
+}
 /* Beam heading beside the entity on both chase panes. `flex:none` for the same
    reason as everywhere else: the country name may truncate, the number may not. */
 .chase-az {

@@ -3,8 +3,10 @@
 // Basic shows the top-3 as plain "call — why now" lines; Expert shows the full
 // ranked table (rank, need chip, gem, window, Work). Clicking a row selects it
 // on the map; ▶ Work QSYs the rig and opens the right cockpit.
+import { useRef } from 'react'
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
+import { useChaseSplit } from './chaseSplit'
 import { buildChaseFeed, type ChaseFeedItem } from '../../features/chaseFeed'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
 import { t } from '../../i18n'
@@ -27,12 +29,15 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
     ctx.dxpedWindows,
     Date.now(),
   )
+  // The Chase pane's row, and its line under the first for an entity with no room (chaseSplit).
+  const list = useRef<HTMLUListElement>(null)
+  useChaseSplit(list, items.length > 0)
   if (items.length === 0) return null // PaneFrame falls back to the basic() line
 
   const rows = items
   return (
     <section className="chase-pane cfeed panel">
-      <ul className="chase-list">
+      <ul className="chase-list" ref={list}>
         {rows.map((i, rank) => {
           const chip = i.tags[0] ? NEED_CHIP[i.tags[0]] : null
           const g = gem(i)
@@ -62,16 +67,18 @@ export function ChaseFeedPane({ ctx }: { ctx: PaneContext }) {
                       {t('chase.feed.endsSoon.label')}
                     </span>
                   )}
-                  <span className="chase-entity">{i.entity}</span>
-                  {/* Same treatment as the Chase pane it shares row chrome with. */}
-                  {(() => {
-                    const az = azimuthTo(ctx.myGrid, null, i.entity, ctx.entityCentroids)
-                    return az ? (
-                      <span className="chase-az" title={azimuthTitle(az, i.entity)}>
-                        {azimuthLabel(az)}
-                      </span>
-                    ) : null
-                  })()}
+                  <span className="chase-where">
+                    <span className="chase-entity">{i.entity}</span>
+                    {/* Same treatment as the Chase pane it shares row chrome with. */}
+                    {(() => {
+                      const az = azimuthTo(ctx.myGrid, null, i.entity, ctx.entityCentroids)
+                      return az ? (
+                        <span className="chase-az" title={azimuthTitle(az, i.entity)}>
+                          {azimuthLabel(az)}
+                        </span>
+                      ) : null
+                    })()}
+                  </span>
                 </div>
                 <div className={`chase-open o-${i.openNow ? 'open' : 'closed'}`}>{i.why}</div>
               </div>

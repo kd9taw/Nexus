@@ -628,6 +628,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   narrowest column the solar-wind speed's km/s drops under the number so it stays inside the
   gauge.
 
+- **Connect: a Chase row's country moves under the call when there is no room beside it.** In a
+  narrow Chase or Chase Feed box the country and its beam heading were cut short ("South Orkney
+  Is." showed as a few letters), and with the box's text at its largest they were not shown at
+  all. Now, where the call, its need chip, the point button and the age leave them no room, they
+  go on the line under the call, whole; those four stay where they were.
+
 - **Connect: the Chase DX button says which map it opens.** Its tooltip said "Beam map,
   need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
   map picker arrived. It now says "Globe, need-colored, live openings", in every language.
