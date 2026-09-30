@@ -497,6 +497,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   narrowest column the solar-wind speed's km/s drops under the number so it stays inside the
   gauge.
 
+- **Connect: the Chase DX button says which map it opens.** Its tooltip said "Beam map,
+  need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
+  map picker arrived. It now says "Globe, need-colored, live openings", in every language.
+
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a

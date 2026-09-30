@@ -934,7 +934,7 @@ export const ES: PartialCatalog = {
   "connect.intent.casual.label": "Charla",
   "connect.intent.casual.title": "A quién oigo — coloreado por señal, tranquilo",
   "connect.intent.dx.label": "Cazar DX",
-  "connect.intent.dx.title": "Mapa de rumbos, coloreado por necesarios, aperturas en vivo",
+  "connect.intent.dx.title": "Globo, coloreado por necesarios, aperturas en vivo",
   "connect.intent.pota.title": "Vista mundial, activadores de parques/cimas",
   "connect.intent.vhf.title": "Aperturas en primer plano (Es / F2 / aurora)",
   "connect.outlook.heading": "Previsión de bandas",

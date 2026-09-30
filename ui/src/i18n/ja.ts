@@ -4420,7 +4420,7 @@ export const JA: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "新しい信号がデコードされたサイクルごとに小さなティック音を鳴らします — バンドのリズムを、目を使わずに感じられます。",
   "connect.intent.aria": "何をしますか？",
   "connect.intent.dx.label": "DXを追う",
-  "connect.intent.dx.title": "ビームマップ、ニーズ別の色分け、ライブのオープン情報",
+  "connect.intent.dx.title": "地球儀、ニーズ別の色分け、ライブのオープン情報",
   "connect.intent.pota.title": "世界表示、公園・山岳のアクティベーター",
   "connect.intent.casual.label": "ラグチュー",
   "connect.intent.casual.title": "聞こえる局は — 信号強度で色分け、落ち着いた表示",

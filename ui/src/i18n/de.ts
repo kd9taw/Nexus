@@ -4687,7 +4687,7 @@ export const DE: PartialCatalog = {
   "topbar.txCycle.second.title": "Senden fest auf die ungeraden (2.) T/R-Slots — die gearbeitete Station muss im 1. Zyklus senden",
   "connect.intent.aria": "Was möchten Sie tun?",
   "connect.intent.dx.label": "DX jagen",
-  "connect.intent.dx.title": "Beam-Karte, nach Bedarf eingefärbt, Live-Öffnungen",
+  "connect.intent.dx.title": "Globus, nach Bedarf eingefärbt, Live-Öffnungen",
   "connect.intent.pota.title": "Weltansicht, Park-/Gipfel-Aktivierer",
   "connect.intent.casual.label": "Ragchew",
   "connect.intent.casual.title": "Wen kann ich hören — nach Signal eingefärbt, ruhig",

@@ -7185,7 +7185,7 @@ export const EN = {
   // labels stay in `ConnectView.tsx` as tokens; the other two are prose and are below.
   'connect.intent.aria': 'What are you doing?',
   'connect.intent.dx.label': 'Chase DX',
-  'connect.intent.dx.title': 'Beam map, need-colored, live openings',
+  'connect.intent.dx.title': 'Globe, need-colored, live openings',
   'connect.intent.pota.title': 'World view, park/summit activators',
   'connect.intent.casual.label': 'Ragchew',
   'connect.intent.casual.title': 'Who can I hear — signal-colored, calm',

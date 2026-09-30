@@ -35,7 +35,11 @@ vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> 
 const gpu = { ok: true }
 vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => gpu.ok }))
 import { ConnectView } from './ConnectView'
-import { EN } from '../i18n'
+import { EN, installCatalog, setLocale, t } from '../i18n'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
 
 class RO {
   observe() {}
@@ -213,4 +217,36 @@ describe('a machine whose GPU cannot run the 3D globe', () => {
     choose('3D')
     expect(await onScreen()).toBe('3d')
   })
+})
+
+// CHASE DX'S TOOLTIP NAMES THE MAP IT OPENS. It said "Beam map, need-colored, live openings" while
+// every intent has opened on the Globe since the picker's decision above: it named a map the box never
+// shows. Tied to the picker the intent actually presses, in every language, so a preset that changes
+// its map without its words (or words naming another map) fails here. Only Chase DX's tooltip
+// describes its map; the others say what the intent shows, and a word search over them would read
+// Spanish "en primer plano" (in the foreground) as the Flat map ("Plano").
+describe('Chase DX’s tooltip and the map it opens, in every language', () => {
+  afterEach(() => setLocale('en'))
+  for (const [locale, catalog] of [['en', null], ['de', DE], ['es', ES], ['fr', FR], ['ja', JA]] as const) {
+    it(`${locale}: it names the map Chase DX opens, and no other map`, async () => {
+      if (catalog) installCatalog(locale, catalog)
+      setLocale(locale)
+      await mount()
+      const maps = () => screen.getByRole('group', { name: t('map.projection.aria') })
+      const choices = within(maps()).getAllByRole('button').map((b) => b.textContent ?? '')
+      expect(choices, 'control: the four maps are offered').toHaveLength(4)
+      const dx = within(screen.getByRole('group', { name: t('connect.intent.aria') })).getByRole('button', { name: t('connect.intent.dx.label') })
+      fireEvent.click(dx)
+      const opened = within(maps())
+        .getAllByRole('button')
+        .filter((x) => x.getAttribute('aria-pressed') === 'true')
+        .map((x) => x.textContent ?? '')
+      expect(opened, 'control: Chase DX opens one map').toHaveLength(1)
+      const low = (s: string) => s.toLocaleLowerCase(locale)
+      const title = low(dx.getAttribute('title') ?? '')
+      for (const other of choices.filter((c) => c !== opened[0]))
+        expect(title, `it names ${other}, which Chase DX does not open`).not.toContain(low(other))
+      expect(title, `it names ${opened[0]}, the map Chase DX opens`).toContain(low(opened[0]))
+    })
+  }
 })
