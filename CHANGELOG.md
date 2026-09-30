@@ -508,10 +508,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   license privileges, what was still waiting used to be held, and it went out by itself as soon as
   transmitting was allowed again. It is now dropped, and that screen's warning line says why. If
   one of those RTTY overs belonged to an auto-sequencer QSO, the auto QSO stops and says so, as it
-  already did when an over could not be queued. An over left waiting when you move to another
-  screen where transmit stays on (Phone, CW, RTTY or PSK) is still held for your return, as
-  before. Overs you send once transmitting is allowed go out exactly as before, and Stop TX, the
-  watchdog and continuous TX work as they did.
+  already did when an over could not be queued. Moving from the RTTY or PSK screen to another
+  mode's screen (Phone, CW, the other of the two, or a digital mode such as FT8) drops what was
+  still typed ahead too, and that screen's warning line says so when you come back, so nothing
+  keys on your return: send it again. Screens that are not a mode's own, such as the map or the
+  logbook, do not count: what you typed ahead keeps going out. An RTTY auto QSO ends when you
+  leave the RTTY screen, and says so. An over already going out is treated as before: it finishes
+  if you move to Phone, CW, RTTY or PSK, and stops if you move to a digital mode, which turns
+  transmit off. Overs you send once transmitting is allowed go out exactly as before, and Stop
+  TX, the watchdog and continuous TX work as they did.
 - **Voice keyer: a message that could not go out is dropped, and a refused one says why.** A
   message you played on a frequency outside your license privileges did nothing and said nothing;
   the keyer's "Could not play F1" note now says why, and so do its other failures. A message
