@@ -1154,6 +1154,16 @@ const AB_NO_DRIVABLE_MAPPING: &str =
     "Nexus drives Main = downlink / Sub = uplink only through its own native CI-V backend, and \
      that backend has no path to this radio — so no VFO mapping carries this pass's uplink here.";
 
+/// What the CW cockpit's warning line says when [`Engine::poll_cw_one`] drops a refused send.
+/// English at the engine, like the keyer's own errors and JS8's refusals, and the same
+/// sentence shape as the log line beside it.
+const CW_REFUSED_TX_OFF: &str = "CW stopped: transmit was turned off, so what was still to go \
+     was dropped, not held for later. Send it again when you are ready.";
+const CW_REFUSED_PRIVILEGES: &str = "CW not sent: this frequency is outside your license \
+     privileges, so it was dropped, not held for later. Send it again from inside them.";
+const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outside your \
+     license's CW privileges, so it was dropped.";
+
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
 /// [`Engine::ingest`] (Boundary), [`Engine::ingest_early`] (Early), and
@@ -2750,13 +2760,16 @@ pub struct Engine {
     /// is, every later knob move is the operator's exactly as before.
     rig_dial_seen: bool,
     /// CW transmit queue (CAT keyer path): expanded CW text the radio loop drains and
-    /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor).
+    /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor) and the
+    /// privileges, and a word they refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
     /// Recent EXPANDED CW transmissions (macros resolved) — a TX echo the cockpit shows
     /// so the operator sees exactly what went out. Capped; cleared with the RX transcript.
     cw_sent: VecDeque<String>,
-    /// A CW-keyer failure to surface (e.g. the rig rejected CAT send_morse), else None.
-    /// Set by the radio loop; cleared when the operator switches keyer back-end.
+    /// A CW-keyer failure to surface (e.g. the rig rejected CAT send_morse), or why the last
+    /// CW send was refused and dropped (`poll_cw_one`), else None. Set by the radio loop after
+    /// every word it hands a keyer, so a word that keys clears a refusal; cleared too when the
+    /// operator switches keyer back-end.
     cw_keyer_error: Option<String>,
     /// Worked-station QRZ info for the `{HISNAME}`/`{HISSTATE}` CW-macro tokens, pushed by the
     /// frontend on a callbook lookup and keyed to the contact (`cw_peer_call`) so a stale
@@ -7471,10 +7484,12 @@ impl Engine {
             //
             // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
             // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
-            // their aborts — and a section change is not an operator pressing TX Off. A manual
-            // mode's queued over is HELD across a section change and keys when the operator
-            // returns to it; `rtty_and_ft8_sequencers_never_key_together` pins exactly that,
-            // and it went red when this was first written the blunt way. So: lower the latch,
+            // their aborts — and a section change is not an operator pressing TX Off. RTTY's
+            // and PSK's queued overs are HELD across a section change and key when the operator
+            // returns to them; `rtty_and_ft8_sequencers_never_key_together` pins exactly that,
+            // and it went red when this was first written the blunt way. CW's are not held:
+            // with the latch down, the loop's next `poll_cw_one` drops them and says so, as it
+            // drops every refused CW send (operator, 2026-09-30). So: lower the latch,
             // bump the gate generation (an over planned while armed must not commit), and
             // nothing else. One bit changes, and it is the operator's.
             if self.tx_enabled {
@@ -8588,7 +8603,8 @@ impl Engine {
         self.cw_sent.iter().cloned().collect()
     }
 
-    /// A CW-keyer failure to surface in the cockpit (rig rejected CAT keying), else None.
+    /// A CW-keyer failure to surface in the cockpit (rig rejected CAT keying), or why the last
+    /// CW send was dropped, else None.
     pub fn cw_keyer_error(&self) -> Option<String> {
         self.cw_keyer_error.clone()
     }
@@ -8651,29 +8667,44 @@ impl Engine {
     }
 
     /// Pop the next queued CW WORD for the radio loop to key, or None if the queue is empty
-    /// or TX is disabled (Monitor / outside privileges — the queue is then held, so a stray
-    /// macro never keys unexpectedly). One word per call so the loop paces the send and Stop
-    /// TX (which clears the queue) can drop the remainder before it reaches the rig.
+    /// or the send is refused. One word per call so the loop paces the send and Stop TX (which
+    /// clears the queue) can drop the remainder before it reaches the rig.
+    ///
+    /// ⛔ A REFUSED SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30). TX off (a section
+    /// change or a watchdog trip lowers the latch and keeps the queue), a dial outside the
+    /// licence's privileges, or a CW emission outside its CW privileges (below): every word still
+    /// queued is cleared, and the log and the CW cockpit's warning line
+    /// ([`Self::cw_keyer_error`]) say why. Held, they keyed the moment TX was allowed again (TX
+    /// back on, a tune back into the privileges), at a time the operator did not choose. A send
+    /// made once TX is allowed keys as it always did.
     ///
     /// ⭐ AND AS CW, WHERE THE KEYER PUTS IT ([`Self::tx_allowed_as`]): the carrier at the dial,
     /// and on the soundcard keyer the tone a pitch from it on the side the transmitting VFO is
     /// commanded. In the CW section that is the gate above, so nothing there moves. The CW ID
     /// after an FT 73 is keyed from the DIGITAL section, whose gate judged FT8's carrier one TX
-    /// offset from the dial, not the CW. A word only this refuses is DROPPED, not held: a parting
-    /// ID must go out after its 73 or not at all, never at some later moment when it happens to
-    /// be allowed.
+    /// offset from the dial, not the CW: a parting ID goes out after its 73 or not at all, never
+    /// at some later moment when it happens to be allowed.
     pub fn poll_cw_one(&mut self) -> Option<String> {
-        if !self.tx_enabled || !self.tx_allowed() {
-            return None;
-        }
-        if !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
+        let refused = if !self.tx_enabled {
+            Some(("transmit is off", CW_REFUSED_TX_OFF))
+        } else if !self.tx_allowed() {
+            Some((
+                "the dial is outside the licence's privileges",
+                CW_REFUSED_PRIVILEGES,
+            ))
+        } else if !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
+            Some((
+                "where it would go is outside the licence's CW privileges",
+                CW_REFUSED_CW_PRIVILEGES,
+            ))
+        } else {
+            None
+        };
+        if let Some((why, notice)) = refused {
             if !self.cw_queue.is_empty() {
-                tempo_core::applog::info(
-                    "tx",
-                    "CW not keyed: where it would go is outside the licence's CW privileges \
-                     (dropped)",
-                );
+                tempo_core::applog::info("tx", &format!("CW not keyed: {why} (dropped)"));
                 self.cw_queue.clear();
+                self.cw_keyer_error = Some(notice.to_string());
             }
             return None;
         }
@@ -31193,6 +31224,107 @@ mod tests {
         assert!(
             !e.take_slot_tx_abort(),
             "the fresh CW send supersedes the pending halt — the macro must not be phantom-cut"
+        );
+    }
+
+    /// ⛔ A REFUSED CW SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Drop it, with a
+    /// notice"). TX off with words still queued, here from leaving the CW section mid-macro
+    /// (the latch drops and every queue stays), used to hold them, and they keyed the moment TX
+    /// came back, at a time nobody chose.
+    #[test]
+    fn a_cw_send_refused_with_tx_off_is_dropped_and_does_not_key_when_tx_comes_back() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        e.send_cw("TEST DE KD9TAW");
+        assert_eq!(
+            e.poll_cw_one().as_deref(),
+            Some("TEST"),
+            "control: the macro keys"
+        );
+        e.set_operating_mode("digital", false); // mid-macro: the latch drops, the queue stays
+        assert!(!e.tx_enabled(), "precondition: TX is off");
+        assert_eq!(e.poll_cw_one(), None, "nothing keys with TX off");
+        e.set_operating_mode("cw", false); // back to CW, which arms TX on entry
+        assert!(e.tx_enabled(), "precondition: TX is on again");
+        assert_eq!(
+            e.poll_cw_one(),
+            None,
+            "nothing refused keys when TX comes back"
+        );
+        assert_eq!(
+            e.cw_keyer_error().as_deref(),
+            Some(CW_REFUSED_TX_OFF),
+            "the CW cockpit says the rest was dropped"
+        );
+        e.send_cw("73");
+        assert_eq!(
+            e.poll_cw_one().as_deref(),
+            Some("73"),
+            "a send made once TX is on keys as before"
+        );
+    }
+
+    /// …and outside the licence's privileges: a send from a dial the licence may not key was
+    /// held, and keyed as soon as the operator tuned into the privileges on the same band.
+    #[test]
+    fn a_cw_send_refused_outside_privileges_is_dropped_and_does_not_key_after_a_tune_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.020, "40m", "CW");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 7.020 is Extra-only CW, outside a General's privileges"
+        );
+        e.send_cw("TEST");
+        assert_eq!(e.poll_cw_one(), None, "nothing keys outside privileges");
+        e.set_frequency(7.030, "40m", "CW"); // a same-band tune into the privileges
+        assert!(e.tx_allowed(), "precondition: 7.030 is inside them");
+        assert_eq!(
+            e.poll_cw_one(),
+            None,
+            "nothing refused keys after the tune in"
+        );
+        assert_eq!(
+            e.cw_keyer_error().as_deref(),
+            Some(CW_REFUSED_PRIVILEGES),
+            "the CW cockpit says it was dropped"
+        );
+        e.send_cw("TEST");
+        assert_eq!(
+            e.poll_cw_one().as_deref(),
+            Some("TEST"),
+            "a send made inside the privileges keys as before"
+        );
+    }
+
+    /// One refusal, one notice: it is raised when words are dropped, not on every poll after
+    /// (the loop polls every tick), and raised again by the next refusal.
+    #[test]
+    fn a_cw_refusal_raises_its_notice_once_per_refusal() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.020, "40m", "CW");
+        e.send_cw("TEST");
+        let _ = e.poll_cw_one();
+        assert!(e.cw_keyer_error().is_some(), "the refusal is noticed");
+        e.set_cw_keyer_error(None); // as the loop does once a word keys
+        for _ in 0..3 {
+            let _ = e.poll_cw_one();
+        }
+        assert_eq!(
+            e.cw_keyer_error(),
+            None,
+            "polls with nothing queued raise nothing"
+        );
+        e.send_cw("TEST");
+        let _ = e.poll_cw_one();
+        assert!(
+            e.cw_keyer_error().is_some(),
+            "the next refusal is noticed again"
         );
     }
 
@@ -54898,9 +55030,9 @@ mod digital_side_licence_tests {
     }
 
     /// Every CW ID keys exactly when FT8's verdict AND its own CW emission allow it, states only
-    /// the soundcard keyer's tone refuses included. One the FT8 verdict refuses is held, as any
-    /// refused CW word always was; one only its CW emission refuses is dropped, so it can never
-    /// key at a later, unrelated moment.
+    /// the soundcard keyer's tone refuses included. A refused ID is dropped whichever verdict
+    /// refused it (the operator, 2026-09-30: no refused CW word is held), so it can never key
+    /// at a later, unrelated moment.
     #[test]
     fn the_cw_id_is_judged_as_ft8_and_as_cw_at_every_cw_edge() {
         let v = cw_id_verdicts();
@@ -54915,16 +55047,16 @@ mod digital_side_licence_tests {
             wrong.len(),
             &wrong[..wrong.len().min(20)]
         );
-        let mishandled: Vec<&str> = v
+        let held: Vec<&str> = v
             .iter()
-            .filter(|r| r.ft == r.held)
+            .filter(|r| r.held)
             .map(|r| r.case.as_str())
             .collect();
         assert!(
-            mishandled.is_empty(),
-            "{} refusals held or dropped the wrong way: {:#?}",
-            mishandled.len(),
-            &mishandled[..mishandled.len().min(20)]
+            held.is_empty(),
+            "{} refused IDs were held instead of dropped: {:#?}",
+            held.len(),
+            &held[..held.len().min(20)]
         );
         let keyed = v.iter().filter(|r| r.got).count();
         let by_the_tone_alone = v.iter().filter(|r| r.ft && r.carrier && !r.cw).count();
@@ -54937,8 +55069,8 @@ mod digital_side_licence_tests {
     }
 
     /// In the CW section nothing about keying moves: a word keys exactly when the CW gate allows
-    /// it, and a refused word is held as it always was — at every CW edge, class and pitch, on
-    /// both keyers.
+    /// it, and a refused word is dropped, never held (the operator, 2026-09-30), at every CW
+    /// edge, class and pitch, on both keyers.
     #[test]
     fn in_the_cw_section_a_word_keys_exactly_when_the_gate_allows_it() {
         let mut wrong = Vec::new();
@@ -54963,7 +55095,7 @@ mod digital_side_licence_tests {
                             let held = !e.cw_queue.is_empty();
                             e.cw_queue.clear();
                             keyed += usize::from(got);
-                            if got != gate || held == gate {
+                            if got != gate || held {
                                 wrong.push(format!(
                                     "{sc:?} {class:?} dial {dial:.4} pitch {pitch}: gate {gate}, \
                                      keyed {got}, held {held}"

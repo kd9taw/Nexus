@@ -15797,6 +15797,155 @@ mod tests {
         );
     }
 
+    /// Every `b <word>` (Hamlib send_morse) a rig was sent: the CAT keyer's wire.
+    fn cw_words(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("b "))
+            .cloned()
+            .collect()
+    }
+
+    /// ⛔ A REFUSED CW SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Drop it, with a
+    /// notice"), on the real loop and the CAT keyer's wire. A macro keys its first word; the CW
+    /// section is left mid-macro, which drops the latch and keeps the queue; the loop's next
+    /// poll refuses. Held, the rest keyed the moment the operator came back to CW.
+    #[test]
+    fn a_cw_macro_refused_with_tx_off_never_reaches_the_rig_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.send_cw("TEST DE KD9TAW");
+        }
+        let (addr, log) = mock_rigctld_refusing(7_030_000, &[]);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(100.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST"],
+            "control: the macro's first word keys"
+        );
+        engine.lock().unwrap().set_operating_mode("digital", false);
+        run(60_000.0); // the word and its space are long gone: the loop polls, with TX off
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "precondition: TX is off"
+        );
+        engine.lock().unwrap().set_operating_mode("cw", false); // back to CW: TX armed again
+        run(120_000.0);
+        run(180_000.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST"],
+            "nothing refused reaches the rig when TX comes back"
+        );
+        assert!(
+            engine.lock().unwrap().cw_keyer_error().is_some(),
+            "the CW cockpit is told the rest was dropped"
+        );
+        engine.lock().unwrap().send_cw("73");
+        run(240_000.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST", "b 73"],
+            "a send made once TX is on keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "…and the word that keys clears the notice"
+        );
+    }
+
+    /// …and outside the licence's privileges: a send from a dial a General may not key, then a
+    /// same-band tune into the privileges. Held, the send keyed on the tune.
+    #[test]
+    fn a_cw_send_refused_outside_privileges_never_reaches_the_rig_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.020, "40m", "CW");
+            assert!(
+                !e.tx_allowed(),
+                "precondition: 7.020 is Extra-only CW, outside a General's privileges"
+            );
+            e.send_cw("TEST");
+        }
+        let (addr, log, dial) = mock_rigctld_switchable(7_020_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(100.0);
+        assert!(cw_words(&log).is_empty(), "nothing keys outside privileges");
+        // The tune, at the rig as at the engine, so the rig's own read-back agrees with it.
+        dial.store(7_030_000, std::sync::atomic::Ordering::SeqCst);
+        engine.lock().unwrap().set_frequency(7.030, "40m", "CW");
+        assert!(
+            engine.lock().unwrap().tx_allowed(),
+            "precondition: 7.030 is inside a General's privileges"
+        );
+        run(60_000.0);
+        run(120_000.0);
+        assert!(
+            cw_words(&log).is_empty(),
+            "nothing refused reaches the rig after the tune in: {:?}",
+            cw_words(&log)
+        );
+        assert!(
+            engine.lock().unwrap().cw_keyer_error().is_some(),
+            "the CW cockpit is told it was dropped"
+        );
+        engine.lock().unwrap().send_cw("TEST");
+        run(180_000.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST"],
+            "a send made inside the privileges keys as before"
+        );
+    }
+
     /// ISSUE #135 (swinn, on 1.6.1): "CW slider does not change speed."
     ///
     /// The slider reached the ENGINE fine — `set_cw_wpm` stores it and every cockpit read
