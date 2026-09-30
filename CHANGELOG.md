@@ -154,6 +154,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each side of a map that runs the full height, Band Advisor over Space Wx on the left and Getting
   Out over Chase on the right, in 400 px columns. Like the other layouts it changes nothing until
   you pick it.
+- **Frame shows the satellites.** Picking the **Frame** layout also ticks **Satellites** on the map
+  and on the 3-D globe, so a wall display shows the birds moving. It is the only layout that
+  touches the map, and it only ever turns Satellites on: every other layer stays as you had it,
+  untick Satellites afterwards and it stays off, and **Undo last change** turns it back off along
+  with the rest of the layout (unless you had it on before you picked Frame).
 - **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
   **Stay behind** button. Pressed, the window stays behind your other windows even when you click
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers

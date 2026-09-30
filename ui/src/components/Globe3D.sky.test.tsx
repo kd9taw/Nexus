@@ -255,3 +255,26 @@ describe('the moon on the 3-D globe', () => {
     expect(moonSprite()?.visible).toBe(false)
   })
 })
+
+// A LAYOUT'S REACH INTO THE GLOBE (Connect's Frame turns the satellites on): the host rewrites this
+// surface's stored layer picks, then bumps `layersRev`, and the globe reads them again.
+describe('the globe reads its layers again when the host has rewritten them', () => {
+  it('a new layersRev shows what the record now says', async () => {
+    vi.useFakeTimers({ now: DUSK })
+    const el = (rev: number) => (
+      <Globe3D myGrid="EN52" prop={quiet} selectedCall={null} onSelectCall={() => {}} stations={[]} layersRev={rev} />
+    )
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(el(0))
+    })
+    const sats = () => (screen.getByRole('checkbox', { name: 'Satellites' }) as HTMLInputElement).checked
+    expect(sats(), 'CONTROL: off by default').toBe(false)
+    const record = JSON.parse(localStorage.getItem('nexus.connect.globe3d.layers') ?? '{}')
+    localStorage.setItem('nexus.connect.globe3d.layers', JSON.stringify({ ...record, sats: true }))
+    await act(async () => r.rerender(el(0)))
+    expect(sats(), 'CONTROL: a record changed under the globe is not read without the bump').toBe(false)
+    await act(async () => r.rerender(el(1)))
+    expect(sats()).toBe(true)
+  })
+})

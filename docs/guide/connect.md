@@ -95,7 +95,7 @@ of the four, or **Custom** once you have moved or resized anything yourself.
 | Map first | Conditions, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
 | List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
 | Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
-| Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height | 400 px |
+| Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height (and Satellites turns on) | 400 px |
 
 A layout applies only when you pick it, and nothing snaps back afterwards: change a
 pane or a width and the menu reads Custom. Over an arrangement of your own the menu
@@ -104,6 +104,9 @@ layout closes stay in their slots, so ticking one in the menu brings back what t
 layout parked there. On a smaller window the columns narrow to fit (the map keeps
 its 280 px minimum). A layout never changes the map's own settings: the Globe, 3D,
 Flat or Beam pick, the layers and the colouring stay as you left them for each intent.
+The one exception is **Frame**, which also turns on **Satellites** on the map and the 3-D
+globe. It never turns a layer off, if you untick Satellites afterwards it stays off, and
+**Undo** turns it back off with the rest of the layout.
 
 **Connect in its own window.** **⧉ Pop out** in the Connect header opens Connect as a
 dashboard window for a second monitor or a screen of its own. It opens at 1600 × 1000,

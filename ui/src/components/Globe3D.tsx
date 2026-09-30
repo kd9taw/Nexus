@@ -18,7 +18,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useContext } from 'react'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import { heatPulse, sectorPulse } from '../features/pulse'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { loadGlobeLayers, saveGlobeLayers, type GlobeLayers } from '../features/globeLayers'
 import { useStableByKey } from '../features/useStableByKey'
 import {
   filterSatsToChased,
@@ -287,6 +287,9 @@ interface Props {
   stations?: Station[]
   /** Draw US state borders (default on, matching the 2-D map). */
   showStates?: boolean
+  /** Bumped by a host that rewrote this surface's stored layer picks (Connect's layouts:
+   *  features/connectPresets `mapLayers`): the globe reads them again. */
+  layersRev?: number
 }
 
 const GETTING_OUT = '#3ddc6a' // a station that heard ME (matches the 2-D map)
@@ -441,82 +444,6 @@ function webglOk(): boolean {
   }
 }
 
-/** The 3-D globe's toggleable layers. Persisted per-surface (#211) — the 2-D map already
- * remembered its layer picks (#199) but the globe reset to defaults on every mount, so a Connect
- * operator working on the 3-D map lost their choices each time. Same `surfaceGet/surfaceSet`
- * store the 2-D map uses, so a pop-out keeps its own picks. */
-type GlobeLayers = {
-  spots: boolean
-  arcs: boolean
-  rxarcs: boolean
-  states: boolean
-  lights: boolean
-  flare: boolean
-  aurora: boolean
-  muf: boolean
-  pca: boolean
-  heat: boolean
-  openings: boolean
-  grid: boolean
-  sats: boolean
-  pass: boolean
-  rings: boolean
-  cqzones: boolean
-  coverage: boolean
-  decodes: boolean
-  dxped: boolean
-  greyline: boolean
-  sunMoon: boolean
-}
-
-const GLOBE_LAYERS_KEY = 'nexus.connect.globe3d.layers'
-
-const defaultGlobeLayers = (showStates: boolean): GlobeLayers => ({
-  spots: true,
-  arcs: true,
-  // OFF by default, like the 2-D map's `rxPaths`: the decode roster on a busy band is 100+
-  // stations, and default-on would web the globe for everyone on upgrade.
-  rxarcs: false,
-  states: showStates,
-  lights: true,
-  flare: true,
-  aurora: false,
-  muf: true,
-  pca: true,
-  heat: true,
-  openings: true,
-  grid: false,
-  sats: false,
-  pass: true, // the tracked-pass scene; nothing is drawn unless a pass is live
-  rings: true,
-  cqzones: false,
-  coverage: false,
-  decodes: true,
-  dxped: false,
-  greyline: true,
-  // The sun and the moon where each is overhead, like the 2-D map's; moved on the 60 s sun clock,
-  // never animated.
-  sunMoon: true,
-})
-
-/** Parse a persisted layer object, keeping only the known boolean toggles — an unknown or
- * malformed store never poisons the defaults it is merged onto. Exported for the round-trip test. */
-export function globeLayersFromStored(v: string | null): Partial<GlobeLayers> {
-  if (!v) return {}
-  try {
-    const raw: unknown = JSON.parse(v)
-    if (!raw || typeof raw !== 'object') return {}
-    const rec = raw as Record<string, unknown>
-    const out: Partial<GlobeLayers> = {}
-    for (const k of Object.keys(defaultGlobeLayers(true)) as (keyof GlobeLayers)[]) {
-      if (typeof rec[k] === 'boolean') out[k] = rec[k] as boolean
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
 // ── layer accessors, HOISTED OUT OF THE JSX ─────────────────────────────────────────────────
 //
 // ⚠️ An accessor written inline in the JSX is a NEW FUNCTION on every render, react-kapsule
@@ -554,6 +481,7 @@ export default function Globe3D({
   xrayLong,
   stations: stationsProp,
   showStates = true,
+  layersRev = 0,
 }: Props) {
   const remoteMap=useContext(NavigationMapContext)
   const remoteConnect=remoteMap?.connect
@@ -637,15 +565,20 @@ export default function Globe3D({
   const workedGrids=useMemo(()=>remoteMap?(remoteConnect?.coverage.grids??[]).flatMap(grid=>{const ll=gridToLatLon(grid);return ll?[ll]:[]}):nativeWorkedGrids,[!!remoteMap,remoteConnect,nativeWorkedGrids])
   // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default), and the
   // operator's picks are restored from the per-surface store on mount (#211).
-  const [show, setShow] = useState<GlobeLayers>(() => ({
-    ...defaultGlobeLayers(showStates),
-    ...globeLayersFromStored(surfaceGet(GLOBE_LAYERS_KEY)),
-  }))
+  const [show, setShow] = useState<GlobeLayers>(() => loadGlobeLayers(showStates))
   // Persist every toggle so the next launch opens the globe you left — the 2-D map's #199
   // behaviour, which the globe was missing.
   useEffect(() => {
-    surfaceSet(GLOBE_LAYERS_KEY, JSON.stringify(show))
+    saveGlobeLayers(show)
   }, [show])
+  // A host that rewrote this surface's record (Connect, when a layout turns a layer on) bumps
+  // `layersRev`, and the globe reads its picks again — during render, React's "adjust state when a
+  // prop changes" pattern, so the save above never writes the old picks back over the new ones.
+  const [seenLayersRev, setSeenLayersRev] = useState(layersRev)
+  if (layersRev !== seenLayersRev) {
+    setSeenLayersRev(layersRev)
+    setShow(loadGlobeLayers(showStates))
+  }
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over

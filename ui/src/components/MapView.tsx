@@ -198,6 +198,10 @@ interface Props {
   onSelectAprs?: (call: string) => void
   /** Highlighted APRS station (the list selection), drawn accented. */
   selectedAprs?: string | null
+  /** Bumped by a host that rewrote this surface's stored map setup (Connect's layouts:
+   *  features/connectPresets `mapLayers`, through `setIntentMapLayer`): the map reads its layers
+   *  again. */
+  layersRev?: number
 }
 
 /** Color for an ionosonde's measured MUF (MHz): a cold→hot scale (blue low → red high)
@@ -289,6 +293,18 @@ export function layersFromStored(v: string | null): Record<LayerKey, Layer> | nu
     return null
   }
   return layersFromValue(raw)
+}
+
+/** Turn one layer on or off in an intent's stored map setup on this surface, starting from what the
+ *  map shows there: the stored table, or the intent's preset for an intent not yet used here. A
+ *  LAYOUT'S reach into the map (features/connectPresets `mapLayers`): Connect calls this when a
+ *  layout is picked, then bumps the map's `layersRev` so a mounted map reads its layers again.
+ *  Returns whether anything changed. */
+export function setIntentMapLayer(intent: MapIntent, key: keyof typeof DEFAULT_LAYERS, on: boolean): boolean {
+  const table = layersFromValue(loadIntentSetup(intent)?.layers) ?? withIntentPreset(DEFAULT_LAYERS, intent)
+  if (table[key].visible === on) return false
+  saveIntentSetup(intent, { layers: { ...table, [key]: { ...table[key], visible: on } } })
+  return true
 }
 
 /** `layersFromStored` for an already-parsed value (the per-intent store holds the table as JSON). */
@@ -672,6 +688,7 @@ export function MapView({
   muf,
   xrayLong = null,
   embedded,
+  layersRev = 0,
 }: Props) {
   const remoteMap=useContext(NavigationMapContext)
   const remoteConnect=remoteMap?.connect
@@ -728,6 +745,15 @@ export function MapView({
     setKind(flatPick(saved?.map) ?? INTENT_PRESETS[intent].kind)
     setColorBy(saved?.colorBy ?? INTENT_PRESETS[intent].colorBy)
     setLayers((L) => layersFromValue(saved?.layers) ?? withIntentPreset(L, intent))
+  }
+  // A HOST THAT REWROTE THE STORED LAYERS (a Connect layout turning one on: `setIntentMapLayer`) bumps
+  // `layersRev`, and the map reads them again — during render, like the intent switch above, so the
+  // persist effect below never writes the old table back over the new one.
+  const [seenLayersRev, setSeenLayersRev] = useState(layersRev)
+  if (!embedded && intent && layersRev !== seenLayersRev) {
+    setSeenLayersRev(layersRev)
+    const saved = loadIntentSetup(intent, dedicatedIntent)
+    setLayers((L) => layersFromValue(saved?.layers) ?? L)
   }
   // Full screen: everything but the map goes. The embedded detail globe has no chrome to
   // hide and no toolbar to hold the way back, so it is never full-screen.

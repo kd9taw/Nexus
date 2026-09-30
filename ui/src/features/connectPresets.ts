@@ -19,13 +19,23 @@
 // Deliberately NOT part of a preset: the map's own choices (projection, layers, colour — the
 // per-intent map setup in features/intentMapSettings). Those are the operator's picks per intent;
 // a layout tap that overwrote them would be overwriting a saved choice nobody asked it to touch.
-// A preset decides how much of the window the map GETS, never how the map looks.
+// A preset decides how much of the window the map GETS, never how the map looks — with ONE
+// exception, by operator pick (2026-09-29, "satellites on in the Frame layout"): a layout may name
+// map layers it turns ON when it is tapped (`mapLayers`; Frame's satellites). Only on, never off; in
+// the map on screen and the one behind the picker (the 2-D map's record for the intent in use, the
+// 3-D globe's); nothing else about either map; and the layers are not part of what reads back, so
+// unticking one afterwards is the operator's choice and the layout still reads as picked. Undo takes
+// back exactly what the tap turned on (ConnectView).
 import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, type PaneId, type SlotId } from './connectConfig'
 import { RAIL_MAX, RAIL_MIN, type RailWidths } from './connectRails'
 import type { PanelLayout } from './panelState'
 
 export const CONNECT_PRESET_IDS = ['mapFirst', 'listFirst', 'dashboard', 'frame'] as const
 export type ConnectPresetId = (typeof CONNECT_PRESET_IDS)[number]
+
+/** The map layers a layout may turn on (the header's one exception). A layer id both maps share. */
+export const PRESET_MAP_LAYERS = ['sats'] as const
+export type PresetMapLayer = (typeof PRESET_MAP_LAYERS)[number]
 
 export interface ConnectLayout {
   /** A complete placement — every slot, no pane twice (validateConnectLayout). */
@@ -36,6 +46,8 @@ export interface ConnectLayout {
   /** Rail width preferences in CSS px; null = the tier default. Fitted into the window on load
    *  and on every resize like any dragged width (fitRails), never trusted raw. */
   rails: { left: number | null; right: number | null }
+  /** Map layers the tap turns ON (never off), on both maps; not part of what reads back. */
+  mapLayers?: readonly PresetMapLayer[]
 }
 
 /** What the screen is built from right now — the three records a layout writes. */
@@ -124,7 +136,8 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
   // Reporter's side of it) over what to chase on the right. The bottom row is closed so the map
   // takes the height; the default's other panes wait in it. 400 px columns read across a desk; in
   // the dashboard window's 1600×1000 they leave the map 728×866 (measured in Chrome), and on a
-  // 1024 window they narrow to fit around the map's 280 px floor.
+  // 1024 window they narrow to fit around the map's 280 px floor. And the satellites on the map: the
+  // one layer a layout turns on (the header's exception), so the wall display shows the birds move.
   frame: {
     slots: {
       left1: 'bandAdvisor',
@@ -137,6 +150,7 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     },
     hidden: STRIP,
     rails: { left: 400, right: 400 },
+    mapLayers: ['sats'],
   },
 }
 
@@ -167,6 +181,9 @@ export function validateConnectLayout(id: string, layout: ConnectLayout): string
     if (px !== null && !(Number.isInteger(px) && px >= RAIL_MIN && px <= RAIL_MAX))
       errs.push(`${id}: the ${side} rail's ${px} px is outside ${RAIL_MIN}–${RAIL_MAX} px`)
   }
+  for (const layer of layout.mapLayers ?? [])
+    if (!(PRESET_MAP_LAYERS as readonly string[]).includes(layer))
+      errs.push(`${id}: turns on '${layer}', which is not a map layer a layout may turn on`)
   return errs
 }
 
