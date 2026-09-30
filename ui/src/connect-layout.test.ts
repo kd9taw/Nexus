@@ -315,7 +315,7 @@ describe('the .connect template has exactly the columns that render', () => {
         const tr = winner(RULES, chain, 'grid-template-rows')
         // One explicit row, flexible: the map's. Its minimum is the rails' floor, computed below the
         // floor at the end of this file.
-        expect(tracks(tr!.value), `\`${tr!.selector}\``).toEqual(['minmax(calc(8em + var(--space-3)), 1fr)'])
+        expect(tracks(tr!.value), `\`${tr!.selector}\``).toEqual(['minmax(max(calc(8em + var(--space-3)), min(calc(10em + var(--space-3)), calc(100% - 4em - var(--space-3)))), 1fr)'])
         // An `auto`-max implicit row: a fixed max would be maximised to its full value before the
         // fr row grows (css-grid §11.6) — a floor stealing height from the map, not a cap. The one
         // exception is the height the OPERATOR set with the strip's divider (layout L7), which the
@@ -505,9 +505,12 @@ describe('the xs stack: every stacked row holds what is in it', () => {
 // title bar and a line of it" (features/paneSeam CONNECT_STRIP_SPLIT_MIN): the map row holds two rail
 // boxes and the rail's gap, the strip one box. Floors that do not yield need a scroller between them
 // and the clip, so the Connect view is one (`.layout.single` around `.connect-shell`, overflow-y
-// auto): the third legal fate of cockpit-panes.css, past the region's own floor the shell scrolls. At
-// every supported size the rows already get more than the floors, so nothing there moves — computed
-// here at the census's geometries, and measured in Chrome (the report's census).
+// auto): the third legal fate of cockpit-panes.css, past the region's own floor the shell scrolls.
+// A rail box asks for 5em while that leaves the strip its 4em: a 248 px rail wraps its titles onto
+// two lines (every rail title in Japanese at 175 %), and 4em under a two-line title bar left no line
+// of the pane showing. It yields before it makes the view scroll. At every supported size the rows
+// already get more than the floors, so nothing there moves — computed here at the census's
+// geometries, and measured in Chrome (the report's census).
 
 /** A grid the Chrome census measured (CSS px): its content height (Chrome's rows plus the gap between
  *  them, map + gap + strip), its gap (var(--space-3): 12 px, 11.28 px in the sm tier's tighter
@@ -520,9 +523,10 @@ interface GridGeom {
   vhEff: number
 }
 
-/** Resolve a length Connect's row rules write, to CSS px at `g`: px, em, var(--space-3),
- *  var(--vh-eff, …), `calc()` sums of those and products with a number, and min()/max() over them.
- *  Null for anything else, so a guard fails loudly instead of passing on a value it could not read. */
+/** Resolve a length Connect's row rules write, to CSS px at `g`: px, em, % (of the grid's content
+ *  height, what a row size's percentage means), var(--space-3), var(--vh-eff, …), `calc()` sums of
+ *  those and products with a number, and min()/max() over them. Null for anything else, so a guard
+ *  fails loudly instead of passing on a value it could not read. */
 function lenPx(v: string, g: GridGeom): number | null {
   const s = v.trim()
   const fn = /^(min|max|calc)\(([^]*)\)$/.exec(s)
@@ -532,27 +536,11 @@ function lenPx(v: string, g: GridGeom): number | null {
       if (parts.some((p) => p === null)) return null
       return (fn[1] === 'min' ? Math.min : Math.max)(...(parts as number[]))
     }
-    const inner = fn[2].trim()
-    // a + b / a - b at the top level (a sum of two terms is all these rules write)
-    let depth = 0
-    for (let i = inner.length - 1; i > 0; i--) {
-      const ch = inner[i]
-      if (ch === ')') depth++
-      else if (ch === '(') depth--
-      else if (depth === 0 && (ch === '+' || ch === '-') && inner[i - 1] === ' ') {
-        const a = lenPx(inner.slice(0, i), g)
-        const b = lenPx(inner.slice(i + 1), g)
-        return a === null || b === null ? null : ch === '+' ? a + b : a - b
-      }
-    }
-    const prod = /^(-?[\d.]+)\s*\*\s*([^]+)$/.exec(inner)
-    if (prod) {
-      const b = lenPx(prod[2], g)
-      return b === null ? null : parseFloat(prod[1]) * b
-    }
-    return lenPx(inner, g)
+    return sumPx(fn[2], g)
   }
-  let m = /^(-?[\d.]+)px$/.exec(s)
+  let m = /^(-?[\d.]+)%$/.exec(s)
+  if (m) return (parseFloat(m[1]) / 100) * g.content
+  m = /^(-?[\d.]+)px$/.exec(s)
   if (m) return parseFloat(m[1])
   m = /^(-?[\d.]+)em$/.exec(s)
   if (m) return parseFloat(m[1]) * g.fontPx
@@ -560,6 +548,29 @@ function lenPx(v: string, g: GridGeom): number | null {
   if (/^var\(\s*--space-3\s*\)$/.test(s)) return g.space
   if (/^var\(\s*--vh-eff\s*(?:,[^)]*)?\)$/.test(s)) return g.vhEff
   return null
+}
+
+/** The inside of a calc(): a left-to-right sum of terms, a term being a product with a number or a
+ *  length lenPx reads. */
+function sumPx(expr: string, g: GridGeom): number | null {
+  const inner = expr.trim()
+  let depth = 0
+  for (let i = inner.length - 1; i > 0; i--) {
+    const ch = inner[i]
+    if (ch === ')') depth++
+    else if (ch === '(') depth--
+    else if (depth === 0 && (ch === '+' || ch === '-') && inner[i - 1] === ' ') {
+      const a = sumPx(inner.slice(0, i), g)
+      const b = sumPx(inner.slice(i + 1), g)
+      return a === null || b === null ? null : ch === '+' ? a + b : a - b
+    }
+  }
+  const prod = /^(-?[\d.]+)\s*\*\s*([^]+)$/.exec(inner)
+  if (prod) {
+    const b = lenPx(prod[2], g)
+    return b === null ? null : parseFloat(prod[1]) * b
+  }
+  return lenPx(inner, g)
 }
 
 function splitTop(s: string): string[] {
@@ -587,7 +598,9 @@ function splitTop(s: string): string[] {
  *  the rows overflow the grid by that much. */
 function connectRows(g: GridGeom, rowsDecl: string, autoRowsDecl: string, capDecl: string) {
   const t = tracks(rowsDecl)
-  const map = t.length === 1 ? /^minmax\(\s*([^,]+?)\s*,\s*1fr\s*\)$/.exec(t[0]) : null
+  const mm = t.length === 1 ? /^minmax\(([^]*)\)$/.exec(t[0]) : null
+  const args = mm ? splitTop(mm[1]).map((a) => a.trim()) : []
+  const map = args.length === 2 && args[1] === '1fr' ? [t[0], args[0]] : null
   const unsized = /^var\(\s*--cn-strip-h\s*,\s*(.+)\)$/.exec(autoRowsDecl.trim())?.[1].trim()
   const strip = unsized === 'auto' ? ['auto', 'auto'] : unsized ? /^minmax\(\s*([^,]+?)\s*,\s*auto\s*\)$/.exec(unsized)?.slice(1) : undefined
   const cap = lenPx(capDecl, g)
@@ -621,6 +634,9 @@ const SUPPORTED: Array<[GridGeom, string]> = [
   [{ name: '1366×768 (auto, 85 %)', content: 662.9, space: 12, fontPx: 14, vhEff: 903.529 }, 'lg'],
   [{ name: '1920×1080 (100 %)', content: 840, space: 12, fontPx: 14, vhEff: 1080 }, 'lg'],
 ]
+/** The floor's own size with the zoom pinned at 100 % (the sm tier): two rail titles there take two
+ *  lines, and their panes were 61 px, a title bar with no line of the pane under it. */
+const G1024_100_EN: GridGeom = { name: '1024×768 pinned 100 %, en', content: 375.155, space: 11.28, fontPx: 14, vhEff: 768 }
 const OLD_ROWS = 'minmax(0, 1fr)'
 const OLD_AUTO_ROWS = 'var(--cn-strip-h, auto)'
 
@@ -693,8 +709,14 @@ describe('below the floor, every Connect box keeps its title bar and a line', ()
     const r = rowRules('sm')
     const now = connectRows(G175_EN, r.rows, r.autoRows, r.cap)
     expect(now, `the model cannot read \`${r.rows}\` / \`${r.autoRows}\``).not.toBeNull()
-    expect(now!.map).toBeCloseTo(123.28, 1)
-    expect(now!.strip).toBeCloseTo(100.62, 1)
+    expect(now!.map).toBeCloseTo(151.28, 1)
+    expect(now!.strip).toBeCloseTo(72.62, 1)
+    const ja = connectRows(G175_JA, r.rows, r.autoRows, r.cap)!
+    expect(ja.map).toBeCloseTo(151.28, 1)
+    expect(ja.strip).toBeCloseTo(57.19, 1)
+    const floor100 = connectRows(G1024_100_EN, r.rows, r.autoRows, r.cap)!
+    expect(floor100.map).toBeCloseTo(151.27, 1)
+    expect(floor100.strip).toBeCloseTo(212.61, 1)
   })
 
   for (const vp of ['sm', 'md', 'lg'])
@@ -708,6 +730,28 @@ describe('below the floor, every Connect box keeps its title bar and a line', ()
         expect(rows!.strip, `${g.name}: a strip box is ${rows!.strip.toFixed(1)} px`).toBeGreaterThanOrEqual(4 * g.fontPx - 0.01)
       }
     })
+
+  it('at 175 % a rail box keeps a two-line title bar and a line (5em), the strip its 4em, and nothing scrolls', () => {
+    const r = rowRules('sm')
+    for (const g of [G175_EN, G175_JA, G1024_100_EN]) {
+      const rows = connectRows(g, r.rows, r.autoRows, r.cap)!
+      expect(rows.railBox, `${g.name}: a rail box is ${rows.railBox.toFixed(1)} px`).toBeGreaterThanOrEqual(5 * g.fontPx - 0.01)
+      expect(rows.strip, `${g.name}: a strip box is ${rows.strip.toFixed(1)} px`).toBeGreaterThanOrEqual(4 * g.fontPx - 0.01)
+      expect(rows.overflow, `${g.name}: the view would scroll`).toBe(0)
+    }
+  })
+
+  it('where 5em rail boxes would take the strip below its 4em, the rail boxes give way first: nothing scrolls for it', () => {
+    // A few px shorter than Japanese at 175 % — another platform's fonts, a taller banner — must
+    // not put a scrollbar on the view for the sake of the rails' second em.
+    const r = rowRules('sm')
+    const tight: GridGeom = { ...G175_JA, name: 'Japanese at 175 %, 5 px shorter', content: G175_JA.content - 5 }
+    const rows = connectRows(tight, r.rows, r.autoRows, r.cap)!
+    expect(rows.overflow, 'the view would scroll').toBe(0)
+    expect(rows.strip, 'the strip keeps its 4em').toBeCloseTo(4 * tight.fontPx, 6)
+    expect(rows.railBox, 'the rails gave up the difference').toBeLessThan(5 * tight.fontPx)
+    expect(rows.railBox, '…and never their own 4em').toBeGreaterThanOrEqual(4 * tight.fontPx)
+  })
 
   for (const vp of ['sm', 'md', 'lg'])
     it(`[data-viewport=${vp}] where the floors do not fit, the Connect view scrolls to them`, () => {

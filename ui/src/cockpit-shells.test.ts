@@ -977,7 +977,7 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
       `.connect rows are \`${rows}\` — the map row alone is explicit, flexible over the rails' floor. ` +
         'A second explicit row is where a fixed max would return: it is maximized to its full value ' +
         'before the fr row expands (§11.6), so it is a floor, not a cap.',
-    ).toEqual(['minmax(calc(8em + var(--space-3)), 1fr)'])
+    ).toEqual(['minmax(max(calc(8em + var(--space-3)), min(calc(10em + var(--space-3)), calc(100% - 4em - var(--space-3)))), 1fr)'])
   })
 
   it('.connect-strip > .pane-frame carries the zoom-corrected max-height cap', () => {

@@ -460,9 +460,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zoom on a smaller screen (for example 175 % on 1920×1080), the top bar and Connect's header leave
   the pane grid little height. The bottom row kept its full height, and each side pane shrank to a
   sliver: its title was cut off and its pane picker and ✕ could not be reached (in Japanese, none
-  of the four). Now every pane keeps its title bar, with its picker and ✕, in view and some room
-  under it: the bottom row gives up the height it was holding, and where even that does not fit,
-  Connect scrolls. At the usual window sizes nothing moves.
+  of the four). Now every pane keeps its title bar, with its picker and ✕, in view and a line of
+  the pane under it: the bottom row gives up the height it was holding, and where even that does
+  not fit, Connect scrolls. At the usual sizes and zooms nothing moves; on a 1024×768 screen with
+  the zoom pinned at 100 %, the side panes also take a little of the bottom row's height, so a
+  two-line title still shows a line of its pane.
 - **CW: a message that could not go out is dropped, not sent later on its own.** When CW could not
   be sent because transmit was off (for example after leaving the CW screen part-way through a
   message) or the frequency was outside your license privileges, what was still waiting used to be

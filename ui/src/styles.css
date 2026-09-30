@@ -1555,7 +1555,10 @@ button.nb-chip:hover {
      reach. Now the map row holds two rail boxes of 4em and the rail's gap, and the strip one box of
      4em, in the unit of the strip divider's own floor: a pane's title bar and a line of it. They
      are hard floors, so where they do not fit the Connect view scrolls (its `.layout.single` host,
-     below). At every supported size the rows get more than the floors, and nothing there moves:
+     below). A rail box asks for 5em while that still leaves the strip its 4em: a 248 px rail wraps
+     its titles onto two lines (every one, in Japanese at 175 %), and 4em under a two-line title bar
+     showed no line of the pane. That second em yields before it would make the view scroll. At
+     every supported size the rows get more than the floors, and nothing there moves:
      connect-layout.test.ts computes the rows at the census's geometries. */
 .connect {
   flex: 1;
@@ -1564,7 +1567,7 @@ button.nb-chip:hover {
   gap: var(--space-3);
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
-  grid-template-rows: minmax(calc(8em + var(--space-3)), 1fr);
+  grid-template-rows: minmax(max(calc(8em + var(--space-3)), min(calc(10em + var(--space-3)), calc(100% - 4em - var(--space-3)))), 1fr);
   grid-auto-rows: var(--cn-strip-h, minmax(4em, auto));
   grid-template-areas: 'left center right';
 }
