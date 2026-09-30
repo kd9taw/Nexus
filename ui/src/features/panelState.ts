@@ -272,6 +272,11 @@ export interface PanelLayout<P extends string> {
   /** The columns' order on screen ("swap columns"): kept by the record, rendered by no cockpit yet
    *  (see features/panelPlace). Absent is a | b | log. */
   colOrder?: PaneColumn[]
+  /** A CONNECT BOX'S OWN TEXT SIZE (⋯ ▸ A− / A+), per slot: a factor on the app's Text size,
+   *  BOX_SCALE_MIN–BOX_SCALE_MAX (the section at the foot of this file). Absent, or 1, is the app's
+   *  size — so an older record, and every cockpit's (none writes one), reads exactly as before. An
+   *  older build's coercion copies none of it: every box opens at the app's size, nothing else lost. */
+  scale?: Partial<Record<P, number>>
 }
 
 /** A grid cockpit's column widths, as its column dividers write them (PanelLayout.cols):
@@ -363,7 +368,7 @@ export function coercePanelLayout<P extends string>(
 ): PanelLayout<P> {
   const out = emptyPanelLayout<P>()
   if (!raw || typeof raw !== 'object') return out
-  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown }
+  const obj = raw as { state?: unknown; share?: unknown; cols?: unknown; place?: unknown; colOrder?: unknown; scale?: unknown }
   if (obj.state && typeof obj.state === 'object') {
     const src = obj.state as Record<string, unknown>
     for (const id of spec.panelIds) {
@@ -400,6 +405,17 @@ export function coercePanelLayout<P extends string>(
     if (place) out.place = place
     const colOrder = coerceColumnOrder(obj.colOrder)
     if (colOrder) out.colOrder = colOrder
+  }
+  // A box's text size (Connect's A− / A+), clamped on read into the range the menu writes; a factor
+  // of 1 is no entry at all, and junk is dropped rather than guessed at.
+  if (obj.scale && typeof obj.scale === 'object') {
+    const src = obj.scale as Record<string, unknown>
+    const scale: Partial<Record<P, number>> = {}
+    for (const id of spec.panelIds) {
+      const v = boxScaleValue(src[id])
+      if (v != null) scale[id] = v
+    }
+    if (Object.keys(scale).length > 0) out.scale = scale
   }
   return out
 }
@@ -587,6 +603,12 @@ export function usePanelLayout<P extends string>(
    *  so an id outside the vocabulary cannot be written. Off PanelLayoutApi on purpose: cockpits
    *  receive that as a prop and have no presets to apply. */
   setLayout: (next: PanelLayout<P>) => void
+  /** A Connect box's text size (⋯ ▸ A− / A+): 1 unless the record holds one. Off PanelLayoutApi for
+   *  setLayout's reason — only Connect's boxes have one. */
+  scaleOf: (id: P) => number
+  /** Set a box's text size, clamped into BOX_SCALE_MIN–BOX_SCALE_MAX; 1 clears the entry. ONE
+   *  undoable step, like a split. */
+  setScale: (id: P, value: number) => void
 } {
   const key = useMemo(() => panelStorageKey(spec.view, instance), [spec.view, instance])
   // Current + previous in ONE state so the undo snapshot is taken by the same updater
@@ -687,6 +709,22 @@ export function usePanelLayout<P extends string>(
     (next: PanelLayout<P>) => apply(() => coercePanelLayout(spec, next)),
     [apply, spec],
   )
+  const scaleOf = useCallback((id: P) => hist.cur.scale?.[id] ?? 1, [hist.cur])
+  const setScale = useCallback(
+    (id: P, value: number) =>
+      apply((cur) => {
+        const scale: Partial<Record<P, number>> = { ...cur.scale }
+        const v = boxScaleValue(value)
+        if (v == null) delete scale[id]
+        else scale[id] = v
+        // Everything else in the record rides along; only `scale` changes.
+        const { scale: _was, ...rest } = cur
+        const next: PanelLayout<P> = { ...rest }
+        if (Object.keys(scale).length > 0) next.scale = scale
+        return next
+      }),
+    [apply],
+  )
   // Which panes the pending undo would UNMOUNT: removed in the snapshot, present now.
   // Computed from the same history the undo restores, so it cannot describe a different
   // click than the one the button makes — and read through the same default `stateOf` uses,
@@ -712,6 +750,8 @@ export function usePanelLayout<P extends string>(
     undoRemoves,
     reset,
     setLayout,
+    scaleOf,
+    setScale,
   }
 }
 
@@ -1123,3 +1163,23 @@ export const STOP_CONTROL_WORDS = [
   'kill',
   'panic',
 ] as const
+
+// ── A CONNECT BOX'S OWN TEXT SIZE (⋯ ▸ A− / A+) ──────────────────────────────────────────────
+// The operator's pick (2026-09-29): "Per-box text size (A−/A+)", 80–160 %. A factor on the app's
+// Text size (Settings ▸ Workspace ▸ Text size), never a structural size: styles.css multiplies
+// --text-scale inside the box body by it, and the frame, the rails and the strip keep their sizes.
+// Stored per SLOT in the record (`PanelLayout.scale`), so it is part of the board, like a split.
+
+export const BOX_SCALE_MIN = 0.8
+export const BOX_SCALE_MAX = 1.6
+/** One press of A− or A+. */
+export const BOX_SCALE_STEP = 0.1
+
+/** A stored or requested box text size as the record keeps it: clamped into the range, rounded to
+ *  the hundredth (so three presses of A+ are 1.3, not 1.3000000000000003), and null for 1 (no entry)
+ *  or for anything that is not a positive number. */
+export function boxScaleValue(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null
+  const c = Math.round(Math.min(BOX_SCALE_MAX, Math.max(BOX_SCALE_MIN, v)) * 100) / 100
+  return c === 1 ? null : c
+}

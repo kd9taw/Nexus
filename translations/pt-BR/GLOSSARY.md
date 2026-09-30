@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,258 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,263 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -130,7 +130,7 @@ word in, and use only that word in the CSV.
 | antenna | 30 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
 | cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 22 / 12 | The movable boxes inside a cockpit. | |
+| pane / panel | 23 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
 | exchange | 15 | The contest exchange. | |

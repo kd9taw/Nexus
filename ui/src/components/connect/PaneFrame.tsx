@@ -15,6 +15,14 @@
 // the rail separator paints during a drag, and `--connect-pane-flex` is the xs stack's
 // content-height override. A strip frame takes no share; its grid sizes it.
 //
+// THE BOX'S OWN TEXT SIZE (2026-09-29, ⋯ ▸ A− / A+). A typed `textScale` placed inline on the
+// BODY as `--box-text-scale`, the same kind of placement input as the share: styles.css multiplies
+// the app's --text-scale by it for everything inside the body, and the head — the title, the picker,
+// the ⋯ and ✕ — stays at the app's size, so a box's head is the same height at every size and the
+// strip's row does not jump. The factor is written only when it is not 1: a box at the app's size
+// renders exactly the DOM it rendered before the control existed. Every prop here is optional, so a
+// host that passes none of them gets today's frame.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every pane's name
 // arrives already translated from the registry (`panes.tsx`, resolved through getters); the
 // picker's B2/B3 groups are named by their tier code, which is not prose. The ✕ uses the
@@ -22,6 +30,7 @@
 import type { CSSProperties } from 'react'
 import { t } from '../../i18n'
 import { PANES, paneById } from './panes'
+import { BoxMenu } from './BoxMenu'
 import type { PaneContext } from './paneContext'
 import type { PaneId, SlotId } from '../../features/connectConfig'
 
@@ -32,6 +41,8 @@ export function PaneFrame({
   onAssign,
   share,
   onHide,
+  textScale,
+  onTextScale,
 }: {
   slotId: SlotId
   paneId: PaneId
@@ -41,10 +52,15 @@ export function PaneFrame({
   share?: number
   /** Close this slot. Omitted ⇒ no ✕. */
   onHide?: () => void
+  /** This box's text size, a factor on the app's Text size (⋯ ▸ A− / A+). Omitted ⇒ 1. */
+  textScale?: number
+  /** Change it. Omitted ⇒ the ⋯ menu offers no text size. */
+  onTextScale?: (factor: number) => void
 }) {
   const def = paneById(paneId)
   if (!def) return null
   const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
+  const scale = textScale ?? 1
   return (
     <section
       className="pane-frame"
@@ -82,6 +98,7 @@ export function PaneFrame({
               ) : null
             })}
           </select>
+          {onTextScale && <BoxMenu title={def.title} textScale={scale} onTextScale={onTextScale} />}
           {onHide && (
             <button
               type="button"
@@ -95,7 +112,12 @@ export function PaneFrame({
           )}
         </div>
       </header>
-      <div className="pane-body">{body ?? <p className="pane-basic">{def.basic(ctx)}</p>}</div>
+      <div
+        className="pane-body"
+        style={scale === 1 ? undefined : ({ '--box-text-scale': scale } as CSSProperties)}
+      >
+        {body ?? <p className="pane-basic">{def.basic(ctx)}</p>}
+      </div>
     </section>
   )
 }

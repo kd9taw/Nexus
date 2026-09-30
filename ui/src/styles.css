@@ -467,6 +467,18 @@ html {
   color: var(--text-faint);
   pointer-events: none;
 }
+/* A Connect box's ⋯ menu (connect/BoxMenu): a heading line that reads the current value back, and
+   the A− / A+ glyphs in a column of their own so the two words line up. */
+.box-menu-label {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.box-menu-glyph {
+  min-width: 2.2em;
+  font-weight: 700;
+}
 
 /* --- Now-Bar status/alert lane (honest-state: degradations never silent). --- */
 /* The persistent Now-Bar: one always-visible line of fused verdicts (band open /
@@ -1987,6 +1999,24 @@ button.nb-chip:hover {
   color: var(--text);
   border-color: var(--accent);
 }
+/* A Connect box's ⋯ menu (connect/BoxMenu: its text size, and the box's other options). The same
+   face as ✕ beside it, so adding it changes no head's height — the 2026-09-13 measurement above. */
+.pane-menu {
+  flex: none;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px var(--space-1);
+  cursor: pointer;
+}
+.pane-menu:hover,
+.pane-menu[data-state='open'] {
+  color: var(--text);
+  border-color: var(--accent);
+}
 .pane-body {
   flex: 1;
   min-height: 0;
@@ -2001,6 +2031,34 @@ button.nb-chip:hover {
 .pane-body::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--text-dim) 50%, transparent);
   border-radius: 999px;
+}
+/* A CONNECT BOX'S OWN TEXT SIZE — ⋯ ▸ A− / A+, 80–160 % of the app's Text size. connect/PaneFrame
+   writes the factor inline on the box's body as `--box-text-scale` (only when it is not 1), and the
+   panel record keeps it per slot. It multiplies --text-scale for everything INSIDE the body and for
+   nothing else: the frame, its head, the rails and the strip keep their sizes, because a text size
+   is content and a box's size is the grid's (cockpit-panes.css). `[data-slot]` is Connect's frame
+   (the cockpits' CockpitPaneFrame has none), so no cockpit pane is touched.
+   · The frame hands its inherited --text-scale down under another name first: declaring
+     `--text-scale: calc(var(--text-scale) * …)` on one element is a cycle, and a cycle makes the
+     property invalid, not bigger.
+   · The five --fs-* tokens are declared AGAIN on the body because a custom property is computed
+     where it is declared: the root's --fs-body is already 14 px × the root's --text-scale when a box
+     inherits it, so a `var(--fs-label)` inside a box would stay put while its neighbours grew. They
+     are the root's expressions, verbatim — PaneFrame.textScale.test.tsx fails if one drifts (every
+     box's words at 100 % must be exactly the size they were before this rule).
+   · The body's own font size is its parent's times the factor, so `em` and `%` text follows too.
+   That test computes every word of every box at 80, 100 and 160 %, and on the app's Larger. */
+.pane-frame[data-slot] {
+  --box-outer-text-scale: var(--text-scale);
+}
+.pane-frame[data-slot] > .pane-body {
+  --text-scale: calc(var(--box-outer-text-scale) * var(--box-text-scale, 1));
+  --fs-display: calc(clamp(22px, calc(0.024 * var(--vw-eff, 100vw)), 30px) * var(--text-scale));
+  --fs-title: calc(18px * var(--text-scale));
+  --fs-body: calc(14px * var(--text-scale));
+  --fs-label: calc(12px * var(--text-scale));
+  --fs-micro: calc(11px * var(--text-scale));
+  font-size: calc(1em * var(--box-text-scale, 1));
 }
 .pane-basic {
   margin: 0;
@@ -2381,7 +2439,7 @@ body.resizing-row {
   gap: var(--space-2);
 }
 .connect-sel .cs-call {
-  font-size: 1.05rem;
+  font-size: calc(16.8px * var(--text-scale));
   letter-spacing: 0.02em;
 }
 .connect-sel .cs-close {
@@ -2390,14 +2448,14 @@ body.resizing-row {
   border: none;
   color: var(--text-faint);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: calc(13.6px * var(--text-scale));
 }
 .connect-sel .cs-close:hover {
   color: var(--text);
 }
 .connect-sel .cs-who {
   color: var(--text-dim);
-  font-size: 0.85rem;
+  font-size: calc(13.6px * var(--text-scale));
   margin-top: 2px;
 }
 /* Beam heading on the selected-station card, right after the entity name. */
@@ -2407,7 +2465,7 @@ body.resizing-row {
 }
 .connect-sel .cs-spot {
   color: var(--text);
-  font-size: 0.85rem;
+  font-size: calc(13.6px * var(--text-scale));
   margin-top: var(--space-1);
 }
 .connect-sel .cs-work,
@@ -18568,7 +18626,7 @@ button.cq-skiptx1.on {
 }
 .opening-new {
   font-weight: 800;
-  font-size: 0.7rem;
+  font-size: calc(11.2px * var(--text-scale));
   letter-spacing: 0.06em;
   color: var(--bg);
   background: var(--state-ok);
@@ -18800,13 +18858,13 @@ button.cq-skiptx1.on {
 }
 .opening-detail {
   color: var(--text-dim);
-  font-size: 0.9rem;
+  font-size: calc(14.4px * var(--text-scale));
 }
 .opening-note {
   margin-left: auto;
   color: var(--accent);
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: calc(13.6px * var(--text-scale));
 }
 
 .prop-grid {
@@ -18998,13 +19056,13 @@ button.cq-skiptx1.on {
   background: var(--bg-elev);
 }
 .swx-k {
-  font-size: 0.68rem;
+  font-size: calc(10.88px * var(--text-scale));
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .swx-v {
-  font-size: 1.15rem;
+  font-size: calc(18.4px * var(--text-scale));
   font-weight: 700;
   font-family: var(--font-mono);
 }
@@ -24782,7 +24840,7 @@ button.sat-chip:disabled {
 
 /* Openings-log sortable header — span-header row atop the episode list. */
 .openings-log-head {
-  font-size: 0.7rem;
+  font-size: calc(11.2px * var(--text-scale));
   font-weight: 700;
   color: var(--text-dim);
   border-bottom: 1px solid var(--border);
@@ -27098,7 +27156,7 @@ tr.sel .aprs-sym {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 0.78rem;
+  font-size: calc(12.48px * var(--text-scale));
   color: var(--text-faint);
 }
 .kp-line.warn {

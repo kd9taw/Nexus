@@ -7199,6 +7199,13 @@ export const EN = {
   'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
   'connect.slot.pick.title': 'Choose what this slot shows',
   'connect.slot.group.core': 'Panels',
+  // A pane's ⋯ menu (connect/BoxMenu): the pane's own options. `{{title}}` is the pane's name, `{{pct}}`
+  // a whole number. The A− / A+ glyphs beside the two words stay in the code.
+  'connect.box.menu.aria': 'Options for {{title}}',
+  'connect.box.menu.title': 'Options for this pane',
+  'connect.box.text.size': 'Text size: {{pct}}%',
+  'connect.box.text.smaller': 'Smaller text',
+  'connect.box.text.larger': 'Larger text',
   // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
   // which pane sits in a slot is the operator's pick, so the title alone says nothing about
   // where the space will be taken from.

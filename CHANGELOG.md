@@ -159,6 +159,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
   it. A click on it still moves the keyboard there, so click back into Nexus before using a
   keyboard shortcut such as Esc. On macOS and Linux the button does not appear yet.
+- **Connect: make one pane's text bigger or smaller.** Every Connect pane has a **⋯** button in its
+  header, beside the ✕. Its **A+ Larger text** and **A− Smaller text** step that pane's words from
+  80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a press. The menu stays
+  open and shows the size, so you can press again. Only the words change: the pane keeps its place
+  and its size, its header stays as it was, and a pane whose text no longer fits scrolls. Each pane
+  keeps its own size in each window, a layout picked from ⊞ Panels keeps the sizes, and **Reset
+  layout** puts every pane back at 100%. Layouts saved before this open with every pane at 100%.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

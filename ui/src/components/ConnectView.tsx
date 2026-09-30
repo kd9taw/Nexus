@@ -512,7 +512,10 @@ export function ConnectView({
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
     const p = CONNECT_PRESETS[id]
     beforeSwitch.current = { slots, rails: widths.pref }
-    panels.setLayout(layoutPanels(p))
+    // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes
+    // go and how much room each gets, never how big their words are — the rule it already keeps for
+    // the map's own settings. Reset layout is what puts every pane back at the app's size.
+    panels.setLayout({ ...layoutPanels(p), scale: panels.layout.scale })
     restoreSlots(p.slots)
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
   }
@@ -526,6 +529,8 @@ export function ConnectView({
       onAssign={change(assignPane)}
       share={share}
       onHide={change(() => panels.setPanelState(s, 'removed'))}
+      textScale={panels.scaleOf(s)}
+      onTextScale={change((f: number) => panels.setScale(s, f))}
     />
   )
   const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {

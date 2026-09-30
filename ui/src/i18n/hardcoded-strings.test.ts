@@ -334,6 +334,8 @@ const MIGRATED = [
   // chip, and the two intent chips named for a programme and a band (POTA/SOTA, 6m/VHF).
   'components/ConnectView.tsx',
   'components/connect/PaneFrame.tsx',
+  // A pane's ⋯ menu (2026-09-29) — born migrated: its A− / A+ are glyphs, every word a catalog key.
+  'components/connect/BoxMenu.tsx',
   'components/connect/RailHandles.tsx',
   'components/connect/panes.tsx',
   'components/connect/paneFormat.ts',

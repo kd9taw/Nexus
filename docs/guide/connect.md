@@ -82,6 +82,15 @@ you make things is remembered per window, and a saved width is trimmed to fit a
 smaller screen. **Reset layout** returns Connect to exactly how it first opened,
 including which pane sits in each slot.
 
+**A pane's own menu.** Each pane's header has a **⋯** button beside the ✕. Its
+**A+ Larger text** and **A− Smaller text** make that pane's words bigger or smaller,
+from 80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a
+press; the menu stays open and shows the size, so you can press again. Only the
+words change: the pane keeps its place and size, its header stays as it was, and a
+pane whose text no longer fits scrolls. Each pane keeps its own size in each
+window. A layout from the Panels menu keeps the sizes; **Reset layout** puts every
+pane back at 100%.
+
 **Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one
 of the four, or **Custom** once you have moved or resized anything yourself.
