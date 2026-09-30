@@ -522,6 +522,32 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
     })
   }
 
+  it('the dashboard boxes — Bands for you, Clock, Space Wx with its new lines — can be picked into every slot of every layout, Frame’s closed row included, and land there', async () => {
+    const BOXES = ['bandTiles', 'clock', 'spacewx'] as const
+    for (const id of ['standard', ...CONNECT_PRESET_IDS] as const) {
+      localStorage.clear()
+      const { container } = await mount()
+      if (id !== 'standard') pick(LABEL[id])
+      expect(layoutNow(), `control: ${id} is on screen`).toBe(id === 'standard' ? 'Standard' : LABEL[id])
+      // A layout's closed slots come back from ⊞ Panels with what it parked there: open them all.
+      openMenu()
+      for (const box of container.querySelectorAll<HTMLInputElement>('.panels-menu input[type="checkbox"]'))
+        if (!box.checked) fireEvent.click(box)
+      expect(slotsOn(container).sort(), `${id}: every slot open`).toEqual([...SLOT_IDS].sort())
+      for (const s of SLOT_IDS) {
+        for (const b of BOXES) {
+          const select = container.querySelector(`.pane-frame[data-slot="${s}"] select`) as HTMLSelectElement
+          expect([...select.options].map((o) => o.value), `${id} ${s}: ${b} is offered`).toContain(b)
+          fireEvent.change(select, { target: { value: b } })
+          expect(paneIn(container, s), `${id} ${s}: ${b} lands there`).toBe(b)
+          const placed = [...container.querySelectorAll('.pane-frame')].map((f) => f.getAttribute('data-pane'))
+          expect(new Set(placed).size, `${id} ${s}: still a permutation after ${b}`).toBe(placed.length)
+        }
+      }
+      cleanup()
+    }
+  })
+
   it('after a preset, moving or resizing a pane reads Custom, and nothing snaps back', async () => {
     const restore = fakeBoxes(1920)
     try {
