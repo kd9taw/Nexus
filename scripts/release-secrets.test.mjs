@@ -48,6 +48,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOW =
   process.env.RELEASE_WORKFLOW || path.join(ROOT, '.github', 'workflows', 'release.yml');
 const TEXT = fs.readFileSync(WORKFLOW, 'utf8');
+// BUILD_LINUX=<path> reads a different copy of scripts/build-linux.sh (the pinned-download checks).
+const BUILD_LINUX = process.env.BUILD_LINUX || path.join(ROOT, 'scripts', 'build-linux.sh');
 
 // Which step sees which secret's VALUE: every one of them, so this table is the map. A presence
 // test (`secrets.X != ''`, which the Verify steps use to decide whether a signature is required)
@@ -211,7 +213,11 @@ function readWorkflow(text, file = path.basename(WORKFLOW)) {
       }
       entries.push({ path: pathHere, value: block.join('\n'), line: n + 1 - block.length });
     } else if (value !== '' && !/^#/.test(value)) {
-      entries.push({ path: pathHere, value: scalar(n, value), line: n + 1 });
+      // A plain scalar ends where ` #` starts a comment (`uses: x@<sha>  # master, 2026-09-12`).
+      // The comment is filed as one, so the accounting of secret expressions still sees it.
+      const plain = !/^["'[{|>&*]/.test(value) && value.match(/^(.*?)\s+(#.*)$/);
+      if (plain) entries.push({ path: ['#'], value: plain[2], line: n + 1 });
+      entries.push({ path: pathHere, value: scalar(n, plain ? plain[1] : value), line: n + 1 });
     }
   }
   return model(entries, items);
@@ -605,6 +611,95 @@ test('a signature made without the version is reported', () => {
   const planted = plant(TEXT, '--app-version "$ver" "$exe"', '"$exe"');
   const { bare } = unboundSignatures(readWorkflow(planted));
   assert.ok(bare.some((c) => c.line.includes('"$exe"')), `the NSIS signature without --app-version was not reported: ${JSON.stringify(bare)}`);
+});
+
+// ---- Pinned downloads --------------------------------------------------------------------------
+// Everything the release fetches to build with is pinned to a digest or a commit, or a release can
+// change with no commit here: an action by branch, a tool from a `continuous` release, a package at
+// whatever version its index serves that day. These checks read what release.yml and build-linux.sh
+// NAME. They cannot see a package manager's choice (apt and Homebrew verify what they fetch but float
+// its version) or the Pi container's own downloads (scripts/Dockerfile.pi).
+//
+// What tauri's AppImage bundler downloads for itself: tauri-bundler 2.9.4 (what tauri-cli 2.11.5
+// locks), bundle/linux/appimage/linuxdeploy.rs, `prepare_tools`, each fetched only when absent, plus
+// the AppImage runtime its appimage plugin fetches unless LDAI_RUNTIME_FILE hands it one. A new
+// tauri-cli can change this list, which is why the tauri-cli pin is checked with it.
+const BUNDLER_TOOLS = [
+  'AppRun-x86_64',
+  'linuxdeploy-x86_64.AppImage',
+  'linuxdeploy-plugin-gtk.sh',
+  'linuxdeploy-plugin-gstreamer.sh',
+  'linuxdeploy-plugin-appimage.AppImage',
+  'runtime-x86_64',
+];
+const MOVING = /\/(?:master|main|HEAD|continuous|latest)\//;
+// Downloads that are not something to build with: publish-pi reads back the SHA256SUMS.txt this run
+// has just published, to append the Pi sums to it.
+const NOT_BUILD_INPUTS = [['publish-pi', 'Upload to the release + extend SHA256SUMS']];
+const FETCH = /\b(?:curl|wget)\b|\bgh\s+release\s+download\b/;
+const CHECKSUM = /\b(?:sha256sum|sha512sum)\b(?:\s+--?[a-z-]+)*\s+-c\b|\bshasum\s+-a\s+(?:256|512)\b(?:\s+--?[a-z-]+)*\s+-c\b/;
+
+function unpinnedDownloads(wf, script) {
+  const v = [];
+  for (const j of wf.jobs.values()) {
+    for (const s of j.steps) {
+      if (!s) continue;
+      if (s.uses && !/^actions\//.test(s.uses) && !/@[0-9a-f]{40}$/.test(s.uses)) {
+        v.push(`job ${j.id}: \`${s.uses}\` names a branch or a tag, not a commit`);
+      }
+      const code = (s.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      const input = !NOT_BUILD_INPUTS.some(([jid, name]) => jid === j.id && name === s.name);
+      if (input && FETCH.test(code) && !CHECKSUM.test(code)) v.push(`job ${j.id}, step "${s.label}": downloads with no checksum check in the same step`);
+      if (/\bpip3?\s+install\b/.test(code) && !/--require-hashes\b/.test(code)) v.push(`job ${j.id}, step "${s.label}": pip installs without --require-hashes`);
+      for (const m of code.matchAll(/\bcargo\s+install\b[^\n]*/g)) {
+        if (!/--version\s+"=[0-9.]+"/.test(m[0]) || !/--locked\b/.test(m[0])) v.push(`job ${j.id}, step "${s.label}": \`${m[0].trim()}\` is not an exact, --locked version`);
+      }
+      if (/\bnpm\s+(?:install|i|add)\b/.test(code)) v.push(`job ${j.id}, step "${s.label}": npm install resolves afresh; use npm ci`);
+    }
+  }
+  // build-linux.sh's pins: `pin_tool <file> <url> <sha256> [<sha256>]`, continuation lines joined.
+  const calls = script.replace(/\\\n\s*/g, ' ').split('\n').map((l) => l.trim()).filter((l) => /^pin_tool\s/.test(l)).map((l) => l.split(/\s+/));
+  for (const tool of BUNDLER_TOOLS) {
+    const c = calls.find((a) => a[1] === tool);
+    if (!c) v.push(`build-linux.sh: ${tool} is not pinned, so tauri's bundler fetches it unverified`);
+    else if (MOVING.test(c[2] ?? '')) v.push(`build-linux.sh: ${tool} is fetched from a moving ref (${c[2]})`);
+    else if (!/^[0-9a-f]{64}$/.test(c[3] ?? '')) v.push(`build-linux.sh: ${tool} has no sha256 pin`);
+  }
+  if (!/^\s*export LDAI_RUNTIME_FILE="\$tauri_tools\/runtime-x86_64"$/m.test(script)) {
+    v.push('build-linux.sh: the pinned runtime is not handed to the appimage plugin (LDAI_RUNTIME_FILE), so appimagetool downloads one');
+  }
+  if (!/cargo install tauri-cli --version "=2\.11\.5" --locked/.test(script)) {
+    v.push("build-linux.sh: tauri-cli is no longer pinned at 2.11.5; re-read that bundler's prepare_tools and update BUNDLER_TOOLS in this test");
+  }
+  // A pin the artifact does not show is a guess: the Linux Verify step checks the shipped runtime.
+  const verify = wf.jobs.get('linux-x86')?.steps.find((s) => s?.name === 'Verify artifacts');
+  if (!/^\s*python3 - "\$app" "\$HOME\/\.cache\/tauri\/runtime-x86_64" <<'PY'$/m.test(verify?.run ?? '')) {
+    v.push('job linux-x86, step "Verify artifacts": does not check that the shipped AppImage carries the pinned runtime');
+  }
+  return v;
+}
+
+const SCRIPT = fs.readFileSync(BUILD_LINUX, 'utf8');
+
+test('everything the release fetches to build with is pinned', () => {
+  const v = unpinnedDownloads(WF, SCRIPT);
+  assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
+});
+
+test('an unpinned download planted in the workflow or build-linux.sh is reported', () => {
+  const sha = '02cb101ec7c40f2c49e1d9714d64511d8e1b74de';
+  const cases = [
+    [plant(TEXT, `dtolnay/rust-toolchain@${sha}  # master, 2026-09-12\n        with:\n          toolchain: 1.93.1\n\n      # Pinned as every other`, `dtolnay/rust-toolchain@master\n        with:\n          toolchain: 1.93.1\n\n      # Pinned as every other`), SCRIPT, 'names a branch or a tag, not a commit'],
+    [plant(TEXT, '          echo "$EC_SHA256  /tmp/ec.zip" | sha256sum -c -\n', ''), SCRIPT, 'step "Validate the EPUB (W3C epubcheck — the shipped download must be valid)": downloads with no checksum check'],
+    [plant(TEXT, ' --require-hashes -r "$RUNNER_TEMP/manual-requirements.txt"', ' -r "$RUNNER_TEMP/manual-requirements.txt"'), SCRIPT, 'pip installs without --require-hashes'],
+    [TEXT, plant(SCRIPT, 'linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/', 'linuxdeploy-plugin-gstreamer/master/'), 'linuxdeploy-plugin-gstreamer.sh is fetched from a moving ref'],
+    [TEXT, plant(SCRIPT, '  export LDAI_RUNTIME_FILE="$tauri_tools/runtime-x86_64"\n', ''), 'the pinned runtime is not handed to the appimage plugin'],
+    [plant(TEXT, `"$HOME/.cache/tauri/runtime-x86_64" <<'PY'`, `"$HOME/.cache/tauri/runtime" <<'PY'`), SCRIPT, 'does not check that the shipped AppImage carries the pinned runtime'],
+  ];
+  for (const [text, script, needle] of cases) {
+    const v = unpinnedDownloads(readWorkflow(text), script);
+    assert.ok(v.some((x) => x.includes(needle)), `a planted unpinned download was not reported. Expected:\n  ${needle}\ngot:\n  ${v.join('\n  ') || '(nothing)'}`);
+  }
 });
 
 test('the reader refuses what it cannot place', () => {
