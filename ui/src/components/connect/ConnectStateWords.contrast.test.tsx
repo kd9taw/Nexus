@@ -314,6 +314,10 @@ const SHIPPED = RULES.filter(
 
 if (RULES.filter((r) => !SHIPPED.includes(r)).some((r) => r.decls.some((d) => d.prop.startsWith('--'))))
   throw new Error('a light-theme state-word rule declares a custom property: the shipped sheet no longer shares the token table')
+/** The accent's words as they shipped: the light-theme rules on them, removed (the same token table, like SHIPPED's). */
+const ACCENT_SHIPPED = RULES.filter((r) => !(r.selector.startsWith("[data-theme='light'] ") && /\.(cp-muf|sat-when|mini-spectrum-src)\b/.test(r.selector)))
+if (RULES.filter((r) => !ACCENT_SHIPPED.includes(r)).some((r) => r.decls.some((d) => d.prop.startsWith('--'))))
+  throw new Error('a light-theme accent-word rule declares a custom property: the shipped sheet no longer shares the token table')
 
 const role = (id: string) => PALETTE_ROLES.find((x) => x.id === id)!
 const PRESETS: Record<string, string>[] = [
@@ -355,7 +359,7 @@ const winnerMode = (mode: Mode): Mode => mode.split(' ').filter((p, i) => i === 
 
 /** The rules this change added declare no custom property, so the shipped sheet's tokens ARE the sheet's:
  *  one token table serves both (the token walk is the expensive half of every lookup). */
-const TOKEN_RULES = (rules: Rule[]) => (rules === SHIPPED ? RULES : rules)
+const TOKEN_RULES = (rules: Rule[]) => (rules === SHIPPED || rules === ACCENT_SHIPPED ? RULES : rules)
 /** Each prefix of a word's chain, keyed once: its shape, and the custom properties its nodes set inline. */
 const KEYS = new WeakMap<Word, { shape: string[]; vars: string[] }>()
 function keysOf(w: Word) {
@@ -481,6 +485,8 @@ function wordOf(rules: Rule[], mode: Mode, w: Word) {
   const fg = [0, 1, 2].map((k) => Math.round(raw[k] * o + bg[k] * (1 - o))) as unknown as Rgb
   return { raw, fg, bg, ratio: contrast(fg, bg), ink }
 }
+/** The theme's accent, resolved at the word. */
+const accentAt = (rules: Rule[], mode: Mode, w: Word, at: number) => hex(colourAt(rules, mode, w, at, 'var(--accent)', [0, 0, 0]))
 /** The theme's own inks at the word: its text colours and its accent. Anything else is a state colour. */
 const NEUTRAL = ['--text', '--text-dim', '--text-faint', '--accent', '--accent-ink', '--readout']
 const neutralAt = (rules: Rule[], mode: Mode, w: Word, at: number) =>
@@ -500,9 +506,11 @@ function unreadable(rules: Rule[], words: Word[], modes: readonly Mode[]): strin
 describe('every state-coloured word on Connect reads in every light theme', () => {
   let all: Word[] = []
   let state: Word[] = []
+  let accent: Word[] = []
   beforeAll(async () => {
     all = await renderAll()
     state = all.filter((w) => shown(RULES, 'dark', w) && !neutralAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at).has(hex(wordOf(RULES, 'dark', w).raw)))
+    accent = all.filter((w) => shown(RULES, 'dark', w) && hex(wordOf(RULES, 'dark', w).raw) === accentAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at))
   }, 120_000)
 
   // THE INVENTORY: every kind of state word on Connect, each in every state the data above puts it in. Exact,
@@ -597,6 +605,59 @@ describe('every state-coloured word on Connect reads in every light theme', () =
         if (contrast(c, under) < 3) low.push(`${w.what} ${mode}: the border ${hex(c)} on ${hex(under)} = ${contrast(c, under).toFixed(2)}:1`)
       }
     expect(low).toEqual([])
+  }, 60_000)
+
+  // THE ACCENT'S WORDS (operator, 2026-09-30: "Ink, accent as the mark"). A word Connect letters in the theme's accent: the
+  // MUF, Satellite Passes' next pass time, the scope's source badge and the openings' note. The accent was tuned as a
+  // mark, and as lettering on the light page it read 4.25:1 (Chrome), so a word that did takes the theme's ink in the
+  // light themes and keeps the accent as its underline. The census is the standard dark theme's again, where their ink is
+  // the accent, and it is exact.
+  const ACCENT_INVENTORY = ['.mini-spectrum-src', '.opening-note', '.sat-when', 'strong']
+  /** The light themes, and the standard light theme under each accent preset: the accent is these words' own colour. */
+  const ACCENT_LIGHT: Mode[] = [...LIGHT, ...role('accent').presets.slice(1).map((p) => withRoles('light', { accent: p.id }))]
+  const ownOf = (w: Word) => {
+    const own = w.nodes[w.nodes.length - 1]
+    return own.classList.length ? `.${[...own.classList].join('.')}` : own.tagName.toLowerCase()
+  }
+  it('every word lettered in the accent reads 4.5:1 in every light theme and accent, and one that left it keeps the accent as its underline', () => {
+    expect([...new Set(accent.map(ownOf))].sort()).toEqual(ACCENT_INVENTORY)
+    const low: string[] = []
+    for (const w of accent)
+      for (const mode of ACCENT_LIGHT) {
+        if (!shown(RULES, mode, w)) continue
+        const { fg, bg, ratio, raw, ink } = wordOf(RULES, mode, w)
+        if (ratio < 4.5) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+        if (hex(raw) === accentAt(RULES, mode, w, ink.at)) continue
+        const i = w.chain.length - 1
+        const mark = declAt(RULES, mode, w, i, 'text-decoration-line') === 'underline' ? declAt(RULES, mode, w, i, 'text-decoration-color') : null
+        if (mark !== 'var(--accent)') {
+          low.push(`${w.what} ${mode}: lettered in ${hex(raw)}, and the accent is not its underline (${mark})`)
+          continue
+        }
+        const c = colourAt(RULES, mode, w, i, mark, bg)
+        if (contrast(c, bg) < 3) low.push(`${w.what} ${mode}: the underline ${hex(c)} on ${hex(bg)} = ${contrast(c, bg).toFixed(2)}:1`)
+      }
+    expect(low).toEqual([])
+  }, 120_000)
+
+  it('in every dark theme each word lettered in the accent keeps it, with no underline', () => {
+    const moved: string[] = []
+    for (const w of accent)
+      for (const mode of DARK) {
+        const now = wordOf(RULES, mode, w)
+        if (hex(now.raw) !== accentAt(RULES, mode, w, now.ink.at)) moved.push(`${w.what} ${mode}: lettered in ${hex(now.raw)}, not the accent`)
+        const line = declAt(RULES, mode, w, w.chain.length - 1, 'text-decoration-line', 'text-decoration')
+        if (line && line !== 'none') moved.push(`${w.what} ${mode}: underlined in dark`)
+      }
+    expect(moved).toEqual([])
+  }, 60_000)
+
+  it('FIRES: the accent words as they shipped are caught in the light theme, at the ratio Chrome measured', () => {
+    const found = unreadable(ACCENT_SHIPPED, accent, ['light'])
+    const has = (re: RegExp) => found.some((m) => re.test(m))
+    expect(has(/ outlook \.strong "14\.2 MHz" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the MUF').toBe(true)
+    expect(has(/ satPasses \.sat-when ".*" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the next pass').toBe(true)
+    expect(has(/ scope \.mini-spectrum-src "AUDIO" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the scope badge').toBe(true)
   }, 60_000)
 
   it('the reader itself: its element-by-element tokens are cssCascade.tokensAt, wherever no node sets one inline', () => {

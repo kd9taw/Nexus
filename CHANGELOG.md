@@ -835,6 +835,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
   Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
   before.
+- **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
+  Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
+  source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
+  page. In the light themes they now take the theme's text colour, underlined in the accent. The
+  dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

@@ -2262,6 +2262,20 @@ body.resizing-row {
 [data-theme='light'] .swsc-chip.swsc-major {
   border-color: var(--alert-critical);
 }
+/* Words lettered in the accent (operator, 2026-09-30: "Ink, accent as the mark"): the MUF in Band Outlook and the
+   path panel, Satellite Passes' next pass time and the scope's source badge. The accent was tuned as a mark, and
+   as lettering it reads 4.25:1 on the light page, under the 4.5:1 floor. In the light themes each takes the
+   theme's ink, with the accent kept as its underline. The badge is Connect's scope's; the same component in
+   Settings is not part of this change. */
+[data-theme='light'] .connect-path .cp-muf strong,
+[data-theme='light'] .sat-when,
+[data-theme='light'] .connect .mini-spectrum-src {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
 
 /* Settings ▸ Connections — credential presence + the rolling event log */
