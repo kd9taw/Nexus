@@ -113,8 +113,8 @@ in the middle of your main screen, sized to fit. The window keeps its own layout
 layout picked there leaves the main window's Connect as it was. On Windows the bar also
 has a **Stay behind** button: pressed, the window stays behind your other windows even
 when you click on it, so it can fill a screen behind Nexus without covering the cockpit.
-A click on it still moves the keyboard to it, so click back into Nexus before a keyboard
-shortcut.
+A click on it still moves the keyboard to it: until you click back into Nexus the keyboard
+is the dashboard's, so Esc stops nothing then. The Stop TX button always works.
 
 The panes you can assign:
 
