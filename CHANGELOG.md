@@ -474,6 +474,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   satellite's footprint still shows the part on your side while the satellite itself is behind the
   planet, and "No located stations yet" still shows only while none of your decoded stations has a
   grid. The Flat and Beam maps and the 3D globe are unchanged.
+- **RTTY and PSK: an over that could not go out is dropped, not sent later on its own.** The same
+  rule as CW. When RTTY or PSK could not be sent because transmit was off (for example after
+  leaving the RTTY or PSK screen for FT8 with more typed ahead) or the frequency was outside your
+  license privileges, what was still waiting used to be held, and it went out by itself as soon as
+  transmitting was allowed again. It is now dropped, and that screen's warning line says why. If
+  one of those RTTY overs belonged to an auto-sequencer QSO, the auto QSO stops and says so, as it
+  already did when an over could not be queued. An over left waiting when you move to another
+  screen where transmit stays on (Phone, CW, RTTY or PSK) is still held for your return, as
+  before. Overs you send once transmitting is allowed go out exactly as before, and Stop TX, the
+  watchdog and continuous TX work as they did.
+- **Voice keyer: a message that could not go out is dropped, and a refused one says why.** A
+  message you played on a frequency outside your license privileges did nothing and said nothing;
+  the keyer's "Could not play F1" note now says why, and so do its other failures. A message
+  already waiting when transmit went off (for example after leaving the Phone screen for FT8
+  before it started) or when the dial left your privileges used to be held, and it played by
+  itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
+  transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
