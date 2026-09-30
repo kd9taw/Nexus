@@ -73,7 +73,8 @@ so every frame identifies you.
 
 Everything automatic is gated twice. The first act is the **TX On** latch in the header —
 never remembered across launches. The second is the switch for that kind of transmission:
-**AUTOREPLY** (answers SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS addressed to you),
+**AUTOREPLY** (answers SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS addressed to you,
+and acknowledges a MSG to you or to a group you joined with an ACK, as JS8Call does),
 **RELAY** (passes on messages routed through your callsign and holds MSG TO: traffic),
 **HB ACK** (answers heartbeats with your report) — those three persist in Settings, at
 JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which is
