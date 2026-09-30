@@ -24735,54 +24735,60 @@ mod tests {
         }
     }
 
-    /// ⛔ A REFUSED RTTY OVER IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Same drop
-    /// rule"), on the real loop: an over keys, the next is typed ahead behind it, the RTTY
-    /// section is left while it waits (the latch drops, the queue stays). Held, it keyed the
-    /// moment the operator came back. What radiated is the transcript's own echo, which the
-    /// loop writes only for what it keyed.
+    /// ⛔ LEAVING THE RTTY SCREEN DROPS WHAT WAS TYPED AHEAD (the operator, 2026-09-30: "Drop it
+    /// when you leave"), on the real loop. An over keys, the next is typed ahead behind it, and
+    /// the RTTY section is left while it waits: for Phone, which keeps TX armed and held the over
+    /// until the return keyed it, and for FT8, which lowers TX. The over in flight is left as a
+    /// section change always left it: Phone keeps it on the air, and FT8's lowered TX has the
+    /// loop cut it (the TX-off cut). What radiated is the transcript's own echo, which the loop
+    /// writes only for what it keyed.
     #[test]
-    fn an_rtty_over_refused_with_tx_off_never_keys_when_tx_comes_back() {
-        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
-        {
-            let mut e = engine.lock().unwrap();
-            e.set_operating_mode("rtty", false);
-            e.rtty_send_text("CQ").unwrap();
-            e.rtty_send_text("DE W9XYZ").unwrap();
+    fn an_rtty_over_typed_ahead_never_keys_after_the_rtty_screen_is_left() {
+        for to in ["phone", "digital"] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_operating_mode("rtty", false);
+                e.rtty_send_text("CQ").unwrap();
+                e.rtty_send_text("DE W9XYZ").unwrap();
+            }
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+            assert!(rig.keyed, "{to}: control, the first over keys");
+            engine.lock().unwrap().set_operating_mode(to, false);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            assert_eq!(
+                rig.keyed,
+                to == "phone",
+                "{to}: the over in flight is not as a section change has always left it"
+            );
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 4_000.0);
+            assert_eq!(rtty_sent(&engine), "CQ", "{to}: precondition, the echo");
+            engine.lock().unwrap().set_operating_mode("rtty", false);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
+            assert_eq!(
+                rtty_sent(&engine),
+                "CQ",
+                "{to}: what was typed ahead keyed on the return"
+            );
+            assert!(
+                engine.lock().unwrap().rtty_state().keyer_error.is_some(),
+                "{to}: the RTTY cockpit is told the rest was dropped"
+            );
+            engine.lock().unwrap().rtty_send_text("73").unwrap();
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+            assert_eq!(
+                rtty_sent(&engine),
+                "CQ73",
+                "{to}: a send made on the return keys as before"
+            );
+            assert_eq!(
+                engine.lock().unwrap().rtty_state().keyer_error,
+                None,
+                "{to}: …and the over that keys clears the notice"
+            );
         }
-        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
-        let mut t = 100.0;
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
-        assert!(rig.keyed, "control: the first over keys");
-        engine.lock().unwrap().set_operating_mode("digital", false);
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 4_000.0);
-        assert_eq!(
-            rtty_sent(&engine),
-            "CQ",
-            "precondition: the first over went out"
-        );
-        engine.lock().unwrap().set_operating_mode("rtty", false); // TX armed again
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
-        assert_eq!(
-            rtty_sent(&engine),
-            "CQ",
-            "nothing refused keys when TX comes back"
-        );
-        assert!(
-            engine.lock().unwrap().rtty_state().keyer_error.is_some(),
-            "the RTTY cockpit is told the rest was dropped"
-        );
-        engine.lock().unwrap().rtty_send_text("73").unwrap();
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
-        assert_eq!(
-            rtty_sent(&engine),
-            "CQ73",
-            "a send made once TX is on keys as before"
-        );
-        assert_eq!(
-            engine.lock().unwrap().rtty_state().keyer_error,
-            None,
-            "…and the over that keys clears the notice"
-        );
     }
 
     /// …and outside the licence's privileges: the dial moves out of them while an over waits,
@@ -24828,47 +24834,57 @@ mod tests {
         );
     }
 
-    /// ⛔ …and a refused PSK over, the same rule on the same loop. PSK has no transcript echo,
-    /// so what radiated is the audio the loop played.
+    /// ⛔ …and the PSK screen, the same rule on the same loop, the over in flight left as the RTTY
+    /// test says. PSK has no transcript echo, so what radiated is the audio the loop played.
     #[test]
-    fn a_psk_over_refused_with_tx_off_never_keys_when_tx_comes_back() {
-        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
-        {
-            let mut e = engine.lock().unwrap();
-            e.set_operating_mode("keyboard", false);
-            e.psk_send_text("CQ").unwrap();
-            e.psk_send_text("DE W9XYZ").unwrap();
+    fn a_psk_over_typed_ahead_never_keys_after_the_psk_screen_is_left() {
+        for to in ["phone", "digital"] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_operating_mode("keyboard", false);
+                e.psk_send_text("CQ").unwrap();
+                e.psk_send_text("DE W9XYZ").unwrap();
+            }
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+            assert!(rig.keyed, "{to}: control, the first over keys");
+            let first = backend.played.len();
+            engine.lock().unwrap().set_operating_mode(to, false);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            assert_eq!(
+                rig.keyed,
+                to == "phone",
+                "{to}: the over in flight is not as a section change has always left it"
+            );
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 5_000.0);
+            assert!(!rig.keyed, "{to}: precondition, the first over has ended");
+            let aired = backend.played.len();
+            assert_eq!(aired, first, "{to}: nothing else went out while away");
+            engine.lock().unwrap().set_operating_mode("keyboard", false);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 6_000.0);
+            assert_eq!(
+                backend.played.len(),
+                aired,
+                "{to}: what was typed ahead keyed on the return"
+            );
+            assert!(
+                engine.lock().unwrap().psk_state().keyer_error.is_some(),
+                "{to}: the PSK cockpit is told the rest was dropped"
+            );
+            engine.lock().unwrap().psk_send_text("73").unwrap();
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 7_000.0);
+            assert!(
+                backend.played.len() > aired,
+                "{to}: a send made on the return keys as before"
+            );
+            assert_eq!(
+                engine.lock().unwrap().psk_state().keyer_error,
+                None,
+                "{to}: …and the over that keys clears the notice"
+            );
         }
-        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
-        let mut t = 100.0;
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
-        assert!(rig.keyed, "control: the first over keys");
-        engine.lock().unwrap().set_operating_mode("digital", false);
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 5_000.0);
-        assert!(!rig.keyed, "precondition: the first over has ended");
-        let aired = backend.played.len();
-        engine.lock().unwrap().set_operating_mode("keyboard", false); // TX armed again
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 6_000.0);
-        assert_eq!(
-            backend.played.len(),
-            aired,
-            "nothing refused keys when TX comes back"
-        );
-        assert!(
-            engine.lock().unwrap().psk_state().keyer_error.is_some(),
-            "the PSK cockpit is told the rest was dropped"
-        );
-        engine.lock().unwrap().psk_send_text("73").unwrap();
-        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 7_000.0);
-        assert!(
-            backend.played.len() > aired,
-            "a send made once TX is on keys as before"
-        );
-        assert_eq!(
-            engine.lock().unwrap().psk_state().keyer_error,
-            None,
-            "…and the over that keys clears the notice"
-        );
     }
 
     /// …and outside the licence's privileges, then a same-band tune back in.
