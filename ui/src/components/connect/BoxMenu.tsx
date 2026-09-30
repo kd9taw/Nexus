@@ -1,5 +1,11 @@
 // A Connect box's ⋯ menu — the box's own options, behind ONE control in its head: its text size
-// (A− / A+, 80–160 % of the app's Text size).
+// (A− / A+, 80–160 % of the app's Text size) and "? … in the manual", a link to the manual section
+// that describes it (connect/paneHelp; absent for a pane the manual does not describe yet).
+//
+// The manual link is a real `<a target="_blank">` inside the menu item (Radix `asChild`), so both a
+// click and Enter reach the app's one external-link path (externalLinks.ts opens it in the browser
+// through the `open_external_url` command); in a plain browser — the TV page, the Remote page — the
+// anchor opens a tab by itself. Nothing is fetched until the operator asks.
 //
 // WHY ONE MENU AND NOT A ROW OF BUTTONS. A box head already carries the title, the content picker
 // and ✕, and a Connect column can be 200 px wide (Map first, or a dragged rail). Three more buttons
@@ -21,6 +27,7 @@ export function BoxMenu({
   title,
   textScale,
   onTextScale,
+  helpUrl,
 }: {
   /** The box's name, already translated — the trigger's accessible name says whose menu it is. */
   title: string
@@ -28,6 +35,8 @@ export function BoxMenu({
   textScale: number
   /** Change it. Omitted ⇒ no text-size entries. */
   onTextScale?: (factor: number) => void
+  /** The manual section that describes this box. Null/omitted ⇒ no link. */
+  helpUrl?: string | null
 }) {
   const pct = Math.round(textScale * 100)
   const step = (dir: 1 | -1) => onTextScale?.(Math.round((textScale + dir * BOX_SCALE_STEP) * 100) / 100)
@@ -77,6 +86,17 @@ export function BoxMenu({
                   {t('connect.box.text.larger')}
                 </RM.Item>
               </RM.Group>
+            )}
+            {onTextScale && helpUrl && <RM.Separator className="box-menu-sep" />}
+            {helpUrl && (
+              <RM.Item asChild className="ui-menu-item box-menu-link">
+                <a href={helpUrl} target="_blank" rel="noreferrer" title={t('connect.box.help.title')}>
+                  <span className="box-menu-glyph" aria-hidden="true">
+                    ?
+                  </span>
+                  {t('connect.box.help', { title })}
+                </a>
+              </RM.Item>
             )}
           </div>
         </RM.Content>

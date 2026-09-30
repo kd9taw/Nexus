@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // A CONNECT PANE'S OWN OPTIONS — the ⋯ menu in every pane head (2026-09-29, the operator's picks):
-// the pane's text size (A− / A+, 80–160 %).
+// the pane's text size (A− / A+, 80–160 %) and "? … in the manual", its manual section.
 //
 // ⚠️ THE REAL ConnectView, THE REAL PaneFrame AND THE REAL Radix MENU ARE MOUNTED. Only the backend
 // is stubbed. Every assertion reads the rendered screen or the stored record — a stubbed frame
@@ -29,7 +29,8 @@ vi.mock('../api', async (importOriginal) => ({
   getContests: vi.fn(async () => []),
 }))
 import { ConnectView } from './ConnectView'
-import { SLOT_IDS, type SlotId } from '../features/connectConfig'
+import { DEFAULT_SLOTS, SLOT_IDS, type SlotId } from '../features/connectConfig'
+import { installExternalLinkInterceptor } from '../externalLinks'
 
 const RECORD = 'nexus.panels.connect.main'
 
@@ -188,5 +189,53 @@ describe('a pane’s text size — ⋯ ▸ A− / A+', () => {
     expect(f.style.getPropertyValue('--box-text-scale')).toBe('')
     expect((f.querySelector('.pane-head') as HTMLElement).style.getPropertyValue('--box-text-scale')).toBe('')
     expect(factorOf(container, 'left1')).toBe('1.5')
+  })
+})
+
+describe('a pane’s manual link — ⋯ ▸ ? … in the manual', () => {
+  const link = (menu: HTMLElement) => within(menu).queryByRole('menuitem', { name: / in the manual$/ }) as HTMLAnchorElement | null
+
+  it('a pane the manual describes links to its own section, opening in the browser', async () => {
+    const { container } = await mount()
+    // The default layout: Conditions (left, top) is a row of the pane-grid table; Chase (right, top)
+    // has a section of its own.
+    expect([DEFAULT_SLOTS.left1, DEFAULT_SLOTS.right1], 'control: the default layout').toEqual(['advisory', 'chase'])
+    let a = link(openMenu(container, 'left1'))!
+    expect(a.textContent).toBe('?Conditions in the manual')
+    expect(a.getAttribute('href')).toBe('https://hamradiotools.io/manual/connect#the-pane-grid')
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noreferrer')
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    a = link(openMenu(container, 'right1'))!
+    expect(a.getAttribute('href')).toBe('https://hamradiotools.io/manual/connect#chase-whats-workable-now')
+  })
+
+  it('a pane the manual does not describe has no link — Bands for you, in the default layout', async () => {
+    const { container } = await mount()
+    expect(DEFAULT_SLOTS.left2).toBe('bandTiles')
+    const menu = openMenu(container, 'left2')
+    expect(link(menu)).toBeNull()
+    expect(item(menu, /Larger text/), 'the rest of its menu is there').toBeTruthy()
+  })
+
+  it('the link follows the pane in the slot: pick another pane and the link is its section', async () => {
+    const { container } = await mount()
+    fireEvent.change(frameOf(container, 'left1').querySelector('select')!, { target: { value: 'amp' } })
+    expect(link(openMenu(container, 'left1'))!.getAttribute('href')).toBe('https://hamradiotools.io/manual/connect#the-amplifier-pane')
+  })
+
+  it('a click and Enter both reach the app’s external-link path (the browser opens it, not the window)', async () => {
+    const opened: string[] = []
+    const uninstall = installExternalLinkInterceptor((url) => opened.push(url))
+    try {
+      const { container } = await mount()
+      fireEvent.click(link(openMenu(container, 'bottom2'))!)
+      expect(opened, 'a click').toEqual(['https://hamradiotools.io/manual/connect#the-pane-grid'])
+      const a = link(openMenu(container, 'bottom1'))!
+      fireEvent.keyDown(a, { key: 'Enter' })
+      expect(opened, 'Enter').toEqual(['https://hamradiotools.io/manual/connect#the-pane-grid', 'https://hamradiotools.io/manual/connect#read-an-opening'])
+    } finally {
+      uninstall()
+    }
   })
 })

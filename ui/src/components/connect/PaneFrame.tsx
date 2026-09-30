@@ -21,7 +21,8 @@
 // the ⋯ and ✕ — stays at the app's size, so a box's head is the same height at every size and the
 // strip's row does not jump. The factor is written only when it is not 1: a box at the app's size
 // renders exactly the DOM it rendered before the control existed. Every prop here is optional, so a
-// host that passes none of them gets today's frame.
+// host that passes none of them gets today's frame — plus the ⋯ menu's manual link, which needs no
+// host at all (connect/paneHelp): the ⋯ renders whenever the menu has something in it.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every pane's name
 // arrives already translated from the registry (`panes.tsx`, resolved through getters); the
@@ -31,6 +32,7 @@ import type { CSSProperties } from 'react'
 import { t } from '../../i18n'
 import { PANES, paneById } from './panes'
 import { BoxMenu } from './BoxMenu'
+import { paneHelpUrl } from './paneHelp'
 import type { PaneContext } from './paneContext'
 import type { PaneId, SlotId } from '../../features/connectConfig'
 
@@ -61,6 +63,7 @@ export function PaneFrame({
   if (!def) return null
   const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
   const scale = textScale ?? 1
+  const helpUrl = paneHelpUrl(paneId)
   return (
     <section
       className="pane-frame"
@@ -98,7 +101,9 @@ export function PaneFrame({
               ) : null
             })}
           </select>
-          {onTextScale && <BoxMenu title={def.title} textScale={scale} onTextScale={onTextScale} />}
+          {(onTextScale || helpUrl) && (
+            <BoxMenu title={def.title} textScale={scale} onTextScale={onTextScale} helpUrl={helpUrl} />
+          )}
           {onHide && (
             <button
               type="button"

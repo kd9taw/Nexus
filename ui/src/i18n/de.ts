@@ -4703,6 +4703,8 @@ export const DE: PartialCatalog = {
   "connect.box.text.size": "Textgröße: {{pct}}%",
   "connect.box.text.smaller": "Kleinere Schrift",
   "connect.box.text.larger": "Größere Schrift",
+  "connect.box.help": "{{title}} im Handbuch",
+  "connect.box.help.title": "Öffnet diesen Teil des Handbuchs im Browser",
   "connect.panels.item": "{{title}} · {{where}}",
   "connect.slot.where.left1": "links, oben",
   "connect.slot.where.left2": "links, unten",

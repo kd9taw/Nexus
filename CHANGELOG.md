@@ -166,6 +166,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its size, its header stays as it was, and a pane whose text no longer fits scrolls. Each pane
   keeps its own size in each window, a layout picked from ⊞ Panels keeps the sizes, and **Reset
   layout** puts every pane back at 100%. Layouts saved before this open with every pane at 100%.
+- **Connect: each pane links to its part of the manual.** A pane's **⋯** menu names the pane in
+  the manual, such as **? Space Wx in the manual**, and opens the part of the Nexus manual
+  (hamradiotools.io/manual) that describes it, in your browser. A pane the manual does not describe
+  yet has no link.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

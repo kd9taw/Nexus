@@ -89,7 +89,9 @@ press; the menu stays open and shows the size, so you can press again. Only the
 words change: the pane keeps its place and size, its header stays as it was, and a
 pane whose text no longer fits scrolls. Each pane keeps its own size in each
 window. A layout from the Panels menu keeps the sizes; **Reset layout** puts every
-pane back at 100%.
+pane back at 100%. The same menu has **? … in the manual**, which opens this
+manual in your browser at the part about that pane; a pane this manual does not
+describe yet has no link.
 
 **Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one

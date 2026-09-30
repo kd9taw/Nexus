@@ -7206,6 +7206,9 @@ export const EN = {
   'connect.box.text.size': 'Text size: {{pct}}%',
   'connect.box.text.smaller': 'Smaller text',
   'connect.box.text.larger': 'Larger text',
+  // …and its link to the manual section that describes the pane (connect/paneHelp); the ? glyph stays in the code.
+  'connect.box.help': '{{title}} in the manual',
+  'connect.box.help.title': 'Opens this part of the manual in your browser',
   // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
   // which pane sits in a slot is the operator's pick, so the title alone says nothing about
   // where the space will be taken from.

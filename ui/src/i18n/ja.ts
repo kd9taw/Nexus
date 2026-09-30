@@ -4436,6 +4436,8 @@ export const JA: PartialCatalog = {
   "connect.box.text.size": "文字サイズ：{{pct}}%",
   "connect.box.text.smaller": "文字を小さく",
   "connect.box.text.larger": "文字を大きく",
+  "connect.box.help": "マニュアルの「{{title}}」",
+  "connect.box.help.title": "マニュアルのこの部分をブラウザで開きます",
   "connect.panels.item": "{{title}} · {{where}}",
   "connect.slot.where.left1": "左・上",
   "connect.slot.where.left2": "左・下",
