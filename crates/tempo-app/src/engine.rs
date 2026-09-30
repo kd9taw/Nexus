@@ -1164,6 +1164,16 @@ const CW_REFUSED_PRIVILEGES: &str = "CW not sent: this frequency is outside your
 const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outside your \
      license's CW privileges, so it was dropped.";
 
+/// …and what the RTTY cockpit's warning line says when [`Engine::poll_rtty_one`] drops refused
+/// overs, and when the auto-sequencer stops because one of them was its own.
+const RTTY_REFUSED_TX_OFF: &str = "RTTY stopped: transmit was turned off, so what was still \
+     queued was dropped, not held for later. Send it again when you are ready.";
+const RTTY_REFUSED_PRIVILEGES: &str = "RTTY not sent: this frequency is outside your license \
+     privileges, so what was queued was dropped, not held for later. Send it again from inside \
+     them.";
+const RTTY_AUTO_REFUSED: &str = "RTTY auto-sequencer stopped — a transmission was refused (the \
+     TX gate closed mid-QSO).";
+
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
 /// [`Engine::ingest`] (Boundary), [`Engine::ingest_early`] (Early), and
@@ -3120,8 +3130,9 @@ pub struct Engine {
     /// and ITA2-filtered). Filled ONLY by [`Engine::rtty_send_text`] — an explicit
     /// operator send — never on arm/launch. The radio loop keys ONE message at a
     /// time via [`Engine::poll_rtty_one`] (gated on tx_enabled + privileges +
-    /// the Rtty operating mode + not tuning), pacing on the real bit-stream
-    /// duration; Stop TX / halt clears this queue so the rest never keys.
+    /// the Rtty operating mode + not tuning; an over the first two refuse is
+    /// dropped there, never held), pacing on the real bit-stream duration;
+    /// Stop TX / halt clears this queue so the rest never keys.
     rtty_queue: VecDeque<String>,
     /// One-shot: abort the RTTY transmission in progress (the loop stops the FSK
     /// keying thread / flushes the AFSK audio ring and unkeys PTT).
@@ -3161,7 +3172,9 @@ pub struct Engine {
     /// [`Engine::rtty_state`]. No TX gate, queue or abort reads it, so nothing here can
     /// key, hold or unkey anything.
     rtty_tx_over: Option<RttyTxOver>,
-    /// An RTTY keyer failure to surface (FSK port wouldn't open / PTT refused).
+    /// An RTTY keyer failure to surface (FSK port wouldn't open / PTT refused), or why
+    /// refused overs were dropped (`poll_rtty_one`). The radio loop rewrites it for every
+    /// over it keys, so an over that keys clears a refusal.
     rtty_keyer_error: Option<String>,
     /// The RTTY auto-sequencer, present ONLY while the operator has flipped Auto
     /// on (`None` = the manual-only behavior). Driven by the RX feed (in
@@ -7342,9 +7355,9 @@ impl Engine {
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
         // …and it ends RTTY's continuous-TX latch. Leaving the section is what
-        // stops RTTY today — `poll_rtty_one` simply stops being called, so the
-        // queue is held and nothing keys. A LATCHED transmitter is already keyed,
-        // so "stop being polled" is not enough: it has to be dropped and unkeyed.
+        // stops RTTY today — `poll_rtty_one` hands out nothing outside the RTTY
+        // section, so nothing queued keys. A LATCHED transmitter is already keyed,
+        // so "hand out nothing" is not enough: it has to be dropped and unkeyed.
         // The per-tick predicate in `poll_rtty_stream` catches this too; this is
         // the explicit half, so the kill does not depend on a tick arriving.
         self.drop_rtty_latch();
@@ -7484,12 +7497,11 @@ impl Engine {
             //
             // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
             // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
-            // their aborts — and a section change is not an operator pressing TX Off. RTTY's
-            // and PSK's queued overs are HELD across a section change and key when the operator
-            // returns to them; `rtty_and_ft8_sequencers_never_key_together` pins exactly that,
-            // and it went red when this was first written the blunt way. CW's are not held:
-            // with the latch down, the loop's next `poll_cw_one` drops them and says so, as it
-            // drops every refused CW send (operator, 2026-09-30). So: lower the latch,
+            // their aborts — and a section change is not an operator pressing TX Off: the over
+            // in flight finishes. PSK's queued overs are HELD across a section change and key
+            // when the operator returns to them. CW's and RTTY's are not held: with the latch
+            // down, the loop's next `poll_cw_one` / `poll_rtty_one` drops them and says so, as
+            // it drops every refused send (operator, 2026-09-30). So: lower the latch,
             // bump the gate generation (an over planned while armed must not commit), and
             // nothing else. One bit changes, and it is the operator's.
             if self.tx_enabled {
@@ -17433,23 +17445,53 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.drop_rtty_latch();
     }
 
-    /// Pop the next queued RTTY MESSAGE for the radio loop to key, or `None` while
-    /// any TX gate is down (Monitor off / outside privileges / not the RTTY section /
-    /// a tune carrier up — the queue is then HELD, so nothing keys unexpectedly; the
-    /// FT8/FT1 sequencer's `poll_tx` is gated off for non-Digital the same way, so
-    /// the two can never key together). One message per call: the loop paces on the
+    /// Pop the next queued RTTY MESSAGE for the radio loop to key, or `None`.
+    ///
+    /// ⛔ A REFUSED OVER IS DROPPED, NEVER HELD (operator, 2026-09-30: "Same drop rule", as
+    /// for CW). With TX off, or with this section's emission outside the licence's privileges
+    /// at the dial, everything queued is dropped, the log says why once, and the cockpit's
+    /// warning line ([`RttyRxState::keyer_error`]) says so. Held, it keyed the moment TX came
+    /// back or the dial was tuned back in. An auto-sequencer over among it ends the auto
+    /// session, as a refused enqueue does ([`Self::apply_rtty_action`]): otherwise the empty
+    /// queue reads as its over sent. `tx_allowed` judges the CURRENT section's emission, so
+    /// it speaks for RTTY only while RTTY owns the rig.
+    ///
+    /// HELD, and not refused, while another section owns the rig (the FT8/FT1 sequencer's
+    /// `poll_tx` is gated off for non-Digital the same way, so the two can never key
+    /// together) or a tune carrier is up. One message per call: the loop paces on the
     /// real bit-stream duration, so a Stop between messages drops the remainder
     /// before it reaches the rig. The wall-clock TX watchdog applies here exactly as
     /// it does to the FT8 slot — past the ceiling it trips BEFORE handing the
     /// message out: TX disarms, the queue drops, and the abort unkeys.
     pub fn poll_rtty_one(&mut self) -> Option<String> {
         use crate::settings::OperatingMode;
-        if !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.settings.operating_mode != OperatingMode::Rtty
-            || self.rtty_queue.is_empty()
-        {
+        if self.rtty_queue.is_empty() {
+            return None;
+        }
+        let in_section = self.settings.operating_mode == OperatingMode::Rtty;
+        let refused = if !self.tx_enabled {
+            Some(("transmit is off", RTTY_REFUSED_TX_OFF))
+        } else if in_section && !self.tx_allowed() {
+            Some((
+                "the dial is outside the licence's privileges",
+                RTTY_REFUSED_PRIVILEGES,
+            ))
+        } else {
+            None
+        };
+        if let Some((why, notice)) = refused {
+            tempo_core::applog::info("tx", &format!("RTTY not keyed: {why} (dropped)"));
+            self.rtty_queue.clear();
+            self.rtty_keyer_error = Some(notice.to_string());
+            if std::mem::take(&mut self.rtty_auto_over) {
+                if let Some(seq) = self.rtty_seq.as_mut() {
+                    seq.abort();
+                }
+                self.rtty_keyer_error = Some(RTTY_AUTO_REFUSED.to_string());
+            }
+            return None;
+        }
+        if self.tuning || !in_section {
             return None;
         }
         // Wall-clock watchdog (WSJT-X semantics): timed from the last operator
@@ -17846,9 +17888,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // mode, with the gate-for-gate table in its doc. Every gate
         // `rtty_tx_gate` checks before a send is re-checked before every chunk,
         // because a latch outlives the moment it was granted and the gates do
-        // not. `poll_rtty_one`'s equivalent gate merely HOLDS the queue; holding
-        // is not an option for a keyed transmitter, so each of these DROPS THE
-        // LATCH and unkeys.
+        // not. `poll_rtty_one`'s equivalent gate HOLDS the queue while another
+        // section or a tune owns the rig; holding is not an option for a keyed
+        // transmitter, so each of these DROPS THE LATCH and unkeys.
         //
         // What stays here is only what is RTTY's: which engine field answers
         // each gate, and what each drop means to this mode's transmitter.
@@ -18155,11 +18197,7 @@ contact yourself."
                 if self.rtty_enqueue(&text, false).is_ok() {
                     self.rtty_auto_over = true;
                 } else {
-                    self.set_rtty_keyer_error(Some(
-                        "RTTY auto-sequencer stopped — a transmission was refused (the TX gate \
-                         closed mid-QSO)."
-                            .to_string(),
-                    ));
+                    self.set_rtty_keyer_error(Some(RTTY_AUTO_REFUSED.to_string()));
                     if let Some(seq) = self.rtty_seq.as_mut() {
                         seq.abort();
                     }
@@ -18705,8 +18743,9 @@ contact yourself."
 
     /// Take the queued SSTV image for the radio loop to stream, or `None` while any TX gate
     /// is down (Monitor off / outside privileges / not Phone / tuning) — the job is then
-    /// HELD (not dropped), so nothing keys unexpectedly, mirroring `poll_rtty_one`'s
-    /// hold-don't-drop. No wall-clock watchdog check here: the over's length is bounded UP
+    /// HELD (not dropped), so nothing keys unexpectedly. (`poll_rtty_one` held too, until the
+    /// operator's 2026-09-30 drop rule for refused RTTY sends; SSTV was not part of it.)
+    /// No wall-clock watchdog check here: the over's length is bounded UP
     /// FRONT by `sstv_send`'s budget, and the loop unkeys unconditionally at the precomputed
     /// `tx_until_ms`, so the watchdog never needs to bite mid-image.
     pub fn poll_sstv_tx(&mut self) -> Option<SstvTxJob> {
@@ -25919,17 +25958,170 @@ mod tests {
                 "no FT8 keying while RTTY owns the rig"
             );
         }
-        // And vice versa: the RTTY queue is HELD while Digital owns the rig.
+        // And vice versa: the RTTY queue keys nothing while Digital owns the rig, even with
+        // TX armed there (FT8's own TX On), so it is the section that holds it.
         e.rtty_send_text("CQ TEST").unwrap();
         e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
         assert_eq!(
             e.poll_rtty_one(),
             None,
             "no RTTY keying while Digital owns the rig"
         );
-        // Back in the RTTY section the held message keys normally.
+    }
+
+    /// Another section owning the rig is a HOLD, not a refusal, and the 2026-09-30 drop rule
+    /// leaves it alone: RTTY to Phone keeps TX armed (both are manual), so an over typed ahead
+    /// waits and keys back in RTTY, as before. Nor does Phone's own gate speak for RTTY: a
+    /// dial where Phone may not key is no reason to drop an RTTY over.
+    #[test]
+    fn an_rtty_over_waiting_while_phone_owns_the_rig_is_held_not_dropped() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
         e.set_operating_mode("rtty", false);
-        assert_eq!(e.poll_rtty_one(), Some("CQ TEST".to_string()));
+        e.set_frequency(14.080, "20m", "LSB");
+        e.rtty_send_text("CQ CQ").unwrap();
+        e.rtty_send_text("DE W9XYZ").unwrap();
+        assert_eq!(e.poll_rtty_one().as_deref(), Some("CQ CQ"));
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled(), "precondition: Phone keeps TX armed");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.080 is no phone frequency"
+        );
+        assert_eq!(e.poll_rtty_one(), None, "nothing RTTY keys in Phone");
+        e.set_operating_mode("rtty", false);
+        assert_eq!(
+            e.poll_rtty_one().as_deref(),
+            Some("DE W9XYZ"),
+            "held by the section, not refused: it keys back in RTTY"
+        );
+        assert_eq!(e.rtty_state().keyer_error, None, "and nothing was dropped");
+    }
+
+    /// ⛔ A REFUSED RTTY OVER IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Same drop rule"),
+    /// as a refused CW send is. Overs typed ahead are queued behind the one keying; leaving the
+    /// RTTY section for FT8 lowers the latch and kept them, and they keyed the moment the
+    /// operator came back.
+    #[test]
+    fn an_rtty_over_refused_with_tx_off_is_dropped_and_does_not_key_when_tx_comes_back() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false); // arms TX, as a manual mode does
+        e.rtty_send_text("CQ CQ").unwrap();
+        e.rtty_send_text("DE W9XYZ").unwrap(); // typed ahead, behind the first
+        assert_eq!(
+            e.poll_rtty_one().as_deref(),
+            Some("CQ CQ"),
+            "control: the first over keys"
+        );
+        e.set_operating_mode("digital", false); // the latch drops, the queue stays
+        assert!(!e.tx_enabled(), "precondition: TX is off");
+        assert_eq!(e.poll_rtty_one(), None, "nothing keys with TX off");
+        e.set_operating_mode("rtty", false); // back to RTTY, which arms TX on entry
+        assert!(e.tx_enabled(), "precondition: TX is on again");
+        assert_eq!(
+            e.poll_rtty_one(),
+            None,
+            "nothing refused keys when TX comes back"
+        );
+        assert_eq!(
+            e.rtty_state().keyer_error.as_deref(),
+            Some(RTTY_REFUSED_TX_OFF),
+            "the RTTY cockpit says the rest was dropped"
+        );
+        e.rtty_send_text("73").unwrap();
+        assert_eq!(
+            e.poll_rtty_one().as_deref(),
+            Some("73"),
+            "a send made once TX is on keys as before"
+        );
+    }
+
+    /// …and outside the licence's privileges: an over queued inside them, then a dial moved
+    /// out of them on the same band, was held and keyed after a tune back in. One notice per
+    /// refusal, not one per poll.
+    #[test]
+    fn an_rtty_over_refused_outside_privileges_is_dropped_and_does_not_key_after_a_tune_in() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.set_frequency(14.080, "20m", "LSB");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.080 is inside a General's data"
+        );
+        e.rtty_send_text("CQ CQ").unwrap();
+        e.rtty_send_text("DE W9XYZ").unwrap();
+        assert_eq!(
+            e.poll_rtty_one().as_deref(),
+            Some("CQ CQ"),
+            "control: the first over keys"
+        );
+        e.set_frequency(14.020, "20m", "LSB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.020 is Extra-only, outside a General's privileges"
+        );
+        assert_eq!(e.poll_rtty_one(), None, "nothing keys outside privileges");
+        e.set_frequency(14.080, "20m", "LSB"); // a same-band tune back in
+        assert_eq!(
+            e.poll_rtty_one(),
+            None,
+            "nothing refused keys after the tune in"
+        );
+        assert_eq!(
+            e.rtty_state().keyer_error.as_deref(),
+            Some(RTTY_REFUSED_PRIVILEGES),
+            "the RTTY cockpit says it was dropped"
+        );
+        // Cleared (as the loop does once an over keys), the notice is not raised again by
+        // polls that find nothing queued, however long a refusal lasts.
+        e.set_rtty_keyer_error(None);
+        e.set_frequency(14.020, "20m", "LSB");
+        for _ in 0..3 {
+            assert_eq!(e.poll_rtty_one(), None);
+        }
+        assert_eq!(
+            e.rtty_state().keyer_error,
+            None,
+            "polls with nothing queued raise nothing"
+        );
+        e.set_frequency(14.080, "20m", "LSB");
+        e.rtty_send_text("73").unwrap();
+        assert_eq!(
+            e.poll_rtty_one().as_deref(),
+            Some("73"),
+            "a send made inside the privileges keys as before"
+        );
+    }
+
+    /// The auto-sequencer's over dropped with the rest ENDS the auto session, as a refused
+    /// enqueue already does. Otherwise the empty queue reads as the over sent
+    /// (`rtty_auto_service`), and the sequencer carries on against a gate that refused it.
+    #[test]
+    fn a_dropped_rtty_auto_sequencer_over_ends_the_auto_session() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true).unwrap();
+        e.rtty_auto_cq().unwrap();
+        assert_eq!(e.rtty_state().seq_state, "calling_cq", "precondition");
+        e.set_operating_mode("digital", false); // TX off with the CQ still queued
+        e.rtty_auto_service();
+        assert_eq!(e.poll_rtty_one(), None, "the CQ does not key");
+        e.rtty_auto_service();
+        assert_eq!(
+            e.rtty_state().seq_state,
+            "idle",
+            "the auto session ends with its dropped over"
+        );
+        assert_eq!(
+            e.rtty_state().keyer_error.as_deref(),
+            Some(RTTY_AUTO_REFUSED),
+            "and the cockpit says why"
+        );
+        e.set_operating_mode("rtty", false);
+        e.rtty_auto_service();
+        assert_eq!(e.poll_rtty_one(), None, "nothing keys when TX comes back");
     }
 
     #[test]
