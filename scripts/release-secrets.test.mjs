@@ -577,6 +577,36 @@ test('a stale row in SEEN is reported', () => {
   reported(planted, `SEEN lists TAURI_SIGNING_PRIVATE_KEY for job sign-updaters, step "${SIGN_STEP}", which does not exist`);
 });
 
+// Every `signer sign` in the workflow, and whether it binds the app version. tauri-cli 2.11.5's
+// bundler puts the version in the signature's trusted comment, which the signature covers;
+// `signer sign` does so only with --app-version. A signature without it is accepted today and
+// refused by any client whose updater sets `requireSignedVersion`, so it is a trap that waits on
+// one config change.
+function unboundSignatures(wf) {
+  const calls = [];
+  for (const j of wf.jobs.values()) {
+    for (const s of j.steps) {
+      for (const line of (s?.run ?? '').split('\n')) {
+        if (!/^\s*#/.test(line) && /\bsigner\s+sign\b/.test(line)) calls.push({ where: `job ${j.id}, step "${s.label}"`, line: line.trim() });
+      }
+    }
+  }
+  return { calls, bare: calls.filter((c) => !/\s--app-version\s+"\$[A-Za-z_]+"\s/.test(c.line)) };
+}
+
+test('every updater signature the release makes binds the app version', () => {
+  const { calls, bare } = unboundSignatures(WF);
+  // The positive control: the NSIS and the AppImage signature are both found.
+  assert.equal(calls.length, 2, `expected the NSIS and the AppImage signature, found:\n${calls.map((c) => c.line).join('\n')}`);
+  assert.deepEqual(bare.map((c) => `${c.where}: ${c.line}`), []);
+});
+
+test('a signature made without the version is reported', () => {
+  const planted = plant(TEXT, '--app-version "$ver" "$exe"', '"$exe"');
+  const { bare } = unboundSignatures(readWorkflow(planted));
+  assert.ok(bare.some((c) => c.line.includes('"$exe"')), `the NSIS signature without --app-version was not reported: ${JSON.stringify(bare)}`);
+});
+
 test('the reader refuses what it cannot place', () => {
   const macos = '    name: macOS (Apple Silicon .dmg)\n    runs-on: macos-14\n';
   const tab = plant(TEXT, macos, `${macos}\tenv: {}\n`);

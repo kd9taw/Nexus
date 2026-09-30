@@ -576,8 +576,11 @@ jobs:
       # applied to both). So with the key present both signatures must appear or this fails; a
       # fork without secrets builds unsigned.
       #
-      # The NSIS signature binds the app version, as the bundler's did (tauri-cli 2.11.5 adds it
-      # there, and `signer sign` only when asked); the AppImage's does not, as it never has.
+      # Both signatures bind the app version, as the bundler's always did (tauri-cli 2.11.5 adds it
+      # there, and `signer sign` only when asked). The AppImage's used not to (1.15.0's has none):
+      # it was made by `signer sign` after the repack, and without the version a client whose
+      # updater ever sets `requireSignedVersion` would refuse every Linux update. The check after
+      # signing reads the version back out of each trusted comment, which the signature covers.
       #
       # Each signature's key id must be the public key's in tauri.conf.json, the one compiled into
       # every client. The bundler only warned when they differed, and a signature by another key
@@ -604,7 +607,7 @@ jobs:
           chmod +x signer/cargo-tauri
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           signer/cargo-tauri signer sign --app-version "$ver" "$exe" >/dev/null
-          signer/cargo-tauri signer sign "$app" >/dev/null
+          signer/cargo-tauri signer sign --app-version "$ver" "$app" >/dev/null
           # A key id: bytes 2..9 of the second line of a minisign key or signature file, which
           # tauri base64-wraps whole.
           keyid() { base64 -d | sed -n 2p | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n'; }
@@ -615,6 +618,11 @@ jobs:
             [ "$f.sig" -nt "$f" ] || { echo "the .sig is older than $f; refusing"; exit 1; }
             got=$(keyid < "$f.sig")
             [ "$got" = "$want" ] || { echo "$f.sig is signed by key $got, but clients trust $want; refusing"; exit 1; }
+            # The trusted comment is "timestamp:…<TAB>file:…<TAB>version:…", the version last.
+            case "$(base64 -d < "$f.sig" | sed -n 3p)" in
+              *$'\t'"version:$ver") ;;
+              *) echo "$f.sig does not bind version $ver; refusing"; exit 1 ;;
+            esac
             cp "$f.sig" sigs/
           done
           echo "signed for self-update with key $want (version $ver):"; ls -l sigs/
