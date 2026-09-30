@@ -15973,7 +15973,8 @@ struct SstvStateDto {
     tx_elapsed_secs: f32,
     tx_total_secs: f32,
     /// Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
-    /// or outside the licence's privileges): the cockpit's warning line. Absent otherwise.
+    /// or outside the licence's privileges), or why the radio loop cut short the one going out
+    /// (`Engine::sstv_tx_cut`): the cockpit's warning line. Absent otherwise.
     /// DESKTOP ONLY: the Remote strips it (`remote_service::application`), because the hosted
     /// page reads this sample against an exact key list and refuses one with a key it lacks.
     #[serde(skip_serializing_if = "Option::is_none")]

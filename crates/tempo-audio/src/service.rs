@@ -9512,7 +9512,12 @@ impl RadioLoop {
                 }
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_sstv_sending(false);
+                    if abort {
+                        eng.set_sstv_sending(false);
+                    } else {
+                        // Nothing told the engine this picture was stopping: say why.
+                        eng.sstv_tx_cut(true);
+                    }
                 }
             } else if orphaned {
                 crate::civ::diag::note(
@@ -9525,7 +9530,7 @@ impl RadioLoop {
                 self.tune_queued_ms = 0.0;
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_sstv_sending(false);
+                    eng.sstv_tx_cut(false);
                 }
             }
             // Start a new image ONLY when the transmitter is otherwise idle — SSTV shares
@@ -26003,6 +26008,12 @@ mod tests {
             !engine.lock().unwrap().sstv_sending(),
             "the SSTV cockpit no longer says sending"
         );
+        assert!(
+            engine.lock().unwrap().sstv_tx_notice().is_some_and(
+                |n| n.contains("transmit was turned off while the picture was going out")
+            ),
+            "the SSTV cockpit says transmit went off under the picture"
+        );
     }
 
     /// …and a cut that reaches only the shared PTT hold ends the picture too. CW's Stop arms the
@@ -26033,6 +26044,14 @@ mod tests {
         assert!(
             !engine.lock().unwrap().sstv_sending(),
             "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .sstv_tx_notice()
+                .is_some_and(|n| n.contains("ended elsewhere")),
+            "the SSTV cockpit says another stop ended the picture"
         );
     }
 
@@ -26071,6 +26090,14 @@ mod tests {
         assert!(
             !engine.lock().unwrap().sstv_sending(),
             "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .sstv_tx_notice()
+                .is_some_and(|n| n.contains("ended elsewhere")),
+            "the SSTV cockpit says another stop ended the picture"
         );
         assert!(rig.keyed && state.tuning_keyed, "the tune carrier stays up");
         assert_eq!(
@@ -26148,6 +26175,14 @@ mod tests {
         assert!(
             !engine.lock().unwrap().sstv_sending(),
             "the SSTV cockpit no longer says sending"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .sstv_tx_notice()
+                .is_some_and(|n| n.contains("ended elsewhere")),
+            "the SSTV cockpit says another stop ended the picture"
         );
         assert_eq!(
             unkeys(&seen) - unkeyed,

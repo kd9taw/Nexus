@@ -569,6 +569,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as soon as transmitting was allowed again. It is now dropped, and a warning line beside Send
   says why until the next picture goes out. A picture already going out is untouched, and Stop,
   Stop TX and the TX switch work as they did.
+- **SSTV: a picture stops going out when its transmission stops.** Leaving the SSTV screen for FT8
+  while a picture was being sent turned transmit off and dropped PTT, but Nexus went on feeding
+  the rest of the picture to the sound card. On a radio keyed by its audio (VOX, or a data port
+  that keys on audio) that put the radio straight back on the air, and the rest of the picture, up
+  to five minutes of it, went out with transmit off. The same happened when a tune, a radio switch
+  or another screen's Stop ended the transmission part-way through a picture. Now the picture
+  stops with the transmission, at once, and the warning line beside Send says it was stopped and
+  why. SSTV's own Stop, TX Off and Stop TX work as before, and a picture that plays out ends
+  exactly as it did.
 - **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
   beacon, a message or an automatic ack waits a moment until the radio is free to key it.
   Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was
