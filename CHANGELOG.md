@@ -510,6 +510,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after STOP until the antenna reached a heading it was no longer going to, so a stopped antenna
   looked as if it were still turning. They now clear as soon as the rotator confirms the stop. If
   the stop does not reach it, they stay, since the antenna may still be moving.
+- **The rotator guide names the DF9GR ERC entry as Settings does.** Its list of rotator models still
+  called it "DF9GR ERC (az)" after the picker renamed it "DF9GR ERC, DCU-1 mode (az)" to say which
+  of the board's modes it drives, so the guide sent readers looking for an entry that was not there.
+  The list is now checked against the picker, entry by entry.
 - **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
   compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
   cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the

@@ -24,6 +24,8 @@ import { SettingsPanel, ROT_FIXED_BAUD, ROTATOR_MODELS, baudForRotator } from '.
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import rotCaps from './__fixtures__/hamlibRotatorSpeeds.json'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -425,5 +427,22 @@ describe('the Yaesu G-5500 by its own name', () => {
       expect(baudBox().value).toBe(String(rate))
     }
     expect(CAPS.get(603)).toMatchObject({ min: 1200, max: 9600, axes: 'azel', minEl: 0, maxEl: 180 })
+  })
+})
+
+describe('the rotator guide lists the picker as it is', () => {
+  // docs/rigs/rotators.md's "Curated rotator models" table says it is what the dropdown offers, and
+  // it drifted twice: the ERC's DCU-1-mode label (2026-08-29) and the G-5500's entries (2026-09-29)
+  // each changed the picker and left the guide naming entries it no longer had.
+  const guide = readFileSync(resolve(process.cwd(), '..', 'docs', 'rigs', 'rotators.md'), 'utf8')
+  const table = guide.split('## Curated rotator models')[1]?.split('\n## ')[0] ?? ''
+  const rows = [...table.matchAll(/^\| (.+?) \| (\d+) \|$/gm)].map((m) => ({ label: m[1], model: Number(m[2]) }))
+
+  it('finds the table (a renamed heading must not empty this check)', () => {
+    expect(rows.length).toBeGreaterThan(10)
+  })
+
+  it("names every entry exactly as the picker does, in the picker's order", () => {
+    expect(rows).toEqual(ROTATOR_MODELS.map((r) => ({ label: r.label, model: r.model })))
   })
 })
