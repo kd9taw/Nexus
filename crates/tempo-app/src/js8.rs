@@ -93,9 +93,9 @@ impl Engine {
             },
             callsign_aging_min: s.js8_callsign_aging_min,
             // A group JS8Call will not let be joined (@APRSIS, @JS8NET) is never joined here,
-            // whatever put it in Settings: an older Nexus accepted one, and the Remote can write
-            // the list. Settings keeps it as written, and the panel refuses every Save while one
-            // is in the field.
+            // whatever put it in Settings: an older Nexus accepted one. (The Remote cannot write
+            // the list: `js8Groups` is denied to every Remote write.) Settings keeps it as
+            // written, and the panel refuses every Save while one is in the field.
             groups: s
                 .js8_groups
                 .iter()

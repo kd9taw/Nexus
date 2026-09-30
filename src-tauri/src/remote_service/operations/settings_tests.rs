@@ -216,6 +216,10 @@ fn a_setting_off_the_allow_list_is_denied_before_anything_is_consumed() {
         json!({"clublogApiKey":"secret"}),
         json!({"radios":[]}),
         json!({"contestCheck":"73","serialPort":"COM3"}),
+        // JS8 groups change only at the station, the two JS8Call will not let be joined above all.
+        json!({"js8Groups":["@APRSIS"]}),
+        json!({"js8Groups":["@JS8NET"]}),
+        json!({"contestCheck":"73","js8Groups":["@APRSIS"]}),
         json!({}),
     ] {
         assert_eq!(
