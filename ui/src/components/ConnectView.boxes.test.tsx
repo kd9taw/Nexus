@@ -210,11 +210,11 @@ describe('a pane’s manual link — ⋯ ▸ ? … in the manual', () => {
     expect(a.getAttribute('href')).toBe('https://hamradiotools.io/manual/connect#chase-whats-workable-now')
   })
 
-  it('a pane the manual does not describe has no link — Bands for you, in the default layout', async () => {
+  it('Bands for you, in the default layout, links to its row in the pane grid', async () => {
     const { container } = await mount()
     expect(DEFAULT_SLOTS.left2).toBe('bandTiles')
     const menu = openMenu(container, 'left2')
-    expect(link(menu)).toBeNull()
+    expect(link(menu)?.getAttribute('href')).toBe('https://hamradiotools.io/manual/connect#the-pane-grid')
     expect(item(menu, /Larger text/), 'the rest of its menu is there').toBeTruthy()
   })
 

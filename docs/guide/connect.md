@@ -181,10 +181,13 @@ The panes you can assign:
 |---|---|
 | Conditions | the propagation headline + any warning banners |
 | Band Advisor | every HF band ranked best-first, with plain reasoning |
+| Bands for you | each band as a tile saying Open, Marginal or Closed for you now, with a dot when the band is being heard, ★ on the best band and a ring on your radio's band; click a tile to show that band on the map |
 | Selection | detail on the station/spot you clicked, with a ▶ Work button |
 | Band Outlook | modelled workable bands to DX (or the path to a selected call) |
 | Openings | detected band openings around you |
+| Openings Log | every band opening Nexus has detected (6 m and 2 m tropo, sporadic-E, aurora), with its band, kind, start, length, longest path and the most stations heard, kept from one session to the next |
 | Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
+| Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
 | Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Best Band → Region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
@@ -198,6 +201,8 @@ The panes you can assign:
 | Measured MUF | real ionosonde MUF measurements |
 | Satellite Passes | next amateur-satellite passes over your grid |
 | Rotor | rotator control + compass, and the elevation on an az/el rotator (appears once a rotctld is configured) |
+| Contests | upcoming HF and VHF contests from the WA7BNM calendar, grouped as on now, soon, this week and later |
+| Band Scope | a live spectrum of your radio's passband, band noise and signals at a glance; flat while the radio's audio is not reaching Nexus |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
 | Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
 | Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |

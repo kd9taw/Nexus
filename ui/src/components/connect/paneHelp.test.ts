@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { MANUAL_BASE, PANE_HELP, paneHelpUrl } from './paneHelp'
+import { paneById } from './panes'
 import { PANE_IDS, type PaneId } from '../../features/connectConfig'
 
 const slugify = (heading: string) =>
@@ -49,8 +50,8 @@ function anchorsOf(chapter: string): Set<string> {
 
 /** The panes the manual does not describe yet — no row in the Connect chapter's pane table and no
  *  section of their own. Named here so a new pane cannot go without a decision: add it to the manual
- *  and to PANE_HELP, or add it to this list. */
-const NOT_IN_THE_MANUAL: PaneId[] = ['openingsLog', 'kpOutlook', 'bandTiles', 'scope', 'contests']
+ *  and to PANE_HELP, or add it to this list. None today: the last five got their rows (2026-09-30). */
+const NOT_IN_THE_MANUAL: PaneId[] = []
 
 describe('a pane’s manual link', () => {
   it('the slug rule is the published site’s (control: headings whose ids were read off the built manual)', () => {
@@ -74,7 +75,8 @@ describe('a pane’s manual link', () => {
   it('is the published page, #section', () => {
     expect(paneHelpUrl('amp')).toBe('https://hamradiotools.io/manual/connect#the-amplifier-pane')
     expect(paneHelpUrl('spacewx')).toBe(`${MANUAL_BASE}connect#the-pane-grid`)
-    expect(paneHelpUrl('bandTiles'), 'no manual text, no link').toBeNull()
+    expect(paneHelpUrl('bandTiles'), 'the pane in the default layout has its row').toBe(`${MANUAL_BASE}connect#the-pane-grid`)
+    expect(paneHelpUrl('nope' as PaneId), 'no manual text, no link').toBeNull()
   })
 
   it('every pane either has a link or is named as not in the manual yet — never both, never neither', () => {
@@ -84,12 +86,14 @@ describe('a pane’s manual link', () => {
     expect(linked.length + unlinked.length).toBe(PANE_IDS.length)
   })
 
-  it('the panes named as not in the manual really are not in the Connect chapter’s pane table', () => {
-    // The table's first column is each pane's English name; a pane listed as "not in the manual"
-    // that has a row there should have a link instead.
+  it('every pane linked to the pane grid has its row in the Connect chapter’s pane table, and a pane named as not in the manual has none', () => {
+    // The table's first column is each pane's English name: a link to the pane grid for a pane with no
+    // row there would open a page that does not mention it.
     const text = readFileSync(resolve(process.cwd(), '..', 'docs', 'guide', 'connect.md'), 'utf8')
     const rows = new Set([...text.matchAll(/^\| ([^|]+?) \| [^|]+ \|$/gm)].map((m) => m[1].trim()))
     expect(rows.has('Space Wx'), 'control: the table was read').toBe(true)
-    for (const name of ['Bands for you', 'Openings Log', 'Kp outlook', 'Band Scope', 'Contests']) expect(rows.has(name), name).toBe(false)
+    const gridPanes = PANE_IDS.filter((id) => PANE_HELP[id]?.anchor === 'the-pane-grid')
+    expect(gridPanes.filter((id) => !rows.has(paneById(id)!.title)), 'linked to the pane grid, with no row in it').toEqual([])
+    for (const id of NOT_IN_THE_MANUAL) expect(rows.has(paneById(id)!.title), id).toBe(false)
   })
 })

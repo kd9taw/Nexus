@@ -275,8 +275,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layout** puts every pane back at 100%. Layouts saved before this open with every pane at 100%.
 - **Connect: each pane links to its part of the manual.** A pane's **⋯** menu names the pane in
   the manual, such as **? Space Wx in the manual**, and opens the part of the Nexus manual
-  (hamradiotools.io/manual) that describes it, in your browser. A pane the manual does not describe
-  yet has no link.
+  (hamradiotools.io/manual) that describes it, in your browser. Every Connect pane has one: the
+  manual's table of Connect's panes now also describes Bands for you, Openings Log, Kp outlook,
+  Band Scope and Contests.
 - **Connect: several panes in one slot, as tabs.** A pane's **⋯** menu has **Add a tab**: pick a
   pane and it joins that slot, shown, and the slot's title becomes a row of tabs, one per pane; in a
   narrow column the tabs get a row of their own, under the pane's buttons. Click a tab to switch, or

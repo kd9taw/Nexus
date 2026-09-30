@@ -27,11 +27,14 @@ const GRID: PaneHelp = { chapter: 'connect', anchor: 'the-pane-grid' }
 export const PANE_HELP: Partial<Record<PaneId, PaneHelp>> = {
   advisory: GRID,
   bandAdvisor: GRID,
+  bandTiles: GRID,
   // "Track propagation to a specific call" is about exactly these two panes.
   selection: { chapter: 'connect', anchor: 'track-propagation-to-a-specific-call' },
   outlook: { chapter: 'connect', anchor: 'track-propagation-to-a-specific-call' },
   openings: { chapter: 'connect', anchor: 'read-an-opening' },
+  openingsLog: GRID,
   spacewx: GRID,
+  kpOutlook: GRID,
   getout: GRID,
   bestband: GRID,
   activity: GRID,
@@ -45,6 +48,8 @@ export const PANE_HELP: Partial<Record<PaneId, PaneHelp>> = {
   measuredMuf: GRID,
   satPasses: GRID,
   rotor: GRID,
+  contests: GRID,
+  scope: GRID,
   amp: { chapter: 'connect', anchor: 'the-amplifier-pane' },
   clock: GRID,
   spots: GRID,
