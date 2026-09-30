@@ -19655,6 +19655,23 @@ button.cq-skiptx1.on {
 .pota-hunt-btn:active {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
 }
+/* THE BOARD'S HUNT AND PARK REFERENCE IN THE LIGHT THEMES (operator, 2026-09-30: "Separate fix, every host"). Both
+   are lettered in the accent, which was tuned as a mark: as lettering the HUNT read 3.45:1 on its own tint (3.21:1 on
+   the hunted row) and the reference 4.25:1 on the row, in Chrome. In the light themes each takes the theme's ink and
+   keeps the accent: HUNT on its tint and on its border, now at full strength, and the reference as its underline. The
+   board is the same in the POTA / SOTA view, its pop-out and the Remote page; Program's Tune and Add buttons borrow the
+   HUNT look and are not part of this. Dark is untouched. PotaSotaView.contrast.test.tsx holds it. */
+[data-theme='light'] .pota-view .pota-hunt-btn {
+  color: var(--text);
+  border-color: var(--accent);
+}
+[data-theme='light'] .pota-view .pota-spot-ref {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
 
 /* need-chip colors for Pota/Sota NeedTags in the Needed board */
 .need-pota {
