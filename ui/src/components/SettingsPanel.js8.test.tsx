@@ -173,6 +173,8 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     const fs = await openJs8()
     const groups = control(fs, 'Groups') as HTMLInputElement
     fireEvent.change(groups, { target: { value: 'ares, @skcc ,,' } })
+    // The box keeps the typed text until it is left (#370), then shows the list as it was read.
+    fireEvent.blur(groups)
     expect(groups.value).toBe('@ARES, @SKCC')
   })
 
