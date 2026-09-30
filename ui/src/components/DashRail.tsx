@@ -221,41 +221,46 @@ function DashRailBody(p: DashRailProps) {
   const shown = DASH_SLOT_IDS.filter((s) => panels.stateOf(s) !== 'removed')
   return (
     <>
-      <header className="dash-rail-head">
+      {/* `dash-head` is the head's content hook for styles.css, which may not name the structural
+          classes (the `dash-boxes` pattern below). The ⊞ and ✕ are one group, so where the head
+          wraps they go under the title together. */}
+      <header className="dash-rail-head dash-head">
         <span className="dash-rail-title">{t('dashRail.title')}</span>
-        {/* The restore surface for a closed box, and Reset: always in the rail's head, so with every
-            box closed the way back is still one click away. */}
-        <PanelsMenu
-          items={DASH_SLOT_IDS.map((s) => ({
-            id: s,
-            label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
-            state: panels.stateOf(s),
-          }))}
-          onToggle={change((id: string, show: boolean) => panels.setPanelState(id as DashSlotId, show ? 'docked' : 'removed'))}
-          onUndo={() => {
-            const before = beforeReset.current
-            beforeReset.current = null
-            panels.undo()
-            if (before) restoreSlots(before)
-          }}
-          canUndo={panels.canUndo}
-          onReset={() => {
-            beforeReset.current = slots
-            panels.reset()
-            resetSlots()
-          }}
-          // The rail's own menu: its ✕ is the off switch here, so it offers no "Dashboard rail" row.
-          offersRail={false}
-        />
-        <button
-          type="button"
-          className="pane-close"
-          onClick={p.onHide}
-          aria-label={t('dashRail.hide.label')}
-          title={t('dashRail.hide.title')}
-        >
-          ✕
-        </button>
+        <div className="dash-rail-acts">
+          {/* The restore surface for a closed box, and Reset: always in the rail's head, so with every
+              box closed the way back is still one click away. */}
+          <PanelsMenu
+            items={DASH_SLOT_IDS.map((s) => ({
+              id: s,
+              label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
+              state: panels.stateOf(s),
+            }))}
+            onToggle={change((id: string, show: boolean) => panels.setPanelState(id as DashSlotId, show ? 'docked' : 'removed'))}
+            onUndo={() => {
+              const before = beforeReset.current
+              beforeReset.current = null
+              panels.undo()
+              if (before) restoreSlots(before)
+            }}
+            canUndo={panels.canUndo}
+            onReset={() => {
+              beforeReset.current = slots
+              panels.reset()
+              resetSlots()
+            }}
+            // The rail's own menu: its ✕ is the off switch here, so it offers no "Dashboard rail" row.
+            offersRail={false}
+          />
+          <button
+            type="button"
+            className="pane-close"
+            onClick={p.onHide}
+            aria-label={t('dashRail.hide.label')}
+            title={t('dashRail.hide.title')}
+          >
+            ✕
+          </button>
+        </div>
       </header>
       <div className="dash-rail-col dash-boxes">
         {shown.map((s, i) => {

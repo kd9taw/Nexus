@@ -553,13 +553,25 @@
   width: 10px;
   margin: 0;
 }
-/* The head — the title, the rail's own ⊞ menu and its ✕: content height, always. */
+/* The head — the title, then the rail's own ⊞ menu and its ✕ as one group: content height, always.
+   It WRAPS: where the title and the group do not fit on one line (the 200 px floor, or a label grown
+   by a hidden box — "⊞ Bereiche · 1 ausgeblendet"), the group goes under the title, at the rail's
+   right edge. On one line the ✕ went past the window's edge and the page scrolled sideways (measured
+   in German, Spanish and French at 1366×768 and 1920×1080). */
 .dash-rail-head {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+.dash-rail-acts {
+  flex: 0 1 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 /* The boxes: a flex column split by each frame's share (the frame's inline
    `flex: var(--connect-share) 1 0`, exactly Connect's rail), a divider in the gap between two. */

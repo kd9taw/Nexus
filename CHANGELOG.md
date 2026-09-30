@@ -764,6 +764,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panels now always leave it at least 360 pixels, about a phone's width. When they have to
   give way, the panel you moved last keeps its width. A double-click on one of these dividers
   now resets only that panel; Reset layout still resets both.
+- **Connect's Getting Out box in a narrow column.** At a Connect rail's narrowest (200 pixels),
+  the line beside the compass that says where you are heard strongest ran past the box's edge and
+  was cut off. It now moves under the compass when there is no room beside it.
 
 ### Corrections to 1.15.0
 
