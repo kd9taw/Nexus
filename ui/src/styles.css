@@ -19595,6 +19595,21 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--text-faint) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
 }
+/* The row's badges in the light themes, as HUNT and the reference: NEW PARK (the accent on its own tint, 3.36:1) and
+   BAND OPEN (a fixed green on its own, 1.66:1, in Chrome) take the ink with their colour on their border at full
+   strength, BAND OPEN's being the theme's open-band colour; WORKED TODAY, a fact about the log and not a mark, takes the
+   dim ink (the faint one read 3.93:1 on its tint). Dark is untouched. PotaSotaView.contrast.test.tsx holds them. */
+[data-theme='light'] .pota-view .pota-badge-new {
+  color: var(--text);
+  border-color: var(--accent);
+}
+[data-theme='light'] .pota-view .pota-badge-open {
+  color: var(--text);
+  border-color: var(--band-open);
+}
+[data-theme='light'] .pota-view .pota-badge-worked {
+  color: var(--text-dim);
+}
 .pota-spot-line2 {
   display: flex;
   align-items: baseline;
