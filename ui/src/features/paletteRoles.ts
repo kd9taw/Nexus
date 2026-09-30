@@ -306,7 +306,7 @@ const AMBER: PaletteRole = {
   labelKey: 'palette.amber.label',
   hintKey: 'palette.amber.hint',
   tokens: AMBER_TOKENS,
-  aliases: ['--state-ok'],
+  aliases: ['--state-ok', '--state-warn'],
   swatch: '--snr-marginal',
   hue: [65, 110],
   dimsAtNight: false,

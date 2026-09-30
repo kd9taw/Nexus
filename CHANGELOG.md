@@ -952,6 +952,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
   Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
   as before.
+- **Need chips are easy to read in the light themes, wherever they appear.** The NEW ONE, ZONE,
+  BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the Call
+  Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
+  lettered their word in the need's own colour, which was hard to read in every light theme; a
+  DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
+  Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
+  before.
+- **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
+  Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
+  source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
+  page. In the light themes they now take the theme's text colour, underlined in the accent. The
+  dark themes look exactly as before.
+- **Closed bands and the NEW ONE chip are easy to read in the dark themes.** The Band Advisor
+  faded a closed band's row, and Band Outlook a closed mode chip, by making them see-through, which
+  left the row's "Closed" and its reason and the struck-through mode very hard to read in the dark
+  themes (and the mode chip in the light ones too). They now fade by their colour instead, and a
+  closed band's name in the 24-hour chart and the Best Band table takes the same dimmer grey. The
+  NEW ONE need chip letters its word in the theme's text colour in every theme, with its magenta
+  kept on the chip.
+- **The Kp outlook and the TV page use the theme's own warning colours.** The Kp outlook's bars
+  and storm line, and the TV page's "stale" and "no link" chips, were drawn in a fixed amber and
+  red in every theme, whatever the theme or the amber colour picked in Settings. They now take the
+  theme's warning and critical colours: in the dark themes the amber is a little lighter and the
+  storm red becomes the critical orange, and in the light themes the bars are dark enough to see.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
