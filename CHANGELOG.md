@@ -467,6 +467,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station's grid, its callbook position, or the centre of its country when nothing closer is known.
   The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
   aims at the country centre.
+- **The S-meter and the receive controls come back on a radio that answers slowly (#385,
+  #376).** Nexus reads the radio's settings back a few at a time and stops when a poll has used
+  its time. Each poll started again at the top of the list, so on a radio that takes a while to
+  answer each read it never reached the bottom. The Yaesu FTX-1 is one: its Hamlib driver waits
+  50 ms after every command. There the S-meter stayed blank, and the Receiver pane listed RF,
+  NB, NR, the notches, AGC and SQL under "Not on this radio" although the radio has all of them.
+  The radio's mode, the VOX, COMP and monitor switches and the monitor level were never read
+  either, and a receive filter width you picked was never sent. A poll that runs out of time now
+  hands the rest of the list to the next one, so every setting gets its turn. A radio that
+  answers quickly is read exactly as before. Not yet checked on the air: on an FTX-1, the
+  S-meter should move within a few seconds of connecting, and the Receiver pane should show RF,
+  NB, NR, the notches, AGC and SQL.
+- **Nexus no longer turns a TS-590S down to 5 W (#381).** Nexus reads the radio's power back so
+  the power slider follows the radio's own knob. On some radios the Hamlib driver answers that
+  read by setting the power to learn its range: it turns the radio up to full power for an
+  instant and then leaves it at its minimum, 5 W on a TS-590S. It did this on every connect and
+  after every mode change, so switching to FT8 or RTTY did it again. Nexus no longer asks these
+  radios for their power: the Kenwood TS-590S, TS-590SG, TS-2000, TS-50S, TS-450S and TS-930, the
+  TRC-80, the Elecraft K2, the Hilberling PT-8000A, the QRP Labs QCX/QDX, the (tr)uSDX, the FX4,
+  SDRuno and SDR Console. A power you set in Nexus still goes to the radio and still stays under
+  your per-mode limits. On these radios the slider no longer follows the knob, so a power turned
+  up at the radio is not pulled back under a limit. Not yet checked on the air: on a TS-590S, set
+  80 W at the radio, connect Nexus, and switch to FT8 and then RTTY; the radio should still be at
+  80 W.
+- **Yaesu FTX-1: Nexus no longer sends the three commands its Hamlib driver gets wrong (#385).**
+  Checked against Yaesu's own FTX-1 CAT reference, the Hamlib driver Nexus uses for the FTX-1
+  turns three of Nexus's controls into different commands. The monitor switch becomes MOX, which
+  makes the radio transmit. The monitor level becomes the monitor's on/off switch. The ATU button
+  changes the radio's TUNER SELECT menu to INT (FAST) and tunes nothing. No control in Nexus sent
+  the monitor switch yet, but the ATU button did, and the monitor level would have now that the
+  radio's settings are all read. On an FTX-1, Nexus now sends none of the three: there is no ATU
+  button (press TUNE on the radio), and the Transmitter pane lists MON under "Not on this radio"
+  although the radio has a monitor, so set it on the radio. Everything else is sent as before.
+  Not yet checked on the air: on an FTX-1, there should be no ATU button and no MON slider, and
+  the radio's TUNER SELECT menu should stay as you set it.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
