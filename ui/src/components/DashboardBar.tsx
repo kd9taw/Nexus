@@ -11,8 +11,9 @@
 // TWO SEAMS, on purpose:
 //   · `clock` — THE CLOCK BOX PLUGS IN HERE (Connect's clock box, built separately). Until it
 //     does, the bar draws `DashClock`, today's UTC + local readout.
-//   · `barIndices` — the list the indices come from. SSN joins it between Kp and A once the
-//     snapshot carries one (NOAA's daily solar indices).
+//   · `barIndices` — the list the indices come from. SSN joins it between Kp and A from NOAA's
+//     daily solar indices, which are their own fetch, not a snapshot field: the newest day with a
+//     count, which is normally yesterday's, so it is shown as that day's.
 //
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
@@ -44,7 +45,7 @@ export interface BarIndex {
  * The indices from a live or cached snapshot, rounded exactly as the Space Wx gauges round them
  * (whole numbers, the X-ray class without "-class"), so the bar and the box never disagree. The
  * hover words are the gauges' own impact lines. Order: SFI, K, (SSN), A, as a wall clock reads
- * them, then X-ray and the solar wind, which has a dash while the DSCOVR feed is out.
+ * them, then X-ray and the solar-wind speed, which is a dash while DSCOVR's plasma feed is out.
  */
 export function barIndices(wx: SpaceWxView): BarIndex[] {
   return [
@@ -54,7 +55,9 @@ export function barIndices(wx: SpaceWxView): BarIndex[] {
     { key: NAME.xray, value: wx.xrayClass.replace('-class', ''), title: xrayImpact(wx.xrayClass).text },
     {
       key: NAME.sw,
-      value: wx.solarWind ? wx.solarWind.speedKms.toFixed(0) : DASH,
+      // 0 is not a reading: propagation::solar_wind::assemble keeps Bz and fills the speed with 0
+      // when DSCOVR's plasma file is missing, and the solar wind is never 0 km/s.
+      value: wx.solarWind && wx.solarWind.speedKms > 0 ? wx.solarWind.speedKms.toFixed(0) : DASH,
       title: t('dash.index.sw.title'),
     },
   ]

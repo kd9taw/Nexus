@@ -132,6 +132,16 @@ describe('the bar', () => {
     expect(indexValue('SFI')).toBe('97')
   })
 
+  it('DSCOVR’s magnetometer answered but its plasma feed did not: speed 0 is no reading, so SW is a dash, never "0"', () => {
+    // propagation::solar_wind::assemble keeps Bz and fills speed and density with 0 when the plasma
+    // file is missing (pinned there by assemble_survives_missing_plasma). The solar wind is never
+    // 0 km/s, so a 0 is the feed's absence, and the bar must not print it as a reading.
+    const noPlasma = { ...WX, solarWind: { bzNt: -6, btNt: 7, speedKms: 0, density: 0 } }
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ spaceWx: noPlasma })} />)
+    expect(indexValue('SW')).toBe('—')
+    expect(indexValue('SFI'), 'control: the other indices still show').toBe('97')
+  })
+
   it('before the first snapshot, and on one that carries no space weather, nothing is invented and nothing throws', () => {
     const { rerender } = render(<DashboardBar call="" grid="" prop={null} />)
     expect(indexValue('SFI')).toBe('—')
