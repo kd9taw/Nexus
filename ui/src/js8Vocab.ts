@@ -213,6 +213,27 @@ function js8BaseCall(call: string): string {
 }
 
 /**
+ * The calls with an unread message to me in the inbox — to my call or its base, from that call —
+ * which is JS8Call's `m_rxInboxCountCache` as `refreshInboxCounts` counts it (mainwindow.cpp:
+ * 9404-9416). JS8Call flags such a station ⚑ and lifts it to the top of its call list
+ * (:10199-10207, :10246-10251), and callsign aging keeps it.
+ */
+export function js8UnreadFrom(inbox: readonly Js8InboxEntry[], myCall: string): Set<string> {
+  const me = myCall.trim().toUpperCase()
+  const toMe = (to: string) => to !== '' && (to === me || to === js8BaseCall(me))
+  return new Set(
+    inbox.filter((e) => e.state === 'unread' && toMe(e.to.trim().toUpperCase())).map((e) => e.from),
+  )
+}
+
+/** JS8Call's "pin messages to the top" (mainwindow.cpp:10199-10207): the stations with an unread
+ *  message to me first, the rest after, each keeping the order it had — a stable partition. */
+export function js8UnreadFirst<T extends { call: string }>(rows: readonly T[], unreadFrom: ReadonlySet<string>): T[] {
+  if (unreadFrom.size === 0) return [...rows]
+  return [...rows.filter((r) => unreadFrom.has(r.call)), ...rows.filter((r) => !unreadFrom.has(r.call))]
+}
+
+/**
  * The Stations list under JS8Call's callsign aging (mainwindow.cpp:10209-10233). With an aging of
  * `agingMin` minutes (0, JS8Call's default, is off: `CallsignAging`, Configuration.cpp:1853), a
  * call last heard that many whole minutes ago or more (`utcTimestamp.secsTo(now) / 60 >=
@@ -226,11 +247,7 @@ export function js8ListedStations(
   o: { agingMin: number; nowMs: number; selectedCall: string; myCall: string },
 ): Js8Heard[] {
   if (!(o.agingMin > 0)) return [...stations]
-  const me = o.myCall.trim().toUpperCase()
-  const toMe = (to: string) => to !== '' && (to === me || to === js8BaseCall(me))
-  const unreadFrom = new Set(
-    inbox.filter((e) => e.state === 'unread' && toMe(e.to.trim().toUpperCase())).map((e) => e.from),
-  )
+  const unreadFrom = js8UnreadFrom(inbox, o.myCall)
   return stations.filter(
     (h) => h.call === o.selectedCall || unreadFrom.has(h.call) || Math.trunc((o.nowMs - h.lastMs) / 60_000) < o.agingMin,
   )

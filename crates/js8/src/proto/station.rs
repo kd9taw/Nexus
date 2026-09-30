@@ -41,6 +41,10 @@
 //! - Store-and-forward: `MSG TO:` stores a `Store` inbox row keyed to the base callsign; the next
 //!   heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and marks it
 //!   `Delivered`.
+//! - A `MSG` to me or a joined group (never `@ALLCALL`) is filed `Unread` in my inbox, as
+//!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133). JS8Call also queues
+//!   `<from> ACK` for it (:9139); this station does NOT, so filing it transmits nothing. My mail
+//!   (`Unread`/`Read`) is bounded apart from mail held for others and never expires.
 //! - Idle watchdog: on trip, stop TX and turn autoreply/relay/HB OFF, clear the outbox, surface a
 //!   toast — `tx_enabled` (the engine's latch) is NOT touched.
 use crate::phy::{Speed, Word87, I3};
@@ -73,7 +77,8 @@ const MAX_PATH_HOPS: usize = 8;
 
 // Store-and-forward puts a stranger's text in our memory. Cap the entry count AND the total
 // stored bytes, and expire at 48 h — upstream's group-message lifetime. Over a cap, drop the
-// OLDEST and toast; never silently. `heard` is one row per station: a busy band holds a few
+// OLDEST and toast; never silently. A MSG to me is the operator's own mail: it has the same caps,
+// counted apart (so it can never push out mail held for someone else), and no expiry. `heard` is one row per station: a busy band holds a few
 // hundred, so cap at 500 and evict least-recently-heard. `allcall_replied` records a reply time
 // per callsign; past the reply interval it carries no information, so it self-prunes.
 const MAX_INBOX: usize = 100;
@@ -441,6 +446,12 @@ impl Station {
                 self.handle_query_msg(m, mine, now_ms, &mut actions);
                 return actions;
             }
+            // A MSG to me or a group I joined is filed UNREAD (JS8Call's `d.cmd == " MSG" &&
+            // !isAllCall`, mainwindow.cpp:9121, past the "to me, a group or @ALLCALL" gate at
+            // :8715). JS8Call then queues `<from> ACK` (:9139); nothing is queued here.
+            if cmd == Command::Msg && mine {
+                self.file_msg_to_me(m, now_ms, &mut actions);
+            }
             // Never an @ALLCALL query: JS8Call's SNR?/INFO?/STATUS?/GRID?/HEARING? replies each
             // carry `!isAllCall` (mainwindow.cpp:8834, :8839, :8849, :8859, :8869).
             if self.cfg.autoreply
@@ -508,32 +519,66 @@ impl Station {
         }
     }
 
-    /// Expire inbox entries older than 48 h, then, while over the count or byte cap, drop the
-    /// OLDEST (by `at_ms`) and toast — never silently. Returns whether anything changed.
+    /// Expire mail HELD for someone else (`Store`, `Delivered`) older than 48 h, then, while
+    /// either half of the inbox is over the count or byte cap, drop that half's OLDEST entry (by
+    /// `at_ms`) and toast — never silently. The halves are counted apart so that a flood of MSGs
+    /// to me can never push out a message held for another station, which would change what a
+    /// later `QUERY MSGS` is answered. My own mail (`Unread`, `Read`) does not expire: JS8Call
+    /// keeps a MSG to me until the operator deletes it.
     fn prune_inbox(&mut self, now_ms: u64, actions: &mut Vec<StationAction>) {
         let before = self.inbox.len();
         self.inbox
-            .retain(|e| now_ms.saturating_sub(e.at_ms) < INBOX_TTL_MS);
+            .retain(|e| is_my_mail(e.state) || now_ms.saturating_sub(e.at_ms) < INBOX_TTL_MS);
         let mut evicted = before != self.inbox.len();
-        while self.inbox.len() > MAX_INBOX || self.inbox_bytes() > MAX_INBOX_BYTES {
-            let Some((idx, _)) = self.inbox.iter().enumerate().min_by_key(|(_, e)| e.at_ms) else {
-                break;
-            };
-            self.inbox.remove(idx);
-            evicted = true;
+        let mut mine_evicted = false;
+        for mine in [false, true] {
+            while self.inbox_count(mine) > MAX_INBOX || self.inbox_bytes(mine) > MAX_INBOX_BYTES {
+                let Some((idx, _)) = self
+                    .inbox
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| is_my_mail(e.state) == mine)
+                    .min_by_key(|(_, e)| e.at_ms)
+                else {
+                    break;
+                };
+                self.inbox.remove(idx);
+                if mine {
+                    mine_evicted = true;
+                } else {
+                    evicted = true;
+                }
+            }
+        }
+        if evicted || mine_evicted {
+            actions.push(StationAction::InboxChanged);
         }
         if evicted {
-            actions.push(StationAction::InboxChanged);
             actions.push(StationAction::Toast {
                 text: "Inbox full: oldest stored messages evicted".into(),
                 directed_to_me: false,
             });
         }
+        if mine_evicted {
+            actions.push(StationAction::Toast {
+                text: "Inbox full: oldest messages to you removed".into(),
+                directed_to_me: false,
+            });
+        }
     }
 
-    fn inbox_bytes(&self) -> usize {
+    /// How many entries one half of the inbox holds (`mine`: my mail, else mail held for others).
+    fn inbox_count(&self, mine: bool) -> usize {
         self.inbox
             .iter()
+            .filter(|e| is_my_mail(e.state) == mine)
+            .count()
+    }
+
+    fn inbox_bytes(&self, mine: bool) -> usize {
+        self.inbox
+            .iter()
+            .filter(|e| is_my_mail(e.state) == mine)
             .map(|e| {
                 e.from.len()
                     + e.to.len()
@@ -691,6 +736,30 @@ impl Station {
         });
         actions.push(StationAction::InboxChanged);
         self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
+    }
+
+    /// A MSG to me (or a group I joined) into my inbox as `Unread`: JS8Call's
+    /// `addCommandToMyInbox` → `addCommandToStorage("UNREAD", d)` (mainwindow.cpp:9462-9467),
+    /// with its PATH (`parseRelayPathCallsigns`, :9127).
+    fn file_msg_to_me(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
+        let from = clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase();
+        let text = clamp_str(m.text.trim(), MAX_TEXT_LEN);
+        let path = relay_path(&from, &text);
+        let id = self.next_inbox_id;
+        self.next_inbox_id += 1;
+        self.inbox.push(InboxEntry {
+            id,
+            from,
+            to: clamp_str(&m.to_text, MAX_CALL_LEN),
+            text,
+            path,
+            state: InboxState::Unread,
+            at_ms: now_ms,
+            freq_hz: m.freq_hz,
+            snr_db: m.snr_db,
+        });
+        actions.push(StationAction::InboxChanged);
+        self.prune_inbox(now_ms, actions);
     }
 
     /// `mine`: addressed to my call or a group I joined (not @ALLCALL, not another station).
@@ -1502,6 +1571,70 @@ fn is_query_msg(m: &Message) -> bool {
 }
 
 /// Parse the `n` from a `QUERY MSG n` body.
+/// The operator's own mail (a MSG to me, filed `Unread`, and what they have `Read`), as against
+/// mail held for another station (`Store`, `Delivered`).
+fn is_my_mail(state: InboxState) -> bool {
+    matches!(state, InboxState::Unread | InboxState::Read)
+}
+
+/// JS8Call's `parseRelayPathCallsigns` (mainwindow.cpp:9568-9579): the sender, then every call
+/// named after a space-separated `*DE*` or `VIA` in the text, the last one named first. The call
+/// is the token's run of callsign characters, kept when it has the pattern's shape: an optional
+/// prefix of one to four characters and `/`, the base (one or two characters, a digit, up to
+/// three letters) and an optional `/` suffix of one to four characters.
+fn relay_path(from: &str, text: &str) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut calls: Vec<String> = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        // `\s(*DE*|VIA)\s`: a marker with a word before it and one after it.
+        if i == 0 || !(*w == "*DE*" || *w == "VIA") {
+            continue;
+        }
+        let Some(next) = words.get(i + 1) else {
+            continue;
+        };
+        let call: String = next
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '/')
+            .collect();
+        if relay_call_shape(&call) {
+            calls.insert(0, call);
+        }
+    }
+    calls.insert(0, from.to_string());
+    calls
+}
+
+/// The callsign shape `parseRelayPathCallsigns` matches (mainwindow.cpp:9570):
+/// `(prefix/)?base(/suffix)?`, the base being `([0-9A-Z])?([0-9A-Z])([0-9])([A-Z]){0,3}`.
+fn relay_call_shape(call: &str) -> bool {
+    let alnum = |s: &str, max: usize| {
+        !s.is_empty()
+            && s.len() <= max
+            && s.bytes()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    };
+    let base = |s: &str| {
+        let b = s.as_bytes();
+        (1..=2).any(|lead| {
+            b.len() > lead
+                && b[..lead]
+                    .iter()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && b[lead].is_ascii_digit()
+                && b.len() - lead - 1 <= 3
+                && b[lead + 1..].iter().all(|c| c.is_ascii_uppercase())
+        })
+    };
+    let parts: Vec<&str> = call.split('/').collect();
+    match parts.as_slice() {
+        [b] => base(b),
+        [a, b] => (alnum(a, 4) && base(b)) || (base(a) && alnum(b, 4)),
+        [p, b, x] => alnum(p, 4) && base(b) && alnum(x, 4),
+        _ => false,
+    }
+}
+
 fn query_msg_id(m: &Message) -> Option<u32> {
     let t = m.text.trim();
     let rest = t.strip_prefix("MSG ").or_else(|| t.strip_prefix("MSGS "))?;
@@ -3030,6 +3163,207 @@ mod tests {
         assert!(
             s2.inbox().is_empty(),
             "48 h expiry did not reclaim the entry"
+        );
+    }
+
+    /// ⭐ A MSG TO ME IS FILED UNREAD, as JS8Call's `addCommandToMyInbox` files it
+    /// (mainwindow.cpp:9121-9133, :9462-9467): who from, to whom, the text and when, at the
+    /// offset and SNR it was heard. Nothing is sent for it: JS8Call also queues `<from> ACK`
+    /// (:9139) and Nexus does not, so no frame, no pending reply.
+    #[test]
+    fn a_msg_to_me_is_filed_unread_and_nothing_is_sent_for_it() {
+        let mut s = Station::new(cfg());
+        let acts = s.on_event(
+            &directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::Msg),
+                None,
+                "HELLO FROM OHIO",
+                -7,
+            ),
+            5_000,
+        );
+        assert_eq!(s.inbox().len(), 1, "the MSG was not filed");
+        let e = &s.inbox()[0];
+        assert_eq!(
+            (e.from.as_str(), e.to.as_str(), e.text.as_str(), e.state),
+            ("W1AW", "KD9TAW", "HELLO FROM OHIO", InboxState::Unread)
+        );
+        assert_eq!((e.at_ms, e.freq_hz, e.snr_db), (5_000, 1500.0, -7));
+        assert_eq!(
+            e.path,
+            vec!["W1AW".to_string()],
+            "JS8Call's PATH is the sender when nothing relayed it"
+        );
+        assert!(
+            acts.iter()
+                .any(|a| matches!(a, StationAction::InboxChanged)),
+            "the journal is not told"
+        );
+        assert!(
+            !acts.iter().any(|a| matches!(
+                a,
+                StationAction::Queued { .. } | StationAction::ReplyPending { .. }
+            )),
+            "something was queued for a MSG: {acts:?}"
+        );
+        assert_eq!((s.outbox_len(), s.pending_len()), (0, 0));
+        assert!(
+            drain(&mut s, 60_000).is_none(),
+            "no ACK, and nothing else, goes out"
+        );
+    }
+
+    /// …and a MSG to a group I joined (JS8Call's `isGroupCall`, :8584, :8715). Never one on
+    /// @ALLCALL (`!isAllCall`, :9121), to another station, or to a group I have not joined.
+    #[test]
+    fn a_msg_is_filed_for_me_and_my_groups_only() {
+        let mut c = cfg();
+        c.groups = vec!["@FUN".into()];
+        let mut s = Station::new(c);
+        for (to, text) in [
+            ("@FUN", "GROUP HELLO"),
+            ("@ALLCALL", "TO EVERYONE"),
+            ("K1ABC", "NOT FOR ME"),
+            ("@OTHER", "NOT MY GROUP"),
+        ] {
+            s.on_event(
+                &directed("W1AW", to, Some(Command::Msg), None, text, -5),
+                1_000,
+            );
+        }
+        let filed: Vec<_> = s
+            .inbox()
+            .iter()
+            .map(|e| (e.to.as_str(), e.text.as_str(), e.state))
+            .collect();
+        assert_eq!(
+            filed,
+            [("@FUN", "GROUP HELLO", InboxState::Unread)],
+            "filed for me and my groups only"
+        );
+    }
+
+    /// The PATH JS8Call keeps with it (`parseRelayPathCallsigns`, :9568-9579): the sender, then
+    /// each call named after `*DE*` or `VIA`, the last one named first.
+    #[test]
+    fn a_relayed_msg_keeps_its_relay_path() {
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "OH8STN",
+                "KD9TAW",
+                Some(Command::Msg),
+                None,
+                "HELLO BRAVE SOUL *DE* N0JDS",
+                -5,
+            ),
+            1_000,
+        );
+        s.on_event(
+            &directed(
+                "OH8STN",
+                "KD9TAW",
+                Some(Command::Msg),
+                None,
+                "QRV *DE* N0JDS VIA K1ABC",
+                -5,
+            ),
+            2_000,
+        );
+        s.on_event(
+            &directed(
+                "OH8STN",
+                "KD9TAW",
+                Some(Command::Msg),
+                None,
+                "*DE* N0JDS SAYS VIA NOBODY HERE",
+                -5,
+            ),
+            3_000,
+        );
+        let paths: Vec<Vec<String>> = s.inbox().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            paths,
+            [
+                vec!["OH8STN".to_string(), "N0JDS".to_string()],
+                vec![
+                    "OH8STN".to_string(),
+                    "K1ABC".to_string(),
+                    "N0JDS".to_string()
+                ],
+                // A marker opening the text has no space before it, and NOBODY is no callsign.
+                vec!["OH8STN".to_string()],
+            ],
+            "the relay paths"
+        );
+    }
+
+    /// My mail is bounded apart from mail held for someone else. A flood of MSGs to me is capped
+    /// on its own, oldest first, and says so; it never pushes out a message held for another
+    /// station, which would change what a later QUERY MSGS is answered. And my mail does not
+    /// expire at 48 h: JS8Call keeps it until the operator deletes it.
+    #[test]
+    fn my_mail_is_bounded_apart_from_mail_held_for_others_and_does_not_expire() {
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC HELD FOR YOU",
+                -5,
+            ),
+            1_000,
+        );
+        let mut said = false;
+        for i in 0..150u32 {
+            let acts = s.on_event(
+                &directed(
+                    "N0XYZ",
+                    "KD9TAW",
+                    Some(Command::Msg),
+                    None,
+                    &format!("HI {i}"),
+                    -5,
+                ),
+                2_000 + u64::from(i),
+            );
+            said |= acts
+                .iter()
+                .any(|a| matches!(a, StationAction::Toast { text, .. } if text.contains("to you")));
+        }
+        let count =
+            |s: &Station, st: InboxState| s.inbox().iter().filter(|e| e.state == st).count();
+        assert_eq!(
+            count(&s, InboxState::Store),
+            1,
+            "a flood of MSGs to me pushed out the message held for K1ABC"
+        );
+        assert_eq!(
+            count(&s, InboxState::Unread),
+            100,
+            "my mail is capped at 100"
+        );
+        assert!(said, "my mail's eviction was never said");
+        assert!(
+            s.inbox().iter().any(|e| e.text == "HI 149")
+                && !s.inbox().iter().any(|e| e.text == "HI 49"),
+            "the oldest went first"
+        );
+        // Every entry is now over 48 h old.
+        s.tick(10_000 + 48 * 60 * 60 * 1000);
+        assert_eq!(
+            count(&s, InboxState::Store),
+            0,
+            "held mail still expires at 48 h"
+        );
+        assert_eq!(
+            count(&s, InboxState::Unread),
+            100,
+            "my mail does not expire"
         );
     }
 

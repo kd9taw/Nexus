@@ -456,6 +456,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
+  you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
+  relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of
+  the list, just under any station you pinned with ★, and a notice says a new message arrived.
+  Mark it read or delete it in the Inbox. Before, a message to you went by in the activity list
+  and was kept nowhere, although the Inbox said such messages appear there. Nothing is sent back:
+  JS8Call also answers such a message with an ACK, and Nexus does not. Messages to you stay until
+  you delete them (the newest 100 are kept); messages held for other stations still go after 48
+  hours, and a flood of messages to you can never push one of those out.
 - **JS8: the Stations pane shows each station's offset the way JS8Call does.** The offset is whole
   hertz with the fraction dropped, so a station at 1508.9 Hz reads 1508 Hz, where it used to be
   rounded up to 1509. It now matches the Band activity pane and JS8Call's own call list.

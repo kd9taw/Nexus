@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,240 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,242 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -48,7 +48,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | POTA / SOTA | 24 / 9 | Parks and Summits On The Air — programme names. |
 | CSV | 24 | File format. |
 | CHIRP | 23 | The radio-programming program. |
-| UTC | 23 | The time standard. Never "TUC". |
+| UTC | 24 | The time standard. Never "TUC". |
 | PSK / PSK31 | 23 / 8 | Mode names. |
 | QSY | 22 | Q-code: change frequency. |
 | SmartSDR / FlexRadio | 22 / 9 | Product names. |

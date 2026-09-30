@@ -8396,6 +8396,7 @@ export const EN = {
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
   'js8.station.sendGrid.title': 'Send your grid square {{grid}} to {{call}}',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+  'js8.station.unread.title': 'Unread message for you from {{call}}, in the Inbox',
   'js8.station.pin.title': 'Pin {{call}} to the top of this list',
   'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
   'js8.station.distance.title': 'Great-circle distance to {{grid}}, from your grid square',
@@ -8414,6 +8415,7 @@ export const EN = {
   'js8.inbox.delete.label': 'Delete',
   'js8.inbox.delete.title': 'Delete this message from the inbox',
   'js8.inbox.failed': 'Inbox change refused',
+  'js8.inbox.new': 'New message from {{from}} at {{time}} UTC, in the Inbox',
 
   // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
   'js8.dock.aria': 'JS8 composer',

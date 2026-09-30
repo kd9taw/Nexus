@@ -301,6 +301,39 @@ describe('the Stations list under JS8Call’s callsign aging', () => {
   })
 })
 
+// A MSG to me is filed UNREAD, and JS8Call shows it in its call list (mainwindow.cpp:10199-10251):
+// ⚑ "Message Available" on the station, and the station lifted to the top of the list.
+describe('a station with an unread message for me', () => {
+  const calls = () =>
+    Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
+  const unread = (from: string, state: 'unread' | 'read' = 'unread') => ({
+    id: 7, from, to: 'KD9TAW', text: 'HELLO', path: [from], state, atMs: 1_757_000_020_000, freqHz: 900, snrDb: -19,
+  })
+  it('is flagged ⚑ and listed first; one without a message is not flagged', async () => {
+    state.current = { ...js8Fixture(), inbox: [unread('N0GRD')] }
+    await renderCockpit()
+    expect(calls(), 'N0GRD, with an unread message, heads the list').toEqual(['N0GRD', 'W0IND'])
+    const flag = Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).find((c) => c.textContent === '⚑')
+    expect(flag, 'no ⚑ on the station with an unread message').toBeTruthy()
+    expect(flag!.getAttribute('title')).toMatch(/Unread message for you from N0GRD/)
+    expect(
+      Array.from(stationRow('W0IND').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑'),
+      'W0IND has no message and no flag',
+    ).toBe(false)
+  })
+  it('a message read is neither flagged nor lifted, and a ★ pin still comes first', async () => {
+    state.current = { ...js8Fixture(), inbox: [unread('N0GRD', 'read')] }
+    await renderCockpit()
+    expect(calls(), 'read: the engine’s order').toEqual(['W0IND', 'N0GRD'])
+    expect(Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑')).toBe(false)
+    cleanup()
+    window.localStorage.setItem(JS8_PINS_KEY, 'W0IND')
+    state.current = { ...js8Fixture(), inbox: [unread('N0GRD')] }
+    await renderCockpit()
+    expect(calls(), 'the operator’s ★ pin, then the message').toEqual(['W0IND', 'N0GRD'])
+  })
+})
+
 describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () => {
   it('is a CockpitPaneFrame inside the region, one row per offset, ordered by offset', async () => {
     await renderCockpit()

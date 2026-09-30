@@ -81,6 +81,8 @@ import {
   TX_PLATE,
   ageLabel,
   bandActivityByOffset,
+  js8UnreadFirst,
+  js8UnreadFrom,
   countBits,
   dtLabel,
   estimateFrames,
@@ -221,6 +223,27 @@ export function Js8Cockpit({
     }
     idleTrippedRef.current = tripped
   }, [js8?.idleTripped, js8?.idleLimitMin])
+
+  // A MSG to me announces itself, as JS8Call's "New Message Received" box does
+  // (mainwindow.cpp:9143-9154): ONCE per message. What the first poll finds is taken as seen, so
+  // mail filed before this view opened (or restored from the journal) does not toast.
+  const seenInboxRef = useRef<Set<number> | null>(null)
+  useEffect(() => {
+    const inbox = js8?.inbox
+    if (!inbox) return
+    const seen = seenInboxRef.current
+    if (seen === null) {
+      seenInboxRef.current = new Set(inbox.map((e) => e.id))
+      return
+    }
+    for (const e of inbox) {
+      if (seen.has(e.id)) continue
+      seen.add(e.id)
+      if (e.state === 'unread') {
+        pushToast(t('js8.inbox.new', { from: e.from, time: utcClock(e.atMs) }), 'info', 8000)
+      }
+    }
+  }, [js8?.inbox])
 
   // ENTER the mode on the rising edge of `active` (works unconfigured, spec §Works unconfigured):
   // `js8_enter` sets the tier and the dial. ⚠️ RX ONLY, and the ENGINE guarantees it — the call
@@ -537,6 +560,9 @@ export function Js8Cockpit({
       })
     : []
 
+  // ⚑ and the lift to the top for a station with an unread message to me (js8Vocab.js8UnreadFrom).
+  const unreadFrom = js8 ? js8UnreadFrom(js8.inbox, snap?.mycall ?? '') : new Set<string>()
+
   const hbTitle =
     js8?.hbOn && js8.armed.hb
       ? t('js8.dock.hb.title.armed')
@@ -737,7 +763,7 @@ export function Js8Cockpit({
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
-          sortPinnedFirst(listedStations, pins).map((h) => {
+          sortPinnedFirst(js8UnreadFirst(listedStations, unreadFrom), pins).map((h) => {
             // The DX columns JS8Call carries (mainwindow.cpp:10296-10362): distance and
             // azimuth from MY grid to theirs, then the logbook's answer about this call. The
             // grid falls back to the one in the log when the station has not sent one — the
@@ -809,6 +835,11 @@ export function Js8Cockpit({
               {det?.comment && (
                 <span className="js8-cell js8-opcomment" title={t('js8.station.comment.title')}>
                   {det.comment}
+                </span>
+              )}
+              {unreadFrom.has(h.call) && (
+                <span className="js8-chip" title={t('js8.station.unread.title', { call: h.call })}>
+                  ⚑
                 </span>
               )}
               {h.lastHb && <span className="js8-chip">{HB}</span>}
