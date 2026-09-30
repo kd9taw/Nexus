@@ -2263,9 +2263,18 @@ export async function probeCatPorts(radioId?: number): Promise<CatProbeResult> {
   return invoke<CatProbeResult>('probe_cat_ports', { radioId })
 }
 
-/** Point the antenna rotator at an absolute azimuth (degrees) via rotctld. */
-export async function pointRotator(azDeg: number): Promise<void> {
-  return invoke('point_rotator', { azDeg })
+/** Point the antenna rotator at an absolute azimuth (degrees) via rotctld. An az/el rotator's
+ *  elevation stays where it is, unless `elDeg` gives the one to go with it (the Rotor pane, while
+ *  an elevation it set is still on its way). Without it the call is exactly `{ azDeg }`, the only
+ *  shape the Remote transport takes. */
+export async function pointRotator(azDeg: number, elDeg?: number): Promise<void> {
+  return invoke('point_rotator', elDeg === undefined ? { azDeg } : { azDeg, elDeg })
+}
+
+/** Point an az/el rotator at an elevation (degrees, inside the range its backend declares). The
+ *  azimuth stays where it is, unless `azDeg` gives the one to go with it. Desktop only. */
+export async function pointRotatorElevation(elDeg: number, azDeg?: number): Promise<void> {
+  return invoke('point_rotator_elevation', azDeg === undefined ? { elDeg } : { elDeg, azDeg })
 }
 
 /** Point the rotator at a callsign's station: its own grid or callbook position when Nexus

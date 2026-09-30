@@ -14275,34 +14275,125 @@ mod rotctld_supervisor_tests {
         let answering = rotator_state(&format!("127.0.0.1:{port}"));
         assert_eq!(answering.reading, "position");
         assert!(answering.az_deg.is_some());
+        // Hamlib's dummy is an az/el rotator, 0–90°, and says so through the real daemon.
+        assert_eq!(answering.el_range, Some(Some([0.0, 90.0])));
+        assert!(answering.el_deg.is_some());
         drop(owner);
         // Nothing listening: the controller is off, or rotctld is not running.
         assert_eq!(
             rotator_state(&format!("127.0.0.1:{port}")),
             RotatorStateDto {
                 az_deg: None,
-                reading: "notAnswering"
+                reading: "notAnswering",
+                el_deg: None,
+                el_range: None,
             }
         );
         // A backend with no position to give (the Hy-Gain DCU-1 answers every `p` this way)
         // is not a silent controller: pointing and STOP still work there.
-        let dcu1 = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        let addr = dcu1.local_addr().expect("its address").to_string();
-        let daemon = std::thread::spawn(move || {
-            use std::io::{BufRead, Write};
-            let (mut sock, _) = dcu1.accept().expect("the read connects");
-            let mut line = String::new();
-            let _ = std::io::BufReader::new(sock.try_clone().expect("clone")).read_line(&mut line);
-            let _ = sock.write_all(b"RPRT -11\n");
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => DCU1_STATE,
+            _ => "RPRT -11\n",
         });
         assert_eq!(
             rotator_state(&addr),
             RotatorStateDto {
                 az_deg: None,
-                reading: "noPosition"
+                reading: "noPosition",
+                el_deg: None,
+                el_range: Some(None),
             }
         );
-        daemon.join().expect("the stand-in daemon");
+    }
+
+    /// What real Hamlib backends answer `\dump_state` with (rotctld 4.5.5 over a pty): the
+    /// Yaesu GS-232B the G-5500 runs on (603), the Hy-Gain DCU-1 (403), the Green Heron RT-21 (405).
+    const GS232B_STATE: &str = "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                                max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n";
+    const DCU1_STATE: &str = "1\n403\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                              max_el=0.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+    const RT21_STATE: &str = "1\n405\nmin_az=0.000000\nmax_az=359.899994\nmin_el=0.000000\n\
+                              max_el=90.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+
+    /// A rotctld stand-in on loopback answering up to two connections, one command each, with
+    /// `answer(command)`. An empty answer is silence, held past the client's deadline.
+    fn stand_in(answer: fn(&str) -> &'static str) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        l.set_nonblocking(true).expect("non-blocking accept");
+        std::thread::spawn(move || {
+            use std::io::{BufRead, Write};
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            let mut held = Vec::new();
+            while held.len() < 2 && std::time::Instant::now() < until {
+                let Ok((mut sock, _)) = l.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                };
+                let _ = sock.set_nonblocking(false);
+                let mut line = String::new();
+                let _ =
+                    std::io::BufReader::new(sock.try_clone().expect("clone")).read_line(&mut line);
+                let _ = sock.write_all(answer(line.trim_end()).as_bytes());
+                held.push(sock);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+        addr
+    }
+
+    #[test]
+    fn the_pane_learns_the_elevation_axis_from_what_the_backend_declares() {
+        // A G-5500 on its GS-232B at 123° / 45°: the elevation and the range to type one in.
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => GS232B_STATE,
+            _ => "123.000000\n45.000000\n",
+        });
+        assert_eq!(
+            rotator_state(&addr),
+            RotatorStateDto {
+                az_deg: Some(123.0),
+                reading: "position",
+                el_deg: Some(45.0),
+                el_range: Some(Some([0.0, 180.0])),
+            }
+        );
+        // The RT-21 declares 0–90° for a second controller Nexus's daemon never has: the pane
+        // is told there is no elevation axis — `null` on the wire.
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => RT21_STATE,
+            _ => "200.000000\n0.000000\n",
+        });
+        let rt21 = rotator_state(&addr);
+        assert_eq!(
+            rt21,
+            RotatorStateDto {
+                az_deg: Some(200.0),
+                reading: "position",
+                el_deg: None,
+                el_range: Some(None),
+            }
+        );
+        let wire = serde_json::to_value(&rt21).expect("json");
+        assert_eq!(wire.get("elRange"), Some(&serde_json::Value::Null));
+        // A busy rotctld leaves `\dump_state` unanswered: the position still comes back, and the
+        // range is ABSENT from the wire, never null, so the pane keeps the elevation it knew.
+        let addr = stand_in(|cmd| match cmd {
+            "\\dump_state" => "",
+            _ => "123.000000\n45.000000\n",
+        });
+        let busy = rotator_state(&addr);
+        assert_eq!(
+            busy,
+            RotatorStateDto {
+                az_deg: Some(123.0),
+                reading: "position",
+                el_deg: Some(45.0),
+                el_range: None,
+            }
+        );
+        let wire = serde_json::to_value(&busy).expect("json");
+        assert_eq!(wire.get("elRange"), None, "{wire}");
     }
 }
 /// What an operator is told when a rotator command reaches no rotctld at all, in place of the
@@ -14324,10 +14415,16 @@ fn rotator_error(e: std::io::Error, external_host: &str) -> String {
 }
 
 /// Point the antenna rotator at an absolute azimuth (degrees) via rotctld — keeping an az/el
-/// rotator's ELEVATION where it is (`tempo_audio::rotator::point_keeping`). It used to send
-/// `P <az> 0`, which drives the elevation to 0 on every move of the beam.
+/// rotator's ELEVATION where it is (`tempo_audio::rotator::point_keeping`), unless `el_deg` gives
+/// the one to go with it: the Rotor pane sends it while an elevation it set is still on its way,
+/// so turning the beam does not stop that climb. It used to send `P <az> 0`, which drives the
+/// elevation to 0 on every move of the beam.
 #[tauri::command]
-async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<(), String> {
+async fn point_rotator(
+    state: State<'_, SharedEngine>,
+    az_deg: f64,
+    el_deg: Option<f64>,
+) -> Result<(), String> {
     #[cfg(feature = "radio")]
     {
         let (host, external) = {
@@ -14344,7 +14441,7 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
             );
         };
         tauri::async_runtime::spawn_blocking(move || {
-            tempo_audio::rotator::point_keeping(&host, Some(az_deg), None)
+            tempo_audio::rotator::point_keeping(&host, Some(az_deg), el_deg)
         })
         .await
         .map_err(|e| e.to_string())?
@@ -14352,7 +14449,48 @@ async fn point_rotator(state: State<'_, SharedEngine>, az_deg: f64) -> Result<()
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = (state, az_deg);
+        let _ = (state, az_deg, el_deg);
+        Err("radio support is not built into this binary".to_string())
+    }
+}
+
+/// Point an az/el rotator at an elevation (degrees above the horizon) — the Rotor pane's
+/// elevation box. The azimuth stays where the rotator reports it, unless `az_deg` gives the one
+/// to go with it (a bearing the pane sent that is still on its way). An elevation outside the
+/// range the rotator's backend declares, or a rotator with no elevation axis, is refused before
+/// anything is sent (`tempo_audio::rotator::manual_line`). Desktop only: Nexus Remote does not
+/// offer it.
+#[tauri::command]
+async fn point_rotator_elevation(
+    state: State<'_, SharedEngine>,
+    el_deg: f64,
+    az_deg: Option<f64>,
+) -> Result<(), String> {
+    #[cfg(feature = "radio")]
+    {
+        let (host, external) = {
+            let eng = engine_lock(&state);
+            (
+                effective_rotator_addr(eng.settings()),
+                eng.settings().rotator_host.clone(),
+            )
+        };
+        let Some(host) = host else {
+            return Err(
+                "Set up your rotator in Settings (pick a model + port; Nexus runs rotctld for you)."
+                    .to_string(),
+            );
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            tempo_audio::rotator::point_keeping(&host, az_deg, Some(el_deg))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| rotator_error(e, &external))
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = (state, el_deg, az_deg);
         Err("radio support is not built into this binary".to_string())
     }
 }
@@ -14760,7 +14898,11 @@ mod manual_pointing_tests {
     #[test]
     fn a_manual_move_keeps_the_axis_it_was_not_given() {
         let src = include_str!("lib.rs");
-        for name in ["point_rotator", "point_rotator_at_call"] {
+        for name in [
+            "point_rotator",
+            "point_rotator_at_call",
+            "point_rotator_elevation",
+        ] {
             let body = body(src, name);
             assert!(
                 body.contains("tempo_audio::rotator::point_keeping("),
@@ -14778,7 +14920,9 @@ mod manual_pointing_tests {
 /// three stations apart: a rotator that reported its position; one whose backend has none to
 /// give (the Hy-Gain DCU-1: pointing and STOP still work); and one where nothing answered at all
 /// (the controller is off or unplugged, or rotctld is not running), which the pane must not call
-/// "pointing still works".
+/// "pointing still works". And, on a rotator with an elevation axis (the Yaesu G-5500 on its
+/// GS-232B), the elevation it reports and the range its backend declares, which is what puts the
+/// elevation in the pane at all.
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RotatorStateDto {
@@ -14786,23 +14930,47 @@ struct RotatorStateDto {
     az_deg: Option<f64>,
     /// `"position"`, `"noPosition"` or `"notAnswering"`.
     reading: &'static str,
+    /// Degrees above the horizon, as the rotator reports them; `None` when it reports none, and
+    /// whenever its backend declares no elevation axis.
+    el_deg: Option<f64>,
+    /// The elevation range the backend declares (`[min, max]`; a G-5500 on a GS-232B `[0, 180]`),
+    /// from rotctld's own `\dump_state` (`tempo_audio::rotator::read_limits`, never the model's
+    /// name). `Some(None)` — `null` on the wire — when it has no elevation axis; ABSENT when the
+    /// question went unanswered this time, so the pane keeps what it last knew rather than
+    /// blinking the elevation out while a busy rotctld catches up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    el_range: Option<Option<[f64; 2]>>,
 }
 
-/// Read the rotator at `addr` for [`RotatorStateDto`].
+/// Read the rotator at `addr` for [`RotatorStateDto`]: its position first, and what its backend
+/// declares only when it answered, so a daemon that is not there costs one connection, as it
+/// always did.
 fn rotator_state(addr: &str) -> RotatorStateDto {
-    match tempo_audio::rotator::read_position(addr) {
-        Ok((az, _)) => RotatorStateDto {
-            az_deg: Some(az),
-            reading: "position",
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => RotatorStateDto {
-            az_deg: None,
-            reading: "noPosition",
-        },
-        Err(_) => RotatorStateDto {
-            az_deg: None,
-            reading: "notAnswering",
-        },
+    let (az_deg, el, reading) = match tempo_audio::rotator::read_position(addr) {
+        Ok((az, el)) => (Some(az), el, "position"),
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => (None, None, "noPosition"),
+        Err(_) => {
+            return RotatorStateDto {
+                az_deg: None,
+                reading: "notAnswering",
+                el_deg: None,
+                el_range: None,
+            }
+        }
+    };
+    let el_range = tempo_audio::rotator::read_limits(addr)
+        .ok()
+        .map(|declared| {
+            declared
+                .as_ref()
+                .and_then(tempo_audio::rotator::Limits::elevation)
+                .map(|(lo, hi)| [lo, hi])
+        });
+    RotatorStateDto {
+        az_deg,
+        reading,
+        el_deg: el.filter(|_| el_range != Some(None)),
+        el_range,
     }
 }
 
@@ -30265,6 +30433,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             detect_rigs,
             probe_cat_ports,
             point_rotator,
+            point_rotator_elevation,
             stop_rotator,
             set_log_form_grid,
             discover_flex,
@@ -32021,6 +32190,33 @@ mod tests {
         assert!(
             list.lines().any(|l| l.trim() == "set_sub_level,"),
             "set_sub_level is not registered — the Sub strip would fail at runtime"
+        );
+    }
+
+    /// The Rotor pane's elevation box reaches the rotator only if `point_rotator_elevation` is
+    /// DEFINED and REGISTERED — `ui/src/api.ts` invokes it, and a name missing from
+    /// `generate_handler!` fails at runtime with nothing at compile time to catch it: the box
+    /// would take a typed elevation and move nothing. Source-scanned, like the auto-arm test
+    /// below, because registration is the property under test and no type sees it.
+    #[test]
+    fn the_rotor_elevation_command_the_pane_calls_is_defined_and_registered() {
+        let src = include_str!("lib.rs");
+        // Column zero, not `contains`: this test's own text is in `src` too.
+        assert!(
+            src.lines()
+                .any(|l| l.starts_with("async fn point_rotator_elevation(")),
+            "the command the Rotor pane invokes must exist"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "point_rotator_elevation,"),
+            "point_rotator_elevation is not registered — the elevation box would fail at runtime"
         );
     }
 

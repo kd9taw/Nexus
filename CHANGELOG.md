@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Rotor pane shows and sets the elevation of an az/el rotator.** On a rotator with an
+  elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A, the Rotor pane in Connect shows
+  the elevation under the bearing (`EL 45°`) and has an `el°` box beside the bearing box: type an
+  elevation and press Enter, for EME, a pass you steer by hand, or parking the antenna. It takes
+  only what the rotator can reach (0–180° on a G-5500) and refuses anything else before sending
+  it, and the bearing stays where it is. While the antenna is on its way the pane shows
+  `→ EL 30°`, as it does for a bearing, and a bearing and an elevation typed one after the other
+  both get there. The one ■ STOP stops both motors. Nexus asks the rotator's own control program
+  whether it has an elevation axis, so a rotator without one gets exactly the pane it had. The
+  Remote page's rotator control is unchanged.
 - **Watch list: a note on each entry (#390).** Every entry on the watch list (Settings ▸ Spots &
   Alerts) has a note field of its own, for why the call is there and when it can come off, such
   as `Samoa DXp 9/27-10/3`. Type the note when you add the entry, or later in the field on its
@@ -478,6 +488,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too busy to answer, the move is refused with a message saying so rather than guessed. A
   satellite pass steers both axes as before. Turning the beam from Nexus Remote in a browser still
   sends the elevation to 0°.
+- **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
+  compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
+  cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the
+  248 px the rail takes on a smaller window, and all of it, with the bearing box, at 200 px. The
+  controls now move under the compass when they do not fit beside it, and the line that shows
+  where the antenna is going sits under STOP, so STOP no longer moves down when the antenna starts
+  to turn.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
