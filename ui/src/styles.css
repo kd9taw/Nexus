@@ -1545,7 +1545,21 @@ button.nb-chip:hover {
      gives way to a fixed row, because the operator asked), and the panes fill it instead of
      stopping at the 30 % cap. The divider fits the stored % into this box on load and on every
      resize, from 4em to half the grid (features/paneSeam CONNECT_STRIP_*). Unset, the row is the
-     `auto` row above: nothing about the stock layout moves. */
+     `auto` row above: nothing about the stock layout moves.
+   · BELOW THE FLOOR, BOTH ROWS ARE FLOORED (2026-09-30). The strip's `auto` minimum is its panes'
+     content (css-grid §6.6: `.connect-strip` is no scroll container), capped at 30 % of the
+     effective VIEWPORT, while the map row's was 0 — so whenever the chrome above takes much of the
+     window, the map row took the whole deficit, and the rails in it with it. Measured in Chrome at
+     1920×1080 pinned at 175 % (effective 1097×617): the grid had 258 px, the strip kept 185, the map
+     row 39, and each rail box got 13.7 px (6 in Japanese) — title bars clipped, pickers out of
+     reach. Now the map row holds two rail boxes of 4em and the rail's gap, and the strip one box of
+     4em, in the unit of the strip divider's own floor: a pane's title bar and a line of it. They
+     are hard floors, so where they do not fit the Connect view scrolls (its `.layout.single` host,
+     below). A rail box asks for 5em while that still leaves the strip its 4em: a 248 px rail wraps
+     its titles onto two lines (every one, in Japanese at 175 %), and 4em under a two-line title bar
+     showed no line of the pane. That second em yields before it would make the view scroll. At
+     every supported size the rows get more than the floors, and nothing there moves:
+     connect-layout.test.ts computes the rows at the census's geometries. */
 .connect {
   flex: 1;
   min-height: 0;
@@ -1553,8 +1567,8 @@ button.nb-chip:hover {
   gap: var(--space-3);
   padding: var(--space-3);
   grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
-  grid-template-rows: minmax(0, 1fr);
-  grid-auto-rows: var(--cn-strip-h, auto);
+  grid-template-rows: minmax(max(calc(8em + var(--space-3)), min(calc(10em + var(--space-3)), calc(100% - 4em - var(--space-3)))), 1fr);
+  grid-auto-rows: var(--cn-strip-h, minmax(4em, auto));
   grid-template-areas: 'left center right';
 }
 .connect:where([data-rails='left']) {
@@ -2046,12 +2060,14 @@ button.nb-chip:hover {
      frames painted over the rows under them (connect-layout.test.ts, the xs stack). */
   grid-auto-rows: max-content;
   grid-template-areas: 'center';
-  /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
-     .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
+  /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolled — the shell rule on
+     .layout.single, .connect-shell and .connect itself all clipped or declared no overflow,
      and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
      floor and five auto rows stack beneath it, the rail panes and the bottom strip were
-     painted past the clip line with no path to them at all. Only this tier: the md/lg
-     grid is a bounded two-rail layout that must not gain a scrollbar. */
+     painted past the clip line with no path to them at all. (The host has scrolled since
+     2026-09-30, as the two-rail grid's deficit valve below the floor; this nearer scroller
+     keeps the stack scrolling inside the grid.) Only this tier: the md/lg grid never
+     scrolls itself. */
   overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
@@ -5377,11 +5393,14 @@ body.resizing {
 }
 /* Connect must flex-FILL rather than block-scroll — its map needs a DEFINITE height
    (see .connect-shell). Targeted via :has() so Log/Settings keep their block+scroll.
-   Same fix the detached window already applies. */
+   Same fix the detached window already applies. It is also the Connect view's deficit valve:
+   below the floor the grid's rows hold their floors (see .connect) and overflow the grid, and
+   this box scrolls to them. It clips where it always did, so nothing that fits moves or scrolls. */
 .layout.single:has(> .connect-shell) {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* Memories must flex-FILL too — under block+scroll `.memories-view { flex:1; min-height:0 }`
    is inert, `.mv-scroll` never becomes the scroller, and the table's sticky header anchors

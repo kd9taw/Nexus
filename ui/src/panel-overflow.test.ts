@@ -152,9 +152,10 @@ describe('Field Day: the Bonuses list cannot crush the Sections board', () => {
 describe('Connect at the xs viewport: the stacked panes are reachable', () => {
   // census/verified-top.md #10 — the xs rule stacks the globe (a 280px floor) plus five
   // auto rows under `.layout.single:has(>.connect-shell){overflow:hidden}` → `.connect-shell`
-  // → `.connect`, none of which scrolls. Everything below the globe is painted past the clip
-  // line with no path to it.
-  it("[data-viewport='xs'] .connect scrolls (nothing above it in the chain does)", () => {
+  // → `.connect`, none of which scrolled. Everything below the globe was painted past the clip
+  // line with no path to it. (Since 2026-09-30 that host scrolls too, as the two-rail grid's
+  // deficit valve below the floor; the stack keeps this nearer scroller of its own.)
+  it("[data-viewport='xs'] .connect scrolls (the stack's own scroller, nearer than its host's)", () => {
     const v =
       winner("[data-viewport='xs'] .connect", 'overflow-y') ??
       winner("[data-viewport='xs'] .connect", 'overflow')
