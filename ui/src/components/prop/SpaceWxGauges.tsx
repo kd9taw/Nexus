@@ -3,6 +3,7 @@
 // plain language is the Mission-Control glanceable layer. In Simple mode (`gloss`)
 // each acronym carries a hover/tap plain-English definition so a newcomer is
 // never staring at a cryptic "SFI 142 / Kp 4"; Expert mode assumes fluency.
+import type { CSSProperties } from 'react'
 import type { SolarWind, SpaceWxView } from '../../types'
 import {
   sfiImpact,
@@ -82,7 +83,13 @@ function Gauge({
       <div className="swx-bar" aria-hidden="true">
         <span className="swx-bar-fill" style={{ background: dim ? 'transparent' : SEV_VAR[impact.sev] }} />
       </div>
-      <div className="swx-impact" style={{ color: dim ? 'var(--text-dim)' : SEV_VAR[impact.sev] }}>
+      {/* The impact's colour rides as `--state-ink`, lettered per theme by the sheet (in the light
+          themes the caption takes the ink and the bar above keeps the colour). */}
+      <div
+        className="swx-impact"
+        data-state-ink={dim ? undefined : 'mark'}
+        style={(dim ? { color: 'var(--text-dim)' } : { '--state-ink': SEV_VAR[impact.sev] }) as CSSProperties}
+      >
         {impact.text}
       </div>
     </div>

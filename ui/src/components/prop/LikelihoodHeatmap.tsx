@@ -2,8 +2,9 @@
 // row is an announced band; each cell an hour, colored by the model's hourly
 // score via the perceptual inferno LUT (dark=low, bright=high). A NOW hairline
 // marks the current UTC hour; hovering a cell shows the exact band/hour/score.
+import type { CSSProperties } from 'react'
 import type { BandOutlook } from '../../types'
-import { heatColor, fmtZ, nowUtcHour, workabilityVar } from '../../propViz'
+import { heatColor, fmtZ, nowUtcHour, stateInkKind, workabilityVar } from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
 import { t } from '../../i18n'
 
@@ -36,14 +37,17 @@ export function LikelihoodHeatmap({
           <div className="heatmap-row" key={o.band}>
             <span
               className="heatmap-band"
-              style={{ color: workabilityVar(o.workability) }}
+              // The workability colour rides as `--state-ink`, lettered per theme by the sheet; the
+              // name is its own span so the light themes' underline does not run under the percentage.
+              data-state-ink={stateInkKind(workabilityVar(o.workability)) ?? undefined}
+              style={{ '--state-ink': workabilityVar(o.workability) } as CSSProperties}
               title={t('prop.heatmap.band.title', {
                 band: o.band,
                 workability: o.workability,
                 pct: Math.round(o.reliability),
               })}
             >
-              {o.band}
+              <span className="heatmap-name">{o.band}</span>
               <span className="heatmap-rel">{Math.round(o.reliability)}%</span>
             </span>
             {HOURS.map((h) => {

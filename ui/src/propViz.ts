@@ -57,6 +57,16 @@ export function tierVar(tier: ActivityTier): string {
   }
 }
 
+/** How the sheet letters a word in a colour from these helpers (its `data-state-ink`). A STATE colour
+ *  is a 'mark': the light themes letter the word in the theme's ink and underline it in the colour.
+ *  The closed-band grey 'recede's: the light themes letter it in the dim ink, unmarked (a closed band is
+ *  not a highlight). One of the theme's own text inks is neither (null): the word keeps it as a plain
+ *  colour in every theme. */
+export function stateInkKind(v: string): 'mark' | 'recede' | null {
+  if (/^var\(--text(-dim|-faint)?\)$/.test(v)) return null
+  return v === 'var(--band-closed)' ? 'recede' : 'mark'
+}
+
 const NEED_ROLE: Record<NeedKind, keyof typeof STATUS> = {
   Atno: 'new-entity',
   NewBand: 'new-band',

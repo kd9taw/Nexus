@@ -104,6 +104,9 @@ describe('no view reads the whole log (the census, as a ratchet)', () => {
     expect(hits('components/Fake.tsx', `import * as api from '../api'\nvoid api.getLogStats()`)).toBe(0)
   })
 
+  // A 30 s budget: this parses every module under src with the TypeScript compiler, about a second alone,
+  // and in three full-suite runs on a loaded box (2026-09-30) it hit vitest's default 5 s timeout and failed
+  // with nothing wrong (the file took 5.08, 5.46 and 5.57 s). What it checks is the census, not the speed.
   it('no module reads the whole log', () => {
     const files = modules(SRC)
     // The walk is not blind: it reaches the api, and the source every view reads the log through.
@@ -113,5 +116,5 @@ describe('no view reads the whole log (the census, as a ratchet)', () => {
     expect(wholeLogReads('api.ts', `${api}\nexport async function planted() { return invoke('get_log_delta', {}) }`)).toHaveLength(1)
     const readers = files.flatMap((file) => wholeLogReads(file, readFileSync(join(SRC, file), 'utf8')))
     expect(readers, 'a whole-log reader — ask LogSource (features/logSource.ts) instead').toEqual([])
-  })
+  }, 30_000)
 })
