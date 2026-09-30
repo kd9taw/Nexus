@@ -1903,6 +1903,10 @@ export interface SstvState {
   /** Seconds of key-down elapsed / total for the in-flight image. */
   txElapsedSecs: number
   txTotalSecs: number
+  /** Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
+   * or outside the licence privileges) — the cockpit's warning line. Absent when nothing was
+   * dropped since a picture last keyed, and always absent on the Remote (the station strips it). */
+  txNotice?: string
 }
 
 /** Where the station's data + log folder is, and where it came from (#289). */

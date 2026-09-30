@@ -25823,6 +25823,109 @@ mod tests {
         );
     }
 
+    /// ⛔ A PICTURE REFUSED WHILE IT WAITS IS DROPPED, NEVER KEYED LATER (the operator,
+    /// 2026-09-30), on the real loop. Send is accepted, then the dial leaves the licence's Phone
+    /// privileges before the loop takes the picture, and comes back. Held, the loop keyed it on
+    /// the tune back in.
+    #[test]
+    fn an_sstv_picture_refused_outside_privileges_never_keys_after_a_tune_in() {
+        let engine = sstv_ready_engine(vec![0.2f32; 24_000]); // 2 s
+        engine.lock().unwrap().set_frequency(14.050, "20m", "USB");
+        assert!(
+            !engine.lock().unwrap().tx_allowed(),
+            "precondition: 14.050 is outside Extra's phone privileges"
+        );
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+        engine.lock().unwrap().set_frequency(14.290, "20m", "USB");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+        assert!(
+            backend.played.is_empty(),
+            "the refused picture keyed after the tune in"
+        );
+        assert!(!rig.keyed, "…and nothing is keyed");
+        assert!(
+            engine.lock().unwrap().sstv_tx_notice().is_some(),
+            "the SSTV cockpit is told"
+        );
+        engine
+            .lock()
+            .unwrap()
+            .sstv_send(vec![0.2f32; 24_000], "PD-120".to_string())
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_200.0);
+        assert!(
+            rig.keyed,
+            "a picture sent inside the privileges keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().sstv_tx_notice(),
+            None,
+            "…and the picture that keys clears the notice"
+        );
+    }
+
+    /// ⛔ WHAT APRS HAS QUEUED IS DROPPED BY TX OFF, NEVER KEYED LATER (the operator, 2026-09-30),
+    /// on the real loop. Two beacons: the first keys and the second waits behind it; TX goes off
+    /// (the cockpit's TX On/Off) while the first is on the air, then back on. The beacon on the
+    /// air is left as TX Off has always left it: the loop's TX-off cut unkeys it.
+    #[test]
+    fn a_queued_aprs_beacon_never_keys_after_tx_off_and_back_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("phone", false);
+            e.aprs_tune(144.390).unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        // The loop settles on the APRS channel first: the tune rebuilds the rig, and that
+        // context change halts TX, which empties the queue. Beacons are queued after it.
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+        {
+            let mut e = engine.lock().unwrap();
+            e.aprs_beacon(41.88, -87.63, '/', '>', "one", &[]).unwrap();
+            e.aprs_beacon(41.88, -87.63, '/', '>', "two", &[]).unwrap();
+        }
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 220.0);
+        assert!(rig.keyed, "control: the first beacon keys");
+        let first = backend.played.len();
+        engine.lock().unwrap().set_tx_enabled(false);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 320.0);
+        assert!(
+            !rig.keyed,
+            "the beacon on the air is not as TX Off has always left it"
+        );
+        engine.lock().unwrap().set_tx_enabled(true);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_000.0);
+        assert_eq!(
+            backend.played.len(),
+            first,
+            "the second beacon keyed when TX came back"
+        );
+        assert!(
+            engine.lock().unwrap().aprs_tx_notice().is_some(),
+            "the APRS cockpit is told"
+        );
+        engine
+            .lock()
+            .unwrap()
+            .aprs_beacon(41.88, -87.63, '/', '>', "three", &[])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_200.0);
+        assert!(
+            backend.played.len() > first,
+            "a beacon sent once TX is on keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().aprs_tx_notice(),
+            None,
+            "…and the frame that keys clears the notice"
+        );
+    }
+
     /// A logging rigctld stub whose `f` answer the TEST can change mid-run —
     /// which is the whole of what a keyed Icom in split does: the same `f` that
     /// answered the downlink a moment ago answers the UPLINK, because the
