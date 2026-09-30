@@ -179,6 +179,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each side of a map that runs the full height, Band Advisor over Space Wx on the left and Getting
   Out over Chase on the right, in 400 px columns. Like the other layouts it changes nothing until
   you pick it.
+- **Frame shows the satellites.** Picking the **Frame** layout also ticks **Satellites** on the map
+  and on the 3-D globe, so a wall display shows the birds moving. It is the only layout that
+  touches the map, and it only ever turns Satellites on: every other layer stays as you had it,
+  untick Satellites afterwards and it stays off, and **Undo last change** turns it back off along
+  with the rest of the layout (unless you had it on before you picked Frame).
 - **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
   **Stay behind** button. Pressed, the window stays behind your other windows even when you click
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
@@ -244,6 +249,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call goes into the log; a phone or digital spot, once you have widened the list to it, opens its
   own screen. Nothing transmits. **Reset layout** unticks both again. On the Remote page the panes
   show the spots and needs the station already shares, and say so when it does not.
+- **The sun is always on the map.** The map and the 3-D globe show the sun where it is overhead,
+  at the centre of the day side, all the time and not only during a solar flare. It moves with the
+  greyline. On the Globe view it is hidden while it is on the far side of the planet. A new **Sun
+  and moon** layer in the Layers menu turns it off. During an M-class flare the flare layer's own
+  animated sun takes its place, so there is only ever one sun on the map. On a quiet sun the map
+  does no extra drawing for it: it moves once a minute, with the greyline.
+- **The moon is on the map too, in its phase.** The map and the 3-D globe show the moon where it
+  is overhead, drawn as much lit as the real one: a thin crescent, a half, a gibbous moon or a full
+  one, and a new moon as a dark disc with a faint rim. It is lit on the side you see lit from where
+  you are: in the northern hemisphere a waxing moon is lit on the right and a waning one on the
+  left, and the other way round in the southern hemisphere. It shares the **Sun and moon** layer
+  and moves once a minute, like the sun. Its place is worked out in Nexus itself, with no download,
+  to within about a third of a degree.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

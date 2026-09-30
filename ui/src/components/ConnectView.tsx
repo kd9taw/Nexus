@@ -16,7 +16,8 @@ import type { AmpStatus } from '../types'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
 import { gpuCapableForGlobe } from '../gpu'
-import { MapView, type MapIntent } from './MapView'
+import { MapView, setIntentMapLayer, type MapIntent } from './MapView'
+import { setGlobeLayer } from '../features/globeLayers'
 // The 3-D WebGL globe is LAZY-loaded: three.js only downloads when an operator turns on
 // 3-D mode, so the 2-D default (which runs anywhere) never pays for it.
 const Globe3D = lazy(() => import('./Globe3D'))
@@ -29,7 +30,14 @@ import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { OtaBoard, SpotsFeed } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
-import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
+import {
+  CONNECT_PRESET_IDS,
+  CONNECT_PRESETS,
+  connectLayoutNow,
+  layoutPanels,
+  type ConnectPresetId,
+  type PresetMapLayer,
+} from '../features/connectPresets'
 import type { RailWidths } from '../features/connectRails'
 import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
 import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
@@ -280,7 +288,18 @@ export function ConnectView({
   // A preset sets the whole board in one tap and its widths are most of what it changes, so an
   // Undo that left them would not put the operator's arrangement back — and a saved arrangement
   // is never overwritten silently. A width drag is still no undo step of its own.
-  const beforeSwitch = useRef<{ slots: typeof slots; rails?: RailWidths } | null>(null)
+  // …and the map layers a layout turned on (Frame: the satellites), exactly those and on exactly the
+  // map whose record the tap changed, so its Undo turns off what the tap turned on and nothing the
+  // operator already had on.
+  const beforeSwitch = useRef<{
+    slots: typeof slots
+    rails?: RailWidths
+    mapLayers?: { intent: MapIntent; turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> }
+  } | null>(null)
+  // A LAYOUT'S REACH INTO THE MAP (features/connectPresets `mapLayers`): the layers it turns on are
+  // written into both maps' records on this surface — the 2-D map's for the intent in use, and the
+  // 3-D globe's — and this revision tells whichever map is on screen to read its layers again.
+  const [mapLayersRev, setMapLayersRev] = useState(0)
   const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
     beforeSwitch.current = null
     fn(...a)
@@ -319,10 +338,16 @@ export function ConnectView({
   const pickLayout = (id: ConnectPresetId) => {
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
     const p = CONNECT_PRESETS[id]
-    beforeSwitch.current = { slots, rails: widths.pref }
+    const turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> = []
+    for (const layer of p.mapLayers ?? []) {
+      if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })
+      if (setGlobeLayer(layer, true)) turnedOn.push({ layer, map: '3d' })
+    }
+    beforeSwitch.current = { slots, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined }
     panels.setLayout(layoutPanels(p))
     restoreSlots(p.slots)
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
+    if (turnedOn.length) setMapLayersRev((n) => n + 1)
   }
 
   const frame = (s: SlotId, share?: number) => (
@@ -407,6 +432,13 @@ export function ConnectView({
               if (before) {
                 restoreSlots(before.slots)
                 if (before.rails) widths.setPrefs(before.rails)
+                if (before.mapLayers) {
+                  for (const { layer, map } of before.mapLayers.turnedOn) {
+                    if (map === '2d') setIntentMapLayer(before.mapLayers.intent, layer, false)
+                    else setGlobeLayer(layer, false)
+                  }
+                  setMapLayersRev((n) => n + 1)
+                }
               }
             }}
             canUndo={panels.canUndo}
@@ -498,6 +530,7 @@ export function ConnectView({
                   muf={muf}
                   xrayLong={xrayLong}
                   stations={stations}
+                  layersRev={mapLayersRev}
                 />
               </Suspense>
             ) : (
@@ -519,6 +552,7 @@ export function ConnectView({
               muf={muf}
               xrayLong={xrayLong}
               onFullChange={setMapFull}
+              layersRev={mapLayersRev}
             />
             )}
           </div>

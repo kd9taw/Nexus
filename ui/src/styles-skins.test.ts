@@ -72,7 +72,7 @@ import {
   type Rule,
 } from './cssCascade'
 import { PALETTE_ROLES, isLockedToken, type PaletteRole } from './features/paletteRoles'
-import { MAP_TOKENS, SKINS, SKIN_TOKENS, STANDARD_MAP, type Skin } from './features/skins'
+import { MAP_TOKENS, SKINS, SKIN_TOKENS, SKY_TOKENS, STANDARD_MAP, STANDARD_SKY, type Skin } from './features/skins'
 
 const blank = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const read = (name: string) => readFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), 'utf8')
@@ -551,6 +551,25 @@ describe('the map basemap is a theme’s, and every mode declares all of it', ()
   })
 })
 
+// ── The sun and the moon on the map (MapView and Globe3D paint them from these tokens) ──────────
+
+/** What the sheet gives each sky token at <html> in `mode`, where it is not the standard sky. */
+function skyProblems(rules: Rule[], mode: Mode): string[] {
+  const tk = tokensIn(rules, mode, 'root')
+  return SKY_TOKENS.filter((t) => valueOf(tk, t) !== STANDARD_SKY[t]).map((t) => `${mode}: ${t} paints "${valueOf(tk, t)}", wanted ${STANDARD_SKY[t]}`)
+}
+
+describe('the sun and the moon wear the same inks in every theme and mode', () => {
+  it('both standard themes declare them, in every standard mode and colour-role set', () => {
+    const standard = [...BASE_MODES, ...PALETTE_SETS.flatMap((set) => BASE_MODES.map((b): Mode => `${b} ${set}`))]
+    expect(standard.flatMap((m) => skyProblems(RULES, m))).toEqual([])
+  })
+
+  it('no built-in theme retunes them (a theme block may not declare one: blockProblems)', () => {
+    expect(SKIN_MODES.flatMap((m) => skyProblems(RULES, m))).toEqual([])
+  })
+})
+
 // ── Positive controls: each check can say no ────────────────────────────────────────────────
 
 /** The real sheet with `css` where the themes sit (after them, so it wins their ties). */
@@ -605,6 +624,14 @@ describe('the checks fire', () => {
     const rules = parseRules(blank(RAW).replace(/--map-rim:[^;]*;/g, '') + '\n' + PANES)
     expect(mapProblems(rules, 'dark', STANDARD_MAP)).toEqual(['dark: --map-rim paints "", wanted #2a4254'])
     expect(mapProblems(RULES, 'dark skin=lagoon', SKINS.find((x) => x.id === 'slate')!.map!).length).toBeGreaterThan(0)
+  })
+
+  it('a mode missing the sun’s ink, or a theme retuning it, is caught', () => {
+    const rules = parseRules(blank(RAW).replace(/--map-sun:[^;]*;/g, '') + '\n' + PANES)
+    expect(skyProblems(rules, 'light')).toEqual([`light: --map-sun paints "", wanted ${STANDARD_SKY['--map-sun']}`])
+    const retuned = spliced(`[data-theme='dark'][data-skin='amber-lcd'] { --map-sun: #ff0000; }`)
+    expect(skyProblems(retuned, 'dark skin=amber-lcd')).toEqual([`dark skin=amber-lcd: --map-sun paints "#ff0000", wanted ${STANDARD_SKY['--map-sun']}`])
+    expect(blockProblems(retuned)).toContain(`[data-theme='dark'][data-skin='amber-lcd'] { --map-sun } — not a theme's token`)
   })
 
   it('an accent fill its own ink cannot be read on is refused', () => {

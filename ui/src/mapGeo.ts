@@ -9,6 +9,7 @@ import {
   geoEquirectangular,
   geoOrthographic,
   geoCircle,
+  geoDistance,
   geoGraticule,
   type GeoProjection,
   type GeoPermissibleObjects,
@@ -178,6 +179,15 @@ export function project(proj: GeoProjection, ll: LatLon): [number, number] | nul
   const p = proj([ll.lon, ll.lat])
   if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) return null
   return [p[0], p[1]]
+}
+
+/** Is `ll` on the side of the planet the view shows? Only the Globe has a far side, and `project`
+ *  cannot tell: d3 clips a PATH at the globe's horizon, but projects a lone POINT from the far side
+ *  straight through the sphere, onto the near face. The flat maps show the whole world. */
+export function inView(kind: Projection, proj: GeoProjection, ll: LatLon): boolean {
+  if (kind !== 'globe') return true
+  const [lambda, phi] = proj.rotate()
+  return geoDistance([ll.lon, ll.lat], [-lambda, -phi]) < Math.PI / 2
 }
 
 /** A range-ring (great-circle circle) of `km` around `center` as a GeoJSON polygon. */
@@ -365,6 +375,72 @@ export function sunDay(lat: number, lon: number, nowMs: number): SunDay {
   }
   const polar = riseMs == null && setMs == null ? (up(start) ? 'up' : 'down') : null
   return { riseMs, setMs, polar }
+}
+
+// ── The moon: where it is overhead, and how much of it is lit ─────────────────
+// The Astronomical Almanac's "low-precision formulae for geocentric coordinates of the Moon"
+// (p. D46 in the 1997–1999 editions), as set out and measured in D. G. Simpson, "An Alternative
+// Lunar Ephemeris Model for On-Board Flight Software Use", 1999 NASA/GSFC Flight Mechanics
+// Symposium, eqs. 1–2: against JPL's DE200 the series is good to about 0.11° rms and 0.35° at worst
+// in position. For the phase, the Sun's ecliptic longitude is the Almanac's low-precision Sun
+// (The Astronomical Almanac for the Year 2010, p. C5: about 0.01° from 1950 to 2050), and sidereal
+// time is IAU 1982 GMST (Meeus, Astronomical Algorithms, 2nd ed., eq. 12.4). Time is UT throughout;
+// the minute or so between UT and the dynamical time the series asks for moves the moon about 0.01°.
+// mapGeo.sky.test.ts holds all of it to JPL Horizons (DE441) and to USNO's times of new and full moon.
+
+export interface Moon {
+  /** The point on Earth with the moon overhead: its geocentric declination, and its right
+   *  ascension less Greenwich sidereal time. */
+  sublunar: LatLon
+  /** Geocentric ecliptic longitude (0–360) and latitude of date, degrees. */
+  eclipticLonDeg: number
+  eclipticLatDeg: number
+  /** How much of its disc is lit, 0 (new) … 1 (full). */
+  illuminated: number
+  /** The lit part is growing (new → full): the moon stands east of the sun. */
+  waxing: boolean
+}
+
+const sinDeg = (deg: number) => Math.sin(deg * DEG)
+const cosDeg = (deg: number) => Math.cos(deg * DEG)
+const norm360 = (deg: number) => ((deg % 360) + 360) % 360
+
+/** The moon at `nowMs`. */
+export function moonAt(nowMs: number): Moon {
+  const n = nowMs / 86_400_000 - 10_957.5 // days from J2000.0 (2000-01-01 12:00 UT, JD 2451545.0)
+  const t = n / 36_525 // Julian centuries
+  const lon =
+    218.32 +
+    481_267.883 * t +
+    6.29 * sinDeg(134.9 + 477_198.85 * t) -
+    1.27 * sinDeg(259.2 - 413_335.38 * t) +
+    0.66 * sinDeg(235.7 + 890_534.23 * t) +
+    0.21 * sinDeg(269.9 + 954_397.7 * t) -
+    0.19 * sinDeg(357.5 + 35_999.05 * t) -
+    0.11 * sinDeg(186.6 + 966_404.05 * t)
+  const lat =
+    5.13 * sinDeg(93.3 + 483_202.03 * t) +
+    0.28 * sinDeg(228.2 + 960_400.87 * t) -
+    0.28 * sinDeg(318.3 + 6_003.18 * t) -
+    0.17 * sinDeg(217.6 - 407_332.2 * t)
+  const eps = 23.439 - 0.000_000_4 * n // obliquity of the ecliptic
+  const ra = Math.atan2(sinDeg(lon) * cosDeg(eps) - Math.tan(lat * DEG) * sinDeg(eps), cosDeg(lon)) / DEG
+  const dec = Math.asin(sinDeg(lat) * cosDeg(eps) + cosDeg(lat) * sinDeg(eps) * sinDeg(lon)) / DEG
+  // Reduced before the subtraction: n days of sidereal time run to millions of degrees, and
+  // `norm180` only folds a few turns.
+  const gmst = norm360(280.460_618_37 + 360.985_647_366_29 * n)
+  const g = 357.528 + 0.985_600_3 * n // the Sun's mean anomaly
+  const sunLon = 280.46 + 0.985_647_4 * n + 1.915 * sinDeg(g) + 0.02 * sinDeg(2 * g)
+  const elongation = lon - sunLon
+  return {
+    sublunar: { lat: dec, lon: norm180(norm360(ra) - gmst) },
+    eclipticLonDeg: norm360(lon),
+    eclipticLatDeg: lat,
+    // The phase angle is 180° less the elongation (to within the ~0.15° the Earth–Moon distance
+    // adds), so the lit fraction (1 + cos i) / 2 is (1 − cos ψ) / 2, where cos ψ = cos β cos Δλ.
+    illuminated: (1 - cosDeg(lat) * cosDeg(elongation)) / 2,
+    waxing: sinDeg(elongation) > 0,
+  }
 }
 
 /** Modelled MUF(3000 km) in MHz at a point, from SFI + solar elevation. */

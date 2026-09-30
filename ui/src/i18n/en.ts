@@ -2173,6 +2173,8 @@ export const EN = {
   'map.layers.expand.title': 'Show the Layers panel',
   'map.layer.opacity.aria': '{{layer}} opacity',
   'map.layer.daynight.label': 'Day / night (greyline)',
+  // The sun and the moon, each where it is overhead. One layer for both: they are the sky.
+  'map.layer.sunMoon.label': 'Sun and moon',
   'map.layer.relief.label': 'Relief (World view)',
   'map.layer.muf.label': 'Ionosonde MUF',
   'map.layer.aurora.label': 'Aurora oval',
@@ -2279,6 +2281,7 @@ export const EN = {
   // The MUF layer's whole name is the acronym — a token, and a constant in the component.
   'globe.layer.pca': 'Polar cap (PCA)',
   'globe.layer.greyline': 'Greyline',
+  'globe.layer.sunMoon': 'Sun and moon',
   'globe.layer.sats': 'Satellites',
   'globe.layer.pass': 'Tracked pass',
   'globe.layer.rings': 'Range rings',

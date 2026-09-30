@@ -8,6 +8,7 @@ import {
   validateConnectLayout,
   type ConnectLayout,
   type ConnectLayoutState,
+  type PresetMapLayer,
 } from './connectPresets'
 import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, type PaneId, type SlotId } from './connectConfig'
 import { assignIn } from './paneLayout'
@@ -59,6 +60,9 @@ describe('the presets are well formed', () => {
       `dashboard: the left rail's ${RAIL_MAX + 1} px is outside ${RAIL_MIN}–${RAIL_MAX} px`,
       `dashboard: the right rail's ${RAIL_MIN - 1} px is outside ${RAIL_MIN}–${RAIL_MAX} px`,
     ])
+    expect(validateConnectLayout('dashboard', { ...p, mapLayers: ['heat' as PresetMapLayer] })).toEqual([
+      "dashboard: turns on 'heat', which is not a map layer a layout may turn on",
+    ])
   })
 
   it('the Standard layout IS the operator-approved DEFAULT_SLOTS, unchanged, and no preset touches it', () => {
@@ -109,6 +113,12 @@ describe('Frame — the wall-display layout', () => {
 
   it('400 px columns, wide enough to read a box from across the desk', () => {
     expect(CONNECT_PRESETS.frame.rails).toEqual({ left: 400, right: 400 })
+  })
+
+  it('turns the satellites on (the operator’s pick), and it is the only layout that reaches into the map', () => {
+    expect(CONNECT_PRESETS.frame.mapLayers).toEqual(['sats'])
+    for (const id of CONNECT_PRESET_IDS.filter((x) => x !== 'frame')) expect(CONNECT_PRESETS[id].mapLayers, id).toBeUndefined()
+    expect((STANDARD_LAYOUT as ConnectLayout).mapLayers).toBeUndefined()
   })
 })
 

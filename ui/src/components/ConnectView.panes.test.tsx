@@ -42,6 +42,8 @@ import { StationDataContext } from '../stationAccess'
 const RECORD = 'nexus.panels.connect.main'
 const POPOUT_RECORD = 'nexus.panels.connect.connect'
 const WIDTHS = 'nexus.connect.railWidths'
+/** The 3-D globe's layer picks on this surface (features/globeLayers). */
+const GLOBE = 'nexus.connect.globe3d.layers'
 
 const props = {
   myGrid: 'EN52',
@@ -491,6 +493,9 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         // unlike the POTA/SOTA defaults, so an overwrite would show.
         localStorage.setItem('nexus.connect.intent', 'pota')
         localStorage.setItem('nexus.connect.intents', JSON.stringify({ pota: { map: 'world', colorBy: 'snr' } }))
+        // …and the 3-D globe's own layer picks, which a layout could reach the same way.
+        const globe = JSON.stringify({ spots: false, aurora: true, sats: false })
+        localStorage.setItem(GLOBE, globe)
         const { container } = await mount()
         // Taken AFTER mount: MapView writes its layer table into the record when it mounts.
         const intents = localStorage.getItem('nexus.connect.intents')
@@ -508,9 +513,21 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         expect(grid(container).style.getPropertyValue('--cn-rail-r')).toBe(`${p.rails.right}px`)
         expect(layoutNow()).toBe(LABEL[id])
         expect(chip(LABEL[id]).getAttribute('aria-pressed')).toBe('true')
-        // The map's own per-intent choices are not the layout's to change.
+        // The map's own choices are not the layout's to change — except the layers a layout turns ON
+        // (Frame: the satellites, the operator's pick), and nothing else about either map.
         expect(localStorage.getItem('nexus.connect.intent')).toBe('pota')
-        expect(localStorage.getItem('nexus.connect.intents')).toBe(intents)
+        const on = (p as { mapLayers?: readonly string[] }).mapLayers ?? []
+        if (on.length === 0) {
+          expect(localStorage.getItem('nexus.connect.intents'), 'the 2-D map’s record').toBe(intents)
+          expect(localStorage.getItem(GLOBE), 'the 3-D globe’s record').toBe(globe)
+        } else {
+          const want = JSON.parse(intents!)
+          for (const k of on) want.pota.layers[k] = { ...want.pota.layers[k], visible: true }
+          expect(stored('nexus.connect.intents'), 'the 2-D map: only the layout’s layers turned on').toEqual(want)
+          const now = stored(GLOBE)
+          expect([now.spots, now.aurora], 'the 3-D globe: the operator’s own picks kept').toEqual([false, true])
+          for (const k of on) expect(now[k], `the 3-D globe: ${k} turned on`).toBe(true)
+        }
 
         cleanup()
         const again = await mount()
@@ -661,5 +678,97 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
     expect(localStorage.getItem(CONFIG), 'the main window’s placement').toBeNull()
     expect(localStorage.getItem(RECORD), 'the main window’s record').toBeNull()
     expect(localStorage.getItem(WIDTHS), 'the main window’s widths').toBeNull()
+  })
+
+  // FRAME TURNS THE SATELLITES ON (the operator's pick: "satellites on in the Frame layout"). The one
+  // reach a layout has into the map: it turns layers ON, on the map on screen and the one behind the
+  // picker, and touches nothing else. The REAL MapView answers here, so these are its own boxes.
+  describe('Frame turns the satellites on, and nothing else about the map', () => {
+    const SATS = 'Satellites (amateur)'
+    /** Every box in the map's Layers panel, by name: what the map shows. */
+    const mapBoxes = (c: HTMLElement) =>
+      Object.fromEntries(
+        [...c.querySelectorAll('.map-layers input[type="checkbox"]')].map((b) => [b.closest('label')!.textContent!.trim(), (b as HTMLInputElement).checked]),
+      )
+
+    it('picking Frame ticks Satellites on the map on screen and in the 3-D globe’s record, and no other box', async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        const { container } = await mount()
+        const before = mapBoxes(container)
+        expect(Object.keys(before).length, 'CONTROL: the map’s Layers panel is on screen').toBeGreaterThan(10)
+        expect(before[SATS], 'CONTROL: off by default').toBe(false)
+        pick('Frame')
+        const after = mapBoxes(container)
+        expect(after[SATS], 'Frame did not turn the satellites on').toBe(true)
+        expect({ ...after, [SATS]: false }, 'Frame moved another box').toEqual(before)
+        expect(stored(GLOBE)?.sats, 'the 3-D globe behind the picker').toBe(true)
+      } finally {
+        restore()
+      }
+    })
+
+    it('keeps the operator’s own picks: a layer they turned off stays off, one they turned on stays on', async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        const { container } = await mount()
+        fireEvent.click(within(container.querySelector('.map-layers')!).getByRole('checkbox', { name: 'Band heat (openings)' }))
+        fireEvent.click(within(container.querySelector('.map-layers')!).getByRole('checkbox', { name: 'Aurora oval' }))
+        const before = mapBoxes(container)
+        expect([before['Band heat (openings)'], before['Aurora oval']], 'CONTROL: the operator’s picks took').toEqual([false, true])
+        pick('Frame')
+        const after = mapBoxes(container)
+        expect([after['Band heat (openings)'], after['Aurora oval'], after[SATS]]).toEqual([false, true, true])
+      } finally {
+        restore()
+      }
+    })
+
+    it('turned off again, the satellites stay off — the layout still reads Frame, after a remount too', async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        const first = await mount()
+        pick('Frame')
+        fireEvent.click(within(first.container.querySelector('.map-layers')!).getByRole('checkbox', { name: SATS }))
+        expect(mapBoxes(first.container)[SATS]).toBe(false)
+        expect(layoutNow(), 'a layer is not part of the layout: unticking one is not a change to it').toBe('Frame')
+        cleanup()
+        const again = await mount()
+        expect(mapBoxes(again.container)[SATS], 'nothing turned it back on').toBe(false)
+        expect(layoutNow()).toBe('Frame')
+      } finally {
+        restore()
+      }
+    })
+
+    it('Undo last change takes the satellites back off with the layout, on both maps', async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        const { container } = await mount()
+        pick('Frame')
+        expect(mapBoxes(container)[SATS], 'CONTROL').toBe(true)
+        fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+        expect(mapBoxes(container)[SATS], 'Undo left the satellites on').toBe(false)
+        expect(stored(GLOBE)?.sats, 'Undo left them on the 3-D globe').toBe(false)
+        expect(layoutNow()).toBe('Standard')
+      } finally {
+        restore()
+      }
+    })
+
+    it('Undo leaves the satellites on when they were on before the tap', async () => {
+      const restore = fakeBoxes(1920)
+      try {
+        const { container } = await mount()
+        fireEvent.click(within(container.querySelector('.map-layers')!).getByRole('checkbox', { name: SATS }))
+        expect(mapBoxes(container)[SATS], 'CONTROL: the operator turned them on first').toBe(true)
+        pick('Frame')
+        fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+        expect(mapBoxes(container)[SATS], 'Undo turned off what the operator had on').toBe(true)
+        expect(layoutNow(), 'CONTROL: the Undo did happen').toBe('Standard')
+      } finally {
+        restore()
+      }
+    })
   })
 })
