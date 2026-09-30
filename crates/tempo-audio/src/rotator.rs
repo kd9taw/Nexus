@@ -494,11 +494,26 @@ pub fn manual_line(
 /// rotctld that declares nothing) is sent exactly the line it always was, and is not asked for
 /// its position first. A daemon that does not answer the question is sent nothing.
 pub fn point_keeping(addr: &str, az: Option<f64>, el: Option<f64>) -> std::io::Result<()> {
-    let limits = read_limits(addr)?;
+    let line = keeping_line(read_limits(addr), || read_position(addr), az, el)?;
+    command(addr, &line)
+}
+
+/// [`point_keeping`]'s decision without its transport: the line a manual move sends, given what
+/// the daemon answered to `\dump_state` (`limits`, as [`read_limits`] returns it) and a way to ask
+/// where the rotator is (`position`, as [`read_position`], asked only when an axis must be kept).
+/// Every other caller that moves a mast by hand — Nexus Remote's host, whose tests drive it with
+/// an in-process mast instead of a socket — goes through this same rule.
+pub fn keeping_line(
+    limits: std::io::Result<Option<Limits>>,
+    position: impl FnOnce() -> std::io::Result<(f64, Option<f64>)>,
+    az: Option<f64>,
+    el: Option<f64>,
+) -> std::io::Result<String> {
+    let limits = limits?;
     let keeps =
         limits.as_ref().and_then(Limits::elevation).is_some() && (az.is_none() || el.is_none());
     let at = if keeps {
-        match read_position(addr) {
+        match position() {
             Ok(at) => Some(at),
             // An answer that there is no position to give (RPRT -11/-4): nothing to keep.
             Err(e) if e.kind() == std::io::ErrorKind::Unsupported => None,
@@ -507,8 +522,7 @@ pub fn point_keeping(addr: &str, az: Option<f64>, el: Option<f64>) -> std::io::R
     } else {
         None
     };
-    let line = manual_line(az, el, limits.as_ref(), at).map_err(std::io::Error::other)?;
-    command(addr, &line)
+    manual_line(az, el, limits.as_ref(), at).map_err(std::io::Error::other)
 }
 
 #[cfg(test)]
