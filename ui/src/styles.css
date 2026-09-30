@@ -2114,6 +2114,17 @@ button.nb-chip:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A DASHBOARD-RAIL BOX'S HEAD WRAPS instead, its controls on a line of their own under the title, at
+   the right, when the two do not fit side by side, as the rail's own head does. At the rail's floor a
+   box is 175 px, and a one-line head left its title "SELEC…" beside a picker reading "Sel ▾"
+   (measured in Chrome). The rail's boxes stand in a column, not a row, so no neighbour's head has to
+   match its height; at the rail's default width every head still fits on one line. */
+.dash-boxes .pane-frame > .pane-head {
+  flex-wrap: wrap;
+}
+.dash-boxes .pane-frame > .pane-head > .pane-acts {
+  margin-left: auto;
+}
 .pane-close {
   flex: none;
   font-size: var(--fs-micro);

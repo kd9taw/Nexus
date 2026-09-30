@@ -60,6 +60,8 @@ vi.mock('../api', async (importOriginal) => {
 
 import { DashRail } from './DashRail'
 import { PanelsMenu } from './PanelsMenu'
+import { PaneFrame } from './connect/PaneFrame'
+import type { PaneContext } from './connect/paneContext'
 import { PotaSotaView } from './PotaSotaView'
 import { APP_SNAPSHOT } from '../appCockpits.testkit'
 import type { AppSnapshot, SpotRow } from '../types'
@@ -172,6 +174,25 @@ describe('Space Wx at the rail’s floor', () => {
     expect(css(unit!, 'justify-content')).toBe('flex-end')
     // …nor, in Spanish, a gauge's name and its value: the value goes under the name.
     expect(css(strip!.querySelector('.swx-head')!, 'flex-wrap'), 'a gauge’s name and value run past its column').toBe('wrap')
+  })
+})
+
+describe('a box’s head at the rail’s floor', () => {
+  it('puts its controls under its title rather than cut the title, as the rail’s own head does; a Connect box keeps its one line', () => {
+    // With the ⋯ in every head, a 175 px box left its title "SELEC…" beside a picker reading "Sel ▾"
+    // (measured in Chrome). The rail's boxes stand in a column, not a row, so a head may take a line more.
+    mountRail()
+    const head = document.querySelector<HTMLElement>('.dash-rail .pane-frame > .pane-head')!
+    expect(css(head, 'flex-wrap'), 'the title is cut to make room for the controls beside it').toBe('wrap')
+    expect(css(head.querySelector('.pane-acts')!, 'margin-left'), 'on a line of their own the controls leave the right edge').toBe('auto')
+    cleanup()
+    // THE CONTROL: a Connect box keeps one line, so the heads in a row keep one height.
+    render(
+      <div className="connect">
+        <PaneFrame slotId="left1" paneId="clock" ctx={{ myGrid: 'EN52' } as unknown as PaneContext} onAssign={() => {}} />
+      </div>,
+    )
+    expect(css(document.querySelector<HTMLElement>('.pane-frame > .pane-head')!, 'flex-wrap')).toBeNull()
   })
 })
 
