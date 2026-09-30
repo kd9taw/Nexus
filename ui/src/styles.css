@@ -649,6 +649,17 @@ button.nb-chip:hover {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
 }
+/* THE LIGHT THEME LETTERS THE WORD IN INK and keeps the state on the chip's border, the band chip's
+   light treatment (#382). The chip sits on the page colour, where the state colours read 3.4–4.3:1
+   as lettering in every light theme, under the 4.5:1 floor; a border needs 3:1 and gets it. Dark is
+   untouched: there the state colours read 8.8:1 and up. The state class is in the selector so this
+   outranks the two rules above by specificity, not by where it sits (ProvenanceChip.contrast.test.tsx). */
+[data-theme='light'] .prop-prov.prov-live,
+[data-theme='light'] .prop-prov.prov-cached,
+[data-theme='light'] .prop-prov.prov-partial,
+[data-theme='light'] .prop-prov.prov-offline {
+  color: var(--text);
+}
 
 /* Space-weather gauges */
 .swx-strip {
@@ -2880,6 +2891,14 @@ body.resizing-row {
 .map-prov.prov-offline {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
+}
+/* Light: the word in ink and the state on the border, as `.prop-prov` does and for the same reason
+   (ProvenanceChip.contrast.test.tsx). */
+[data-theme='light'] .map-prov.prov-live,
+[data-theme='light'] .map-prov.prov-cached,
+[data-theme='light'] .map-prov.prov-partial,
+[data-theme='light'] .map-prov.prov-offline {
+  color: var(--text);
 }
 /* Toolbar buttons that stand alone (not in a .map-proj segmented group): Reset, and the
    full-screen / Layers pair beside it. One look, one rule; only Reset takes the auto margin
@@ -25337,6 +25356,13 @@ tr.sel .aprs-sym {
   color: #0d1117;
   cursor: pointer;
   white-space: nowrap;
+}
+/* The light themes darken the accent so that white reads on it (--accent-ink), and the near-black
+   above read 2.1–3.7:1 there; the dark themes keep it (7.2:1 and up, 4.97:1 under violet at night).
+   Not a disabled button: that one is transparent and takes the banner's ink
+   (UpdateBanner.contrast.test.tsx). */
+[data-theme='light'] .update-install:not(:disabled) {
+  color: var(--accent-ink);
 }
 .update-install:hover:not(:disabled) { filter: brightness(1.1); }
 .update-install:disabled { opacity: 0.55; cursor: not-allowed; background: transparent; color: inherit; }
