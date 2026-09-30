@@ -11,6 +11,12 @@
 // Space Wx is Connect's box and needs Connect's fit here too: its gauge strip is also a `.panel`, whose
 // flex column comes later in the sheet than the strip's grid, so without a rule of the box's own the
 // gauges stand one per row and the 30-day lines start under the box's fold (measured on Connect).
+// A box at this floor is 175 px wide (the rail's padding and border take 25), narrower than any Connect
+// box, and three more defects were found there by the census of the whole set (every language):
+//   - Spots: a six-character call, the frequency and the mode no longer fit on one line, and the call's
+//     column was left 19 px ("W1AW" cut to one letter);
+//   - POTA / SOTA: its three programme tabs ran 5 px past the box in German, Spanish and French;
+//   - Space Wx: in Spanish a gauge's name and value ("VIENTO 487") ran past a 65 px column.
 // The controls: a cockpit's ⊞ keeps its one-line label, and the direction line keeps a basis, so it
 // drops under the rose only where it cannot stand beside it.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
@@ -41,11 +47,22 @@ vi.mock('../api', async (importOriginal) => {
     getSolarIndices: vi.fn(async () => ({ days: [] })),
     getPathOutlook: vi.fn(async () => null),
     getDxccEntityLocations: vi.fn(async () => []),
+    getOtaSpots: vi.fn(async (program: string) =>
+      program === 'POTA'
+        ? [{ program: 'POTA', reference: 'US-1000', name: 'Test park', activator: 'K9ABC', freqKhz: 14285, mode: 'SSB', spotter: null, comment: null, grid: null, newPark: false, bandOpen: false, huntedToday: false }]
+        : [],
+    ),
+    getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
+    parksCount: vi.fn(async () => 0),
+    huntedParksCount: vi.fn(async () => 0),
   }
 })
 
 import { DashRail } from './DashRail'
 import { PanelsMenu } from './PanelsMenu'
+import { PotaSotaView } from './PotaSotaView'
+import { APP_SNAPSHOT } from '../appCockpits.testkit'
+import type { AppSnapshot, SpotRow } from '../types'
 
 const LIVE = {
   advisory: { headline: 'Bands are fair', bands: [], banners: [] },
@@ -56,6 +73,11 @@ const LIVE = {
   asOf: Math.floor(Date.now() / 1000),
 } as unknown as PropagationSnapshot
 
+const SPOT = {
+  call: 'KD9TAW', entity: 'United States', zone: 4, state: null, band: '20m', freqMhz: 14.025, mode: 'CW', submode: 'CW',
+  spotter: 'W3LPL', corroborators: [], ageSecs: 30, comment: '', licensed: true, spotterLocal: true,
+} as unknown as SpotRow
+
 const mountRail = (prop: PropagationSnapshot = LIVE) =>
   render(
     <DashRail
@@ -65,6 +87,8 @@ const mountRail = (prop: PropagationSnapshot = LIVE) =>
       stations={[]}
       prop={prop}
       needByCall={new Map()}
+      spotsFeed={{ rows: [SPOT], board: { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: () => {}, onWork: () => {} } }}
+      otaBoard={{ snap: APP_SNAPSHOT as unknown as AppSnapshot, onHunt: () => {}, onSnap: () => {} }}
       onHide={() => {}}
     />,
   )
@@ -146,5 +170,68 @@ describe('Space Wx at the rail’s floor', () => {
     // Two to a row at the 200 px floor, a column is ~77 px: the speed and its unit do not fit side by side.
     expect(css(unit!, 'flex-wrap'), 'the unit runs past its column’s edge').toBe('wrap')
     expect(css(unit!, 'justify-content')).toBe('flex-end')
+    // …nor, in Spanish, a gauge's name and its value: the value goes under the name.
+    expect(css(strip!.querySelector('.swx-head')!, 'flex-wrap'), 'a gauge’s name and value run past its column').toBe('wrap')
+  })
+})
+
+describe('the boards at the rail’s floor', () => {
+  const slots = { rail1: 'spots', rail2: 'pota', rail3: 'clock', rail4: 'getout' }
+
+  it('a Spots box too narrow for a call, the frequency and the mode on one line gives the call a line of its own', async () => {
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots }))
+    const width = { px: 147 } // a box at the rail's floor, measured in Chrome
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains('cn-spots') ? width.px : 0
+      },
+    })
+    try {
+      mountRail()
+      const box = await vi.waitFor(() => {
+        const el = document.querySelector<HTMLElement>('.dash-rail .cn-spots')
+        if (!el?.querySelector('.sp-row')) throw new Error('the rail’s Spots box has not drawn its row yet')
+        return el
+      })
+      const row = box.querySelector<HTMLElement>('.sp-row')!
+      expect(box.hasAttribute('data-stack'), 'the box did not stack its rows').toBe(true)
+      expect(css(row, 'grid-template-columns'), 'the call keeps a one-line row’s leftover column').toBe('minmax(0, 1fr) auto')
+      expect(css(row.querySelector('.np-call')!, 'grid-column'), 'the call does not take a line of its own').toBe('1 / -1')
+      expect(css(box.querySelector('.np-header [data-col="call"]')!, 'grid-column'), 'the heading does not follow its column').toBe('1 / -1')
+      cleanup()
+      // THE CONTROL: Connect's narrowest box (182 px, a 200 px rail) keeps its one-line rows.
+      width.px = 182
+      mountRail()
+      const wide = await vi.waitFor(() => {
+        const el = document.querySelector<HTMLElement>('.dash-rail .cn-spots')
+        if (!el?.querySelector('.sp-row')) throw new Error('the rail’s Spots box has not drawn its row yet')
+        return el
+      })
+      expect(wide.hasAttribute('data-stack')).toBe(false)
+      expect(css(wide.querySelector('.sp-row')!, 'grid-template-columns')).toBe('minmax(0, 1fr) 3.9em 3.5em')
+    } finally {
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth
+    }
+  })
+
+  it('the POTA / SOTA box’s programme tabs wrap rather than run past the box; the screen’s own stay on one line', async () => {
+    localStorage.setItem('nexus.dashrail.config', JSON.stringify({ slots }))
+    mountRail()
+    const tabs = await vi.waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.dash-rail [data-ota-box] .filter-row')
+      if (!el) throw new Error('the rail’s POTA / SOTA box has not drawn its tabs yet')
+      return el
+    })
+    expect(css(tabs, 'flex-wrap'), '“POTA SOTA Beide” runs 5 px past a 175 px box').toBe('wrap')
+    cleanup()
+    // THE CONTROL: the POTA / SOTA screen is not a box.
+    render(<PotaSotaView snap={APP_SNAPSHOT as unknown as AppSnapshot} onHunt={() => {}} onSnap={() => {}} />)
+    const screenTabs = await vi.waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.filter-row')
+      if (!el) throw new Error('the POTA / SOTA screen has not drawn its tabs yet')
+      return el
+    })
+    expect(css(screenTabs, 'flex-wrap')).toBeNull()
   })
 })

@@ -10,7 +10,8 @@
 // `data-fit` (s | m | l), and styles.css drops the columns a narrow box cannot hold. A measured
 // attribute, never a query, for the reasons useRegionCols.ts gives: no size-based `@media` (it is
 // zoom-blind) and no container queries (unverified on WebKitGTK and under this app's `zoom`).
-// `clientWidth` is the box's own layout width in CSS px, the unit the templates are written in.
+// `clientWidth` is the box's own layout width in CSS px, the unit the templates are written in. Below
+// STACK_BELOW it also stamps `data-stack`, and a row puts the call on a line of its own.
 //
 // It keys nothing. Working a row QSYs and opens a cockpit through the board's own handler, exactly
 // as from the Spots view, and that handler keys no transmitter.
@@ -38,8 +39,15 @@ export function classifyBoxFit(width: number): BoxFit {
   return 'l'
 }
 
-/** Keep `data-fit` on the box in step with its own width. Stamped imperatively before paint, as
- *  useRegionCols stamps a region; a hidden box (0 wide) keeps the class it last had. */
+/**
+ * Below this width (CSS px) a six-character call, the frequency and the mode no longer share a line,
+ * so the row stacks: the dashboard rail's box at its floor is 175 px; a Connect box is never under 182.
+ * Measured in Chrome.
+ */
+export const STACK_BELOW = 176
+
+/** Keep `data-fit` (and `data-stack`) on the box in step with its own width. Stamped imperatively
+ *  before paint, as useRegionCols stamps a region; a hidden box (0 wide) keeps what it last had. */
 function useBoxFit<T extends HTMLElement>(): React.RefObject<T> {
   const ref = useRef<T>(null)
   useLayoutEffect(() => {
@@ -48,7 +56,10 @@ function useBoxFit<T extends HTMLElement>(): React.RefObject<T> {
     let raf = 0
     const measure = () => {
       const w = el.clientWidth
-      if (w >= 2) el.setAttribute('data-fit', classifyBoxFit(w))
+      if (w >= 2) {
+        el.setAttribute('data-fit', classifyBoxFit(w))
+        el.toggleAttribute('data-stack', w < STACK_BELOW)
+      }
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return

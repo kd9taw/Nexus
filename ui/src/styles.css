@@ -2104,6 +2104,12 @@ button.nb-chip:hover {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/* …and so does a gauge's value under its name where the two do not fit side by side: in Spanish
+   "VIENTO 487" ran past a 77 px column, and past a 65 px one at the dashboard rail's floor. */
+.connect .pane-body .swx-head,
+.dash-boxes .pane-body .swx-head {
+  flex-wrap: wrap;
+}
 /* ── The Amplifier pane ────────────────────────────────────────────────────────────────
    A readout, never a control surface. The cells auto-fit rather than taking a fixed column
    count, so the same markup works in the ~250px Connect rail and in the wider bottom strip
@@ -17602,7 +17608,12 @@ button.cq-skiptx1.on {
       about 260 px and the head wraps inside the box, never widening it, below that.
    4. A CALL TOO LONG FOR ITS COLUMN ELLIPSIZES inside its own button — the Logbook's rule
       (`.log-cell > .qrz-link-call`): a cell's text-overflow cannot reach into a button, so
-      `KP4/W1ABC` in a 200 px rail was cut mid-glyph. */
+      `KP4/W1ABC` in a 200 px rail was cut mid-glyph.
+   5. BELOW 176 px THE ROW STACKS (SpotsBox stamps `data-stack`): a six-character call, the
+      frequency and the mode no longer share a line, so the call takes a line of its own and the
+      frequency and the mode go under it. The dashboard rail's box at its floor is 175 px, where the
+      one-line row left the call 19 px ("W1AW" cut to one letter, measured in Chrome); a Connect box
+      is never narrower than 182 px, so no Connect box stacks. */
 .cn-spots .np-board,
 .cn-spots .np-board > .np-grid {
   flex: none;
@@ -17636,6 +17647,13 @@ button.cq-skiptx1.on {
 .cn-spots[data-fit='s'] .sp-grid .np-row {
   grid-template-columns: minmax(0, 1fr) 3.9em 3.5em;
   gap: var(--space-1);
+}
+.cn-spots[data-stack] .sp-grid .np-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.cn-spots[data-stack] .np-call,
+.cn-spots[data-stack] [data-col='call'] {
+  grid-column: 1 / -1;
 }
 .cn-spots[data-fit='m'] .sp-state,
 .cn-spots[data-fit='m'] .np-band,
@@ -19931,7 +19949,8 @@ button.cq-skiptx1.on {
    parts instead of running under HUNT. In a card too narrow for its text beside HUNT (the 200 px
    rail) HUNT goes under the text, at the right: the text keeps the card's width rather than a
    100 px column that stacked the call, the reference and each badge a line apiece (152 px a card,
-   measured). The list scrolls in the pane body. */
+   measured). The list scrolls in the pane body. The programme tabs wrap too: at the dashboard rail's
+   floor (a 175 px box) "POTA SOTA Beide" ran 5 px past it, and "Ambos" and "Les deux" as far. */
 [data-ota-box] .pota-controls {
   gap: var(--space-1);
   margin-bottom: var(--space-1);
@@ -19940,6 +19959,7 @@ button.cq-skiptx1.on {
   gap: var(--space-1);
 }
 [data-ota-box] .filter-row {
+  flex-wrap: wrap;
   padding: 0;
   border-bottom: 0;
   gap: var(--space-1);
