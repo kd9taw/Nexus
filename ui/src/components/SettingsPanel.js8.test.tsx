@@ -248,7 +248,7 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     await waitFor(() => expect(api.get('setBetaUpdates'), 'the beta switch still saves').toHaveBeenCalledWith(true))
     // The CW cockpit's macro-set switch, as it writes it.
     await patchSettings((s) => ({ macros: { ...s.macros, activeCwProfile: 2 } }))
-    const sent = api.get('setSettings').mock.calls.at(-1)?.[0] as Settings | undefined
+    const sent = api.get('setSettings').mock.lastCall?.[0] as Settings | undefined
     expect(sent?.macros.activeCwProfile, "a cockpit's own write still saves").toBe(2)
     expect(sent?.js8Groups, 'and keeps the group as it is').toEqual(['@APRSIS'])
   })
