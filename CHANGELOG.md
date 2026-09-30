@@ -489,6 +489,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Connect: the Space Wx gauges sit two to a row.** They were meant to, but stood one per row,
+  so the box ran six gauges deep and its 30-day lines were out of sight below them. Now the
+  gauges take three rows, and at 1920 × 1080 and larger the lines show in the box's usual place
+  along the bottom without scrolling; on smaller windows the box still scrolls to them. In the
+  narrowest column the solar-wind speed's km/s drops under the number so it stays inside the
+  gauge.
+
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a
