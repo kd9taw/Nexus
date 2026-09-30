@@ -518,11 +518,11 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   // and a new state word must be looked at before it joins; either way this list is where it shows.
   const INVENTORY = [
     'amp-fault: .amp-fault.amp-alarm', 'amp-fault: .amp-fault.amp-warn', 'amp-link: .amp-link', 'amp-link: .amp-link.amp-down',
-    'ba-modeled: .ba-modeled [mark]', 'ba-modeled: .ba-modeled [recede]', 'bbt-band: .bbt-band [mark]', 'bbt-band: .bbt-band [recede]',
+    'ba-modeled: .ba-modeled [mark]', 'bbt-band: .bbt-band [mark]',
     'cfeed-ends: .cfeed-ends', 'chase-open: .chase-open.o-open', 'cp-mode: .cp-mode.fair', 'cp-mode: .cp-mode.good',
     'cp-work: .cp-work.w-excellent', 'cp-work: .cp-work.w-fair', 'cp-work: .cp-work.w-good', 'getout-summary: strong', 'go-snr: .go-snr',
-    'heatmap-band: .heatmap-name [mark]', 'heatmap-band: .heatmap-name [recede]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
-    'need-chip: .need-chip.need-band', 'need-chip: .need-chip.need-dxped', 'need-chip: .need-chip.need-entity', 'need-chip: .need-chip.need-mode',
+    'heatmap-band: .heatmap-name [mark]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
+    'need-chip: .need-chip.need-band', 'need-chip: .need-chip.need-dxped', 'need-chip: .need-chip.need-mode',
     'need-chip: .need-chip.need-state', 'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
     'rotor-slewing: .rotor-slewing', 'rotor-stop: .rotor-stop', 'sat-chip: .sat-chip.dead', 'sat-chip: .sat-chip.stale',
     'sat-stale: .sat-stale', 'swsc-chip: .swsc-chip.swsc-major', 'swsc-chip: .swsc-chip.swsc-minor', 'swx-impact: .swx-impact [mark]',
@@ -560,8 +560,8 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   }, 240_000)
 
   // The words with no border of their own that says their state: each must carry an underline or a bar in the
-  // light themes (a closed band's grey excepted: it recedes, unmarked). The rest keep the state on their
-  // chip's or row's border, or (Space Wx) on the gauge's bar above; those are measured in the report.
+  // light themes. The rest keep the state on their chip's or row's border, or (Space Wx) on the gauge's bar
+  // above; those are measured in the report. (A closed band's grey is no state: it recedes, below.)
   const MARKED = ['ba-modeled', 'bbt-band', 'heatmap-band', 'cp-work', 'amp-link', 'kp-line', 'sat-stale', 'rotor-slewing', 'amp-fault']
   it('the state stays on its mark in the light themes: an underline or bar in the state colour, 3:1 off the surface', () => {
     const low: string[] = []
@@ -572,9 +572,8 @@ describe('every state-coloured word on Connect reads in every light theme', () =
         // A bar's colour may arrive in the `border-left` shorthand: the colour is its var() or hex.
         const bar = declAt(RULES, mode, w, i, 'border-left-color', 'border-left')?.match(/var\(--[\w-]+[^)]*\)|#[0-9a-fA-F]{3,8}\b/)?.[0] ?? null
         const mark = line === 'underline' ? declAt(RULES, mode, w, i, 'text-decoration-color') : bar
-        const recedes = w.nodes.some((n) => n.getAttribute('data-state-ink') === 'recede')
         if (!mark) {
-          if (MARKED.includes(w.kind) && !recedes) low.push(`${w.what} ${mode}: no underline or bar carries its state`)
+          if (MARKED.includes(w.kind)) low.push(`${w.what} ${mode}: no underline or bar carries its state`)
           continue
         }
         const bg = surfaceOf(RULES, mode, w)
@@ -676,7 +675,29 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     expect(has(/ spacewx \.swx-impact ".*" light: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
     expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
     expect(has(/ kpOutlook \.kp-line\.warn .* light: #f5a524 on #e5eaf0 = 1\.69:1/), 'the Kp storm line').toBe(true)
-    // Through its row's 50 % dimming: 1.64:1 here, 1.65:1 in Chrome (the dimmed ink rounds a unit apart).
-    expect(has(/ bandAdvisor \.ba-modeled "Closed" light: .* = 1\.6[45]:1/), "a closed band's Closed").toBe(true)
   }, 60_000)
+
+  // A CLOSED BAND RECEDES BY ITS INK, NEVER BY FADING (operator, 2026-09-30: "Closed rows and chips fade by colour instead of
+  // transparency"). The Band Advisor's closed rows and Band Outlook's closed mode chips faded by opacity, and a closed
+  // band's name in the 24-hour chart and the Best Band table lettered in the closed grey. In the dark theme, in Chrome,
+  // the row's "Closed" read 1.98:1, the reason under it 2.26:1, the chip 2.05:1 and the names 4.47:1. Each now recedes by
+  // its ink alone, so every word they letter is held to 4.5:1 in every theme, light and dark, with nothing dimming it.
+  const isClosed = (w: Word) =>
+    w.nodes.some((n) => (n.classList.contains('ba-row') && n.classList.contains('is-closed')) || n.getAttribute('data-state-ink') === 'recede') ||
+    w.nodes[w.nodes.length - 1].matches('.cp-mode.closed')
+  const CLOSED_INVENTORY = ['.ba-band', '.ba-modeled', '.ba-people', '.ba-reason', '.bbt-band', '.cp-mode.closed', '.heatmap-name', '.heatmap-rel']
+  it('a closed band recedes by its ink: every word it letters reads 4.5:1 in every theme, and nothing dims it', () => {
+    const closed = all.filter(isClosed)
+    expect([...new Set(closed.map(ownOf))].sort()).toEqual(CLOSED_INVENTORY)
+    const low: string[] = []
+    for (const w of closed)
+      for (const mode of [...LIGHT, ...DARK]) {
+        if (!shown(RULES, mode, w)) continue
+        const o = opacityOf(RULES, mode, w)
+        if (o !== 1) low.push(`${w.what} ${mode}: dimmed to ${o}`)
+        const { fg, bg, ratio } = wordOf(RULES, mode, w)
+        if (ratio < 4.5) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+      }
+    expect(low).toEqual([])
+  }, 120_000)
 })

@@ -404,8 +404,13 @@ function everyNeed(chips: Chip[]): Chip[] {
 const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
-/** The chip as it shipped before any light-theme rule of its own: every light rule on a need chip or a need colour, removed. */
-const SHIPPED = RULES.filter((r) => !(r.selector.startsWith("[data-theme='light'] ") && /\.need-(chip|pota|sota)\b/.test(r.selector)))
+/** The chip as it shipped, before any rule of its own lettered it in ink: every light rule on a need chip or a need
+ *  colour, and the NEW ONE chip's ink in every theme, removed. */
+const SHIPPED = RULES.filter(
+  (r) =>
+    !(r.selector.startsWith("[data-theme='light'] ") && /\.need-(chip|pota|sota)\b/.test(r.selector)) &&
+    !(/\.need-chip\b/.test(r.selector) && r.decls.some((d) => d.prop === 'color' && d.value === 'var(--text)')),
+)
 
 const skinsOf = (theme: 'light' | 'dark') => ['', ...SKINS.filter((s) => s.base === theme).map((s) => s.id)]
 /** Every built-in light theme: the four light modes, bare and on each light theme, and the standard light theme under each
@@ -628,6 +633,9 @@ describe('a need chip reads in every light theme, wherever it sits', () => {
     ["a worked station's card", (e) => e.classes.includes('station-card') && e.classes.includes('worked')],
   ]
   const dipOf = (w: Chip) => DIPS.find(([, is]) => w.chain.some(is))?.[0] ?? null
+  /** A row that tints itself or dims: the three above, or a Band Activity row in a need's colour. In the night modes the
+   *  dark ink on NEW ONE reads 4.35–4.46:1 in them (measured: a watched station's row, a worked station's card). */
+  const tintsOrDims = (w: Chip) => dipOf(w) != null || w.chain.some((e) => e.classes.includes('decode-row') && e.classes.some((c) => c.startsWith('need-')))
   it('the need stays on the border at full strength, 3:1 off what the chip sits on in every light theme (2.7:1 in the three rows that tint or dim)', () => {
     const low: string[] = []
     for (const w of chips)
@@ -646,18 +654,24 @@ describe('a need chip reads in every light theme, wherever it sits', () => {
     expect(DIPS.filter(([name]) => !chips.some((w) => dipOf(w) === name)).map(([name]) => name), 'rows with no chip').toEqual([])
   }, 240_000)
 
-  // Dark is untouched. That is checked by what dark paints, not against the sheet minus this change's rules, which a rule
-  // escaping the light theme would be in as well: in every dark theme each chip letters in its own need colour, and its
-  // border stays a mix of it.
-  it('in every dark theme each chip letters in its own need colour, its border a mix of it, as before', () => {
+  // Dark keeps the need colours. That is checked by what dark paints, not against the sheet minus this change's rules,
+  // which a rule escaping the light theme would be in as well: in every dark theme each chip letters in its own need
+  // colour, and its border stays a mix of it. The one exception is NEW ONE (operator, 2026-09-30, the dark batch: "the NEW
+  // ONE chip's word goes to the text colour"): its magenta on its own tint read 4.27:1 on the dark page, so it letters in
+  // the theme's ink, at 4.5:1 (4.3:1 in a row that tints or dims), with the need kept on its tint and border.
+  it('in every dark theme each chip letters in its own need colour (NEW ONE in the ink, at 4.5:1), its border a mix of it', () => {
     const moved: string[] = []
     for (const w of chips)
       for (const mode of DARK) {
         const i = w.chain.length - 1
         const ink = inkOf(RULES, mode, w)
         const raw = colourAt(RULES, mode, w, ink.at, ink.value, [0, 0, 0])
-        const need = colourAt(RULES, mode, w, i, 'var(--need-color, var(--accent))', [0, 0, 0])
-        if (hex(raw) !== hex(need)) moved.push(`${w.what} ${mode}: lettered ${hex(raw)}, not its need colour ${hex(need)}`)
+        const need = colourAt(RULES, mode, w, i, w.cls === 'entity' ? 'var(--text)' : 'var(--need-color, var(--accent))', [0, 0, 0])
+        if (hex(raw) !== hex(need)) moved.push(`${w.what} ${mode}: lettered ${hex(raw)}, not ${w.cls === 'entity' ? 'the ink' : 'its need colour'} ${hex(need)}`)
+        if (w.cls === 'entity') {
+          const { fg, bg, ratio } = wordOf(RULES, mode, w)
+          if (ratio < (tintsOrDims(w) ? 4.3 : 4.5)) moved.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+        }
         const border = edgeOf(RULES, mode, w)?.value ?? 'none'
         if (!border.includes('color-mix(')) moved.push(`${w.what} ${mode}: the border is ${border}, not a mix of the need colour`)
       }

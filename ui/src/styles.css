@@ -777,8 +777,10 @@ button.nb-chip:hover {
 .ba-row:hover {
   background: var(--bg-elev);
 }
+/* A closed band recedes by its ink, not by fading the row: at half opacity its "Closed" read 1.98:1 and the reason
+   under it 2.26:1 in the dark theme, and the "Closed" 1.65:1 in the light one. */
 .ba-row.is-closed {
-  opacity: 0.5;
+  color: var(--text-dim);
 }
 .ba-band {
   font-family: var(--font-mono);
@@ -1366,8 +1368,9 @@ button.nb-chip:hover {
   color: var(--band-marginal);
   border-color: var(--band-marginal);
 }
+/* A closed mode recedes by the chip's faint ink and its strike, not by fading: at 45 % it read 2.05:1 in the dark
+   theme and 1.86:1 in the light one. */
 .cp-mode.closed {
-  opacity: 0.45;
   text-decoration: line-through;
 }
 /* Two small numeric inputs side-by-side (e.g. TX/RX antenna gain). */
@@ -2160,8 +2163,9 @@ body.resizing-row {
    to 3:1, by components/connect/ConnectStateWords.contrast.test.tsx. */
 
 /* Words whose state colour comes from their component as `--state-ink`, flagged `data-state-ink`: a
-   'mark' (a state) or 'recede' (the closed-band grey, which is no highlight: in the light themes it is
-   the dim ink, unmarked, since as an underline it read 2.9:1). propViz.stateInkKind decides. */
+   'mark' (a state) or 'recede' (the closed-band grey, which is no highlight: in every theme it is the
+   dim ink, unmarked, since as an underline it read 2.9:1 in the light themes and as lettering 4.47:1 in
+   the dark one). propViz.stateInkKind decides. */
 .ba-modeled[data-state-ink],
 .bbt-band[data-state-ink],
 .heatmap-band[data-state-ink],
@@ -2174,9 +2178,9 @@ body.resizing-row {
 [data-theme='light'] .swx-impact[data-state-ink='mark'] {
   color: var(--text);
 }
-[data-theme='light'] .ba-modeled[data-state-ink='recede'],
-[data-theme='light'] .bbt-band[data-state-ink='recede'],
-[data-theme='light'] .heatmap-band[data-state-ink='recede'] {
+.ba-modeled[data-state-ink='recede'],
+.bbt-band[data-state-ink='recede'],
+.heatmap-band[data-state-ink='recede'] {
   color: var(--text-dim);
 }
 [data-theme='light'] .ba-modeled[data-state-ink='mark'],
@@ -2186,12 +2190,6 @@ body.resizing-row {
   text-decoration-color: var(--state-ink);
   text-decoration-thickness: 0.15em;
   text-underline-offset: 0.25em;
-}
-/* A closed band recedes by its ink, not by fading the row: at half opacity its "Closed" read 1.6:1 and
-   its band name 3.1:1 in the light theme. */
-[data-theme='light'] .ba-row.is-closed {
-  opacity: 1;
-  color: var(--text-dim);
 }
 
 /* Words coloured by their class: the same, from the sheet. */
@@ -6959,6 +6957,11 @@ select optgroup {
 }
 .need-watch {
   --need-color: var(--need-watch);
+}
+/* NEW ONE letters in the theme's text colour in every theme: its magenta on its own tint read 4.27:1 on the dark
+   page and 2.49:1 on a watched station's row in Band Activity. The need stays on the chip's tint and border. */
+.need-chip.need-entity {
+  color: var(--text);
 }
 /* NEED CHIPS IN THE LIGHT THEMES, WHEREVER THEY SIT (Band Activity, the Call Roster, the station cards,
    the WATCH tile, the Needed board, Spots, the Satellites section and Connect). Lettered in its need

@@ -840,6 +840,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
   page. In the light themes they now take the theme's text colour, underlined in the accent. The
   dark themes look exactly as before.
+- **Closed bands and the NEW ONE chip are easy to read in the dark themes.** The Band Advisor
+  faded a closed band's row, and Band Outlook a closed mode chip, by making them see-through, which
+  left the row's "Closed" and its reason and the struck-through mode very hard to read in the dark
+  themes (and the mode chip in the light ones too). They now fade by their colour instead, and a
+  closed band's name in the 24-hour chart and the Best Band table takes the same dimmer grey. The
+  NEW ONE need chip letters its word in the theme's text colour in every theme, with its magenta
+  kept on the chip.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
