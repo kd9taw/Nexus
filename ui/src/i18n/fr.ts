@@ -5778,6 +5778,7 @@ export const FR: PartialCatalog = {
   "shell.logStore.failed": "Nexus n'a pas pu ouvrir la base de données du journal. Raison : {{reason}}. Rien n'est perdu : cette session tient votre journal dans log.adi, comme avant. Le journal de diagnostic donne les détails, dans Réglages ▸ Journal et connecteurs ▸ Intégrations et flux ▸ Diagnostic log.",
   "shell.keptFile.pendingQso": "Nexus n'a pas pu lire le fichier des QSO qui attendaient dans la fenêtre « Enregistrer ce QSO ? » : il a donc conservé ce fichier, intact, sous {{path}}. Rien n'a été supprimé.",
   "shell.keptFile.fieldDay": "Nexus n'a pas pu lire en entier la sauvegarde de votre journal de Field Day ou du concours : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé une nouvelle avec les contacts qu'il a pu lire. Rien n'a été supprimé.",
+  "shell.keptFile.js8Inbox": "Nexus n'a pas pu lire votre boîte de réception JS8 : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé une nouvelle. Rien n'a été supprimé.",
   "shell.keptFile.other": "Nexus n'a pas pu lire l'un de ses fichiers : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé un nouveau. Rien n'a été supprimé.",
   "shell.keptFile.keptInPlace": "Nexus n'a pas pu lire {{path}} ni le mettre de côté : il a donc laissé le fichier où il est et n'écrira pas par-dessus. Rien n'a été supprimé. Déplacez ou réparez le fichier, puis redémarrez Nexus.",
   "quit.logbook.saving.title": "Enregistrement de votre journal…",

@@ -573,13 +573,29 @@ impl Engine {
         self.js8_journal_path = Some(path);
     }
 
-    /// Restore the journal at startup (best-effort: a missing/corrupt file yields an empty
-    /// station, exactly like `load_pending_msgs`).
+    /// Restore a journal's text (best-effort: text that does not parse yields an empty station).
     pub fn js8_load_journal(&mut self, text: &str) {
         let Ok(snap) = serde_json::from_str::<StationSnapshot>(text) else {
             return;
         };
         self.js8_station.restore(snap, now_unix_secs() * 1000);
+    }
+
+    /// Restore the journal at launch, from the path the shell set ([`Self::set_js8_journal_path`]).
+    /// A journal this build cannot read — torn, or from a newer build with a value this one does
+    /// not know — holds stored messages, so it is kept aside ([`tempo_core::keep_aside`]) and the
+    /// screen says where, rather than starting empty and letting the next inbox change write
+    /// over it.
+    pub fn restore_js8_journal(&mut self, now_unix: i64) {
+        let Some(path) = self.js8_journal_path.clone() else {
+            return;
+        };
+        let snap = tempo_core::keep_aside::read_or_keep("js8Inbox", &path, now_unix, |text| {
+            serde_json::from_str::<StationSnapshot>(text).map_err(|e| e.to_string())
+        });
+        if let Some(snap) = snap {
+            self.js8_station.restore(snap, now_unix_secs() * 1000);
+        }
     }
 
     /// Journal the station the MOMENT its inbox changes — write-tmp + fsync + rename, like
@@ -593,6 +609,11 @@ impl Engine {
         let Some(path) = &self.js8_journal_path else {
             return;
         };
+        // A journal this run could not read and could not move aside holds stored messages: it
+        // is never written over (`restore_js8_journal`).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         let Ok(text) = serde_json::to_string(&self.js8_station.snapshot(now_ms)) else {
             return;

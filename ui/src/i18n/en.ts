@@ -9421,6 +9421,8 @@ export const EN = {
     'Nexus could not read the file of QSOs that were waiting in the “Log this QSO?” popup, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
   'shell.keptFile.fieldDay':
     'Nexus could not read all of the backup of your Field Day or contest log, so it kept that file, untouched, at {{path}}, and started a new backup from the contacts it could read. Nothing was deleted.',
+  'shell.keptFile.js8Inbox':
+    'Nexus could not read your JS8 inbox, so it kept that file, untouched, at {{path}}, and started a new inbox. Nothing was deleted.',
   'shell.keptFile.other':
     'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
   'shell.keptFile.keptInPlace':

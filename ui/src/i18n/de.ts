@@ -5816,6 +5816,7 @@ export const DE: PartialCatalog = {
   "shell.logStore.failed": "Nexus konnte die Logbuch-Datenbank nicht öffnen. Grund: {{reason}}. Es geht nichts verloren: Diese Sitzung führt dein Log wie bisher in log.adi. Die Einzelheiten stehen im Diagnoseprotokoll, unter Einstellungen ▸ Logbuch & Konnektoren ▸ Integrationen & Feeds ▸ Diagnostic log.",
   "shell.keptFile.pendingQso": "Nexus konnte die Datei mit den QSOs, die im Fenster „Dieses QSO loggen?“ warteten, nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt. Es wurde nichts gelöscht.",
   "shell.keptFile.fieldDay": "Nexus konnte die Sicherung Ihres Field-Day- oder Contest-Logs nicht vollständig lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und eine neue Sicherung wurde aus den lesbaren Kontakten begonnen. Es wurde nichts gelöscht.",
+  "shell.keptFile.js8Inbox": "Nexus konnte Ihren JS8-Posteingang nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und ein neuer Posteingang wurde begonnen. Es wurde nichts gelöscht.",
   "shell.keptFile.other": "Nexus konnte eine seiner Dateien nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und eine neue wurde begonnen. Es wurde nichts gelöscht.",
   "shell.keptFile.keptInPlace": "Nexus konnte {{path}} nicht lesen und die Datei auch nicht beiseitelegen. Sie bleibt, wo sie ist, und Nexus überschreibt sie nicht. Es wurde nichts gelöscht. Verschieben oder reparieren Sie die Datei, und starten Sie Nexus dann neu.",
   "quit.logbook.saving.title": "Dein Logbuch wird gespeichert…",

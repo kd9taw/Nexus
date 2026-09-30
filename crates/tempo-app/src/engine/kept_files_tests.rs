@@ -446,3 +446,139 @@ fn no_field_day_journal_is_a_first_run() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ── js8_station.json: the JS8 inbox ──────────────────────────────────────────────────────────
+
+/// A JS8 station journal as this build writes it: one stored message from W1AW.
+fn a_js8_journal() -> String {
+    let at_ms = tempo_core::timing::now_unix_ms() as u64;
+    format!(
+        r#"{{"inbox":[{{"id":1,"from":"W1AW","to":"K2DEF","text":"FRIDAY CONTACT","path":[],"state":"store","atMs":{at_ms},"freqHz":1750.0,"snrDb":-10}}],"heard":[],"allcallReplied":[],"nextInboxId":2}}"#
+    )
+}
+
+fn js8_engine_on(path: &Path) -> Engine {
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.set_js8_journal_path(path.to_path_buf());
+    e
+}
+
+fn inbox_from(e: &Engine) -> Vec<String> {
+    e.js8_state().inbox.iter().map(|m| m.from.clone()).collect()
+}
+
+/// The inbox changes (a message is stored, then read), as the radio loop and the operator
+/// change it: the journal is written.
+fn change_the_inbox(e: &mut Engine) {
+    e.js8_load_journal(&a_js8_journal());
+    e.js8_inbox_mark(1, ::js8::proto::station::InboxState::Read)
+        .expect("the stored message");
+    e.journal_mark().wait();
+}
+
+fn assert_js8_kept(what: &str, bytes: Vec<u8>) {
+    let dir = scratch("js8");
+    let path = dir.join("js8_station.json");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut e = js8_engine_on(&path);
+    e.restore_js8_journal(NOW);
+    assert_eq!(
+        inbox_from(&e),
+        Vec::<String>::new(),
+        "{what}: nothing is read out of it"
+    );
+    change_the_inbox(&mut e);
+
+    assert_eq!(
+        holding(&dir, &bytes),
+        vec![aside(&dir, "js8_station.json")],
+        "{what}: the unreadable journal must survive the next inbox change, byte for byte, moved aside"
+    );
+    assert_eq!(
+        kept_under(&e, &dir),
+        vec![kept("js8Inbox", &aside(&dir, "js8_station.json"), false)],
+        "{what}: the screen is told where it is"
+    );
+    let mut relaunched = js8_engine_on(&path);
+    relaunched.restore_js8_journal(NOW + 1);
+    assert_eq!(
+        inbox_from(&relaunched),
+        vec!["W1AW".to_string()],
+        "{what}: the new journal is this build's"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_js8_journal_cut_short_is_kept_and_never_written_over() {
+    let whole = a_js8_journal().into_bytes();
+    assert_js8_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+}
+
+/// A value this build does not know: an inbox state from a later build.
+#[test]
+fn a_js8_journal_with_a_value_this_build_does_not_know_is_kept_and_never_written_over() {
+    let unknown = a_js8_journal().replacen("\"state\":\"store\"", "\"state\":\"forwarded\"", 1);
+    assert!(
+        unknown.contains("forwarded"),
+        "the fixture must carry the unknown value"
+    );
+    assert_js8_kept("an unknown value", unknown.into_bytes());
+}
+
+#[test]
+fn a_js8_journal_that_cannot_be_moved_is_never_written_over() {
+    let dir = scratch("js8-stuck");
+    let path = dir.join("js8_station.json");
+    let bytes = b"{\"inbox\":[{\"id\":1,\"from\":\"W1AW\"".to_vec();
+    std::fs::write(&path, &bytes).unwrap();
+    take_every_aside_name(&dir, "js8_station.json");
+
+    let mut e = js8_engine_on(&path);
+    e.restore_js8_journal(NOW);
+    change_the_inbox(&mut e);
+    assert_eq!(
+        std::fs::read(&path).ok(),
+        Some(bytes),
+        "the unreadable journal must never be written over"
+    );
+    assert_eq!(
+        kept_under(&e, &dir),
+        vec![kept("js8Inbox", &path, true)],
+        "the screen is told it was left in place"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_js8_journal_whose_only_news_is_fields_restores_as_it_always_has() {
+    let dir = scratch("js8-fields");
+    let path = dir.join("js8_station.json");
+    let journal = a_js8_journal()
+        .replacen("{\"inbox\"", "{\"aNewField\":7,\"inbox\"", 1)
+        .replacen("\"snrDb\"", "\"aNewEntryField\":true,\"snrDb\"", 1);
+    assert!(journal.contains("aNewEntryField"));
+    std::fs::write(&path, &journal).unwrap();
+    let mut e = js8_engine_on(&path);
+    e.restore_js8_journal(NOW);
+    assert_eq!(
+        (inbox_from(&e), kept_under(&e, &dir)),
+        (vec!["W1AW".to_string()], vec![]),
+        "restored as it always has, with nothing to say"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn no_js8_journal_is_a_first_run() {
+    let dir = scratch("js8-none");
+    let mut e = js8_engine_on(&dir.join("js8_station.json"));
+    e.restore_js8_journal(NOW);
+    assert_eq!(
+        (inbox_from(&e), kept_under(&e, &dir)),
+        (Vec::<String>::new(), vec![]),
+        "no journal: an empty inbox and nothing to say"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

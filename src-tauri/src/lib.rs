@@ -29353,12 +29353,10 @@ fn start_on_the_logbook(
         if let Ok(text) = std::fs::read_to_string(pending_msgs_path()) {
             eng.load_pending_msgs(&text);
         }
-        // JS8 store-and-forward inbox: same contract as the Tempo journal above —
-        // best-effort, a missing or corrupt file yields an empty station.
+        // JS8 store-and-forward inbox: a missing file is an empty station; one this build cannot
+        // read is kept aside, and the screen says where.
         eng.set_js8_journal_path(js8_station_path());
-        if let Ok(text) = std::fs::read_to_string(js8_station_path()) {
-            eng.js8_load_journal(&text);
-        }
+        eng.restore_js8_journal(now_unix());
         // Restore persisted Tempo conversation threads so chat history (and the `*`
         // band feed) survives an app restart. Best-effort: a missing/corrupt file
         // just yields an empty roster of threads.
