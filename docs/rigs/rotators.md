@@ -91,7 +91,7 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 | Idiom Press Rotor-EZ (az) | 401 |
 | Hy-Gain DCU-1/DCU-1X (az) | 403 |
 | Hy-Gain DCU2/DCU3/YRC-1 (az) | 406 |
-| DF9GR ERC (az) | 404 |
+| DF9GR ERC, DCU-1 mode (az) | 404 |
 | Green Heron RT-21 | 405 |
 | M2 RC2800 (az/el) | 1001 |
 | Prosistel D (az) | 1701 |

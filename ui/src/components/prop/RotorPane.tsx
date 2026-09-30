@@ -331,6 +331,12 @@ export function RotorPane() {
                     setSatTrack(null)
                     return stopRotator()
                   })
+                  .then(() => {
+                    // Stopped, so heading nowhere: what it was sent to is no longer on its way.
+                    // Not before the rotator answers — a stop that failed may leave it moving.
+                    setTarget(null)
+                    setTargetEl(null)
+                  })
                   .catch((e) =>
                     pushToast(
                       t('rotor.stop.failed', {

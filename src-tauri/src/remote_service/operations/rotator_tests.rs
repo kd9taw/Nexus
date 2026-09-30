@@ -225,3 +225,76 @@ fn rotator_actions_refuse_extra_fields_and_a_logging_only_grant() {
     assert_eq!(run(&f2, 3, &command), Err("localPermissionRequired"));
     assert!(fake.lines().is_empty());
 }
+
+/// One rotator gesture from a browser, and its receipt once the worker has finished it.
+fn point_from_a_browser(f: &Fixture, action: Value) -> Value {
+    let state = acquire_controls_version(f, Instant::now(), 3);
+    settle(f, &control_request(&state, action))
+}
+
+#[test]
+fn a_remote_azimuth_move_keeps_an_az_el_masts_elevation() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
+    let (f, fake) = station();
+    fake.mast(test_rotor::Mast::AzEl {
+        az: 123.0,
+        el: 45.0,
+    });
+    let turned = point_from_a_browser(&f, json!({"action":"rotator.point","azimuthDeg":200}));
+    assert_eq!(turned["outcome"], "applied");
+    // ⭐ THE BUG, from a browser: `P 200.0 0` laid a G-5500's antenna on the horizon.
+    assert_eq!(fake.lines(), vec!["P 200.0 45.0\n".to_string()]);
+    // Point-at-call is the same move on the wire, so it keeps the elevation too.
+    let called = point_from_a_browser(&f, json!({"action":"rotator.pointAtCall","call":"JA1ABC"}));
+    assert_eq!(called["outcome"], "applied");
+    let me = propagation::geo::maidenhead_to_latlon("FN31").unwrap();
+    let info = propagation::dxcc::resolve("JA1ABC").unwrap();
+    let bearing = propagation::geo::bearing_deg(me, (info.lat, info.lon));
+    let kept = tempo_audio::rotator::point_line(bearing).replace(" 0\n", " 45.0\n");
+    assert_eq!(fake.lines()[1], kept);
+    assert!(!f.engine.lock().unwrap().tx_enabled());
+}
+
+#[test]
+fn a_remote_azimuth_move_sends_an_azimuth_only_mast_exactly_the_line_it_always_did() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
+    let (f, fake) = station(); // the fake's default: an azimuth-only backend
+    let turned = point_from_a_browser(&f, json!({"action":"rotator.point","azimuthDeg":200}));
+    assert_eq!(turned["outcome"], "applied");
+    assert_eq!(fake.lines(), vec![tempo_audio::rotator::point_line(200.0)]);
+}
+
+#[test]
+fn a_remote_azimuth_move_sends_nothing_when_rotctld_does_not_say_what_the_mast_is() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
+    let (f, fake) = station();
+    fake.mast(test_rotor::Mast::Silent);
+    // A busy rotctld leaves `\dump_state` unanswered. Reading that as "azimuth-only" would send
+    // a G-5500 `P <az> 0`, so, as on the desktop, nothing reaches the mast.
+    let turned = point_from_a_browser(&f, json!({"action":"rotator.point","azimuthDeg":200}));
+    assert_ne!(turned["outcome"], "applied");
+    assert!(fake.lines().is_empty(), "{:?}", fake.lines());
+}
+
+/// The host's own `send` is `#[cfg(not(test))]`, so no test above runs it: which function it
+/// calls is the property, and only its source says so. Source-scanned, like the desktop's
+/// `manual_pointing_tests`.
+#[test]
+fn the_host_turns_a_remote_mast_through_the_desktops_keeping_path() {
+    let src = include_str!("rotator.rs");
+    let body = src
+        .split_once("#[cfg(not(test))]\nfn send(")
+        .expect("the host's own send")
+        .1
+        .split_once("\n}\n")
+        .expect("its end")
+        .0;
+    assert!(
+        body.contains("tempo_audio::rotator::point_keeping(addr, Some(az), None)"),
+        "a Remote azimuth move must keep the elevation, as the desktop's does"
+    );
+    assert!(
+        !body.contains("tempo_audio::rotator::point(addr"),
+        "the host sends `P <az> 0`, the elevation of zero, on a Remote azimuth move"
+    );
+}

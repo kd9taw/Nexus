@@ -551,8 +551,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   axis rather than going by its name, so an azimuth-only rotator, such as a Rotor-EZ, a DCU-1, a
   SPID Rot1Prog or a Green Heron RT-21, gets exactly the command it always did. If that program is
   too busy to answer, the move is refused with a message saying so rather than guessed. A
-  satellite pass steers both axes as before. Turning the beam from Nexus Remote in a browser still
-  sends the elevation to 0°.
+  satellite pass steers both axes as before.
+- **Turning the beam from Nexus Remote keeps an az/el rotator's elevation too.** A bearing sent from
+  the Remote page in a browser, typed or from a callsign, still set the elevation of an az/el
+  rotator such as a Yaesu G-5500 to 0°. It now goes through the same check as the desktop: the
+  elevation goes back with the new bearing, an azimuth-only rotator gets exactly the command it
+  always did, and when the rotator's control program is too busy to say which kind it is, nothing
+  is sent.
+- **The Rotor pane's ■ STOP is easy to read in the light theme.** Its red was the dark theme's, and
+  on a light theme's pane it read faintly (about 2.2:1), on the one button that stops the antenna
+  turning. It now takes the same red as the cockpits' Stop TX in every theme, dark and light,
+  high-contrast and night included, and when you point at it, it turns solid red with the pane's
+  own colour for its letters.
+- **The Rotor pane's → lines go away when you press ■ STOP.** The line that shows where the antenna
+  is going (`→ 200°`, and `→ EL 30°` for an elevation) and the dashed target on the compass stayed
+  after STOP until the antenna reached a heading it was no longer going to, so a stopped antenna
+  looked as if it were still turning. They now clear as soon as the rotator confirms the stop. If
+  the stop does not reach it, they stay, since the antenna may still be moving.
+- **The rotator guide names the DF9GR ERC entry as Settings does.** Its list of rotator models still
+  called it "DF9GR ERC (az)" after the picker renamed it "DF9GR ERC, DCU-1 mode (az)" to say which
+  of the board's modes it drives, so the guide sent readers looking for an entry that was not there.
+  The list is now checked against the picker, entry by entry.
 - **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
   compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
   cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the

@@ -93,17 +93,26 @@ pub fn write(completion: &Completion, addr: &str, command: Command) {
 #[cfg(not(test))]
 fn send(addr: &str, command: Command) -> std::io::Result<()> {
     match command {
-        Command::Point(az) => tempo_audio::rotator::point(addr, az),
+        // A move by hand, as the desktop's: an az/el mast keeps its elevation where it is. The
+        // pass's `rotator::point` sends `P <az> 0`, which on a G-5500 is an elevation of zero.
+        Command::Point(az) => tempo_audio::rotator::point_keeping(addr, Some(az), None),
         Command::Stop => tempo_audio::rotator::stop(addr),
     }
 }
 
 /// Under test the exact rotctld line goes to an in-process fake at that address; an address with
-/// no fake is an error, so a test can never open a socket to a real rotator.
+/// no fake is an error, so a test can never open a socket to a real rotator. A point is decided by
+/// the desktop's own rule (`keeping_line`, which `point_keeping` runs over TCP), with the fake
+/// answering what its mast is and where.
 #[cfg(test)]
 fn send(addr: &str, command: Command) -> std::io::Result<()> {
     let line = match command {
-        Command::Point(az) => tempo_audio::rotator::point_line(az),
+        Command::Point(az) => tempo_audio::rotator::keeping_line(
+            test_rotor::limits(addr),
+            || test_rotor::position(addr),
+            Some(az),
+            None,
+        )?,
         Command::Stop => "S\n".to_string(),
     };
     test_rotor::call(addr, &line)
@@ -120,15 +129,40 @@ pub mod test_rotor {
         lines: Mutex<Vec<String>>,
         fail: AtomicBool,
         hold: Mutex<Option<mpsc::Receiver<()>>>,
+        mast: Mutex<Mast>,
     }
+
+    /// What the fake rotctld says the mast is when asked (`\dump_state`), and where it is (`p`).
+    #[derive(Clone, Copy, Debug)]
+    pub enum Mast {
+        /// An azimuth-only Hamlib backend, declared as the Rotor-EZ family declares itself. The
+        /// default: it gets exactly the line a Remote azimuth move always sent.
+        AzimuthOnly,
+        /// An az/el rotator (a Yaesu G-5500 on its GS-232B) at `az` / `el`.
+        AzEl { az: f64, el: f64 },
+        /// A rotctld too busy to answer `\dump_state` before its deadline.
+        Silent,
+    }
+
+    /// What real backends answer `\dump_state` with (rotctld 4.5.5, over a pty): the Rotor-EZ
+    /// (401) and the GS-232B (603).
+    const ROTOR_EZ_STATE: &str = "1\n401\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                                  max_el=0.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+    const GS232B_STATE: &str = "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                                max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n";
 
     impl Fake {
         pub fn addr(&self) -> &str {
             &self.addr
         }
-        /// Every rotctld line this fake received, in order.
+        /// Every rotctld command line this fake received, in order: the moves and stops that reach
+        /// the mast. Its questions (`\dump_state`, `p`) are answered from [`Mast`], not recorded.
         pub fn lines(&self) -> Vec<String> {
             self.lines.lock().unwrap().clone()
+        }
+        /// What the mast is, from now on.
+        pub fn mast(&self, mast: Mast) {
+            *self.mast.lock().unwrap() = mast;
         }
         /// Answer every later command with a rotctld error.
         pub fn fail(&self, on: bool) {
@@ -150,6 +184,7 @@ pub mod test_rotor {
             lines: Mutex::new(Vec::new()),
             fail: AtomicBool::new(false),
             hold: Mutex::new(None),
+            mast: Mutex::new(Mast::AzimuthOnly),
         });
         FAKES
             .lock()
@@ -159,15 +194,43 @@ pub mod test_rotor {
         fake
     }
 
-    pub(super) fn call(addr: &str, line: &str) -> std::io::Result<()> {
-        let fake = FAKES
+    fn get(addr: &str) -> std::io::Result<Arc<Fake>> {
+        FAKES
             .lock()
             .unwrap()
             .as_ref()
-            .and_then(|fakes| fakes.get(addr).cloned());
-        let Some(fake) = fake else {
-            return Err(std::io::Error::other("no test rotator at this address"));
+            .and_then(|fakes| fakes.get(addr).cloned())
+            .ok_or_else(|| std::io::Error::other("no test rotator at this address"))
+    }
+
+    /// The fake's answer to `\dump_state`, as `tempo_audio::rotator::read_limits` returns one.
+    pub(super) fn limits(addr: &str) -> std::io::Result<Option<tempo_audio::rotator::Limits>> {
+        let mast = *get(addr)?.mast.lock().unwrap();
+        let state = match mast {
+            Mast::AzimuthOnly => ROTOR_EZ_STATE,
+            Mast::AzEl { .. } => GS232B_STATE,
+            Mast::Silent => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "rotctld did not answer \\dump_state",
+                ))
+            }
         };
+        Ok(tempo_audio::rotator::parse_limits(state))
+    }
+
+    /// The fake's answer to `p`, as `tempo_audio::rotator::read_position` returns one.
+    pub(super) fn position(addr: &str) -> std::io::Result<(f64, Option<f64>)> {
+        let mast = *get(addr)?.mast.lock().unwrap();
+        match mast {
+            Mast::AzEl { az, el } => Ok((az, Some(el))),
+            // An azimuth-only backend reports its elevation as 0.
+            _ => Ok((0.0, Some(0.0))),
+        }
+    }
+
+    pub(super) fn call(addr: &str, line: &str) -> std::io::Result<()> {
+        let fake = get(addr)?;
         let hold = fake.hold.lock().unwrap().take();
         if let Some(release) = hold {
             let _ = release.recv();
