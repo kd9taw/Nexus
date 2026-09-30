@@ -160,9 +160,11 @@ and who hears you stay in view while you operate. It is off until you turn it on
 of the Now-Bar. Each cockpit remembers its own choice. The rail opens with the **Clock**,
 **Bands for you**, **Space Wx** and **Getting Out**; each box has the same picker as a Connect
 slot, so any pane can take its place, its **✕** closes it, and the **⊞ Panels** menu in the
-rail's head brings a closed box back or resets the rail. Drag the rail's left edge to make it
-wider or narrower (200–720 px), or the line between two boxes to share the height between them;
-both also work from the keyboard, and a double-click puts the default back. The rail shows only
+rail's head brings a closed box back or resets the rail. A box's **⋯** sets its own text size
+there as on Connect (tabs stay Connect's), and the rail's Reset puts every box back at 100%.
+Drag the rail's left edge to make it wider or narrower (200–720 px), or the line between two
+boxes to share the height between them; both also work from the keyboard, and a double-click
+puts the default back. The rail shows only
 on a large window, about 1600 px wide at your zoom (a 1366×768 laptop at its usual 85 %
 qualifies), and the cockpit beside it is never narrower than it is on a 1024×768 screen, so a
 saved width is trimmed to fit. On a smaller window the rail stays hidden, and the ⊞ Panels entry

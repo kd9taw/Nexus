@@ -196,7 +196,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time, the bands and who hears you stay in view while you operate. It is off until you turn it
   on, and Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8 each remember their own choice. Each
   box has the same menu as a Connect box, so any Connect box can take its place; its **✕** closes
-  it, and the rail's own **⊞ Panels** brings it back or resets the rail. Drag the rail's left edge
+  it, and the rail's own **⊞ Panels** brings it back or resets the rail. A box's **⋯** sets its own
+  text size there too, and the rail's Reset puts every box back at 100%. Drag the rail's left edge
   to make it wider or narrower, and the line between two boxes to share the height between them;
   both work from the keyboard too. The rail appears only on a large window (about 1600 px wide at
   your zoom, which includes a 1366×768 laptop at its usual 85 %), and the cockpit beside it is

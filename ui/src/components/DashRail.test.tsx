@@ -6,7 +6,7 @@
 // The one-poll claim with Connect beside it is DashRail.feeds.test.tsx; the rail beside the real
 // cockpits (off by default, per section, the doors, the stop line) is App.dashRail.test.tsx.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { AppSnapshot, OtaSpot, PropagationSnapshot, SpotRow } from '../types'
 
 // The boards the window lends the Spots and POTA/SOTA boxes, so the sweep reads their controls too.
@@ -192,6 +192,45 @@ describe('the rail renders no transmit control, whichever box is in which slot',
     if (group.includes('rotor')) {
       await waitFor(() => expect(within(rail()).queryAllByRole('button', { name: STOP }).length).toBeGreaterThan(0))
     }
+  })
+})
+
+describe('a box’s own text size in the rail — ⋯ ▸ A− / A+', () => {
+  const frame = (slot: string) => rail().querySelector<HTMLElement>(`.pane-frame[data-slot="${slot}"]`)!
+  const factor = (slot: string) => frame(slot).querySelector<HTMLElement>('.pane-body')!.style.getPropertyValue('--box-text-scale')
+  // Radix opens its menu on pointerdown, and measures and captures pointers, which jsdom lacks
+  // (ConnectView.boxes.test.tsx's helper).
+  const larger = (slot: string) => {
+    Element.prototype.hasPointerCapture = () => false
+    Element.prototype.setPointerCapture = () => {}
+    Element.prototype.releasePointerCapture = () => {}
+    Element.prototype.scrollIntoView = () => {}
+    const trigger = within(frame(slot)).getByRole('button', { name: /^Options for / })
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Larger text/ }))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+  }
+
+  it('A+ grows that box’s words and no other’s, and the rail remembers it', () => {
+    render(<DashRail {...props()} />)
+    expect(factor('rail3'), 'control: a box opens at the app’s size').toBe('')
+    larger('rail3')
+    expect(factor('rail3'), 'A+ did not reach the rail’s box').toBe('1.1')
+    expect(factor('rail2'), 'A+ reached another box').toBe('')
+    cleanup()
+    render(<DashRail {...props()} />)
+    expect(factor('rail3'), 'the size did not survive a remount').toBe('1.1')
+  })
+
+  it('the rail’s own Reset puts every box back at the app’s size, and its Undo brings the size back', () => {
+    render(<DashRail {...props()} />)
+    larger('rail1')
+    expect(factor('rail1')).toBe('1.1')
+    fireEvent.click(within(rail()).getByRole('button', { name: /^⊞ Panels/ }))
+    fireEvent.click(within(rail()).getByRole('button', { name: 'Reset layout' }))
+    expect(factor('rail1'), 'Reset kept the size').toBe('')
+    fireEvent.click(within(rail()).getByRole('button', { name: 'Undo last change' }))
+    expect(factor('rail1'), 'Undo lost the size').toBe('1.1')
   })
 })
 

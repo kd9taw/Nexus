@@ -14,7 +14,9 @@
 // WHAT IT IS MADE OF — nothing a second system: Connect's `PaneFrame`s and registry (every box is
 // pickable in every slot), Connect's pane context built by the same code (connect/usePaneContext, the
 // window's one poll of the feeds — the rail adds no request Connect or App already makes), the ⊞ Panels
-// menu for its own four slots, and `PaneSeam` for the width and for the split between two boxes.
+// menu for its own four slots, and `PaneSeam` for the width and for the split between two boxes. A
+// box's ⋯ menu offers its own text size and its manual link, as on Connect; tabs and their rotation
+// are Connect's alone (the dashboard window and the TV page), so the rail offers neither.
 //
 // A CRASH IN A BOX COSTS THE RAIL, NOT THE COCKPIT: the boundary is inside the rail's own box, so the
 // cockpit keeps its width and its controls, and the panel's way out turns the rail off.
@@ -311,6 +313,10 @@ function DashRailBody(p: DashRailProps) {
                 share={panels.shareOf(s)}
                 onHide={change(() => panels.setPanelState(s, 'removed'))}
                 frameRef={frames[s]}
+                // A box's own text size (⋯ ▸ A− / A+), kept in the rail's own record as Connect keeps
+                // its own: one Undo step, and the rail's Reset puts every box back at the app's size.
+                textScale={panels.scaleOf(s)}
+                onTextScale={change((f: number) => panels.setScale(s, f))}
               />
             </Fragment>
           )
