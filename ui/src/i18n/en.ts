@@ -9412,6 +9412,17 @@ export const EN = {
     'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
   'shell.logStore.failed':
     'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
+  // A file Nexus could not read at launch and KEPT rather than save over (features/keptFiles.ts):
+  // a torn journal, or one a newer Nexus wrote. `{{path}}` is the file's full path on the
+  // operator's computer, a token. One sentence per store says what the file held; `other` is a
+  // store this build has no words for. “Log this QSO?” is the popup's own title
+  // (logPrompt.title), quoted as this language shows it.
+  'shell.keptFile.pendingQso':
+    'Nexus could not read the file of QSOs that were waiting in the “Log this QSO?” popup, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.other':
+    'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
+  'shell.keptFile.keptInPlace':
+    'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
   // window open until they are saved (components/LogbookSaving.tsx). `{{count}}` is a number of
   // changes; `{{reason}}` is the station's diagnostic wording, passed through untranslated. The

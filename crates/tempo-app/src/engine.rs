@@ -17,6 +17,9 @@
 #[cfg(test)]
 mod by_id_tests;
 mod field_day_display;
+/// The journals when the file there cannot be read: kept, never written over.
+#[cfg(test)]
+mod kept_files_tests;
 mod mode_entry;
 pub mod parsec_presence;
 pub mod radio_selection;
@@ -10041,6 +10044,11 @@ impl Engine {
         let Some(path) = &self.station.pending_qso_path else {
             return;
         };
+        // A journal this run could not read and could not move aside holds contacts: it is
+        // neither written over nor removed (the screen says so — `restore_pending_qso_journal`).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
         if self.pending_logs.is_empty() {
             let _ = std::fs::remove_file(path);
             return;
@@ -20592,6 +20600,10 @@ contact yourself."
         s.log_tick = self.station.log_tick();
         s.log_store_problem = self.station.store_problem.clone();
         s.log_save_trouble = self.station.store.save_trouble();
+        s.kept_files = tempo_core::keep_aside::kept()
+            .into_iter()
+            .map(Into::into)
+            .collect();
         s.parsec_presence = self.parsec_presence_dto();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();

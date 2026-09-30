@@ -26517,22 +26517,6 @@ fn remember_radioprog_notice(notice: &Option<RadioProgFileNotice>) {
     }
 }
 
-/// A new name beside `path` for an unreadable projects file: `radioprog.unreadable-YYYYMMDD-HHMMSS
-/// .json` (UTC), numbered on when that name is taken, so a later set-aside never replaces an
-/// earlier one (a rename onto an existing file replaces it, on every platform). `None` when every
-/// name is taken, which leaves the file where it is.
-fn radioprog_aside_path(path: &Path, now: i64) -> Option<PathBuf> {
-    let (y, mo, d, h, mi, s) = tempo_core::logbook::datetime_utc(now.max(0) as u64);
-    let stem = format!("radioprog.unreadable-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}");
-    let dir = path.parent()?;
-    (1..=100)
-        .map(|n| match n {
-            1 => dir.join(format!("{stem}.json")),
-            n => dir.join(format!("{stem}-{n}.json")),
-        })
-        .find(|candidate| !candidate.exists())
-}
-
 /// `radioprog.json` for Program, and whether anything about it has to be said.
 ///
 /// A file that is there but cannot be read is NEVER treated as an empty one. That was this
@@ -26562,8 +26546,10 @@ fn radioprog_open(path: &Path, now: i64) -> RadioProgOpened {
         }
         Err(reason) => reason,
     };
-    let moved =
-        radioprog_aside_path(path, now).filter(|aside| std::fs::rename(path, aside).is_ok());
+    // The shared name (`radioprog.unreadable-YYYYMMDD-HHMMSS.json`, `-2` … when taken). Program
+    // keeps its own notice, at the top of the section, rather than the shell's.
+    let moved = tempo_core::keep_aside::aside_path(path, now)
+        .filter(|aside| std::fs::rename(path, aside).is_ok());
     eprintln!(
         "tempo: {} could not be read ({reason}); {}",
         path.display(),
@@ -29353,12 +29339,10 @@ fn start_on_the_logbook(
         eng.set_fd_log_path(fd_path);
         // A contact left in the confirm-before-log popup by a previous session (crash, power
         // loss, or a quit with the popup open) is a REAL QSO — the other station logged it.
-        // Restore the hold so the operator can still log it. Best-effort: a missing or corrupt
-        // journal just means there was nothing pending.
+        // Restore the hold so the operator can still log it. A missing journal means nothing
+        // was pending; one this build cannot read is kept aside, and the screen says where.
         eng.set_pending_qso_path(pending_qso_path());
-        if let Ok(text) = std::fs::read_to_string(pending_qso_path()) {
-            eng.load_pending_qso_json(&text);
-        }
+        eng.restore_pending_qso_journal(now_unix());
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation

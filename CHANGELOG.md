@@ -486,6 +486,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of Program where the kept file is. If the file cannot be moved aside, it stays where it is
   and Program saves nothing until it is moved or repaired. A file from a newer Nexus that only adds
   new fields opens as it always has.
+- **A QSO waiting in the “Log this QSO?” popup is no longer lost to a file Nexus cannot read.**
+  Nexus keeps the QSOs waiting for your confirmation in a file, so a crash or a power cut does not
+  lose them. When that file could not be read (damaged, or written by a newer Nexus with a value
+  this one does not know), Nexus restored nothing and wrote the next waiting QSO over it, and every
+  contact in it was gone. Now Nexus keeps that file, untouched, under a new dated name beside it
+  (such as `pending_qso.unreadable-20260930-142233.json`), and says where, once, when it starts.
+  If the file cannot be moved aside, Nexus leaves it where it is and does not write over it.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read

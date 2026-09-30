@@ -316,6 +316,10 @@ impl Publisher {
                     let pending_key = eng.pending_qso_log_key();
                     drop(eng);
                     serde_json::to_value(snapshot).map(|mut value| {
+                        // Paths on this computer, and the remedy is at this computer.
+                        if let Some(fields) = value.as_object_mut() {
+                            fields.remove("keptFiles");
+                        }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
                         value["currentQsoLogKey"] = serde_json::json!(current_key);
@@ -607,6 +611,49 @@ mod tests {
         let engine = shared.lock().unwrap();
         assert_eq!(serde_json::to_value(engine.settings()).unwrap(), settings);
         assert!(!engine.snapshot().radio.tx_enabled);
+    }
+    /// A file the station could not read and kept is said on the station's own screen, never
+    /// through the Remote: its path is this computer's, and what to do about it is here.
+    #[test]
+    fn a_kept_files_path_never_reaches_the_remote() {
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-kept-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pending_qso.json");
+        std::fs::write(&path, b"{ torn").unwrap();
+        tempo_core::keep_aside::keep_aside("pendingQso", &path, 1_790_778_153, "torn");
+        let where_kept = dir.to_string_lossy().into_owned();
+        let engine = tempo_app::engine::Engine::with_settings(Default::default());
+        assert!(
+            engine
+                .snapshot()
+                .kept_files
+                .iter()
+                .any(|k| k.path.starts_with(&where_kept)),
+            "control: the station's own snapshot carries it"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("keptFiles").is_none(),
+            "the Remote's snapshot carries no kept files"
+        );
+        assert!(
+            !data.contains(&where_kept),
+            "no path of this computer's reaches the Remote"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {

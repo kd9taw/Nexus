@@ -100,6 +100,15 @@ struct PendingRecord {
     grid_source: GridSource,
 }
 
+/// The journal's contacts: this build's queue, or the single record older builds wrote.
+fn pending_qso_journal(text: &str) -> Result<Vec<PendingRecord>, serde_json::Error> {
+    serde_json::from_str::<Vec<PendingRecord>>(text).or_else(|queue| {
+        serde_json::from_str::<PendingRecord>(text)
+            .map(|one| vec![one])
+            .map_err(|_| queue)
+    })
+}
+
 fn pending_record(held: &HeldQso) -> PendingRecord {
     PendingRecord {
         record: held.record.clone().into(),
@@ -395,11 +404,26 @@ impl Engine {
     /// Each restored contact keeps the grid provenance the journal recorded — a journal from
     /// an older build records none, and those restore as [`GridSource::LookedUp`].
     pub fn load_pending_qso_json(&mut self, text: &str) {
-        if let Ok(queue) = serde_json::from_str::<Vec<PendingRecord>>(text) {
+        if let Ok(queue) = pending_qso_journal(text) {
             for pending in queue {
                 self.hold_pending_log(pending.into_held());
             }
-        } else if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
+        }
+    }
+
+    /// Restore the journal at launch, from the path the shell set
+    /// ([`Self::set_pending_qso_path`]). A journal this build cannot read — torn, or from a newer
+    /// build with a value this one does not know — holds REAL contacts, so it is kept aside
+    /// ([`tempo_core::keep_aside`]) and the screen says where, rather than restoring nothing and
+    /// letting the next held contact write over it.
+    pub fn restore_pending_qso_journal(&mut self, now_unix: i64) {
+        let Some(path) = self.station.pending_qso_path.clone() else {
+            return;
+        };
+        let queue = tempo_core::keep_aside::read_or_keep("pendingQso", &path, now_unix, |text| {
+            pending_qso_journal(text).map_err(|e| e.to_string())
+        });
+        for pending in queue.into_iter().flatten() {
             self.hold_pending_log(pending.into_held());
         }
     }
@@ -432,6 +456,16 @@ impl Engine {
     ) -> Result<JournalSync, LogFailure> {
         if !self.matches_pending_log(&prepared.pending) {
             return Err(LogFailure::StalePending);
+        }
+        // The journal there could not be read at launch and could not be moved aside: it holds
+        // contacts, so nothing is renamed over it (see `persist_pending_qso`).
+        if prepared
+            .pending
+            .path
+            .as_deref()
+            .is_some_and(tempo_core::keep_aside::refuses)
+        {
+            return Err(LogFailure::PersistenceUnconfirmed);
         }
         std::fs::rename(
             &prepared.temporary,
@@ -501,10 +535,15 @@ impl Engine {
             .as_ref()
             .ok_or(LogFailure::PersistenceUnconfirmed)?;
         let parent = journal_parent(path).map_err(|_| LogFailure::PersistenceUnconfirmed)?;
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return Err(LogFailure::PersistenceUnconfirmed),
+        // A journal kept in place (unreadable, and it could not be moved aside) is not this hold's:
+        // nothing of this session was written there, so there is nothing to remove, and removing it
+        // would delete the contacts it holds.
+        if !tempo_core::keep_aside::refuses(path) {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => return Err(LogFailure::PersistenceUnconfirmed),
+            }
         }
         self.replace_pending_log(None);
         Ok(JournalSync { parent })

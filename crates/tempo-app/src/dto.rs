@@ -3518,6 +3518,12 @@ pub struct AppSnapshot {
     /// every change is in the database or on its way there. The screen says so while it lasts.
     #[serde(default)]
     pub log_save_trouble: Option<LogSaveTrouble>,
+    /// Files this run could not read and KEPT rather than save over — see
+    /// [`tempo_core::keep_aside`]. Empty on a healthy launch, and then not sent at all, so a
+    /// healthy snapshot is the one it always was. The screen says each one once. Paths on this
+    /// computer: the Remote never receives this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept_files: Vec<KeptFile>,
     /// Parsec presence mode, for its Settings readout and the status lane. `None` while the mode
     /// is switched off, which is the default.
     #[serde(default)]
@@ -3549,6 +3555,30 @@ pub struct LogStoreProblem {
     pub network_folder: bool,
     /// Why, as the diagnostic log records it.
     pub reason: String,
+}
+
+/// A file Nexus could not read, and kept — see [`AppSnapshot::kept_files`]. Tokens and a path
+/// only: the UI owns every word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptFile {
+    /// Which store it is: `"pendingQso"`, … (the stores [`tempo_core::keep_aside`] serves).
+    pub store: String,
+    /// Where the file is now: the name it was moved aside to, or its own path when it could not
+    /// be moved.
+    pub path: String,
+    /// It could not be moved, so it is where it was and nothing writes over it this run.
+    pub kept_in_place: bool,
+}
+
+impl From<tempo_core::keep_aside::Kept> for KeptFile {
+    fn from(k: tempo_core::keep_aside::Kept) -> Self {
+        KeptFile {
+            store: k.store.to_string(),
+            path: k.path.to_string_lossy().into_owned(),
+            kept_in_place: k.kept_in_place,
+        }
+    }
 }
 
 /// Changes the logbook database refused, which Nexus is holding in memory — see
