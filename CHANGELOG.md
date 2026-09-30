@@ -447,6 +447,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CW: a message that could not go out is dropped, not sent later on its own.** When CW could not
+  be sent because transmit was off (for example after leaving the CW screen part-way through a
+  message) or the frequency was outside your license privileges, what was still waiting used to be
+  held, and it went out by itself as soon as transmitting was allowed again: TX back on, or a tune
+  back inside your privileges. It is now dropped, and the CW screen's warning line says why. A
+  message you send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer
+  and its speed work as they did.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
