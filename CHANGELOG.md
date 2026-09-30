@@ -179,6 +179,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   main window then follows to the matching screen (on CW and Phone with the call ready in the
   log). Nothing transmits. The wall display still has neither list, and nothing on it can move
   the radio.
+- **Getting Out lists everyone who hears you.** The Getting Out box on Connect lists every station
+  that has decoded you in the last half hour, not only the first six, most distant first: the
+  call, the direction and distance, the band, the SNR they heard you at and how long ago. The list
+  scrolls inside the box, one line per station where the box has room, and a click still shows the
+  station on the map.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

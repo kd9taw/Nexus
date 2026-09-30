@@ -32,8 +32,9 @@ const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '
 const CONTINENT_ORDER = CONTINENT_CODES
 
 /** Compact age string from seconds-since-received (−1 = unknown). A number and its unit
- * letter, with no prose in it at all — a measurement, so it is not a catalog string. */
-function ageLabel(secs: number): string {
+ * letter, with no prose in it at all — a measurement, so it is not a catalog string. Connect's
+ * Getting Out box prints its receivers' ages with it too, so the two lists read alike. */
+export function ageLabel(secs: number): string {
   if (secs < 0) return '—'
   if (secs < 60) return `${secs}s`
   if (secs < 3600) return `${Math.round(secs / 60)}m`

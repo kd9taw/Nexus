@@ -2682,23 +2682,46 @@ body.resizing-row {
   flex-direction: column;
   gap: 3px;
 }
+/* A row is the call, where (octant and distance), the band, the SNR and how long ago — the full
+   list, so every receiver the station reports. One line where the box has room (about 280 px
+   of list), each cell at a FIXED width so the columns line up down the list; a narrower box wraps
+   the same cells onto a second line, every row at the same place, because the cells' widths decide
+   it and not their text, with the SNR and the age pushed right (`.go-snr`'s auto margin). It was a
+   three-track grid holding four cells, so the SNR always fell under the call. */
 .getout-list li {
-  display: grid;
-  grid-template-columns: 1fr auto 2.6em;
+  display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
   font-size: var(--fs-micro);
 }
 .getout-list .go-call {
+  flex: 1 1 5.5em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   font-family: var(--font-mono);
 }
 .getout-list .go-where {
+  flex: 0 0 8em;
   color: var(--text-dim);
 }
 .getout-list .go-band {
+  flex: 0 0 2.6em;
   font-family: var(--font-mono);
   color: var(--text-faint);
+  text-align: right;
+}
+.getout-list .go-snr {
+  flex: 0 0 3.6em;
+  text-align: right;
+}
+.getout-list .go-age {
+  flex: 0 0 2.6em;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 

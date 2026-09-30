@@ -138,7 +138,7 @@ The getting-out panel polls every 30 seconds from the live MQTT spot buffer (180
 
 - Total distinct receiver count
 - Furthest reception in km
-- Up to 6 named receivers with direction octant, band, and SNR
+- Every receiver in that window, most distant first, each with its direction octant and distance, band, the SNR it heard you at, and how long ago; the list scrolls inside the box
 
 Clicking a receiver row selects it on the map. Stations that heard you appear as green halo dots on the map regardless of whether the getting-out panel is open.
 

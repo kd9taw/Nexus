@@ -51,6 +51,7 @@ import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
 import { MeasuredMuf } from '../prop/MeasuredMuf'
 import { PotaSotaView } from '../PotaSotaView'
+import { ageLabel } from '../SpotsPanel'
 import { SpotsBox } from './SpotsBox'
 import {
   NEED_CHIP,
@@ -347,8 +348,11 @@ function renderGetout(c: PaneContext): ReactNode {
             <GetoutCompass reports={g.reports} maxKm={g.maxKm} />
             <p className="getout-dir">{getoutSummary(g.reports)}</p>
           </div>
+          {/* THE FULL LIST: every receiver the station reports (`propagation::getting_out` — the
+              latest report per receiver over its window, most distant first), not the first six.
+              It scrolls inside the box's body; each row gains how long ago it heard you. */}
           <ul className="getout-list">
-            {g.reports.slice(0, 6).map((r) => (
+            {g.reports.map((r) => (
               <li
                 key={r.call}
                 className="go-clickable"
@@ -361,6 +365,7 @@ function renderGetout(c: PaneContext): ReactNode {
                 </span>
                 <span className="go-band">{r.band}</span>
                 <span className="go-snr">{r.snr != null ? `${r.snr} ${DB_UNIT}` : ''}</span>
+                <span className="go-age">{ageLabel(r.ageSecs)}</span>
               </li>
             ))}
           </ul>

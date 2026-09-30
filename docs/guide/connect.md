@@ -124,7 +124,7 @@ The panes you can assign:
 | Band Outlook | modelled workable bands to DX (or the path to a selected call) |
 | Openings | detected band openings around you |
 | Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
-| Getting Out | who is hearing you right now, on a compass |
+| Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Best Band → Region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
 | NCDXF Beacons | the NCDXF beacon schedule, with heard badges |
