@@ -17370,12 +17370,12 @@ button.cq-skiptx1.on {
 .sp-grid .np-row {
   grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
 }
-/* ── THE TWO BOARDS AS PHONE PANES (#345) ─────────────────────────────────────────────────
-   The Spots and Needed boards render inside a CockpitPaneFrame on the Phone cockpit, as fill
-   panes. This is the content half of that, in the sanctioned place (`.pane-body > .cw-decode`
-   is the precedent): `.np-pane` is Phone's wrapper, `.np-board` the board's own root when it is
-   hosted as a pane (SpotsPane / NeededPane) — never `.layout.single.needed-panel`, which is
-   the VIEW's shell and sizes a view.
+/* ── THE TWO BOARDS AS PHONE AND CW PANES (#345, plan H8) ─────────────────────────────────
+   The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
+   fill panes. This is the content half of that, in the sanctioned place (`.pane-body >
+   .cw-decode` is the precedent): `.np-pane` is the cockpits' wrapper, `.np-board` the board's
+   own root when it is hosted as a pane (SpotsPane / NeededPane) — never
+   `.layout.single.needed-panel`, which is the VIEW's shell and sizes a view.
 
    1. FILL, with the board's GRID as the one scroller. At the bounded tiers `height: 100%`
       resolves against the body's definite height, and each level below is a column flex whose

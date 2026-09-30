@@ -2793,31 +2793,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     </main>
   )
 
-  const cwWorkspace = (
-    <CwCockpit
-      active={!remote || (effectiveView === 'cw' && !remote.stale)}
-      onOpenLogbook={openLogbookFor}
-      pitchHz={settings?.cwPitchHz ?? 600}
-      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
-      snap={snap}
-      theme={theme}
-      pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
-      onConsumeWork={() => setPendingWork(null)}
-      onSnap={setSnap}
-      fieldDay={snap.fieldDay}
-      spots={allSpots}
-      needByCall={needByCall}
-      typeByCall={typeByCall}
-      onWorkSpot={workSpotHereCw}
-      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
-      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
-      onOpenSettings={openSettingsAt}
-      panels={cwPanels}
-    />
-  )
-  // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below and by
-  // the Phone cockpit's Spots and Needed panes (#345) — so a pane can never be wired differently
-  // from its view, and working a row from a pane is the view's own act.
+  // THE SPOTS AND NEEDED BOARDS' WIRING, one object each, shared by the two views below, by the
+  // Phone and CW cockpits' Spots and Needed panes (#345) and by Connect's Spots box — so a pane or
+  // a box can never be wired differently from its view, and working a row from one is the view's
+  // own act.
   const spotsBoard = {
     bandPlan,
     selectedCall: activePeer,
@@ -2856,6 +2835,30 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       : null,
   }
+  const cwWorkspace = (
+    <CwCockpit
+      active={!remote || (effectiveView === 'cw' && !remote.stale)}
+      onOpenLogbook={openLogbookFor}
+      pitchHz={settings?.cwPitchHz ?? 600}
+      wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+      snap={snap}
+      theme={theme}
+      pendingWork={pendingWork?.view === 'cw' ? pendingWork : null}
+      onConsumeWork={() => setPendingWork(null)}
+      onSnap={setSnap}
+      fieldDay={snap.fieldDay}
+      spots={allSpots}
+      needByCall={needByCall}
+      typeByCall={typeByCall}
+      onWorkSpot={workSpotHereCw}
+      onRecallMemory={isViewEnabled('memories') ? recallMemory : undefined}
+      onOpenMemories={isViewEnabled('memories') ? () => setView('memories') : undefined}
+      onOpenSettings={openSettingsAt}
+      panels={cwPanels}
+      spotsBoard={spotsBoard}
+      neededBoard={neededBoard}
+    />
+  )
   const phoneWorkspace = (
     <PhoneCockpit
       active={!remote || (effectiveView === 'phone' && !remote.stale)}

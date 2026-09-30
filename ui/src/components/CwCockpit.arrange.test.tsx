@@ -10,7 +10,7 @@ import { render, cleanup, act } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
 import { CW_PANELS, panelStorageKey, usePanelLayout, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
-import { arrangeIds, placedColumns, type PaneMove } from '../features/panelPlace'
+import { arrangeIds, isStockPlacement, placedColumns, type PaneMove } from '../features/panelPlace'
 
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
@@ -137,10 +137,23 @@ function makeSnap(over: Record<string, unknown> = {}): AppSnapshot {
 
 
 let api: PanelLayoutApi<CwPanelId> | null = null
+// The two feeds (plan H8) render only with their boards lent, as App lends them; they ship hidden.
+const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }
+const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
 function Live() {
   const panels = usePanelLayout(CW_PANELS)
   api = panels
-  return <CwCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} />
+  return (
+    <CwCockpit
+      snap={makeSnap()}
+      theme="dark"
+      onWorkSpot={() => {}}
+      spots={[]}
+      panels={panels}
+      spotsBoard={spotsBoard}
+      neededBoard={neededBoard}
+    />
+  )
 }
 
 const region = () => document.querySelector('.cockpit-panes')!
@@ -158,12 +171,18 @@ async function mount() {
     for (let i = 0; i < 4; i++) await Promise.resolve()
   })
 }
-/** What the placement says the region shows (every CW pane renders in this fixture), with the Rig
- *  controls frame at the head of the middle column. */
+/** What the placement says the region shows (every CW pane renders in this fixture once the two
+ *  feeds are ticked, as the sweep ticks them), with the Rig controls frame at the head of the
+ *  middle column — and below three tracks, on the stock placement, the two feeds after every strip
+ *  (Phone's rule, `stockMerged`). */
 function expected(tracks: number) {
-  const c = placedColumns(CW_PANELS.arrange!, api!.layout.place)
+  const place = api!.layout.place
+  const c = placedColumns(CW_PANELS.arrange!, place)
   const mid = ['rigctl', ...c.b]
   if (tracks === 3) return [[...c.a], mid, [...c.log, 'log']]
+  if (isStockPlacement(CW_PANELS.arrange!, place)) {
+    return [['decode', 'sent', 'rigctl', 'bandActivity', 'copilot', 'spots', 'needed'], ['log']]
+  }
   return [[...c.a, ...mid], [...c.log, 'log']]
 }
 
@@ -201,6 +220,8 @@ function rng(seed: number) {
 
 describe('THE FIBER-IDENTITY SWEEP: no arrangement remounts the log form', () => {
   it('50 random moves with tier flips between them: the region is the placement and the log form the same node throughout', async () => {
+    // The feeds ticked, so every id the moves draw is on screen.
+    localStorage.setItem(panelStorageKey('cw'), JSON.stringify({ v: 2, state: { spots: 'docked', needed: 'docked' }, share: {} }))
     await mount()
     await tier(1800)
     const log0 = document.querySelector('[data-testid="log-stub"]')!

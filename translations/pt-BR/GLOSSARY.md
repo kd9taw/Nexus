@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,262 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,267 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -115,8 +115,8 @@ word in, and use only that word in the CSV.
 | power | 52 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 51 | Both noun and verb. | |
-| spot / spots | 33 / 50 | A cluster or RBN spot. Both noun and verb. | |
-| needed | 50 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
+| spot / spots | 33 / 53 | A cluster or RBN spot. Both noun and verb. | |
+| needed | 53 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
 | import / export | 45 / 42 | ADIF import and export. | |
 | upload | 61 | Sending the log to LoTW, QRZ, eQSL, ClubLog. | |
 | satellite | 41 | | |

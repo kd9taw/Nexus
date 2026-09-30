@@ -68,6 +68,9 @@ export const PER_SURFACE = [
   // under another name, for the same reason: what THIS board shows. Never that key — a chip in
   // the pane and one on the Needed view must not move each other.
   'nexus.phone.neededFilters',
+  // …and the CW cockpit's (plan H8: CW gains Phone's two feeds), for the same reason and apart
+  // from both of the above.
+  'nexus.cw.neededFilters',
   'nexus.decodes.hideB4',
   'nexus.decodes.hideBlocked',
   'nexus.decodes.hideConfirmed',
@@ -380,8 +383,8 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.logbook.globe',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
-  // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
-  'components/NeededPanel.tsx:key': ['neededFilters', 'nexus.phone.neededFilters'],
+  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8).
+  'components/NeededPanel.tsx:key': ['neededFilters', 'nexus.phone.neededFilters', 'nexus.cw.neededFilters'],
   // The POTA/SOTA board's filters, read and written through its key table (OTA_KEYS): the view's
   // own six, or the Connect box's six.
   'components/PotaSotaView.tsx:keys': [
@@ -583,6 +586,9 @@ describe('call sites agree with the classification', () => {
     const phone = readFileSync(join(SRC, 'components/PhoneCockpit.tsx'), 'utf8')
     expect(phone).toContain("const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'")
     expect(phone).toContain('pane={{ filterKey: PHONE_NEEDED_FILTERS,')
+    const cw = readFileSync(join(SRC, 'components/CwCockpit.tsx'), 'utf8')
+    expect(cw).toContain("const CW_NEEDED_FILTERS = 'nexus.cw.neededFilters'")
+    expect(cw).toContain('pane={{ filterKey: CW_NEEDED_FILTERS,')
     // The POTA/SOTA board's key table: every key the seam claims is a literal in it, the board
     // reads through it and nothing else, and it picks the box's half only as a box.
     const ota = readFileSync(join(SRC, 'components/PotaSotaView.tsx'), 'utf8')

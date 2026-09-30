@@ -184,6 +184,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call, the direction and distance, the band, the SNR they heard you at and how long ago. The list
   scrolls inside the box, one line per station where the box has room, and a click still shows the
   station on the map.
+- **Spots and Needed on the CW screen.** ⊞ Panels on the CW cockpit has the Phone screen's two
+  entries, **Spots** and **Needed**, and both start unticked, so nobody's CW screen changes on the
+  update. Tick one and it joins the screen. On a wide window Spots goes under CW Decode and the
+  Sent echo, and the transcript keeps three quarters of that column; Needed goes under Band
+  Activity and the copilot. On a narrower window both go at the bottom of the left-hand column,
+  below the rig controls, Band Activity and the copilot, with a divider between them that you drag
+  to share the height (the split is remembered). On a small window the column scrolls, so hide a
+  pane you do not need to give them more room. **Spots** opens on the CW spots on the band your
+  radio is on (a skimmer's RTTY or FT8 decode in the CW part of the band stays out) and moves with
+  the radio when you change band; its Filter chips widen it to other modes and bands. **Needed**
+  opens on the CW needs, and its chips widen it the same way. Each pane keeps its own filters, so a
+  chip on the CW screen never changes the Spots or Needed screen, or the Phone screen's panes. A
+  click on a row does exactly what it does on those screens: the radio goes to the station and the
+  call goes into the log; a phone or digital spot, once you have widened the list to it, opens its
+  own screen. Nothing transmits. **Reset layout** unticks both again. On the Remote page the panes
+  show the spots and needs the station already shares, and say so when it does not.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

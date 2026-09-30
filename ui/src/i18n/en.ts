@@ -8804,11 +8804,16 @@ export const EN = {
   'cw.panel.copilot': 'CW Copilot',
   'cw.panel.decode': 'CW Decode',
   'cw.panel.sent': 'Sent Echo',
+  // Phone's two feeds (#345) in CW (plan H8), named as the views they come from, as in Phone.
+  'cw.panel.spots': 'Spots',
+  'cw.panel.needed': 'Needed',
   'cw.pane.decode.title': 'Decode',
   'cw.pane.sent.title': 'Sent',
   'cw.pane.rigctl.title': 'Rig controls',
   'cw.pane.bandActivity.title': 'Band activity',
   'cw.pane.copilot.title': 'Copilot',
+  'cw.pane.spots.title': 'Spots',
+  'cw.pane.needed.title': 'Needed',
   'cw.pane.log.title': 'Log',
 
   // ── CW ▸ the header: the mode badge, speed, keyer, pitch, macro profile, filter ──────
@@ -8880,6 +8885,8 @@ export const EN = {
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',
+  // The divider between the Spots and Needed panes (its accessible name, and the resize tooltip's).
+  'cw.seam.spotsNeeded.label': 'Spots / Needed',
   'cw.rfZoom.aria': 'Panadapter zoom',
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",

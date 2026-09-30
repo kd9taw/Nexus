@@ -845,8 +845,9 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
  *  drives Phone's case off `PHONE_PANEL_IDS` itself rather than a copy of it. */
 /*  ⭐ `spots` AND `needed` (#345, operator 2026-09-27) are the Spots and Needed boards as Phone
  *  FEEDS — "much empty real estate" was the tester's report, and a phone operator's band map is
- *  what fills it. They are the only two ids in the app that SHIP HIDDEN (`defaultRemoved`), by
- *  the operator's pick: "Hidden, add via ⊞ Panels — nobody's Phone screen changes on update."
+ *  what fills it. They were the first ids in the app to SHIP HIDDEN (`defaultRemoved`; CW's twins
+ *  below are the only others), by the operator's pick: "Hidden, add via ⊞ Panels — nobody's Phone
+ *  screen changes on update."
  *
  *  Under THE STOP LINE they are the plainest entries on the list. Neither holds a stop control;
  *  neither is a sender (working a row QSYs and opens a cockpit through the boards' own handlers,
@@ -895,7 +896,14 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
  *  THE SCOPE ITSELF IS ONE, since 2026-08-16 (see SCOPE_PANEL_ID) — the same correction as
  *  in the Phone twin: it was listed as unhideable "by TX-safety", and it hosts no stop
  *  control. `scopeCtl` is a different entry for a different thing (the controls that command
- *  the rig's own panadapter, in the region below), and both keep their own box. */
+ *  the rig's own panadapter, in the region below), and both keep their own box.
+ *
+ *  `spots` AND `needed` are Phone's two feeds (#345) in CW, the same boards with the same wiring
+ *  (plan piece H8, operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
+ *  way: HIDDEN (`defaultRemoved`), one tick in ⊞ Panels, so nobody's CW screen changes on update.
+ *  Under THE STOP LINE they are Phone's plainest entries again: neither holds a stop control,
+ *  neither sends (a row QSYs through the board's own handler and keys nothing), and a hide ends
+ *  nothing, so neither carries a note — which is also what lets Reset hide them silently. */
 export const CW_PANEL_IDS = [
   SCOPE_PANEL_ID,
   'scopeCtl',
@@ -906,25 +914,32 @@ export const CW_PANEL_IDS = [
   'copilot',
   'decode',
   'sent',
+  'spots',
+  'needed',
 ] as const
 export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
+  defaultRemoved: ['spots', 'needed'],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
   // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
   // frame; the log form (no id) alone in the last column. The three rig-control groups (`scopeCtl`,
   // `dsp`, `rxdsp`) share ONE frame, which is not a vocabulary pane: it keeps its place at the head
   // of the middle column, and is not listed. Nothing here is pinned (CW has no voice keyer; the log
-  // form cannot move). Below three tracks the middle column simply follows the first.
+  // form cannot move). Below three tracks the middle column simply follows the first. The two feeds
+  // take Phone's places: Spots at the foot of the leading column, Needed at the foot of the middle,
+  // and below three tracks both after every strip (`stockMerged`, Phone's rule), so ticking one never
+  // pushes the Rig controls (which CwCockpit keeps ahead of them), Band Activity or the copilot down.
   arrange: {
     columns: {
-      a: ['decode', 'sent'],
-      b: ['bandActivity', 'copilot'],
+      a: ['decode', 'sent', 'spots'],
+      b: ['bandActivity', 'copilot', 'needed'],
       log: [],
     },
     pinned: [],
+    stockMerged: ['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'],
   },
 }
 

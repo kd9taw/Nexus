@@ -226,6 +226,8 @@ The Needed board surfaces stations you have not yet worked (ATNO, new band-slot,
 
 Focus lands on the RST field in the log strip after prefill so you can tab to confirm and log immediately after the QSO.
 
+The boards can also sit on the CW screen itself: **⊞ Panels ▸ Spots** and **⊞ Panels ▸ Needed** (both unticked until you tick them, as on the Phone screen) add them as panes. Spots opens on the CW spots on the band your radio is on and follows the band; Needed opens on the CW needs. Each keeps its own filters, apart from the Spots and Needed screens'. A click on a row in either is the same click as on its screen — the same QSY and the same prefill — and nothing keys.
+
 ---
 
 ## Log Strip

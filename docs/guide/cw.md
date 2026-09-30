@@ -101,11 +101,29 @@ entry its line goes with it: the pane is off your screen because you said so, no
 because of anything the rig is doing. **Esc** closes the menu and puts focus back
 on the ⊞ button. See [Phone](phone.md) for the same menu on the voice side.
 
+**Spots** and **Needed** are the [Spots](spots.md) and [Needed](needed-dx.md)
+boards as panes of this screen, the same two the Phone screen offers, and they
+start unticked. Tick one and it joins the screen: on a wide window Spots goes
+under Decode and the Sent echo, and Needed under Band Activity and the Copilot;
+on a narrower one both go at the bottom of the left-hand column, after Rig
+controls, Band Activity and the Copilot, with a divider between them that you
+drag to share the height. On a small window the column scrolls; hide a pane you
+do not need to give them more room. Spots opens on the CW spots on the band your
+radio is on (a spot in the CW part of the band and a skimmer's CW decode, never a
+skimmer's RTTY or FT8 decode there) and moves with the radio when you change
+band; its Filter chips widen it to other modes and bands. Needed opens on the CW
+needs, and its chips widen it the same way. Each pane keeps its own filters,
+apart from the Spots and Needed screens' and the Phone screen's panes. A click on
+a row works the station exactly as it does on those screens and keys nothing.
+**Reset layout** unticks both again, and closing either ends nothing.
+
 **What the cockpit gives room to.** The Decode transcript is the pane a CW
 operator works from, and it is the one the layout grows: everything beside it —
 the Sent echo, Rig controls, Band Activity, the Copilot — is exactly as tall as
-what it holds, and the transcript takes the rest. There is a floor under it, so a
-column full of control strips can no longer starve it toward nothing. At the
+what it holds, and the transcript takes the rest (a ticked Spots or Needed pane
+in the same column shares it, at a third of the transcript's part each). There
+is a floor under it, so a column full of control strips can no longer starve it
+toward nothing. At the
 window Nexus opens at that comes to four lines of copy with one short drag left
 to scroll; on a wide window the aux panes get a column of their own and the
 transcript keeps the whole gain. The leading column scrolls when it stands taller
