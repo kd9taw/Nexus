@@ -29348,11 +29348,10 @@ fn start_on_the_logbook(
         // Restore the store-and-forward outbound queue BEFORE the conversation
         // threads: each restored bubble's held-vs-abandoned decision reads the live
         // queue (a held message whose journal entry survived stays "waiting to send"
-        // and transmits when its peer is next heard). Best-effort like the others.
+        // and transmits when its peer is next heard). A queue this build cannot read is kept
+        // aside, and the screen says where.
         eng.set_pending_msgs_path(pending_msgs_path());
-        if let Ok(text) = std::fs::read_to_string(pending_msgs_path()) {
-            eng.load_pending_msgs(&text);
-        }
+        eng.restore_pending_msgs(now_unix());
         // JS8 store-and-forward inbox: a missing file is an empty station; one this build cannot
         // read is kept aside, and the screen says where.
         eng.set_js8_journal_path(js8_station_path());

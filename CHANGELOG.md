@@ -507,6 +507,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not know), Nexus started an empty inbox and the next message that arrived wrote over the
   file. Now Nexus keeps that file, untouched, under a new dated name beside it, and says where. If
   it cannot be moved aside, Nexus leaves it where it is and does not write over it.
+- **Tempo messages waiting to send are no longer lost to a file Nexus cannot read.** When the file
+  that holds them could not be read (damaged, or written by a newer Nexus in a way this one cannot
+  read), Nexus started with none waiting and the next message you sent wrote over the file. Now
+  Nexus keeps that file, untouched, under a new dated name beside it, and says where. If it cannot
+  be moved aside, Nexus leaves it where it is and does not write over it.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read

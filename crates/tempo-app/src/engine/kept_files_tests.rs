@@ -582,3 +582,152 @@ fn no_js8_journal_is_a_first_run() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ── pending_msgs.json: the Tempo messages waiting to send ────────────────────────────────────
+
+fn msgs_engine_on(path: &Path) -> Engine {
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.set_pending_msgs_path(path.to_path_buf());
+    e
+}
+
+fn waiting_to(e: &Engine) -> Vec<String> {
+    e.app
+        .export_pending()
+        .iter()
+        .map(|p| p.to.clone())
+        .collect()
+}
+
+/// Send a message and wait for the queue's journal write, as the radio loop's queue changes do.
+fn send(e: &mut Engine, to: &str) {
+    e.send_message(to, "see you on 20m");
+    e.journal_mark().wait();
+}
+
+/// The queue's journal as this build writes it: one message to W1ABC waiting to send.
+fn a_pending_msgs_journal() -> String {
+    let dir = scratch("msgsmade");
+    let path = dir.join("pending_msgs.json");
+    let mut e = msgs_engine_on(&path);
+    send(&mut e, "W1ABC");
+    let text = std::fs::read_to_string(&path).expect("the queue is journaled");
+    std::fs::remove_dir_all(&dir).unwrap();
+    text
+}
+
+fn assert_pending_msgs_kept(what: &str, bytes: Vec<u8>) {
+    let dir = scratch("msgs");
+    let path = dir.join("pending_msgs.json");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut e = msgs_engine_on(&path);
+    e.restore_pending_msgs(NOW);
+    assert_eq!(
+        waiting_to(&e),
+        Vec::<String>::new(),
+        "{what}: nothing is read out of it"
+    );
+    send(&mut e, "K1NEW");
+
+    assert_eq!(
+        holding(&dir, &bytes),
+        vec![aside(&dir, "pending_msgs.json")],
+        "{what}: the unreadable queue must survive the next message sent, byte for byte, moved aside"
+    );
+    assert_eq!(
+        kept_under(&e, &dir),
+        vec![kept(
+            "pendingMsgs",
+            &aside(&dir, "pending_msgs.json"),
+            false
+        )],
+        "{what}: the screen is told where it is"
+    );
+    let mut relaunched = msgs_engine_on(&path);
+    relaunched.restore_pending_msgs(NOW + 1);
+    assert_eq!(
+        waiting_to(&relaunched),
+        vec!["K1NEW".to_string()],
+        "{what}: the new journal is this build's"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_pending_msgs_journal_cut_short_is_kept_and_never_written_over() {
+    let whole = a_pending_msgs_journal().into_bytes();
+    assert_pending_msgs_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+}
+
+/// A value this build cannot hold: a message id wider than the one character this build keeps.
+#[test]
+fn a_pending_msgs_journal_with_a_value_this_build_cannot_hold_is_kept_and_never_written_over() {
+    let journal = a_pending_msgs_journal();
+    let at = journal.find("\"id\":\"").expect("the id") + "\"id\":\"".len();
+    let wider = format!("{}ab{}", &journal[..at], &journal[at + 1..]);
+    assert!(
+        wider.contains("\"id\":\"ab"),
+        "the fixture must carry the wider id: {wider}"
+    );
+    assert_pending_msgs_kept("a value this build cannot hold", wider.into_bytes());
+}
+
+/// A queue that cannot be moved aside is never written over, nor removed when the queue
+/// empties.
+#[test]
+fn a_pending_msgs_journal_that_cannot_be_moved_is_never_written_over_or_removed() {
+    let dir = scratch("msgs-stuck");
+    let path = dir.join("pending_msgs.json");
+    let bytes = b"[{\"to\":\"W1ABC\",\"text\":\"see".to_vec();
+    std::fs::write(&path, &bytes).unwrap();
+    take_every_aside_name(&dir, "pending_msgs.json");
+
+    let mut e = msgs_engine_on(&path);
+    e.restore_pending_msgs(NOW);
+    send(&mut e, "K1NEW");
+    e.app.restore_pending(Vec::new());
+    e.persist_pending_msgs();
+    e.journal_mark().wait();
+    assert_eq!(
+        std::fs::read(&path).ok(),
+        Some(bytes),
+        "the unreadable queue must never be written over or removed"
+    );
+    assert_eq!(
+        kept_under(&e, &dir),
+        vec![kept("pendingMsgs", &path, true)],
+        "the screen is told it was left in place"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_pending_msgs_journal_whose_only_news_is_fields_restores_as_it_always_has() {
+    let dir = scratch("msgs-fields");
+    let path = dir.join("pending_msgs.json");
+    let journal = a_pending_msgs_journal().replacen("{", "{\"aNewField\":7,", 1);
+    assert!(journal.contains("aNewField"));
+    std::fs::write(&path, &journal).unwrap();
+    let mut e = msgs_engine_on(&path);
+    e.restore_pending_msgs(NOW);
+    assert_eq!(
+        (waiting_to(&e), kept_under(&e, &dir)),
+        (vec!["W1ABC".to_string()], vec![]),
+        "restored as it always has, with nothing to say"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn no_pending_msgs_journal_is_a_first_run() {
+    let dir = scratch("msgs-none");
+    let mut e = msgs_engine_on(&dir.join("pending_msgs.json"));
+    e.restore_pending_msgs(NOW);
+    assert_eq!(
+        (waiting_to(&e), kept_under(&e, &dir)),
+        (Vec::<String>::new(), vec![]),
+        "no journal: nothing waiting and nothing to say"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

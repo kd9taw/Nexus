@@ -16,6 +16,8 @@ export function keptFileMessage(f: KeptFile): string {
       return t('shell.keptFile.fieldDay', { path: f.path })
     case 'js8Inbox':
       return t('shell.keptFile.js8Inbox', { path: f.path })
+    case 'pendingMsgs':
+      return t('shell.keptFile.pendingMsgs', { path: f.path })
     default:
       return t('shell.keptFile.other', { path: f.path })
   }

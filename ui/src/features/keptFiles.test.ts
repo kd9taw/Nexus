@@ -11,6 +11,7 @@ describe('keptFileMessage', () => {
     ['pendingQso', 'shell.keptFile.pendingQso'],
     ['fieldDay', 'shell.keptFile.fieldDay'],
     ['js8Inbox', 'shell.keptFile.js8Inbox'],
+    ['pendingMsgs', 'shell.keptFile.pendingMsgs'],
   ] as const)(
     'says what a %s file held, and where it is now',
     (store, key) => {

@@ -9997,6 +9997,11 @@ impl Engine {
         let Some(path) = &self.station.pending_msgs_path else {
             return;
         };
+        // A journal this run could not read and could not move aside holds messages waiting to
+        // send: it is neither written over nor removed (`restore_pending_msgs`).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
         let items = self.app.export_pending();
         if items.is_empty() {
             self.station.journals.remove(path);
@@ -10027,6 +10032,29 @@ impl Engine {
                 .map(PendingMsgJournal::into_pending)
                 .collect(),
         );
+    }
+
+    /// Restore the journaled queue at launch, from the path the shell set
+    /// ([`Self::set_pending_msgs_path`]); call it where [`Self::load_pending_msgs`] is called. A
+    /// queue this build cannot read — torn, or from a newer build with a value this one cannot
+    /// hold — keeps messages waiting to send, so it is kept aside ([`tempo_core::keep_aside`])
+    /// and the screen says where, rather than starting empty and letting the next queue change
+    /// write over it.
+    pub fn restore_pending_msgs(&mut self, now_unix: i64) {
+        let Some(path) = self.station.pending_msgs_path.clone() else {
+            return;
+        };
+        let items = tempo_core::keep_aside::read_or_keep("pendingMsgs", &path, now_unix, |text| {
+            serde_json::from_str::<Vec<PendingMsgJournal>>(text).map_err(|e| e.to_string())
+        });
+        if let Some(items) = items {
+            self.app.restore_pending(
+                items
+                    .into_iter()
+                    .map(PendingMsgJournal::into_pending)
+                    .collect(),
+            );
+        }
     }
 
     /// Journal (or clear) the QSO held by the prompt-to-log popup.
