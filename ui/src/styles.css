@@ -17641,8 +17641,10 @@ button.cq-skiptx1.on {
   white-space: nowrap;
   vertical-align: top;
 }
+/* The age column is as wide as its heading needs: the board sorts on the age by default, and "Age ▲"
+   is 43 px (SpotsBox.fit.test.tsx). */
 .cn-spots[data-fit='m'] .sp-grid .np-row {
-  grid-template-columns: 40px minmax(64px, 1fr) minmax(0, 1.2fr) 60px 52px minmax(0, 1fr);
+  grid-template-columns: minmax(40px, max-content) minmax(64px, 1fr) minmax(0, 1.2fr) 60px 52px minmax(0, 1fr);
 }
 .cn-spots[data-fit='s'] .sp-grid .np-row {
   grid-template-columns: minmax(0, 1fr) 3.9em 3.5em;
