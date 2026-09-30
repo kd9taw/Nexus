@@ -1107,7 +1107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were lettered in green, amber or red, and some were hard to read on the light page colour. In
   every light theme they now take the theme's text colour, with the colour kept on the chip's
   border. The same goes for Connect's boxes in the dashboard rail beside the cockpits, and for the
-  BAND OPEN badge in the POTA/SOTA box. The dark themes look exactly as before.
+  BAND OPEN and NEW PARK badges in the POTA/SOTA box. The dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

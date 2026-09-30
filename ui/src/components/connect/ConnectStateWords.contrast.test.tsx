@@ -719,9 +719,10 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
   /** The chip's index in the word's chain: the word itself, or (the NOW bar's) the chip it sits in. */
   const chipAt = (w: Word) => w.chain.length - 1 - [...w.nodes].reverse().findIndex((n) => n.classList.contains(w.kind))
-  it("a chip that carries its state on its own border keeps it 3:1 off the surface in the light themes", () => {
+  /** Each word's chip border that is missing or under 3:1 off what the chip sits on, in the light themes. */
+  function lowEdges(words: Word[]): string[] {
     const low: string[] = []
-    for (const w of state.filter((x) => CHIPS.includes(x.kind)))
+    for (const w of words)
       for (const mode of LIGHT) {
         const i = chipAt(w)
         const v = declAt(RULES, mode, w, i, 'border-top-color', 'border-color', 'border')
@@ -735,7 +736,21 @@ describe('every state-coloured word on Connect reads in every light theme', () =
         const c = colourAt(RULES, mode, w, i, borderColour(v).replace(/currentColor/gi, ink), under)
         if (contrast(c, under) < 3) low.push(`${w.what} ${mode}: the border ${hex(c)} on ${hex(under)} = ${contrast(c, under).toFixed(2)}:1`)
       }
-    expect(low).toEqual([])
+    return low
+  }
+  it("a chip that carries its state on its own border keeps it 3:1 off the surface in the light themes", () => {
+    expect(lowEdges(state.filter((x) => CHIPS.includes(x.kind)))).toEqual([])
+  }, 60_000)
+
+  // The POTA/SOTA box's two badges sit side by side. BAND OPEN is a state word, above. NEW PARK letters in the
+  // accent, which the census counts as the theme's own ink (a link's), but on the accent's own tint: in the
+  // light theme it read 3.36:1 in Chrome, beside a BAND OPEN that now reads. Both are held here, whatever
+  // their ink: 4.5:1, and the colour kept on the badge's edge at 3:1.
+  it("the POTA/SOTA box's badges read in every light theme, their colour on the badge's edge", () => {
+    const badges = all.filter((w) => w.kind === 'pota-badge')
+    expect([...new Set(badges.map(signature))].sort(), 'both badges').toEqual(['pota-badge: .pota-badge.pota-badge-new', 'pota-badge: .pota-badge.pota-badge-open'])
+    expect(unreadable(RULES, badges, LIGHT)).toEqual([])
+    expect(lowEdges(badges)).toEqual([])
   }, 60_000)
 
   it('the reader itself: its element-by-element tokens are cssCascade.tokensAt, wherever no node sets one inline', () => {
@@ -760,5 +775,8 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     expect(has(/^dash chase \.need-chip\.need-band "BAND" light: #a16207 on #d5c9b8 = 3\.02:1$/), "the rail's need chip").toBe(true)
     expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
     expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
+    // NEW PARK, which the census does not count (above): 3.37:1 here, 3.36:1 in Chrome.
+    const badge = unreadable(SHIPPED, all.filter((w) => w.kind === 'pota-badge'), ['light'])
+    expect(badge.some((m) => / pota \.pota-badge\.pota-badge-new "NEW PARK" light: #0174ab on #bcd5e4 = 3\.3[67]:1$/.test(m)), 'NEW PARK').toBe(true)
   }, 60_000)
 })

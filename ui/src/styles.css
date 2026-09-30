@@ -2630,11 +2630,18 @@ body.resizing-row {
 }
 /* The POTA/SOTA box is the board itself (in Connect's boxes and the rail's, `[data-ota-box]`), and its
    BAND OPEN badge letters in a fixed green that read 1.65:1 on the light page, its half-mixed edge
-   1.4:1: the word takes the ink and the edge the theme's open-band colour. The POTA/SOTA view itself
-   is not part of this change. */
-[data-theme='light'] [data-ota-box] .pota-badge-open {
+   1.4:1: the word takes the ink and the edge the theme's open-band colour. NEW PARK beside it, in the
+   accent on the accent's tint, read 3.36:1: the same, its edge the full accent. The POTA/SOTA view
+   itself is not part of this change. */
+[data-theme='light'] [data-ota-box] .pota-badge-open,
+[data-theme='light'] [data-ota-box] .pota-badge-new {
   color: var(--text);
+}
+[data-theme='light'] [data-ota-box] .pota-badge-open {
   border-color: var(--band-open);
+}
+[data-theme='light'] [data-ota-box] .pota-badge-new {
+  border-color: var(--accent);
 }
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
 
