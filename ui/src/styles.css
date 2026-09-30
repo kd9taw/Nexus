@@ -2848,6 +2848,13 @@ body.resizing-row {
   order: 1;
   flex: 1 0 100%;
 }
+/* On its own line the country may still be wider than the box leaves it (in a 200 px box, "South
+   Orkney Is." and its heading are 129 px in 115, measured in Chrome): there it wraps between its
+   words, whole, and a single word too long for the line breaks rather than being cut. */
+.chase-head[data-split] > .chase-where > .chase-entity {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 /* Beam heading beside the entity on both chase panes. `flex:none` for the same
    reason as everywhere else: the country name may truncate, the number may not. */
 .chase-az {

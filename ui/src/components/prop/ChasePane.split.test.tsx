@@ -81,6 +81,9 @@ describe('a Chase row whose first line has no room for the entity', () => {
     expect(css(head, 'flex-wrap'), 'the head keeps one line').toBe('wrap')
     expect(css(place, 'order'), 'the entity is not after the age').toBe('1')
     expect(css(place, 'flex-basis'), 'the entity does not take a line of its own').toBe('100%')
+    // On its own line the country may still be wider than a 200 px box leaves it ("South Orkney Is." and
+    // its heading, 129 px in 115, measured in Chrome): there it wraps between its words, whole.
+    expect(css(head.querySelector('.chase-entity')!, 'white-space'), 'the country is cut on its own line').toBe('normal')
   })
 
   it('keeps one line where the entity fits beside the rest', () => {
@@ -90,6 +93,7 @@ describe('a Chase row whose first line has no room for the entity', () => {
     expect(head.hasAttribute('data-split'), 'a row with room split anyway').toBe(false)
     expect(css(head, 'flex-wrap')).toBeNull()
     expect(css(head.querySelector('.chase-where')!, 'order')).toBeNull()
+    expect(css(head.querySelector('.chase-entity')!, 'white-space'), 'beside the call the country keeps one line').toBe('nowrap')
   })
 
   it('does the same in the Chase Feed pane, which shares the row', () => {

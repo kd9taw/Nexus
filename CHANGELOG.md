@@ -633,7 +633,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   narrow Chase or Chase Feed box the country and its beam heading were cut short ("South Orkney
   Is." showed as a few letters), and with the box's text at its largest they were not shown at
   all. Now, where the call, its need chip, the point button and the age leave them no room, they
-  go on the line under the call, whole; those four stay where they were.
+  go on the line under the call, whole; those four stay where they were. Where even those four
+  do not fit on one line (the largest text, or the narrowest column), they take the lines they
+  need instead of running under the ▶ Work button beside them.
 
 - **Connect: the Chase DX button says which map it opens.** Its tooltip said "Beam map,
   need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
