@@ -47,6 +47,8 @@ pub struct RepeaterRecord {
     pub dstar: bool,
     pub fusion: bool,
     pub dmr_color_code: Option<u8>,
+    /// Channel width, kHz, when the source says: RepeaterBook's "FM Bandwidth"; hearham's
+    /// "NFM" is recorded as the narrowband 12.5. A narrow machine programs as NFM.
     pub bandwidth_khz: Option<f32>,
     /// On-air per the directory (RB "Operational Status", hearham `operational`).
     pub operational: bool,
@@ -72,6 +74,18 @@ fn jf64(v: &serde_json::Value, k: &str) -> Option<f64> {
         Some(serde_json::Value::Number(n)) => n.as_f64(),
         Some(serde_json::Value::String(s)) => s.trim().parse().ok(),
         _ => None,
+    }
+}
+
+/// A bandwidth in kHz: a number, or a string of one, with or without the unit RepeaterBook's
+/// own pages print ("12.5", 12.5, "12.5 kHz"). Anything else is not known.
+fn jkhz(v: &serde_json::Value, k: &str) -> Option<f32> {
+    match v.get(k) {
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim().to_ascii_lowercase();
+            t.strip_suffix("khz").unwrap_or(&t).trim().parse().ok()
+        }
+        _ => jf64(v, k).map(|b| b as f32),
     }
 }
 
@@ -170,7 +184,7 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 dstar: jyes(v, "D-Star"),
                 fusion: jyes(v, "System Fusion"),
                 dmr_color_code: jf64(v, "DMR Color Code").map(|c| c as u8),
-                bandwidth_khz: jf64(v, "FM Bandwidth").map(|b| b as f32),
+                bandwidth_khz: jkhz(v, "FM Bandwidth"),
                 // RB reports "On-air" / "Off-air" / "Unknown"; only a positive
                 // off-air marks it down (unknown machines still get programmed).
                 operational: !status.eq_ignore_ascii_case("off-air"),
@@ -329,7 +343,7 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 dstar: names(&["D-STAR", "DSTAR"]),
                 fusion: names(&["YSF", "C4FM", "FUSION"]),
                 dmr_color_code: hearham_cc(&enc),
-                bandwidth_khz: None,
+                bandwidth_khz: names(&["NFM"]).then_some(NARROW_FM_KHZ),
                 operational: jf64(v, "operational").unwrap_or(1.0) != 0.0,
                 open_use: jstr(v, "restriction").is_empty(),
                 distance_km: 0.0,
@@ -583,6 +597,10 @@ pub fn filter_sort(
 /// rather than a +/- shift. The largest conventional shift is 23cm's 12–20 MHz.
 const MAX_SHIFT_MHZ: f64 = 30.0;
 
+/// The narrowband FM channel width. A machine whose source gives this bandwidth or less
+/// (RepeaterBook's "FM Bandwidth" 12.5; hearham's "NFM" is recorded as it) is an NFM channel.
+const NARROW_FM_KHZ: f32 = 12.5;
+
 /// Convert a picked repeater into a programmable [`Channel`].
 ///
 /// Duplex/offset derive from `input − output`: within ±1 Hz ⇒ simplex; a
@@ -590,7 +608,8 @@ const MAX_SHIFT_MHZ: f64 = 30.0;
 /// like +1.0 MHz on 2m stay correct); beyond [`MAX_SHIFT_MHZ`] ⇒ `Split` with
 /// the absolute input frequency. Tone: uplink PL ⇒ `Tone` (the safe default —
 /// TSQL would mute a machine that doesn't transmit tone); downlink-only tone ⇒
-/// `TSql`; DCS ⇒ `Dtcs`. Mode: FM unless the record is digital-only.
+/// `TSql`; DCS ⇒ `Dtcs`. Mode: FM, or NFM for a machine its source marks narrow
+/// ([`NARROW_FM_KHZ`]), unless the record is digital-only.
 pub fn to_channel(r: &RepeaterRecord) -> Channel {
     let diff = r.input_mhz - r.output_mhz;
     let (duplex, offset_mhz) = if diff.abs() < 1e-6 {
@@ -609,7 +628,11 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         (None, None, None) => (ToneMode::None, 88.5, 88.5),
     };
     let mode = if r.fm {
-        ChanMode::Fm
+        if r.bandwidth_khz.is_some_and(|khz| khz <= NARROW_FM_KHZ) {
+            ChanMode::Nfm
+        } else {
+            ChanMode::Fm
+        }
     } else if r.dmr {
         ChanMode::Dmr
     } else if r.dstar {
@@ -854,8 +877,8 @@ mod tests {
         assert_eq!(to_channel(&r).mode, ChanMode::Fm);
     }
 
-    /// "NFM" is narrow FM, so an NFM machine is an FM machine. Nothing in the model exports a
-    /// narrow channel yet (`to_channel` never writes `ChanMode::Nfm`), so it programs as FM.
+    /// "NFM" is narrow FM, so an NFM machine is an FM machine: listed, and addable. It programs
+    /// as a narrow channel ([`a_machine_its_source_marks_narrow_is_an_nfm_channel`]).
     #[test]
     fn a_hearham_nfm_machine_is_fm() {
         let wrong = wrong_flags(&[
@@ -865,7 +888,7 @@ mod tests {
             ("NXDN/NFM", &["FM"]),
         ]);
         assert_eq!(wrong, Vec::<String>::new(), "NFM");
-        assert_eq!(to_channel(&hh_row("NFM", "100.0")).mode, ChanMode::Fm);
+        assert_eq!(to_channel(&hh_row("NFM", "100.0")).mode, ChanMode::Nfm);
     }
 
     /// FM beside a mode the record has no field for (P25, NXDN, M17) is still FM.
@@ -1003,6 +1026,72 @@ mod tests {
             })
             .collect();
         assert_eq!(wrong, Vec::<String>::new(), "contradicted DCS codes");
+    }
+
+    /// A one-row RepeaterBook export carrying `bandwidth` as the raw JSON value of its
+    /// "FM Bandwidth" field (`null` = absent).
+    fn rb_row_bw(bandwidth: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"{{"results":[{{"Callsign":"W9NAR","Frequency":"146.9400","Input Freq":"146.3400","PL":"103.5","TSQ":"","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"7","FM Analog":"Yes","FM Bandwidth":{bandwidth}}}]}}"#
+        );
+        let mut recs = parse_repeaterbook_json(&json);
+        assert_eq!(recs.len(), 1, "the {bandwidth} row did not parse");
+        recs.remove(0)
+    }
+
+    /// A machine its source marks narrow is a narrow (NFM) channel: hearham's "NFM" word (55
+    /// rows on 2026-09-30) and RepeaterBook's "FM Bandwidth" of 12.5 kHz, written as a number or
+    /// with the unit RepeaterBook's own pages print. Everything else stays wide FM.
+    #[test]
+    fn a_machine_its_source_marks_narrow_is_an_nfm_channel() {
+        let hearham = [
+            ("NFM", ChanMode::Nfm),
+            ("P25/NFM", ChanMode::Nfm),
+            ("DMR/NFM", ChanMode::Nfm),
+            ("FM", ChanMode::Fm),
+            ("YSF/FM", ChanMode::Fm),
+        ];
+        let repeaterbook = [
+            (r#""12.5""#, ChanMode::Nfm),
+            ("12.5", ChanMode::Nfm),
+            (r#""12.5 kHz""#, ChanMode::Nfm),
+            (r#""25""#, ChanMode::Fm),
+            (r#""25 kHz""#, ChanMode::Fm),
+            (r#""wide""#, ChanMode::Fm),
+            ("null", ChanMode::Fm),
+        ];
+        let mut wrong: Vec<String> = hearham
+            .iter()
+            .filter_map(|&(mode, want)| {
+                let got = to_channel(&hh_row(mode, "100.0")).mode;
+                (got != want).then(|| format!("hearham {mode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        wrong.extend(repeaterbook.iter().filter_map(|&(bw, want)| {
+            let got = to_channel(&rb_row_bw(bw)).mode;
+            (got != want).then(|| format!("RepeaterBook {bw}: got {got:?}, want {want:?}"))
+        }));
+        assert_eq!(wrong, Vec::<String>::new(), "narrow channels");
+    }
+
+    /// What the operator's radio gets: both export files write a narrow machine's mode as NFM.
+    #[test]
+    fn a_narrow_machine_exports_as_nfm_in_both_files() {
+        let c = to_channel(&hh_row("NFM", "100.0"));
+        let chirp = crate::chirp::to_chirp_csv(std::slice::from_ref(&c), 8, "");
+        let row = chirp.lines().nth(1).expect("a CHIRP row");
+        assert_eq!(
+            row.split(',').nth(10),
+            Some("NFM"),
+            "CHIRP Mode column: {row}"
+        );
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        let row = csv.lines().nth(1).expect("a CSV row");
+        assert_eq!(
+            row.split(',').nth(10),
+            Some("NFM"),
+            "generic CSV Mode column: {row}"
+        );
     }
 
     /// A mode the record has no field for is never FM on its own, and a plain or empty mode is

@@ -224,6 +224,11 @@ describe('repeaterMemory', () => {
     expect(m.ctcssEncHz).toBeUndefined()
   })
 
+  it('keeps a narrow machine narrow, so the bank and its CHIRP export say NFM', () => {
+    expect(repeaterMemory(chan({ mode: 'nfm' }), 'W9ABC 94').mode).toBe('NFM')
+    expect(repeaterMemory(chan(), 'W9ABC 94').mode).toBe('FM')
+  })
+
   it('leaves the site undefined when the caller has no record (a reloaded list)', () => {
     const m = repeaterMemory(chan(), 'W9ABC 94')
     expect(m.lat).toBeUndefined()

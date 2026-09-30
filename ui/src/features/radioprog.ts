@@ -208,7 +208,7 @@ export function repeaterMemory(
   return {
     name,
     rxMhz: c.rxMhz,
-    mode: 'FM',
+    mode: c.mode === 'nfm' ? 'NFM' : 'FM',
     kind: shift === 'simplex' && !toneHz && !dtcs ? 'simplex' : 'repeater',
     offsetDir: shift,
     offsetMhz: offsetHz ? offsetHz / 1e6 : undefined,
