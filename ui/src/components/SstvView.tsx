@@ -1577,12 +1577,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       .catch(() => {})
   }
 
-  // Announce natural completion (sending true → false without an explicit Stop).
+  // Announce natural completion (sending true → false without an explicit Stop). A picture the
+  // engine DROPPED before it went out is no completion: its warning line (an alert) says so.
+  const txNotice = sstv?.txNotice
   const wasSending = useRef(false)
   useEffect(() => {
-    if (wasSending.current && !sending) announce(t('sstv.tx.announce.finished'))
+    if (wasSending.current && !sending && !txNotice) announce(t('sstv.tx.announce.finished'))
     wasSending.current = sending
-  }, [sending])
+  }, [sending, txNotice])
 
   const txProgressPct = Math.round((sstv?.txProgress ?? 0) * 100)
   const txRemaining = Math.max(0, (sstv?.txTotalSecs ?? 0) - (sstv?.txElapsedSecs ?? 0))
@@ -2401,6 +2403,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <div className="sstv-tx-progress-track">
               <div className="sstv-tx-progress-fill" style={{ width: `${txProgressPct}%` }} />
             </div>
+          </div>
+        )}
+        {/* A picture the engine DROPPED while it waited for the transmitter (TX went off, or
+            the dial left the licence privileges) says so here, beside Send, until the next
+            picture keys: the engine's own sentence, like the RTTY, PSK and CW keyer warnings. */}
+        {!sending && txNotice && (
+          <div className="cw-keyer-warn" role="alert">
+            ⚠ {txNotice}
           </div>
         )}
       </div>

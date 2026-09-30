@@ -476,6 +476,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before it started) or when the dial left your privileges used to be held, and it played by
   itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
   transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
+- **SSTV: a picture that could not go out is dropped, not sent later on its own.** After Send, a
+  picture waits until the radio is free to key it: a moment, or longer while another
+  transmission ends or the radio is being switched. If transmit went off in that time, or the
+  frequency left your license privileges, the picture used to be held, and it went out by itself
+  as soon as transmitting was allowed again. It is now dropped, and a warning line beside Send
+  says why until the next picture goes out. A picture already going out is untouched, and Stop,
+  Stop TX and the TX switch work as they did.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched

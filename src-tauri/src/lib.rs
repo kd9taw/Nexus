@@ -15963,6 +15963,12 @@ struct SstvStateDto {
     /// Seconds of key-down elapsed / total for the in-flight image.
     tx_elapsed_secs: f32,
     tx_total_secs: f32,
+    /// Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
+    /// or outside the licence's privileges): the cockpit's warning line. Absent otherwise.
+    /// DESKTOP ONLY: the Remote strips it (`remote_service::application`), because the hosted
+    /// page reads this sample against an exact key list and refuses one with a key it lacks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_notice: Option<String>,
 }
 
 fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
@@ -15993,6 +15999,7 @@ fn sstv_state_dto(eng: &Engine) -> SstvStateDto {
         tx_progress,
         tx_elapsed_secs,
         tx_total_secs,
+        tx_notice: eng.sstv_tx_notice().map(str::to_string),
     }
 }
 

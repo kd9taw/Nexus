@@ -1185,6 +1185,13 @@ const RTTY_LEFT_SECTION: &str = "RTTY stopped: you left the RTTY screen, so what
      queued was dropped, not held for your return. Send it again when you are ready.";
 const PSK_LEFT_SECTION: &str = "PSK stopped: you left the PSK screen, so what was still queued \
      was dropped, not held for your return. Send it again when you are ready.";
+/// …and the SSTV cockpit's, when [`Engine::poll_sstv_tx`] drops the picture that was waiting for
+/// the transmitter (one picture at a time, so there is never more than one).
+const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the picture that \
+     was waiting was dropped, not held for later. Send it again when you are ready.";
+const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
+     privileges, so the picture that was waiting was dropped, not held for later. Send it again \
+     from inside them.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -3396,6 +3403,10 @@ pub struct Engine {
     /// In-flight SSTV TX progress `(played_ms, total_ms)`, stamped by the radio loop.
     /// `None` = no image queued or sending.
     sstv_tx_progress: Option<(f64, f64)>,
+    /// Why the last picture that waited for the transmitter was DROPPED instead of sent (see
+    /// [`Engine::poll_sstv_tx`]): the SSTV cockpit's warning line. Cleared when the next picture
+    /// keys. `None` = nothing dropped since.
+    sstv_tx_notice: Option<String>,
     /// Parsec presence mode — the state machine the watcher's verdicts drive, and the last
     /// stop it made. See `engine/parsec_presence.rs`.
     parsec: parsec_presence::ParsecPresence,
@@ -5073,6 +5084,7 @@ impl Engine {
             sstv_sending: false,
             sstv_tx_mode: None,
             sstv_tx_progress: None,
+            sstv_tx_notice: None,
             parsec: parsec_presence::ParsecPresence::default(),
         }
     }
@@ -18867,24 +18879,57 @@ contact yourself."
         Ok(())
     }
 
-    /// Take the queued SSTV image for the radio loop to stream, or `None` while any TX gate
-    /// is down (Monitor off / outside privileges / not Phone / tuning) — the job is then
-    /// HELD (not dropped), so nothing keys unexpectedly. (`poll_rtty_one` held too, until the
-    /// operator's 2026-09-30 drop rule for refused RTTY sends; SSTV was not part of it.)
+    /// Take the queued SSTV image for the radio loop to stream, or `None`.
+    ///
+    /// ⛔ A PICTURE REFUSED WHILE IT WAITS IS DROPPED, NEVER HELD (the operator, 2026-09-30: "a
+    /// refused picture or beacon is dropped with a notice, never sent later"). A picture waits
+    /// here from [`Self::sstv_send`] until the loop is idle: another over or its PTT tail, a held
+    /// mic, a radio handoff. If in that time TX went off, or the dial left the licence's Phone
+    /// privileges, the picture is dropped: the log says why once, and the SSTV cockpit's warning
+    /// line ([`Self::sstv_tx_notice`]) says so. Held, it keyed the moment TX was allowed again, at
+    /// a time the operator did not choose. TX Off itself already drops it (`set_tx_enabled`), so
+    /// the TX-off arm here is the backstop for a latch lowered any other way.
+    ///
+    /// HELD, as before, while a tune carrier is up, and outside the Phone section: `tx_allowed`
+    /// judges the current section's emission, so it speaks for SSTV only in Phone. A picture
+    /// already going out is the loop's, and nothing here touches it.
+    ///
     /// No wall-clock watchdog check here: the over's length is bounded UP
     /// FRONT by `sstv_send`'s budget, and the loop unkeys unconditionally at the precomputed
     /// `tx_until_ms`, so the watchdog never needs to bite mid-image.
     pub fn poll_sstv_tx(&mut self) -> Option<SstvTxJob> {
         use crate::settings::OperatingMode;
-        if !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.settings.operating_mode != OperatingMode::Phone
-            || self.sstv_tx.is_none()
-        {
+        self.sstv_tx.as_ref()?; // nothing waiting, nothing to judge
+        let in_section = self.settings.operating_mode == OperatingMode::Phone;
+        let refused = if !self.tx_enabled {
+            Some(("transmit is off", SSTV_REFUSED_TX_OFF))
+        } else if in_section && !self.tx_allowed() {
+            Some((
+                "the dial is outside the licence's privileges",
+                SSTV_REFUSED_PRIVILEGES,
+            ))
+        } else {
+            None
+        };
+        if let Some((why, notice)) = refused {
+            tempo_core::applog::info("tx", &format!("SSTV not keyed: {why} (dropped)"));
+            self.sstv_tx = None;
+            self.sstv_tx_mode = None;
+            self.sstv_tx_progress = None;
+            self.sstv_tx_notice = Some(notice.to_string());
             return None;
         }
+        if self.tuning || !in_section {
+            return None;
+        }
+        self.sstv_tx_notice = None;
         self.sstv_tx.take()
+    }
+
+    /// Why the last picture that waited for the transmitter was dropped instead of sent, for
+    /// the SSTV cockpit's warning line; `None` once a picture keys.
+    pub fn sstv_tx_notice(&self) -> Option<&str> {
+        self.sstv_tx_notice.as_deref()
     }
 
     /// Stop SSTV now: drop the queued image and abort the over in progress — the radio loop
@@ -28492,8 +28537,9 @@ mod tests {
 
     #[test]
     fn poll_sstv_tx_holds_the_job_while_a_gate_is_down() {
-        // A queued image is HELD (not dropped) when a gate rung drops, so it can't
-        // silently vanish — and can't key while the gate is down either.
+        // A queued image is HELD (not dropped) while a tune carrier is up, so it can't
+        // silently vanish — and can't key while the tune is up either. A picture refused
+        // with TX off or outside the privileges is dropped instead (the two tests below).
         let mut e = phone_armed_engine();
         e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
         e.set_tune(true); // tune carrier up → poll holds
@@ -28501,6 +28547,76 @@ mod tests {
         assert!(e.sstv_sending(), "the job is still queued, not dropped");
         e.set_tune(false);
         assert!(e.poll_sstv_tx().is_some(), "released once the gate clears");
+    }
+
+    /// ⛔ A PICTURE REFUSED WHILE IT WAITS IS DROPPED, NEVER HELD (the operator, 2026-09-30: "a
+    /// refused picture or beacon is dropped with a notice, never sent later"). The dial leaves
+    /// the licence's Phone privileges while the picture waits for the transmitter, then comes
+    /// back. Held, the picture keyed on the tune back in.
+    #[test]
+    fn an_sstv_picture_refused_outside_privileges_is_dropped_and_does_not_key_after_a_tune_in() {
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        e.set_frequency(14.050, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.050 is outside Extra's phone privileges"
+        );
+        assert!(e.poll_sstv_tx().is_none(), "nothing keys outside them");
+        e.set_frequency(14.290, "20m", "USB");
+        assert!(e.tx_allowed(), "precondition: back inside them");
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "the refused picture keyed after the tune in"
+        );
+        assert!(!e.sstv_sending(), "the cockpit's TX indicator is down");
+        assert_eq!(e.sstv_tx_mode(), None, "…and its mode label went with it");
+        assert_eq!(
+            e.sstv_tx_notice(),
+            Some(SSTV_REFUSED_PRIVILEGES),
+            "the SSTV cockpit is told"
+        );
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(
+            e.poll_sstv_tx().is_some(),
+            "a picture sent inside the privileges keys as before"
+        );
+        assert_eq!(
+            e.sstv_tx_notice(),
+            None,
+            "…and the picture that keys clears the notice"
+        );
+    }
+
+    /// …and with TX off. TX Off itself drops the picture (`set_tx_enabled`), so this is the
+    /// backstop: the latch lowered another way, as a watchdog trip does.
+    #[test]
+    fn an_sstv_picture_refused_with_tx_off_is_dropped_and_does_not_key_when_tx_comes_back() {
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        e.tx_enabled = false; // not TX Off: the latch lowered another way
+        assert!(e.poll_sstv_tx().is_none(), "nothing keys with TX off");
+        e.set_tx_enabled(true);
+        assert!(
+            e.poll_sstv_tx().is_none(),
+            "the refused picture keyed when TX came back"
+        );
+        assert!(!e.sstv_sending(), "the cockpit's TX indicator is down");
+        assert_eq!(
+            e.sstv_tx_notice(),
+            Some(SSTV_REFUSED_TX_OFF),
+            "the SSTV cockpit is told"
+        );
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(
+            e.poll_sstv_tx().is_some(),
+            "a picture sent once TX is on keys as before"
+        );
+        assert_eq!(
+            e.sstv_tx_notice(),
+            None,
+            "…and the picture that keys clears the notice"
+        );
     }
 
     #[test]
