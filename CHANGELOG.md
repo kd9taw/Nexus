@@ -488,9 +488,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be sent because transmit was off (for example after leaving the CW screen part-way through a
   message) or the frequency was outside your license privileges, what was still waiting used to be
   held, and it went out by itself as soon as transmitting was allowed again: TX back on, or a tune
-  back inside your privileges. It is now dropped, and the CW screen's warning line says why. A
-  message you send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer
-  and its speed work as they did.
+  back inside your privileges. It is now dropped, and the CW screen's warning line says why.
+  Moving from the CW screen to another mode's screen (Phone, RTTY, PSK or a digital mode) drops
+  what was still to go too, and the CW screen's warning line says so when you come back: send it
+  again. Before, the rest of a message kept keying from Phone, RTTY or PSK, or was dropped under a
+  note blaming your privileges. The word already being keyed finishes, since the keyer is handed
+  one word at a time; on the soundcard keyer a move to a digital mode, which turns transmit off,
+  still cuts it, as before. Screens that are not a mode's own, such as the map or the logbook, do
+  not count, and the CW ID after an FT8 73 is sent from the FT8 screen as before. A message you
+  send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer and its
+  speed work as they did.
 - **The Globe map no longer shows what is behind the planet on its face.** On Connect's Globe map, a
   spot, a decoded station, a park, a DXpedition, an APRS station or a satellite on the far side of
   the planet was drawn on the side facing you, where a line from it straight through the Earth
@@ -575,8 +582,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmission ends or the radio is being switched. If transmit went off in that time, or the
   frequency left your license privileges, the picture used to be held, and it went out by itself
   as soon as transmitting was allowed again. It is now dropped, and a warning line beside Send
-  says why until the next picture goes out. A picture already going out is untouched, and Stop,
-  Stop TX and the TX switch work as they did.
+  says why until the next picture goes out. Moving to another mode's screen (CW, RTTY, PSK or a
+  digital mode) while a picture waits drops it too, and the warning line says so; before, CW, RTTY
+  and PSK held it, and it went out when you came back to Phone. A picture already going out is
+  untouched, and Stop, Stop TX and the TX switch work as they did.
 - **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
   beacon, a message or an automatic ack waits a moment until the radio is free to key it.
   Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was

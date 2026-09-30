@@ -15807,77 +15807,145 @@ mod tests {
             .collect()
     }
 
-    /// ⛔ A REFUSED CW SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Drop it, with a
-    /// notice"), on the real loop and the CAT keyer's wire. A macro keys its first word; the CW
-    /// section is left mid-macro, which drops the latch and keeps the queue; the loop's next
-    /// poll refuses. Held, the rest keyed the moment the operator came back to CW.
+    /// ⛔ LEAVING THE CW SCREEN DROPS WHAT WAS STILL TO GO (the operator, 2026-09-30: "Same leave
+    /// rule for CW"), on the real loop and the CAT keyer's wire. A macro keys its first word, the
+    /// CW section is left, and the loop runs on long past the rest of the macro: for Phone by the
+    /// nav (its re-home to the phone segment), for RTTY and PSK, which keep TX armed, and for FT8,
+    /// which lowers it. The first three keyed the rest from the screen the operator went to; FT8's
+    /// poll dropped it under the TX-off notice. The word already on the wire is the rig's keyer's
+    /// to finish: no stop goes out.
     #[test]
-    fn a_cw_macro_refused_with_tx_off_never_reaches_the_rig_when_tx_comes_back() {
-        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
-        {
-            let mut e = engine.lock().unwrap();
-            e.set_license_class("extra");
-            e.set_cw_keyer("cat", 600.0);
-            e.set_operating_mode("cw", false);
-            e.set_frequency(7.03, "40m", "CW");
-            e.send_cw("TEST DE KD9TAW");
+    fn a_cw_macro_typed_ahead_never_reaches_the_rig_after_the_cw_screen_is_left() {
+        for (to, follow) in [
+            ("phone", true),
+            ("rtty", false),
+            ("keyboard", false),
+            ("digital", false),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                e.set_cw_keyer("cat", 600.0);
+                e.set_operating_mode("cw", false);
+                e.set_frequency(14.03, "20m", "CW");
+                e.send_cw("CQ CQ DE KD9TAW K");
+            }
+            let (addr, log, dial) = mock_rigctld_switchable(14_030_000);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |t: f64| {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            };
+            run(100.0);
+            assert_eq!(
+                cw_words(&log),
+                ["b CQ"],
+                "{to}: control, the macro's first word keys"
+            );
+            engine.lock().unwrap().set_operating_mode(to, follow);
+            // The rig follows the section's QSY, as a real one does, so its read-back agrees.
+            let moved = engine.lock().unwrap().settings().dial_hz();
+            dial.store(moved, std::sync::atomic::Ordering::SeqCst);
+            // Each word and its space are long gone by every tick: the loop polls once a tick.
+            for t in [60_000.0, 120_000.0, 180_000.0, 240_000.0] {
+                run(t);
+            }
+            assert_eq!(
+                cw_words(&log),
+                ["b CQ"],
+                "{to}: the rest keyed from the other screen"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l.contains("stop_morse")),
+                "{to}: leaving cut the word on the wire"
+            );
+            assert!(
+                engine
+                    .lock()
+                    .unwrap()
+                    .cw_keyer_error()
+                    .is_some_and(|n| n.contains("you left the CW screen")),
+                "{to}: the CW cockpit is told the screen was left"
+            );
+            engine.lock().unwrap().set_operating_mode("cw", false);
+            run(300_000.0);
+            run(360_000.0);
+            assert_eq!(
+                cw_words(&log),
+                ["b CQ"],
+                "{to}: what was still to go reached the rig on the return"
+            );
+            engine.lock().unwrap().send_cw("73");
+            run(420_000.0);
+            assert_eq!(
+                cw_words(&log),
+                ["b CQ", "b 73"],
+                "{to}: a send made on the return keys as before"
+            );
+            assert_eq!(
+                engine.lock().unwrap().cw_keyer_error(),
+                None,
+                "{to}: …and the word that keys clears the notice"
+            );
         }
-        let (addr, log) = mock_rigctld_refusing(7_030_000, &[]);
-        let mut rig = Rig::rigctld(&addr);
-        let mut backend = MockBackend::new();
-        let mut state = loop_state_for(&engine);
-        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
-        let mut station = StationSinks::new();
-        let mut run = |t: f64| {
-            state
-                .step(
-                    &engine,
-                    &mut backend,
-                    &mut rig,
-                    &sinks,
-                    t,
-                    &mut ra,
-                    &mut rr,
-                    &mut station,
-                )
-                .unwrap();
-        };
-        run(100.0);
-        assert_eq!(
-            cw_words(&log),
-            ["b TEST"],
-            "control: the macro's first word keys"
-        );
-        engine.lock().unwrap().set_operating_mode("digital", false);
-        run(60_000.0); // the word and its space are long gone: the loop polls, with TX off
-        assert!(
-            !engine.lock().unwrap().tx_enabled(),
-            "precondition: TX is off"
-        );
-        engine.lock().unwrap().set_operating_mode("cw", false); // back to CW: TX armed again
-        run(120_000.0);
-        run(180_000.0);
-        assert_eq!(
-            cw_words(&log),
-            ["b TEST"],
-            "nothing refused reaches the rig when TX comes back"
-        );
-        assert!(
-            engine.lock().unwrap().cw_keyer_error().is_some(),
-            "the CW cockpit is told the rest was dropped"
-        );
-        engine.lock().unwrap().send_cw("73");
-        run(240_000.0);
-        assert_eq!(
-            cw_words(&log),
-            ["b TEST", "b 73"],
-            "a send made once TX is on keys as before"
-        );
-        assert_eq!(
-            engine.lock().unwrap().cw_keyer_error(),
-            None,
-            "…and the word that keys clears the notice"
-        );
+    }
+
+    /// …and the word already being keyed is left as a section change has always left it, on the
+    /// soundcard keyer, whose word is audio under the loop's own hold: Phone (by the nav), RTTY and
+    /// PSK keep TX armed, so it plays out; FT8 lowers TX, and the loop's TX-off cut ends it. That
+    /// one word is all that can go out after the move.
+    #[test]
+    fn the_cw_word_in_flight_is_left_as_a_section_change_leaves_it() {
+        for (to, follow) in [
+            ("phone", true),
+            ("rtty", false),
+            ("keyboard", false),
+            ("digital", false),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                e.set_cw_keyer("soundcard", 600.0);
+                e.set_operating_mode("cw", false);
+                e.set_frequency(14.03, "20m", "CW");
+                e.send_cw("CQ CQ DE KD9TAW K");
+            }
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+            assert!(rig.keyed, "{to}: control, the first word keys");
+            let first = backend.played.len();
+            engine.lock().unwrap().set_operating_mode(to, follow);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            assert_eq!(
+                rig.keyed,
+                to != "digital",
+                "{to}: the word in flight is not as a section change has always left it"
+            );
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+            assert_eq!(
+                backend.played.len(),
+                first,
+                "{to}: a word after the first keyed from the other screen"
+            );
+            assert!(!rig.keyed, "{to}: the key is up once that word is done");
+        }
     }
 
     /// …and outside the licence's privileges: a send from a dial a General may not key, then a
@@ -25864,6 +25932,42 @@ mod tests {
             None,
             "…and the picture that keys clears the notice"
         );
+    }
+
+    /// ⛔ LEAVING PHONE DROPS AN SSTV PICTURE STILL WAITING (the operator, 2026-09-30: "Drop it on
+    /// leave"), on the real loop. Send is accepted, and the operator moves to CW or FT8 before the
+    /// loop takes the picture, then comes back to Phone. CW keeps TX armed, so the section check
+    /// held the picture and the loop keyed it on the return.
+    #[test]
+    fn a_waiting_sstv_picture_never_keys_after_the_phone_screen_is_left() {
+        for to in ["cw", "digital"] {
+            let engine = sstv_ready_engine(vec![0.2f32; 24_000]); // 2 s
+            engine.lock().unwrap().set_operating_mode(to, false);
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            engine.lock().unwrap().set_operating_mode("phone", false);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+            assert!(
+                backend.played.is_empty(),
+                "{to}: the picture keyed on the return"
+            );
+            assert!(!rig.keyed, "{to}: …or anything else keyed");
+            assert!(
+                engine.lock().unwrap().sstv_tx_notice().is_some(),
+                "{to}: the SSTV cockpit is told"
+            );
+            engine
+                .lock()
+                .unwrap()
+                .sstv_send(vec![0.2f32; 24_000], "PD-120".to_string())
+                .unwrap();
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_200.0);
+            assert!(
+                rig.keyed,
+                "{to}: a picture sent on the return keys as before"
+            );
+        }
     }
 
     /// ⛔ WHAT APRS HAS QUEUED IS DROPPED BY TX OFF, NEVER KEYED LATER (the operator, 2026-09-30),
