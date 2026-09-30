@@ -109,7 +109,7 @@ The panes you can assign:
 | Selection | detail on the station/spot you clicked, with a ▶ Work button |
 | Band Outlook | modelled workable bands to DX (or the path to a selected call) |
 | Openings | detected band openings around you |
-| Space Wx | solar/geomagnetic gauges + the NOAA scales annunciator |
+| Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
 | Getting Out | who is hearing you right now, on a compass |
 | Best Band → Region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
@@ -124,6 +124,7 @@ The panes you can assign:
 | Satellite Passes | next amateur-satellite passes over your grid |
 | Rotor | rotator control + compass (appears once a rotctld is configured) |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
+| Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
 
 The default layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,

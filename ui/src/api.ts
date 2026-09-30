@@ -57,6 +57,7 @@ import type {
   VoiceMessage,
   OtaMapSpot,
   KpForecast,
+  DailySolarIndices,
 } from './types'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
@@ -3154,6 +3155,13 @@ export async function getOtaSpots(program: string, cached = false): Promise<OtaS
  *  draw as a quiet sky. */
 export async function getKpForecast(): Promise<KpForecast> {
   return invoke<KpForecast>('get_kp_forecast')
+}
+
+/** NOAA's daily solar indices: the last thirty days of SFI and sunspot number. Cached an hour
+ *  server-side, and the last good copy is served when a fetch fails — every row carries its own
+ *  date, so the caller can say how old the newest day is. EMPTY = never had the file. */
+export async function getSolarIndices(): Promise<DailySolarIndices> {
+  return invoke<DailySolarIndices>('get_solar_indices')
 }
 
 /** Activators placed for the Connect map's parks layer. Served from a shared cache

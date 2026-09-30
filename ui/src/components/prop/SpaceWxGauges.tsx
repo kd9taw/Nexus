@@ -4,7 +4,7 @@
 // each acronym carries a hover/tap plain-English definition so a newcomer is
 // never staring at a cryptic "SFI 142 / Kp 4"; Expert mode assumes fluency.
 import type { SpaceWxView } from '../../types'
-import { sfiImpact, kpImpact, aImpact, xrayImpact, bzImpact, type Impact } from '../../propViz'
+import { sfiImpact, kpImpact, aImpact, xrayImpact, bzImpact, windSpeedImpact, type Impact } from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
 import { t, type MessageKey } from '../../i18n'
 
@@ -26,6 +26,9 @@ const INDEX = {
   bz: 'Bz',
 } as const
 
+/** The unit printed after the solar-wind speed — a unit symbol, the same in every language. */
+const KMS_UNIT = 'km/s'
+
 /** Plain-English glosses for the space-weather acronyms (Simple mode only). Looked up when
  * a gauge renders, not at import — this is module state. */
 const GLOSS: Record<string, { glossKey: MessageKey }> = {
@@ -38,11 +41,14 @@ const GLOSS: Record<string, { glossKey: MessageKey }> = {
 function Gauge({
   label,
   value,
+  unit,
   impact,
   gloss,
 }: {
   label: string
   value: string
+  /** A unit symbol after the value, smaller, so the number itself stays short in a narrow rail. */
+  unit?: string
   impact: Impact
   gloss?: boolean
 }) {
@@ -61,7 +67,14 @@ function Gauge({
     <div className="swx-gauge">
       <div className="swx-head">
         {key}
-        <span className="swx-v">{value}</span>
+        {unit ? (
+          <span className="swx-vu">
+            <span className="swx-v">{value}</span>
+            <span className="swx-u">{unit}</span>
+          </span>
+        ) : (
+          <span className="swx-v">{value}</span>
+        )}
       </div>
       <div className="swx-bar" aria-hidden="true">
         <span className="swx-bar-fill" style={{ background: SEV_VAR[impact.sev] }} />
@@ -105,6 +118,18 @@ export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean 
           label={INDEX.bz}
           value={`${wx.solarWind.bzNt.toFixed(1)}`}
           impact={bzImpact(wx.solarWind.bzNt)}
+          gloss={gloss}
+        />
+      )}
+      {/* 0 is the producer's "the plasma feed did not answer" (solar_wind::assemble keeps Bz from
+          the magnetometer and fills speed with 0), never a reading: the Sun's wind does not blow
+          below ~250 km/s. So no speed is drawn rather than a solar wind that has stopped. */}
+      {wx.solarWind && wx.solarWind.speedKms > 0 && (
+        <Gauge
+          label={t('prop.spaceWx.wind')}
+          value={wx.solarWind.speedKms.toFixed(0)}
+          unit={KMS_UNIT}
+          impact={windSpeedImpact(wx.solarWind.speedKms)}
           gloss={gloss}
         />
       )}

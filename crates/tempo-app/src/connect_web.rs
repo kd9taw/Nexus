@@ -206,6 +206,7 @@ pub const RPC_ALLOWLIST: &[&str] = &[
     "get_satellites",      // satellite positions (map layer)
     "get_ota_map_spots",   // POTA activators (map layer)
     "get_kp_forecast",     // the three-day outlook pane
+    "get_solar_indices",   // NOAA daily SFI + sunspot number (Space Wx pane's trends)
     "get_band_outlook",    // per-band outlook pane
     "get_path_outlook",    // outlook for a clicked spot
     "get_getting_out",     // the getting-out pane

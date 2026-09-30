@@ -61,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is one pick away in the box's menu. A layout you have already arranged keeps what it has, and
   Reset layout brings in the tiles.
 
+- **A Clock box for Connect.** Pick **Clock** from any Connect box's menu: it shows UTC in large
+  digits with your computer's local time under it, today's date, your grid, and today's sunrise and
+  sunset there in UTC (point at that line for the times on your own clock). The digits grow with
+  the box, so a wide box reads from across the room and the narrowest one still fits them. Where the
+  Sun stays up or down all day it says so, and with no grid in Settings it asks for one instead of
+  guessing a place. It needs no network, so it keeps time when every feed is down.
+- **Space Wx shows the sunspot number, the solar-wind speed and 30-day trends.** Beside Bz, the
+  Space Wx box now shows the solar wind's speed in km/s, in the warning colour from 600 km/s, the
+  speed at which the Insights feed says a fast stream is arriving. Under the gauges are two lines
+  for the last 30 days from NOAA's daily solar indices, the solar flux and the sunspot number, each
+  with its newest value and the day it is from. When the newest day in NOAA's file is three or more
+  days old, the box says it has not been updated since that day; if the file has never arrived, the
+  box says the trend is unavailable rather than drawing a line. A day NOAA has no value for is a gap in the line, not a drop to zero. The
+  Connect TV page shows the same.
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2

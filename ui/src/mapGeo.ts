@@ -322,6 +322,51 @@ export function nextTerminatorMs(lat: number, lon: number, nowMs: number): NextT
   return { atMs: nowMs + HORIZON, kind: e0 >= 0 ? 'set' : 'rise' }
 }
 
+/** Today's sunrise and sunset at one place. */
+export interface SunDay {
+  /** The day's sunrise / sunset (ms, UTC); null when that crossing does not happen today. */
+  riseMs: number | null
+  setMs: number | null
+  /** No crossing at all: the sun is up ('up') or down ('down') the whole day. */
+  polar: 'up' | 'down' | null
+}
+
+/** TODAY's sunrise and sunset at (lat, lon): the horizon crossings inside the place's own solar
+ *  day — local mean midnight to midnight at that longitude — that contains `nowMs`. So after
+ *  sunset it still answers with this morning's sunrise, where `nextTerminatorMs` answers with the
+ *  next event. The same elevation, the same 5-min scan and the same bisection to the minute, so
+ *  it can never disagree with the Greyline pane or the drawn terminator (both use the 0° horizon,
+ *  a few minutes off an almanac's refracted one). */
+export function sunDay(lat: number, lon: number, nowMs: number): SunDay {
+  const DAY = 86_400_000
+  const STEP = 5 * 60 * 1000
+  const shift = (lon / 360) * DAY // local mean time runs ahead of UTC east of Greenwich
+  const start = Math.floor((nowMs + shift) / DAY) * DAY - shift
+  const up = (t: number) => solarElevationDeg(lat, lon, t) > 0
+  let riseMs: number | null = null
+  let setMs: number | null = null
+  let t0 = start
+  let up0 = up(t0)
+  for (let t = start + STEP; t <= start + DAY; t += STEP) {
+    const up1 = up(t)
+    if (up1 !== up0) {
+      let lo = t0
+      let hi = t
+      while (hi - lo > 60 * 1000) {
+        const mid = (lo + hi) / 2
+        if (up(mid) === up0) lo = mid
+        else hi = mid
+      }
+      if (up1 && riseMs == null) riseMs = Math.round(hi)
+      if (!up1 && setMs == null) setMs = Math.round(hi)
+    }
+    t0 = t
+    up0 = up1
+  }
+  const polar = riseMs == null && setMs == null ? (up(start) ? 'up' : 'down') : null
+  return { riseMs, setMs, polar }
+}
+
 /** Modelled MUF(3000 km) in MHz at a point, from SFI + solar elevation. */
 export function mufMhz(lat: number, lon: number, nowMs: number, sfi: number): number {
   const elev = solarElevationDeg(lat, lon, nowMs)

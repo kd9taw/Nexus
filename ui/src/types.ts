@@ -985,6 +985,23 @@ export interface KpForecast {
   points: KpPoint[]
 }
 
+/** One day of NOAA SWPC's daily solar indices. `null` = SWPC published no value for that day —
+ *  never a zero. A sunspot number of 0 is a real reading (a spotless Sun). */
+export interface DailySolarIndex {
+  /** 00:00 UTC of the day, Unix seconds. */
+  dayUnix: number
+  /** Observed 10.7 cm solar flux (SFI). */
+  sfi: number | null
+  /** SESC daily sunspot number — a daily count, not the smoothed number the model uses. */
+  ssn: number | null
+}
+
+/** The last ~30 days of NOAA's daily solar indices, oldest first. EMPTY = the file has never
+ *  arrived, which the Space Wx box says rather than draw a line. */
+export interface DailySolarIndices {
+  days: DailySolarIndex[]
+}
+
 /** The operator's current activation state (POTA/SOTA). */
 export interface Activation {
   /** "POTA" | "SOTA", or null when not activating. */

@@ -485,6 +485,9 @@ type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStati
 type ProtonCache = Arc<Mutex<Option<(std::time::Instant, propagation::live::protons::ProtonFlux)>>>;
 /// TTL cache for the NOAA planetary-K outlook (the three-day forecast).
 type KpForecastCache = Arc<Mutex<Option<(std::time::Instant, propagation::KpForecast)>>>;
+/// TTL cache for NOAA's daily solar indices (thirty days of SFI + sunspot number). Distinct
+/// payload type → distinct TypeId for `.manage()`.
+type SolarIndicesCache = Arc<Mutex<Option<(std::time::Instant, propagation::DailySolarIndices)>>>;
 /// TTL cache for the NOAA R/S/G scales + recent SWPC alerts (one fetch pair).
 /// Distinct payload type → distinct TypeId for `.manage()`.
 type ScalesCache = Arc<
@@ -12134,6 +12137,46 @@ async fn get_kp_forecast(
     let fetched = tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_kp_forecast)
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
+        Ok(v) => {
+            if let Ok(mut g) = cache.lock() {
+                *g = Some((std::time::Instant::now(), v.clone()));
+            }
+            Ok(v)
+        }
+        Err(_) => {
+            let g = cache.lock().map_err(|e| e.to_string())?;
+            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+        }
+    }
+}
+
+/// NOAA's daily solar indices — thirty days of solar flux and sunspot number, for the Space Wx
+/// box's SSN and its trend lines. Display only: nothing here reaches the propagation model,
+/// whose sunspot input is the smoothed R12 (`LAST_SSN`), a different quantity.
+///
+/// Cached an hour: SWPC issues the file about once a day, and an hourly read picks up a new day
+/// within the hour for ~3 KB. Serves the last good copy on a failed fetch and an EMPTY one if
+/// there never was one — never fabricated. The copy stays honest however long the fetch keeps
+/// failing, because every row carries its own date: the box says how old the newest day is.
+#[tauri::command]
+async fn get_solar_indices(
+    cache: State<'_, SolarIndicesCache>,
+) -> Result<propagation::DailySolarIndices, String> {
+    const SOLAR_INDICES_TTL_SECS: u64 = 3600;
+    {
+        let g = cache.lock().map_err(|e| e.to_string())?;
+        if let Some((when, v)) = g.as_ref() {
+            if when.elapsed().as_secs() < SOLAR_INDICES_TTL_SECS {
+                return Ok(v.clone());
+            }
+        }
+    }
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched =
+        tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_daily_solar_indices)
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
         Ok(v) => {
             if let Ok(mut g) = cache.lock() {
@@ -25246,6 +25289,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_satellites" => ok(get_satellites(app.state()).await),
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
+            "get_solar_indices" => ok(get_solar_indices(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
@@ -30136,6 +30180,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.connect_web)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
+        .manage(SolarIndicesCache::default())
         .manage(LogTallies::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
@@ -30491,6 +30536,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_ota_spots,
             get_ota_map_spots,
             get_kp_forecast,
+            get_solar_indices,
             connect_web_status,
             search_parks,
             parks_count,
@@ -35053,6 +35099,32 @@ mod tests {
             matches!(on_the_pool, Ok(Ok(Ok(())))),
             "the same client on the blocking pool starts cleanly"
         );
+    }
+
+    /// Every command the TV page's allowlist admits has its hand-written arm in `tv_rpc`. An
+    /// allowlisted name with no arm compiles, passes every other test, and reaches the TV as a
+    /// 500 ("allowlisted but has no dispatch arm") — found only by opening the page and noticing
+    /// a pane that never fills.
+    #[test]
+    fn every_tv_allowlisted_command_has_a_dispatch_arm() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn tv_rpc(")
+            .expect("tv_rpc is defined in this file");
+        let body = &src[start..];
+        // The function ends at the first closing brace in column 0.
+        let body = &body[..body.find("\n}\n").expect("tv_rpc has a closing brace")];
+        let missing: Vec<&str> = tempo_app::connect_web::RPC_ALLOWLIST
+            .iter()
+            .copied()
+            .filter(|name| !body.contains(&format!("\"{name}\" =>")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "allowlisted for the TV page with no arm in tv_rpc: {missing:?}"
+        );
+        // Control: the scan reads the real body, where the first arm lives.
+        assert!(body.contains("\"get_propagation\" =>"));
     }
 
     /// Each command body and each `async fn` in `src` that waits for a logbook change to reach

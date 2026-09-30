@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,235 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,251 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -48,7 +48,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | POTA / SOTA | 24 / 9 | Parks and Summits On The Air — programme names. |
 | CSV | 24 | File format. |
 | CHIRP | 23 | The radio-programming program. |
-| UTC | 23 | The time standard. Never "TUC". |
+| UTC | 26 | The time standard. Never "TUC". |
 | PSK / PSK31 | 23 / 8 | Mode names. |
 | QSY | 22 | Q-code: change frequency. |
 | SmartSDR / FlexRadio | 22 / 9 | Product names. |
@@ -100,8 +100,8 @@ word in, and use only that word in the CSV.
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 121 | The Settings screen and every reference to it. | |
-| grid | 117 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
+| settings | 122 | The Settings screen and every reference to it. | |
+| grid | 120 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 106 | Sound cards, levels, routing. | |
 | station | 108 | Both your own station and the one you are working. | |
 | port | 97 | Serial and network ports. | |
