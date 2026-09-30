@@ -37,6 +37,9 @@ pub struct RepeaterRecord {
     pub ctcss_dec_hz: Option<f32>,
     /// DCS code (uplink), when the machine uses digital code squelch.
     pub dcs: Option<u16>,
+    /// DCS code on the downlink, when the source gives one. The same code as `dcs` makes the
+    /// channel DCS both ways; without it the code is sent only ([`to_channel`]).
+    pub dcs_dec: Option<u16>,
     pub lat: f64,
     pub lon: f64,
     pub city: String,
@@ -171,6 +174,11 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 ctcss_dec_hz: tone_hz(&tsq),
                 dcs: if pl.starts_with(['D', 'd']) {
                     dcs_code(&pl)
+                } else {
+                    None
+                },
+                dcs_dec: if tsq.starts_with(['D', 'd']) {
+                    dcs_code(&tsq)
                 } else {
                     None
                 },
@@ -316,12 +324,15 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 Some(Squelch::Ctcss(hz)) => Some(hz),
                 _ => None,
             };
-            // DCS is the uplink's (`encode`). A channel carries ONE code for both directions,
-            // so a downlink naming a different tone or code (a cross-mode machine) leaves the
-            // code unread rather than guessed at.
-            let dcs = match (up, down) {
-                (Some(Squelch::Dcs(code)), None) => Some(code),
-                (Some(Squelch::Dcs(code)), Some(Squelch::Dcs(d))) if d == code => Some(code),
+            // DCS is the uplink's (`encode`). The downlink confirms it only by giving the SAME
+            // code; any other downlink (none, a tone, another code, one Nexus cannot read) leaves
+            // it send-only, with the receiver open (`to_channel`), never guessed at.
+            let dcs = match up {
+                Some(Squelch::Dcs(code)) => Some(code),
+                _ => None,
+            };
+            let dcs_dec = match down {
+                Some(Squelch::Dcs(code)) if dcs == Some(code) => Some(code),
                 _ => None,
             };
             Some(RepeaterRecord {
@@ -333,6 +344,7 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 ctcss_enc_hz: ctcss(up),
                 ctcss_dec_hz: ctcss(down),
                 dcs,
+                dcs_dec,
                 lat,
                 lon,
                 city: jstr(v, "city"),
@@ -608,7 +620,9 @@ const NARROW_FM_KHZ: f32 = 12.5;
 /// like +1.0 MHz on 2m stay correct); beyond [`MAX_SHIFT_MHZ`] ⇒ `Split` with
 /// the absolute input frequency. Tone: uplink PL ⇒ `Tone` (the safe default —
 /// TSQL would mute a machine that doesn't transmit tone); downlink-only tone ⇒
-/// `TSql`; DCS ⇒ `Dtcs`. Mode: FM, or NFM for a machine its source marks narrow
+/// `TSql`; DCS ⇒ `Dtcs`, both ways only when the downlink gives the same code and
+/// otherwise send-only ([`Channel::dtcs_tx_only`], the DCS counterpart of `Tone`, for the
+/// same reason). Mode: FM, or NFM for a machine its source marks narrow
 /// ([`NARROW_FM_KHZ`]), unless the record is digital-only.
 pub fn to_channel(r: &RepeaterRecord) -> Channel {
     let diff = r.input_mhz - r.output_mhz;
@@ -664,6 +678,7 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         rtone_hz: rtone,
         ctone_hz: ctone,
         dtcs_code: r.dcs.unwrap_or(23),
+        dtcs_tx_only: r.dcs.is_some() && r.dcs_dec != r.dcs,
         mode,
         comment: if r.city.is_empty() {
             r.callsign.clone()
@@ -999,33 +1014,39 @@ mod tests {
         assert_eq!((c.tone_mode, c.dtcs_code), (ToneMode::Dtcs, 23));
     }
 
-    /// The channel carries ONE squelch setting for both directions, so a DCS code whose other
-    /// settings contradict it is left unread rather than guessed at: a tone and a code in one
-    /// field ("77.0/D454"), or a downlink that names a different tone or code (a cross-mode
-    /// machine, "D311" up and "100" down). A downlink with the same code, or one Nexus cannot
-    /// read ("D031*"), leaves the uplink's code standing. Every pair below is one the directory
-    /// writes.
+    /// The uplink's DCS code is the machine's, and the downlink only confirms it: the same
+    /// code there makes the channel DCS both ways, anything else (a tone on a cross-mode
+    /// machine, another code, "D031*" that Nexus cannot read) leaves it send-only
+    /// ([`a_dcs_code_on_the_uplink_only_exports_as_send_only_dcs`]). A field whose own parts
+    /// disagree, a tone and a code ("77.0/D454"), gives neither. Every pair below is one the
+    /// directory writes.
     #[test]
-    fn a_hearham_dcs_code_that_its_other_settings_contradict_is_not_read() {
-        let cases: [(&str, &str, Option<u16>, Option<f32>); 7] = [
-            ("DCS023", "DCS023", Some(23), None),
-            ("D031", "D031*", Some(31), None),
-            ("DCS172", "DCS172.0", Some(172), None),
-            ("77.0/D454", "", None, None),
-            ("DCS365", "DCS364", None, None),
-            ("D311", "100", None, None),
-            ("D244/NAC293", "131.8/NAC293", None, None),
+    fn a_hearham_dcs_code_is_the_uplinks_and_only_the_same_downlink_code_confirms_it() {
+        // (encode, decode, the uplink's code, the downlink's code, the uplink's CTCSS)
+        type Case<'a> = (&'a str, &'a str, Option<u16>, Option<u16>, Option<f32>);
+        let cases: [Case; 7] = [
+            ("DCS023", "DCS023", Some(23), Some(23), None),
+            ("D031", "D031*", Some(31), None, None),
+            ("DCS172", "DCS172.0", Some(172), None, None),
+            ("77.0/D454", "", None, None, None),
+            ("DCS365", "DCS364", Some(365), None, None),
+            ("D311", "100", Some(311), None, None),
+            ("D244/NAC293", "131.8/NAC293", Some(244), None, None),
         ];
         let wrong: Vec<String> = cases
             .iter()
-            .filter_map(|&(encode, decode, dcs, tone)| {
+            .filter_map(|&(encode, decode, dcs, dcs_dec, tone)| {
                 let r = hh_row_tones("NFM", encode, decode);
-                let got = (r.dcs, r.ctcss_enc_hz);
-                (got != (dcs, tone))
-                    .then(|| format!("{encode:?}/{decode:?}: got {got:?}, want {:?}", (dcs, tone)))
+                let got = (r.dcs, r.dcs_dec, r.ctcss_enc_hz);
+                (got != (dcs, dcs_dec, tone)).then(|| {
+                    format!(
+                        "{encode:?}/{decode:?}: got {got:?}, want {:?}",
+                        (dcs, dcs_dec, tone)
+                    )
+                })
             })
             .collect();
-        assert_eq!(wrong, Vec::<String>::new(), "contradicted DCS codes");
+        assert_eq!(wrong, Vec::<String>::new(), "uplink and downlink DCS codes");
     }
 
     /// A one-row RepeaterBook export carrying `bandwidth` as the raw JSON value of its
@@ -1092,6 +1113,130 @@ mod tests {
             Some("NFM"),
             "generic CSV Mode column: {row}"
         );
+    }
+
+    /// A one-row RepeaterBook export with its uplink (`PL`) and downlink (`TSQ`) tone fields.
+    fn rb_row_tones(pl: &str, tsq: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"{{"results":[{{"Callsign":"W9DCS","Frequency":"146.9400","Input Freq":"146.3400","PL":"{pl}","TSQ":"{tsq}","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"8","FM Analog":"Yes"}}]}}"#
+        );
+        let mut recs = parse_repeaterbook_json(&json);
+        assert_eq!(recs.len(), 1, "the {pl}/{tsq} row did not parse");
+        recs.remove(0)
+    }
+
+    /// One CSV line split into its fields, honouring the quotes `csv_field` puts around a
+    /// value with a comma in it (a city such as "Rockford, Illinois" in the comment).
+    fn csv_fields(line: &str) -> Vec<String> {
+        let (mut out, mut cur, mut quoted) = (Vec::new(), String::new(), false);
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' if quoted && chars.peek() == Some(&'"') => {
+                    cur.push('"');
+                    chars.next();
+                }
+                '"' => quoted = !quoted,
+                ',' if !quoted => out.push(std::mem::take(&mut cur)),
+                _ => cur.push(ch),
+            }
+        }
+        out.push(cur);
+        out
+    }
+
+    /// The columns a record's CHIRP row carries, read back by CHIRP's own column names.
+    fn chirp_columns(r: &RepeaterRecord, names: &[&str]) -> Vec<String> {
+        let csv = crate::chirp::to_chirp_csv(&[to_channel(r)], 8, "");
+        let mut lines = csv.lines();
+        let header = csv_fields(lines.next().expect("a header"));
+        let row = csv_fields(lines.next().expect("a CHIRP row"));
+        names
+            .iter()
+            .map(|name| {
+                header
+                    .iter()
+                    .position(|h| h == name)
+                    .and_then(|i| row.get(i))
+                    .map_or_else(|| format!("<no {name} column>"), |v| v.to_string())
+            })
+            .collect()
+    }
+
+    /// A machine whose source gives its DCS code on the uplink only is send-only DCS: CHIRP's
+    /// Cross mode "DTCS->", the code on transmit and the receiver open, which is the DCS
+    /// counterpart of `Tone`. As DTCS both ways, a machine whose output carries no code would
+    /// keep the radio squelched. hearham's uplink-only rows (32 on 2026-09-30) and
+    /// RepeaterBook's PL-only rows alike. A downlink that gives the same code stays DTCS both
+    /// ways; a downlink with a tone or another code (a cross-mode machine) is send-only too.
+    #[test]
+    fn a_dcs_code_on_the_uplink_only_exports_as_send_only_dcs() {
+        let cases = [
+            (
+                "hearham, uplink only",
+                hh_row_tones("FM", "DCS023", ""),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "hearham, both ways",
+                hh_row_tones("FM", "DCS023", "DCS023"),
+                ["DTCS", "023", "Tone->Tone"],
+            ),
+            (
+                "hearham, tone down",
+                hh_row_tones("NFM", "D311", "100"),
+                ["Cross", "311", "DTCS->"],
+            ),
+            (
+                "RepeaterBook, PL only",
+                rb_row_tones("D023", ""),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "RepeaterBook, PL and TSQ",
+                rb_row_tones("D023", "D023"),
+                ["DTCS", "023", "Tone->Tone"],
+            ),
+            (
+                "RepeaterBook, tone down",
+                rb_row_tones("D023", "100.0"),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "a CTCSS machine",
+                hh_row_tones("FM", "100.0", ""),
+                ["Tone", "023", "Tone->Tone"],
+            ),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(what, r, want)| {
+                let got = chirp_columns(r, &["Tone", "DtcsCode", "CrossMode"]);
+                (got != want).then(|| format!("{what}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(
+            wrong,
+            Vec::<String>::new(),
+            "send-only DCS in the CHIRP export"
+        );
+    }
+
+    /// The generic CSV names send-only DCS in its Tone Mode column with CHIRP's word for it.
+    #[test]
+    fn send_only_dcs_is_named_in_the_generic_csv() {
+        let c = to_channel(&hh_row_tones("FM", "DCS023", ""));
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        let mut lines = csv.lines();
+        let header = csv_fields(lines.next().expect("a header"));
+        let row = csv_fields(lines.next().expect("a CSV row"));
+        let at = |name: &str| {
+            header
+                .iter()
+                .position(|h| h == name)
+                .map(|i| row[i].as_str())
+        };
+        assert_eq!((at("Tone Mode"), at("DCS")), (Some("DTCS->"), Some("023")));
     }
 
     /// A mode the record has no field for is never FM on its own, and a plain or empty mode is
