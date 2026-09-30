@@ -143,7 +143,9 @@ The panes you can assign:
 | POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
 
 The **Spots** and **POTA / SOTA** boxes are those screens' own lists, so a click on a spot or on
-**HUNT** does what it does there, and nothing transmits. Each box keeps its own filters, apart from
+**HUNT** does what it does there, and nothing transmits. In Connect's own window (**⧉ Pop out**)
+they work the same way, through that window's own Needed and POTA/SOTA boards, and the main
+window follows to the screen the station needs. Each box keeps its own filters, apart from
 the screen's. In a narrow box the Spots list shows the call, the frequency and the mode, adds the
 age, the country and the comment as the box widens, and shows every column from about 640 px;
 the list scrolls inside the box. The wall display (the TV page) shows no spot list, and each box says so there.

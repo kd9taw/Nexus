@@ -572,6 +572,12 @@ mod tests {
             "set_frequency",
             "set_tx_enabled",
             "halt_tx",
+            // The Spots and POTA/SOTA boards' own traffic — which is also Connect's two boxes',
+            // the reason those boxes have neither a list nor a Work on this page:
+            "work_spot", // a Work: moves the rig and opens a cockpit (and is no set_ verb)
+            "set_hunt_target", // tags the next logged contact with a park or summit
+            "get_all_spots", // the Spots board's rows carry the log's worked flags and the licence's verdict
+            "get_ota_spots", // the POTA/SOTA board's rows carry hunted-today, from the log
         ];
         for f in FORBIDDEN {
             assert!(

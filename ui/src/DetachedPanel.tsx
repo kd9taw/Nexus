@@ -74,7 +74,7 @@ import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
-import { PotaSotaView } from './components/PotaSotaView'
+import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
 import { DashboardBar, StayBehindToggle } from './components/DashboardBar'
@@ -88,7 +88,8 @@ import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
-import { visibleNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall } from './features/needs'
+import { spotNeed } from './remote-web/remote-work'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { readEnabledModes } from './useFeatures'
@@ -321,9 +322,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
 
-  // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.)
+  // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.) The
+  // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed.
+  const pollsSpots = isBandMap || panel === 'connect'
   useEffect(() => {
-    if (!isBandMap) return
+    if (!pollsSpots) return
     let live = true
     const load = () => {
       getAllSpots().then((s) => live && setAllSpots(s)).catch(() => {})
@@ -334,7 +337,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       live = false
       clearInterval(id)
     }
-  }, [isBandMap])
+  }, [pollsSpots])
 
   // Drive a command then mirror the returned snapshot immediately (the 300 ms poll would
   // catch it anyway, but this keeps the cockpit snappy).
@@ -390,6 +393,66 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     if (spot.freqMhz != null) apply(workSpot(mode, spot.freqMhz, spot.band, spot.call))
     else qsyBand(spot.band)
   }
+  // THIS WINDOW'S BOARD PATHS, named so the boards and the Connect boxes share them. The Needed
+  // board's work (below, its arm) and the POTA/SOTA board's hunt: the atomic workSpot, whose
+  // snapshot nav-hint (workTick) makes the MAIN window follow to the matching cockpit — this
+  // window cannot navigate it. The dashboard window's Spots box works a spot as the Spots view
+  // does in the main window, `handleWorkSpot = handleWorkNeeded(spotNeed(s))`: this window's
+  // Needed work applied to the spot as a need. Neither keys anything.
+  //
+  // Full work path from the pop-out: the atomic workSpot switches the rig's MODE + exact
+  // frequency (a bare QSY left CW clicks in DATA-U).
+  const workNeed = async (a: NeedAlert) => {
+    // `target`, not `t` — `t` is the translator in this file (App.tsx's own idiom).
+    const target = workTarget(a, bandPlan)
+    if (!target) {
+      qsyBand(a.band, a.freqMhz ?? undefined)
+      return
+    }
+    // A park/summit row names its activation: tag the hunt first, exactly as the docked
+    // board and `onWorkSpot` above do, so the contact this leads to carries the park.
+    // AFTER the bail-out above and AWAITED — handleWorkNeeded spells out why, and here
+    // the bail-out is the harder no-op of the two: `workTarget` is null only when the
+    // band has no plan channel, and `qsyBand` then silently moves nothing at all.
+    if (a.park) {
+      const park = a.park
+      await withErrorToast(
+        () => setHuntTarget(a.call, park.program, park.reference),
+        t('ota.hunt.setFailed', { call: a.call }),
+      )
+    }
+    // The board lists ALL modes, but the CW/Phone cockpits are opt-in features.
+    // If the target cockpit is disabled, the MAIN window's nav-hint effect refuses
+    // to follow (same gate as handleWorkNeeded) — so a workSpot would silently
+    // switch the rig into a hidden mode with no UI. Just QSY to the spot instead.
+    const modes = readEnabledModes()
+    if ((target.view === 'cw' && !modes.cw) || (target.view === 'phone' && !modes.phone)) {
+      qsyBand(a.band, a.freqMhz ?? undefined)
+      return
+    }
+    const opMode = target.view === 'operate' ? 'digital' : target.view
+    // A digital spot's FT8/FT4 protocol rides the same atomic call (the engine
+    // no-ops on a same-tier request) — the pop-out used to not switch the tier at
+    // all, leaving an FT4 click decoding FT8, and doing it as a second call would
+    // recreate the main window's default-dial-first double retune.
+    const m = a.mode?.toUpperCase()
+    const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
+    apply(workSpot(opMode, target.freqMhz, target.band, target.call, spotTier))
+  }
+  // The POTA/SOTA board has already called setHuntTarget itself (and handed us the fresh
+  // snapshot via onSnap); this half is the QSY + rig-mode switch — the same atomic workSpot
+  // the Needed work uses, with its same guard: a spot whose cockpit is a DISABLED feature only
+  // QSYs, because the main window's nav-hint effect would refuse to follow a hidden mode.
+  const huntOta = (a: OtaSpotClickArg) => {
+    const modes = readEnabledModes()
+    const view = a.modeClass === 'CW' ? 'cw' : a.modeClass === 'Phone' ? 'phone' : 'operate'
+    if ((view === 'cw' && !modes.cw) || (view === 'phone' && !modes.phone)) {
+      qsyBand(a.band, a.freqMhz)
+      return
+    }
+    const opMode = view === 'operate' ? 'digital' : view
+    apply(workSpot(opMode, a.freqMhz, a.band, a.call))
+  }
   // Work a decoded/roster station from the cockpit (guards the self-QSO false toast).
   const onCall = (call: string, grid?: string, message?: string, snr?: number, freq?: number) => {
     const me = (snap?.mycall ?? '').trim()
@@ -423,6 +486,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     () => visibleNeeds(needAlerts, readEnabledModes(), needScopes),
     [needAlerts, needScopes],
   )
+  // The Spots board's needs (Hide worked's rescue), as App hands its Spots board: band scopes
+  // honoured, mode-feature neutral (`boardNeeds`). For the dashboard window's Spots box.
+  const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   // The SHARED chain, same as App.tsx — the hand-rolled loop this replaces was
   // the pre-fix last-tag-wins map (backend orders alerts priority-DESCENDING,
   // so "last" was reliably the WEAKEST need): a new entity on the band in
@@ -509,47 +575,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           myGrid={snap?.mygrid ?? ''}
           onQsy={(a) => qsyBand(a.band, a.freqMhz ?? undefined)}
           onSelect={onSelect}
-          // Full work path from the pop-out too: the atomic workSpot switches the
-          // rig's MODE + exact frequency (a bare QSY left CW clicks in DATA-U),
-          // and its snapshot nav-hint (workTick) makes the MAIN window follow to
-          // the matching cockpit — this window can't navigate it directly.
-          onWork={async (a) => {
-            // `target`, not `t` — `t` is the translator in this file (App.tsx's own idiom).
-            const target = workTarget(a, bandPlan)
-            if (!target) {
-              qsyBand(a.band, a.freqMhz ?? undefined)
-              return
-            }
-            // A park/summit row names its activation: tag the hunt first, exactly as the docked
-            // board and `onWorkSpot` above do, so the contact this leads to carries the park.
-            // AFTER the bail-out above and AWAITED — handleWorkNeeded spells out why, and here
-            // the bail-out is the harder no-op of the two: `workTarget` is null only when the
-            // band has no plan channel, and `qsyBand` then silently moves nothing at all.
-            if (a.park) {
-              const park = a.park
-              await withErrorToast(
-                () => setHuntTarget(a.call, park.program, park.reference),
-                t('ota.hunt.setFailed', { call: a.call }),
-              )
-            }
-            // The board lists ALL modes, but the CW/Phone cockpits are opt-in features.
-            // If the target cockpit is disabled, the MAIN window's nav-hint effect refuses
-            // to follow (same gate as handleWorkNeeded) — so a workSpot would silently
-            // switch the rig into a hidden mode with no UI. Just QSY to the spot instead.
-            const modes = readEnabledModes()
-            if ((target.view === 'cw' && !modes.cw) || (target.view === 'phone' && !modes.phone)) {
-              qsyBand(a.band, a.freqMhz ?? undefined)
-              return
-            }
-            const opMode = target.view === 'operate' ? 'digital' : target.view
-            // A digital spot's FT8/FT4 protocol rides the same atomic call (the engine
-            // no-ops on a same-tier request) — the pop-out used to not switch the tier at
-            // all, leaving an FT4 click decoding FT8, and doing it as a second call would
-            // recreate the main window's default-dial-first double retune.
-            const m = a.mode?.toUpperCase()
-            const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
-            apply(workSpot(opMode, target.freqMhz, target.band, target.call, spotTier))
-          }}
+          // Full work path from the pop-out too (`workNeed`, above).
+          onWork={workNeed}
         />
       </DetachedShell>
     )
@@ -623,6 +650,23 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
+          // The Spots and POTA/SOTA boxes, with THIS window's board paths (`workNeed`,
+          // `huntOta`): the Spots box a spot as a need, as App's handleWorkSpot does, and the
+          // board's own feeds — the spot poll above, and the same band-scoped needs App hands its
+          // Spots board for Hide worked's rescue. The POTA/SOTA box waits for the first snapshot,
+          // as this window's POTA/SOTA arm does.
+          spotsFeed={{
+            rows: allSpots,
+            board: {
+              bandPlan,
+              selectedCall: selected,
+              myGrid: snap?.mygrid ?? '',
+              onSelect,
+              onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
+              needAlerts: boardAlerts,
+            },
+          }}
+          otaBoard={snap ? { snap, onHunt: huntOta, onSnap: setSnap } : undefined}
           onPoint={
             // Same rotator gate as App (model-launched rotctld OR external host). This failure
             // IS still swallowed — but that is a gap, not a constraint. A detached window has a
@@ -668,21 +712,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           snap={snap}
           onSnap={setSnap}
           detached
-          // The board has already called setHuntTarget itself (and handed us the
-          // fresh snapshot via onSnap); this half is the QSY + rig-mode switch —
-          // the same atomic workSpot the Needed arm uses, with its same guard: a
-          // spot whose cockpit is a DISABLED feature only QSYs, because the main
-          // window's nav-hint effect would refuse to follow a hidden mode.
-          onHunt={(a) => {
-            const modes = readEnabledModes()
-            const view = a.modeClass === 'CW' ? 'cw' : a.modeClass === 'Phone' ? 'phone' : 'operate'
-            if ((view === 'cw' && !modes.cw) || (view === 'phone' && !modes.phone)) {
-              qsyBand(a.band, a.freqMhz)
-              return
-            }
-            const opMode = view === 'operate' ? 'digital' : view
-            apply(workSpot(opMode, a.freqMhz, a.band, a.call))
-          }}
+          // The QSY half of a hunt (`huntOta`, above): the board tags the hunt itself first.
+          onHunt={huntOta}
         />
       </DetachedShell>
     )

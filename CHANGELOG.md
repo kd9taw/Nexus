@@ -173,6 +173,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from about 360 px; every column from about 640 px), and the list scrolls inside the box. Neither box is in the
   default layout or a ready-made one, so nobody's Connect changes on the update. The wall display
   (the TV page) shows no spot list, and each box says so there.
+- **The Spots and POTA / SOTA boxes work in Connect's own window too.** In the window **⧉ Pop
+  out** opens, the two boxes show the same lists as in the main window, and a click on a spot or
+  on **HUNT** moves the radio exactly as that window's own Needed and POTA/SOTA boards do; the
+  main window then follows to the matching screen (on CW and Phone with the call ready in the
+  log). Nothing transmits. The wall display still has neither list, and nothing on it can move
+  the radio.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

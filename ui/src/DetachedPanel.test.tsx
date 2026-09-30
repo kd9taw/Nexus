@@ -86,6 +86,8 @@ vi.mock('./api', () => ({
   ),
   getPropagation: vi.fn(() => Promise.resolve(null)),
   getNeedAlerts: vi.fn(() => Promise.resolve([])),
+  // The Connect window polls the spot list for its Spots box (the band-map pop-outs' 15 s poll).
+  getAllSpots: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve(null)),
   // The picture-viewer branch polls the gallery and closes its own window.
   getSstvState: vi.fn(() => Promise.resolve({ gallery: [] })),
