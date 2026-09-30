@@ -19829,7 +19829,7 @@ button.cq-skiptx1.on {
 }
 [data-ota-box] .pota-hunt-btn {
   margin-left: auto;
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
 }
 
 /* Zero-config detected-radio list (Settings → rig control). */
