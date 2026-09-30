@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Yaesu G-5500 / G-5500DC by name in the rotator picker.** The G-5500 has no computer port
+  and no Hamlib model of its own: it is driven through a Yaesu GS-232B or GS-232A interface. So
+  Settings ▸ Radio ▸ Rotator now names it on those two entries, **Yaesu G-5500 / G-5500DC —
+  GS-232B interface** and **— GS-232A interface**, each still any GS-232B or GS-232A. A GS-232
+  clone board still belongs on **GS-232 (generic)**. The saved setting is the same model number
+  as before, so a rotator you have already set up is unchanged, and the rotator guide and the
+  settings reference say which entry to pick.
 - **The Rotor pane shows and sets the elevation of an az/el rotator.** On a rotator with an
   elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A, the Rotor pane in Connect shows
   the elevation under the bearing (`EL 45°`) and has an `el°` box beside the bearing box: type an
