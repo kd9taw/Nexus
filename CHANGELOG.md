@@ -699,6 +699,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after you logged a hunted contact, the empty log strip showed that contact's park again and
   kept it. The box now fills with the clicked activator's park, and clears once its contact is
   logged.
+- **A park you type before the call belongs to the call you type next (#383).** Type a park, then
+  the station's call, and the park stays that station's even if a spot for it names another park.
+  Click an activator's spot instead and it is a new station: the box fills with the spot's park,
+  and the park you typed is not logged on that contact, with or without a callbook. After a
+  hunted contact is logged the strip now comes up empty every time, including when the next
+  update arrives straight away.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
