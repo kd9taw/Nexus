@@ -161,7 +161,7 @@ fn nothing_to_export_is_said_rather_than_sent_as_an_empty_file() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// ⛔ The `load_radioprog` trap: the desktop loader turns an unreadable file into an empty default.
+/// ⛔ The empty-default trap the desktop's old loader fell into: an unreadable file read as empty.
 /// Exporting that would hand the operator a blank CSV and call it their channel list.
 #[test]
 fn an_unreadable_file_is_a_failure_not_a_blank_export() {

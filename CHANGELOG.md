@@ -555,6 +555,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ways, and the 4 hearham machines that list a tone or a different code on their output, which got
   no code before, now go out the same send-only way. CHIRP files from Program and Memories carry two
   more columns at the end, `RxDtcsCode` and `CrossMode`.
+- **Program no longer loses your saved channel lists to a file it cannot read.** When the file
+  that holds them was damaged, cut short, or written by a newer Nexus with a setting this one does
+  not know, Program opened on an empty list and saved that over the file moments later, and every
+  saved list was gone. Now Program keeps that file, untouched, under a new dated name in the same
+  folder (such as `radioprog.unreadable-20260930-142233.json`), starts a new list, and says at the
+  top of Program where the kept file is. If the file cannot be moved aside, it stays where it is
+  and Program saves nothing until it is moved or repaired. A file from a newer Nexus that only adds
+  new fields opens as it always has.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
