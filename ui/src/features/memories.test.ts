@@ -569,4 +569,16 @@ describe('findEquivalent', () => {
     expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'USB', ctcssEncHz: 103.5 })).toBeUndefined()
     expect(findEquivalent(emptyBank(), { rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5 })).toBeUndefined()
   })
+
+  it('reads NFM as the same machine as FM: narrow is how it is programmed, not which machine it is', () => {
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'NFM', ctcssEncHz: 103.5 })?.id).toBe('m-rptr')
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'nfm', ctcssEncHz: 103.5 })?.id).toBe('m-rptr')
+    expect(memoryKey({ rxMhz: 146.94, mode: 'NFM', ctcssEncHz: 103.5 })).toBe(
+      memoryKey({ rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5 }),
+    )
+    // Only NFM joins FM: broadcast-wide FM, AM and the sidebands stay other channels.
+    for (const other of ['WFM', 'AM', 'NAM', 'USB']) {
+      expect(findEquivalent(bank, { rxMhz: 146.94, mode: other, ctcssEncHz: 103.5 })).toBeUndefined()
+    }
+  })
 })
