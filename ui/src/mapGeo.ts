@@ -9,6 +9,7 @@ import {
   geoEquirectangular,
   geoOrthographic,
   geoCircle,
+  geoDistance,
   geoGraticule,
   type GeoProjection,
   type GeoPermissibleObjects,
@@ -178,6 +179,15 @@ export function project(proj: GeoProjection, ll: LatLon): [number, number] | nul
   const p = proj([ll.lon, ll.lat])
   if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) return null
   return [p[0], p[1]]
+}
+
+/** Is `ll` on the side of the planet the view shows? Only the Globe has a far side, and `project`
+ *  cannot tell: d3 clips a PATH at the globe's horizon, but projects a lone POINT from the far side
+ *  straight through the sphere, onto the near face. The flat maps show the whole world. */
+export function inView(kind: Projection, proj: GeoProjection, ll: LatLon): boolean {
+  if (kind !== 'globe') return true
+  const [lambda, phi] = proj.rotate()
+  return geoDistance([ll.lon, ll.lat], [-lambda, -phi]) < Math.PI / 2
 }
 
 /** A range-ring (great-circle circle) of `km` around `center` as a GeoJSON polygon. */

@@ -4742,6 +4742,20 @@ body.resizing-row {
   --map-ocean-deep: #06101c;
 }
 
+/* ---- MAP SKY: the sun on the map (MapView.tsx, Globe3D.tsx; features/skyGlyphs.ts; features/skins.ts
+   STANDARD_SKY) --------------------------------------------------------------------------------
+   The marker where the sun is overhead. One ink in both themes and under every built-in theme: the
+   sun is the sun, and it is drawn over the basemap, which is dark in both themes, so no theme block
+   declares it. Plain hexes: the canvas reads them as strings. styles-skins.test.ts holds every mode
+   to the table. */
+:root,
+[data-theme='dark'] {
+  --map-sun: #ffd166;
+}
+[data-theme='light'] {
+  --map-sun: #ffd166;
+}
+
 /* ---- COLOUR ROLES: the operator's picks (Settings ▸ Appearance ▸ Colours) ------------------
    Operator picks, 2026-09-26: "Presets first, hex later" and "Agent picks, you review". Five
    roles, each a named job a colour does, with a few pre-checked presets:

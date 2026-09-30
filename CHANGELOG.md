@@ -159,6 +159,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
   it. A click on it still moves the keyboard there, so click back into Nexus before using a
   keyboard shortcut such as Esc. On macOS and Linux the button does not appear yet.
+- **The sun is always on the map.** The map and the 3-D globe show the sun where it is overhead,
+  at the centre of the day side, all the time and not only during a solar flare. It moves with the
+  greyline. On the Globe view it is hidden while it is on the far side of the planet. A new **Sun
+  and moon** layer in the Layers menu turns it off. During an M-class flare the flare layer's own
+  animated sun takes its place, so there is only ever one sun on the map. On a quiet sun the map
+  does no extra drawing for it: it moves once a minute, with the greyline.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

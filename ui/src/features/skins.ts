@@ -152,6 +152,16 @@ export const STANDARD_MAP: Readonly<Record<MapToken, string>> = {
   '--map-ocean-deep': '#06101c', // the globe's limb, its dark edge
 }
 
+/** The sun on the map (MapView, Globe3D; drawn by features/skyGlyphs). One ink in every theme and
+ *  mode: the sun is the sun, and it is drawn over the basemap, which is dark in both themes. So no
+ *  theme may declare it (a theme block declares a theme's tokens only), and styles.css MAP SKY holds
+ *  the one table. */
+export const SKY_TOKENS = ['--map-sun'] as const
+export type SkyToken = (typeof SKY_TOKENS)[number]
+export const STANDARD_SKY: Readonly<Record<SkyToken, string>> = {
+  '--map-sun': '#ffd166', // the disc, its rays and its glow: a warm gold
+}
+
 /** The gallery's order: the rig looks, then the modern ones. */
 export const SKINS: readonly Skin[] = [
   {

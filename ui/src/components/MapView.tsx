@@ -90,6 +90,7 @@ import {
   greatCircle,
   terminator,
   subsolarPoint,
+  inView,
   flareHafMhz,
   flareField,
   flareRScale,
@@ -103,7 +104,8 @@ import { modeClassOf } from '../features/needs'
 import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
-import { STANDARD_MAP, type MapToken } from '../features/skins'
+import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
+import { drawSun } from '../features/skyGlyphs'
 // A shaded-relief basemap (Natural Earth I 50m, public domain),
 // downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
 import reliefUrl from '../assets/earth-relief.webp'
@@ -356,6 +358,7 @@ function needColor(tag: NeedTag | undefined): string | null {
 
 type LayerKey =
   | 'daynight'
+  | 'sunMoon'
   | 'relief'
   | 'muf'
   | 'aurora'
@@ -388,6 +391,7 @@ interface Layer {
  * happened to be active when this module first loaded. The layer ids are code. */
 const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
   daynight: { labelKey: 'map.layer.daynight.label' },
+  sunMoon: { labelKey: 'map.layer.sunMoon.label' },
   relief: { labelKey: 'map.layer.relief.label' },
   muf: { labelKey: 'map.layer.muf.label' },
   aurora: { labelKey: 'map.layer.aurora.label' },
@@ -415,6 +419,9 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
 const layerLabel = (k: LayerKey): string => t(LAYER_LABEL[k].labelKey)
 export const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { visible: true, opacity: 1 },
+  // The sun where it is overhead. On by default and free: it is drawn in the redraws the map already
+  // makes (the 60 s greyline clock moves it), never on a clock of its own.
+  sunMoon: { visible: true, opacity: 1 },
   relief: { visible: true, opacity: 1 },
   muf: { visible: true, opacity: 0.9 },
   aurora: { visible: false, opacity: 0.85 },
@@ -499,6 +506,8 @@ const PATH_LP = 'LP'
 // light source, deepening to a dark limb, plus an atmospheric rim glow and a star field — turns
 // the flat disc into a planet floating in space without any WebGL.
 const mapInk = (token: MapToken) => cssVar(token, STANDARD_MAP[token])
+/** The sun's ink (styles.css MAP SKY): one value in every theme, read like the basemap's. */
+const skyInk = (token: SkyToken) => cssVar(token, STANDARD_SKY[token])
 const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
 /** ⭐ MARKER HALO — how "brighter" is done WITHOUT touching the colour scheme.
  *  A band-coloured dot competes with whatever it lands on: a 40 m blue dot on the deep-sea
@@ -507,8 +516,9 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  Saturating the palette would fix that by changing the colours the operator said they like;
  *  a dark outline fixes it by raising the CONTRAST STEP at the marker's edge, so every dot
  *  keeps its exact hue and reads against land, sea, relief raster and greyline alike. Darker
- *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb. */
-const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
+ *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb.
+ *  Exported for the 3-D globe's sun, which is the same glyph (features/skyGlyphs). */
+export const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
 
 /** ⭐ MARKER SCALE — one factor, derived from the canvas, applied to every station/spot/park/
  *  satellite/APRS/QTH marker and its label.
@@ -2002,6 +2012,22 @@ export function MapView({
       }
     }
 
+    // THE SUN where it is overhead, on a quiet sun as well as during a flare. The flare layer draws a
+    // sun only while an M-class flare is on (animated, on its own canvas below), so without this the
+    // map had no sun at all on a quiet day. While the flare layer's sun is up this one stands down:
+    // the two are never drawn together. It moves with the 60 s greyline clock, like the terminator it
+    // sits in the middle of, and has no clock of its own. Over the night shading and the flare field
+    // so neither dims it; under the spots and stations the operator clicks.
+    if (layers.sunMoon.visible && !flarePulsing) {
+      const ss = subsolarPoint(nowMs)
+      const p = inView(kind, proj, ss) ? project(proj, ss) : null
+      if (p) {
+        ctx.globalAlpha = layers.sunMoon.opacity
+        drawSun(ctx, p[0], p[1], 5.5 * ms, skyInk('--map-sun'), MARKER_HALO)
+        ctx.globalAlpha = 1
+      }
+    }
+
     // MUF field — the maximum usable frequency WHERE, as a coarse heatmap (7→35 MHz on
     // the colormap): live where an ionosonde is within range (IDW-blended), the foF2 model
     // out over the oceans. Tells you at a glance which bands the ionosphere supports where.
@@ -2476,7 +2502,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, showQth, kind, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the

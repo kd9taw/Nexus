@@ -33,6 +33,8 @@ corner of every view and folds away to a pill, the same way Conditions does.
 The **Layers** menu toggles what's drawn on top:
 
 - **Greyline** with graded civil / nautical / astronomical twilight,
+- **Sun and moon** — the sun where it is overhead, at the centre of the day side (on by default;
+  during an M-class flare the flare layer's animated sun takes its place),
 - **shaded relief** (bundled offline),
 - **band-heat auras**,
 - **live spot dots** — grid-placed, age-faded, and colored by what they're worth

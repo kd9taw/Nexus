@@ -34,7 +34,9 @@ import Globe, { type GlobeMethods } from 'react-globe.gl'
 import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
-import { placeHoverCard } from './MapView'
+import { placeHoverCard, MARKER_HALO } from './MapView'
+import { drawSun, SUN_REACH } from '../features/skyGlyphs'
+import { STANDARD_SKY, type SkyToken } from '../features/skins'
 import { bandColor, openingModeColor } from '../bandColors'
 import {
   subsolarPoint,
@@ -334,6 +336,34 @@ function textSprite(text: string, color: string): THREE.Sprite {
   return sp
 }
 
+/** How high above the surface the sun marker sits (globe radii): off the ground, so the sphere never
+ *  cuts it in half, and low enough to read as over its own point. */
+const SKY_ALT = 0.03
+/** The sprite's size in world units, where the globe's radius is 100: the glyph spans 12 and its disc
+ *  5 (`SUN_REACH` radii fill the sprite). */
+const SKY_SCALE = 12
+
+/** The sun's ink right now (styles.css MAP SKY). The same in every theme by rule
+ *  (styles-skins.test.ts), so a sprite drawn once never goes stale on a theme change. */
+const skyInkNow = (token: SkyToken) =>
+  getComputedStyle(document.documentElement).getPropertyValue(token).trim() || STANDARD_SKY[token]
+
+/** A sprite showing `draw` on a small canvas, named so the scene can be read back: the sun above the
+ *  globe, drawn with the 2-D map's own glyph. The globe's depth hides it on the far side. */
+function skySprite(name: string, draw: (ctx: CanvasRenderingContext2D, size: number) => void): THREE.Sprite {
+  const size = 64
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const ctx = c.getContext('2d')
+  if (ctx) draw(ctx, size)
+  const mat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })
+  const sp = new THREE.Sprite(mat)
+  sp.name = name
+  sp.scale.set(SKY_SCALE, SKY_SCALE, 1)
+  return sp
+}
+
 /** `MUF` is the acronym for Maximum Usable Frequency — a technical token that reads the
  * same in every language, so it is a constant rather than a catalog entry. It is the one
  * layer in the list below whose whole name is a token. */
@@ -352,6 +382,7 @@ type GlobeLayerKey =
   | 'muf'
   | 'pca'
   | 'greyline'
+  | 'sunMoon'
   | 'sats'
   | 'pass'
   | 'rings'
@@ -377,6 +408,7 @@ const LAYER_ROWS: readonly GlobeLayerRow[] = [
   { k: 'muf', label: MUF_LABEL },
   { k: 'pca', labelKey: 'globe.layer.pca' },
   { k: 'greyline', labelKey: 'globe.layer.greyline' },
+  { k: 'sunMoon', labelKey: 'globe.layer.sunMoon' },
   { k: 'sats', labelKey: 'globe.layer.sats' },
   { k: 'pass', labelKey: 'globe.layer.pass' },
   { k: 'rings', labelKey: 'globe.layer.rings' },
@@ -422,6 +454,7 @@ type GlobeLayers = {
   decodes: boolean
   dxped: boolean
   greyline: boolean
+  sunMoon: boolean
 }
 
 const GLOBE_LAYERS_KEY = 'nexus.connect.globe3d.layers'
@@ -449,6 +482,8 @@ const defaultGlobeLayers = (showStates: boolean): GlobeLayers => ({
   decodes: true,
   dxped: false,
   greyline: true,
+  // The sun where it is overhead, like the 2-D map's; moved on the 60 s sun clock, never animated.
+  sunMoon: true,
 })
 
 /** Parse a persisted layer object, keeping only the known boolean toggles — an unknown or
@@ -932,6 +967,36 @@ export default function Globe3D({
     const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
+
+  // THE SUN where it is overhead — the light above lights the day side, and this shows where the sun
+  // is. Built once when the globe is ready; everything it adds it disposes.
+  const skyRef = useRef<{ sun: THREE.Sprite } | null>(null)
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const sun = skySprite('sky-sun', (ctx, size) =>
+      drawSun(ctx, size / 2, size / 2, size / 2 / SUN_REACH, skyInkNow('--map-sun'), MARKER_HALO),
+    )
+    g.scene().add(sun)
+    skyRef.current = { sun }
+    return () => {
+      g.scene().remove(sun)
+      sun.material.map?.dispose()
+      sun.material.dispose()
+      skyRef.current = null
+    }
+  }, [ready])
+  // Moved on the 60 s clock above and shown or hidden with its layer, written straight into the
+  // scene: the ONE-FRAME list below draws it, so a still globe stays asleep with the sun on it.
+  useEffect(() => {
+    const g = globeRef.current
+    const sky = skyRef.current
+    if (!g || !ready || !sky) return
+    const ss = subsolarPoint(nowMs)
+    const c = g.getCoords(ss.lat, ss.lon, SKY_ALT)
+    sky.sun.position.set(c.x, c.y, c.z)
+    sky.sun.visible = show.sunMoon
+  }, [ready, nowMs, show.sunMoon])
 
   // Gated 1 s pulse tick — the 2-D map's pattern: only while a layer that
   // BREATHES is visible and something is actually open, and never for a hidden
