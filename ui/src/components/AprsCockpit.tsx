@@ -1,9 +1,9 @@
 // ⚠️ THIS FILE IS ON THE PARTIAL LIST (i18n/hardcoded-strings.test.ts), for ONE reason and
 // no other: the TX On/Off ARM LATCH below keeps its label and its two tooltips. They are a
 // transmit-path control's accessible name, and every one of those moves in its own batch
-// with the stop-line sweeps re-run. APRS is the sixth cockpit and renders NO stop control —
-// the latch is an arm latch, and turning it off drops what is still queued — so nothing here
-// is on a stop-line census. The file graduates to MIGRATED the moment that batch lands.
+// with the stop-line sweeps re-run. APRS is the sixth cockpit, and that latch is its one stop
+// control: turning it off stops a beacon on the air (the radio loop's TX-off cut) and drops
+// what is still queued. The file graduates to MIGRATED the moment that batch lands.
 //
 // Everything else operator-visible comes from the catalog. What does NOT: callsign-SSIDs,
 // symbol codes and their table, digipeater paths, the channel list and every dial reading,

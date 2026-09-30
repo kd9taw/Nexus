@@ -542,10 +542,9 @@ const MIGRATED = [
  *
  * `AprsCockpit.tsx` (batch 14, 2026-08-19) is here for exactly that reason and no other:
  * every string in it is migrated except the TX On/Off ARM LATCH — its label and its two
- * tooltips. APRS renders no stop control at all (the latch is an arm latch, and turning it off
- * drops what is still queued, so it is on no cockpit's stop-line census), but the latch is
- * still a transmit-path control, and those move with the sweeps. It graduates the moment that
- * batch lands.
+ * tooltips. That latch is APRS's one stop control (turning it off stops a beacon on the air and
+ * drops what is still queued), a transmit-path control, and those move with the sweeps. It
+ * graduates the moment that batch lands.
  *
  * `OperateQsoStrip.tsx` (batch 18, 2026-08-19) is here on the same narrow ruling, for FOUR
  * controls: STOP TX and TUNE — Operate's stop-line census, and Stop TX is the only control in
