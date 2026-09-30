@@ -458,8 +458,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   narrow, hearham's `NFM` or a RepeaterBook bandwidth of 12.5 kHz, now goes out as `NFM` in the
   CHIRP and CSV files (the Remote's export too) and is starred into Memories as NFM, so the radio
   uses the narrow deviation the machine expects. That is 55 machines in the hearham directory.
-  **Tune now** and recalling the memory still set the radio to ordinary FM: Nexus has no narrow-FM
-  setting for the rig on any radio yet.
+  A narrow machine you had already starred as FM is still that one memory: Memories counts NFM and
+  FM on the same frequency and tone as the same channel, so starring it again or importing it adds
+  no second copy. **Tune now** and recalling the memory still set the radio to ordinary FM: Nexus
+  has no narrow-FM setting for the rig on any radio yet.
 - **Program exports the DCS code of a hearham repeater.** The hearham directory writes a DCS
   machine's code in its tone field (`DCS023`, `D023`, `DCS 043`, `DPL411` and a few other
   spellings), and Program read none of them, so 138 FM machines went out with no code and would not

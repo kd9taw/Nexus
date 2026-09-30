@@ -397,9 +397,12 @@ export function useMemories(): MemoriesBank {
 // ---------------------------------------------------------------------------
 
 /** Merge/dedupe identity: same channel = same freq (to the kHz), mode, and tone.
- * Used by Program + pack imports so re-importing never piles duplicates. */
+ * Used by Program + pack imports so re-importing never piles duplicates. NFM is the same
+ * machine as FM: narrow is how a repeater is programmed, not which one it is, so one starred
+ * as FM before its directory said narrow stays that memory (and is not starred twice). */
 export function memoryKey(m: Pick<Memory, 'rxMhz' | 'mode' | 'ctcssEncHz'>): string {
-  return `${m.rxMhz.toFixed(4)}|${m.mode.toUpperCase()}|${m.ctcssEncHz ?? 0}`
+  const mode = m.mode.toUpperCase()
+  return `${m.rxMhz.toFixed(4)}|${mode === 'NFM' ? 'FM' : mode}|${m.ctcssEncHz ?? 0}`
 }
 
 /** The memory in `bank` equivalent to `probe` under [`memoryKey`], if any. The
