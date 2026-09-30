@@ -11,7 +11,9 @@
 // outlook's storm line #f5a524 = 1.69:1, a closed band's "Closed" in the Band Advisor 1.65:1 through its
 // row's dimming). In the light themes each takes the provenance chip's treatment (and #382's): the word in the
 // theme's ink, the state on a border: its own chip's or row's border where it has one, else an underline (a
-// word) or a left bar (a line). Dark is untouched.
+// word) or a left bar (a line). Dark is untouched. (The Band Advisor has since taken the Band conditions
+// list's pill, the word in the theme's ink on the band colour's tint and edge in every theme, so its word is
+// no longer state-coloured and left the census.)
 //
 // WHAT COUNTS AS A STATE-COLOURED WORD. Every pane in the vocabulary is rendered through the real PaneFrame,
 // in a rail and in the strip, and the map's insight card in its map chain, with data that puts each pane's
@@ -19,13 +21,22 @@
 // when, in the standard DARK theme (which this change does not touch, so the census cannot move with the
 // fix), its ink is anything but the theme's text inks and its accent. The census is then held to 4.5:1 on
 // what it sits on (through any dimming) in every light theme, and to its state colour in every dark theme.
-import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+//
+// CONNECT'S BOXES OUTSIDE CONNECT, AND THE NOW BAR. The dashboard rail beside the cockpits is a column of
+// Connect's boxes in a chain of its own (`.dash-boxes`), so every pane is rendered there too. The Spots and
+// POTA/SOTA boxes are the two boards themselves, rendered with rows that put their words in every state. And
+// the NOW bar, above every section and so over Connect, letters its chips' words in their state colours: it
+// is rendered in each state as well.
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PaneFrame } from './PaneFrame'
-import type { PaneContext } from './paneContext'
+import type { OtaBoard, PaneContext, SpotsFeed } from './paneContext'
 import { MapInsightRail } from '../prop/MapInsightRail'
+import { NowBar } from '../NowBar'
+import { publishBandConditions } from '../../bandConditions'
+import { newWatchFilter, saveWatchlist } from '../../watchlist'
 import { PANE_IDS, type PaneId, type SlotId } from '../../features/connectConfig'
 import { PALETTE_ROLES } from '../../features/paletteRoles'
 import { SKINS } from '../../features/skins'
@@ -50,7 +61,18 @@ import {
   type Rgb,
   type Rule,
 } from '../../cssCascade'
-import type { AmpStatus, BandOutlook, NeedAlert, PathPrediction, PropagationSnapshot } from '../../types'
+import type {
+  AmpStatus,
+  AppSnapshot,
+  BandOutlook,
+  FeedHealth,
+  FeedStatus,
+  NeedAlert,
+  OtaSpot,
+  PathPrediction,
+  PropagationSnapshot,
+  SpotRow,
+} from '../../types'
 import FIXTURE from '../../remote-web/__fixtures__/navigation-connect.json'
 
 const NOW = Math.floor(Date.now() / 1000)
@@ -82,6 +104,11 @@ vi.mock('../../api', async (importOriginal) => ({
   getOpeningsLog: vi.fn(async () => []),
   getContests: vi.fn(async () => []),
   getDxpedWindows: vi.fn(async () => []),
+  // The POTA/SOTA box's board fetches its own rows.
+  getOtaSpots: vi.fn(async () => OTA),
+  getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
+  parksCount: vi.fn(async () => 0),
+  huntedParksCount: vi.fn(async () => 0),
 }))
 
 beforeAll(() => {
@@ -90,6 +117,13 @@ beforeAll(() => {
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver
+  // A watched station on the Spots board: its row leads with the WATCH tile. (The box measures no width
+  // here, so it stamps no `data-fit` and shows every column.)
+  saveWatchlist([newWatchFilter('call', 'K1CW')])
+})
+afterAll(() => {
+  saveWatchlist([])
+  publishBandConditions(null)
 })
 afterEach(cleanup)
 
@@ -154,6 +188,33 @@ const AMP_UP = {
   warningRaised: true, kpaFault: null,
 } as unknown as AmpStatus
 const AMP_DOWN = { ...AMP_UP, linked: false, reason: 'noAnswer', alarmRaised: false, warningRaised: false } as AmpStatus
+// The Spots box's board: a row of each mode's badge, the watched station's (its WATCH tile) and a need.
+const spotRow = (call: string, band: string, freqMhz: number, mode: string, over: Partial<SpotRow> = {}): SpotRow =>
+  ({
+    call, entity: 'Somewhere', zone: 5, state: null, band, freqMhz, mode, submode: null, spotter: 'W3LPL', corroborators: [],
+    ageSecs: 30, comment: 'up 2', licensed: true, spotterLocal: true, ...over,
+  }) as SpotRow
+const SPOTS: SpotRow[] = [
+  spotRow('K1CW', '20m', 14.025, 'CW'),
+  spotRow('W2SSB', '40m', 7.2, 'Phone'),
+  spotRow('JA1FT', '15m', 21.074, 'Digital', { submode: 'FT8' }),
+  spotRow('VP8XYZ', '40m', 7.074, 'Digital', { entity: 'Falkland Islands', submode: 'FT8' }),
+]
+const SPOTS_FEED: SpotsFeed = {
+  rows: SPOTS,
+  board: { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: () => {}, onWork: () => {}, needAlerts: NEEDS },
+}
+// The POTA/SOTA box's board: a new park and a band that is open (a spot hunted today is hidden by default).
+const otaSpot = (activator: string, reference: string, over: Partial<OtaSpot> = {}): OtaSpot => ({
+  program: 'POTA', reference, name: 'Test park', activator, freqKhz: 14_285, mode: 'SSB', spotter: null, comment: null, grid: null,
+  newPark: false, bandOpen: false, huntedToday: false, ...over,
+})
+const OTA: OtaSpot[] = [otaSpot('K1NEW', 'US-0001', { newPark: true }), otaSpot('K2OPN', 'US-0002', { bandOpen: true })]
+const OTA_BOARD: OtaBoard = {
+  snap: { hunt: null, radio: { dialMhz: 14.285 }, logTick: 1 } as unknown as AppSnapshot,
+  onHunt: () => {},
+  onSnap: () => {},
+}
 
 function ctxOf(over: Partial<PaneContext> = {}): PaneContext {
   return {
@@ -173,10 +234,31 @@ function ctxOf(over: Partial<PaneContext> = {}): PaneContext {
     scales: { r: 1, s: 0, g: 3, gTomorrow: 2, asOf: NOW },
     alerts: [{ productId: 'K05A', issued: NOW, kind: 'ALERT', message: 'Geomagnetic K-index of 5 reached' }],
     muf: [],
+    spotsFeed: SPOTS_FEED, otaBoard: OTA_BOARD,
     onSelectCall: () => {}, toggleFocusBand: () => {},
     ...over,
   } as PaneContext
 }
+
+// The NOW bar in each state its chips have: the band Open, Marginal and Closed; heard or not; a need or
+// none; the propagation LIVE, PARTIAL, CACHED and OFFLINE; and each feed state.
+const feed = (state: FeedStatus['state'], lastEventSecs: number | null = 30): FeedStatus => ({ enabled: true, state, lastEventSecs })
+const HEARD: PropagationSnapshot = {
+  ...PROP,
+  advisory: {
+    ...PROP.advisory,
+    // 60 m heard; 40 m Marginal with nobody heard (a heard band draws green: propViz bandConditionCell).
+    bands: PROP.advisory.bands.map((b) =>
+      b.band === '60m' ? { ...b, nHearMe: 8, nIHear: 12 } : b.band === '40m' ? { ...b, tier: 'Quiet' as never } : b,
+    ),
+  },
+}
+const NOW_BARS: Array<[string, string, PropagationSnapshot, FeedHealth | null]> = [
+  ['open', '60m', HEARD, { cluster: feed('live'), phoneCluster: feed('reconnecting'), phoneClusterHost: 'node', pskr: feed('idle', 900) } as FeedHealth],
+  ['marginal', '40m', { ...HEARD, source: 'partial' }, { cluster: feed('connecting', null), phoneCluster: { enabled: false, state: 'off', lastEventSecs: null }, phoneClusterHost: null, pskr: feed('connected', null) } as FeedHealth],
+  ['closed', '80m', { ...HEARD, source: 'cached', dxpeditions: { ...HEARD.dxpeditions, workableNow: [] } }, null],
+  ['offline', '60m', { ...HEARD, source: 'offline' }, null],
+]
 
 // ── rendering: the real frames in the real chains ─────────────────────────────────────────────────────────
 interface Word {
@@ -195,9 +277,11 @@ function nodesOf(node: Element): Element[] {
 }
 /** The state-word kinds this change is about, by the class that names them (nearest first). */
 const KIND_CLASSES = [
-  'ba-modeled', 'bbt-band', 'heatmap-band', 'swx-impact', 'cp-work', 'cp-mode', 'swsc-chip', 'go-snr', 'getout-summary', 'chase-open',
+  'bbt-band', 'heatmap-band', 'swx-impact', 'cp-work', 'cp-mode', 'swsc-chip', 'go-snr', 'getout-summary', 'chase-open',
   'cfeed-ends', 'need-chip', 'opening-band', 'opening-new', 'kp-line', 'sat-stale', 'sat-chip', 'rotor-slewing', 'rotor-stop', 'amp-link',
   'amp-fault', 'prop-prov',
+  // The Spots and POTA/SOTA boxes' boards, and the NOW bar.
+  'np-mode-col', 'pota-badge', 'nb-chip', 'nb-src',
 ]
 function kindOf(nodes: Element[]): string {
   for (let i = nodes.length - 1; i >= 0; i--) {
@@ -207,14 +291,17 @@ function kindOf(nodes: Element[]): string {
   const own = nodes[nodes.length - 1]
   return `${own.tagName.toLowerCase()}.${[...own.classList].join('.')}`
 }
-/** A state word's identity in the census: the element's classes, and how its component flags its ink. */
+/** A state word's identity in the census: the element's classes, how its component flags its ink, and,
+ *  where its kind's class sits on an ancestor (a chip around its word), that ancestor's state classes. */
 const signature = (w: Word) => {
   const own = w.nodes[w.nodes.length - 1]
   const flag = w.nodes.map((n) => n.getAttribute('data-state-ink')).filter((v) => v != null).pop()
   const cls = [...own.classList].join('.')
-  return `${w.kind}: ${cls ? `.${cls}` : own.tagName.toLowerCase()}${flag != null ? ` [${flag || 'set'}]` : ''}`
+  const holder = [...w.nodes].reverse().find((n) => n.classList.contains(w.kind))
+  const held = holder && holder !== own ? [...holder.classList].filter((c) => c !== w.kind) : []
+  return `${w.kind}: ${cls ? `.${cls}` : own.tagName.toLowerCase()}${held.length ? ` in .${w.kind}.${held.join('.')}` : ''}${flag != null ? ` [${flag || 'set'}]` : ''}`
 }
-function readWords(root: ParentNode, where: string, out: Word[]) {
+function readWords(root: ParentNode, where: string, out: Word[], outside = 'map') {
   const seen = new Set<Element>()
   const walker = document.createTreeWalker(root as Node, NodeFilter.SHOW_TEXT)
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -223,14 +310,27 @@ function readWords(root: ParentNode, where: string, out: Word[]) {
     seen.add(el)
     if (el.closest('[hidden]')) continue
     const nodes = nodesOf(el)
-    const pane = el.closest('.pane-frame')?.getAttribute('data-pane') ?? 'map'
+    const pane = el.closest('.pane-frame')?.getAttribute('data-pane') ?? outside
     out.push({ what: `${where} ${pane} .${[...el.classList].join('.') || el.tagName.toLowerCase()} "${(n.textContent ?? '').trim().slice(0, 18)}"`, kind: kindOf(nodes), nodes, chain: [BODY, ...chainOf(el)] })
   }
 }
 
 async function renderAll(): Promise<Word[]> {
   const words: Word[] = []
-  const shell = (host: 'rail' | 'strip', paneId: PaneId, ctx: PaneContext) => {
+  const shell = (host: 'rail' | 'strip' | 'dash', paneId: PaneId, ctx: PaneContext) => {
+    // The dashboard rail beside a cockpit (components/DashRail): App's shell, the rail, its column.
+    if (host === 'dash')
+      return (
+        <div className="app">
+          <div className="shell" data-dash-rail="on">
+            <aside className="dash-rail">
+              <div className="dash-rail-col dash-boxes">
+                <PaneFrame slotId="rail1" slotName="rail1" paneId={paneId} ctx={ctx} onAssign={() => {}} onHide={() => {}} share={1} />
+              </div>
+            </aside>
+          </div>
+        </div>
+      )
     const slot: SlotId = host === 'rail' ? 'left1' : 'bottom1'
     const frame = <PaneFrame slotId={slot} paneId={paneId} ctx={ctx} onAssign={() => {}} onHide={() => {}} />
     return (
@@ -259,7 +359,7 @@ async function renderAll(): Promise<Word[]> {
     ['amp down', ['amp'], ctxOf({ amp: AMP_DOWN })],
   ]
   for (const [tag, ids, ctx] of variants)
-    for (const host of ['rail', 'strip'] as const)
+    for (const host of ['rail', 'strip', 'dash'] as const)
       for (const id of ids) {
         let r!: ReturnType<typeof render>
         await act(async () => {
@@ -298,6 +398,29 @@ async function renderAll(): Promise<Word[]> {
   })
   readWords(r.container, 'map', words)
   cleanup()
+  // The NOW bar, a child of the app above the section (App.tsx), in each of its states; the band chip reads
+  // the published advisory, as every band menu does.
+  for (const [tag, band, prop, feeds] of NOW_BARS) {
+    publishBandConditions(prop)
+    await act(async () => {
+      r = render(
+        <div className="app">
+          <NowBar
+            snap={{ radio: { band } } as unknown as AppSnapshot}
+            prop={prop}
+            feedHealth={feeds}
+            connectEnabled
+            dxpedEnabled
+            onNavigate={() => {}}
+            rail={{ on: tag === 'open', onToggle: () => {} }}
+          />
+        </div>,
+      )
+    })
+    readWords(r.container, `app (${tag})`, words, 'nowBar')
+    cleanup()
+  }
+  publishBandConditions(null)
   // One word per shape: two words with the same chain and the same inline styles resolve alike in every mode.
   const shape = (w: Word) => chainKey(w.chain) + JSON.stringify(w.nodes.map((n) => (n as HTMLElement).style?.cssText ?? ''))
   return [...new Map(words.map((w) => [shape(w), w])).values()]
@@ -309,7 +432,7 @@ const sheet = (name: string) =>
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
 /** The sheet as it shipped before this change: every light-theme rule on a state word, removed. */
 const SHIPPED = RULES.filter(
-  (r) => !(r.selector.startsWith("[data-theme='light'] ") && KIND_CLASSES.some((k) => r.selector.includes(`.${k}`) || r.selector.includes('.ba-row.is-closed'))),
+  (r) => !(r.selector.startsWith("[data-theme='light'] ") && KIND_CLASSES.some((k) => r.selector.includes(`.${k}`))),
 )
 
 if (RULES.filter((r) => !SHIPPED.includes(r)).some((r) => r.decls.some((d) => d.prop.startsWith('--'))))
@@ -510,7 +633,7 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   // and a new state word must be looked at before it joins; either way this list is where it shows.
   const INVENTORY = [
     'amp-fault: .amp-fault.amp-alarm', 'amp-fault: .amp-fault.amp-warn', 'amp-link: .amp-link', 'amp-link: .amp-link.amp-down',
-    'ba-modeled: .ba-modeled [mark]', 'ba-modeled: .ba-modeled [recede]', 'bbt-band: .bbt-band [mark]', 'bbt-band: .bbt-band [recede]',
+    'bbt-band: .bbt-band [mark]', 'bbt-band: .bbt-band [recede]',
     'cfeed-ends: .cfeed-ends', 'chase-open: .chase-open.o-open', 'cp-mode: .cp-mode.fair', 'cp-mode: .cp-mode.good',
     'cp-work: .cp-work.w-excellent', 'cp-work: .cp-work.w-fair', 'cp-work: .cp-work.w-good', 'getout-summary: strong', 'go-snr: .go-snr',
     'heatmap-band: .heatmap-name [mark]', 'heatmap-band: .heatmap-name [recede]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
@@ -518,10 +641,20 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     'need-chip: .need-chip.need-state', 'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
     'rotor-slewing: .rotor-slewing', 'rotor-stop: .rotor-stop', 'sat-chip: .sat-chip.dead', 'sat-chip: .sat-chip.stale',
     'sat-stale: .sat-stale', 'swsc-chip: .swsc-chip.swsc-major', 'swsc-chip: .swsc-chip.swsc-minor', 'swx-impact: .swx-impact [mark]',
+    // The Spots box's board (its WATCH tile, its mode badges), the POTA/SOTA box's, and the NOW bar.
+    'need-chip: .need-chip.need-watch',
+    'np-mode-col: .np-mode-col.np-mode-cw', 'np-mode-col: .np-mode-col.np-mode-digital', 'np-mode-col: .np-mode-col.np-mode-phone',
+    'pota-badge: .pota-badge.pota-badge-open',
+    'nb-chip: .nb-v in .nb-chip.good', 'nb-chip: .nb-v in .nb-chip.ok', 'nb-chip: .nb-v in .nb-chip.nb-need.good',
+    'nb-chip: .nb-v in .nb-chip.nb-feed.good', 'nb-chip: .nb-v in .nb-chip.nb-feed.ok', 'nb-chip: .nb-v in .nb-chip.nb-feed.bad',
+    'nb-src: .nb-src.cached', 'nb-src: .nb-src.live', 'nb-src: .nb-src.partial',
   ]
   it('finds every state word Connect letters, each in every state it has (the census cannot silently empty out)', () => {
     expect([...new Set(state.map(signature))].sort()).toEqual([...INVENTORY].sort())
     expect(new Set(state.map((w) => w.kind)), 'every kind').toEqual(new Set(KIND_CLASSES))
+    // The rail's boxes are Connect's: every state word a box letters on Connect, it letters beside a cockpit.
+    const inHost = (host: string) => [...new Set(state.filter((w) => w.what.startsWith(`${host} `)).map(signature))].sort()
+    expect(inHost('dash'), 'the dashboard rail').toEqual(inHost('rail'))
     expect(all.length, 'words read').toBeGreaterThan(300)
   })
 
@@ -553,8 +686,10 @@ describe('every state-coloured word on Connect reads in every light theme', () =
 
   // The words with no border of their own that says their state: each must carry an underline or a bar in the
   // light themes (a closed band's grey excepted: it recedes, unmarked). The rest keep the state on their
-  // chip's or row's border, or (Space Wx) on the gauge's bar above; those are measured in the report.
-  const MARKED = ['ba-modeled', 'bbt-band', 'heatmap-band', 'cp-work', 'amp-link', 'kp-line', 'sat-stale', 'rotor-slewing', 'amp-fault']
+  // chip's or row's border, or (Space Wx) on the gauge's bar above; those are measured in the report. The
+  // Spots board's mode badges letter in the page colour on their mode's fill, which carries the mode, and
+  // read 4.5:1 in every light theme as they are.
+  const MARKED = ['bbt-band', 'heatmap-band', 'cp-work', 'amp-link', 'kp-line', 'sat-stale', 'rotor-slewing', 'amp-fault']
   it('the state stays on its mark in the light themes: an underline or bar in the state colour, 3:1 off the surface', () => {
     const low: string[] = []
     for (const w of state)
@@ -579,21 +714,25 @@ describe('every state-coloured word on Connect reads in every light theme', () =
 
   // The chips whose own border says their state: with the word in ink, that border must stand 3:1 off what the
   // chip sits on. (Rows that carry it on their left edge, Chase's and the openings', are measured in the report.)
-  const CHIPS = ['need-chip', 'cp-mode', 'swsc-chip', 'cfeed-ends', 'sat-chip']
+  const CHIPS = ['need-chip', 'cp-mode', 'swsc-chip', 'cfeed-ends', 'sat-chip', 'pota-badge', 'nb-chip', 'nb-src']
   /** A border declaration's colour: the value itself, or a `border` shorthand without its width and style. */
   const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
+  /** The chip's index in the word's chain: the word itself, or (the NOW bar's) the chip it sits in. */
+  const chipAt = (w: Word) => w.chain.length - 1 - [...w.nodes].reverse().findIndex((n) => n.classList.contains(w.kind))
   it("a chip that carries its state on its own border keeps it 3:1 off the surface in the light themes", () => {
     const low: string[] = []
     for (const w of state.filter((x) => CHIPS.includes(x.kind)))
       for (const mode of LIGHT) {
-        const i = w.chain.length - 1
+        const i = chipAt(w)
         const v = declAt(RULES, mode, w, i, 'border-top-color', 'border-color', 'border')
         if (!v) {
           low.push(`${w.what} ${mode}: no border`)
           continue
         }
-        const under = surfaceOf(RULES, mode, { ...w, chain: w.chain.slice(0, -1), nodes: w.nodes.slice(0, -1) })
-        const c = colourAt(RULES, mode, w, i, borderColour(v), under)
+        const under = surfaceOf(RULES, mode, { ...w, chain: w.chain.slice(0, i), nodes: w.nodes.slice(0, i - 1) })
+        // A border mixed from `currentColor` (the NOW bar's source chip) is mixed from the chip's own ink.
+        const ink = inkOf(RULES, mode, { ...w, chain: w.chain.slice(0, i + 1), nodes: w.nodes.slice(0, i) }).value
+        const c = colourAt(RULES, mode, w, i, borderColour(v).replace(/currentColor/gi, ink), under)
         if (contrast(c, under) < 3) low.push(`${w.what} ${mode}: the border ${hex(c)} on ${hex(under)} = ${contrast(c, under).toFixed(2)}:1`)
       }
     expect(low).toEqual([])
@@ -615,7 +754,11 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     expect(has(/ spacewx \.swx-impact ".*" light: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
     expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
     expect(has(/ kpOutlook \.kp-line\.warn .* light: #f5a524 on #e5eaf0 = 1\.69:1/), 'the Kp storm line').toBe(true)
-    // Through its row's 50 % dimming: 1.64:1 here, 1.65:1 in Chrome (the dimmed ink rounds a unit apart).
-    expect(has(/ bandAdvisor \.ba-modeled "Closed" light: .* = 1\.6[45]:1/), "a closed band's Closed").toBe(true)
+    // Beside the cockpits, in the boxes' boards and on the NOW bar, before their light rules: a need chip in
+    // the rail (Connect's rule stopped at `.connect`), the POTA/SOTA box's BAND OPEN (1.65:1 here, 1.66:1 in
+    // Chrome: the badge's tint rounds a unit apart), and the bar's PROP CACHED.
+    expect(has(/^dash chase \.need-chip\.need-band "BAND" light: #a16207 on #d5c9b8 = 3\.02:1$/), "the rail's need chip").toBe(true)
+    expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
+    expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
   }, 60_000)
 })

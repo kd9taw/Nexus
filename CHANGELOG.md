@@ -1102,6 +1102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
   Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
   as before.
+- **The NOW bar's coloured words are easy to read in the light themes.** The band's condition,
+  who hears you, the top need, the Cluster, Phone and PSKR pills and PROP LIVE / PARTIAL / CACHED
+  were lettered in green, amber or red, and some were hard to read on the light page colour. In
+  every light theme they now take the theme's text colour, with the colour kept on the chip's
+  border. The same goes for Connect's boxes in the dashboard rail beside the cockpits, and for the
+  BAND OPEN badge in the POTA/SOTA box. The dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
