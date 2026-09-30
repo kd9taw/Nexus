@@ -587,13 +587,13 @@ jobs:
       - name: scripts/gates still derives the gate list from this workflow
         run: node --test scripts/gates.test.mjs
 
-      # release.yml keeps every secret out of the steps that build or run third-party code
-      # (FFTW, Hamlib, npm, crates.io, the AppImage tooling) and loads the signing key only where
-      # the finished installer is signed. A release exercises that once, in public, so it is read
-      # here on every commit instead, by a test that plants its own violations to prove it can
-      # still see one. Same argument as the suites around it: a tool whose only trigger is
-      # somebody remembering is not a gate.
-      - name: release.yml keeps its secrets out of the third-party builds
+      # release.yml keeps every secret out of the jobs that build or run third-party code
+      # (FFTW, Hamlib, npm, crates.io, the AppImage tooling), signs the Windows and Linux
+      # installers in a job that builds nothing, and pins everything it downloads to build with.
+      # A release exercises that once, in public, so it is read here on every commit instead, by a
+      # test that plants its own violations to prove it can still see one. Same argument as the
+      # suites around it: a tool whose only trigger is somebody remembering is not a gate.
+      - name: release.yml keeps its secrets out of the third-party builds and pins its downloads
         run: node --test scripts/release-secrets.test.mjs
 
       # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
