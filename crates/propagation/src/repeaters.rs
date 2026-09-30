@@ -210,9 +210,27 @@ fn hearham_mode_words(mode: &str) -> Vec<&'static str> {
     out
 }
 
+/// The CTCSS tone in a hearham tone field. A machine that runs several modes can have one
+/// parameter per mode joined with `/`: "CC1/146.2" (the DMR colour code, then the FM tone),
+/// "NAC293/100.0", "67.0/CC9/RAN1/NAC293/C/CAN0" (58 rows on 2026-09-30). The tone is the
+/// part that reads as one. Two different tones ("88.5/71.9") are left unknown rather than
+/// guessed at. A field with no `/` reads exactly as [`tone_hz`] reads it.
+fn hearham_tone(field: &str) -> Option<f32> {
+    let mut tones = field.split('/').filter_map(tone_hz);
+    let tone = tones.next()?;
+    tones.all(|t| t == tone).then_some(tone)
+}
+
+/// The DMR colour code in a hearham tone field: its `"CCn"` part, alone or joined with
+/// `/` as in [`hearham_tone`].
+fn hearham_cc(field: &str) -> Option<u8> {
+    field.split('/').find_map(cc_code)
+}
+
 /// Parse the hearham.com `/api/repeaters/v1` payload (bare array; `frequency` +
 /// `offset` in Hz as integers; tones as strings — `"0.00"`/`""` = none, and DMR
-/// rows carry the color code as `"CC2"` in `encode`).
+/// rows carry the color code as `"CC2"` in `encode`, joined with `/` to the FM tone
+/// on a machine that runs both, see [`hearham_tone`]).
 ///
 /// `mode` can name several modes ([`hearham_mode_words`]). A machine is FM when any
 /// of them is FM or NFM (or the mode is empty), and each digital flag comes from its
@@ -235,15 +253,15 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
             let names = |any: &[&str]| words.iter().any(|w| any.contains(w));
             let enc = jstr(v, "encode");
             let dec = jstr(v, "decode");
-            let is_dmr = names(&["DMR"]) || cc_code(&enc).is_some();
+            let is_dmr = names(&["DMR"]) || hearham_cc(&enc).is_some();
             Some(RepeaterRecord {
                 source: RepeaterSource::Hearham,
                 source_id: jstr(v, "id"),
                 callsign: jstr(v, "callsign"),
                 output_mhz,
                 input_mhz: (freq_hz + offset_hz) / 1e6,
-                ctcss_enc_hz: tone_hz(&enc),
-                ctcss_dec_hz: tone_hz(&dec),
+                ctcss_enc_hz: hearham_tone(&enc),
+                ctcss_dec_hz: hearham_tone(&dec),
                 dcs: None,
                 lat,
                 lon,
@@ -254,7 +272,7 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 dmr: is_dmr,
                 dstar: names(&["D-STAR", "DSTAR"]),
                 fusion: names(&["YSF", "C4FM", "FUSION"]),
-                dmr_color_code: cc_code(&enc),
+                dmr_color_code: hearham_cc(&enc),
                 bandwidth_khz: None,
                 operational: jf64(v, "operational").unwrap_or(1.0) != 0.0,
                 open_use: jstr(v, "restriction").is_empty(),
@@ -818,6 +836,44 @@ mod tests {
             ("P25YSFD-STARNXDNDMR", &["DMR", "D-STAR", "YSF"]),
         ]);
         assert_eq!(wrong, Vec::<String>::new(), "digital-only modes");
+    }
+
+    /// A tone field that joins one parameter per mode with `/` gives the FM tone and the DMR
+    /// colour code in it. The machines in the tests above write theirs this way ("CC1/146.2",
+    /// "NAC293/100.0"), and read as one value that was no tone at all, so they would program
+    /// with no tone. Every tone field below is one the directory writes.
+    #[test]
+    fn a_hearham_tone_field_joining_several_modes_gives_its_tone_and_colour_code() {
+        let cases: [(&str, &str, Option<f32>, Option<u8>); 9] = [
+            ("DMR/FM", "CC1/146.2", Some(146.2), Some(1)),
+            ("P25/FM", "NAC293/100.0", Some(100.0), None),
+            ("P25/FM", "131.8/NAC293", Some(131.8), None),
+            ("YSF/FM", "67.0/CC9/RAN1/NAC293/C/CAN0", Some(67.0), Some(9)),
+            ("DMR/FM", "B/CC1", None, Some(1)),
+            // Two different tones: which one opens the machine is not written, so neither.
+            ("YSF/FM", "88.5/71.9", None, None),
+            ("FM", "B/71.9/88.5", None, None),
+            // One value reads as before.
+            ("FM", "100.0", Some(100.0), None),
+            ("DMR", "CC2", None, Some(2)),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(mode, encode, tone, cc)| {
+                let r = hh_row(mode, encode);
+                let got = (r.ctcss_enc_hz, r.dmr_color_code);
+                (got != (tone, cc))
+                    .then(|| format!("{encode:?}: got {got:?}, want {:?}", (tone, cc)))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "joined tone fields");
+
+        // What the operator exports: an FM channel with the tone that opens the machine.
+        let c = to_channel(&hh_row("DMR/FM", "CC1/146.2"));
+        assert_eq!(
+            (c.mode, c.tone_mode, c.rtone_hz),
+            (ChanMode::Fm, ToneMode::Tone, 146.2)
+        );
     }
 
     /// A mode the record has no field for is never FM on its own, and a plain or empty mode is
