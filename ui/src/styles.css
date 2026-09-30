@@ -27173,7 +27173,8 @@ tr.sel .aprs-sym {
   font-size: var(--fs-title);
 }
 .dash-time-k,
-.dash-index-k {
+.dash-index-k,
+.dash-index-d {
   font-size: var(--fs-label);
   color: var(--text-dim);
   letter-spacing: 0.04em;

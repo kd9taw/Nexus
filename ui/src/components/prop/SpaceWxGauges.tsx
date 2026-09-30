@@ -4,7 +4,7 @@
 // each acronym carries a hover/tap plain-English definition so a newcomer is
 // never staring at a cryptic "SFI 142 / Kp 4"; Expert mode assumes fluency.
 import type { SpaceWxView } from '../../types'
-import { sfiImpact, kpImpact, aImpact, xrayImpact, bzImpact, windSpeedImpact, type Impact } from '../../propViz'
+import { sfiImpact, kpImpact, aImpact, xrayImpact, bzImpact, windSpeedImpact, windSpeedKms, type Impact } from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
 import { t, type MessageKey } from '../../i18n'
 
@@ -87,6 +87,7 @@ function Gauge({
 }
 
 export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean }) {
+  const windKms = windSpeedKms(wx)
   const body = (
     <section className="swx-strip panel" aria-label={t('prop.spaceWx.aria')}>
       <Gauge
@@ -121,15 +122,14 @@ export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean 
           gloss={gloss}
         />
       )}
-      {/* 0 is the producer's "the plasma feed did not answer" (solar_wind::assemble keeps Bz from
-          the magnetometer and fills speed with 0), never a reading: the Sun's wind does not blow
-          below ~250 km/s. So no speed is drawn rather than a solar wind that has stopped. */}
-      {wx.solarWind && wx.solarWind.speedKms > 0 && (
+      {/* No speed is drawn rather than a solar wind that has stopped: `windSpeedKms` is null for
+          the producer's 0 (the plasma feed did not answer), the rule the dashboard bar reads too. */}
+      {windKms != null && (
         <Gauge
           label={t('prop.spaceWx.wind')}
-          value={wx.solarWind.speedKms.toFixed(0)}
+          value={windKms.toFixed(0)}
           unit={KMS_UNIT}
-          impact={windSpeedImpact(wx.solarWind.speedKms)}
+          impact={windSpeedImpact(windKms)}
           gloss={gloss}
         />
       )}

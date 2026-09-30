@@ -6,14 +6,19 @@
 // the TV page: the station, a big UTC clock beside the local time, and the day's space-weather
 // indices, in the order a wall-display clock reads them (call, clocks, SFI / K / SSN / A / solar
 // wind). The look is Nexus's own tokens, and the data is the propagation snapshot the surface
-// already polls — nothing here fetches it.
+// already polls, with one exception below.
 //
 // TWO SEAMS, on purpose:
-//   · `clock` — THE CLOCK BOX PLUGS IN HERE (Connect's clock box, built separately). Until it
-//     does, the bar draws `DashClock`, today's UTC + local readout.
-//   · `barIndices` — the list the indices come from. SSN joins it between Kp and A from NOAA's
-//     daily solar indices, which are their own fetch, not a snapshot field: the newest day with a
-//     count, which is normally yesterday's, so it is shown as that day's.
+//   · `clock` — a clock to draw instead of `DashClock`, today's UTC + local readout. Connect's
+//     Clock box is a whole box with no one-line form, so `DashClock` stays the bar's clock.
+//   · `barIndices` — the list the indices come from. SSN sits between Kp and A, from NOAA's
+//     daily solar indices, which are their own fetch, not a snapshot field (the snapshot's
+//     sunspot input is the model's smoothed R12, a different quantity, and never reaches the UI).
+//     The bar asks for that file itself, through the Space Wx box's own `useSolarIndices`
+//     (cached an hour by the command), and shows the newest day that has a count, which is
+//     normally yesterday's, as that day's. The solar-wind speed reads the Wind gauge's own
+//     no-data rule (propViz `windSpeedKms`). DashboardBar.seams.test.tsx holds the bar and the
+//     box to the same numbers.
 //
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
@@ -21,16 +26,17 @@
 // on a chip of the bar's own (styles.css `.dash-prov`: the panes' chip letters its warning in a
 // colour that reads under 4.5:1 on this bar in the light theme).
 import { useEffect, useState, type ReactNode } from 'react'
-import type { PropagationSnapshot, SpaceWxView } from '../types'
-import { aImpact, kpImpact, sfiImpact, xrayImpact } from '../propViz'
+import type { DailySolarIndices, PropagationSnapshot, SpaceWxView } from '../types'
+import { aImpact, kpImpact, sfiImpact, windSpeedKms, xrayImpact } from '../propViz'
 import { provLabel } from './connect/paneFormat'
+import { dayLabel, newest, trendsCaption, useSolarIndices } from './prop/SolarTrends'
 import { getWindowBehind, setWindowBehind, type WindowBehind } from '../api'
 import { withErrorToast } from '../toast'
 import { t } from '../i18n'
 
 /** Tokens, not prose: the same on every ham's screen in every language. */
 const UTC = 'UTC'
-const NAME = { sfi: 'SFI', kp: 'Kp', a: 'A', xray: 'X-ray', sw: 'SW' } as const
+const NAME = { sfi: 'SFI', kp: 'Kp', ssn: 'SSN', a: 'A', xray: 'X-ray', sw: 'SW' } as const
 /** An index with nothing honest to show. */
 const DASH = '—'
 
@@ -38,28 +44,31 @@ const DASH = '—'
 export interface BarIndex {
   key: string
   value: string
+  /** The day a daily count is from (SSN), drawn after its value; absent for the snapshot's own. */
+  day?: string
   title: string
 }
 
 /**
  * The indices from a live or cached snapshot, rounded exactly as the Space Wx gauges round them
  * (whole numbers, the X-ray class without "-class"), so the bar and the box never disagree. The
- * hover words are the gauges' own impact lines. Order: SFI, K, (SSN), A, as a wall clock reads
+ * hover words are the gauges' own impact lines. Order: SFI, K, SSN, A, as a wall clock reads
  * them, then X-ray and the solar-wind speed, which is a dash while DSCOVR's plasma feed is out.
+ * SSN is the newest day of NOAA's daily file that has a count (`daily`), dated as that day and
+ * hovered with the Space Wx box's own caption for the file; a dash while there is none.
  */
-export function barIndices(wx: SpaceWxView): BarIndex[] {
+export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): BarIndex[] {
+  const ssn = daily && daily.days.length > 0 ? newest(daily.days, (d) => d.ssn) : null
+  const windKms = windSpeedKms(wx)
   return [
     { key: NAME.sfi, value: wx.sfi.toFixed(0), title: sfiImpact(wx.sfi).text },
     { key: NAME.kp, value: wx.kp.toFixed(0), title: kpImpact(wx.kp).text },
+    daily && ssn
+      ? { key: NAME.ssn, value: ssn.value.toFixed(0), day: dayLabel(ssn.dayUnix), title: trendsCaption(daily.days).text }
+      : { key: NAME.ssn, value: DASH, title: '' },
     { key: NAME.a, value: wx.aIndex.toFixed(0), title: aImpact(wx.aIndex).text },
     { key: NAME.xray, value: wx.xrayClass.replace('-class', ''), title: xrayImpact(wx.xrayClass).text },
-    {
-      key: NAME.sw,
-      // 0 is not a reading: propagation::solar_wind::assemble keeps Bz and fills the speed with 0
-      // when DSCOVR's plasma file is missing, and the solar wind is never 0 km/s.
-      value: wx.solarWind && wx.solarWind.speedKms > 0 ? wx.solarWind.speedKms.toFixed(0) : DASH,
-      title: t('dash.index.sw.title'),
-    },
+    { key: NAME.sw, value: windKms != null ? windKms.toFixed(0) : DASH, title: t('dash.index.sw.title') },
   ]
 }
 
@@ -108,10 +117,11 @@ interface Props {
 }
 
 export function DashboardBar({ call, grid, prop, clock, children }: Props) {
+  const daily = useSolarIndices()
   // `spaceWx` is read defensively: the TV page's LAN transport hands over whatever the station
   // serves, and a missing block is "no live data", never a throw that blanks the wall.
   const wx = prop?.spaceWx
-  const indices = prop && wx && prop.source !== 'offline' ? barIndices(wx) : NO_INDICES
+  const indices = prop && wx && prop.source !== 'offline' ? barIndices(wx, daily) : NO_INDICES
   // Live is the normal state and gets no chip; anything else says what it is.
   const prov = prop && prop.source !== 'live' ? provLabel(prop.source, prop.asOf) : null
   return (
@@ -126,6 +136,7 @@ export function DashboardBar({ call, grid, prop, clock, children }: Props) {
           <li key={i.key} className="dash-index" title={i.title || undefined}>
             <span className="dash-index-k">{i.key}</span>
             <span className="dash-index-v">{i.value}</span>
+            {i.day && <span className="dash-index-d">{i.day}</span>}
           </li>
         ))}
       </ul>

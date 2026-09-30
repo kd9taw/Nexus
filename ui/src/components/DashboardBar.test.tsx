@@ -7,20 +7,25 @@
 //   · OFFLINE HONESTY: an offline snapshot carries modelled defaults (SFI 120 …) and must never
 //     be drawn as numbers, a stale one says how old it is;
 //   · the clock is a SEAM — Connect's clock box plugs in through `clock`, and the surface's own
-//     controls through `children`.
+//     controls through `children`;
+//   · SSN is NOAA's DAILY count from the daily solar indices (their own fetch, not a snapshot
+//     field): the newest day that has one, shown as that day's, and a dash when there is none.
 // The stay-behind toggle is the pop-out's, and is tested there (DetachedPanel.dashboard.test.tsx)
 // and here for its own half: it shows only where the platform offers it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import type { PropagationSnapshot } from '../types'
+import type { DailySolarIndex, DailySolarIndices, PropagationSnapshot } from '../types'
 
 vi.mock('../api', () => ({
   getWindowBehind: vi.fn(),
   setWindowBehind: vi.fn(),
+  getSolarIndices: vi.fn(),
 }))
 
-import { getWindowBehind, setWindowBehind } from '../api'
+import { getSolarIndices, getWindowBehind, setWindowBehind } from '../api'
 import { DashboardBar, StayBehindToggle, barIndices } from './DashboardBar'
+import { dayLabel } from './prop/SolarTrends'
+import { t } from '../i18n'
 
 const WX = {
   sfi: 97.4,
@@ -52,17 +57,49 @@ function indexValue(name: string): string | null {
   return null
 }
 
+/** The date drawn after an index's value, or null when it carries none. */
+function indexDay(name: string): string | null {
+  const bar = document.querySelector('.dash-bar') as HTMLElement
+  for (const li of bar.querySelectorAll('.dash-index')) {
+    if (li.querySelector('.dash-index-k')?.textContent === name) return li.querySelector('.dash-index-d')?.textContent ?? null
+  }
+  return null
+}
+
+const indexItem = (name: string) =>
+  [...document.querySelectorAll('.dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === name)
+
 const two = (n: number) => String(n).padStart(2, '0')
+
+const DAY = 86_400
+/** 00:00 UTC on the day the fake clock below stands on (29 Sep 2026). */
+const TODAY = Date.UTC(2026, 8, 29) / 1000
+
+/** NOAA's daily file as the command serves it: `n` days, oldest first, the newest `newestAgo`
+ *  days before today (1 = yesterday, SWPC's normal); `at(i)` overrides day i's values. */
+function daily(n: number, at: (i: number) => Partial<DailySolarIndex> = () => ({}), newestAgo = 1): DailySolarIndices {
+  return {
+    days: Array.from({ length: n }, (_, i) => ({
+      dayUnix: TODAY - (newestAgo + n - 1 - i) * DAY,
+      sfi: 100 + i,
+      ssn: 40 + i,
+      ...at(i),
+    })),
+  }
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date(Date.UTC(2026, 8, 29, 17, 32, 10)))
+  // Unless a test hands the bar a file, the daily indices are still on their way: nothing settles.
+  vi.mocked(getSolarIndices).mockImplementation(() => new Promise<DailySolarIndices>(() => {}))
 })
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.mocked(getWindowBehind).mockReset()
   vi.mocked(setWindowBehind).mockReset()
+  vi.mocked(getSolarIndices).mockReset()
 })
 
 describe('the bar', () => {
@@ -107,11 +144,16 @@ describe('the bar', () => {
     expect(sfi.getAttribute('title')).toBe('low flux — high bands sluggish')
   })
 
-  it('OFFLINE: the modelled defaults are never drawn as numbers, and the bar says there is no live data', () => {
+  it('OFFLINE: the modelled defaults are never drawn as numbers, and the bar says there is no live data', async () => {
     // The offline snapshot is non-null and carries modelled values; SFI 120 is one of them.
+    // NOAA's daily file is here with a count in it, and SSN is a dash all the same: offline, the
+    // Space Wx box shows neither its gauges nor its lines, and the bar says what the box says.
+    vi.mocked(getSolarIndices).mockResolvedValue(daily(30, (i) => (i === 29 ? { ssn: 46 } : {})))
     render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot({ source: 'offline', spaceWx: { ...WX, sfi: 120 } })} />)
+    await act(async () => {})
     expect(indexValue('SFI'), 'control: the index is on the bar').not.toBeNull()
-    for (const k of ['SFI', 'Kp', 'A', 'X-ray', 'SW']) expect(indexValue(k), k).toBe('—')
+    for (const k of ['SFI', 'Kp', 'SSN', 'A', 'X-ray', 'SW']) expect(indexValue(k), k).toBe('—')
+    expect(indexDay('SSN'), 'no date for a count that is not shown').toBeNull()
     expect(document.querySelector('.dash-prov')?.textContent).toBe('NO LIVE DATA')
     expect(document.querySelector('.dash-bar')?.textContent).not.toContain('120')
   })
@@ -142,6 +184,58 @@ describe('the bar', () => {
     expect(indexValue('SFI'), 'control: the other indices still show').toBe('97')
   })
 
+  it('SSN is NOAA’s daily count: the newest day that has one, shown as that day’s, between Kp and A', async () => {
+    const f = daily(30, (i) => (i === 29 ? { ssn: 46 } : {}))
+    vi.mocked(getSolarIndices).mockResolvedValue(f)
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot()} />)
+    await act(async () => {})
+    expect(indexValue('SSN')).toBe('46')
+    expect(indexDay('SSN')).toBe(dayLabel(f.days[29].dayUnix))
+    expect([...document.querySelectorAll('.dash-index-k')].map((k) => k.textContent)).toEqual(['SFI', 'Kp', 'SSN', 'A', 'X-ray', 'SW'])
+    // The hover names the file it is from, in the Space Wx box's own words for it.
+    expect(indexItem('SSN')?.getAttribute('title')).toBe(
+      t('connect.solar.caption', { from: dayLabel(f.days[0].dayUnix), to: dayLabel(f.days[29].dayUnix) }),
+    )
+    // Control: SSN is the one index with a day of its own; the rest are the snapshot's.
+    expect(indexDay('SFI')).toBeNull()
+  })
+
+  it('a newest day with no count shows the last day that has one, dated as THAT day', async () => {
+    const f = daily(30, (i) => (i === 29 ? { ssn: null } : i === 28 ? { ssn: 44 } : {}))
+    vi.mocked(getSolarIndices).mockResolvedValue(f)
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot()} />)
+    await act(async () => {})
+    expect(indexValue('SSN')).toBe('44')
+    expect(indexDay('SSN')).toBe(dayLabel(f.days[28].dayUnix))
+  })
+
+  it('a file that has stopped arriving still shows its last count, dated, and says so on hover', async () => {
+    const f = daily(30, () => ({}), 5)
+    vi.mocked(getSolarIndices).mockResolvedValue(f)
+    render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot()} />)
+    await act(async () => {})
+    expect(indexValue('SSN')).toBe('69')
+    expect(indexDay('SSN')).toBe(dayLabel(f.days[29].dayUnix))
+    expect(indexItem('SSN')?.getAttribute('title')).toBe(t('connect.solar.stale', { date: dayLabel(f.days[29].dayUnix) }))
+  })
+
+  it('no file (never arrived), no count in it, or a failed fetch: SSN is a dash with no date, and the rest still show', async () => {
+    const served = [
+      () => Promise.resolve(daily(0)),
+      () => Promise.resolve(daily(30, () => ({ ssn: null }))),
+      () => Promise.reject(new Error('no station')),
+    ]
+    for (const serve of served) {
+      vi.mocked(getSolarIndices).mockImplementation(serve)
+      render(<DashboardBar call="KD9TAW" grid="EN52" prop={snapshot()} />)
+      await act(async () => {})
+      expect(indexValue('SSN')).toBe('—')
+      expect(indexDay('SSN')).toBeNull()
+      expect(indexValue('SFI'), 'control: the other indices still show').toBe('97')
+      cleanup()
+    }
+  })
+
   it('before the first snapshot, and on one that carries no space weather, nothing is invented and nothing throws', () => {
     const { rerender } = render(<DashboardBar call="" grid="" prop={null} />)
     expect(indexValue('SFI')).toBe('—')
@@ -166,7 +260,7 @@ describe('the bar', () => {
 
 describe('barIndices — the list the bar draws', () => {
   it('is the day’s indices, SFI first and the solar wind last, as a wall-display clock reads them', () => {
-    expect(barIndices(WX as never).map((i) => i.key)).toEqual(['SFI', 'Kp', 'A', 'X-ray', 'SW'])
+    expect(barIndices(WX as never).map((i) => i.key)).toEqual(['SFI', 'Kp', 'SSN', 'A', 'X-ray', 'SW'])
   })
 })
 

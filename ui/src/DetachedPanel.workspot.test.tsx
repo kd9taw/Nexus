@@ -83,6 +83,8 @@ vi.mock('./api', () => ({
   // The dashboard bar's Stay behind toggle asks once on mount; not offered here.
   getWindowBehind: vi.fn(() => Promise.resolve({ supported: false, on: false })),
   setWindowBehind: vi.fn(() => Promise.resolve({ supported: false, on: false })),
+  // …and its SSN asks for NOAA's daily file; none here.
+  getSolarIndices: vi.fn(() => Promise.resolve({ days: [] })),
 }))
 
 const mockedWorkSpot = vi.mocked(workSpot)

@@ -22,6 +22,7 @@ import type {
   MapSpot,
   NeedKind,
   SatView,
+  SpaceWxView,
   TrendDir,
 } from './types'
 
@@ -185,6 +186,14 @@ export const FAST_WIND_KMS = 600
 export function windSpeedImpact(kms: number): Impact {
   if (kms >= FAST_WIND_KMS) return { sev: 'warn', text: t('prop.impact.wind.fast') }
   return { sev: 'quiet', text: t('prop.impact.wind.normal') }
+}
+/** The solar-wind speed as a reading (km/s), or null when there is none: no sample, or the 0 that
+ * `propagation::solar_wind::assemble` fills in when DSCOVR's plasma feed did not answer (it keeps
+ * Bz from the magnetometer). The Sun's wind never blows below ~250 km/s, so a 0 is never drawn.
+ * The Space Wx box's Wind gauge and the dashboard bar both read this, so they cannot disagree. */
+export function windSpeedKms(wx: SpaceWxView): number | null {
+  const kms = wx.solarWind?.speedKms
+  return kms != null && kms > 0 ? kms : null
 }
 /** A-index (24 h average of geomagnetic activity — the day's character, where Kp is
  * the last 3 h). NOAA scale: <8 quiet · 8–15 unsettled · 16–29 active · 30+ storm. */

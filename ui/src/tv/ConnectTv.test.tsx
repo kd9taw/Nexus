@@ -106,6 +106,26 @@ describe('the chrome', () => {
     expect(document.querySelector('.tv-bar')).toBeNull()
   })
 
+  it('the bar’s sunspot number comes over the same LAN read as the Space Wx box’s lines, dated as its day', async () => {
+    // get_solar_indices is on the TV page's read list (crates/tempo-app/src/connect_web.rs): public
+    // weather, like the Kp outlook. The bar asks for it itself; the snapshot carries no SSN.
+    const spaceWx = { sfi: 97, kp: 2, aIndex: 7, xrayClass: 'B3.1-class', flare: false, solarWind: null }
+    const day = Date.UTC(2026, 8, 28) / 1000
+    const calls = mockFetch({
+      get_propagation: { ...PROP, spaceWx, asOf: Math.floor(Date.now() / 1000) },
+      tv_station: { call: 'KD9TAW', grid: 'EN52' },
+      get_solar_indices: { days: [{ dayUnix: day - 86_400, sfi: 94, ssn: 51 }, { dayUnix: day, sfi: 95, ssn: 46 }] },
+    })
+    render(<ConnectTv />)
+    const ssn = () =>
+      [...document.querySelectorAll('.dash-bar .dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === 'SSN')
+    await waitFor(() => expect(ssn()?.querySelector('.dash-index-v')?.textContent).toBe('46'))
+    expect(ssn()?.querySelector('.dash-index-d')?.textContent).toBe(
+      new Date(day * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }),
+    )
+    expect(calls, 'control: it came over the LAN read').toContain('/connect/rpc/get_solar_indices')
+  })
+
   it('says "no link" instead of freezing on a stale screen', async () => {
     mockFetch({ tv_station: { call: 'KD9TAW', grid: 'EN52' } }) // get_propagation 404s
     render(<ConnectTv />)

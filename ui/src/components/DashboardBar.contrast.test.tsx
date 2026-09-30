@@ -34,6 +34,8 @@ import type { PropagationSnapshot } from '../types'
 vi.mock('../api', () => ({
   getWindowBehind: vi.fn(),
   setWindowBehind: vi.fn(),
+  // NOAA's daily file, so the SSN's date is lettered on the bar and read below.
+  getSolarIndices: vi.fn(() => Promise.resolve({ days: [{ dayUnix: Math.floor(Date.now() / 86_400_000) * 86_400 - 86_400, sfi: 142, ssn: 46 }] })),
 }))
 
 import { getWindowBehind } from '../api'
@@ -60,7 +62,7 @@ const PROP = {
 
 /** Every lettered element on the bar (`.prop-prov` is the panes' chip, for the control below). */
 const LETTERED =
-  '.dash-call, .dash-grid, .dash-time-v, .dash-time-k, .dash-index-k, .dash-index-v, .dash-prov, .prop-prov, .dash-behind'
+  '.dash-call, .dash-grid, .dash-time-v, .dash-time-k, .dash-index-k, .dash-index-v, .dash-index-d, .dash-prov, .prop-prov, .dash-behind'
 
 interface Word {
   what: string
@@ -153,9 +155,10 @@ describe('the dashboard bar reads in every theme and mode', () => {
   it('every word clears 4.5:1 on its face, in both hosts, the Stay behind toggle up and pressed', async () => {
     const words: Word[] = []
     for (const host of HOSTS) for (const pressed of [false, true]) words.push(...(await wordsOn(host, pressed)))
-    // The census cannot silently empty out: call, grid, two clocks with their labels, five
-    // indices with their names, the provenance chip and the toggle, in each of four renders.
-    expect(words.length, 'words found').toBe(4 * (2 + 4 + 10 + 1 + 1))
+    // The census cannot silently empty out: call, grid, two clocks with their labels, six
+    // indices with their names and SSN's date, the provenance chip and the toggle, in each of four
+    // renders.
+    expect(words.length, 'words found').toBe(4 * (2 + 4 + 13 + 1 + 1))
     expect(unreadable(RULES, distinct(words))).toEqual([])
     // Every mode × every shape through the resolver: seconds, not the default five.
   }, 60_000)

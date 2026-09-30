@@ -38,6 +38,16 @@ const fx = vi.hoisted(() => ({
     source: 'live',
     asOf: 0,
   },
+  /** NOAA's daily file, the bar's SSN: two days, the newest yesterday (UTC). */
+  DAILY: (() => {
+    const yesterday = Math.floor(Date.now() / 86_400_000) * 86_400 - 86_400
+    return {
+      days: [
+        { dayUnix: yesterday - 86_400, sfi: 96, ssn: 51 },
+        { dayUnix: yesterday, sfi: 97, ssn: 46 },
+      ],
+    }
+  })(),
 }))
 
 vi.mock('./api', () => ({
@@ -55,10 +65,11 @@ vi.mock('./api', () => ({
   setFrequency: vi.fn(() => Promise.resolve(null)),
   getWindowBehind: vi.fn(() => Promise.resolve({ supported: true, on: false })),
   setWindowBehind: vi.fn((on: boolean) => Promise.resolve({ supported: true, on })),
+  getSolarIndices: vi.fn(() => Promise.resolve(fx.DAILY)),
 }))
 
 import { DetachedPanel } from './DetachedPanel'
-import { getWindowBehind, setWindowBehind } from './api'
+import { getSolarIndices, getWindowBehind, setWindowBehind } from './api'
 
 async function mount(panel: string) {
   let r!: ReturnType<typeof render>
@@ -71,6 +82,7 @@ async function mount(panel: string) {
 beforeEach(() => {
   vi.mocked(getWindowBehind).mockClear()
   vi.mocked(setWindowBehind).mockClear()
+  vi.mocked(getSolarIndices).mockClear()
 })
 afterEach(() => cleanup())
 
@@ -93,6 +105,9 @@ describe('the Connect pop-out', () => {
     expect(bar.querySelector('.dash-grid')?.textContent).toBe('EN52')
     const sfi = [...bar.querySelectorAll('.dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === 'SFI')
     expect(sfi?.querySelector('.dash-index-v')?.textContent).toBe('97')
+    // SSN is NOAA's daily count, from the daily solar indices the bar asks for itself.
+    const ssn = [...bar.querySelectorAll('.dash-index')].find((li) => li.querySelector('.dash-index-k')?.textContent === 'SSN')
+    expect(ssn?.querySelector('.dash-index-v')?.textContent).toBe('46')
   })
 
   it('carries the Stay behind toggle, which asks the window to stay behind', async () => {
@@ -120,5 +135,6 @@ describe('the other pop-outs', () => {
     expect(screen.getByTestId('needed'), 'control: the Needed board rendered').toBeTruthy()
     expect(document.querySelector('.dash-bar')).toBeNull()
     expect(vi.mocked(getWindowBehind)).not.toHaveBeenCalled()
+    expect(vi.mocked(getSolarIndices), 'nor ask for the daily solar indices').not.toHaveBeenCalled()
   })
 })

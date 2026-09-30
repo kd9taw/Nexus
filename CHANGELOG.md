@@ -145,11 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Connect's pop-out is a dashboard window.** **⧉ Pop out** on Connect now opens a large window,
   1600 × 1000 or your whole screen if it is smaller, showing Connect's full layout instead of the
   narrow stacked one. A bar across its top shows your callsign and grid, a big UTC clock beside
-  your local time, and the day's SFI, Kp, A, X-ray and solar-wind speed; with no live data each
-  number is a dash, and old data says how old it is. Close the window and it comes back on the
-  same monitor, in the same place and at the same size, maximized if you left it maximized. If
-  that monitor is gone it opens in the middle of your main screen, sized to fit it. The TV page
-  has the same bar.
+  your local time, and the day's SFI, Kp, sunspot number, A, X-ray and solar-wind speed. The
+  sunspot number is NOAA's daily count, shown with the day it is from, the same one the Space Wx
+  box shows. With no live data each number is a dash, and old data says how old it is. Close the
+  window and it comes back on the same monitor, in the same place and at the same size, maximized
+  if you left it maximized. If that monitor is gone it opens in the middle of your main screen,
+  sized to fit it. The TV page has the same bar.
 - **Connect: a Frame layout.** **⊞ Panels ▸ Layout** has a fourth choice, **Frame**: two panes down
   each side of a map that runs the full height, Band Advisor over Space Wx on the left and Getting
   Out over Chase on the right, in 400 px columns. Like the other layouts it changes nothing until
