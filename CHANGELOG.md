@@ -464,6 +464,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen where transmit stays on (Phone, CW, RTTY or PSK) is still held for your return, as
   before. Overs you send once transmitting is allowed go out exactly as before, and Stop TX, the
   watchdog and continuous TX work as they did.
+- **Voice keyer: a message that could not go out is dropped, and a refused one says why.** A
+  message you played on a frequency outside your license privileges did nothing and said nothing;
+  the keyer's "Could not play F1" note now says why, and so do its other failures. A message
+  already waiting when transmit went off (for example after leaving the Phone screen for FT8
+  before it started) or when the dial left your privileges used to be held, and it played by
+  itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
+  transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched

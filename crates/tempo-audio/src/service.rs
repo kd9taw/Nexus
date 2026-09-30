@@ -23071,7 +23071,7 @@ mod tests {
             let mut e = sc.engine.lock().unwrap();
             e.set_active_radio(sc.incoming);
             e.set_frequency(14.250, "20m", "USB");
-            e.send_voice(vec![0.05f32; 12_000]);
+            e.send_voice(vec![0.05f32; 12_000]).unwrap();
             assert!(
                 e.tx_owner() == Some(tempo_app::engine::TxOwner::Voice),
                 "scene guard: the engine holds a voice message"
@@ -23103,7 +23103,11 @@ mod tests {
         // A refusal, not a mute — the same F-key, once the loop owns the Icom. (The message
         // queued mid-switch is gone: the handoff's RX-audio rebuild halts TX for the context
         // change, which drops it with every other pending over.)
-        sc.engine.lock().unwrap().send_voice(vec![0.05f32; 12_000]);
+        sc.engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05f32; 12_000])
+            .unwrap();
         sc.tick(200.0);
         assert!(
             sc.incoming_saw(|l| l == "T 1"),
@@ -24906,6 +24910,84 @@ mod tests {
         assert!(
             backend.played.len() > aired,
             "a send made inside the privileges keys as before"
+        );
+    }
+
+    /// ⛔ …and a refused voice-keyer message, on the real loop: the message is queued, and
+    /// before the loop takes it the operator leaves Phone for FT8 (the latch drops, the
+    /// message stays). Held, it played the moment the operator came back.
+    #[test]
+    fn a_voice_message_refused_with_tx_off_never_plays_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.send_voice(vec![0.05f32; 12_000]).unwrap();
+            e.set_operating_mode("digital", false);
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+        assert!(backend.played.is_empty(), "nothing plays with TX off");
+        engine.lock().unwrap().set_operating_mode("phone", false); // TX armed again
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 2_000.0);
+        assert!(
+            backend.played.is_empty() && !rig.keyed,
+            "nothing refused plays when TX comes back"
+        );
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05f32; 12_000])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_000.0);
+        assert_eq!(
+            backend.played.len(),
+            12_000,
+            "a message sent once TX is on plays as before"
+        );
+    }
+
+    /// …and outside the licence's privileges: queued inside them, the dial moved out before
+    /// the loop took it, then a same-band tune back in.
+    #[test]
+    fn a_voice_message_refused_outside_privileges_never_plays_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.send_voice(vec![0.05f32; 12_000]).unwrap();
+            e.set_frequency(14.200, "20m", "USB");
+            assert!(
+                !e.tx_allowed(),
+                "precondition: 14.200 is Extra-only phone, outside a General's privileges"
+            );
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+        assert!(
+            backend.played.is_empty(),
+            "nothing plays outside privileges"
+        );
+        engine.lock().unwrap().set_frequency(14.250, "20m", "USB");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 2_000.0);
+        assert!(
+            backend.played.is_empty() && !rig.keyed,
+            "nothing refused plays after the tune in"
+        );
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05f32; 12_000])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_000.0);
+        assert_eq!(
+            backend.played.len(),
+            12_000,
+            "a message sent inside the privileges plays as before"
         );
     }
 

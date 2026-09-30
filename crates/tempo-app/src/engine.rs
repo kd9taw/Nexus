@@ -3003,8 +3003,9 @@ pub struct Engine {
     /// the foreign-key surface is exactly what it was before the latch was restored.
     broker_context_hold: bool,
     /// Phone voice-keyer: pending 12 kHz mono samples to transmit. The radio loop drains
-    /// this (gated on `tx_enabled`), keys PTT, plays it, and drops PTT when it's out — the
-    /// same path the soundcard CW keyer uses. Set by `send_voice`.
+    /// this (gated on `tx_enabled` + privileges; a message they refuse is dropped there, never
+    /// held), keys PTT, plays it, and drops PTT when it's out — the same path the soundcard CW
+    /// keyer uses. Set by `send_voice`.
     voice_tx: Option<Vec<f32>>,
     /// One-shot voice-keyer abort: the loop flushes the output ring + unkeys, then clears it.
     voice_abort: bool,
@@ -9765,22 +9766,58 @@ impl Engine {
 
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
 
-    /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. Ignored
-    /// while TX is disabled (Monitor), so a stray F-key never keys unexpectedly. Replaces
-    /// any still-pending message (one voice over at a time).
-    pub fn send_voice(&mut self, samples: Vec<f32>) {
-        if self.tx_enabled && self.tx_allowed() && !samples.is_empty() {
+    /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. REFUSED while
+    /// TX is disabled (Monitor) or the dial is outside the licence's privileges, so a stray
+    /// F-key never keys unexpectedly: nothing is queued, the log says why, and so does the
+    /// `Err`, which the keyer's toast shows. It used to be ignored without a word. Replaces any
+    /// still-pending message (one voice over at a time).
+    pub fn send_voice(&mut self, samples: Vec<f32>) -> Result<(), String> {
+        if !self.tx_enabled {
+            tempo_core::applog::info("tx", "voice-keyer message refused: transmit is off");
+            return Err(
+                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
+            );
+        }
+        if !self.tx_allowed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: the dial is outside the licence's privileges",
+            );
+            return Err(
+                "TX locked — this frequency is outside your license privileges".to_string(),
+            );
+        }
+        if !samples.is_empty() {
             tempo_core::applog::info(
                 "tx",
                 &format!("voice-keyer over queued: {} samples", samples.len()),
             );
             self.voice_tx = Some(samples);
         }
+        Ok(())
     }
 
     /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges).
+    ///
+    /// ⛔ A message REFUSED here is DROPPED, never held (operator, 2026-09-30: the rule CW, RTTY
+    /// and PSK follow): TX went off, or the dial left the privileges, after it was queued. Held,
+    /// it played the moment TX was allowed again. The log says why; the keyer has no warning
+    /// line to carry it, its toasts being the answer to the send itself.
     pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
-        if !self.tx_enabled || !self.tx_allowed() {
+        self.voice_tx.as_ref()?;
+        let refused = if !self.tx_enabled {
+            Some("transmit is off")
+        } else if !self.tx_allowed() {
+            Some("the dial is outside the licence's privileges")
+        } else {
+            None
+        };
+        if let Some(why) = refused {
+            tempo_core::applog::info(
+                "tx",
+                &format!("voice-keyer message not played: {why} (dropped)"),
+            );
+            self.voice_tx = None;
             return None;
         }
         self.voice_tx.take()
@@ -26936,13 +26973,13 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_tx_enabled(true); // TX is disarmed by default (WSJT-X Enable-Tx) — arm it
                                 // Queue a voice message → the loop drains it once.
-        e.send_voice(vec![0.1, 0.2, 0.3]);
+        e.send_voice(vec![0.1, 0.2, 0.3]).unwrap();
         assert_eq!(e.poll_voice(), Some(vec![0.1, 0.2, 0.3]));
         assert!(e.poll_voice().is_none(), "drained");
 
-        // Gated by Monitor: with TX disabled nothing is queued/played.
+        // Gated by Monitor: with TX disabled nothing is queued/played, and the send says why.
         e.set_tx_enabled(false);
-        e.send_voice(vec![0.5]);
+        assert!(e.send_voice(vec![0.5]).unwrap_err().contains("TX is off"));
         assert!(
             e.poll_voice().is_none(),
             "no voice played while TX is disabled"
@@ -26950,7 +26987,7 @@ mod tests {
         e.set_tx_enabled(true);
 
         // Abort drops the pending message + raises the one-shot flag.
-        e.send_voice(vec![0.9; 100]);
+        e.send_voice(vec![0.9; 100]).unwrap();
         e.stop_voice();
         assert!(e.take_voice_abort());
         assert!(!e.take_voice_abort(), "abort is one-shot");
@@ -26974,6 +27011,92 @@ mod tests {
         );
         assert!(!e.is_recording());
         assert!(e.stop_recording().is_empty(), "buffer taken/reset");
+    }
+
+    /// ⛔ A REFUSED VOICE-KEYER MESSAGE IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Same
+    /// drop rule"). A message queued while TX was allowed waits for the radio loop to take it.
+    /// If TX goes off first (leaving the Phone section for FT8 lowers the latch and keeps it),
+    /// or the dial moves outside the privileges, it was HELD, and it played the moment TX was
+    /// allowed again.
+    #[test]
+    fn a_voice_message_refused_before_it_plays_is_dropped_not_played_later() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.set_operating_mode("digital", false); // before the loop takes it
+        assert_eq!(e.poll_voice(), None, "nothing plays with TX off");
+        e.set_operating_mode("phone", false);
+        assert!(
+            e.tx_enabled() && e.tx_allowed(),
+            "precondition: TX is allowed again"
+        );
+        assert_eq!(
+            e.poll_voice(),
+            None,
+            "nothing refused plays when TX comes back"
+        );
+        // …and outside the privileges, then a same-band tune back in.
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.set_frequency(14.200, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.200 is Extra-only phone, outside a General's privileges"
+        );
+        assert_eq!(e.poll_voice(), None, "nothing plays outside privileges");
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(
+            e.poll_voice(),
+            None,
+            "nothing refused plays after the tune in"
+        );
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert_eq!(
+            e.poll_voice(),
+            Some(vec![0.5; 100]),
+            "a message sent once TX is allowed plays as before"
+        );
+    }
+
+    /// …and a send made while TX is off or outside the privileges, which was ignored without
+    /// a word, is refused with the reason the keyer's toast shows. Nothing is queued, so
+    /// nothing plays when TX is allowed again.
+    #[test]
+    fn a_voice_message_refused_at_send_says_why_and_queues_nothing() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.200, "20m", "USB");
+        let err = e
+            .send_voice(vec![0.5; 100])
+            .expect_err("a send outside the privileges is refused");
+        assert!(
+            err.contains("outside your license privileges"),
+            "the refusal says why: {err}"
+        );
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(
+            e.poll_voice(),
+            None,
+            "nothing refused plays after the tune in"
+        );
+        e.set_tx_enabled(false);
+        let err = e
+            .send_voice(vec![0.5; 100])
+            .expect_err("a send with TX off is refused");
+        assert!(err.contains("TX is off"), "the refusal says why: {err}");
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.poll_voice(),
+            None,
+            "nothing refused plays when TX comes back"
+        );
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert!(
+            e.poll_voice().is_some(),
+            "a send made once TX is allowed plays"
+        );
     }
 
     #[test]
@@ -27859,7 +27982,7 @@ mod tests {
         let mut e = phone_armed_engine();
 
         // A queued voice-keyer message → refused.
-        e.send_voice(vec![0.1; 100]);
+        e.send_voice(vec![0.1; 100]).unwrap();
         assert!(e
             .sstv_send(sstv_img_samples(), "PD-120".into())
             .unwrap_err()
@@ -27999,7 +28122,7 @@ mod tests {
         assert!(err.contains("PTT"), "got: {err}");
         e.set_ptt(false);
 
-        e.send_voice(vec![0.1; 100]);
+        e.send_voice(vec![0.1; 100]).unwrap();
         assert!(
             e.atu_tune().is_err(),
             "a queued voice message must refuse an ATU tune-up"
