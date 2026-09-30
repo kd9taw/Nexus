@@ -488,8 +488,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmission ends or the radio is being switched. If transmit went off in that time, or the
   frequency left your license privileges, the picture used to be held, and it went out by itself
   as soon as transmitting was allowed again. It is now dropped, and a warning line beside Send
-  says why until the next picture goes out. A picture already going out is untouched, and Stop,
-  Stop TX and the TX switch work as they did.
+  says why until the next picture goes out. Moving to another mode's screen (CW, RTTY, PSK or a
+  digital mode) while a picture waits drops it too, and the warning line says so; before, CW, RTTY
+  and PSK held it, and it went out when you came back to Phone. A picture already going out is
+  untouched, and Stop, Stop TX and the TX switch work as they did.
 - **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
   beacon, a message or an automatic ack waits a moment until the radio is free to key it.
   Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was

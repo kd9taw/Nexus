@@ -1199,6 +1199,11 @@ const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the
 const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
      privileges, so the picture that was waiting was dropped, not held for later. Send it again \
      from inside them.";
+/// …and when the operator LEFT the Phone section, which SSTV rides, with a picture still waiting
+/// ([`Engine::set_operating_mode_with_reset`]).
+const SSTV_LEFT_SECTION: &str = "SSTV stopped: you moved to another mode's screen, so the \
+     picture that was waiting was dropped, not held for your return. Send it again when you are \
+     ready.";
 /// …and the APRS cockpit's status line, when what was queued (beacons, messages, automatic acks)
 /// is dropped: by TX Off ([`Engine::set_tx_enabled`]), or refused at [`Engine::poll_aprs_tx`].
 const APRS_REFUSED_TX_OFF: &str = "APRS stopped: transmit was turned off, so what was still \
@@ -7413,8 +7418,9 @@ impl Engine {
         self.drop_rtty_latch();
         // …and PSK's, for the identical reason.
         self.drop_psk_latch();
-        // ⛔ …and LEAVING RTTY, PSK OR CW DROPS WHAT WAS TYPED AHEAD (operator, 2026-09-30: "Drop
-        // it when you leave"; for CW, "Same leave rule"): the section's queue is cleared, the log
+        // ⛔ …and LEAVING RTTY, PSK OR CW DROPS WHAT WAS TYPED AHEAD, and leaving Phone an SSTV
+        // picture still waiting (operator, 2026-09-30: "Drop it when you leave"; for CW, "Same
+        // leave rule"; for SSTV, "Drop it on leave"): the section's queue is cleared, the log
         // says so once, and its ⚠ line tells the operator on their return, so nothing keys when
         // they come back. Bound HERE, to the act of leaving: every section change (the nav, a spot
         // click that opens another cockpit, an SSTV channel pick, the Remote) passes through this
@@ -7572,13 +7578,13 @@ impl Engine {
         }
     }
 
-    /// What leaving RTTY, PSK or CW does to what that section still has queued, from the one place
-    /// a section changes ([`Self::set_operating_mode_with_reset`]): dropped with a notice, never
-    /// keyed on the return or from the screen the operator went to. `to` is the section being
-    /// entered. An RTTY auto QSO ends with the screen,
-    /// with a line of its own ([`RTTY_AUTO_LEFT`]; nothing was refused, so the refusal line would
-    /// mislead): left running, its next over would be queued while the operator is away and key
-    /// on the return.
+    /// What leaving RTTY, PSK or CW does to what that section still has queued, and leaving Phone
+    /// to an SSTV picture still waiting, from the one place a section changes
+    /// ([`Self::set_operating_mode_with_reset`]): dropped with a notice, never keyed on the return
+    /// or from the screen the operator went to. `to` is the section being entered. An RTTY auto
+    /// QSO ends with the screen, with a line of its own ([`RTTY_AUTO_LEFT`]; nothing was refused,
+    /// so the refusal line would mislead): left running, its next over would be queued while the
+    /// operator is away and key on the return.
     fn drop_queued_overs_on_leaving(&mut self, to: crate::settings::OperatingMode) {
         use crate::settings::OperatingMode;
         let from = self.settings.operating_mode;
@@ -7622,6 +7628,16 @@ impl Engine {
             tempo_core::applog::info("tx", "CW not keyed: the CW section was left (dropped)");
             self.cw_queue.clear();
             self.cw_keyer_error = Some(CW_LEFT_SECTION.to_string());
+        }
+        // …and SSTV, which rides Phone (the operator, 2026-09-30: "Drop it on leave"). Only a
+        // picture still WAITING for the loop is the rule's: one the loop has taken is on the air,
+        // and leaving does to it what it always did (nothing here arms `sstv_abort`).
+        if from == OperatingMode::Phone && to != OperatingMode::Phone && self.sstv_tx.is_some() {
+            tempo_core::applog::info("tx", "SSTV not keyed: the Phone section was left (dropped)");
+            self.sstv_tx = None;
+            self.sstv_tx_mode = None;
+            self.sstv_tx_progress = None;
+            self.sstv_tx_notice = Some(SSTV_LEFT_SECTION.to_string());
         }
     }
 
@@ -18967,9 +18983,11 @@ contact yourself."
     /// a time the operator did not choose. TX Off itself already drops it (`set_tx_enabled`), so
     /// the TX-off arm here is the backstop for a latch lowered any other way.
     ///
-    /// HELD, as before, while a tune carrier is up, and outside the Phone section: `tx_allowed`
-    /// judges the current section's emission, so it speaks for SSTV only in Phone. A picture
-    /// already going out is the loop's, and nothing here touches it.
+    /// HELD, as before, while a tune carrier is up. Outside the Phone section there is none to
+    /// hold: leaving Phone drops a waiting picture ([`Self::set_operating_mode_with_reset`]), and
+    /// the section check here stays as the backstop; `tx_allowed` judges the current section's
+    /// emission, so it speaks for SSTV only in Phone. A picture already going out is the loop's,
+    /// and nothing here touches it.
     ///
     /// No wall-clock watchdog check here: the over's length is bounded UP
     /// FRONT by `sstv_send`'s budget, and the loop unkeys unconditionally at the precomputed
@@ -28694,6 +28712,69 @@ mod tests {
             e.sstv_tx_notice(),
             None,
             "…and the picture that keys clears the notice"
+        );
+    }
+
+    /// ⛔ LEAVING PHONE DROPS AN SSTV PICTURE STILL WAITING (the operator, 2026-09-30: "Drop it on
+    /// leave"). SSTV rides Phone, and a picture waits for the loop after Send. Left for CW, RTTY
+    /// or PSK, which keep TX armed, the poll's section check held it and it keyed on the return to
+    /// Phone; left for FT8, which lowers TX, it waited for the poll's TX-off drop.
+    #[test]
+    fn a_waiting_sstv_picture_is_dropped_when_the_phone_section_is_left() {
+        for to in ["cw", "rtty", "keyboard", "digital"] {
+            let mut e = phone_armed_engine();
+            e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+            e.set_operating_mode("phone", false); // a view re-asserting its own section
+            assert!(
+                e.sstv_sending(),
+                "{to}: re-entering Phone dropped the picture"
+            );
+            e.set_operating_mode(to, false);
+            assert!(
+                !e.sstv_sending(),
+                "{to}: the waiting picture outlived the Phone screen"
+            );
+            assert!(
+                !e.sstv_abort,
+                "{to}: leaving aborted a picture that was not on the air"
+            );
+            assert_eq!(
+                e.sstv_tx_notice(),
+                Some(SSTV_LEFT_SECTION),
+                "{to}: the SSTV cockpit is told"
+            );
+            e.set_operating_mode("phone", false);
+            assert!(
+                e.poll_sstv_tx().is_none(),
+                "{to}: the picture keyed on the return"
+            );
+            e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+            assert!(
+                e.poll_sstv_tx().is_some(),
+                "{to}: a picture sent on the return keys as before"
+            );
+        }
+    }
+
+    /// …and a picture the loop has already taken is on the air: not the rule's. Leaving drops
+    /// nothing, arms no abort and says nothing, as a section change always did.
+    #[test]
+    fn an_sstv_picture_on_the_air_is_not_the_leave_rules() {
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e.poll_sstv_tx().is_some(), "control: the loop takes it");
+        e.set_sstv_sending(true);
+        e.set_operating_mode("cw", false);
+        assert!(!e.sstv_abort, "leaving aborted the picture on the air");
+        assert_eq!(
+            e.sstv_tx_mode(),
+            Some("PD-120"),
+            "leaving took the picture's label off its progress"
+        );
+        assert_eq!(
+            e.sstv_tx_notice(),
+            None,
+            "leaving said a picture on the air was dropped"
         );
     }
 

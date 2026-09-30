@@ -25934,6 +25934,42 @@ mod tests {
         );
     }
 
+    /// ⛔ LEAVING PHONE DROPS AN SSTV PICTURE STILL WAITING (the operator, 2026-09-30: "Drop it on
+    /// leave"), on the real loop. Send is accepted, and the operator moves to CW or FT8 before the
+    /// loop takes the picture, then comes back to Phone. CW keeps TX armed, so the section check
+    /// held the picture and the loop keyed it on the return.
+    #[test]
+    fn a_waiting_sstv_picture_never_keys_after_the_phone_screen_is_left() {
+        for to in ["cw", "digital"] {
+            let engine = sstv_ready_engine(vec![0.2f32; 24_000]); // 2 s
+            engine.lock().unwrap().set_operating_mode(to, false);
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 200.0);
+            engine.lock().unwrap().set_operating_mode("phone", false);
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+            assert!(
+                backend.played.is_empty(),
+                "{to}: the picture keyed on the return"
+            );
+            assert!(!rig.keyed, "{to}: …or anything else keyed");
+            assert!(
+                engine.lock().unwrap().sstv_tx_notice().is_some(),
+                "{to}: the SSTV cockpit is told"
+            );
+            engine
+                .lock()
+                .unwrap()
+                .sstv_send(vec![0.2f32; 24_000], "PD-120".to_string())
+                .unwrap();
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_200.0);
+            assert!(
+                rig.keyed,
+                "{to}: a picture sent on the return keys as before"
+            );
+        }
+    }
+
     /// ⛔ WHAT APRS HAS QUEUED IS DROPPED BY TX OFF, NEVER KEYED LATER (the operator, 2026-09-30),
     /// on the real loop. Two beacons: the first keys and the second waits behind it; TX goes off
     /// (the cockpit's TX On/Off) while the first is on the air, then back on. The beacon on the
