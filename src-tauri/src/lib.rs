@@ -17640,7 +17640,8 @@ fn set_cw_keyer(
 // ----- Phone voice keyer: play / record / import recorded WAV messages -----
 
 /// Play a voice-keyer message: read the slot's WAV and queue it for the radio loop to
-/// transmit (PTT + audio). Errors if the slot has no recording.
+/// transmit (PTT + audio). Errors if the slot has no recording, or with the engine's reason
+/// when it refuses the send (TX off, outside the privileges), which the keyer's toast shows.
 #[tauri::command(async)]
 fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSnapshot, String> {
     let file = {
@@ -17661,7 +17662,7 @@ fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSna
         let samples = tempo_audio::voice::read_wav_12k(&file)
             .map_err(|e| format!("Could not read voice message: {e}"))?;
         let mut eng = engine_lock(&state);
-        eng.send_voice(samples);
+        eng.send_voice(samples)?;
         Ok(eng.snapshot())
     }
     #[cfg(not(feature = "radio"))]

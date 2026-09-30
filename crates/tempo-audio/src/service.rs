@@ -15797,6 +15797,155 @@ mod tests {
         );
     }
 
+    /// Every `b <word>` (Hamlib send_morse) a rig was sent: the CAT keyer's wire.
+    fn cw_words(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("b "))
+            .cloned()
+            .collect()
+    }
+
+    /// ⛔ A REFUSED CW SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Drop it, with a
+    /// notice"), on the real loop and the CAT keyer's wire. A macro keys its first word; the CW
+    /// section is left mid-macro, which drops the latch and keeps the queue; the loop's next
+    /// poll refuses. Held, the rest keyed the moment the operator came back to CW.
+    #[test]
+    fn a_cw_macro_refused_with_tx_off_never_reaches_the_rig_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.send_cw("TEST DE KD9TAW");
+        }
+        let (addr, log) = mock_rigctld_refusing(7_030_000, &[]);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(100.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST"],
+            "control: the macro's first word keys"
+        );
+        engine.lock().unwrap().set_operating_mode("digital", false);
+        run(60_000.0); // the word and its space are long gone: the loop polls, with TX off
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "precondition: TX is off"
+        );
+        engine.lock().unwrap().set_operating_mode("cw", false); // back to CW: TX armed again
+        run(120_000.0);
+        run(180_000.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST"],
+            "nothing refused reaches the rig when TX comes back"
+        );
+        assert!(
+            engine.lock().unwrap().cw_keyer_error().is_some(),
+            "the CW cockpit is told the rest was dropped"
+        );
+        engine.lock().unwrap().send_cw("73");
+        run(240_000.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST", "b 73"],
+            "a send made once TX is on keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "…and the word that keys clears the notice"
+        );
+    }
+
+    /// …and outside the licence's privileges: a send from a dial a General may not key, then a
+    /// same-band tune into the privileges. Held, the send keyed on the tune.
+    #[test]
+    fn a_cw_send_refused_outside_privileges_never_reaches_the_rig_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.020, "40m", "CW");
+            assert!(
+                !e.tx_allowed(),
+                "precondition: 7.020 is Extra-only CW, outside a General's privileges"
+            );
+            e.send_cw("TEST");
+        }
+        let (addr, log, dial) = mock_rigctld_switchable(7_020_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(100.0);
+        assert!(cw_words(&log).is_empty(), "nothing keys outside privileges");
+        // The tune, at the rig as at the engine, so the rig's own read-back agrees with it.
+        dial.store(7_030_000, std::sync::atomic::Ordering::SeqCst);
+        engine.lock().unwrap().set_frequency(7.030, "40m", "CW");
+        assert!(
+            engine.lock().unwrap().tx_allowed(),
+            "precondition: 7.030 is inside a General's privileges"
+        );
+        run(60_000.0);
+        run(120_000.0);
+        assert!(
+            cw_words(&log).is_empty(),
+            "nothing refused reaches the rig after the tune in: {:?}",
+            cw_words(&log)
+        );
+        assert!(
+            engine.lock().unwrap().cw_keyer_error().is_some(),
+            "the CW cockpit is told it was dropped"
+        );
+        engine.lock().unwrap().send_cw("TEST");
+        run(180_000.0);
+        assert_eq!(
+            cw_words(&log),
+            ["b TEST"],
+            "a send made inside the privileges keys as before"
+        );
+    }
+
     /// ISSUE #135 (swinn, on 1.6.1): "CW slider does not change speed."
     ///
     /// The slider reached the ENGINE fine — `set_cw_wpm` stores it and every cockpit read
@@ -22922,7 +23071,7 @@ mod tests {
             let mut e = sc.engine.lock().unwrap();
             e.set_active_radio(sc.incoming);
             e.set_frequency(14.250, "20m", "USB");
-            e.send_voice(vec![0.05f32; 12_000]);
+            e.send_voice(vec![0.05f32; 12_000]).unwrap();
             assert!(
                 e.tx_owner() == Some(tempo_app::engine::TxOwner::Voice),
                 "scene guard: the engine holds a voice message"
@@ -22954,7 +23103,11 @@ mod tests {
         // A refusal, not a mute — the same F-key, once the loop owns the Icom. (The message
         // queued mid-switch is gone: the handoff's RX-audio rebuild halts TX for the context
         // change, which drops it with every other pending over.)
-        sc.engine.lock().unwrap().send_voice(vec![0.05f32; 12_000]);
+        sc.engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05f32; 12_000])
+            .unwrap();
         sc.tick(200.0);
         assert!(
             sc.incoming_saw(|l| l == "T 1"),
@@ -24551,6 +24704,290 @@ mod tests {
         assert_eq!(
             (st.tx_text.as_str(), st.tx_keyed, st.tx_cut),
             ("TEST", 4, false)
+        );
+    }
+
+    /// Step the loop every 20 ms from `*t` to `until`, as the RTTY/PSK/voice tests below do.
+    fn step_to(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        backend: &mut MockBackend,
+        rig: &mut Rig,
+        t: &mut f64,
+        until: f64,
+    ) {
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        while *t <= until {
+            state
+                .step(
+                    engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    *t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            *t += 20.0;
+        }
+    }
+
+    /// ⛔ A REFUSED RTTY OVER IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Same drop
+    /// rule"), on the real loop: an over keys, the next is typed ahead behind it, the RTTY
+    /// section is left while it waits (the latch drops, the queue stays). Held, it keyed the
+    /// moment the operator came back. What radiated is the transcript's own echo, which the
+    /// loop writes only for what it keyed.
+    #[test]
+    fn an_rtty_over_refused_with_tx_off_never_keys_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("rtty", false);
+            e.rtty_send_text("CQ").unwrap();
+            e.rtty_send_text("DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "control: the first over keys");
+        engine.lock().unwrap().set_operating_mode("digital", false);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 4_000.0);
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ",
+            "precondition: the first over went out"
+        );
+        engine.lock().unwrap().set_operating_mode("rtty", false); // TX armed again
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ",
+            "nothing refused keys when TX comes back"
+        );
+        assert!(
+            engine.lock().unwrap().rtty_state().keyer_error.is_some(),
+            "the RTTY cockpit is told the rest was dropped"
+        );
+        engine.lock().unwrap().rtty_send_text("73").unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ73",
+            "a send made once TX is on keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().rtty_state().keyer_error,
+            None,
+            "…and the over that keys clears the notice"
+        );
+    }
+
+    /// …and outside the licence's privileges: the dial moves out of them while an over waits,
+    /// then a same-band tune back in. Held, the over keyed on the tune.
+    #[test]
+    fn an_rtty_over_refused_outside_privileges_never_keys_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("rtty", false);
+            e.set_frequency(14.080, "20m", "LSB");
+            e.rtty_send_text("CQ").unwrap();
+            e.rtty_send_text("DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "control: the first over keys");
+        engine.lock().unwrap().set_frequency(14.020, "20m", "LSB");
+        assert!(
+            !engine.lock().unwrap().tx_allowed(),
+            "precondition: 14.020 is outside a General's privileges"
+        );
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 4_000.0);
+        engine.lock().unwrap().set_frequency(14.080, "20m", "LSB");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 8_000.0);
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ",
+            "nothing refused keys after the tune in"
+        );
+        assert!(
+            engine.lock().unwrap().rtty_state().keyer_error.is_some(),
+            "the RTTY cockpit is told it was dropped"
+        );
+        engine.lock().unwrap().rtty_send_text("73").unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+        assert_eq!(
+            rtty_sent(&engine),
+            "CQ73",
+            "a send made inside the privileges keys as before"
+        );
+    }
+
+    /// ⛔ …and a refused PSK over, the same rule on the same loop. PSK has no transcript echo,
+    /// so what radiated is the audio the loop played.
+    #[test]
+    fn a_psk_over_refused_with_tx_off_never_keys_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("keyboard", false);
+            e.psk_send_text("CQ").unwrap();
+            e.psk_send_text("DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "control: the first over keys");
+        engine.lock().unwrap().set_operating_mode("digital", false);
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 5_000.0);
+        assert!(!rig.keyed, "precondition: the first over has ended");
+        let aired = backend.played.len();
+        engine.lock().unwrap().set_operating_mode("keyboard", false); // TX armed again
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 6_000.0);
+        assert_eq!(
+            backend.played.len(),
+            aired,
+            "nothing refused keys when TX comes back"
+        );
+        assert!(
+            engine.lock().unwrap().psk_state().keyer_error.is_some(),
+            "the PSK cockpit is told the rest was dropped"
+        );
+        engine.lock().unwrap().psk_send_text("73").unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 7_000.0);
+        assert!(
+            backend.played.len() > aired,
+            "a send made once TX is on keys as before"
+        );
+        assert_eq!(
+            engine.lock().unwrap().psk_state().keyer_error,
+            None,
+            "…and the over that keys clears the notice"
+        );
+    }
+
+    /// …and outside the licence's privileges, then a same-band tune back in.
+    #[test]
+    fn a_psk_over_refused_outside_privileges_never_keys_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("keyboard", false);
+            e.set_frequency(14.070, "20m", "USB");
+            e.psk_send_text("CQ").unwrap();
+            e.psk_send_text("DE W9XYZ").unwrap();
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 100.0);
+        assert!(rig.keyed, "control: the first over keys");
+        engine.lock().unwrap().set_frequency(14.020, "20m", "USB");
+        assert!(
+            !engine.lock().unwrap().tx_allowed(),
+            "precondition: 14.020 is outside a General's privileges"
+        );
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 5_000.0);
+        let aired = backend.played.len();
+        engine.lock().unwrap().set_frequency(14.070, "20m", "USB");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 6_000.0);
+        assert_eq!(
+            backend.played.len(),
+            aired,
+            "nothing refused keys after the tune in"
+        );
+        assert!(
+            engine.lock().unwrap().psk_state().keyer_error.is_some(),
+            "the PSK cockpit is told it was dropped"
+        );
+        engine.lock().unwrap().psk_send_text("73").unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 7_000.0);
+        assert!(
+            backend.played.len() > aired,
+            "a send made inside the privileges keys as before"
+        );
+    }
+
+    /// ⛔ …and a refused voice-keyer message, on the real loop: the message is queued, and
+    /// before the loop takes it the operator leaves Phone for FT8 (the latch drops, the
+    /// message stays). Held, it played the moment the operator came back.
+    #[test]
+    fn a_voice_message_refused_with_tx_off_never_plays_when_tx_comes_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.send_voice(vec![0.05f32; 12_000]).unwrap();
+            e.set_operating_mode("digital", false);
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+        assert!(backend.played.is_empty(), "nothing plays with TX off");
+        engine.lock().unwrap().set_operating_mode("phone", false); // TX armed again
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 2_000.0);
+        assert!(
+            backend.played.is_empty() && !rig.keyed,
+            "nothing refused plays when TX comes back"
+        );
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05f32; 12_000])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_000.0);
+        assert_eq!(
+            backend.played.len(),
+            12_000,
+            "a message sent once TX is on plays as before"
+        );
+    }
+
+    /// …and outside the licence's privileges: queued inside them, the dial moved out before
+    /// the loop took it, then a same-band tune back in.
+    #[test]
+    fn a_voice_message_refused_outside_privileges_never_plays_after_a_tune_in() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.send_voice(vec![0.05f32; 12_000]).unwrap();
+            e.set_frequency(14.200, "20m", "USB");
+            assert!(
+                !e.tx_allowed(),
+                "precondition: 14.200 is Extra-only phone, outside a General's privileges"
+            );
+        }
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
+        assert!(
+            backend.played.is_empty(),
+            "nothing plays outside privileges"
+        );
+        engine.lock().unwrap().set_frequency(14.250, "20m", "USB");
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 2_000.0);
+        assert!(
+            backend.played.is_empty() && !rig.keyed,
+            "nothing refused plays after the tune in"
+        );
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05f32; 12_000])
+            .unwrap();
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_000.0);
+        assert_eq!(
+            backend.played.len(),
+            12_000,
+            "a message sent inside the privileges plays as before"
         );
     }
 

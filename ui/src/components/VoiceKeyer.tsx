@@ -130,11 +130,11 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
   useEffect(() => {
     return () => {
       // BOTH conditions, and only these two: this pane started a message it has not seen end,
-      // AND the rig is keyed right now. Either alone would lie — a message the engine refused
-      // (no privileges) leaves the first set with nothing ever on the air, and live mic PTT
-      // satisfies the second with no keyer message involved. The cost is the ~1 poll between
-      // pressing an F-key and the snapshot showing TX: a hide inside that window says nothing.
-      // A missed notice beats a false one.
+      // AND the rig is keyed right now. Either alone would lie — a message the engine dropped
+      // before it played (TX went off first) leaves the first set with nothing ever on the
+      // air, and live mic PTT satisfies the second with no keyer message involved. The cost is
+      // the ~1 poll between pressing an F-key and the snapshot showing TX: a hide inside that
+      // window says nothing. A missed notice beats a false one.
       const over = onAirRef.current ? playingRef.current : null
       void stopVoice().catch(() => {})
       if (over !== null) {
@@ -175,10 +175,13 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       return
     }
     playingRef.current = slot
-    void playVoiceMessage(slot).catch(() => {
-      playingRef.current = null
-      pushToast(t('phone.keyer.playFailed', { slot }), 'error')
-    })
+    // The toast carries the engine's reason: a message refused outside the privileges (or with
+    // TX off after all) used to be ignored without a word, and now says why.
+    void withErrorToast(() => playVoiceMessage(slot), t('phone.keyer.playFailed', { slot })).then(
+      (snap) => {
+        if (snap === null) playingRef.current = null
+      },
+    )
   }
 
   const stop = () => {

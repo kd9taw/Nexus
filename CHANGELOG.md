@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
+  **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
+  reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this
+  entry the port box asks for its address (`127.0.0.1:12000` on the same PC), and the hint under it
+  says to turn on UDP Control in PstRotatorAz's Setup. The hint also warns that Hamlib's backend for
+  it, including the one Nexus ships, writes the bearing it sends with a formatting bug (123.4° goes
+  out as `123.400002.2`), so PstRotatorAz may not turn to it. Nobody has tried that against a real
+  PstRotatorAz yet. The saved setting is the model number, 3, so a rotator already set up that way is
+  unchanged and now shows by name.
 - **The Yaesu G-5500 / G-5500DC by name in the rotator picker.** The G-5500 has no computer port
   and no Hamlib model of its own: it is driven through a Yaesu GS-232B or GS-232A interface. So
   Settings ▸ Radio ▸ Rotator now names it on those two entries, **Yaesu G-5500 / G-5500DC —
@@ -641,6 +650,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
   map picker arrived. It now says "Globe, need-colored, live openings", in every language.
 
+- **CW: a message that could not go out is dropped, not sent later on its own.** When CW could not
+  be sent because transmit was off (for example after leaving the CW screen part-way through a
+  message) or the frequency was outside your license privileges, what was still waiting used to be
+  held, and it went out by itself as soon as transmitting was allowed again: TX back on, or a tune
+  back inside your privileges. It is now dropped, and the CW screen's warning line says why. A
+  message you send once transmitting is allowed goes out exactly as before, and Stop TX, the keyer
+  and its speed work as they did.
+- **The Globe map no longer shows what is behind the planet on its face.** On Connect's Globe map, a
+  spot, a decoded station, a park, a DXpedition, an APRS station or a satellite on the far side of
+  the planet was drawn on the side facing you, where a line from it straight through the Earth
+  comes out: a 20 m spot in Sydney showed over the eastern Pacific on a globe centred on the US
+  Midwest. Now only what is on your side of the planet is drawn, and only that answers a hover or a
+  click. The same goes for your QTH marker when you turn the globe away from it, a satellite's
+  trail, the long path of the Selected path layer, Band heat, the Ionosonde MUF, Aurora oval,
+  Proton polar cap and Flare blackout markers, the grid labels and the CQ-zone numbers. A ★
+  satellite's footprint still shows the part on your side while the satellite itself is behind the
+  planet, and "No located stations yet" still shows only while none of your decoded stations has a
+  grid. The Flat and Beam maps and the 3D globe are unchanged.
+- **RTTY and PSK: an over that could not go out is dropped, not sent later on its own.** The same
+  rule as CW. When RTTY or PSK could not be sent because transmit was off (for example after
+  leaving the RTTY or PSK screen for FT8 with more typed ahead) or the frequency was outside your
+  license privileges, what was still waiting used to be held, and it went out by itself as soon as
+  transmitting was allowed again. It is now dropped, and that screen's warning line says why. If
+  one of those RTTY overs belonged to an auto-sequencer QSO, the auto QSO stops and says so, as it
+  already did when an over could not be queued. An over left waiting when you move to another
+  screen where transmit stays on (Phone, CW, RTTY or PSK) is still held for your return, as
+  before. Overs you send once transmitting is allowed go out exactly as before, and Stop TX, the
+  watchdog and continuous TX work as they did.
+- **Voice keyer: a message that could not go out is dropped, and a refused one says why.** A
+  message you played on a frequency outside your license privileges did nothing and said nothing;
+  the keyer's "Could not play F1" note now says why, and so do its other failures. A message
+  already waiting when transmit went off (for example after leaving the Phone screen for FT8
+  before it started) or when the dial left your privileges used to be held, and it played by
+  itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
+  transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
+- **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
+  directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
+  `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
+  machines, most of them in Florida, New England, Missouri and Minnesota, were hidden unless the
+  digital filter was on, and could not be added to a channel list. They are now listed and can be
+  added, starred and exported as FM channels, and a `YSF/FM` machine keeps its +YSF badge. An `NFM`
+  machine is programmed as ordinary FM, since Program does not write narrow channels yet.
+- **Program exports the tone of a repeater whose directory entry lists several modes'
+  settings together.** For a machine that runs FM and a digital mode, the hearham directory can
+  write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
+  that as no tone, so the channel went out with no tone and would not open the machine. It now
+  takes the FM tone and the DMR colour code from such an entry: 40 machines get their tone, most
+  of them FM machines that Program has only just started listing. An entry that holds two
+  different tones still gets no tone, rather than a guess.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
@@ -662,6 +720,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   solar wind's speed and density are now sent as not known, instead of 0. So is the field's total
   (Bt) when the magnetometer's reading carries Bz without it. The Insights feed's southward-Bz line
   then leaves out what is not known, rather than reporting a solar wind of 0 km/s or a Bt of 0.0 nT.
+- **Stop TX stands out in every theme.** In the dark themes, Stop TX in Operate, in the top bar and
+  in the log dialog on the Remote page had an outline barely darker than the strip around it, and
+  it wrote white on the red when the pointer was over it, which was hard to read. The cockpit
+  headers' Stop TX had a faint outline in the dark themes too, and its word faded under the
+  pointer. Now every Stop TX has a solid red outline in every theme, dark and light, high
+  contrast and night. It turns solid red under the pointer, with the word in the page colour. On
+  a strip lighter than the page, it sits on the page colour so the red word reads. SSTV's Stop
+  sits on the page colour too while a picture is going out, and so does Roam's Stop, which shares
+  the look. Nothing else about the buttons changed: the same place, size, words and keys.
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a
@@ -861,6 +928,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clear log removes only the contacts this window had.** With two windows on one data folder,
   Clear log also removed any contact the other window had logged since this window last took
   the log in. It now removes exactly the contacts this window had when you pressed it.
+- **A contact the other window logs while this one starts is no longer missed.** With two
+  windows on one data folder, a contact the other window logged or changed while this window
+  was starting up could be missing from this window's duplicate check, worked-before marks and
+  badges until the other window changed something else. It now arrives a moment later, like any
+  other change the other window makes.
 - **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
   colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
   you picked. The dark theme is unchanged.
@@ -1020,6 +1092,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the update prompt's Install and restart (or Download) button lettered near-black on its blue.
   In every light theme the chip's word now takes the theme's text colour, with the green or amber
   kept on its border, and the button letters in white. The dark themes look exactly as before.
+- **Connect's coloured words are easy to read in the light themes.** Connect letters a word in
+  green, amber, red or grey to say how things stand: the Band Advisor's Open / Marginal / Closed,
+  Band Outlook's Excellent / Good / Fair and its mode chips, the band names in the 24-hour chart
+  and the Best Band table, the Space Wx lines and scale chips, the Kp outlook's storm line, the
+  Chase panes' need chips and "open now" lines, the openings' band names, Getting Out's reports,
+  and the satellite, rotor and amplifier panes' warnings. In every light theme those words were
+  hard to read. They now take the theme's text colour, and the colour stays beside them: as an
+  underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
+  Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
+  as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

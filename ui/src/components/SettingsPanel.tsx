@@ -558,6 +558,16 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
 }
 
 /**
+ * PstRotatorAz (YO3DMU), which takes its commands over UDP rather than a serial line: Hamlib's
+ * PstRotator backend is model 3, and the port box takes the program's address, 12000 on this
+ * machine by default ("UDP Control" in its Setup). The backend writes a bearing with `%f.2`, a
+ * typo for `%.2f` that is in the bundled Hamlib 4.7.1's own format string and still on Hamlib's
+ * master: 123.4° goes out as `123.400002.2`. Whether PstRotatorAz reads that as 123.4 takes a
+ * real one to tell, so the hint says what is sent. Not prose, like `ROTATOR_EXAMPLES`.
+ */
+const PSTROTATOR = { model: 3, address: '127.0.0.1:12000', bearing: '123.4', sent: '123.400002.2' } as const
+
+/**
  * The curated rotator list. Model numbers and the `(az)` / `(az/el)` suffixes are checked
  * against the generated caps fixture by `SettingsPanel.rotpicker.test.tsx`, so neither can be
  * typed from a manual either.
@@ -582,6 +592,11 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
  * "G-5500" entry saving 603 would be displayed as the other 603 entry after a save — the list
  * would name something the operator did not pick. The name leads each label, with the interface
  * straight after it, so a closed select too narrow for the whole label still shows both.
+ *
+ * ⭐ THE ONE ENTRY THAT IS NOT A SERIAL PORT (2026-09-30, #362): PstRotatorAz, model 3. Its
+ * backend is UDP, and it can still work as presented, because the port box is rotctld's `-r`,
+ * which takes an address too. So it names no axes (Hamlib declares az/el, PstRotatorAz turns
+ * azimuth only), and it brings its own port placeholder and hint (`PSTROTATOR`).
  */
 export const ROTATOR_MODELS: { model: number; label: string }[] = [
   {
@@ -607,6 +622,7 @@ export const ROTATOR_MODELS: { model: number; label: string }[] = [
   { model: 1001, label: 'M2 RC2800 (az/el)' },
   { model: 1701, label: 'Prosistel D (az)' },
   { model: 1703, label: 'Prosistel Combi-Track (az/el)' },
+  { model: PSTROTATOR.model, label: 'PstRotatorAz / PstRotator (UDP)' },
   { model: 1, label: 'Dummy (testing — no hardware)' },
 ]
 
@@ -6333,7 +6349,13 @@ export function SettingsPanel({
                       className="settings-input"
                       type="text"
                       value={form.rotatorPort ?? ''}
-                      placeholder={IS_MAC ? ROTATOR_EXAMPLES.macPort : ROTATOR_EXAMPLES.port}
+                      placeholder={
+                        (form.rotatorModel ?? 0) === PSTROTATOR.model
+                          ? PSTROTATOR.address
+                          : IS_MAC
+                            ? ROTATOR_EXAMPLES.macPort
+                            : ROTATOR_EXAMPLES.port
+                      }
                       onChange={(e) => update('rotatorPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -6356,6 +6378,19 @@ export function SettingsPanel({
                       right. It now names THIS model's own declared rate, and says so loudly
                       when the saved value cannot work. */}
                   {(() => {
+                    // PstRotatorAz has no line rate to match: its hint says where it listens,
+                    // and what Hamlib's backend for it sends as a bearing.
+                    if ((form.rotatorModel ?? 0) === PSTROTATOR.model) {
+                      return (
+                        <span className="settings-hint">
+                          {t('settings.rotator.port.hint.pstRotator', {
+                            address: PSTROTATOR.address,
+                            sent: PSTROTATOR.sent,
+                            bearing: PSTROTATOR.bearing,
+                          })}
+                        </span>
+                      )
+                    }
                     const only = ROT_FIXED_BAUD.get(form.rotatorModel ?? 0)
                     const set = form.rotatorBaud ?? 9600
                     if (only === undefined) {

@@ -2481,6 +2481,127 @@ body.resizing-row {
   font-weight: 600;
   line-height: 1.35;
 }
+/* ---- STATE WORDS ON CONNECT, AND THE LIGHT THEMES ------------------------------------------------
+   A word that states a condition (a band's modelled state, a workability, a space-weather impact, a
+   need, a warning) is lettered in that state's colour. The colours were tuned as marks on the dark
+   theme; in every light theme they read 1.7–4.3:1 as lettering on the page colour Connect's panes sit
+   on, under the 4.5:1 floor. So the light themes take the provenance chip's treatment (and #382's):
+   the word in the theme's ink, the state on a border. Where the word's chip or row already has a
+   border in the state colour, that border carries it; a word without one is underlined in it, a line
+   gets a bar down its left edge, and the Space Wx caption keeps its colour on the gauge's bar just
+   above it. The dark themes are untouched. Every word is held to 4.5:1 in every theme, and its mark
+   to 3:1, by components/connect/ConnectStateWords.contrast.test.tsx. */
+
+/* Words whose state colour comes from their component as `--state-ink`, flagged `data-state-ink`: a
+   'mark' (a state) or 'recede' (the closed-band grey, which is no highlight: in the light themes it is
+   the dim ink, unmarked, since as an underline it read 2.9:1). propViz.stateInkKind decides. */
+.ba-modeled[data-state-ink],
+.bbt-band[data-state-ink],
+.heatmap-band[data-state-ink],
+.swx-impact[data-state-ink] {
+  color: var(--state-ink);
+}
+[data-theme='light'] .ba-modeled[data-state-ink='mark'],
+[data-theme='light'] .bbt-band[data-state-ink='mark'],
+[data-theme='light'] .heatmap-band[data-state-ink='mark'],
+[data-theme='light'] .swx-impact[data-state-ink='mark'] {
+  color: var(--text);
+}
+[data-theme='light'] .ba-modeled[data-state-ink='recede'],
+[data-theme='light'] .bbt-band[data-state-ink='recede'],
+[data-theme='light'] .heatmap-band[data-state-ink='recede'] {
+  color: var(--text-dim);
+}
+[data-theme='light'] .ba-modeled[data-state-ink='mark'],
+[data-theme='light'] .bbt-band[data-state-ink='mark'],
+[data-theme='light'] .heatmap-band[data-state-ink='mark'] > .heatmap-name {
+  text-decoration-line: underline;
+  text-decoration-color: var(--state-ink);
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
+/* A closed band recedes by its ink, not by fading the row: at half opacity its "Closed" read 1.6:1 and
+   its band name 3.1:1 in the light theme. */
+[data-theme='light'] .ba-row.is-closed {
+  opacity: 1;
+  color: var(--text-dim);
+}
+
+/* Words coloured by their class: the same, from the sheet. */
+[data-theme='light'] .cp-work.w-excellent,
+[data-theme='light'] .cp-work.w-good,
+[data-theme='light'] .cp-work.w-fair,
+[data-theme='light'] .amp-link,
+[data-theme='light'] .amp-link.amp-down {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.25em;
+}
+[data-theme='light'] .cp-work.w-excellent,
+[data-theme='light'] .cp-work.w-good {
+  text-decoration-color: var(--band-open);
+}
+[data-theme='light'] .cp-work.w-fair {
+  text-decoration-color: var(--band-marginal);
+}
+[data-theme='light'] .amp-link {
+  text-decoration-color: var(--state-good);
+}
+[data-theme='light'] .amp-link.amp-down {
+  text-decoration-color: var(--alert-warning);
+}
+
+/* Lines: the bar down the left edge. The Kp storm line's own colour (a fallback orange: no theme
+   defines --state-warn) read 1.7:1 even as a mark here, so its bar takes the theme's warning colour. */
+[data-theme='light'] .kp-line.warn,
+[data-theme='light'] .kp-line.good,
+[data-theme='light'] .sat-stale,
+[data-theme='light'] .rotor-slewing,
+[data-theme='light'] .amp-fault.amp-alarm,
+[data-theme='light'] .amp-fault.amp-warn {
+  color: var(--text);
+  border-left: 3px solid var(--alert-warning);
+  padding-left: var(--space-2);
+}
+[data-theme='light'] .kp-line.good {
+  border-left-color: var(--state-good);
+}
+[data-theme='light'] .amp-fault.amp-alarm {
+  border-left-color: var(--state-weak);
+}
+
+/* Words whose chip or row already has a border in the state colour: the ink only. The Space Wx scale
+   chips' borders are fixed colours that read 1.9:1 (R) and 3.1:1 (G) on the light page, so they take
+   the theme's warning and critical colours. Need and satellite chips are Connect's own here; the same
+   chips elsewhere in the app are not part of this change. */
+[data-theme='light'] .cp-mode.good,
+[data-theme='light'] .cp-mode.fair,
+[data-theme='light'] .swsc-chip.swsc-minor,
+[data-theme='light'] .swsc-chip.swsc-major,
+[data-theme='light'] .chase-open.o-open,
+[data-theme='light'] .cfeed-ends,
+[data-theme='light'] .opening-band,
+[data-theme='light'] .getout-list .go-snr,
+[data-theme='light'] .getout-summary strong,
+[data-theme='light'] .connect .need-chip,
+[data-theme='light'] .connect .sat-chip.alive,
+[data-theme='light'] .connect .sat-chip.dead,
+[data-theme='light'] .connect .sat-chip.stale {
+  color: var(--text);
+}
+[data-theme='light'] .swsc-chip.swsc-minor {
+  border-color: var(--alert-warning);
+}
+[data-theme='light'] .swsc-chip.swsc-major {
+  border-color: var(--alert-critical);
+}
+/* A need chip's border is its need colour mixed toward transparent, 1.9–2.8:1 on the light page for three
+   of the needs; with the word in ink it is the border that has to say which need, so it takes the full
+   colour. */
+[data-theme='light'] .connect .need-chip {
+  border-color: var(--need-color, var(--accent));
+}
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
 
 /* Settings ▸ Connections — credential presence + the rolling event log */
@@ -6653,13 +6774,18 @@ select optgroup {
   color: var(--accent-ink);
   animation: pulse 0.9s ease-in-out infinite;
 }
+/* Every Stop TX reads in every theme (StopTx.contrast.test.tsx). The outline is the solid red (a
+   45 % mix was 1.61:1 on Lagoon's strip), the face is the page colour because the strips and the
+   log dialog are raised surfaces the red word cannot read on (3.64:1 on Lagoon's), and the hover
+   writes in the page colour on the red (white on the dark theme's red is 3.39:1). */
 .op-btn.stop {
   color: var(--state-weak);
-  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+  background: var(--bg);
+  border-color: var(--state-weak);
 }
 .op-btn.stop:hover {
   background: var(--state-weak);
-  color: #fff;
+  color: var(--bg);
 }
 
 /* ---- TX watchdog warning chip ---- */
@@ -8755,6 +8881,9 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--state-weak);
   font-weight: 800;
 }
+/* The outline is the solid red and the hover fills it under page-coloured words: a 50 % outline was
+   under 3:1 in every dark theme, and the 22 % hover fill took the word under 4.5:1
+   (StopTx.contrast.test.tsx). */
 .cw-abort,
 .cockpit-stoptx {
   padding: 6px var(--space-4);
@@ -8762,11 +8891,12 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 800;
   color: var(--state-weak);
   background: color-mix(in srgb, var(--state-weak) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--state-weak) 50%, transparent);
+  border: 1px solid var(--state-weak);
 }
 .cw-abort:hover,
 .cockpit-stoptx:hover {
-  background: color-mix(in srgb, var(--state-weak) 22%, transparent);
+  background: var(--state-weak);
+  color: var(--bg);
 }
 /* How far a REMOTE Stop has got, beside the button that sent it. `--state-weak` while it is only
    SENT (the station accepted it; the rig may still be keyed), `--state-good` once the station's own
@@ -25219,8 +25349,11 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   padding: 6px var(--space-5);
 }
+/* Live, it sits on the page colour: the TX bar is a raised surface, and the red word on it was
+   4.16:1 on Lagoon's (StopTx.contrast.test.tsx). */
 .sstv-tx-stop:not(:disabled) {
   color: var(--state-weak);
+  background: var(--bg);
   border-color: var(--state-weak);
 }
 .sstv-tx-stop:disabled {

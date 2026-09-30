@@ -264,7 +264,7 @@ fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
         "cw" => e.send_cw("CQ TEST"),
         "voice" => {
             e.set_tx_enabled(true);
-            e.send_voice(vec![0.1; 1200]);
+            e.send_voice(vec![0.1; 1200]).unwrap();
         }
         "rtty" => {
             e.set_operating_mode("rtty", false);

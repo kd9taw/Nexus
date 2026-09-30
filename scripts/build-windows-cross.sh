@@ -161,7 +161,7 @@ if [ "$GUI" = 1 ]; then
   # blank "page cannot be displayed" screen) and bundles the offline installer.
   # With no updater key in the environment it builds with --no-sign, because Tauri treats
   # "a pubkey is configured but no private key" as fatal. That is how release.yml runs this:
-  # the key is loaded only in the step after, which signs the finished installer. A local
+  # its build jobs never see the key, and a separate job signs the finished installer. A local
   # build with the key in ~/.nexus-build.env still signs here, as before.
   no_sign=(); [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || no_sign=(--no-sign)
   ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis "${no_sign[@]}" )

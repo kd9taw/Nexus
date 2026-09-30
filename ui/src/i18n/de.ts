@@ -1268,6 +1268,7 @@ export const DE: PartialCatalog = {
   "settings.rotator.baud.hint.any": "Auf die am Steuergerät eingestellte Rate setzen — Hamlib gibt für dieses Modell keine feste Rate vor.",
   "settings.rotator.baud.hint.fixed": "Dieses Steuergerät läuft mit {{rate}} Baud — der Rate, die sein Hamlib-Backend angibt. So lassen.",
   "settings.rotator.baud.hint.wrong": "<b>Dieses Steuergerät läuft mit {{rate}} Baud, nicht mit {{set}}</b> — mit der falschen Rate antwortet es nie und wirkt wie defekte Hardware. {{rate}} einstellen oder das Modell oben neu wählen, dann wird es eingetragen.",
+  "settings.rotator.port.hint.pstRotator": "PstRotatorAz: {{address}} als Port eintragen und in dessen Setup UDP Control einschalten (die Baudrate wird nicht verwendet). Sein Hamlib-Backend kann die gesendete Peilung verstümmeln — {{sent}} für {{bearing}}° —, sodass PstRotatorAz sie womöglich nicht anfährt.",
   "settings.rotator.external.label": "Externer rotctld (erweitert)",
   "settings.rotator.external.placeholder": "host:port — z. B. {{example}}",
   "settings.rotator.external.aria": "Adresse eines externen rotctld (erweitert)",

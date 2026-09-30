@@ -5343,6 +5343,7 @@ export const FR: PartialCatalog = {
   "settings.rotator.baud.hint.any": "Faites correspondre au débit réglé sur votre contrôleur — Hamlib n'impose pas de débit fixe pour ce modèle.",
   "settings.rotator.baud.hint.fixed": "Ce contrôleur fonctionne à {{rate}} bauds — le débit déclaré par son backend Hamlib. Laissez-le ainsi.",
   "settings.rotator.baud.hint.wrong": "<b>Ce contrôleur fonctionne à {{rate}} bauds, pas {{set}}</b> — au mauvais débit il ne répond jamais et passe pour du matériel en panne. Mettez {{rate}}, ou resélectionnez le modèle ci-dessus pour le remplir.",
+  "settings.rotator.port.hint.pstRotator": "PstRotatorAz : saisissez {{address}} comme port et activez UDP Control dans son Setup (le débit n'est pas utilisé). Son backend Hamlib peut déformer l'azimut qu'il envoie — {{sent}} pour {{bearing}}° —, si bien que PstRotatorAz risque de ne pas s'y orienter.",
   "settings.rotator.baud.title": "Débit série du contrôleur de rotor",
   "settings.rotator.calibration.az.aria": "Correction d'étalonnage en azimut (degrés)",
   "settings.rotator.calibration.el.aria": "Correction d'étalonnage en élévation (degrés)",

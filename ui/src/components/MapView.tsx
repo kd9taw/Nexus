@@ -26,7 +26,7 @@ import {
   symbolCategory,
 } from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
-import { geoPath, type GeoPermissibleObjects } from 'd3-geo'
+import { geoPath, type GeoPermissibleObjects, type GeoProjection } from 'd3-geo'
 import { Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
@@ -202,6 +202,16 @@ interface Props {
    *  features/connectPresets `mapLayers`, through `setIntentMapLayer`): the map reads its layers
    *  again. */
   layersRev?: number
+}
+
+/** Where a POINT lands on the map, or null where the map cannot show it: off the projection, or on
+ *  the far side of the Globe (mapGeo `inView`). d3 clips a path at the globe's horizon, but it
+ *  projects a lone point from the far side straight through the sphere, onto the near face — so a
+ *  spot in Sydney, on a globe centred on the Midwest, landed over the eastern Pacific. Every point
+ *  marker, point label and hit target on this map is placed through this, bar the openings' wedge
+ *  and its tag: an area drawn from its projected corners, which `path` does not clip. */
+function placePoint(kind: Projection, proj: GeoProjection, ll: LatLon): [number, number] | null {
+  return inView(kind, proj, ll) ? project(proj, ll) : null
 }
 
 /** Color for an ionosonde's measured MUF (MHz): a cold→hot scale (blue low → red high)
@@ -1129,11 +1139,14 @@ export function MapView({
       if (!s.grid) continue
       const ll = gridToLatLon(s.grid)
       if (!ll) continue
-      const xy = project(proj, ll)
+      const xy = placePoint(kind, proj, ll)
       if (xy) out.push({ s, ll, xy })
     }
     return out
   }, [me, kind, size, stations, view])
+  // Whether ANY decoded station has a location: the empty-map hint's question, which is not whether
+  // one is on screen — on the Globe the stations behind the planet are not.
+  const anyLocated = useMemo(() => stations.some((s) => !!s.grid && gridToLatLon(s.grid) != null), [stations])
 
   // Project the live cluster/RBN/PSKR spots the same way — RETAINED (not just drawn)
   // so they participate in hover tooltips + click/double-click-to-work. Previously
@@ -1145,7 +1158,7 @@ export function MapView({
     const proj = makeProjection(kind, me, size.w, size.h, view)
     const out: Array<{ sp: MapSpot; xy: [number, number] }> = []
     for (const sp of prop.spots) {
-      const xy = project(proj, { lat: sp.lat, lon: sp.lon })
+      const xy = placePoint(kind, proj, { lat: sp.lat, lon: sp.lon })
       if (xy) out.push({ sp, xy })
     }
     return out
@@ -1177,7 +1190,7 @@ export function MapView({
     const proj = makeProjection(kind, me, size.w, size.h, view)
     const out: Array<{ card: WorkableCard; xy: [number, number] }> = []
     for (const card of dxCards) {
-      const xy = project(proj, destinationPoint(me, card.bearingDeg, card.distanceKm))
+      const xy = placePoint(kind, proj, destinationPoint(me, card.bearingDeg, card.distanceKm))
       if (xy) out.push({ card, xy })
     }
     return out
@@ -1220,7 +1233,7 @@ export function MapView({
     const proj = makeProjection(kind, me, size.w, size.h, view)
     const out: Array<{ sp: OtaMapSpot; xy: [number, number] }> = []
     for (const sp of otaSpots) {
-      const xy = project(proj, { lat: sp.lat, lon: sp.lon })
+      const xy = placePoint(kind, proj, { lat: sp.lat, lon: sp.lon })
       if (xy) out.push({ sp, xy })
     }
     return out
@@ -1427,7 +1440,7 @@ export function MapView({
 
     const proj = makeProjection(kind, me, w, h, view)
     const path = geoPath(proj, ctx)
-    const c = showQth ? project(proj, myQth ?? me) : null
+    const c = showQth ? placePoint(kind, proj, myQth ?? me) : null
 
     // ⭐ THE BASE MAP IS CACHED. Everything from the space backdrop to the coverage fill changes only
     // with the VIEW (projection, pan/zoom/spin, size, device scale, QTH), the theme (a built-in
@@ -1577,7 +1590,7 @@ export function MapView({
           for (let fj = 0; fj < 18; fj++) {
             const clon = -180 + fi * 20 + 10
             const clat = -90 + fj * 10 + 5
-            const pc = project(proj, { lat: clat, lon: clon })
+            const pc = placePoint(kind, proj, { lat: clat, lon: clon })
             if (!pc || pc[0] < -40 || pc[0] > w + 40 || pc[1] < -40 || pc[1] > h + 40) continue
             // Field width in px via a 2° probe at the field center.
             const probe = project(proj, { lat: clat, lon: clon + 2 })
@@ -1593,7 +1606,7 @@ export function MapView({
               ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
               for (let di = 0; di < 10; di++) {
                 for (let dj = 0; dj < 10; dj++) {
-                  const p = project(proj, {
+                  const p = placePoint(kind, proj, {
                     lat: -90 + fj * 10 + dj + 0.5,
                     lon: -180 + fi * 20 + di * 2 + 1,
                   })
@@ -1623,7 +1636,7 @@ export function MapView({
         ctx.textBaseline = 'middle'
         for (const f of cqzones) {
           const [lat, lon] = f.properties.cq_zone_name_loc
-          const p = project(proj, { lat, lon })
+          const p = placePoint(kind, proj, { lat, lon })
           if (p) ctx.fillText(String(f.properties.cq_zone_number), p[0], p[1])
         }
         ctx.globalAlpha = 1
@@ -1690,7 +1703,7 @@ export function MapView({
         .slice()
         .sort((a, b) => a.lastHeardUnix - b.lastHeardUnix)
       for (const a of positioned) {
-        const p = project(proj, { lat: a.lat as number, lon: a.lon as number })
+        const p = placePoint(kind, proj, { lat: a.lat as number, lon: a.lon as number })
         if (!p) continue
         const isSel = sel != null && a.call.toUpperCase() === sel
         ctx.globalAlpha = layers.aprs.opacity
@@ -1847,7 +1860,8 @@ export function MapView({
         return { lat: last[1], lon: last[2] }
       }
       // Stroke a track segment as short projected legs, breaking at the
-      // dateline/backside (a long pixel jump = a wrap, not a path).
+      // dateline (a long pixel jump = a wrap, not a path) and at the Globe's
+      // horizon (a point behind the planet has no place on the map).
       const strokeTrack = (pts: LatLon[], style: string, dash: number[]) => {
         ctx.strokeStyle = style
         ctx.setLineDash(dash)
@@ -1855,7 +1869,7 @@ export function MapView({
         let prev: [number, number] | null = null
         ctx.beginPath()
         for (const ll of pts) {
-          const q = project(proj, ll)
+          const q = placePoint(kind, proj, ll)
           if (!q) {
             prev = null
             continue
@@ -1891,7 +1905,7 @@ export function MapView({
         if (soloSat && b.name.toUpperCase() !== soloSat) continue
         const isChased = isSatChased(b.name, b.norad, chaseKeys)
         const live = posAt(b.track, nowSecs) ?? { lat: b.lat, lon: b.lon }
-        const p = project(proj, live)
+        const p = placePoint(kind, proj, live)
         const color = isChased ? '#5eead4' : 'rgba(148, 163, 184, 0.95)'
         // Trail (past → now): drawn in two halves so the older half fades.
         const past = b.track.filter(([t]) => t <= nowSecs).map(([, la, lo]) => ({ lat: la, lon: lo }))
@@ -1905,9 +1919,8 @@ export function MapView({
         ctx.globalAlpha = layers.sats.opacity * 0.45
         strokeTrack([live, ...future], color, [3, 4])
         ctx.globalAlpha = layers.sats.opacity
-        if (!p) {
-          continue // bird itself is on the far side / off-frame
-        }
+        // A chased bird's footprint is an area, clipped at the Globe's horizon by geoPath: part of it
+        // can face the viewer while the bird itself is behind the planet, so it is drawn first.
         if (isChased) {
           ctx.strokeStyle = 'rgba(94, 234, 212, 0.55)'
           ctx.setLineDash([4, 4])
@@ -1916,6 +1929,9 @@ export function MapView({
           path(rangeRing(live, b.footprintKm))
           ctx.stroke()
           ctx.setLineDash([])
+        }
+        if (!p) {
+          continue // bird itself is on the far side / off-frame
         }
         // Mini satellite icon: body + solar panels, tilted 45° so it reads as
         // a bird, not a box. Scales slightly up for chased birds. The shape is
@@ -2019,7 +2035,7 @@ export function MapView({
         const pulse = 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r))
         const splat = Math.max(8, Math.min(w, h) * 0.03) / 3
         for (const s of flareField(nowMs, xrayEff)) {
-          const p = project(proj, { lat: s.lat, lon: s.lon }) // null on the far side
+          const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon }) // null on the far side
           if (!p) continue
           const [cr, cg, cb] = flareColor(s.haf)
           const x = p[0] / 3
@@ -2076,7 +2092,7 @@ export function MapView({
       // stations you can click, diamonds = measurements.
       ctx.globalAlpha = layers.muf.opacity
       for (const s of mufStations) {
-        const p = project(proj, { lat: s.lat, lon: s.lon })
+        const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
         const r = 3.8 * ms
         ctx.beginPath()
@@ -2097,7 +2113,7 @@ export function MapView({
     // operationally meaningful. Drawn over the field layers, under spots.
     if (layers.aurora.visible) {
       for (const a of auroraPts) {
-        const p = project(proj, { lat: a.lat, lon: a.lon })
+        const p = placePoint(kind, proj, { lat: a.lat, lon: a.lon })
         if (!p) continue
         const t = Math.max(0, Math.min(1, (a.prob - 8) / (90 - 8)))
         const r = Math.round(80 + 175 * t)
@@ -2117,7 +2133,7 @@ export function MapView({
     // (0.5 dB faint → 10 dB+ solid). Quiet sun = zero points = nothing drawn.
     if (layers.pca.visible && pca && pca.points.length > 0) {
       for (const s of pca.points) {
-        const p = project(proj, { lat: s.lat, lon: s.lon })
+        const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
         const t = Math.max(0, Math.min(1, s.db30 / 10))
         ctx.globalAlpha = layers.pca.opacity * (0.18 + 0.5 * t)
@@ -2354,7 +2370,7 @@ export function MapView({
           ctx.beginPath()
           let prevX: number | null = null
           for (let i = 0; i <= 48; i++) {
-            const p = project(proj, destinationPoint(me, lpBrg, (lpKm * i) / 48))
+            const p = placePoint(kind, proj, destinationPoint(me, lpBrg, (lpKm * i) / 48))
             if (!p) {
               prevX = null
               continue
@@ -2834,7 +2850,7 @@ export function MapView({
       const proj = makeProjection(kind, me, size.w, size.h, view)
       let best: MapHit | null = null
       for (const s of mufStations) {
-        const p = project(proj, { lat: s.lat, lon: s.lon })
+        const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
         const d = Math.hypot(p[0] - mx, p[1] - my)
         if (d < 0.9 * hitR && (!best || d < best.d))
@@ -3290,7 +3306,7 @@ export function MapView({
               </div>
             </div>
           )}
-          {!embedded && placed.length === 0 && (
+          {!embedded && !anyLocated && (
             <div className="map-empty-hint">{t('map.emptyHint', { grid: myGrid })}</div>
           )}
           {satAllHidden > 0 && (
