@@ -90,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
   current value, so it follows the locator when you move.
+- **JS8: band activity aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Band
+  activity aging (minutes)** field, 2 by default as in JS8Call, so the Band activity pane looks
+  different out of the box: a row whose newest decode is 2 minutes old or more leaves the pane,
+  unless RX is on its offset (a double-click on a row puts RX there). Set it to 0 to keep every
+  row, as before. Nothing about decoding or transmitting changes, and a row comes back as soon as
+  its offset decodes again. Up to 1440 minutes, a day. The Remote's Band activity pane follows the
+  station's setting.
 - **JS8: callsign aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Callsign aging
   (minutes)** field, off (0) by default as in JS8Call. Set it, and a station you have not heard
   for that many minutes drops off the JS8 Stations pane, unless it is the one you have selected
@@ -456,6 +463,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
+  you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
+  relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of
+  the list, just under any station you pinned with ★, and a notice says a new message arrived.
+  Mark it read or delete it in the Inbox. Before, a message to you went by in the activity list
+  and was kept nowhere, although the Inbox said such messages appear there. Nothing is sent back:
+  JS8Call also answers such a message with an ACK, and Nexus does not. Messages to you stay until
+  you delete them (the newest 100 are kept); messages held for other stations still go after 48
+  hours, and a flood of messages to you can never push one of those out.
+- **JS8: the Stations pane shows each station's offset the way JS8Call does.** The offset is whole
+  hertz with the fraction dropped, so a station at 1508.9 Hz reads 1508 Hz, where it used to be
+  rounded up to 1509. It now matches the Band activity pane and JS8Call's own call list.
 - **CW: a message that could not go out is dropped, not sent later on its own.** When CW could not
   be sent because transmit was off (for example after leaving the CW screen part-way through a
   message) or the frequency was outside your license privileges, what was still waiting used to be

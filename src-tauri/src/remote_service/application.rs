@@ -158,6 +158,8 @@ const SETTINGS_KEYS: &[&str] = &[
     "wheelTuneSensitivity",
     // The JS8 cockpit's Stations list ages calls by it, on the Remote as at the station.
     "js8CallsignAgingMin",
+    // …and its Band activity pane ages rows by this one.
+    "js8ActivityAgingMin",
     "specialOp",
 ];
 fn settings_view(settings: &tempo_app::settings::Settings) -> Result<Value, &'static str> {
@@ -844,6 +846,17 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(settings_view(&settings).unwrap()["js8CallsignAgingMin"], 10);
+    }
+
+    /// …and its Band activity pane by the station's band-activity aging. A station from before
+    /// the setting sends none, which the page reads as off: that station ages no row.
+    #[test]
+    fn the_live_view_carries_the_js8_activity_aging() {
+        let settings = tempo_app::settings::Settings {
+            js8_activity_aging_min: 5,
+            ..Default::default()
+        };
+        assert_eq!(settings_view(&settings).unwrap()["js8ActivityAgingMin"], 5);
     }
 
     #[test]

@@ -81,6 +81,9 @@ import {
   TX_PLATE,
   ageLabel,
   bandActivityByOffset,
+  js8ShownOffsetRows,
+  js8UnreadFirst,
+  js8UnreadFrom,
   countBits,
   dtLabel,
   estimateFrames,
@@ -111,6 +114,9 @@ interface Props {
   /** JS8Call's callsign aging from Settings, in minutes (0 = off): the Stations list leaves out
    *  a call not heard for this long (`js8ListedStations`). */
   callsignAgingMin?: number
+  /** JS8Call's band-activity aging, in minutes (Settings ▸ JS8; 0, the default here, is off):
+   *  App hands down the station's setting. */
+  activityAgingMin?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -169,6 +175,7 @@ export function Js8Cockpit({
   theme = 'dark',
   wheelSensitivity,
   callsignAgingMin = 0,
+  activityAgingMin = 0,
   onOpenLogbook,
   panels,
   onOpenSettings,
@@ -221,6 +228,27 @@ export function Js8Cockpit({
     }
     idleTrippedRef.current = tripped
   }, [js8?.idleTripped, js8?.idleLimitMin])
+
+  // A MSG to me announces itself, as JS8Call's "New Message Received" box does
+  // (mainwindow.cpp:9143-9154): ONCE per message. What the first poll finds is taken as seen, so
+  // mail filed before this view opened (or restored from the journal) does not toast.
+  const seenInboxRef = useRef<Set<number> | null>(null)
+  useEffect(() => {
+    const inbox = js8?.inbox
+    if (!inbox) return
+    const seen = seenInboxRef.current
+    if (seen === null) {
+      seenInboxRef.current = new Set(inbox.map((e) => e.id))
+      return
+    }
+    for (const e of inbox) {
+      if (seen.has(e.id)) continue
+      seen.add(e.id)
+      if (e.state === 'unread') {
+        pushToast(t('js8.inbox.new', { from: e.from, time: utcClock(e.atMs) }), 'info', 8000)
+      }
+    }
+  }, [js8?.inbox])
 
   // ENTER the mode on the rising edge of `active` (works unconfigured, spec §Works unconfigured):
   // `js8_enter` sets the tier and the dial. ⚠️ RX ONLY, and the ENGINE guarantees it — the call
@@ -536,6 +564,16 @@ export function Js8Cockpit({
         myCall: snap?.mycall ?? '',
       })
     : []
+  // Band activity under JS8Call's aging (js8Vocab.js8ShownOffsetRows), with RX's offset as the
+  // selected one.
+  const shownOffsetRows = js8ShownOffsetRows(offsetRows, {
+    agingMin: activityAgingMin,
+    nowMs: now,
+    selectedHz: snap?.radio.rxOffsetHz ?? null,
+  })
+
+  // ⚑ and the lift to the top for a station with an unread message to me (js8Vocab.js8UnreadFrom).
+  const unreadFrom = js8 ? js8UnreadFrom(js8.inbox, snap?.mycall ?? '') : new Set<string>()
 
   const hbTitle =
     js8?.hbOn && js8.armed.hb
@@ -691,10 +729,10 @@ export function Js8Cockpit({
       {...closeProps('offsets')}
     >
       <div className="js8-offsets" title={t('js8.panel.offsets.title')}>
-        {offsetRows.length === 0 ? (
+        {shownOffsetRows.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.panel.offsets.empty')}</div>
         ) : (
-          offsetRows.map((r) => (
+          shownOffsetRows.map((r) => (
             <div
               key={r.offsetHz}
               className={`js8-offset-row${r.mine ? ' mine' : ''}${r.directedToMe ? ' directed' : ''}${
@@ -737,7 +775,7 @@ export function Js8Cockpit({
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
-          sortPinnedFirst(listedStations, pins).map((h) => {
+          sortPinnedFirst(js8UnreadFirst(listedStations, unreadFrom), pins).map((h) => {
             // The DX columns JS8Call carries (mainwindow.cpp:10296-10362): distance and
             // azimuth from MY grid to theirs, then the logbook's answer about this call. The
             // grid falls back to the one in the log when the station has not sent one — the
@@ -772,8 +810,10 @@ export function Js8Cockpit({
               </button>
               <span className="js8-cell">{grid}</span>
               <span className="js8-cell js8-snr">{fmtSnr(h.snrDb)}</span>
+              {/* JS8Call's call activity prints the offset held in an int, so truncated
+                  (`cd.offset`, mainwindow.cpp:10280 and :4029): the Band activity pane's rule. */}
               <span className="js8-cell">
-                {Math.round(h.freqHz)} {HZ}
+                {Math.trunc(h.freqHz)} {HZ}
               </span>
               <span className="js8-cell js8-speed">{JS8_SPEEDS[h.speed].letter}</span>
               <span className="js8-cell js8-age">{ageLabel(now - h.lastMs)}</span>
@@ -807,6 +847,11 @@ export function Js8Cockpit({
               {det?.comment && (
                 <span className="js8-cell js8-opcomment" title={t('js8.station.comment.title')}>
                   {det.comment}
+                </span>
+              )}
+              {unreadFrom.has(h.call) && (
+                <span className="js8-chip" title={t('js8.station.unread.title', { call: h.call })}>
+                  ⚑
                 </span>
               )}
               {h.lastHb && <span className="js8-chip">{HB}</span>}

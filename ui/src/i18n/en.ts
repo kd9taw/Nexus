@@ -6333,6 +6333,9 @@ export const EN = {
   'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
   'settings.js8.callsignAgingMin.hint':
     'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
+  'settings.js8.activityAgingMin.label': 'Band activity aging (minutes)',
+  'settings.js8.activityAgingMin.hint':
+    '2 by default, as in JS8Call. A row of the Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX is on its offset. 0 keeps every row. Up to 1440 (a day).',
   'settings.js8.automatic.title': 'Automatic transmissions',
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':
@@ -8396,6 +8399,7 @@ export const EN = {
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
   'js8.station.sendGrid.title': 'Send your grid square {{grid}} to {{call}}',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+  'js8.station.unread.title': 'Unread message for you from {{call}}, in the Inbox',
   'js8.station.pin.title': 'Pin {{call}} to the top of this list',
   'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
   'js8.station.distance.title': 'Great-circle distance to {{grid}}, from your grid square',
@@ -8414,6 +8418,7 @@ export const EN = {
   'js8.inbox.delete.label': 'Delete',
   'js8.inbox.delete.title': 'Delete this message from the inbox',
   'js8.inbox.failed': 'Inbox change refused',
+  'js8.inbox.new': 'New message from {{from}} at {{time}} UTC, in the Inbox',
 
   // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
   'js8.dock.aria': 'JS8 composer',
