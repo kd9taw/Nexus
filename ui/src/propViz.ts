@@ -188,13 +188,18 @@ export function windSpeedImpact(kms: number): Impact {
   if (kms >= FAST_WIND_KMS) return { sev: 'warn', text: t('prop.impact.wind.fast') }
   return { sev: 'quiet', text: t('prop.impact.wind.normal') }
 }
-/** The solar-wind speed as a reading (km/s), or null when there is none: no sample, or the 0 that
- * `propagation::solar_wind::assemble` fills in when DSCOVR's plasma feed did not answer (it keeps
- * Bz from the magnetometer). The Sun's wind never blows below ~250 km/s, so a 0 is never drawn.
- * The Space Wx box's Wind gauge and the dashboard bar both read this, so they cannot disagree. */
-export function windSpeedKms(wx: SpaceWxView): number | null {
-  const kms = wx.solarWind?.speedKms
-  return kms != null && kms > 0 ? kms : null
+/** The solar-wind speed as a reading (km/s) at `nowMs`, or null when there is none: no sample, a
+ * speed the station does not know (an older station sends 0 for that; the Sun's wind never blows
+ * below ~250 km/s), or a sample SOLAR_WIND_STALE_SECS or more old, whose speed is not the wind now
+ * (the Bz gauge beside it says how old the reading is). An older station's undated sample reads as
+ * it always did. The Space Wx box's Wind gauge and the dashboard bar both read this, so they cannot
+ * disagree. */
+export function windSpeedKms(wx: SpaceWxView, nowMs: number): number | null {
+  const sw = wx.solarWind
+  const kms = sw?.speedKms
+  if (!sw || kms == null || !(kms > 0)) return null
+  const age = solarWindAgeSecs(sw, nowMs)
+  return age != null && age >= SOLAR_WIND_STALE_SECS ? null : kms
 }
 /** How long a solar-wind sample speaks for "now" — the station's own threshold (SOLAR_WIND_STALE_SECS
  * in crates/propagation/src/solar_wind.rs; propViz.solarWind.test.ts reads it out of that file). Past

@@ -132,7 +132,7 @@ function BzGauge({ sw, gloss }: { sw: SolarWind | null; gloss?: boolean }) {
 }
 
 export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean }) {
-  const windKms = windSpeedKms(wx)
+  const windKms = windSpeedKms(wx, Date.now())
   const body = (
     <section className="swx-strip panel" aria-label={t('prop.spaceWx.aria')}>
       <Gauge
@@ -160,8 +160,9 @@ export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean 
         gloss={gloss}
       />
       <BzGauge sw={wx.solarWind ?? null} gloss={gloss} />
-      {/* No speed is drawn rather than a solar wind that has stopped: `windSpeedKms` is null for
-          the producer's 0 (the plasma feed did not answer), the rule the dashboard bar reads too. */}
+      {/* No speed is drawn rather than a solar wind that has stopped or an old one: `windSpeedKms`
+          is null for a speed the station does not know and for a stale sample (Bz above says how
+          old it is), the rule the dashboard bar reads too. */}
       {windKms != null && (
         <Gauge
           label={t('prop.spaceWx.wind')}

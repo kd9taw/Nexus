@@ -54,6 +54,10 @@ describe('the solar-wind speed: one no-data rule for the Wind gauge and the bar'
     { what: 'the magnetometer answered and the plasma feed did not (speed 0)', solarWind: sample(0), shown: null },
     { what: 'an ordinary wind', solarWind: sample(421.6), shown: '422' },
     { what: 'a fast stream', solarWind: sample(650), shown: '650' },
+    // The station keeps its last good sample while DSCOVR is unreachable, dated by its magnetometer
+    // reading: past half an hour the speed is not the wind now (Bz says how old the reading is).
+    { what: 'a sample 45 minutes old', solarWind: { ...sample(487), timeUnix: Math.floor(Date.now() / 1000) - 45 * 60 }, shown: null },
+    { what: 'a sample 5 minutes old', solarWind: { ...sample(487), timeUnix: Math.floor(Date.now() / 1000) - 5 * 60 }, shown: '487' },
   ]
   it.each(CASES)('$what', ({ solarWind, shown }) => {
     const wx = { ...WX, solarWind }

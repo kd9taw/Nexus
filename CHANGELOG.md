@@ -538,8 +538,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus keeps its last good reading, and the Bz gauge used to show that reading as if it were
   current. Each reading now carries the time it was made. Past 30 minutes the gauge says when that
   was ("last reading 45m ago") instead of how the field looks now, and with no reading at all it
-  says "no solar-wind reading" instead of leaving Bz off the box. The Insights feed no longer raises
-  a solar-wind warning ("turned stormy", "fast stream") from a reading more than 30 minutes old.
+  says "no solar-wind reading" instead of leaving Bz off the box. The solar-wind speed is not shown
+  from a reading that old, in the Wind gauge or on the dashboard bar. The Insights feed no longer
+  raises a solar-wind warning ("turned stormy", "fast stream") from a reading more than 30 minutes
+  old.
 - **No more "wind 0 km/s" when NOAA's plasma data is missing.** When DSCOVR's plasma product does
   not answer, or its newest reading is not from the same half hour as the magnetic field's, the
   solar wind's speed and density are now sent as not known, instead of 0. So is the field's total

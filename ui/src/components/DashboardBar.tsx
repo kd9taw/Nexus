@@ -59,7 +59,7 @@ export interface BarIndex {
  */
 export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): BarIndex[] {
   const ssn = daily && daily.days.length > 0 ? newest(daily.days, (d) => d.ssn) : null
-  const windKms = windSpeedKms(wx)
+  const windKms = windSpeedKms(wx, Date.now())
   return [
     { key: NAME.sfi, value: wx.sfi.toFixed(0), title: sfiImpact(wx.sfi).text },
     { key: NAME.kp, value: wx.kp.toFixed(0), title: kpImpact(wx.kp).text },

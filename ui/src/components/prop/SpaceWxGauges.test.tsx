@@ -10,6 +10,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { SpaceWxGauges } from './SpaceWxGauges'
+import { t } from '../../i18n'
 import type { SolarWind, SpaceWxView } from '../../types'
 
 afterEach(cleanup)
@@ -52,12 +53,35 @@ describe('the solar-wind speed gauge', () => {
     expect(g.some((x) => x.label === 'Bz' && x.value === '-1.2')).toBe(true)
   })
 
-  it('draws no speed, and no Bz, when there is no solar wind at all', () => {
+  it('draws no speed when there is no solar wind at all, and Bz says there is no reading', () => {
     const { container } = render(<SpaceWxGauges wx={wx(null)} />)
     const g = gauges(container)
     expect(g.some((x) => x.unit === 'km/s')).toBe(false)
-    expect(g.some((x) => x.label === 'Bz')).toBe(false)
+    // Bz no longer leaves the box: it shows the mark and says why.
+    const bz = [...container.querySelectorAll('.swx-gauge')].find((x) => x.querySelector('.swx-k')?.textContent === 'Bz')
+    expect(bz?.querySelector('.swx-v')?.textContent).toBe('—')
+    expect(bz?.querySelector('.swx-impact')?.textContent).toBe(t('prop.spaceWx.bz.none'))
     // Control: the strip itself rendered.
     expect(g.some((x) => x.label === 'SFI' && x.value === '97')).toBe(true)
+  })
+
+  it('draws no speed from a stale sample, while Bz says how old its reading is', () => {
+    // The station keeps its last good sample while DSCOVR is unreachable; past half an hour its
+    // speed is not the wind now, and Bz beside it says so.
+    const old = { ...wind(487), timeUnix: Math.floor(Date.now() / 1000) - 45 * 60 }
+    const { container } = render(<SpaceWxGauges wx={wx(old)} />)
+    const g = gauges(container)
+    expect(g.some((x) => x.unit === 'km/s'), 'a 45-minute-old speed is drawn').toBe(false)
+    const bz = [...container.querySelectorAll('.swx-gauge')].find((x) => x.querySelector('.swx-k')?.textContent === 'Bz')
+    expect(bz?.querySelector('.swx-impact')?.textContent, 'control: Bz carries the age').toContain('45')
+  })
+
+  it('draws the speed of a fresh sample, and of an older station’s undated one, as before', () => {
+    const fresh = { ...wind(487), timeUnix: Math.floor(Date.now() / 1000) - 5 * 60 }
+    for (const sample of [fresh, wind(487)]) {
+      const { container } = render(<SpaceWxGauges wx={wx(sample)} />)
+      expect(gauges(container).find((x) => x.unit === 'km/s')?.value, sample.timeUnix ? 'fresh' : 'undated').toBe('487')
+      cleanup()
+    }
   })
 })
