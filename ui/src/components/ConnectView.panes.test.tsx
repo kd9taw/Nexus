@@ -539,9 +539,12 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
     })
   }
 
-  it('the dashboard boxes — Bands for you, Clock, Space Wx with its new lines — can be picked into every slot of every layout, Frame’s closed row included, and land there', async () => {
-    const BOXES = ['bandTiles', 'clock', 'spacewx'] as const
-    for (const id of ['standard', ...CONNECT_PRESET_IDS] as const) {
+  // One test per layout. Each mounts the real ConnectView and MapView and makes 21 picks, each a render of the
+  // whole view; as one test the five were 105 renders in one 5 s budget: 1.2 s on a quiet box, 4.0 s with a
+  // third of a CPU, and a timeout in full-suite runs on a loaded one (2026-09-30).
+  const BOXES = ['bandTiles', 'clock', 'spacewx'] as const
+  for (const id of ['standard', ...CONNECT_PRESET_IDS] as const)
+    it(`the dashboard boxes — Bands for you, Clock, Space Wx with its new lines — can be picked into every slot of ${id === 'standard' ? 'Standard' : LABEL[id]}${id !== 'standard' && CONNECT_PRESETS[id].hidden.length > 0 ? ', its closed row included,' : ''} and land there`, async () => {
       localStorage.clear()
       const { container } = await mount()
       if (id !== 'standard') pick(LABEL[id])
@@ -562,8 +565,7 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
         }
       }
       cleanup()
-    }
-  })
+    })
 
   it('after a preset, moving or resizing a pane reads Custom, and nothing snaps back', async () => {
     const restore = fakeBoxes(1920)
