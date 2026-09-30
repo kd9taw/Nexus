@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// THE POTA / SOTA BOARD'S HUNT BUTTON, PARK REFERENCE AND BADGES READ IN EVERY LIGHT THEME, IN EVERY HOST (operator,
-// 2026-09-30: "Separate fix, every host": "A small light-theme fix to the board wherever it shows").
+// THE POTA / SOTA BOARD'S HUNT BUTTON, PARK REFERENCE, BADGES AND HUNTING LINE READ IN EVERY LIGHT THEME, IN EVERY HOST
+// (operator, 2026-09-30: "Separate fix, every host": "A small light-theme fix to the board wherever it shows").
 //
 // The board letters its HUNT button and each row's park or summit reference in the accent, which was tuned as a mark: as
 // lettering in the light themes the HUNT read 3.45:1 on its own accent tint and the reference 4.25:1 on the row (Chrome,
@@ -9,11 +9,13 @@
 // tint and its border, now at full strength, and the reference as its underline. The row badges read under the floor
 // too (NEW PARK 3.36:1, the accent on its own tint; BAND OPEN 1.66:1, a fixed green on its own; WORKED TODAY 3.93:1, the
 // faint ink on its own): the first two take the ink with their colour on their border, and WORKED TODAY, a fact about the
-// log rather than a mark, takes the dim ink. Dark is untouched.
+// log rather than a mark, takes the dim ink. The Hunting line above the list letters the hunted park and call in the
+// accent on its accent tint (4.12:1): they take the reference's look. Dark is untouched.
 //
 // THE HOSTS. The board (PotaSotaView) renders in the POTA / SOTA view, in its pop-out, and on the Remote page (observing,
-// with HUNT offered). Each is rendered here in its chain, with rows in every state a row has (plain, the hunted row, a band
-// that is open, a new park), and the cascade is resolved with the app's own resolver (cssCascade.ts).
+// with HUNT offered). Each is rendered here in its chain, with a hunt target (so the Hunting line shows) and rows in every
+// state a row has (plain, the hunted row, a band that is open, a new park, a park worked today), and the cascade is resolved
+// with the app's own resolver (cssCascade.ts).
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -121,10 +123,11 @@ async function renderWords(): Promise<Word[]> {
     const walker = document.createTreeWalker(r.container, NodeFilter.SHOW_TEXT)
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const el = n.parentElement
-      if (!el || seen.has(el) || !/[\p{L}\p{N}]/u.test(n.textContent ?? '') || el.closest('[hidden]') || !el.closest('li.pota-spot')) continue
+      if (!el || seen.has(el) || !/[\p{L}\p{N}]/u.test(n.textContent ?? '') || el.closest('[hidden]') || !el.closest('li.pota-spot, .pota-hunt-banner')) continue
       seen.add(el)
-      const own = el.classList.length ? `.${[...el.classList].join('.')}` : el.tagName.toLowerCase()
-      const row = el.closest('li.pota-spot')!
+      // A word with no class of its own is named by its parent's (the Hunting line's park and call are its <strong>s).
+      const own = el.classList.length ? `.${[...el.classList].join('.')}` : `.${[...el.parentElement!.classList].join('.')} ${el.tagName.toLowerCase()}`
+      const row = (el.closest('li.pota-spot') ?? el.closest('.pota-hunt-banner'))!
       out.push({ host, own, what: `${host} ${[...row.classList].join('.')} ${own} "${(n.textContent ?? '').trim().slice(0, 16)}"`, chain: [BODY, ...chainOf(el)] })
     }
     cleanup()
@@ -135,8 +138,8 @@ async function renderWords(): Promise<Word[]> {
 const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
-/** The board as it shipped: the light-theme rules on its HUNT button, park reference and badges removed. */
-const SHIPPED = RULES.filter((r) => !(r.selector.startsWith("[data-theme='light'] ") && /\.pota-(hunt-btn|spot-ref|badge-(new|open|worked))\b/.test(r.selector)))
+/** The board as it shipped: the light-theme rules on its HUNT button, park reference, badges and Hunting line removed. */
+const SHIPPED = RULES.filter((r) => !(r.selector.startsWith("[data-theme='light'] ") && /\.pota-(hunt-btn|hunt-text|spot-ref|badge-(new|open|worked))\b/.test(r.selector)))
 /** The colour a kind's own base rule letters it in (the last such rule wins its ties). */
 const baseInk = (selector: string) => [...RULES].reverse().find((r) => r.selector === selector && r.decls.some((d) => d.prop === 'color'))!.decls.find((d) => d.prop === 'color')!.value
 
@@ -199,11 +202,12 @@ const KINDS: Record<string, { mark: 'border' | 'underline' | 'none'; colour?: st
   '.pota-badge.pota-badge-new': { mark: 'border', colour: 'var(--accent)', base: '.pota-badge-new' },
   '.pota-badge.pota-badge-open': { mark: 'border', colour: 'var(--band-open)', base: '.pota-badge-open' },
   '.pota-badge.pota-badge-worked': { mark: 'none', base: '.pota-badge-worked' },
+  '.pota-hunt-text strong': { mark: 'underline', colour: 'var(--accent)', base: '.pota-hunt-text strong' },
 }
 /** A border declaration's colour: the value itself, or a `border` shorthand without its width and style. */
 const borderColour = (v: string) => v.replace(/^\s*[\d.]+(px|em|rem)\s+/, '').replace(/^(solid|dashed|dotted|double)\s+/, '').trim()
 
-describe("the POTA / SOTA board's HUNT, park reference and badges read in every light theme, in every host", () => {
+describe("the POTA / SOTA board's HUNT, park reference, badges and Hunting line read in every light theme, in every host", () => {
   let all: Word[] = []
   let words: Word[] = []
   beforeAll(async () => {
@@ -212,19 +216,20 @@ describe("the POTA / SOTA board's HUNT, park reference and badges read in every 
   }, 60_000)
 
   // THE INVENTORY: each host, and each word in each row state the data gives it: HUNT and the reference on every row, NEW
-  // PARK on the new park, BAND OPEN on the open band, WORKED TODAY on the worked row. Exact, so a host that stops rendering
-  // the board, or a row that stops lettering one, cannot leave the sweep silently.
+  // PARK on the new park, BAND OPEN on the open band, WORKED TODAY on the worked row, and the Hunting line's park and call.
+  // Exact, so a host that stops rendering the board, or a row that stops lettering one, cannot leave the sweep silently.
   const ROWS = ['pota-spot.pota-spot-v2', 'pota-spot.pota-spot-v2.pota-spot-new', 'pota-spot.pota-spot-v2.pota-spot-open', 'pota-spot.pota-spot-v2.selected']
   const BADGE_ROWS: Record<string, string> = {
     '.pota-badge.pota-badge-new': 'pota-spot.pota-spot-v2.pota-spot-new',
     '.pota-badge.pota-badge-open': 'pota-spot.pota-spot-v2.pota-spot-open',
     '.pota-badge.pota-badge-worked': 'pota-spot.pota-spot-v2',
   }
-  it('finds HUNT and the reference on every row, and each badge on its own, in every host (the census cannot silently empty out)', () => {
+  it('finds HUNT and the reference on every row, each badge on its own and the Hunting line, in every host (the census cannot silently empty out)', () => {
     const seen = [...new Set(words.map((w) => w.what.replace(/ "[^"]*"$/, '')))].sort()
     const want = HOSTS.flatMap(([h]) => [
       ...ROWS.flatMap((r) => ['.pota-hunt-btn', '.pota-spot-ref'].map((k) => `${h} ${r} ${k}`)),
       ...Object.entries(BADGE_ROWS).map(([k, r]) => `${h} ${r} ${k}`),
+      `${h} pota-hunt-banner .pota-hunt-text strong`,
     ]).sort()
     expect(seen).toEqual(want)
   })
@@ -290,6 +295,8 @@ describe("the POTA / SOTA board's HUNT, park reference and badges read in every 
     for (const [h] of HOSTS) {
       expect(has(new RegExp(`^${h} pota-spot\\.pota-spot-v2 \\.pota-hunt-btn "HUNT": #0174ab on #c1d7e5 = 3\\.45:1$`)), `${h}: HUNT`).toBe(true)
       expect(has(new RegExp(`^${h} pota-spot\\.pota-spot-v2 \\.pota-spot-ref "US-0001": #0174ab on #e5eaf0 = 4\\.25:1$`)), `${h}: the reference`).toBe(true)
+      // The Hunting line's park and call, on its accent tint (Chrome: 4.12:1, the same pair).
+      expect(has(new RegExp(`^${h} pota-hunt-banner \\.pota-hunt-text strong "US-0002": #0174ab on #d8e9f2 = 4\\.12:1$`)), `${h}: the Hunting line`).toBe(true)
     }
     // The hunted row, on its accent tint, is lower still (the same pair in Chrome, 3.20:1 from its unrounded colours).
     expect(has(/ pota-spot\.pota-spot-v2\.selected \.pota-hunt-btn "HUNT": #0174ab on #add2e4 = 3\.2[01]:1$/), 'HUNT on the hunted row').toBe(true)

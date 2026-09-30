@@ -982,6 +982,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on its own tint harder still. They now take the theme's text colour, with the accent kept on
   HUNT's border and as the reference's underline. So do the board's NEW PARK and BAND OPEN badges,
   with their colour kept on their border, and its WORKED TODAY badge reads in the dim text colour.
+  The park and call in the Hunting line above the list take the text colour too, underlined in the
+  accent.
   The dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
