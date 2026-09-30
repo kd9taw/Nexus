@@ -15,7 +15,7 @@
 // `work_spot_keys_nothing` for the idle case. A UI cannot see that refusal; it can only prove that
 // the box asks for exactly what the board asks for, which is what is asserted here.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, waitFor, fireEvent, within, act } from '@testing-library/react'
+import { render, cleanup, waitFor, fireEvent, within } from '@testing-library/react'
 import type { AppSnapshot, OtaSpot, SpotRow } from './types'
 import { t } from './i18n'
 
@@ -162,6 +162,34 @@ const theWork = (calls: Call[]) => {
   const w = writes(calls)
   return w.slice(0, w.findIndex(([n]) => n === 'workSpot') + 1)
 }
+/** A Work's window: the traffic from the click to the entry write of the cockpit it opens. App re-asserts the rig
+ *  mode of every cockpit it enters (`setOperatingMode(mode, false)`, from its view effect), in the commit that mounts
+ *  the cockpit, after the cockpit's own mount effects. What the cockpit then does on its own clock is not the Work's:
+ *  the CW and Phone log strips look the worked call up in the callbook 700 ms after it lands in them, and on a slow
+ *  box that lookup landed inside a fixed 50 ms wait in one of a test's two runs and not the other (2026-09-30). No
+ *  entry write, and the window is everything seen, for the assertions to name. */
+function toEntry(calls: Call[]): Call[] {
+  const work = calls.findIndex(([n]) => n === 'workSpot')
+  const entry = calls.findIndex(([n], i) => i > work && n === 'setOperatingMode')
+  return work < 0 || entry < 0 ? calls : calls.slice(0, entry + 1)
+}
+
+// THE BUDGET (2026-09-30). Every test here mounts the real App and, with each Work, the cockpit the Work opens:
+// real work, and it scales with the CPU a test gets. The longest, the file's first (it also warms up), takes
+// 0.6 s on a quiet box, 4.1 s with a fifth of a CPU, 8.5 s with a tenth and 12.9 s with a sixteenth, where
+// vitest's 5 s default runs out; in full-suite runs on a loaded box a test of two Works took 6.3 s. So each
+// test has 30 s. What is checked here is the traffic, not the speed.
+const BUDGET = 30_000
+
+/** Wait for a Work's window to close: the entry write (`toEntry`). A condition, and outside act. Not `act(async)`
+ *  around a sleep, as this file had: App re-renders itself on a 400 ms clock, act flushes every render queued while
+ *  it waits, and once one render of the whole App takes longer than 400 ms (a loaded box) the next is due before act
+ *  can finish, and it went on flushing: 6 s inside one click at a sixteenth of a CPU, and two tests past a 30 s
+ *  budget in one of three runs at a tenth. A Work that opens no cockpit writes no entry: then the window is what
+ *  arrived by the wait's end. */
+async function settled() {
+  await waitFor(() => expect(api.setOperatingMode).toHaveBeenCalled()).catch(() => {})
+}
 
 function clearMocks() {
   for (const fn of Object.values(api)) (fn as { mockClear?: () => void }).mockClear?.()
@@ -216,14 +244,10 @@ async function workSpotRow(call: string, box: boolean) {
   const r = await boot(box ? 'connect' : 'spots')
   const row = await spotsRow(call, box)
   clearMocks()
-  await act(async () => {
-    fireEvent.click(row)
-  })
+  fireEvent.click(row)
   await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
-  await act(async () => {
-    await new Promise((res) => setTimeout(res, 50))
-  })
-  const out = { calls: traffic(), view: localStorage.getItem('nexus.view') }
+  await settled()
+  const out = { calls: toEntry(traffic()), view: localStorage.getItem('nexus.view') }
   r.unmount()
   cleanup()
   return out
@@ -242,7 +266,7 @@ describe('the Spots box works a spot exactly as the Spots screen does', () => {
     expect(writes(fromBox.calls), 'the box asked for exactly what the board asks for').toEqual(writes(fromBoard.calls))
     expect(fromBox.view, 'the box opens the cockpit the board opens').toBe('cw')
     expect(fromBoard.view).toBe('cw')
-  })
+  }, BUDGET)
 
   it("carries an FT4 spot's tier in the same one call, as the board does", async () => {
     const fromBox = await workSpotRow('JA1FT', true)
@@ -253,7 +277,7 @@ describe('the Spots box works a spot exactly as the Spots screen does', () => {
     ])
     expect(writes(fromBox.calls)).toEqual(writes(fromBoard.calls))
     expect(fromBox.view).toBe('operate')
-  })
+  }, BUDGET)
 
   it("treats a spot outside the operator's privileges exactly as the board does: the same QSY, which listening always allows; the engine refuses the transmit", async () => {
     const fromBox = await workSpotRow('VK9LOCK', true)
@@ -263,7 +287,7 @@ describe('the Spots box works a spot exactly as the Spots screen does', () => {
       ['selectPeer', ['VK9LOCK']],
       ['workSpot', ['cw', 14.02, '20m', 'VK9LOCK', undefined]],
     ])
-  })
+  }, BUDGET)
 
   it("hides an out-of-privilege spot with the board's own privileges chip, in the box as on the screen", async () => {
     await boot('connect')
@@ -274,16 +298,17 @@ describe('the Spots box works a spot exactly as the Spots screen does', () => {
     const calls = [...box.querySelectorAll('.sp-row .np-call')].map((c) => c.textContent)
     expect(calls).toContain('K1CW')
     expect(calls).not.toContain('VK9LOCK')
-  })
+  }, BUDGET)
 
-  it('transmits nothing: no transmit command, from the box or the board', async () => {
-    for (const call of ['K1CW', 'JA1FT', 'VK9LOCK']) {
+  // One test per spot, from the box and from the board: the six Works in one test were three times the work
+  // of any other test here.
+  for (const call of ['K1CW', 'JA1FT', 'VK9LOCK'])
+    it(`transmits nothing: no transmit command, from the box or the board, working ${call}`, async () => {
       for (const box of [true, false]) {
         const { calls } = await workSpotRow(call, box)
         expect(keyed(calls), `${box ? 'the box' : 'the board'} working ${call}`).toEqual([])
       }
-    }
-  })
+    }, BUDGET)
 })
 
 describe('the POTA/SOTA box hunts exactly as the POTA/SOTA screen does', () => {
@@ -292,14 +317,10 @@ describe('the POTA/SOTA box hunts exactly as the POTA/SOTA screen does', () => {
     const root = () => (box ? (document.querySelector('.pane-frame[data-pane="pota"]') as HTMLElement | null) : document.body)
     await waitFor(() => expect(root()?.querySelector('.pota-hunt-btn')).toBeTruthy())
     clearMocks()
-    await act(async () => {
-      fireEvent.click(within(root()!).getByRole('button', { name: t('ota.hunt.button.aria', { call: 'K9ABC' }) }))
-    })
+    fireEvent.click(within(root()!).getByRole('button', { name: t('ota.hunt.button.aria', { call: 'K9ABC' }) }))
     await waitFor(() => expect(api.workSpot).toHaveBeenCalled())
-    await act(async () => {
-      await new Promise((res) => setTimeout(res, 50))
-    })
-    const out = { calls: traffic(), view: localStorage.getItem('nexus.view') }
+    await settled()
+    const out = { calls: toEntry(traffic()), view: localStorage.getItem('nexus.view') }
     r.unmount()
     cleanup()
     return out
@@ -317,5 +338,5 @@ describe('the POTA/SOTA box hunts exactly as the POTA/SOTA screen does', () => {
     expect(fromBoard.view).toBe('phone')
     expect(keyed(fromBox.calls), 'a hunt from the box').toEqual([])
     expect(keyed(fromBoard.calls), 'a hunt from the board').toEqual([])
-  })
+  }, BUDGET)
 })
