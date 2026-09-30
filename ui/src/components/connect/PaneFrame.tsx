@@ -28,7 +28,9 @@
 // the title becomes a TAB STRIP — the WAI-ARIA tabs pattern: one button per pane in the title's own
 // face, the shown one selected and the only one in the Tab order, ←/→ (and Home/End) moving to the
 // next pane and showing it, the body the tabpanel. With one pane the head is the title, as it always
-// was. The picker replaces the SHOWN pane; ⋯ ▸ Add a tab and ⋯ ▸ Remove are the menu's.
+// was. The picker replaces the SHOWN pane; ⋯ ▸ Add a tab and ⋯ ▸ Remove are the menu's. A tabbed head
+// is marked `data-tabs`: styles.css lets it wrap, its controls on top, when they and the strip do not
+// fit side by side.
 //
 // AUTO-ROTATE (2026-09-29, the dashboard window and the TV page only — the host passes `rotateSecs`
 // and `onRotate` only there): with an interval set, the frame shows its next tab every interval, round
@@ -166,7 +168,7 @@ export function PaneFrame({
           : ({ '--connect-share': share, flex: 'var(--connect-pane-flex, var(--connect-share) 1 0)' } as CSSProperties)
       }
     >
-      <header className="pane-head">
+      <header className="pane-head" data-tabs={tabbed ? '' : undefined}>
         {tabbed ? (
           <div className="pane-tabs" role="tablist" aria-label={t('connect.box.tabs.aria')}>
             {tabbed.map((p) => {

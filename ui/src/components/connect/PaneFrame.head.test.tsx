@@ -66,6 +66,37 @@ describe('a Connect pane head makes room for its ⋯', () => {
     expect(win(title, 'white-space'), 'no nowrap: a two-word title still breaks between its words').toBeNull()
   })
 
+  it('a slot with tabs puts its controls on a line of their own, top right, rather than shrink them', () => {
+    // Found in the same census: at the 200 px floor the tab strip cannot go below its widest tab, so
+    // the head's shrink pushed the controls' box under their own width and ✕ past the frame (16 of 30
+    // tabbed cases). A tabbed head now wraps, the second line on top (wrap-reverse), and the controls
+    // never shrink.
+    const { container } = render(
+      <div className="app">
+        <div className="connect" data-rails="both">
+          <div className="connect-rail" data-side="left">
+            <PaneFrame
+              slotId="left2"
+              paneId="clock"
+              ctx={{ myGrid: 'EN52', prop: null } as unknown as PaneContext}
+              onAssign={() => {}}
+              onHide={() => {}}
+              tabs={['bandTiles', 'clock']}
+              onShowTab={() => {}}
+            />
+          </div>
+        </div>
+      </div>,
+    )
+    const head = container.querySelector('.pane-frame[data-slot] > .pane-head')!
+    expect(head.querySelector('[role="tablist"]'), 'control: the head is a tab strip').not.toBeNull()
+    expect(win(head, 'flex-wrap')).toBe('wrap-reverse')
+    expect(win(head.querySelector('.pane-acts')!, 'flex-shrink')).toBe('0')
+    // …and a head with ONE pane does not wrap at all: its title yields a long word instead (above).
+    const plain = connectHead().querySelector('.pane-frame[data-slot] > .pane-head')!
+    expect(win(plain, 'flex-wrap')).toBeNull()
+  })
+
   it('touches no cockpit pane head (CockpitPaneFrame shares the classes)', () => {
     const { container } = render(
       <div className="app">

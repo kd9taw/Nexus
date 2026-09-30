@@ -97,7 +97,8 @@ describe yet has no link.
 
 **Tabs.** A slot can hold more than one pane. **⋯ ▸ Add a tab** lists the panes it
 can take; pick one and it joins the slot, shown, and the slot's title becomes a row
-of tabs. Click a tab to switch, or use ← →, Home and End on it. The picker changes
+of tabs (in a narrow column, a row of its own under the picker, ⋯ and ✕). Click a
+tab to switch, or use ← →, Home and End on it. The picker changes
 the pane on the tab that is showing, and **⋯ ▸ Remove … from this slot** takes it
 out. A pane is only ever in one slot: adding one from another slot moves it, and a
 slot's only pane is not offered, since that slot would be empty. Each slot reopens

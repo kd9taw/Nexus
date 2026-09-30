@@ -1984,9 +1984,10 @@ button.nb-chip:hover {
 /* A SLOT'S TABS (several panes in one slot, features/connectConfig `tabs`): in the title's place and in
    its face, one button per pane, the shown one in ink over an accent rule. A narrow slot's tabs WRAP
    onto a second line rather than clip or scroll sideways, so every pane in the slot stays one click
-   away; the strip keeps its widest tab's width (min-width auto) and the head's controls yield first, as
-   they do beside a title. A tab is no taller than the title it replaces, so a slot keeps its head height
-   until its tabs wrap. The focus ring is the app's own (:focus-visible). */
+   away; the strip keeps its widest tab's width (min-width auto), and when it and the head's controls do
+   not fit side by side the controls take a line of their own (below). A tab is no taller than the title
+   it replaces, so a slot keeps its head height until its tabs wrap. The focus ring is the app's own
+   (:focus-visible). */
 .pane-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2012,6 +2013,19 @@ button.nb-chip:hover {
 .pane-tab.active {
   color: var(--text);
   border-bottom-color: var(--accent);
+}
+/* …and a slot with tabs shares its head between the strip and the controls while they fit side by
+   side. When they do not, the controls keep the top-right corner on a line of their own and the strip
+   takes the whole width under them (wrap-reverse stacks the second line on top): the controls never
+   shrink, so ✕ and ⋯ never leave the frame, and no tab is cut short. Measured in Chrome over every
+   tabbed case — five languages, 1024–2290 wide, default and 200 px columns: ✕ and ⋯ inside every
+   frame, no tab cut, ✕ never below the tabs. PaneFrame marks a tabbed head `data-tabs`. */
+.pane-frame[data-slot] > .pane-head[data-tabs] {
+  flex-wrap: wrap-reverse;
+}
+.pane-frame[data-slot] > .pane-head[data-tabs] > .pane-acts {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .pane-pick {
   font-size: var(--fs-micro);
