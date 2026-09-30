@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,244 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,246 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,7 +20,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 117 | The program's name. |
+| Nexus | 114 | The program's name. |
 | QSO / QSOs | 97 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 84 | Computer Aided Transceiver — the radio control protocol. |
@@ -96,7 +96,7 @@ word in, and use only that word in the CSV.
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
 | band | 318 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 230 | The rig itself, and the radio list in Settings. | |
+| radio | 232 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
@@ -106,7 +106,7 @@ word in, and use only that word in the CSV.
 | station | 109 | Both your own station and the one you are working. | |
 | port | 98 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 97 / 30 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 98 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 86 | A satellite pass. | |
 | callsign | 79 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |

@@ -463,6 +463,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
+  own split and said to turn it on in Settings, but there was never a switch for it: the only way
+  was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
+  beside Split operation, off by default. Turn it on and a split you set at the radio is the one
+  Nexus checks your licence privileges against; if the radio says it is split but not where it
+  transmits, Nexus will not transmit. Nexus never asks a radio whose split can only be read by
+  moving it. From a browser the switch is shown but cannot be changed.
 - **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
   you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
   relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of

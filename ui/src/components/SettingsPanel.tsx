@@ -5443,6 +5443,26 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.rigControl.split.hint')}</span>
               </div>
 
+              {/* `splitDetectEnabled` shipped in 1.9.1 as "new in Settings" with no control at
+                  all, so only an edited settings.json could turn it on. Station-wide, beside
+                  Split operation because both are about the radio's split. Read-only from a
+                  browser: the station refuses the write (WRITE_DENIED_KEYS). */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.rigControl.splitDetect.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.splitDetectEnabled ?? false}
+                    className={`toggle${form.splitDetectEnabled ? ' on' : ''}`}
+                    onClick={() => updateBool('splitDetectEnabled', !form.splitDetectEnabled)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.rigControl.splitDetect.hint')}</span>
+              </div>
+
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.rigControl.wheel.label')}{' '}

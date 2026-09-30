@@ -9174,6 +9174,34 @@ mod tests {
         }
     }
 
+    /// "Follow the radio's split": the Settings switch writes `splitDetectEnabled`, which must be
+    /// the exact key this field serialises as (a mismatch is a switch that does nothing). A file
+    /// written before the switch loads as off, and a stored value survives a save and a load.
+    #[test]
+    fn split_detect_enabled_is_off_by_default_and_round_trips_on_its_wire_key() {
+        assert!(!Settings::default().split_detect_enabled);
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            !old.split_detect_enabled,
+            "a file from before the switch loads as off"
+        );
+        let on: Settings = serde_json::from_str(r#"{"splitDetectEnabled":true}"#).unwrap();
+        assert!(
+            on.split_detect_enabled,
+            "the key the switch writes is the key read"
+        );
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(
+            json.contains("\"splitDetectEnabled\":true"),
+            "…and the key it is saved under"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.split_detect_enabled,
+            "a stored value survives a save and a load"
+        );
+    }
+
     #[test]
     fn partial_json_fills_defaults() {
         // An old/partial settings file with only identity fields still loads.

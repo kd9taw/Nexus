@@ -1131,6 +1131,8 @@ export const DE: PartialCatalog = {
   "settings.rigControl.split.rig": "Rig",
   "settings.rigControl.split.fakeit": "Fake It",
   "settings.rigControl.split.hint": "Hält das Sende-NF zwischen 1500–2000 Hz, indem die TX-Frequenz in 500-Hz-Schritten verschoben wird — so fallen die NF-Oberwellen aus dem Sendefilter, das Signal wird sauberer. Rig = nutzt Split über VFO B. Fake It = stimmt den VFO um jede Sendephase herum um (funktioniert an jedem CAT-Gerät). Kein Split = Werksverhalten von WSJT-X, sendet mit dem rohen NF-Offset.",
+  "settings.rigControl.splitDetect.label": "Split des Funkgeräts folgen",
+  "settings.rigControl.splitDetect.hint": "Nexus liest den Split des Funkgeräts, damit ein am Gerät eingestellter Split derjenige ist, an dem Nexus Ihre Lizenzberechtigung prüft; meldet das Gerät Split, aber nicht, wo es sendet, sendet Nexus nicht. Ein Gerät, dessen Split sich nur durch Verstellen auslesen lässt, wird nie gefragt. Standardmäßig aus.",
   "settings.rigControl.wheel.label": "Mausrad-Empfindlichkeit",
   "settings.rigControl.wheel.aria": "Empfindlichkeit der Mausrad-Abstimmung",
   "settings.rigControl.wheel.hint": "Wie weit sich die Frequenz pro Mausrad-Raste bewegt. Verringern, wenn eine hochauflösende oder frei laufende Maus pro Dreh zu weit abstimmt; erhöhen, um schneller abzustimmen. Gilt für die Frequenzanzeige und das Rad im Phone-/CW-Bandscope.",
