@@ -456,6 +456,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS8: the Stations pane shows each station's offset the way JS8Call does.** The offset is whole
+  hertz with the fraction dropped, so a station at 1508.9 Hz reads 1508 Hz, where it used to be
+  rounded up to 1509. It now matches the Band activity pane and JS8Call's own call list.
 - **CW: a message that could not go out is dropped, not sent later on its own.** When CW could not
   be sent because transmit was off (for example after leaving the CW screen part-way through a
   message) or the frequency was outside your license privileges, what was still waiting used to be

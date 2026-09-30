@@ -231,6 +231,18 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
     expect(row.querySelector('.js8-snr')!.textContent).toBe('-19')
   })
 
+  it('shows a station’s offset in whole hertz truncated, as JS8Call’s call activity does', async () => {
+    // JS8Call prints `cd.offset` (mainwindow.cpp:10280), the decoder's frequency held in an int
+    // (:4029, decodedtext.cpp:248), so 1508.9 Hz reads 1508: the Band activity pane's rule.
+    const [w0ind, n0grd] = js8Fixture().stations
+    state.current = { ...js8Fixture(), stations: [{ ...w0ind, freqHz: 1508.9 }, n0grd] }
+    await renderCockpit()
+    const offsets = Array.from(stationRow('W0IND').querySelectorAll('.js8-cell'))
+      .map((c) => c.textContent ?? '')
+      .filter((text) => text.endsWith(' Hz'))
+    expect(offsets, '1508.9 Hz is on the 1508 row, not rounded up').toEqual(['1508 Hz'])
+  })
+
   it('takes the grid from the LOG when the station has not sent one (JS8Call’s fallback)', async () => {
     log.current = [{ ...logFixture()[0], call: 'N0GRD', grid: 'FN31' }]
     await renderCockpit()

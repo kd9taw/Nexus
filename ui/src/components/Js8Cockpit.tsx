@@ -772,8 +772,10 @@ export function Js8Cockpit({
               </button>
               <span className="js8-cell">{grid}</span>
               <span className="js8-cell js8-snr">{fmtSnr(h.snrDb)}</span>
+              {/* JS8Call's call activity prints the offset held in an int, so truncated
+                  (`cd.offset`, mainwindow.cpp:10280 and :4029): the Band activity pane's rule. */}
               <span className="js8-cell">
-                {Math.round(h.freqHz)} {HZ}
+                {Math.trunc(h.freqHz)} {HZ}
               </span>
               <span className="js8-cell js8-speed">{JS8_SPEEDS[h.speed].letter}</span>
               <span className="js8-cell js8-age">{ageLabel(now - h.lastMs)}</span>
