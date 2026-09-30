@@ -40,6 +40,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmitter. Only the slider under the pointer moves, never one you clicked earlier, and a scroll
   that starts elsewhere and passes over a slider keeps scrolling. On the Remote page a run of
   notches is sent as one change once the wheel stops, as a drag is.
+- **Connect: "Bands for you", the band advice as tiles.** A new Connect box shows one tile per
+  band, big enough to read from across the desk. The tiles run in band-stack order, 160 m up to
+  6 m, plus 4 m and 2 m when there is an opening there. Each tile gives the band and its word,
+  with the same word and colour as the map's Band conditions list and the band menu:
+  - Open: green, with a solid outline.
+  - Marginal: amber, with a dashed outline.
+  - Closed: no colour, dimmer letters.
+
+  On each tile:
+  - A dot shows what you are hearing now.
+  - ★ marks the Band Advisor's best band, and a ring marks the band your radio is on.
+  - On 6 m, 4 m and 2 m, the mode of an opening is named (Es, Tropo, Aurora, F2, MS).
+  - Hover for why: who hears you, the best direction, and when the model expects the band to
+    open or close next.
+  - Click a tile to show that band on the map.
+
+  With no fresh data the tiles are hollow and grey, never green. The box takes the Band Advisor's
+  place in the default Connect layout (and on the wall display). The Band Advisor's ranked list
+  is one pick away in the box's menu. A layout you have already arranged keeps what it has, and
+  Reset layout brings in the tiles.
+
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2
@@ -297,6 +318,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places. The reply now lists the four stations you heard most recently, not counting the one
   asking.
 
+- **A band says the same thing everywhere.** The map's Band conditions list, the Band Advisor,
+  the band menu and the NOW bar now show the same word and the same colour for each band.
+  - A band you are hearing now is Open and green, even when the propagation model calls it
+    closed. A summer Es opening on 10 m or 6 m used to show a grey "Open".
+  - The NOW bar says what the band menu says. For a band the model calls open but nobody has
+    heard yet it now says "20m open" (it used to say "quiet"). It says "marginal" where the list
+    says Marginal. A closed band shows in grey instead of red.
+  - The Band Advisor's word is the same outlined word as the list's. A closed band's row is no
+    longer faded to half strength, which made its text too faint to read; its band name and word
+    are dimmer instead.
+
 - **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
   do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
   offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
@@ -467,6 +499,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station's grid, its callbook position, or the centre of its country when nothing closer is known.
   The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
   aims at the country centre.
+- **Connect at 1024×768: the Layers panel no longer covers the band list.** When the map is too
+  narrow for both, the Layers panel now starts folded, so it no longer hides the band names in
+  the Conditions panel on the map's right. It opens again by itself on a wider window. Once you
+  fold or unfold it yourself, your choice is kept. The 2-D map and the 3-D globe both work this
+  way.
+
+- **Connect: the Band conditions list on the map is readable in every theme (#382).** The band
+  names are now drawn in the theme's own text colour. Before, they used the computer's default
+  button colour, so with Windows in light mode they came out black on the dark theme and could
+  hardly be seen. The Open, Marginal and Closed words are now lettered in the text colour too,
+  and the band's green, amber or grey shows as the tint and outline of each word. In the light
+  theme those words had been too faint to read comfortably. A closed band's word is dimmer, so it
+  recedes.
+
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,

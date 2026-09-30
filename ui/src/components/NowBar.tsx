@@ -8,6 +8,7 @@ import { t, type MessageKey } from '../i18n'
 import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
 import { azimuthLabel, backendAzimuth } from '../grid'
+import { useBandConditions } from '../bandConditions'
 
 interface Props {
   snap: AppSnapshot
@@ -130,18 +131,25 @@ function NbChip({
  * band or need chip drills into the propagation nowcast.
  */
 
-// ActivityTier → the verdict word + its status class. The word resolves when it is READ, so
-// the table is not frozen to whichever locale loaded this module first.
-const BAND_WORD: Record<string, { wordKey: MessageKey; cls: string }> = {
-  Active: { wordKey: 'nowbar.band.open', cls: 'good' },
-  Moderate: { wordKey: 'nowbar.band.fair', cls: 'ok' },
-  Quiet: { wordKey: 'nowbar.band.quiet', cls: 'weak' },
-  Closed: { wordKey: 'nowbar.band.closed', cls: 'bad' },
+// THE BAND CHIP SAYS WHAT THE BAND MENU AND THE MAP'S LIST SAY: the band's condition comes from
+// the one cell they draw (bandConditions.ts over propViz `bandConditionCell`), in the bar's own
+// words, and the chip's class comes from the cell's colour. It used to say what the activity tier
+// said: "quiet" for a band the model calls open and nobody has heard yet (the list: "Open · none
+// heard"), and a closed band in the alert red. Now a band is green, amber or grey here exactly
+// where it is there, and a closed band recedes. Unknown or stale data prints an ellipsis, never a
+// word. The words resolve when they are READ, so the table is not frozen to whichever locale
+// loaded this module first.
+const BAND_WORD: Record<'open' | 'marginal' | 'closed', { wordKey: MessageKey }> = {
+  open: { wordKey: 'nowbar.band.open' },
+  marginal: { wordKey: 'nowbar.band.marginal' },
+  closed: { wordKey: 'nowbar.band.closed' },
 }
+const BAND_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok' }
 
 export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
+  const condition = useBandConditions()(band)
   // Skip NotOpen cards: the chip must never advertise an unworkable slot as the
   // top need (the tracker keeps NotOpen cards for the board, filtered here).
   const need = prop?.dxpeditions.workableNow.find((c) => c.status !== 'NotOpen') ?? null
@@ -170,11 +178,9 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
       })()
     : ''
 
-  // Band open? An unrecognised tier prints an em dash and no data prints an ellipsis —
-  // glyphs, not words.
-  const verdict = report ? BAND_WORD[report.tier] : undefined
-  const bandWord = report ? (verdict ? t(verdict.wordKey) : '—') : '…'
-  const bandCls = report ? (verdict?.cls ?? 'weak') : 'weak'
+  // Band open? No data, stale data or an offline snapshot prints an ellipsis — a glyph, not a word.
+  const bandWord = condition.state === 'unknown' ? '…' : t(BAND_WORD[condition.state].wordKey)
+  const bandCls = condition.state === 'unknown' ? 'weak' : (BAND_CLASS[condition.color ?? ''] ?? 'weak')
 
   // Getting out? — PSK Reporter spots OF me on this band.
   const hearMe = report?.nHearMe ?? 0

@@ -290,11 +290,18 @@ export function dualStateLabel(
 }
 
 /** One band's condition cell — the word, its sub-note and its colour — exactly as the Band
- *  conditions strip draws it. The band dropdown (`bandConditions.ts`) draws from this same
- *  function so the two surfaces cannot disagree about a band. */
+ *  conditions strip draws it. The band dropdown (`bandConditions.ts`), the Band Advisor's rows and
+ *  the NOW bar draw from this same function, so no two surfaces can disagree about a band.
+ *
+ *  THE COLOUR FOLLOWS THE WORD. A band heard now IS open, whatever the model says, so it is green:
+ *  a summer Es opening on 10 m or 6 m, which the model calls closed, used to be painted as a grey
+ *  "Open". A silent band wears the model's word and that word's colour. With no model and nobody
+ *  heard (a report from an older station), the word defaults to Open, which is no evidence, so the
+ *  colour stays the tier's neutral: unknown is never green. */
 export function bandConditionCell(b: BandReport): { word: string; sub: string; color: string } {
   const ds = dualStateLabel(b.modeled, b.tier)
-  return { ...ds, color: b.modeled ? modeledVar(b.modeled) : tierVar(b.tier) }
+  const heard = b.tier === 'Active' || b.tier === 'Moderate'
+  return { ...ds, color: heard ? modeledVar('Open') : b.modeled ? modeledVar(b.modeled) : tierVar(b.tier) }
 }
 
 /** The map hover-tooltip line for a live cluster/RBN/PSKR spot — who/where/what

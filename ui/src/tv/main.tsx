@@ -54,7 +54,7 @@ if (surfaceGet('nexus.connect.config') == null) {
     JSON.stringify({
       slots: {
         left1: 'advisory',
-        left2: 'bandAdvisor',
+        left2: 'bandTiles',
         right1: 'insights',
         right2: 'kpOutlook',
         bottom1: 'openings',

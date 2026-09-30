@@ -614,6 +614,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
+          rigBand={snap?.radio.band ?? null}
           onPoint={
             // Same rotator gate as App (model-launched rotctld OR external host). This failure
             // IS still swallowed — but that is a gap, not a constraint. A detached window has a

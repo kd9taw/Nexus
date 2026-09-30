@@ -4771,6 +4771,15 @@ export const EN = {
   'freq.channel.menu.aria': 'Band channel preset: {{channel}}',
   'bandMenu.condition.unknown': 'No data',
   'bandMenu.condition.unknown.title': 'No current band-condition data for this band',
+  'bandTiles.aria': 'Bands for you: one tile per band',
+  'bandTiles.title.state': '{{band}}: {{word}}',
+  'bandTiles.title.opening': '{{mode}} opening seen on this band',
+  'bandTiles.title.heard': '{{hearYou}} hear you · you hear {{youHear}}',
+  'bandTiles.title.region': 'Best toward {{region}} ({{octant}}, {{bearing}}°)',
+  'bandTiles.title.modelled': '{{timing}} (modelled)',
+  'bandTiles.title.best': 'The Band Advisor’s best band right now',
+  'bandTiles.title.rig': 'Your radio is on this band',
+  'bandTiles.title.focus': 'Click to show this band on the map, and again to clear it',
   'bandPicker.txLock.splitTitle':
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
@@ -7213,6 +7222,7 @@ export const EN = {
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Conditions',
   'connect.pane.bandAdvisor.title': 'Band Advisor',
+  'connect.pane.bandTiles.title': 'Bands for you',
   'connect.pane.selection.title': 'Selection',
   'connect.pane.outlook.title': 'Band Outlook',
   'connect.pane.openings.title': 'Openings',
@@ -9572,8 +9582,7 @@ export const EN = {
   'nowbar.age.hours': '{{hours}}h',
   'nowbar.band.label': 'Band',
   'nowbar.band.open': 'open',
-  'nowbar.band.fair': 'fair',
-  'nowbar.band.quiet': 'quiet',
+  'nowbar.band.marginal': 'marginal',
   'nowbar.band.closed': 'closed',
   // The chip's own tooltip, used only when the advisory carries no reason of its own (that
   // reason is backend prose, interpolated as data — it moves in phase 3).

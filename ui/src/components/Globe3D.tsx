@@ -52,7 +52,7 @@ import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
 import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { MapLayersPanel } from './MapLayersPanel'
+import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import type {
   PropagationSnapshot,
@@ -1733,7 +1733,12 @@ export default function Globe3D({
       {/* Layers panel — the same place and the same fold as the 2-D map's (MapLayersPanel). Grows
           as Phase B adds layers. (Was gated on the Expert detail level, removed 2026-07-26.) */}
       {(
-        <MapLayersPanel className="globe3d-layers" title={t('globe.layers.head')}>
+        // Folded by default where it would cover the Conditions rail (the 2-D map's rule).
+        <MapLayersPanel
+          className="globe3d-layers"
+          title={t('globe.layers.head')}
+          narrow={prop != null && size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+        >
           {LAYER_ROWS.map((row) => (
             <Fragment key={row.k}>
               <label>

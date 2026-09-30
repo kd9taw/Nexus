@@ -15,24 +15,41 @@ import { t } from '../i18n'
  *  the fold follows the operator across the 2D/3D toggle. */
 const COLLAPSE_KEY = 'nexus.connect.layersPanel.collapsed'
 
+/** The narrowest map (layout px) that holds this panel OPEN and the Conditions rail side by side:
+ *  the panel's place and width (8 + 200), a gap (8), the rail's least width and its margin
+ *  (248 + 12), as styles.css draws `.map-layers` and `.map-insights`
+ *  (MapLayersPanel.narrow.test.tsx holds the two together). At the 1024×768 floor the map is
+ *  about 445 px wide. */
+export const OVERLAYS_SIDE_BY_SIDE_PX = 8 + 200 + 8 + 248 + 12
+
 export function MapLayersPanel({
   className,
   title,
   children,
+  narrow = false,
 }: {
   /** The surface's own class (`map-layers` / `globe3d-layers`) — both share the overlay rule. */
   className: string
   /** The panel's heading, which is also its accessible name and the pill's label. */
   title: string
   children: ReactNode
+  /** The map is narrower than OVERLAYS_SIDE_BY_SIDE_PX while the Conditions rail is on it. This
+   *  panel stacks above the rail on purpose, so open it would cover the left edge of the rail's
+   *  band list (at 1024×768 it covered four band names). While the operator has no fold of their
+   *  own on record, the panel is folded here, and opens by itself again on a wider map. */
+  narrow?: boolean
 }) {
-  const [collapsed, setCollapsed] = useState(() => surfaceGet(COLLAPSE_KEY) === '1')
-  const toggle = () =>
-    setCollapsed((v) => {
-      const nv = !v
-      surfaceSet(COLLAPSE_KEY, nv ? '1' : '0')
-      return nv
-    })
+  // What the operator chose, or null: nothing on record. Only then does `narrow` decide.
+  const [chosen, setChosen] = useState<boolean | null>(() => {
+    const stored = surfaceGet(COLLAPSE_KEY)
+    return stored === '1' ? true : stored === '0' ? false : null
+  })
+  const collapsed = chosen ?? narrow
+  const toggle = () => {
+    const nv = !collapsed
+    surfaceSet(COLLAPSE_KEY, nv ? '1' : '0')
+    setChosen(nv)
+  }
 
   if (collapsed) {
     return (

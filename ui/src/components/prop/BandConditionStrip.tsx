@@ -1,7 +1,14 @@
 // hamqsl/N0NBH-style at-a-glance band-condition strip: one row per band, coloured by
-// MODELED openness (green/amber/red — derivable with zero spots), with the OBSERVED
+// MODELED openness (green/amber/grey — derivable with zero spots), with the OBSERVED
 // activity tier riding as a filled/hollow dot. So a green cell with a hollow dot reads
 // "open per model, just no spots heard" — never a dead band.
+//
+// THE LETTERS ARE THE THEME'S INKS (#382). The band colour is the pill's tint and edge
+// (`--bc-color`, styles.css `.bc-state`), never its letters: a word painted in the band
+// colour on a tint of itself failed the 4.5:1 lettering floor in the light theme, and
+// "Closed" in the dark one. Each row is a <button>, which draws its text in the browser's
+// own ink unless the sheet says otherwise, so `.bc-cell` gives it the theme's.
+import type { CSSProperties } from 'react'
 import type { BandReport } from '../../types'
 import { bandConditionCell } from '../../propViz'
 import { t } from '../../i18n'
@@ -51,8 +58,8 @@ export function BandConditionStrip({
           >
             <span className="bc-band">{b.band}</span>
             <span
-              className="bc-state"
-              style={{ color, background: `color-mix(in srgb, ${color} 16%, transparent)` }}
+              className={`bc-state${ds.word === 'Closed' ? ' is-closed' : ''}`}
+              style={{ '--bc-color': color } as CSSProperties}
             >
               {ds.word}
             </span>

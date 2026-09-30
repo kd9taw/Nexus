@@ -766,8 +766,11 @@ button.nb-chip:hover {
 .ba-row:hover {
   background: var(--bg-elev);
 }
-.ba-row.is-closed {
-  opacity: 0.5;
+/* A closed band recedes by its INK, not by fading the row: at half opacity every word in it, the
+   pill's "Closed" and the faint reason included, fell below the 4.5:1 lettering floor. The pill dims
+   its own letters (.bc-state.is-closed); the band name follows. */
+.ba-row.is-closed .ba-band {
+  color: var(--text-dim);
 }
 .ba-band {
   font-family: var(--font-mono);
@@ -3095,7 +3098,15 @@ body.resizing-row {
   letter-spacing: 0.03em;
   color: var(--text-faint);
 }
-/* Band-condition strip — modelled colour pill + observed dot. */
+/* Band-condition strip — modelled colour pill + observed dot.
+   THE LETTERS ARE THE THEME'S INKS (#382). A row is a <button>, and a button draws its text in the
+   BROWSER's ink unless the sheet colours it: in 1.15.0 that followed the computer's light/dark, so
+   a light Windows drew black band names on the dark rail, and since the colour-scheme rule it is
+   still the browser's white or black, not --text (Night, High contrast and the themes ignored).
+   The pill's band colour (`--bc-color`, set per band by the component) is its tint and its edge,
+   never its letters: a word in the band colour on a tint of itself read 2.6–3.5:1 in the light
+   theme and 3.8:1 for "Closed" in the dark one. Guard: BandConditionStrip.test.tsx, every mode and
+   theme. */
 .band-cond {
   display: flex;
   flex-direction: column;
@@ -3110,6 +3121,7 @@ body.resizing-row {
   background: none;
   border: none;
   border-radius: var(--radius-sm);
+  color: var(--text);
   cursor: pointer;
   text-align: left;
 }
@@ -3128,9 +3140,17 @@ body.resizing-row {
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
   border-radius: 4px;
-  padding: 1px 6px;
+  /* One pixel less than before on every side: the edge takes it, so the pill's box is unchanged. */
+  padding: 0 5px;
   text-align: center;
   letter-spacing: 0.02em;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bc-color) 16%, transparent);
+  border: 1px solid var(--bc-color);
+}
+/* A closed band recedes: dim letters, still no red. */
+.bc-state.is-closed {
+  color: var(--text-dim);
 }
 .bc-dot {
   width: 8px;
@@ -3148,6 +3168,94 @@ body.resizing-row {
 }
 .bc-dot.quiet {
   background: transparent; /* hollow — open per model, none heard */
+}
+/* BANDS FOR YOU — tiles (components/prop/BandTiles.tsx). CONTENT inside a Connect box's .pane-body:
+   the grid follows the box's own width (auto-fill), no viewport query, and the box is sized by the
+   pane grid, never by this. The letters are the theme's inks; the band colour (`--bt-color`, set per
+   tile) is only ever a tint and an edge: Open a solid edge, Marginal a dashed one (a second channel
+   besides hue), Closed no tint and dim letters (it recedes, never red), no data hollow and neutral.
+   Guard: BandTiles.test.tsx, every mode and theme.
+   THE FLOOR holds the widest word on one line: "Marginal" is 56 px in the widest UI font the app
+   meets (DejaVu Sans, Linux and the Pi; measured in Chrome, and BandTiles.test.tsx computes the room
+   at every text size). At 64 px it was cut on every default layout. */
+.band-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(76px * var(--text-scale)), 1fr));
+  gap: var(--space-1);
+}
+.bt-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bt-tile.is-open,
+.bt-tile.is-marginal {
+  background: color-mix(in srgb, var(--bt-color) 20%, transparent);
+  border-color: var(--bt-color);
+}
+.bt-tile.is-marginal {
+  border-style: dashed;
+}
+.bt-tile.is-closed {
+  color: var(--text-dim);
+}
+.bt-tile.is-unknown {
+  color: var(--text-faint);
+  border-style: dotted;
+}
+/* The band the radio is on. */
+.bt-tile.is-rig {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+/* The band shown on the map. */
+.bt-tile[aria-pressed='true'] {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.bt-band {
+  font-family: var(--font-mono);
+  font-size: calc(16px * var(--text-scale));
+  font-weight: 700;
+  line-height: 1.1;
+}
+/* A longer phrase (the no-data words run to "Pas de données") wraps at its spaces; nothing is cut. */
+.bt-word {
+  max-width: 100%;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow-wrap: break-word;
+}
+.bt-marks {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  font-size: calc(10px * var(--text-scale));
+  line-height: 1;
+}
+.bt-dot.is-active,
+.bt-dot.is-some {
+  color: var(--bt-color, var(--text-dim));
+}
+.bt-dot.is-none {
+  color: var(--text-faint);
+}
+.bt-mode {
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 700;
 }
 /* Predictive insight feed. */
 .insight-feed {
