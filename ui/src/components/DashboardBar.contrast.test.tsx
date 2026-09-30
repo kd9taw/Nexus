@@ -44,6 +44,11 @@ import { DashboardBar, StayBehindToggle } from './DashboardBar'
 const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
+/** The FIRES control's own rule, planted here and never shipped: a word lettered in the warning
+ *  colour, the style this bar first reused, which Chrome measured under the floor in the light theme
+ *  (#a76d00 on #fbfcfe = 4.23:1) and well over it in the dark one. A fix to any shipped rule cannot
+ *  silence it: the panes' own chip was this control until it was fixed to read in the light themes. */
+const FIXTURE = parseRules('.dash-fires-fixture { color: var(--alert-warning); }', { n: RULES.length + 1 })
 
 const TEXT_MIN = 4.5
 const EDGE_MIN = 3
@@ -60,9 +65,9 @@ const PROP = {
   asOf: Math.floor(Date.now() / 1000) - 12 * 60,
 } as unknown as PropagationSnapshot
 
-/** Every lettered element on the bar (`.prop-prov` is the panes' chip, for the control below). */
+/** Every lettered element on the bar (`.dash-fires-fixture` is the planted word for the control below). */
 const LETTERED =
-  '.dash-call, .dash-grid, .dash-time-v, .dash-time-k, .dash-index-k, .dash-index-v, .dash-index-d, .dash-prov, .prop-prov, .dash-behind'
+  '.dash-call, .dash-grid, .dash-time-v, .dash-time-k, .dash-index-k, .dash-index-v, .dash-index-d, .dash-prov, .dash-fires-fixture, .dash-behind'
 
 interface Word {
   what: string
@@ -182,13 +187,13 @@ describe('the dashboard bar reads in every theme and mode', () => {
     expect(low).toEqual([])
   })
 
-  it('FIRES: the panes’ chip, lettered in the warning colour, is caught on this bar in the light theme', async () => {
-    // The shipped style this bar first reused, and the one the measurement found under the floor.
-    const words = await wordsOn('app detached', false, <span className="prop-prov prov-cached">CACHED 12m</span>)
-    const panes = words.filter((w) => w.what === 'app detached .prop-prov.prov-cached')
-    expect(panes, 'control: the panes’ chip is on the bar').toHaveLength(1)
-    const failing = MODES.filter((mode) => unreadable(RULES, panes, [mode]).length > 0)
-    // Chrome measured this chip at 4.23:1 in the standard light theme and 10.69:1 in the standard
+  it('FIRES: a word lettered in the warning colour is caught on this bar in the light theme', async () => {
+    // The planted rule above, owned by this test: the style the bar first reused.
+    const words = await wordsOn('app detached', false, <span className="dash-fires-fixture">CACHED 12m</span>)
+    const planted = words.filter((w) => w.what === 'app detached .dash-fires-fixture')
+    expect(planted, 'control: the planted word is on the bar').toHaveLength(1)
+    const failing = MODES.filter((mode) => unreadable([...RULES, ...FIXTURE], planted, [mode]).length > 0)
+    // Chrome measured this lettering at 4.23:1 in the standard light theme and 10.69:1 in the standard
     // dark one; the resolver must agree both ways, or it is not measuring what Chrome painted.
     expect(failing, 'the control must fire in the standard light theme').toContain('light')
     expect(failing, 'and not in the standard dark theme').not.toContain('dark')
