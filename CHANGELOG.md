@@ -505,6 +505,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turning. It now takes the same red as the cockpits' Stop TX in every theme, dark and light,
   high-contrast and night included, and when you point at it, it turns solid red with the pane's
   own colour for its letters.
+- **The Rotor pane's → lines go away when you press ■ STOP.** The line that shows where the antenna
+  is going (`→ 200°`, and `→ EL 30°` for an elevation) and the dashed target on the compass stayed
+  after STOP until the antenna reached a heading it was no longer going to, so a stopped antenna
+  looked as if it were still turning. They now clear as soon as the rotator confirms the stop. If
+  the stop does not reach it, they stay, since the antenna may still be moving.
 - **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
   compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
   cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the

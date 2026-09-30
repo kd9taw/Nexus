@@ -174,3 +174,42 @@ describe('a browser on Nexus Remote', () => {
     await waitFor(() => expect(api.pointRotator).toHaveBeenCalledWith(200))
   })
 })
+
+describe('■ STOP ends every move the pane shows (operator, 2026-09-29: "the → markers that linger after STOP")', () => {
+  const onTheirWay = () => screen.queryAllByTitle(/commanded/i).map((e) => e.textContent)
+
+  it('clears the → bearing, the → elevation and the rose\'s target needle once the rotator has stopped', async () => {
+    const { container } = render(<RotorPane />)
+    await waitFor(() => expect(elBox()).not.toBeNull())
+    type(bearingBox(), '200')
+    type(elBox()!, '30')
+    await waitFor(() => expect(onTheirWay()).toEqual(['→ 200°', '→ EL 30°']))
+    expect(container.querySelector('.rotor-needle.target')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await waitFor(() => expect(api.stopRotator).toHaveBeenCalledTimes(1))
+    // The mast is heading nowhere now: it is not "on its way" to where it was sent before.
+    await waitFor(() => expect(onTheirWay()).toEqual([]))
+    expect(container.querySelector('.rotor-needle.target')).toBeNull()
+  })
+
+  it('an azimuth-only rotator\'s → bearing clears the same way', async () => {
+    api.readRotatorState.mockImplementation(() => Promise.resolve(ROTOR_EZ))
+    render(<RotorPane />)
+    await waitFor(() => expect(screen.queryByText(/123°T/)).not.toBeNull())
+    type(bearingBox(), '200')
+    await waitFor(() => expect(onTheirWay()).toEqual(['→ 200°']))
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await waitFor(() => expect(onTheirWay()).toEqual([]))
+  })
+
+  it('keeps them when the stop did not reach the rotator: the mast may still be on its way', async () => {
+    api.stopRotator.mockImplementation(() => Promise.reject(new Error('Nothing answers at 10.0.0.5:4533')))
+    render(<RotorPane />)
+    await waitFor(() => expect(elBox()).not.toBeNull())
+    type(bearingBox(), '200')
+    await waitFor(() => expect(onTheirWay()).toEqual(['→ 200°']))
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await waitFor(() => expect(toast.pushToast).toHaveBeenCalled())
+    expect(onTheirWay()).toEqual(['→ 200°'])
+  })
+})
