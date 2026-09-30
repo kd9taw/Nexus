@@ -93,6 +93,15 @@ pane back at 100%. The same menu has **? … in the manual**, which opens this
 manual in your browser at the part about that pane; a pane this manual does not
 describe yet has no link.
 
+**Tabs.** A slot can hold more than one pane. **⋯ ▸ Add a tab** lists the panes it
+can take; pick one and it joins the slot, shown, and the slot's title becomes a row
+of tabs. Click a tab to switch, or use ← →, Home and End on it. The picker changes
+the pane on the tab that is showing, and **⋯ ▸ Remove … from this slot** takes it
+out. A pane is only ever in one slot: adding one from another slot moves it, and a
+slot's only pane is not offered, since that slot would be empty. Each slot reopens
+on the tab it was showing. A layout from the Panels menu, or **Reset layout**, puts
+one pane back in each slot; **Undo** brings the tabs back.
+
 **Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one
 of the four, or **Custom** once you have moved or resized anything yourself.

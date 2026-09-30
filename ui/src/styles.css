@@ -490,6 +490,16 @@ html {
   margin: var(--space-1) 0;
   background: var(--border);
 }
+/* ⋯ ▸ Add a tab: the submenu's arrow at the row's end, and the pane list scrolling inside the room
+   the window leaves it (Radix measures it) rather than running off a short screen. */
+.box-menu-chev {
+  margin-left: auto;
+  padding-left: var(--space-2);
+}
+.box-menu-panes {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
 
 /* --- Now-Bar status/alert lane (honest-state: degradations never silent). --- */
 /* The persistent Now-Bar: one always-visible line of fused verdicts (band open /
@@ -1970,6 +1980,38 @@ button.nb-chip:hover {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-dim);
+}
+/* A SLOT'S TABS (several panes in one slot, features/connectConfig `tabs`): in the title's place and in
+   its face, one button per pane, the shown one in ink over an accent rule. A narrow slot's tabs WRAP
+   onto a second line rather than clip or scroll sideways, so every pane in the slot stays one click
+   away; the strip keeps its widest tab's width (min-width auto) and the head's controls yield first, as
+   they do beside a title. A tab is no taller than the title it replaces, so a slot keeps its head height
+   until its tabs wrap. The focus ring is the app's own (:focus-visible). */
+.pane-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-2);
+}
+.pane-tab {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0;
+}
+.pane-tab:hover {
+  color: var(--text);
+}
+.pane-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
 }
 .pane-pick {
   font-size: var(--fs-micro);

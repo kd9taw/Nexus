@@ -239,3 +239,163 @@ describe('a pane’s manual link — ⋯ ▸ ? … in the manual', () => {
     }
   })
 })
+
+describe('tabs — several panes in one slot', () => {
+  const CONFIG = 'nexus.connect.config'
+  const cfg = () => JSON.parse(localStorage.getItem(CONFIG) ?? 'null')
+  const tabsIn = (c: HTMLElement, s: SlotId) => within(frameOf(c, s)).queryAllByRole('tab')
+  const tabNames = (c: HTMLElement, s: SlotId) => tabsIn(c, s).map((b) => b.textContent)
+  const selected = (c: HTMLElement, s: SlotId) => tabsIn(c, s).find((b) => b.getAttribute('aria-selected') === 'true')?.textContent
+  const paneIn = (c: HTMLElement, s: SlotId) => frameOf(c, s)?.getAttribute('data-pane')
+  /** ⋯ ▸ Add a tab ▸ <pane>, the way a pointer does it. */
+  function openAddTab(c: HTMLElement, s: SlotId) {
+    const menu = openMenu(c, s)
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Add a tab/ }))
+    const menus = screen.getAllByRole('menu')
+    expect(menus.length, 'the submenu opened').toBe(2)
+    return menus[1]
+  }
+  const addTab = (c: HTMLElement, s: SlotId, name: string) =>
+    fireEvent.click(within(openAddTab(c, s)).getByRole('menuitem', { name }))
+  const layoutNow = () => {
+    if (!screen.queryByRole('group', { name: 'Layout' })) fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+    return screen.getByRole('group', { name: 'Layout' }).querySelector('.connect-layout-now')?.textContent
+  }
+
+  it('a layout saved before tabs loads exactly as today: every head is its title, no tab strip anywhere', async () => {
+    localStorage.setItem(CONFIG, JSON.stringify({ slots: { ...DEFAULT_SLOTS, left1: 'greyline' }, overlays: {} }))
+    const { container } = await mount()
+    for (const s of SLOT_IDS) {
+      const head = frameOf(container, s).querySelector('.pane-head')!
+      expect([...head.children].map((el) => el.className), s).toEqual(['pane-title', 'pane-acts'])
+      expect(frameOf(container, s).querySelector('[role="tablist"], [role="tabpanel"]'), s).toBeNull()
+    }
+    expect(paneIn(container, 'left1')).toBe('greyline')
+    expect(cfg().tabs, 'loading rewrote nothing').toBeUndefined()
+  })
+
+  it('⋯ ▸ Add a tab puts a second pane in the slot and shows it: the title becomes a tab strip and the body its tabpanel', async () => {
+    const { container } = await mount()
+    addTab(container, 'left2', 'Clock')
+    expect(tabNames(container, 'left2')).toEqual(['Bands for you', 'Clock'])
+    expect(selected(container, 'left2')).toBe('Clock')
+    expect(paneIn(container, 'left2')).toBe('clock')
+    const strip = within(frameOf(container, 'left2')).getByRole('tablist')
+    expect(strip.getAttribute('aria-label')).toBe('Panes in this slot')
+    const body = bodyOf(container, 'left2')
+    const shown = tabsIn(container, 'left2').find((b) => b.getAttribute('aria-selected') === 'true')!
+    expect(body.getAttribute('role')).toBe('tabpanel')
+    expect(body.getAttribute('aria-labelledby')).toBe(shown.id)
+    expect(shown.getAttribute('aria-controls')).toBe(body.id)
+    expect(cfg().slots.left2).toBe('clock')
+    expect(cfg().tabs).toEqual({ left2: ['bandTiles', 'clock'] })
+    expect(screen.queryByRole('menu'), 'the menu closed: the slot changed under it').toBeNull()
+  })
+
+  it('a click on a tab shows it, and the slot reopens on the tab that was showing', async () => {
+    const first = await mount()
+    addTab(first.container, 'right2', 'Greyline')
+    fireEvent.click(within(frameOf(first.container, 'right2')).getByRole('tab', { name: 'Band Outlook' }))
+    expect(paneIn(first.container, 'right2')).toBe('outlook')
+    first.unmount()
+    const { container } = await mount()
+    expect(selected(container, 'right2')).toBe('Band Outlook')
+    expect(tabNames(container, 'right2')).toEqual(['Band Outlook', 'Greyline'])
+  })
+
+  it('the keyboard: only the shown tab is in the Tab order, ←/→ wrap and show, Home/End go to the ends', async () => {
+    const { container } = await mount()
+    addTab(container, 'bottom1', 'Clock')
+    addTab(container, 'bottom1', 'Greyline')
+    expect(tabNames(container, 'bottom1')).toEqual(['Openings', 'Clock', 'Greyline'])
+    const order = () => tabsIn(container, 'bottom1').map((b) => b.tabIndex)
+    expect(order()).toEqual([-1, -1, 0])
+    const tab = (name: string) => within(frameOf(container, 'bottom1')).getByRole('tab', { name })
+    fireEvent.keyDown(tab('Greyline'), { key: 'ArrowRight' })
+    expect(paneIn(container, 'bottom1'), '→ wraps to the first').toBe('openings')
+    expect(document.activeElement).toBe(tab('Openings'))
+    expect(order()).toEqual([0, -1, -1])
+    fireEvent.keyDown(tab('Openings'), { key: 'ArrowLeft' })
+    expect(paneIn(container, 'bottom1'), '← wraps to the last').toBe('greyline')
+    fireEvent.keyDown(tab('Greyline'), { key: 'Home' })
+    expect(paneIn(container, 'bottom1')).toBe('openings')
+    fireEvent.keyDown(tab('Openings'), { key: 'End' })
+    expect(paneIn(container, 'bottom1')).toBe('greyline')
+    expect(document.activeElement).toBe(tab('Greyline'))
+  })
+
+  it('the picker replaces the SHOWN tab, in its place', async () => {
+    const { container } = await mount()
+    addTab(container, 'left2', 'Clock')
+    fireEvent.change(frameOf(container, 'left2').querySelector('select')!, { target: { value: 'insights' } })
+    expect(tabNames(container, 'left2')).toEqual(['Bands for you', 'Insights'])
+    expect(selected(container, 'left2')).toBe('Insights')
+  })
+
+  it('⋯ ▸ Remove takes the shown pane out; with one pane left the head is its title again', async () => {
+    const { container } = await mount()
+    addTab(container, 'left2', 'Clock')
+    let menu = openMenu(container, 'left2')
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remove Clock from this slot' }))
+    expect(tabsIn(container, 'left2')).toEqual([])
+    expect(frameOf(container, 'left2').querySelector('.pane-title')?.textContent).toBe('Bands for you')
+    expect(cfg().tabs).toEqual({})
+    menu = openMenu(container, 'left2')
+    expect(within(menu).queryByRole('menuitem', { name: /^Remove / }), 'a slot’s only pane has no Remove — ✕ closes the slot').toBeNull()
+  })
+
+  it('a pane is in one slot at most: a tab added here MOVES from the slot it was in', async () => {
+    localStorage.setItem(CONFIG, JSON.stringify({ slots: DEFAULT_SLOTS, tabs: { right2: ['outlook', 'clock'] }, overlays: {} }))
+    const { container } = await mount()
+    expect(tabNames(container, 'right2'), 'control: a stored tab strip loads').toEqual(['Band Outlook', 'Clock'])
+    addTab(container, 'left2', 'Clock')
+    expect(tabNames(container, 'left2')).toEqual(['Bands for you', 'Clock'])
+    expect(tabsIn(container, 'right2'), 'Clock left the other slot').toEqual([])
+    expect(paneIn(container, 'right2')).toBe('outlook')
+  })
+
+  it('another slot’s only pane is not offered — it would leave that slot empty', async () => {
+    const { container } = await mount()
+    const sub = openAddTab(container, 'left2')
+    const offered = within(sub).getAllByRole('menuitem').map((i) => i.textContent)
+    expect(offered).toContain('Clock')
+    expect(offered, 'Space Wx is the only pane of the bottom row’s middle slot').not.toContain('Space Wx')
+    expect(offered, 'already here').not.toContain('Bands for you')
+  })
+
+  it('Reset layout is one pane per slot again, and Undo brings the tabs back', async () => {
+    const { container } = await mount()
+    addTab(container, 'left2', 'Clock')
+    fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+    for (const s of SLOT_IDS) expect(tabsIn(container, s), s).toEqual([])
+    expect(cfg().tabs).toEqual({})
+    fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+    expect(tabNames(container, 'left2')).toEqual(['Bands for you', 'Clock'])
+    expect(selected(container, 'left2')).toBe('Clock')
+  })
+
+  it('with tabs the Layout menu reads Custom; a layout is one pane per slot, reads as itself, and Undo brings the tabs back', async () => {
+    const { container } = await mount()
+    expect(layoutNow()).toBe('Standard')
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Layout' }), { key: 'Escape' })
+    addTab(container, 'left2', 'Clock')
+    expect(layoutNow()).toBe('Custom')
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Dashboard' }))
+    expect(layoutNow()).toBe('Dashboard')
+    for (const s of SLOT_IDS) expect(tabsIn(container, s), s).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+    expect(tabNames(container, 'left2')).toEqual(['Bands for you', 'Clock'])
+    expect(layoutNow()).toBe('Custom')
+  })
+
+  it('a pane’s text size belongs to its slot: it applies to whichever tab is shown', async () => {
+    const { container } = await mount()
+    addTab(container, 'left2', 'Clock')
+    fireEvent.click(item(openMenu(container, 'left2'), /Larger text/))
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    expect(factorOf(container, 'left2')).toBe('1.1')
+    fireEvent.click(within(frameOf(container, 'left2')).getByRole('tab', { name: 'Bands for you' }))
+    expect(factorOf(container, 'left2')).toBe('1.1')
+  })
+})

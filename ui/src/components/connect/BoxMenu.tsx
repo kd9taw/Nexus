@@ -7,6 +7,10 @@
 // through the `open_external_url` command); in a plain browser — the TV page, the Remote page — the
 // anchor opens a tab by itself. Nothing is fetched until the operator asks.
 //
+// TABS: "Add a tab" opens a submenu of the panes the slot can take (connectConfig `addableTo`), in
+// the picker's own groups; "Remove … from this slot" takes the shown pane out while the slot holds
+// two or more. Both close the menu — the slot has changed under it.
+//
 // WHY ONE MENU AND NOT A ROW OF BUTTONS. A box head already carries the title, the content picker
 // and ✕, and a Connect column can be 200 px wide (Map first, or a dragged rail). Three more buttons
 // there (A−, A+, ?) would leave the picker a few pixels, or push ✕ past the frame's clip — the
@@ -22,12 +26,17 @@
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { t } from '../../i18n'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP } from '../../features/panelState'
+import type { PaneId } from '../../features/connectConfig'
+import { PANES } from './panes'
 
 export function BoxMenu({
   title,
   textScale,
   onTextScale,
   helpUrl,
+  addable,
+  onAddTab,
+  onRemoveTab,
 }: {
   /** The box's name, already translated — the trigger's accessible name says whose menu it is. */
   title: string
@@ -37,6 +46,12 @@ export function BoxMenu({
   onTextScale?: (factor: number) => void
   /** The manual section that describes this box. Null/omitted ⇒ no link. */
   helpUrl?: string | null
+  /** The panes this slot can take as a tab. */
+  addable?: readonly PaneId[]
+  /** Add one. Omitted ⇒ no "Add a tab". */
+  onAddTab?: (paneId: PaneId) => void
+  /** Take the shown pane out of the slot. Omitted ⇒ no "Remove" (a slot's only pane). */
+  onRemoveTab?: () => void
 }) {
   const pct = Math.round(textScale * 100)
   const step = (dir: 1 | -1) => onTextScale?.(Math.round((textScale + dir * BOX_SCALE_STEP) * 100) / 100)
@@ -87,7 +102,50 @@ export function BoxMenu({
                 </RM.Item>
               </RM.Group>
             )}
-            {onTextScale && helpUrl && <RM.Separator className="box-menu-sep" />}
+            {onTextScale && (onAddTab || onRemoveTab) && <RM.Separator className="box-menu-sep" />}
+            {onAddTab && (
+              <RM.Sub>
+                <RM.SubTrigger className="ui-menu-item" disabled={!addable?.length}>
+                  <span className="box-menu-glyph" aria-hidden="true">
+                    +
+                  </span>
+                  {t('connect.box.tab.add')}
+                  <span className="box-menu-chev" aria-hidden="true">
+                    ▸
+                  </span>
+                </RM.SubTrigger>
+                <RM.Portal>
+                  <RM.SubContent className="ui-menu box-menu box-menu-panes" sideOffset={2} collisionPadding={8}>
+                    <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
+                      {(['core', 'b2', 'b3'] as const).map((cat) => {
+                        const items = PANES.filter((p) => p.category === cat && addable?.includes(p.id))
+                        return items.length ? (
+                          <RM.Group key={cat}>
+                            <RM.Label className="box-menu-label">
+                              {cat === 'core' ? t('connect.slot.group.core') : cat.toUpperCase()}
+                            </RM.Label>
+                            {items.map((p) => (
+                              <RM.Item key={p.id} className="ui-menu-item" onSelect={() => onAddTab(p.id)}>
+                                {p.title}
+                              </RM.Item>
+                            ))}
+                          </RM.Group>
+                        ) : null
+                      })}
+                    </div>
+                  </RM.SubContent>
+                </RM.Portal>
+              </RM.Sub>
+            )}
+            {onRemoveTab && (
+              <RM.Item className="ui-menu-item" onSelect={() => onRemoveTab()}>
+                <span className="box-menu-glyph" aria-hidden="true">
+                  −
+                </span>
+                {t('connect.box.tab.remove', { title })}
+              </RM.Item>
+            )}
+            {(onTextScale || onAddTab || onRemoveTab) && helpUrl && <RM.Separator className="box-menu-sep" />}
             {helpUrl && (
               <RM.Item asChild className="ui-menu-item box-menu-link">
                 <a href={helpUrl} target="_blank" rel="noreferrer" title={t('connect.box.help.title')}>

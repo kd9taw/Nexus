@@ -40,7 +40,7 @@ import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { PaneContext } from './connect/paneContext'
-import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
+import { SLOT_IDS, addableTo, slotBoxes, useConnectConfig, type PaneId, type SlotId } from '../features/connectConfig'
 import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
 import type { RailWidths } from '../features/connectRails'
 import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
@@ -222,7 +222,7 @@ export function ConnectView({
   // panes with nothing on screen able to bring them back.
   const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, assignPane, resetSlots, restoreSlots } = useConnectConfig()
+  const { slots, tabs, assignPane, addTab, removeTab, showTab, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -472,7 +472,7 @@ export function ConnectView({
   // A preset sets the whole board in one tap and its widths are most of what it changes, so an
   // Undo that left them would not put the operator's arrangement back — and a saved arrangement
   // is never overwritten silently. A width drag is still no undo step of its own.
-  const beforeSwitch = useRef<{ slots: typeof slots; rails?: RailWidths } | null>(null)
+  const beforeSwitch = useRef<{ slots: typeof slots; tabs: typeof tabs; rails?: RailWidths } | null>(null)
   const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
     beforeSwitch.current = null
     fn(...a)
@@ -504,14 +504,14 @@ export function ConnectView({
   // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame. Which one is on
   // screen is READ BACK from the placement, the panel record and the stored rail widths — never
   // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
-  const layoutNow = connectLayoutNow({ slots, panels: panels.layout, rails: widths.pref })
+  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref })
   const layoutsId = useId()
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
   const pickLayout = (id: ConnectPresetId) => {
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
     const p = CONNECT_PRESETS[id]
-    beforeSwitch.current = { slots, rails: widths.pref }
+    beforeSwitch.current = { slots, tabs, rails: widths.pref }
     // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes
     // go and how much room each gets, never how big their words are — the rule it already keeps for
     // the map's own settings. Reset layout is what puts every pane back at the app's size.
@@ -520,6 +520,8 @@ export function ConnectView({
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
   }
 
+  // TABS (features/connectConfig): a slot holds one or more panes and shows one. Showing a tab is not
+  // an arrangement change, so it leaves the one Undo alone; adding or removing one is, like a pick.
   const frame = (s: SlotId, share?: number) => (
     <PaneFrame
       key={s}
@@ -531,6 +533,11 @@ export function ConnectView({
       onHide={change(() => panels.setPanelState(s, 'removed'))}
       textScale={panels.scaleOf(s)}
       onTextScale={change((f: number) => panels.setScale(s, f))}
+      tabs={slotBoxes({ slots, tabs }, s)}
+      onShowTab={(p: PaneId) => showTab(s, p)}
+      addable={addableTo({ slots, tabs }, s)}
+      onAddTab={change((p: PaneId) => addTab(s, p))}
+      onRemoveTab={change(() => removeTab(s))}
     />
   )
   const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {
@@ -602,13 +609,13 @@ export function ConnectView({
               beforeSwitch.current = null
               panels.undo()
               if (before) {
-                restoreSlots(before.slots)
+                restoreSlots(before.slots, before.tabs)
                 if (before.rails) widths.setPrefs(before.rails)
               }
             }}
             canUndo={panels.canUndo}
             onReset={() => {
-              beforeSwitch.current = { slots }
+              beforeSwitch.current = { slots, tabs }
               panels.reset()
               resetSlots()
               widths.resetAll()

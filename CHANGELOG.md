@@ -170,6 +170,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the manual, such as **? Space Wx in the manual**, and opens the part of the Nexus manual
   (hamradiotools.io/manual) that describes it, in your browser. A pane the manual does not describe
   yet has no link.
+- **Connect: several panes in one slot, as tabs.** A pane's **⋯** menu has **Add a tab**: pick a
+  pane and it joins that slot, shown, and the slot's title becomes a row of tabs, one per pane. Click
+  a tab to switch, or use the arrow keys, Home and End on it. The picker changes the pane on the tab
+  that is showing, and **⋯ ▸ Remove … from this slot** takes that pane out. A pane is only ever in
+  one slot, so adding one from another slot moves it; a slot's only pane is not offered. Each slot
+  reopens on the tab it was showing. The ready-made layouts are one pane per slot: picking one, or
+  **Reset layout**, takes the tabs away, and **Undo** brings them back. Layouts saved before this open
+  exactly as they were.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

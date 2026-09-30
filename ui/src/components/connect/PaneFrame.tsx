@@ -24,11 +24,17 @@
 // host that passes none of them gets today's frame — plus the ⋯ menu's manual link, which needs no
 // host at all (connect/paneHelp): the ⋯ renders whenever the menu has something in it.
 //
+// TABS (2026-09-29): a slot may hold several panes (features/connectConfig `tabs`). With two or more,
+// the title becomes a TAB STRIP — the WAI-ARIA tabs pattern: one button per pane in the title's own
+// face, the shown one selected and the only one in the Tab order, ←/→ (and Home/End) moving to the
+// next pane and showing it, the body the tabpanel. With one pane the head is the title, as it always
+// was. The picker replaces the SHOWN pane; ⋯ ▸ Add a tab and ⋯ ▸ Remove are the menu's.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every pane's name
 // arrives already translated from the registry (`panes.tsx`, resolved through getters); the
 // picker's B2/B3 groups are named by their tier code, which is not prose. The ✕ uses the
 // cockpit frame's own words (`pane.hide.*`) — one gesture, one sentence, in every view.
-import type { CSSProperties } from 'react'
+import { useId, type CSSProperties, type KeyboardEvent } from 'react'
 import { t } from '../../i18n'
 import { PANES, paneById } from './panes'
 import { BoxMenu } from './BoxMenu'
@@ -45,8 +51,14 @@ export function PaneFrame({
   onHide,
   textScale,
   onTextScale,
+  tabs,
+  onShowTab,
+  addable,
+  onAddTab,
+  onRemoveTab,
 }: {
   slotId: SlotId
+  /** The pane SHOWN in this slot. */
   paneId: PaneId
   ctx: PaneContext
   onAssign: (slotId: SlotId, paneId: PaneId) => void
@@ -58,12 +70,38 @@ export function PaneFrame({
   textScale?: number
   /** Change it. Omitted ⇒ the ⋯ menu offers no text size. */
   onTextScale?: (factor: number) => void
+  /** Every pane in this slot, in tab order (connectConfig `slotBoxes`). Omitted or one ⇒ no tabs. */
+  tabs?: readonly PaneId[]
+  /** Show one of them. */
+  onShowTab?: (paneId: PaneId) => void
+  /** What ⋯ ▸ Add a tab offers (connectConfig `addableTo`). */
+  addable?: readonly PaneId[]
+  /** Add one as a tab. Omitted ⇒ no Add a tab. */
+  onAddTab?: (paneId: PaneId) => void
+  /** Take the shown pane out of the slot — offered only while the slot holds two or more. */
+  onRemoveTab?: () => void
 }) {
+  const uid = useId()
   const def = paneById(paneId)
   if (!def) return null
   const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
   const scale = textScale ?? 1
   const helpUrl = paneHelpUrl(paneId)
+  const tabbed = tabs && tabs.length > 1 ? tabs : null
+  const tabId = (p: PaneId) => `${uid}-tab-${p}`
+  const panelId = `${uid}-panel`
+  // ←/→ wrap, Home/End: the WAI-ARIA tabs keys, showing the tab they reach (automatic activation).
+  const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (!tabbed) return
+    const i = tabbed.indexOf(paneId)
+    const n = tabbed.length
+    const to =
+      e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i - 1 + n) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1
+    if (to < 0) return
+    e.preventDefault()
+    onShowTab?.(tabbed[to])
+    ;(e.currentTarget.parentElement?.children[to] as HTMLElement | undefined)?.focus({ preventScroll: true })
+  }
   return (
     <section
       className="pane-frame"
@@ -76,7 +114,31 @@ export function PaneFrame({
       }
     >
       <header className="pane-head">
-        <span className="pane-title">{def.title}</span>
+        {tabbed ? (
+          <div className="pane-tabs" role="tablist" aria-label={t('connect.box.tabs.aria')}>
+            {tabbed.map((p) => {
+              const on = p === paneId
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  role="tab"
+                  id={tabId(p)}
+                  className={`pane-tab${on ? ' active' : ''}`}
+                  aria-selected={on}
+                  aria-controls={panelId}
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => onShowTab?.(p)}
+                  onKeyDown={onTabKey}
+                >
+                  {paneById(p)?.title ?? p}
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <span className="pane-title">{def.title}</span>
+        )}
         <div className="pane-acts">
           <select
             className="pane-pick"
@@ -101,8 +163,16 @@ export function PaneFrame({
               ) : null
             })}
           </select>
-          {(onTextScale || helpUrl) && (
-            <BoxMenu title={def.title} textScale={scale} onTextScale={onTextScale} helpUrl={helpUrl} />
+          {(onTextScale || helpUrl || onAddTab) && (
+            <BoxMenu
+              title={def.title}
+              textScale={scale}
+              onTextScale={onTextScale}
+              helpUrl={helpUrl}
+              addable={addable}
+              onAddTab={onAddTab}
+              onRemoveTab={tabbed ? onRemoveTab : undefined}
+            />
           )}
           {onHide && (
             <button
@@ -119,6 +189,7 @@ export function PaneFrame({
       </header>
       <div
         className="pane-body"
+        {...(tabbed ? { role: 'tabpanel', id: panelId, 'aria-labelledby': tabId(paneId) } : {})}
         style={scale === 1 ? undefined : ({ '--box-text-scale': scale } as CSSProperties)}
       >
         {body ?? <p className="pane-basic">{def.basic(ctx)}</p>}

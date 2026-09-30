@@ -7209,6 +7209,10 @@ export const EN = {
   // …and its link to the manual section that describes the pane (connect/paneHelp); the ? glyph stays in the code.
   'connect.box.help': '{{title}} in the manual',
   'connect.box.help.title': 'Opens this part of the manual in your browser',
+  // TABS: several panes in one slot. The strip of tabs is named for screen readers; the + and − glyphs stay in the code.
+  'connect.box.tabs.aria': 'Panes in this slot',
+  'connect.box.tab.add': 'Add a tab',
+  'connect.box.tab.remove': 'Remove {{title}} from this slot',
   // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
   // which pane sits in a slot is the operator's pick, so the title alone says nothing about
   // where the space will be taken from.
