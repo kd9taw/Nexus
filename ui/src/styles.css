@@ -6135,13 +6135,18 @@ select optgroup {
   color: var(--accent-ink);
   animation: pulse 0.9s ease-in-out infinite;
 }
+/* Every Stop TX reads in every theme (StopTx.contrast.test.tsx). The outline is the solid red (a
+   45 % mix was 1.61:1 on Lagoon's strip), the face is the page colour because the strips and the
+   log dialog are raised surfaces the red word cannot read on (3.64:1 on Lagoon's), and the hover
+   writes in the page colour on the red (white on the dark theme's red is 3.39:1). */
 .op-btn.stop {
   color: var(--state-weak);
-  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+  background: var(--bg);
+  border-color: var(--state-weak);
 }
 .op-btn.stop:hover {
   background: var(--state-weak);
-  color: #fff;
+  color: var(--bg);
 }
 
 /* ---- TX watchdog warning chip ---- */
@@ -8237,6 +8242,9 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--state-weak);
   font-weight: 800;
 }
+/* The outline is the solid red and the hover fills it under page-coloured words: a 50 % outline was
+   under 3:1 in every dark theme, and the 22 % hover fill took the word under 4.5:1
+   (StopTx.contrast.test.tsx). */
 .cw-abort,
 .cockpit-stoptx {
   padding: 6px var(--space-4);
@@ -8244,11 +8252,12 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 800;
   color: var(--state-weak);
   background: color-mix(in srgb, var(--state-weak) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--state-weak) 50%, transparent);
+  border: 1px solid var(--state-weak);
 }
 .cw-abort:hover,
 .cockpit-stoptx:hover {
-  background: color-mix(in srgb, var(--state-weak) 22%, transparent);
+  background: var(--state-weak);
+  color: var(--bg);
 }
 /* How far a REMOTE Stop has got, beside the button that sent it. `--state-weak` while it is only
    SENT (the station accepted it; the rig may still be keyed), `--state-good` once the station's own
@@ -24542,8 +24551,11 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   padding: 6px var(--space-5);
 }
+/* Live, it sits on the page colour: the TX bar is a raised surface, and the red word on it was
+   4.16:1 on Lagoon's (StopTx.contrast.test.tsx). */
 .sstv-tx-stop:not(:disabled) {
   color: var(--state-weak);
+  background: var(--bg);
   border-color: var(--state-weak);
 }
 .sstv-tx-stop:disabled {

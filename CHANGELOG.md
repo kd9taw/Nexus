@@ -439,6 +439,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stop TX stands out in every theme.** In the dark themes, Stop TX in Operate, in the top bar and
+  in the log dialog on the Remote page had an outline barely darker than the strip around it, and
+  it wrote white on the red when the pointer was over it, which was hard to read. The cockpit
+  headers' Stop TX had a faint outline in the dark themes too, and its word faded under the
+  pointer. Now every Stop TX has a solid red outline in every theme, dark and light, high
+  contrast and night. It turns solid red under the pointer, with the word in the page colour. On
+  a strip lighter than the page, it sits on the page colour so the red word reads. SSTV's Stop
+  sits on the page colour too while a picture is going out, and so does Roam's Stop, which shares
+  the look. Nothing else about the buttons changed: the same place, size, words and keys.
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a
