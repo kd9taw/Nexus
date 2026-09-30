@@ -61,4 +61,9 @@ describe('JS8 api wrappers', () => {
     expect(s.speed).toBe('normal')
     expect(s.rxSpeeds).toBe(15)
   })
+
+  it('asks the JS8 gate about the locator by its own command, with no arguments', async () => {
+    await api.js8LocatorRefusal()
+    expect(calls).toEqual([{ cmd: 'js8_locator_refusal', args: undefined }])
+  })
 })

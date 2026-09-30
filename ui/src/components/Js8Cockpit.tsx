@@ -43,6 +43,7 @@ import {
   js8Enter,
   js8InboxDelete,
   js8InboxMark,
+  js8LocatorRefusal,
   js8Send,
   js8SendCommand,
   js8SetSpeed,
@@ -84,6 +85,7 @@ import {
   dtLabel,
   estimateFrames,
   fmtSnr,
+  js8ListedStations,
   utcClock,
 } from '../js8Vocab'
 
@@ -106,6 +108,9 @@ interface Props {
   onSetTxEnabled?: (on: boolean) => void
   theme?: string
   wheelSensitivity?: number
+  /** JS8Call's callsign aging from Settings, in minutes (0 = off): the Stations list leaves out
+   *  a call not heard for this long (`js8ListedStations`). */
+  callsignAgingMin?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -163,6 +168,7 @@ export function Js8Cockpit({
   onSetTxEnabled,
   theme = 'dark',
   wheelSensitivity,
+  callsignAgingMin = 0,
   onOpenLogbook,
   panels,
   onOpenSettings,
@@ -381,8 +387,9 @@ export function Js8Cockpit({
     })
   }
   // JS8Call's query menu sends a station your locator in one click, `<call> GRID <my_grid()>`
-  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657); so is the button, and
-  // the engine refuses a send with no locator whatever the button says.
+  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657). The button is disabled
+  // whenever the JS8 gate refuses the locator (`locatorRefusal`), and the engine refuses such a
+  // send whatever the button says.
   const sendMyGrid = (call: string) => {
     if (!canControl) return
     if (refuseIfUnready()) return
@@ -473,6 +480,26 @@ export function Js8Cockpit({
   const units = useUnits()
   const myGrid = snap?.mygrid ?? ''
   const ownGrid = myGrid.trim().toUpperCase()
+  // JS8Call's Settings refuse a malformed locator (Configuration.cpp:2443-2446), so its GRID menu
+  // item only ever meets a good one or none, and is disabled for none (mainwindow.cpp:6657).
+  // Nexus's Settings can hold a malformed one, which the JS8 gate refuses. "Send my grid" asks
+  // that gate, its one rule, whenever the locator changes: disabled while it refuses, with its
+  // reason as the tooltip, and until it has answered. The Remote never asks (it cannot send).
+  const [locatorRefusal, setLocatorRefusal] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!active || !canControl) return
+    let live = true
+    void js8LocatorRefusal()
+      .then((reason) => {
+        if (live) setLocatorRefusal(reason)
+      })
+      .catch(() => {
+        if (live) setLocatorRefusal(undefined)
+      })
+    return () => {
+      live = false
+    }
+  }, [active, canControl, myGrid])
 
   // ONE row per offset, from the same activity feed (js8Vocab.bandActivityByOffset) — the
   // pane adds no engine state, it reads the decodes the transcript already carries.
@@ -499,6 +526,16 @@ export function Js8Cockpit({
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
   const now = js8DisplayNow(js8)
+  // The list only: the station keeps every call it heard, so the log strip, the rotator and the
+  // To box still know an aged one, as JS8Call's call activity does.
+  const listedStations = js8
+    ? js8ListedStations(js8.stations, js8.inbox, {
+        agingMin: callsignAgingMin,
+        nowMs: now,
+        selectedCall,
+        myCall: snap?.mycall ?? '',
+      })
+    : []
 
   const hbTitle =
     js8?.hbOn && js8.armed.hb
@@ -700,7 +737,7 @@ export function Js8Cockpit({
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
-          sortPinnedFirst(js8.stations, pins).map((h) => {
+          sortPinnedFirst(listedStations, pins).map((h) => {
             // The DX columns JS8Call carries (mainwindow.cpp:10296-10362): distance and
             // azimuth from MY grid to theirs, then the logbook's answer about this call. The
             // grid falls back to the one in the log when the station has not sent one — the
@@ -795,9 +832,12 @@ export function Js8Cockpit({
                 <button
                   type="button"
                   className="cw-macro js8-query js8-send-grid"
-                  disabled={!canControl || !ownGrid}
+                  disabled={!canControl || locatorRefusal !== null}
                   onClick={() => sendMyGrid(h.call)}
-                  title={ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined}
+                  title={
+                    locatorRefusal ??
+                    (ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined)
+                  }
                 >
                   {ownGrid ? `${JS8_GRID.label} ${ownGrid}` : JS8_GRID.label}
                 </button>

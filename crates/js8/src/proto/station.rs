@@ -153,6 +153,10 @@ pub struct StationConfig {
     /// a beacon (`buildRepeatMenu`'s `isLowInterval`, mainwindow.cpp:6186).
     pub cq_interval_min: u16,
     pub idle_watchdog_min: u16,
+    /// JS8Call's callsign aging (`CallsignAging`, whole minutes; 0, its default, is off:
+    /// Configuration.cpp:1853). A call last heard this long ago or more is left out of the
+    /// HEARING? reply (mainwindow.cpp:8894) and out of the saved heard list (:2021).
+    pub callsign_aging_min: u16,
     pub groups: Vec<String>,
     pub info: String,
     pub status: String,
@@ -172,6 +176,7 @@ impl Default for StationConfig {
             hb_interval_min: 0,
             cq_interval_min: 0,
             idle_watchdog_min: 60,
+            callsign_aging_min: 0,
             groups: Vec::new(),
             info: String::new(),
             status: String::new(),
@@ -594,7 +599,7 @@ impl Station {
                 self.expand_grid_macros(&self.cfg.info)
             )),
             Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text(now_ms))),
-            Command::HearingQuery => Some(self.hearing_reply(&from)),
+            Command::HearingQuery => Some(self.hearing_reply(&from, now_ms)),
             Command::Nack | Command::Ack => None, // acks are logged, not answered
             _ => None,
         };
@@ -804,15 +809,25 @@ impl Station {
     }
 
     /// JS8Call's HEARING? reply (mainwindow.cpp:8868-8905): "<FROM> HEARING" (:8903), then up to
-    /// four calls, newest first (:8873-8883), never the station that asked (:8890). JS8Call also
-    /// skips calls older than its callsign aging (:8894), a setting that ships off (CallsignAging
-    /// 0, Configuration.cpp:1853) and that Nexus does not have, so nothing is aged out here.
-    fn hearing_reply(&self, from: &str) -> String {
-        let mut calls: Vec<&Heard> = self.heard.iter().filter(|h| h.call != from).collect();
+    /// four calls, newest first (:8873-8883), never the station that asked (:8890) and none its
+    /// callsign aging has passed (:8894), a setting that ships off.
+    fn hearing_reply(&self, from: &str, now_ms: u64) -> String {
+        let mut calls: Vec<&Heard> = self
+            .heard
+            .iter()
+            .filter(|h| h.call != from && !self.aged(h, now_ms))
+            .collect();
         calls.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
         let mut words = vec![format!("{from} HEARING")];
         words.extend(calls.iter().take(4).map(|h| h.call.clone()));
         words.join(" ")
+    }
+
+    /// JS8Call's callsign-aging test, `callsignAging && cd.utcTimestamp.secsTo(now) / 60 >=
+    /// callsignAging` (mainwindow.cpp:8894, :2021): whole minutes since the call was last heard.
+    fn aged(&self, h: &Heard, now_ms: u64) -> bool {
+        let aging = u64::from(self.cfg.callsign_aging_min);
+        aging > 0 && now_ms.saturating_sub(h.last_ms) / 60_000 >= aging
     }
 
     fn schedule_reply(
@@ -1388,10 +1403,20 @@ impl Station {
         self.last_tx_display.as_deref()
     }
 
-    pub fn snapshot(&self) -> StationSnapshot {
+    /// The journal's copy of the station, taken at `now_ms`. JS8Call saves its call activity
+    /// without the calls its callsign aging has passed (`writeSettings`, mainwindow.cpp:2013-2023,
+    /// run as it closes, :3059), and so does this. Nexus writes the journal when the inbox
+    /// changes rather than as it closes, so a call that ages after the last write is restored,
+    /// still aged.
+    pub fn snapshot(&self, now_ms: u64) -> StationSnapshot {
         StationSnapshot {
             inbox: self.inbox.clone(),
-            heard: self.heard.clone(),
+            heard: self
+                .heard
+                .iter()
+                .filter(|h| !self.aged(h, now_ms))
+                .cloned()
+                .collect(),
             allcall_replied: self
                 .allcall_replied
                 .iter()
@@ -2882,7 +2907,7 @@ mod tests {
             1000,
         );
         s.on_event(&heartbeat("N0XYZ", -12), 2000);
-        let snap = s.snapshot();
+        let snap = s.snapshot(2500);
         let json = serde_json::to_string(&snap).unwrap();
         let back: StationSnapshot = serde_json::from_str(&json).unwrap();
         let mut s2 = Station::new(cfg());
@@ -3247,6 +3272,67 @@ mod tests {
             hearing_reply(&mut s, "W1AW", 60_000).as_deref(),
             Some("KD9TAW: W1AW HEARING"),
             "with nobody else heard, the reply names nobody"
+        );
+    }
+
+    /// JS8Call's callsign aging (mainwindow.cpp:8894): with it set, a call last heard that many
+    /// whole minutes ago or more takes no place in the HEARING? reply. Off (0, its default,
+    /// Configuration.cpp:1853), nothing ages.
+    #[test]
+    fn a_hearing_reply_leaves_out_calls_older_than_the_callsign_aging() {
+        let aging = |min: u16| {
+            Station::new(StationConfig {
+                callsign_aging_min: min,
+                ..cfg()
+            })
+        };
+        let t = 20 * 60_000;
+        let mut s = aging(10);
+        heard_at(&mut s, "K1ABC", t - 10 * 60_000);
+        heard_at(&mut s, "N0XYZ", t - 10 * 60_000 + 1_000);
+        heard_at(&mut s, "K2DEF", t - 60_000);
+        assert_eq!(
+            hearing_reply(&mut s, "W1AW", t).as_deref(),
+            Some("KD9TAW: W1AW HEARING K2DEF N0XYZ"),
+            "heard ten whole minutes ago is aged out, 9:59 ago is not"
+        );
+        let mut s = aging(0);
+        heard_at(&mut s, "K1ABC", 0);
+        heard_at(&mut s, "K2DEF", t - 60_000);
+        assert_eq!(
+            hearing_reply(&mut s, "W1AW", t).as_deref(),
+            Some("KD9TAW: W1AW HEARING K2DEF K1ABC"),
+            "off, nothing ages"
+        );
+    }
+
+    /// JS8Call saves its call activity without the calls its callsign aging has passed
+    /// (mainwindow.cpp:2013-2023), keeping them in memory, so they do not come back after a
+    /// restart. The journal's snapshot leaves them out the same way; with the aging off it keeps
+    /// every call.
+    #[test]
+    fn the_journal_leaves_out_calls_older_than_the_callsign_aging() {
+        let t = 20 * 60_000;
+        let mut s = Station::new(StationConfig {
+            callsign_aging_min: 10,
+            ..cfg()
+        });
+        heard_at(&mut s, "K1ABC", t - 10 * 60_000);
+        heard_at(&mut s, "K2DEF", t - 60_000);
+        let calls = |snap: StationSnapshot| -> Vec<String> {
+            snap.heard.into_iter().map(|h| h.call).collect()
+        };
+        assert_eq!(
+            calls(s.snapshot(t)),
+            ["K2DEF"],
+            "the aged call is not saved"
+        );
+        assert_eq!(s.heard().len(), 2, "and it is still heard, as in JS8Call");
+        s.set_config(cfg());
+        assert_eq!(
+            calls(s.snapshot(t)),
+            ["K1ABC", "K2DEF"],
+            "off, every call is saved"
         );
     }
 }

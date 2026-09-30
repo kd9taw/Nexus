@@ -1952,14 +1952,16 @@ export function SettingsPanel({
       .map((g) => g.trim().toUpperCase().replace(/^@+/, ''))
       .filter(Boolean)
       .map((g) => `@${g}`)
-  // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
+  // Whole non-negative minutes, up to `max`; junk leaves the stored value alone (never coerces
+  // to 0).
   const updateMinutes = (
-    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin',
+    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin' | 'js8CallsignAgingMin',
     raw: string,
+    max = Infinity,
   ) => {
     const n = Number(raw)
     if (raw.trim() === '' || Number.isNaN(n)) return
-    updateNum(key, Math.max(0, Math.floor(n)))
+    updateNum(key, Math.min(max, Math.max(0, Math.floor(n))))
   }
 
   // The RF digipeater path, edited as one comma-separated field for the same reason as the
@@ -3164,14 +3166,17 @@ export function SettingsPanel({
       setPosNameInvalid(true)
       return
     }
-    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: its Settings refuses the save
-    // ("%1 is a group that cannot be joined", Configuration.cpp:2449-2453). ON THE CHANGE, as the
-    // position name above: a settings file from a Nexus that accepted one loads and is not
-    // refused on an unrelated save, and the engine never joins it either way.
-    const js8Groups = form.js8Groups ?? []
-    const js8GroupsChanged = js8Groups.join(',') !== (savedRef.current?.js8Groups ?? []).join(',')
-    const unjoinable = js8Groups.find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
-    if (js8GroupsChanged && unjoinable) {
+    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: while either is in the Groups
+    // field its Settings refuses OK, whatever else changed ("%1 is a group that cannot be joined",
+    // Configuration.cpp:2449-2453, asked by accept() at :2595), reading the field upper-cased. So
+    // does this Save, a settings file from a Nexus that accepted one included. Only this Save:
+    // the switches here that save on the click, a cockpit's own settings and the backend's own
+    // writers (window places, band and rig state) never pass through it, and the engine never
+    // joins the group either way.
+    const unjoinable = (form.js8Groups ?? [])
+      .map((g) => g.trim().toUpperCase())
+      .find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
+    if (unjoinable) {
       setTab('digital')
       setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
       return
@@ -8437,6 +8442,23 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.js8.rxSpeeds.hint')}</span>
               </div>
+              {/* JS8Call's "Remove callsigns from call activity after" (CallsignAging): 0,
+                  "Disabled", to 1440 minutes (Configuration.ui:464-490). */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.callsignAgingMin.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={1440}
+                  value={String(form.js8CallsignAgingMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8CallsignAgingMin', e.target.value, 1440)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.callsignAgingMin.hint')}</span>
+              </label>
             </div>
 
             <div className="settings-featgroup">

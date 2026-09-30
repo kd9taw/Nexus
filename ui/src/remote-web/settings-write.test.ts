@@ -44,7 +44,9 @@ it('writes only settings on the allow-list, each in its own type, against the do
     { audioOut: 'Speakers' }, { betaUpdates: true }, { clusterHosts: [] }, { saveWav: 'all' }, { txEven: true }, { dialMhz: 14.074 },
     { tunePowerPct: 100 }, { alertCq: true }, { soundTxState: true }, { specialOp: 'hound' }, { fdActive: true }, { lotwAutoUpload: true },
     { clublogApiKey: 'secret' }, { autoLog: true, rigPort: 'COM3' }, {},
-    { autoLog: 'yes' }, { decodeDepth: '2' }, { contestCheck: 7 }, { macros: [] }, { units: null }
+    { autoLog: 'yes' }, { decodeDepth: '2' }, { contestCheck: 7 }, { macros: [] }, { units: null },
+    // JS8 groups, the two JS8Call will not let be joined above all, change only at the station.
+    { js8Groups: ['@APRSIS'] }, { js8Groups: ['@JS8NET'] }, { autoLog: true, js8Groups: ['@APRSIS'] }
   ])
     expect(() => logChange({ kind: 'settings', revision, values }), JSON.stringify(values)).toThrow()
   for (const bad of [

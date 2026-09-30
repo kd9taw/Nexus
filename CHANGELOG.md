@@ -75,11 +75,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: send your grid to a station in one click, as in JS8Call.** Each station in the JS8
   cockpit's Stations pane has a new button beside the quick queries, **GRID** followed by your
   locator. One click sends that station your locator, the way JS8Call's menu item "GRID … - Send
-  my current station Maidenhead grid locator" does. It is greyed out until Settings has a locator.
+  my current station Maidenhead grid locator" does. It is greyed out while Settings has no
+  locator, or one JS8 will not send (such as EN5), and its tooltip then says what to set.
 - **JS8: the `<MYGRID4>` and `<MYGRID12>` macros, as in JS8Call.** Type either in a JS8 message,
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
   current value, so it follows the locator when you move.
+- **JS8: callsign aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Callsign aging
+  (minutes)** field, off (0) by default as in JS8Call. Set it, and a station you have not heard
+  for that many minutes drops off the JS8 Stations pane, unless it is the one you have selected
+  or it has an unread message for you, and your automatic HEARING? replies leave it out. It is
+  not saved with the heard list either, so it does not come back when Nexus restarts. Up to 1440
+  minutes, a day, as in JS8Call. The Remote's Stations pane follows the station's setting.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -302,12 +309,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** Saving Settings
-  with either in the JS8 Groups field is refused with "… is a group that cannot be joined", as
-  JS8Call's Settings refuses it. Messages can still be sent to both. If an earlier Nexus saved one
-  in your settings, it stays in the file and in the field but is not joined, so traffic to it gets
-  no automatic replies. Other changes still save, and the next edit of the Groups field asks you
-  to take it out.
+- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
+  in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
+  group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.
+  Messages can still be sent to both. If an earlier Nexus saved one in your settings, it stays in
+  the file and in the field but is not joined, so traffic to it gets no automatic replies, and
+  your next Save asks you to take it out. Nothing that saves by itself is held up: window places,
+  band and radio state, and the switches that save when you click them.
 
 - **JS8: a HEARING? reply no longer names the station that asked, as in JS8Call.** A station asking
   who you hear used to find its own call in your reply, usually first, taking one of the four
@@ -472,6 +480,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station drifting a little at Fast or Turbo could show as two rows, because the pane joined
   decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's
   own tolerances, and keeps 10 Hz at Normal and Slow.
+
+- **JS8: the Band activity by offset pane files each signal on the row JS8Call does.** An offset
+  reads in whole hertz as JS8Call shows it (a signal at 1500.9 Hz is on the 1500 row, not 1501). A
+  signal at an offset already on the list stays on that row, and one near two rows joins the lower
+  of them. Before, a signal joined whichever row had been listed first, and two rows could show
+  the same offset.
 
 - **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
   STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8

@@ -3496,6 +3496,10 @@ export interface Settings {
   /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/
    * relay switch OFF after this long without an operator act. */
   js8IdleWatchdogMin: number
+  /** JS8Call's callsign aging in minutes (0 = off, the default; JS8Call's field runs 0-1440): a
+   * station not heard for this long leaves the Stations list, unless it is selected or has an
+   * unread message for me, and HEARING? replies. */
+  js8CallsignAgingMin: number
   /** Free text answered to INFO?. */
   js8Info: string
   /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */

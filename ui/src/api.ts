@@ -2776,6 +2776,12 @@ export async function getJs8State(): Promise<Js8State> {
   return invoke<Js8State>('get_js8_state')
 }
 
+/** Why the JS8 gate would refuse the locator in Settings (the gate's own sentence), or null when
+ *  it would take it. "Send my grid" follows this rather than a copy of the gate's rule. */
+export async function js8LocatorRefusal(): Promise<string | null> {
+  return invoke<string | null>('js8_locator_refusal')
+}
+
 /** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo). Persisted; the slot
  * clock and the boundary decode window follow. Never touches the TX latch. */
 export async function js8SetSpeed(speed: number): Promise<Js8State> {

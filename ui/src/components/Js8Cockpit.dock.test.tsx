@@ -56,6 +56,7 @@ vi.mock('../api', async (importOriginal) => {
     js8Arm: vi.fn(async () => s()),
     js8Cancel: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
+    js8LocatorRefusal: vi.fn(async () => null),
     // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
     // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
     getLicensedBandPlan: vi.fn(async () => []),
@@ -75,6 +76,7 @@ const js8SendCommand = api.js8SendCommand as ReturnType<typeof vi.fn>
 const js8Arm = api.js8Arm as ReturnType<typeof vi.fn>
 const js8Cancel = api.js8Cancel as ReturnType<typeof vi.fn>
 const js8DropQueue = api.js8DropQueue as ReturnType<typeof vi.fn>
+const js8LocatorRefusal = api.js8LocatorRefusal as ReturnType<typeof vi.fn>
 
 const snap = {
   mycall: 'KD9TAW',
@@ -89,6 +91,8 @@ beforeEach(() => {
   js8Arm.mockClear()
   js8Cancel.mockClear()
   js8DropQueue.mockClear()
+  js8LocatorRefusal.mockReset()
+  js8LocatorRefusal.mockImplementation(async () => null)
   toast.pushToast.mockClear()
   globalThis.ResizeObserver = class {
     observe() {}
@@ -263,6 +267,8 @@ describe('the pending auto-reply and the queue', () => {
 // one-click queries are Nexus's query menu.
 describe('send my grid, from a station row', () => {
   const sendGrid = () => q<HTMLButtonElement>('.js8-station-acts .js8-send-grid')
+  /** The engine's JS8_NO_LOCATOR, the gate's words. */
+  const NO_LOCATOR = 'Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.'
 
   it('one click sends that station GRID and the whole locator', async () => {
     await renderCockpit({ ...snap, mygrid: 'en52xa' } as AppSnapshot)
@@ -275,6 +281,7 @@ describe('send my grid, from a station row', () => {
   })
 
   it('is disabled with no locator in Settings', async () => {
+    js8LocatorRefusal.mockImplementation(async () => NO_LOCATOR)
     await renderCockpit({ ...snap, mygrid: '  ' } as AppSnapshot)
     expect(sendGrid()?.disabled).toBe(true)
     expect(sendGrid().textContent).toBe('GRID')
@@ -282,5 +289,33 @@ describe('send my grid, from a station row', () => {
       fireEvent.click(sendGrid())
     })
     expect(js8SendCommand).not.toHaveBeenCalled()
+  })
+
+  // JS8Call's Settings refuse a malformed locator (Configuration.cpp:2443-2446), so its GRID item
+  // never meets one. Nexus's Settings can hold one, which the JS8 gate refuses; the button takes
+  // the gate's own answer (`js8_locator_refusal`), not a copy of its rule.
+  it("is disabled, with the gate's reason as its tooltip, whenever the JS8 gate refuses the locator", async () => {
+    js8LocatorRefusal.mockImplementation(async () => NO_LOCATOR)
+    await renderCockpit({ ...snap, mygrid: 'EN5' } as AppSnapshot)
+    expect(sendGrid()?.disabled, 'a locator the gate refuses').toBe(true)
+    expect(sendGrid().title, "the gate's reason").toBe(NO_LOCATOR)
+    await act(async () => {
+      fireEvent.click(sendGrid())
+    })
+    expect(js8SendCommand).not.toHaveBeenCalled()
+  })
+
+  it('asks the gate again when the locator in Settings changes', async () => {
+    js8LocatorRefusal.mockImplementation(async () => NO_LOCATOR)
+    const r = await renderCockpit({ ...snap, mygrid: 'EN5' } as AppSnapshot)
+    expect(sendGrid()?.disabled, 'control: EN5 is refused').toBe(true)
+    js8LocatorRefusal.mockImplementation(async () => null)
+    r.rerender(<Js8Cockpit snap={{ ...snap, mygrid: 'EN52' } as AppSnapshot} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(sendGrid()?.disabled, 'EN52, which the gate takes').toBe(false)
+    expect(sendGrid().title).toBe('Send your grid square EN52 to W1AW')
   })
 })

@@ -156,6 +156,8 @@ const SETTINGS_KEYS: &[&str] = &[
     "sstvDefaultTxMode",
     "sstvTxPowerPct",
     "wheelTuneSensitivity",
+    // The JS8 cockpit's Stations list ages calls by it, on the Remote as at the station.
+    "js8CallsignAgingMin",
     "specialOp",
 ];
 fn settings_view(settings: &tempo_app::settings::Settings) -> Result<Value, &'static str> {
@@ -830,6 +832,18 @@ mod tests {
         let view = settings_view(&settings).unwrap();
         assert_eq!(view["activeRadio"], 7);
         assert!(view.get("radios").is_none());
+    }
+
+    /// The Remote's JS8 cockpit ages its Stations list by the station's own callsign aging, so
+    /// the live view carries it. A station from before the setting sends none, which the page
+    /// reads as off, what that station does.
+    #[test]
+    fn the_live_view_carries_the_js8_callsign_aging() {
+        let settings = tempo_app::settings::Settings {
+            js8_callsign_aging_min: 10,
+            ..Default::default()
+        };
+        assert_eq!(settings_view(&settings).unwrap()["js8CallsignAgingMin"], 10);
     }
 
     #[test]

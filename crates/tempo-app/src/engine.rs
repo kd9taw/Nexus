@@ -4704,6 +4704,7 @@ impl Engine {
             hb_interval_min: 0,
             cq_interval_min: 0,
             idle_watchdog_min: 0,
+            callsign_aging_min: 0,
             groups: Vec::new(),
             info: String::new(),
             status: String::new(),

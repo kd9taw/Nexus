@@ -1106,6 +1106,10 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 - **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
   a Slow station and a Turbo station on the same band both print, each activity row
   marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
+  not heard for this many minutes drops off the cockpit's Stations list (the one you have
+  selected, or one with an unread message for you, stays) and is left out of your
+  `HEARING?` replies. Up to 1440, a day.
 
 **Automatic transmissions**
 
@@ -1141,7 +1145,9 @@ nothing until you enable TX in the cockpit, every session.
 - **STATUS** — what a `STATUS?` query gets back. Blank sends the JS8Call form: `IDLE`,
   the idle minutes, and the app name.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
-  them counts as addressed to you. `@ALLCALL` is everyone and is always on.
+  them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
+  `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
+  this field, and says so.
 
 ### SSTV
 

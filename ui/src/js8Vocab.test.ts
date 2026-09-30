@@ -4,9 +4,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   JS8_COMMANDS, JS8_CQS, JS8_SPEEDS, JS8_SPEED_LIST, JS8_QUICK_QUERIES,
-  ageLabel, bandActivityByOffset, countBits, dtLabel, estimateFrames, fmtSnr, utcClock,
+  ageLabel, bandActivityByOffset, countBits, dtLabel, estimateFrames, fmtSnr, js8ListedStations, utcClock,
 } from './js8Vocab'
-import type { Js8ActivityRow } from './types'
+import type { Js8ActivityRow, Js8Heard, Js8InboxEntry } from './types'
 
 describe('the 32-command table (varicode.cpp:46-84, leading space included)', () => {
   it('has 32 unique ids 0..31 in order and the exact wire texts', () => {
@@ -134,6 +134,35 @@ describe('bandActivityByOffset — JS8Call’s offset-bucketed band-activity tab
     const normalApart = bandActivityByOffset([row(1_000, 1500, 'A', { speed: 'turbo' }), row(2_000, 1530, 'B')])
     expect(normalApart.map((r) => r.offsetHz), 'a Normal decode 30 Hz from a Turbo bucket does not').toEqual([1500, 1530])
   })
+
+  // JS8Call files a decode at `frequencyOffset()`, the int the decoder's float frequency is handed
+  // in as (decodedtext.cpp:248 → decodedtext.h:80): truncated, never rounded.
+  it('files a decode at its offset truncated to whole hertz', () => {
+    expect(bandActivityByOffset([row(1_000, 1500.9, 'A')]).map((r) => r.offsetHz), '1500.9 Hz files at 1500').toEqual([1500])
+    // 1510.6 Hz files at 1510, inside Normal's 10 Hz of 1500; rounded it would be 1511, outside.
+    const out = bandActivityByOffset([row(1_000, 1500, 'A'), row(2_000, 1510.6, 'B')])
+    expect(out.map((r) => [r.offsetHz, r.text]), 'a truncated offset joins its neighbour').toEqual([[1510, 'B']])
+  })
+
+  // An offset already filed takes the decode as it is (mainwindow.cpp:3969); only a new offset
+  // looks for a neighbour to take over (:3970-3981).
+  it('files a decode at its own offset when that offset is already filed, whatever else is in range', () => {
+    // A Turbo bucket at 1500 and a Normal one at 1520 stand apart (20 Hz is over Normal's 10). A
+    // Turbo decode at 1520 lands on 1520, though 1500 is within Turbo's 32 Hz.
+    const out = bandActivityByOffset([
+      row(1_000, 1500, 'A', { speed: 'turbo' }),
+      row(2_000, 1520, 'B'),
+      row(3_000, 1520, 'C', { speed: 'turbo' }),
+    ])
+    expect(out.map((r) => [r.offsetHz, r.text])).toEqual([[1500, 'A'], [1520, 'C']])
+  })
+
+  // A new offset takes over the first filed offset `generateOffsets` meets counting up from
+  // offset − range (mainwindow.cpp:3972-3979, :3730-3739): the lowest in range, not the oldest.
+  it('a new offset takes over the lowest filed offset in range, not the one filed first', () => {
+    const out = bandActivityByOffset([row(1_000, 1520, 'A'), row(2_000, 1500, 'B'), row(3_000, 1510, 'C')])
+    expect(out.map((r) => [r.offsetHz, r.text])).toEqual([[1510, 'C'], [1520, 'A']])
+  })
 })
 
 describe('dtLabel — JS8Call’s Time Delta face (whole ms, signed)', () => {
@@ -143,5 +172,38 @@ describe('dtLabel — JS8Call’s Time Delta face (whole ms, signed)', () => {
   })
   it('keeps the sign — an early station reads negative', () => {
     expect(dtLabel(-0.4)).toBe('-400 ms')
+  })
+})
+
+// JS8Call's callsign aging for its call-activity list (mainwindow.cpp:10209-10233): off by default
+// (CallsignAging 0, Configuration.cpp:1853); set, a call last heard that many whole minutes ago or
+// more is left off, unless it is selected or has an unread message to me (:10220-10231).
+describe('js8ListedStations — the Stations list under JS8Call’s callsign aging', () => {
+  const NOW = 1_800_000_000_000
+  const heard = (call: string, agoMs: number): Js8Heard => ({
+    call, grid: null, snrDb: -10, freqHz: 1500, speed: 'normal', lastMs: NOW - agoMs,
+    lastHb: false, lastCq: false, storedMsgs: 0,
+  })
+  const msg = (from: string, to: string, state: Js8InboxEntry['state']): Js8InboxEntry => ({
+    id: 1, from, to, text: 'HELLO', path: [], state, atMs: NOW - 3_600_000, freqHz: 1500, snrDb: -10,
+  })
+  const stations = [heard('K1ABC', 10 * 60_000), heard('N0XYZ', 10 * 60_000 - 1_000), heard('K2DEF', 60_000)]
+  const listed = (o: Partial<Parameters<typeof js8ListedStations>[2]>, inbox: Js8InboxEntry[] = []) =>
+    js8ListedStations(stations, inbox, { agingMin: 10, nowMs: NOW, selectedCall: '', myCall: 'KD9TAW', ...o }).map((h) => h.call)
+
+  it('off (0, the default), lists every station in order', () => {
+    expect(listed({ agingMin: 0 })).toEqual(['K1ABC', 'N0XYZ', 'K2DEF'])
+  })
+  it('leaves off a call heard the aging’s whole minutes ago or more, and keeps 9:59', () => {
+    expect(listed({})).toEqual(['N0XYZ', 'K2DEF'])
+  })
+  it('keeps the selected call, however old', () => {
+    expect(listed({ selectedCall: 'K1ABC' }), 'selected').toEqual(['K1ABC', 'N0XYZ', 'K2DEF'])
+  })
+  it('keeps a call with an unread message to me, or to my base call, and no other', () => {
+    expect(listed({}, [msg('K1ABC', 'KD9TAW', 'unread')]), 'unread, to me').toEqual(['K1ABC', 'N0XYZ', 'K2DEF'])
+    expect(listed({ myCall: 'KD9TAW/P' }, [msg('K1ABC', 'KD9TAW', 'unread')]), 'unread, to my base call').toEqual(['K1ABC', 'N0XYZ', 'K2DEF'])
+    expect(listed({}, [msg('K1ABC', 'KD9TAW', 'read')]), 'read').toEqual(['N0XYZ', 'K2DEF'])
+    expect(listed({}, [msg('K1ABC', 'W1AW', 'unread')]), 'unread, for another station').toEqual(['N0XYZ', 'K2DEF'])
   })
 })
