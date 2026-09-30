@@ -12,6 +12,8 @@ export function keptFileMessage(f: KeptFile): string {
   switch (f.store) {
     case 'pendingQso':
       return t('shell.keptFile.pendingQso', { path: f.path })
+    case 'fieldDay':
+      return t('shell.keptFile.fieldDay', { path: f.path })
     default:
       return t('shell.keptFile.other', { path: f.path })
   }

@@ -7,7 +7,10 @@ import { keptFileMessage } from './keptFiles'
 const PATH = '/home/op/.config/tempo/x.unreadable-20260930-142233.json'
 
 describe('keptFileMessage', () => {
-  it.each([['pendingQso', 'shell.keptFile.pendingQso']] as const)(
+  it.each([
+    ['pendingQso', 'shell.keptFile.pendingQso'],
+    ['fieldDay', 'shell.keptFile.fieldDay'],
+  ] as const)(
     'says what a %s file held, and where it is now',
     (store, key) => {
       const said = keptFileMessage({ store, path: PATH, keptInPlace: false })

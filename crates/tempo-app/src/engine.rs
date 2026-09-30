@@ -10167,8 +10167,16 @@ impl Engine {
     /// copy of a contest contact on disk, so an OPERATOR's contest logging still waits for it
     /// before it answers — after the lock is released ([`Self::journal_mark`]).
     pub fn persist_fd_log(&self) {
-        let (Some(path), Some(text)) = (&self.station.fd_log_path, self.field_day_log_adif())
-        else {
+        let Some(path) = &self.station.fd_log_path else {
+            return;
+        };
+        // A journal this run could not read and could not move aside holds the event's earlier
+        // contacts: it is never written over (`restore_fd_journal`, which carries the live log
+        // across a rebuild instead).
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
+        let Some(text) = self.field_day_log_adif() else {
             return;
         };
         self.station.journals.replace(
@@ -12021,6 +12029,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // One flush closes it for every future "I moved" action without that action
         // having to know it exists. A no-op outside Field Day, and when no journal path
         // is set.
+        //
+        // A journal kept in place (it could not be read, nor moved aside) is never written, so
+        // the flush cannot carry the live log's rows across; they cross in memory instead.
+        let carried = self
+            .station
+            .fd_log_path
+            .as_deref()
+            .filter(|path| tempo_core::keep_aside::refuses(path))
+            .and_then(|_| self.field_day_log_adif());
         self.persist_fd_log();
         let band = self.settings.band.clone();
         let next_mode = match spec {
@@ -12089,9 +12106,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 // The flush at the top of this call handed the journal to its thread; read it
                 // back once it is on disk. The wait is the one the write used to make here.
                 self.station.journals.settle();
-                station.log.merge_adif(
-                    &std::fs::read_to_string(path).unwrap_or_default(),
+                restore_fd_journal(
+                    &mut station.log,
+                    path,
                     now_unix_secs().saturating_sub(4 * 86_400),
+                    carried.as_deref(),
+                    now_unix_secs() as i64,
                 );
             }
             // ⚠️ A RESTART MUST NOT SHORTEN THE SESSION. The session above starts at
@@ -24181,6 +24201,51 @@ pub fn sync_shared_log(engine: &std::sync::Mutex<Engine>) -> bool {
 pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
     sync_shared_log(engine);
     engine_lock(engine).station_mut().log_plan()
+}
+
+/// Restore the Field Day journal at `path` into the fresh contest log `log` (rows from before
+/// `min_when_unix` self-expire). A journal this build cannot read in full, whether cut off
+/// mid-record, a record with no call, bytes that are not UTF-8, or a file it cannot open, is
+/// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
+/// rewrites the journal from the log, which would drop the rest for good.
+///
+/// A journal kept in place is not read again; `carried`, the live log's own rows, crosses the
+/// rebuild instead (see `set_mode_with_decoder`).
+fn restore_fd_journal(
+    log: &mut tempo_core::fieldday::FieldDayLog,
+    path: &std::path::Path,
+    min_when_unix: u64,
+    carried: Option<&str>,
+    now_unix: i64,
+) {
+    if tempo_core::keep_aside::refuses(path) {
+        if let Some(rows) = carried {
+            log.merge_adif(rows, min_when_unix);
+        }
+        return;
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            tempo_core::keep_aside::keep_aside("fieldDay", path, now_unix, &e.to_string());
+            return;
+        }
+    };
+    // Lossy on purpose, as the logbook's own load: the ADIF structure is ASCII, so every record
+    // survives a bad byte, and the file itself is kept below.
+    let text = String::from_utf8_lossy(&bytes);
+    let merged = log.merge_adif(&text, min_when_unix);
+    let why = if matches!(text, std::borrow::Cow::Owned(_)) {
+        Some("it is not UTF-8".to_string())
+    } else if merged.unreadable > 0 {
+        Some(format!("{} record(s) could not be read", merged.unreadable))
+    } else {
+        None
+    };
+    if let Some(why) = why {
+        tempo_core::keep_aside::keep_aside("fieldDay", path, now_unix, &why);
+    }
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.

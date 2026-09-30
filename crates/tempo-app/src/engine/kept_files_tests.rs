@@ -271,3 +271,178 @@ fn no_pending_qso_journal_is_a_first_run() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing made");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ── fieldday_backup_<posid>.adi: the Field Day or contest log's backup ───────────────────────
+
+const FD_JOURNAL: &str = "fieldday_backup_ab12cd34.adi";
+
+/// An engine in Field Day on the journal at `path`, entered the way a launch enters it.
+fn fd_engine(path: &Path) -> Engine {
+    let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+    s.fd_active = true;
+    s.fd_class = "3A".into();
+    s.fd_section = "WI".into();
+    let mut e = Engine::with_settings(s);
+    e.set_fd_log_path(path.to_path_buf());
+    e.restore_field_day_if_enabled();
+    assert!(e.snapshot().field_day.is_some(), "premise: in Field Day");
+    e
+}
+
+fn fd_count(e: &Engine) -> usize {
+    e.snapshot().field_day.map_or(0, |f| f.qso_count)
+}
+
+/// Log a contest contact and wait for its journal write, as an operator's logging command does.
+fn log_fd(e: &mut Engine, call: &str) {
+    assert!(
+        e.fd_log_manual(call, "2A", "EMA", "CW").unwrap(),
+        "{call} logs"
+    );
+    e.journal_mark().wait();
+}
+
+/// A Field Day journal as this build writes it: three contacts.
+fn a_field_day_journal() -> Vec<u8> {
+    let dir = scratch("fdmade");
+    let path = dir.join(FD_JOURNAL);
+    let mut e = fd_engine(&path);
+    for call in ["K1ABC", "N0GHI", "W7XYZ"] {
+        log_fd(&mut e, call);
+    }
+    let bytes = std::fs::read(&path).expect("the journal is written");
+    std::fs::remove_dir_all(&dir).unwrap();
+    bytes
+}
+
+/// The file in `dir` holding `bytes`, which must be the journal's dated set-aside name.
+fn kept_fd_journal(dir: &Path, bytes: &[u8], what: &str) -> PathBuf {
+    let found = holding(dir, bytes);
+    assert_eq!(
+        found.len(),
+        1,
+        "{what}: the unreadable journal must survive the next contact, byte for byte, moved aside"
+    );
+    let name = found[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        name.starts_with("fieldday_backup_ab12cd34.unreadable-") && name.ends_with(".adi"),
+        "{what}: under its dated name, not its own: {name}"
+    );
+    found[0].clone()
+}
+
+/// A journal this build cannot read in full is kept, byte for byte; the contacts it could read
+/// come back; the next contact starts a new journal; the snapshot names where the old one is.
+fn assert_fd_journal_kept(what: &str, bytes: Vec<u8>, readable: usize) {
+    let dir = scratch("fd");
+    let path = dir.join(FD_JOURNAL);
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut e = fd_engine(&path);
+    assert_eq!(fd_count(&e), readable, "{what}: the contacts it could read");
+    log_fd(&mut e, "K9NEW");
+
+    let aside = kept_fd_journal(&dir, &bytes, what);
+    assert_eq!(
+        kept_under(&e, &dir),
+        vec![kept("fieldDay", &aside, false)],
+        "{what}: the screen is told where it is"
+    );
+    let relaunched = fd_engine(&path);
+    assert_eq!(
+        fd_count(&relaunched),
+        readable + 1,
+        "{what}: the new journal holds what was read, and the new contact"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_field_day_journal_cut_short_is_kept_and_its_readable_contacts_restored() {
+    let whole = a_field_day_journal();
+    let text = String::from_utf8(whole).unwrap();
+    let last_eor = text.rfind("<EOR>").expect("a record end");
+    assert_fd_journal_kept("cut short", text.as_bytes()[..last_eor - 4].to_vec(), 2);
+}
+
+/// Bytes that are not UTF-8 used to read as NO journal at all, and the next contact then
+/// replaced every contact of the event.
+#[test]
+fn a_field_day_journal_that_is_not_utf8_is_kept_and_its_contacts_restored() {
+    let whole = a_field_day_journal();
+    let first_eor = whole
+        .windows(5)
+        .position(|w| w == b"<EOR>")
+        .expect("a record end")
+        + 5;
+    let mut bad = whole[..first_eor].to_vec();
+    bad.push(0xFF);
+    bad.extend_from_slice(&whole[first_eor..]);
+    assert!(
+        String::from_utf8(bad.clone()).is_err(),
+        "premise: not UTF-8"
+    );
+    assert_fd_journal_kept("not UTF-8", bad, 3);
+}
+
+/// A journal kept in place (it could not be moved aside) is never written over by a contact,
+/// and the contacts of this session still cross a Run/S&P rebuild, in memory.
+#[test]
+fn a_field_day_journal_kept_in_place_is_never_written_over_and_the_session_survives_a_rebuild() {
+    let dir = scratch("fd-stuck");
+    let path = dir.join(FD_JOURNAL);
+    let bytes = b"<EOH>\n<CALL:5>K1ABC <BAND:3>20m <MODE:2>CW".to_vec();
+    std::fs::write(&path, &bytes).unwrap();
+    take_every_aside_name(&dir, FD_JOURNAL);
+    let kept_where = tempo_core::keep_aside::keep_aside("fieldDay", &path, NOW, "cut short");
+    assert!(kept_where.kept_in_place, "premise: left in place");
+
+    let mut e = fd_engine(&path);
+    log_fd(&mut e, "K9NEW");
+    log_fd(&mut e, "W8ONE");
+    e.set_mode("fieldday-sp").expect("the rebuild");
+    e.journal_mark().wait();
+    assert_eq!(
+        std::fs::read(&path).ok(),
+        Some(bytes),
+        "the unreadable journal must never be written over"
+    );
+    assert_eq!(
+        fd_count(&e),
+        2,
+        "this session's contacts cross the rebuild in memory"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A journal from a newer build that only ADDED fields restores as it always has.
+#[test]
+fn a_field_day_journal_whose_only_news_is_fields_restores_as_it_always_has() {
+    let dir = scratch("fd-fields");
+    let path = dir.join(FD_JOURNAL);
+    let text = String::from_utf8(a_field_day_journal())
+        .unwrap()
+        .replace("<EOR>", "<APP_NEXUS_FUTURE:3>abc <EOR>");
+    assert!(text.contains("APP_NEXUS_FUTURE"));
+    std::fs::write(&path, &text).unwrap();
+    let e = fd_engine(&path);
+    assert_eq!(
+        (fd_count(&e), kept_under(&e, &dir)),
+        (3, vec![]),
+        "restored as it always has, with nothing to say"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// No journal at all is a first run.
+#[test]
+fn no_field_day_journal_is_a_first_run() {
+    let dir = scratch("fd-none");
+    let e = fd_engine(&dir.join(FD_JOURNAL));
+    assert_eq!(
+        (fd_count(&e), kept_under(&e, &dir)),
+        (0, vec![]),
+        "no journal: no contacts and nothing to say"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

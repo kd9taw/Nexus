@@ -493,6 +493,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact in it was gone. Now Nexus keeps that file, untouched, under a new dated name beside it
   (such as `pending_qso.unreadable-20260930-142233.json`), and says where, once, when it starts.
   If the file cannot be moved aside, Nexus leaves it where it is and does not write over it.
+- **Field Day and contest contacts are no longer lost to a backup Nexus cannot read in full.**
+  Nexus keeps a backup of the contest log beside your settings and rewrites it with every contact,
+  so a restart mid-event loses nothing. When part of that backup could not be read (cut off by a
+  crash, or damaged), Nexus restored what it could and the next contact rewrote the backup
+  without the rest; a backup it could not open at all restored nothing, and the next contact
+  replaced every earlier contact of the event. Now Nexus restores the contacts it can read and
+  keeps the backup itself, untouched, under a new dated name beside it, and says where. If the
+  backup cannot be moved aside, Nexus leaves it where it is, does not write over it, and keeps
+  this session's contest contacts in memory, where switching between Run and S&P keeps them.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
