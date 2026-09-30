@@ -53,6 +53,10 @@ export interface ConnectLayout {
 /** What the screen is built from right now — the three records a layout writes. */
 export interface ConnectLayoutState {
   slots: Readonly<Record<SlotId, PaneId>>
+  /** The slots holding more than one pane (connectConfig `tabs`). A layout is one pane per slot,
+   *  so a screen with any tabs is the operator's own arrangement: it reads Custom, and a layout's
+   *  tap puts one pane back in each slot. Absent is none. */
+  tabs?: Readonly<Partial<Record<SlotId, readonly PaneId[]>>>
   panels: PanelLayout<SlotId>
   /** The STORED preferences, not the widths the window fitted them to: a list-first rail
    *  squeezed by a small window is still list-first, and reloading on a big one gives it back. */
@@ -198,6 +202,7 @@ export function layoutPanels(layout: ConnectLayout): PanelLayout<SlotId> {
 const even = (share: number | undefined) => Math.abs((share ?? 1) - 1) < 1e-6
 
 function matches(layout: ConnectLayout, now: ConnectLayoutState): boolean {
+  if (SLOT_IDS.some((s) => (now.tabs?.[s]?.length ?? 0) > 1)) return false
   for (const s of SLOT_IDS) {
     if (now.slots[s] !== layout.slots[s]) return false
     if ((now.panels.state[s] === 'removed') !== layout.hidden.includes(s)) return false

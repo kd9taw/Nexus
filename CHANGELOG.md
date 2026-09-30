@@ -262,6 +262,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left, and the other way round in the southern hemisphere. It shares the **Sun and moon** layer
   and moves once a minute, like the sun. Its place is worked out in Nexus itself, with no download,
   to within about a third of a degree.
+- **Connect: make one pane's text bigger or smaller.** Every Connect pane has a **⋯** button in its
+  header, beside the ✕. Its **A+ Larger text** and **A− Smaller text** step that pane's words from
+  80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a press. The menu stays
+  open and shows the size, so you can press again. Only the words change: the pane keeps its place
+  and its size, its header stays as it was, and a pane whose text no longer fits scrolls. To make
+  room for the ⋯, the pane picker beside the title is a little narrower, and in the narrowest
+  columns a long title can end in "…" rather than push ✕ out of view. Each pane
+  keeps its own size in each window, a layout picked from ⊞ Panels keeps the sizes, and **Reset
+  layout** puts every pane back at 100%. Layouts saved before this open with every pane at 100%.
+- **Connect: each pane links to its part of the manual.** A pane's **⋯** menu names the pane in
+  the manual, such as **? Space Wx in the manual**, and opens the part of the Nexus manual
+  (hamradiotools.io/manual) that describes it, in your browser. A pane the manual does not describe
+  yet has no link.
+- **Connect: several panes in one slot, as tabs.** A pane's **⋯** menu has **Add a tab**: pick a
+  pane and it joins that slot, shown, and the slot's title becomes a row of tabs, one per pane; in a
+  narrow column the tabs get a row of their own, under the pane's buttons. Click a tab to switch, or
+  use the arrow keys, Home and End on it. The picker changes the pane on the tab
+  that is showing, and **⋯ ▸ Remove … from this slot** takes that pane out. A pane is only ever in
+  one slot, so adding one from another slot moves it; a slot's only pane is not offered. Each slot
+  reopens on the tab it was showing. The ready-made layouts are one pane per slot: picking one, or
+  **Reset layout**, takes the tabs away, and **Undo** brings them back. Layouts saved before this open
+  exactly as they were.
+- **Connect in the dashboard window and on the TV page: a slot's tabs can take turns.** In a slot
+  with tabs, **⋯ ▸ Rotate the tabs** shows them one after another, every 10 s, 15 s, 30 s, 1 min or
+  2 min. It is off until you pick an interval, and it waits while the mouse is over the slot, while
+  you are in it with the keyboard and while its menu is open. The main window's Connect never
+  rotates.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

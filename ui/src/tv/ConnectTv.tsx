@@ -101,6 +101,8 @@ export function ConnectTv() {
           selectedCall={selectedCall}
           onSelectCall={setSelectedCall}
           needByCall={emptyNeeds.current}
+          // A wall display: a slot's tabs may rotate (⋯ ▸ Rotate the tabs), as in the dashboard window.
+          autoRotate
         />
       )}
     </div>

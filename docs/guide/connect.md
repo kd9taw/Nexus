@@ -86,6 +86,36 @@ you make things is remembered per window, and a saved width is trimmed to fit a
 smaller screen. **Reset layout** returns Connect to exactly how it first opened,
 including which pane sits in each slot.
 
+**A pane's own menu.** Each pane's header has a **⋯** button beside the ✕ (the
+picker next to it is a little narrower to make room, and in the narrowest columns a
+long pane title can end in "…"). Its
+**A+ Larger text** and **A− Smaller text** make that pane's words bigger or smaller,
+from 80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a
+press; the menu stays open and shows the size, so you can press again. Only the
+words change: the pane keeps its place and size, its header stays as it was, and a
+pane whose text no longer fits scrolls. Each pane keeps its own size in each
+window. A layout from the Panels menu keeps the sizes; **Reset layout** puts every
+pane back at 100%. The same menu has **? … in the manual**, which opens this
+manual in your browser at the part about that pane; a pane this manual does not
+describe yet has no link.
+
+**Tabs.** A slot can hold more than one pane. **⋯ ▸ Add a tab** lists the panes it
+can take; pick one and it joins the slot, shown, and the slot's title becomes a row
+of tabs (in a narrow column, a row of its own under the picker, ⋯ and ✕). Click a
+tab to switch, or use ← →, Home and End on it. The picker changes
+the pane on the tab that is showing, and **⋯ ▸ Remove … from this slot** takes it
+out. A pane is only ever in one slot: adding one from another slot moves it, and a
+slot's only pane is not offered, since that slot would be empty. Each slot reopens
+on the tab it was showing. A layout from the Panels menu, or **Reset layout**, puts
+one pane back in each slot; **Undo** brings the tabs back.
+
+In the dashboard window and on the TV page, a slot with tabs can also show them in
+turn: **⋯ ▸ Rotate the tabs** and pick 10 s, 15 s, 30 s, 1 min or 2 min. It is off
+until you pick one. It waits while the mouse is over the slot, while you are in it
+with the keyboard and while its menu is open, and starts the interval again after.
+The main window's Connect never rotates, so what you are looking at while you
+operate never changes by itself.
+
 **Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one
 of the four, or **Custom** once you have moved or resized anything yourself.

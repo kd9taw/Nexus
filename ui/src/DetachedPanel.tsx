@@ -667,6 +667,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             },
           }}
           otaBoard={snap ? { snap, onHunt: huntOta, onSnap: setSnap } : undefined}
+          // A slot's tabs may rotate here, the dashboard window, and on the TV page — never in the
+          // main window's Connect (the operator's pick: "Auto-rotating boxes on the dashboard/TV").
+          autoRotate
           onPoint={
             // Same rotator gate as App (model-launched rotctld OR external host). This failure
             // IS still swallowed — but that is a gap, not a constraint. A detached window has a

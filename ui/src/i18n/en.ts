@@ -7217,6 +7217,25 @@ export const EN = {
   'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
   'connect.slot.pick.title': 'Choose what this slot shows',
   'connect.slot.group.core': 'Panels',
+  // A pane's ⋯ menu (connect/BoxMenu): the pane's own options. `{{title}}` is the pane's name, `{{pct}}`
+  // a whole number. The A− / A+ glyphs beside the two words stay in the code.
+  'connect.box.menu.aria': 'Options for {{title}}',
+  'connect.box.menu.title': 'Options for this pane',
+  'connect.box.text.size': 'Text size: {{pct}}%',
+  'connect.box.text.smaller': 'Smaller text',
+  'connect.box.text.larger': 'Larger text',
+  // …and its link to the manual section that describes the pane (connect/paneHelp); the ? glyph stays in the code.
+  'connect.box.help': '{{title}} in the manual',
+  'connect.box.help.title': 'Opens this part of the manual in your browser',
+  // TABS: several panes in one slot. The strip of tabs is named for screen readers; the + and − glyphs stay in the code.
+  'connect.box.tabs.aria': 'Panes in this slot',
+  'connect.box.tab.add': 'Add a tab',
+  'connect.box.tab.remove': 'Remove {{title}} from this slot',
+  // AUTO-ROTATE (the dashboard window and the TV page only): the heading over the choices, and the choices, bare durations like dxped.alarm.lead.option.
+  'connect.box.rotate.heading': 'Rotate the tabs',
+  'connect.box.rotate.off': 'Off',
+  'connect.box.rotate.secs': '{{secs}} s',
+  'connect.box.rotate.mins': '{{mins}} min',
   // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
   // which pane sits in a slot is the operator's pick, so the title alone says nothing about
   // where the space will be taken from.

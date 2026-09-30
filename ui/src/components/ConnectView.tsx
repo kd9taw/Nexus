@@ -29,7 +29,7 @@ import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { OtaBoard, SpotsFeed } from './connect/paneContext'
-import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
+import { SLOT_IDS, addableTo, slotBoxes, useConnectConfig, type PaneId, type SlotId } from '../features/connectConfig'
 import {
   CONNECT_PRESET_IDS,
   CONNECT_PRESETS,
@@ -152,6 +152,11 @@ interface Props {
   /** The POTA/SOTA box's wiring: this window's POTA/SOTA board's (paneContext OtaBoard). Omitted ⇒
    *  its one-line state and no HUNT. */
   otaBoard?: OtaBoard
+  /** AUTO-ROTATE a slot's tabs (⋯ ▸ Rotate the tabs), offered and run only where the host says so:
+   *  the dashboard window (DetachedPanel's Connect) and the TV page (ConnectTv), never the main
+   *  window's Connect (the operator's pick, 2026-09-29: "Auto-rotating boxes on the dashboard/TV").
+   *  Without it a stored interval is inert and the menu offers none. */
+  autoRotate?: boolean
 }
 
 export function ConnectView({
@@ -171,6 +176,7 @@ export function ConnectView({
   rigBand,
   spotsFeed,
   otaBoard,
+  autoRotate,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -221,7 +227,7 @@ export function ConnectView({
   // panes with nothing on screen able to bring them back.
   const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, assignPane, resetSlots, restoreSlots } = useConnectConfig()
+  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -293,6 +299,8 @@ export function ConnectView({
   // operator already had on.
   const beforeSwitch = useRef<{
     slots: typeof slots
+    tabs: typeof tabs
+    rotate: typeof rotate
     rails?: RailWidths
     mapLayers?: { intent: MapIntent; turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> }
   } | null>(null)
@@ -331,7 +339,7 @@ export function ConnectView({
   // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame. Which one is on
   // screen is READ BACK from the placement, the panel record and the stored rail widths — never
   // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
-  const layoutNow = connectLayoutNow({ slots, panels: panels.layout, rails: widths.pref })
+  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref })
   const layoutsId = useId()
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
@@ -343,13 +351,18 @@ export function ConnectView({
       if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })
       if (setGlobeLayer(layer, true)) turnedOn.push({ layer, map: '3d' })
     }
-    beforeSwitch.current = { slots, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined }
-    panels.setLayout(layoutPanels(p))
+    beforeSwitch.current = { slots, tabs, rotate, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined }
+    // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes
+    // go and how much room each gets, never how big their words are — the rule it already keeps for
+    // the map's own settings. Reset layout is what puts every pane back at the app's size.
+    panels.setLayout({ ...layoutPanels(p), scale: panels.layout.scale })
     restoreSlots(p.slots)
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
     if (turnedOn.length) setMapLayersRev((n) => n + 1)
   }
 
+  // TABS (features/connectConfig): a slot holds one or more panes and shows one. Showing a tab is not
+  // an arrangement change, so it leaves the one Undo alone; adding or removing one is, like a pick.
   const frame = (s: SlotId, share?: number) => (
     <PaneFrame
       key={s}
@@ -359,6 +372,15 @@ export function ConnectView({
       onAssign={change(assignPane)}
       share={share}
       onHide={change(() => panels.setPanelState(s, 'removed'))}
+      textScale={panels.scaleOf(s)}
+      onTextScale={change((f: number) => panels.setScale(s, f))}
+      tabs={slotBoxes({ slots, tabs }, s)}
+      onShowTab={(p: PaneId) => showTab(s, p)}
+      addable={addableTo({ slots, tabs }, s)}
+      onAddTab={change((p: PaneId) => addTab(s, p))}
+      onRemoveTab={change(() => removeTab(s))}
+      rotateSecs={autoRotate ? rotate[s] : undefined}
+      onRotate={autoRotate ? change((secs: number | null) => setRotate(s, secs)) : undefined}
     />
   )
   const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {
@@ -430,7 +452,7 @@ export function ConnectView({
               beforeSwitch.current = null
               panels.undo()
               if (before) {
-                restoreSlots(before.slots)
+                restoreSlots(before.slots, before.tabs, before.rotate)
                 if (before.rails) widths.setPrefs(before.rails)
                 if (before.mapLayers) {
                   for (const { layer, map } of before.mapLayers.turnedOn) {
@@ -443,7 +465,7 @@ export function ConnectView({
             }}
             canUndo={panels.canUndo}
             onReset={() => {
-              beforeSwitch.current = { slots }
+              beforeSwitch.current = { slots, tabs, rotate }
               panels.reset()
               resetSlots()
               widths.resetAll()
