@@ -5,15 +5,20 @@
 //! Schema (chirpmyradio.com CSV_HowTo, verified 2026-07): header row required;
 //! `Location` must be the FIRST column and starts at 1; `Duplex` ∈
 //! {'', '+', '-', 'split'}; `Tone` ∈ {'', 'Tone', 'TSQL', 'DTCS', 'Cross'};
-//! frequencies with 6 decimals. CHIRP itself clamps names/fields a given radio
-//! can't hold when the operator copies rows into a radio image — so this CSV is
-//! safe for every model. A `# comment` attribution line is appended after the
-//! rows; CHIRP ignores lines it can't parse.
+//! frequencies with 6 decimals. CHIRP reads columns by NAME, so `RxDtcsCode` and
+//! `CrossMode` ride at the end; `Tone` = `Cross` with `CrossMode` = `DTCS->` is DCS on
+//! transmit only. CHIRP's CSV reader rejects a row whose `CrossMode` is empty (it is
+//! parsed against its cross-mode list), so every row writes CHIRP's own default,
+//! `Tone->Tone`, which applies only to a `Cross` row (both checked against CHIRP's
+//! `generic_csv.py` and `chirp_common.CROSS_MODES`, 2026-09-30). CHIRP itself clamps
+//! names/fields a given radio can't hold when the operator copies rows into a radio
+//! image — so this CSV is safe for every model. A `# comment` attribution line is
+//! appended after the rows; CHIRP ignores lines it can't parse.
 
 use crate::memchan::{csv_field, sanitize_name, ChanMode, Channel, Duplex, ToneMode};
 
 /// The exact CHIRP generic-CSV header.
-pub const CHIRP_HEADER: &str = "Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE";
+pub const CHIRP_HEADER: &str = "Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE,RxDtcsCode,CrossMode";
 
 /// Render channels as a CHIRP generic CSV. Only analog channels are written —
 /// v1 programs FM; digital rows are the UI's responsibility to exclude (this
@@ -32,11 +37,12 @@ pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) ->
             Duplex::Minus => "-",
             Duplex::Split => "split",
         };
-        let tone = match c.tone_mode {
-            ToneMode::None => "",
-            ToneMode::Tone => "Tone",
-            ToneMode::TSql => "TSQL",
-            ToneMode::Dtcs => "DTCS",
+        let (tone, cross) = match c.tone_mode {
+            ToneMode::None => ("", "Tone->Tone"),
+            ToneMode::Tone => ("Tone", "Tone->Tone"),
+            ToneMode::TSql => ("TSQL", "Tone->Tone"),
+            ToneMode::Dtcs if c.dtcs_tx_only => ("Cross", "DTCS->"),
+            ToneMode::Dtcs => ("DTCS", "Tone->Tone"),
         };
         let mode = match c.mode {
             ChanMode::Nfm => "NFM",
@@ -46,7 +52,7 @@ pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) ->
         // In CHIRP's model `Offset` is the split TX frequency when Duplex=split,
         // the offset magnitude otherwise — identical to our Channel semantics.
         out.push_str(&format!(
-            "{},{},{:.6},{},{:.6},{},{:.1},{:.1},{:03},NN,{},5.00,,{},,,,\n",
+            "{},{},{:.6},{},{:.6},{},{:.1},{:.1},{:03},NN,{},5.00,,{},,,,,{:03},{}\n",
             loc,
             csv_field(&sanitize_name(&c.name, name_cap)),
             c.rx_mhz,
@@ -58,6 +64,8 @@ pub fn to_chirp_csv(channels: &[Channel], name_cap: usize, attribution: &str) ->
             c.dtcs_code,
             mode,
             csv_field(&c.comment),
+            c.dtcs_code,
+            cross,
         ));
         loc += 1;
     }
@@ -105,11 +113,11 @@ mod tests {
         ];
         let csv = to_chirp_csv(&chans, 7, "Data courtesy of RepeaterBook.com");
         let expect = "\
-Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE
-1,W9ABC,146.940000,-,0.600000,Tone,103.5,88.5,023,NN,FM,5.00,,,,,,
-2,K9XYZ,147.255000,+,0.600000,TSQL,91.5,88.5,023,NN,FM,5.00,,,,,,
-3,SIMPLX,146.520000,,0.000000,,88.5,88.5,023,NN,FM,5.00,,,,,,
-4,ODDSPL,145.110000,split,147.885000,Tone,114.8,88.5,023,NN,FM,5.00,,,,,,
+Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE,RxDtcsCode,CrossMode
+1,W9ABC,146.940000,-,0.600000,Tone,103.5,88.5,023,NN,FM,5.00,,,,,,,023,Tone->Tone
+2,K9XYZ,147.255000,+,0.600000,TSQL,91.5,88.5,023,NN,FM,5.00,,,,,,,023,Tone->Tone
+3,SIMPLX,146.520000,,0.000000,,88.5,88.5,023,NN,FM,5.00,,,,,,,023,Tone->Tone
+4,ODDSPL,145.110000,split,147.885000,Tone,114.8,88.5,023,NN,FM,5.00,,,,,,,023,Tone->Tone
 # Data courtesy of RepeaterBook.com
 ";
         assert_eq!(csv, expect);

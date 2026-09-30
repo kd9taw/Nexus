@@ -537,11 +537,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Program exports the DCS code of a hearham repeater.** The hearham directory writes a DCS
   machine's code in its tone field (`DCS023`, `D023`, `DCS 043`, `DPL411` and a few other
   spellings), and Program read none of them, so 138 FM machines went out with no code and would not
-  open. They now export as DTCS with their code, in the CHIRP and CSV files and when starred into
+  open. They now export with their code, in the CHIRP and CSV files and when starred into
   Memories. **Tune now** still sets no code on the radio: Nexus has no DCS setting for the rig. A code
-  that is not one of the 104 standard ones, or an entry whose settings contradict each other (a tone
-  and a code together, or a different tone or code on the output), still gets none rather than a
-  guess.
+  that is not one of the 104 standard ones, or an entry that lists a tone and a code together, still
+  gets none rather than a guess.
+- **A repeater that takes its DCS code only on its input is programmed that way.** When the
+  directory gives a machine's DCS code for its input alone (32 hearham machines, and a RepeaterBook
+  machine with a DCS code in PL but not in TSQ), Program now exports it as DCS on transmit only,
+  CHIRP's Cross mode `DTCS->`, with the receiver left open: in the CHIRP and CSV files, the Remote's
+  export and when starred into Memories. As DCS both ways, it kept the radio squelched on a machine
+  whose output carries no code. A machine that lists the same code on its output stays DCS both
+  ways, and the 4 hearham machines that list a tone or a different code on their output, which got
+  no code before, now go out the same send-only way. CHIRP files from Program and Memories carry two
+  more columns at the end, `RxDtcsCode` and `CrossMode`.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read

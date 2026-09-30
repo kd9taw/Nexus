@@ -202,9 +202,12 @@ export function repeaterMemory(
   site?: { lat: number; lon: number },
 ): Partial<Memory> & { rxMhz: number; mode: string } {
   const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
-  // A DCS code rides into the bank (and its CHIRP export) as it is. Recall still tunes no code:
-  // the rig path has no DCS setting, which is why `rigRepeaterParams` carries none.
+  // A DCS code rides into the bank (and its CHIRP export) as it is: a send-only one as CHIRP's
+  // Cross "DTCS->", which the bank writes for a cross memory carrying a code and nothing else
+  // (`isSendOnlyDcs`). Recall still tunes no code: the rig path has no DCS setting, which is
+  // why `rigRepeaterParams` carries none.
   const dtcs = c.toneMode === 'dtcs'
+  const sendOnly = dtcs && !!c.dtcsTxOnly
   return {
     name,
     rxMhz: c.rxMhz,
@@ -212,7 +215,7 @@ export function repeaterMemory(
     kind: shift === 'simplex' && !toneHz && !dtcs ? 'simplex' : 'repeater',
     offsetDir: shift,
     offsetMhz: offsetHz ? offsetHz / 1e6 : undefined,
-    toneMode: dtcs ? 'dtcs' : toneHz ? 'tone' : 'none',
+    toneMode: sendOnly ? 'cross' : dtcs ? 'dtcs' : toneHz ? 'tone' : 'none',
     ctcssEncHz: toneHz || undefined,
     dtcsCode: dtcs ? c.dtcsCode : undefined,
     callsign: c.source?.callsign || undefined,

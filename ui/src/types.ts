@@ -4440,6 +4440,8 @@ export interface RepeaterRecord {
   ctcssEncHz?: number | null
   ctcssDecHz?: number | null
   dcs?: number | null
+  /** The downlink's DCS code, when the source gives one; the same code as `dcs` = both ways. */
+  dcsDec?: number | null
   lat: number
   lon: number
   city: string
@@ -4506,6 +4508,8 @@ export interface ProgChannel {
   rtoneHz: number
   ctoneHz: number
   dtcsCode: number
+  /** With toneMode 'dtcs': the code on transmit only, the receiver open (CHIRP Cross "DTCS->"). */
+  dtcsTxOnly?: boolean
   mode: 'fm' | 'nfm' | 'am' | 'dmr' | 'dstar' | 'fusion'
   comment: string
   dmrColorCode?: number | null

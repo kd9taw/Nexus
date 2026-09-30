@@ -42,6 +42,7 @@ import {
 import {
   addMemoryDeduped,
   findEquivalent,
+  isSendOnlyDcs,
   memoriesStore,
   saveFavoriteFromDial,
   updateMemory,
@@ -341,7 +342,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     duplex:
       m.offsetDir === 'split' ? 'split' : m.offsetDir === 'plus' ? 'plus' : m.offsetDir === 'minus' ? 'minus' : 'simplex',
     offsetMhz: m.offsetDir === 'split' ? (m.txMhz ?? m.rxMhz) - m.rxMhz : (m.offsetMhz ?? 0),
-    toneMode: m.toneMode === 'tone' || m.toneMode === 'tsql' || m.toneMode === 'dtcs' ? m.toneMode : 'none',
+    toneMode:
+      m.toneMode === 'tone' || m.toneMode === 'tsql' || m.toneMode === 'dtcs'
+        ? m.toneMode
+        : isSendOnlyDcs(m)
+          ? 'dtcs'
+          : 'none',
+    dtcsTxOnly: isSendOnlyDcs(m) || undefined,
     rtoneHz: m.ctcssEncHz ?? 0,
     ctoneHz: m.ctcssDecHz ?? m.ctcssEncHz ?? 0,
     dtcsCode: m.dtcsCode ?? 0,

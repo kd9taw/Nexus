@@ -225,6 +225,12 @@ describe('repeaterMemory', () => {
     expect(m.ctcssEncHz).toBeUndefined()
   })
 
+  it('carries a send-only DCS code as CHIRP Cross "DTCS->", the code on transmit only', () => {
+    const m = repeaterMemory(chan({ toneMode: 'dtcs', dtcsCode: 23, dtcsTxOnly: true }), 'W9ABC 94')
+    expect(m).toMatchObject({ toneMode: 'cross', dtcsCode: 23, kind: 'repeater' })
+    expect([m.ctcssEncHz, m.ctcssDecHz, m.dtcsRxCode]).toEqual([undefined, undefined, undefined])
+  })
+
   it('keeps a narrow machine narrow, so the bank and its CHIRP export say NFM', () => {
     expect(repeaterMemory(chan({ mode: 'nfm' }), 'W9ABC 94').mode).toBe('NFM')
     expect(repeaterMemory(chan(), 'W9ABC 94').mode).toBe('FM')
