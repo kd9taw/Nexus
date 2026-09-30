@@ -29,7 +29,7 @@ function withWind(solarWind: Record<string, unknown>) {
 
 describe("the hosted page reads a station's solar-wind sample", () => {
   it('from a station of this build: not known is null, and the sample is dated', async () => {
-    const doc = withWind({ bzNt: -3.4, btNt: 6.1, speedKms: null, density: null, timeUnix: connect.prop.asOf - 120 })
+    const doc = withWind({ bzNt: -3.4, btNt: null, speedKms: null, density: null, timeUnix: connect.prop.asOf - 120 })
     const result = await loadNavigation<typeof doc>(source(navigationPages('connect', doc)), 'connect', '', () => true)
     expect(result.value.prop.spaceWx.solarWind).toEqual(doc.prop.spaceWx.solarWind)
   })

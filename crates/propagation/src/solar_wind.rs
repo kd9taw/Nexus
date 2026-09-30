@@ -24,7 +24,8 @@
 //! [`SOLAR_WIND_STALE_SECS`] a sample is a record of the past — the insight feed stops speaking from
 //! it and the Space Wx gauges say how old it is. Speed and density come from the separate plasma
 //! product and are `None` when it did not answer, or when its newest reading is not from the same
-//! moment as the magnetometer's — never 0, which is a solar wind that stopped blowing.
+//! moment as the magnetometer's — never 0, which is a solar wind that stopped blowing. Bt is `None`
+//! the same way when the magnetometer row carries Bz without it.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -41,8 +42,8 @@ pub const SOLAR_WIND_STALE_SECS: i64 = 30 * 60;
 pub struct SolarWind {
     /// Bz (GSM), nT. Negative = southward = the geoeffective case.
     pub bz_nt: f32,
-    /// Total field magnitude Bt, nT.
-    pub bt_nt: f32,
+    /// Total field magnitude Bt, nT. `None` = NOT KNOWN: the magnetometer row carried Bz without it.
+    pub bt_nt: Option<f32>,
     /// Bulk speed, km/s. `None` = NOT KNOWN: the plasma product did not answer, or its newest
     /// reading is not from this sample's moment.
     pub speed_kms: Option<f32>,
@@ -90,19 +91,15 @@ fn cell(row: &[Value], idx: usize) -> Option<f32> {
 }
 
 /// Parse the `mag-1-day` product → (Bz, Bt, the reading's time) from the newest dated row
-/// with a valid Bz.
-pub fn parse_mag(v: &Value) -> Option<(f32, f32, i64)> {
+/// with a valid Bz. Bt is `None` when that row carries none.
+pub fn parse_mag(v: &Value) -> Option<(f32, Option<f32>, i64)> {
     let arr = v.as_array()?;
     let header = arr.first()?;
     let bz_i = col(header, "bz_gsm")?;
     let bt_i = col(header, "bt");
     let time_i = col(header, "time_tag")?;
     let (row, time) = newest_dated_row_with(&arr[1..], bz_i, time_i)?;
-    Some((
-        cell(row, bz_i)?,
-        bt_i.and_then(|i| cell(row, i)).unwrap_or(0.0),
-        time,
-    ))
+    Some((cell(row, bz_i)?, bt_i.and_then(|i| cell(row, i)), time))
 }
 
 /// Parse the `plasma-1-day` product → (speed, density, the reading's time) from the newest dated
@@ -173,7 +170,7 @@ mod tests {
         ]);
         let (bz, bt, time) = parse_mag(&v).unwrap();
         assert!((bz - -8.2).abs() < 1e-3); // skipped the trailing null row
-        assert!((bt - 9.3).abs() < 1e-3);
+        assert!((bt.unwrap() - 9.3).abs() < 1e-3);
         assert_eq!(time, 1_704_067_260, "the 00:01 row's own time");
     }
 
@@ -291,6 +288,42 @@ mod tests {
             Value::Null,
             "a two-hour-old speed was paired with a fresh Bz"
         );
+    }
+
+    /// Bt the same way as the speed: a magnetometer row that carries Bz but no total field (a null
+    /// cell, or a product without the column) sends Bt as not known — a 0 there is a field that
+    /// vanished, and it read as "Bt 0.0 nT" in the insight feed.
+    #[test]
+    fn a_missing_total_field_reaches_the_wire_as_not_known_never_zero() {
+        let null_cell = json!([
+            ["time_tag", "bz_gsm", "bt"],
+            ["2026-09-29 12:00:00.000", "-6.0", null]
+        ]);
+        let wire = serde_json::to_value(assemble(&null_cell, &Value::Null).unwrap()).unwrap();
+        assert_eq!(
+            wire["btNt"],
+            Value::Null,
+            "a missing Bt went out as {}",
+            wire["btNt"]
+        );
+        let no_column = json!([["time_tag", "bz_gsm"], ["2026-09-29 12:00:00.000", "-6.0"]]);
+        let wire = serde_json::to_value(assemble(&no_column, &Value::Null).unwrap()).unwrap();
+        assert_eq!(
+            wire["btNt"],
+            Value::Null,
+            "a product without Bt sent {}",
+            wire["btNt"]
+        );
+        // Control: a row that has Bt sends it.
+        let wire = serde_json::to_value(
+            assemble(&mag_at("2026-09-29 12:00:00.000", "-6.0"), &Value::Null).unwrap(),
+        )
+        .unwrap();
+        // An f32 9.3 goes out as 9.300000190734863, so compare as a number, not as JSON.
+        let bt = wire["btNt"]
+            .as_f64()
+            .expect("control: a present Bt is on the wire");
+        assert!((bt - 9.3).abs() < 1e-3, "control: Bt went out as {bt}");
     }
 
     /// No time, no sample: an undated reading could be of any age, and a reader shown it could only

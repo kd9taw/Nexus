@@ -430,8 +430,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a solar-wind warning ("turned stormy", "fast stream") from a reading more than 30 minutes old.
 - **No more "wind 0 km/s" when NOAA's plasma data is missing.** When DSCOVR's plasma product does
   not answer, or its newest reading is not from the same half hour as the magnetic field's, the
-  solar wind's speed and density are now sent as not known, instead of 0. The Insights feed's
-  southward-Bz line then leaves the speed out, rather than reporting a solar wind of 0 km/s.
+  solar wind's speed and density are now sent as not known, instead of 0. So is the field's total
+  (Bt) when the magnetometer's reading carries Bz without it. The Insights feed's southward-Bz line
+  then leaves out what is not known, rather than reporting a solar wind of 0 km/s or a Bt of 0.0 nT.
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a

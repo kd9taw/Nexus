@@ -200,17 +200,18 @@ pub fn generate_insights(
                     "Solar wind turned stormy (magnetic field tilted south) — polar paths to EU/Asia will fade over the next 1–2 h{}",
                     if strong { "; watch for aurora on 6m/2m" } else { "" }
                 ),
-                // The speed only when it is known: with the plasma feed down there is none to
-                // print, and "wind 0 km/s" read as a solar wind that had stopped.
-                technical: match sw.speed_kms {
-                    Some(speed) => format!(
-                        "IMF Bz {:.1} nT south, Bt {:.1} nT, wind {:.0} km/s (DSCOVR real-time — leads Kp)",
-                        sw.bz_nt, sw.bt_nt, speed
-                    ),
-                    None => format!(
-                        "IMF Bz {:.1} nT south, Bt {:.1} nT (DSCOVR real-time — leads Kp)",
-                        sw.bz_nt, sw.bt_nt
-                    ),
+                // Each quantity only when it is known: with the plasma feed down there is no speed
+                // to print ("wind 0 km/s" read as a solar wind that had stopped), and a row without
+                // the total field has no Bt ("Bt 0.0 nT" read as a field that had vanished).
+                technical: {
+                    let mut parts = vec![format!("IMF Bz {:.1} nT south", sw.bz_nt)];
+                    if let Some(bt) = sw.bt_nt {
+                        parts.push(format!("Bt {bt:.1} nT"));
+                    }
+                    if let Some(speed) = sw.speed_kms {
+                        parts.push(format!("wind {speed:.0} km/s"));
+                    }
+                    format!("{} (DSCOVR real-time — leads Kp)", parts.join(", "))
                 },
                 band: None,
             });
@@ -700,7 +701,7 @@ mod tests {
     fn southward_bz_warns_polar_paths_and_calm_wind_is_quiet() {
         let sw = crate::solar_wind::SolarWind {
             bz_nt: -12.0,
-            bt_nt: 14.0,
+            bt_nt: Some(14.0),
             speed_kms: Some(650.0),
             density: Some(6.0),
             time_unix: NOW,
@@ -716,7 +717,7 @@ mod tests {
         // Northward Bz + slow wind = quiet → no solar-wind line.
         let calm = crate::solar_wind::SolarWind {
             bz_nt: 2.0,
-            bt_nt: 5.0,
+            bt_nt: Some(5.0),
             speed_kms: Some(380.0),
             density: Some(4.0),
             time_unix: NOW,
@@ -762,6 +763,31 @@ mod tests {
         assert!(
             !s.technical.contains("km/s"),
             "no speed is known, so none may be printed: {}",
+            s.technical
+        );
+    }
+
+    #[test]
+    fn a_southward_bz_without_a_total_field_never_reports_bt_zero() {
+        // A magnetometer product with Bz and no Bt column, the plasma feed down as well.
+        let sw = crate::solar_wind::assemble(
+            &serde_json::json!([["time_tag", "bz_gsm"], [A_MINUTE_AGO, "-12.0"]]),
+            &serde_json::Value::Null,
+        )
+        .expect("a dated magnetometer reading is a sample");
+        let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[], None, Some(&sw));
+        let s = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::SolarWind)
+            .expect("control: a strongly southward Bz still warns");
+        assert!(
+            !s.technical.contains("Bt 0.0"),
+            "the technical line reported a total field of zero: {}",
+            s.technical
+        );
+        assert!(
+            s.technical.contains("Bz -12.0 nT south"),
+            "control: the line still names the field it knows: {}",
             s.technical
         );
     }
