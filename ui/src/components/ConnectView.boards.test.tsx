@@ -193,8 +193,9 @@ describe('the Spots box', () => {
   })
 
   it('the column sets split where the rail widths need them', () => {
-    // A Connect rail runs 200–720 px (features/connectRails RAIL_MIN / RAIL_MAX).
-    expect([200, 359, 360, 639, 640, 720].map(classifyBoxFit)).toEqual(['s', 's', 'm', 'm', 'l', 'l'])
+    // A Connect rail runs 200–720 px (features/connectRails RAIL_MIN / RAIL_MAX). The middle set starts
+    // where every one of its headings fits whole in all five languages (SpotsBox `classifyBoxFit`).
+    expect([200, 529, 530, 639, 640, 720].map(classifyBoxFit)).toEqual(['s', 's', 'm', 'm', 'l', 'l'])
   })
 })
 

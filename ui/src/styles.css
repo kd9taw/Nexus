@@ -17752,7 +17752,7 @@ button.cq-skiptx1.on {
       alike, and the grid is no scroller of its own: its sticky column headings then stick to the
       pane body, the scroller they are in.
    2. ITS COLUMNS FOLLOW ITS OWN WIDTH. SpotsBox stamps `data-fit` from its own clientWidth (CSS
-      px): s (under 360) — call, frequency, mode; m (under 640) — age, call, entity, frequency,
+      px): s (under 530) — call, frequency, mode; m (under 640) — age, call, entity, frequency,
       mode, comment; l — the pane's nine. A narrow box drops columns rather than scrolling sideways.
    3. THE HEAD KEEPS TO ONE LINE WHERE IT FITS. The search field gives up its fixed 240 px and a
       large basis (the flex line breaks on the basis, so a 10em one wrapped the Filter button onto

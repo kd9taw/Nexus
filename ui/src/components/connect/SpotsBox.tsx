@@ -30,11 +30,14 @@ export type BoxFit = 's' | 'm' | 'l'
 
 /**
  * The column set for a box `width` CSS px wide. Pure, so the thresholds test without layout.
- * Below 360 px: call, frequency and mode — a 200 px rail. Below 640: the age, the entity and the
- * comment come back. From 640: every column the board draws as a pane. Measured in Chrome.
+ * Below 530 px: call, frequency and mode — a 200 px rail up to a 557 px one. Below 640: the age, the
+ * entity and the comment come back. From 640: every column the board draws as a pane.
+ * The middle set starts where every one of its headings fits whole in all five languages, measured
+ * in Chrome: English from 450 px, Japanese 410, German and Spanish 510, French ("Commentaire") 530.
+ * At 360, where it used to start, "Comment" was cut in every language.
  */
 export function classifyBoxFit(width: number): BoxFit {
-  if (width < 360) return 's'
+  if (width < 530) return 's'
   if (width < 640) return 'm'
   return 'l'
 }

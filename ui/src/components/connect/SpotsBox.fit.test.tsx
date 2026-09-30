@@ -2,8 +2,8 @@
 //
 // THE SPOTS BOX'S MIDDLE COLUMN SET KEEPS ITS SORTED HEADING WHOLE, computed over the real sheets.
 // The board sorts on the age by default and marks the sorted heading with its arrow, so every Spots
-// box from 360 to 640 px wide (`data-fit='m'`) headed its age column "Age ▲" — and Chrome measured that
-// 43 px in the column's fixed 40 ("Age…", the arrow gone). The column is now as wide as its heading
+// box in the middle set (`data-fit='m'`, then from 360 px) headed its age column "Age ▲" — and Chrome
+// measured that 43 px in the column's fixed 40 ("Age…", the arrow gone). The column is now as wide as its heading
 // needs, and never under the 40 px it had. jsdom lays nothing out: this is the cascade winner
 // (cssCascade.testkit); the widths are the real-browser census's.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
@@ -55,7 +55,7 @@ afterEach(() => {
 
 describe('the Spots box’s middle column set', () => {
   it('sizes its age column to its heading, the sort arrow included', async () => {
-    const box = await boxAt(382) // Frame's and Dashboard's 400 px rails
+    const box = await boxAt(530) // the narrowest box that shows the middle set
     expect(box.getAttribute('data-fit'), 'control: the middle column set').toBe('m')
     const heading = box.querySelector<HTMLElement>('.np-header [data-col="age"]')!
     expect(heading.textContent, 'control: the age is the sorted heading').toBe('Age ▲')

@@ -220,7 +220,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station and the right screen opens. Nothing transmits. Each box keeps its own filters, so a chip
   in a box never changes the Spots or POTA / SOTA screen, or the other way round. A narrow box
   shows fewer columns (call, frequency and mode at its narrowest; the age, country and comment
-  from about 360 px; every column from about 640 px), and the list scrolls inside the box. Neither box is in the
+  from about 530 px, where their headings fit whole in every language; every column from about
+  640 px), and the list scrolls inside the box. Neither box is in the
   default layout or a ready-made one, so nobody's Connect changes on the update. The wall display
   (the TV page) shows no spot list, and each box says so there.
 - **The Spots and POTA / SOTA boxes work in Connect's own window too.** In the window **⧉ Pop
