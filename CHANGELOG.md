@@ -439,6 +439,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
+  (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
+  so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
+  calls, the digipeater path, JS8 Groups, and the Chat, QSO and Band / CQ quick-reply chips. Each
+  box now keeps what you type, and shows the list as it was read when you leave it (`@ARES,
+  @SKCC`). Save keeps what is in the box even when you press Enter without leaving it. A pasted
+  list worked before and still does, and every list is read exactly as before: an empty
+  digipeater path still means direct, with no digipeaters.
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a

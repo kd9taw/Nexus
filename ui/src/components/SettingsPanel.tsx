@@ -7829,11 +7829,11 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.quickReply.chat.label')}</span>
-                <input disabled={locked('macros')}
+                <ListInput disabled={locked('macros')}
                   className="settings-input"
                   type="text"
-                  value={form.macros.chat.join(', ')}
-                  onChange={(e) => updateMacros('chat', e.target.value)}
+                  entries={form.macros.chat}
+                  onText={(raw) => updateMacros('chat', raw)}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -7841,11 +7841,11 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{MACRO_SET_QSO}</span>
-                <input disabled={locked('macros')}
+                <ListInput disabled={locked('macros')}
                   className="settings-input"
                   type="text"
-                  value={form.macros.qso.join(', ')}
-                  onChange={(e) => updateMacros('qso', e.target.value)}
+                  entries={form.macros.qso}
+                  onText={(raw) => updateMacros('qso', raw)}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -7853,11 +7853,11 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.quickReply.band.label')}</span>
-                <input disabled={locked('macros')}
+                <ListInput disabled={locked('macros')}
                   className="settings-input"
                   type="text"
-                  value={form.macros.band.join(', ')}
-                  onChange={(e) => updateMacros('band', e.target.value)}
+                  entries={form.macros.band}
+                  onText={(raw) => updateMacros('band', raw)}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -8558,10 +8558,10 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.js8.groups.label')}</span>
-                <input disabled={remote}
+                <ListInput disabled={remote}
                   className="settings-input"
-                  value={(form.js8Groups ?? []).join(', ')}
-                  onChange={(e) => setJs8Groups(parseJs8Groups(e.target.value))}
+                  entries={form.js8Groups ?? []}
+                  onText={(raw) => setJs8Groups(parseJs8Groups(raw))}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -8780,13 +8780,13 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.aprs.path.label')}</span>
-                  <input disabled={remote}
+                  <ListInput disabled={remote}
                     className="settings-input"
                     type="text"
-                    value={(form.aprsPath ?? []).join(', ')}
-                    onChange={(e) =>
+                    entries={form.aprsPath ?? []}
+                    onText={(raw) =>
                       setAprsPath(
-                        e.target.value
+                        raw
                           .split(',')
                           .map((s) => s.trim().toUpperCase())
                           .filter(Boolean),
@@ -8899,12 +8899,12 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.aprs.is.watchCalls.label')}</span>
-                  <input
+                  <ListInput
                     className="settings-input"
-                    value={(form.aprsIsWatchCalls ?? []).join(', ')}
-                    onChange={(e) =>
+                    entries={form.aprsIsWatchCalls ?? []}
+                    onText={(raw) =>
                       setWatchCalls(
-                        e.target.value
+                        raw
                           .split(',')
                           .map((c) => c.trim().toUpperCase())
                           .filter(Boolean),
@@ -12286,5 +12286,41 @@ export function SettingsPanel({
       </form>
     </section>
     </SettingsOpenTarget.Provider>
+  )
+}
+
+/**
+ * #370 — a text box that edits a LIST: the APRS-IS Watched calls, the digipeater path, the JS8
+ * groups and the three quick-reply chip sets. It shows the operator's own text while they type and
+ * hands it to the field's parser on EVERY change, so the list is always current: a separator can be
+ * typed, and a Save that never leaves the box (Enter in any box submits this form) saves what is in
+ * it. Leaving the box shows the list as it was read, joined the one way.
+ *
+ * Each of the six used to render `list.join(', ')` as its value. Every keystroke re-parsed the text
+ * and React wrote the parsed list straight back into the box, so whatever the parse drops, the comma
+ * of `W1ABC,` or the space of `TNX ` in a chip set that trims each entry, could never be typed, and
+ * the next call glued on (`W1ABCK2DEF`). The Blocked-callsigns box keeps its raw text the same way,
+ * but parses only as it is left, which suits its own save verb and would lose a Save here.
+ */
+function ListInput({
+  entries,
+  onText,
+  ...input
+}: {
+  entries: readonly string[]
+  /** The box's text on every change: the field's own parse and set, exactly as before. */
+  onText: (text: string) => void
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur'>) {
+  const [draft, setDraft] = useState<string | null>(null)
+  return (
+    <input
+      {...input}
+      value={draft ?? entries.join(', ')}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        onText(e.target.value)
+      }}
+      onBlur={() => setDraft(null)}
+    />
   )
 }
