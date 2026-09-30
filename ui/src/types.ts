@@ -786,12 +786,18 @@ export interface SatBinding {
 export interface SolarWind {
   /** Bz (GSM), nT. Negative = southward = geoeffective. */
   bzNt: number
-  /** Total field magnitude Bt, nT. */
-  btNt: number
-  /** Bulk speed, km/s. */
-  speedKms: number
-  /** Proton density, p/cm³. */
-  density: number
+  /** Total field magnitude Bt, nT. `null` = not known (the magnetometer row carried Bz without it;
+   *  an older station sends 0). */
+  btNt: number | null
+  /** Bulk speed, km/s. `null` = not known (the plasma feed did not answer, or its newest reading
+   *  is not from this sample's moment). ⚠️ An OLDER station sends 0 for the same thing — the Sun's
+   *  wind never blows below ~250 km/s, so a reader treats a speed ≤ 0 as not known too. */
+  speedKms: number | null
+  /** Proton density, p/cm³. `null` = not known (an older station sends 0). */
+  density: number | null
+  /** When the magnetometer reading was made, Unix seconds UTC. Absent from an OLDER station, whose
+   *  sample's age cannot be known — see `solarWindAgeSecs` in propViz. */
+  timeUnix?: number
 }
 
 export interface SpaceWxView {
@@ -2543,6 +2549,14 @@ export interface QrzLookup {
 export interface RotatorState {
   azDeg: number | null
   reading: 'position' | 'noPosition' | 'notAnswering'
+  /** The elevation the rotator reports; null when it reports none, and whenever its backend
+   *  declares no elevation axis. */
+  elDeg?: number | null
+  /** The elevation range that backend declares (a G-5500 on a GS-232B: 0–180), from rotctld's
+   *  own `\dump_state`: null when it has no elevation axis, and ABSENT when rotctld did not answer
+   *  that question this time, so the pane keeps what it last knew instead of blinking the
+   *  elevation out while a busy rotctld catches up. */
+  elRange?: [number, number] | null
 }
 
 /** What a point-at-call aimed at (`point_rotator_at_call`): the bearing, and what it was taken
@@ -3499,6 +3513,10 @@ export interface Settings {
   /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/
    * relay switch OFF after this long without an operator act. */
   js8IdleWatchdogMin: number
+  /** JS8Call's callsign aging in minutes (0 = off, the default; JS8Call's field runs 0-1440): a
+   * station not heard for this long leaves the Stations list, unless it is selected or has an
+   * unread message for me, and HEARING? replies. */
+  js8CallsignAgingMin: number
   /** Free text answered to INFO?. */
   js8Info: string
   /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */
@@ -3574,6 +3592,10 @@ export interface Settings {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
+   * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
+   * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */
+  txAudioSource?: string
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *
@@ -4220,6 +4242,10 @@ export interface RadioProfile {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
+   * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
+   * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */
+  txAudioSource?: string
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *

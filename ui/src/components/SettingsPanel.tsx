@@ -56,6 +56,7 @@ import {
   getAllRigModels,
   getPortlessRigModels,
   getCatCwUnprovenRigModels,
+  getPttMicDataRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -816,6 +817,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // DATA1. `ampModel`/`ampPort` were absent and Rust does NOT default them, so Save failed
     // outright with `missing field ampModel`.
     icomDataMode: s.icomDataMode ?? 1,
+    // ⚠️ PER-RADIO, and Rust carries no serde default on the PATCH (only on the stored profile, so
+    // an old file loads as Front/Mic). Dropping it here would fail the Save loudly rather than
+    // quietly put a Rear/Data radio (#381) back on its microphone.
+    txAudioSource: s.txAudioSource ?? 'front',
     ampModel: s.ampModel ?? '',
     ampPort: s.ampPort ?? '',
     ampFollowBand: s.ampFollowBand ?? false,
@@ -1263,6 +1268,9 @@ export function SettingsPanel({
   /** Models whose CAT CW keyer is unproven and cannot report its own failure, from the backend.
    *  Empty = rule unread, and no caution is shown. Notice only — never blocks a save. */
   const [catCwUnprovenModels, setCatCwUnprovenModels] = useState<number[]>([])
+  /** Models whose CAT PTT can key the radio's MIC or DATA input (#381), from the backend. Empty =
+   *  rule unread, and no radio is offered "Transmit audio source", so every one keys Front/Mic. */
+  const [pttMicDataModels, setPttMicDataModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
@@ -1696,6 +1704,11 @@ export function SettingsPanel({
     getCatCwUnprovenRigModels()
       .then((m) => mounted && Array.isArray(m) && setCatCwUnprovenModels(m))
       .catch(() => {})
+    // The backend's "this radio's CAT PTT can choose MIC or DATA" rule (#381), fetched once. On
+    // failure it stays empty and the choice is not offered: the radio keys as it always has.
+    getPttMicDataRigModels()
+      .then((m) => mounted && Array.isArray(m) && setPttMicDataModels(m))
+      .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
       .catch(() => {})
@@ -1939,14 +1952,16 @@ export function SettingsPanel({
       .map((g) => g.trim().toUpperCase().replace(/^@+/, ''))
       .filter(Boolean)
       .map((g) => `@${g}`)
-  // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
+  // Whole non-negative minutes, up to `max`; junk leaves the stored value alone (never coerces
+  // to 0).
   const updateMinutes = (
-    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin',
+    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin' | 'js8CallsignAgingMin',
     raw: string,
+    max = Infinity,
   ) => {
     const n = Number(raw)
     if (raw.trim() === '' || Number.isNaN(n)) return
-    updateNum(key, Math.max(0, Math.floor(n)))
+    updateNum(key, Math.min(max, Math.max(0, Math.floor(n))))
   }
 
   // The RF digipeater path, edited as one comma-separated field for the same reason as the
@@ -3151,14 +3166,17 @@ export function SettingsPanel({
       setPosNameInvalid(true)
       return
     }
-    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: its Settings refuses the save
-    // ("%1 is a group that cannot be joined", Configuration.cpp:2449-2453). ON THE CHANGE, as the
-    // position name above: a settings file from a Nexus that accepted one loads and is not
-    // refused on an unrelated save, and the engine never joins it either way.
-    const js8Groups = form.js8Groups ?? []
-    const js8GroupsChanged = js8Groups.join(',') !== (savedRef.current?.js8Groups ?? []).join(',')
-    const unjoinable = js8Groups.find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
-    if (js8GroupsChanged && unjoinable) {
+    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: while either is in the Groups
+    // field its Settings refuses OK, whatever else changed ("%1 is a group that cannot be joined",
+    // Configuration.cpp:2449-2453, asked by accept() at :2595), reading the field upper-cased. So
+    // does this Save, a settings file from a Nexus that accepted one included. Only this Save:
+    // the switches here that save on the click, a cockpit's own settings and the backend's own
+    // writers (window places, band and rig state) never pass through it, and the engine never
+    // joins the group either way.
+    const unjoinable = (form.js8Groups ?? [])
+      .map((g) => g.trim().toUpperCase())
+      .find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
+    if (unjoinable) {
       setTab('digital')
       setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
       return
@@ -4890,6 +4908,29 @@ export function SettingsPanel({
                 </select>
                 <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
               </label>
+
+              {/* #381: which input a CAT key-down selects. Offered where Rust's `cat_ptt_mode` can
+                  honour it — CAT PTT, not OmniRig (its own rig file keys the radio), a radio whose
+                  Hamlib driver has a working mic/data PTT — and hidden everywhere else, where the
+                  radio keys as it always has whatever is stored. */}
+              {form.pttMethod === 'cat' && form.rigConn !== 'omnirig' && pttMicDataModels.includes(form.rigModel) && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.txAudio.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    // Read as Rust reads it (`tx_audio_source_is_rear`), so the box never shows
+                    // Front/Mic for a stored value the radio loop treats as Rear/Data.
+                    value={(form.txAudioSource ?? '').trim().toLowerCase() === 'rear' ? 'rear' : 'front'}
+                    onChange={(e) => update('txAudioSource', e.target.value)}
+                  >
+                    <option value="front">{t('settings.rigControl.txAudio.front')}</option>
+                    <option value="rear">{t('settings.rigControl.txAudio.rear')}</option>
+                  </select>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.txAudio.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              )}
 
               {(form.pttMethod === 'rts' || form.pttMethod === 'dtr') && (
                 <label className="settings-field">
@@ -7793,11 +7834,11 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.quickReply.chat.label')}</span>
-                <input disabled={locked('macros')}
+                <ListInput disabled={locked('macros')}
                   className="settings-input"
                   type="text"
-                  value={form.macros.chat.join(', ')}
-                  onChange={(e) => updateMacros('chat', e.target.value)}
+                  entries={form.macros.chat}
+                  onText={(raw) => updateMacros('chat', raw)}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -7805,11 +7846,11 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{MACRO_SET_QSO}</span>
-                <input disabled={locked('macros')}
+                <ListInput disabled={locked('macros')}
                   className="settings-input"
                   type="text"
-                  value={form.macros.qso.join(', ')}
-                  onChange={(e) => updateMacros('qso', e.target.value)}
+                  entries={form.macros.qso}
+                  onText={(raw) => updateMacros('qso', raw)}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -7817,11 +7858,11 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.quickReply.band.label')}</span>
-                <input disabled={locked('macros')}
+                <ListInput disabled={locked('macros')}
                   className="settings-input"
                   type="text"
-                  value={form.macros.band.join(', ')}
-                  onChange={(e) => updateMacros('band', e.target.value)}
+                  entries={form.macros.band}
+                  onText={(raw) => updateMacros('band', raw)}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -8401,6 +8442,23 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.js8.rxSpeeds.hint')}</span>
               </div>
+              {/* JS8Call's "Remove callsigns from call activity after" (CallsignAging): 0,
+                  "Disabled", to 1440 minutes (Configuration.ui:464-490). */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.callsignAgingMin.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={1440}
+                  value={String(form.js8CallsignAgingMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8CallsignAgingMin', e.target.value, 1440)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.callsignAgingMin.hint')}</span>
+              </label>
             </div>
 
             <div className="settings-featgroup">
@@ -8522,10 +8580,10 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.js8.groups.label')}</span>
-                <input disabled={remote}
+                <ListInput disabled={remote}
                   className="settings-input"
-                  value={(form.js8Groups ?? []).join(', ')}
-                  onChange={(e) => setJs8Groups(parseJs8Groups(e.target.value))}
+                  entries={form.js8Groups ?? []}
+                  onText={(raw) => setJs8Groups(parseJs8Groups(raw))}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -8744,13 +8802,13 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.aprs.path.label')}</span>
-                  <input disabled={remote}
+                  <ListInput disabled={remote}
                     className="settings-input"
                     type="text"
-                    value={(form.aprsPath ?? []).join(', ')}
-                    onChange={(e) =>
+                    entries={form.aprsPath ?? []}
+                    onText={(raw) =>
                       setAprsPath(
-                        e.target.value
+                        raw
                           .split(',')
                           .map((s) => s.trim().toUpperCase())
                           .filter(Boolean),
@@ -8863,12 +8921,12 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.aprs.is.watchCalls.label')}</span>
-                  <input
+                  <ListInput
                     className="settings-input"
-                    value={(form.aprsIsWatchCalls ?? []).join(', ')}
-                    onChange={(e) =>
+                    entries={form.aprsIsWatchCalls ?? []}
+                    onText={(raw) =>
                       setWatchCalls(
-                        e.target.value
+                        raw
                           .split(',')
                           .map((c) => c.trim().toUpperCase())
                           .filter(Boolean),
@@ -12250,5 +12308,41 @@ export function SettingsPanel({
       </form>
     </section>
     </SettingsOpenTarget.Provider>
+  )
+}
+
+/**
+ * #370 — a text box that edits a LIST: the APRS-IS Watched calls, the digipeater path, the JS8
+ * groups and the three quick-reply chip sets. It shows the operator's own text while they type and
+ * hands it to the field's parser on EVERY change, so the list is always current: a separator can be
+ * typed, and a Save that never leaves the box (Enter in any box submits this form) saves what is in
+ * it. Leaving the box shows the list as it was read, joined the one way.
+ *
+ * Each of the six used to render `list.join(', ')` as its value. Every keystroke re-parsed the text
+ * and React wrote the parsed list straight back into the box, so whatever the parse drops, the comma
+ * of `W1ABC,` or the space of `TNX ` in a chip set that trims each entry, could never be typed, and
+ * the next call glued on (`W1ABCK2DEF`). The Blocked-callsigns box keeps its raw text the same way,
+ * but parses only as it is left, which suits its own save verb and would lose a Save here.
+ */
+function ListInput({
+  entries,
+  onText,
+  ...input
+}: {
+  entries: readonly string[]
+  /** The box's text on every change: the field's own parse and set, exactly as before. */
+  onText: (text: string) => void
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur'>) {
+  const [draft, setDraft] = useState<string | null>(null)
+  return (
+    <input
+      {...input}
+      value={draft ?? entries.join(', ')}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        onText(e.target.value)
+      }}
+      onBlur={() => setDraft(null)}
+    />
   )
 }

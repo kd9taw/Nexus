@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Yaesu G-5500 / G-5500DC by name in the rotator picker.** The G-5500 has no computer port
+  and no Hamlib model of its own: it is driven through a Yaesu GS-232B or GS-232A interface. So
+  Settings ▸ Radio ▸ Rotator now names it on those two entries, **Yaesu G-5500 / G-5500DC —
+  GS-232B interface** and **— GS-232A interface**, each still any GS-232B or GS-232A. A GS-232
+  clone board still belongs on **GS-232 (generic)**. The saved setting is the same model number
+  as before, so a rotator you have already set up is unchanged, and the rotator guide and the
+  settings reference say which entry to pick.
+- **The Rotor pane shows and sets the elevation of an az/el rotator.** On a rotator with an
+  elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A, the Rotor pane in Connect shows
+  the elevation under the bearing (`EL 45°`) and has an `el°` box beside the bearing box: type an
+  elevation and press Enter, for EME, a pass you steer by hand, or parking the antenna. It takes
+  only what the rotator can reach (0–180° on a G-5500) and refuses anything else before sending
+  it, and the bearing stays where it is. While the antenna is on its way the pane shows
+  `→ EL 30°`, as it does for a bearing, and a bearing and an elevation typed one after the other
+  both get there. The one ■ STOP stops both motors. Nexus asks the rotator's own control program
+  whether it has an elevation axis, so a rotator without one gets exactly the pane it had. The
+  Remote page's rotator control is unchanged.
 - **Watch list: a note on each entry (#390).** Every entry on the watch list (Settings ▸ Spots &
   Alerts) has a note field of its own, for why the call is there and when it can come off, such
   as `Samoa DXp 9/27-10/3`. Type the note when you add the entry, or later in the field on its
@@ -93,11 +110,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: send your grid to a station in one click, as in JS8Call.** Each station in the JS8
   cockpit's Stations pane has a new button beside the quick queries, **GRID** followed by your
   locator. One click sends that station your locator, the way JS8Call's menu item "GRID … - Send
-  my current station Maidenhead grid locator" does. It is greyed out until Settings has a locator.
+  my current station Maidenhead grid locator" does. It is greyed out while Settings has no
+  locator, or one JS8 will not send (such as EN5), and its tooltip then says what to set.
 - **JS8: the `<MYGRID4>` and `<MYGRID12>` macros, as in JS8Call.** Type either in a JS8 message,
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
   current value, so it follows the locator when you move.
+- **JS8: callsign aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Callsign aging
+  (minutes)** field, off (0) by default as in JS8Call. Set it, and a station you have not heard
+  for that many minutes drops off the JS8 Stations pane, unless it is the one you have selected
+  or it has an unread message for you, and your automatic HEARING? replies leave it out. It is
+  not saved with the heard list either, so it does not come back when Nexus restarts. Up to 1440
+  minutes, a day, as in JS8Call. The Remote's Stations pane follows the station's setting.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -339,12 +363,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** Saving Settings
-  with either in the JS8 Groups field is refused with "… is a group that cannot be joined", as
-  JS8Call's Settings refuses it. Messages can still be sent to both. If an earlier Nexus saved one
-  in your settings, it stays in the file and in the field but is not joined, so traffic to it gets
-  no automatic replies. Other changes still save, and the next edit of the Groups field asks you
-  to take it out.
+- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** While either is
+  in the JS8 Groups field, Settings will not save, whatever else you changed: it says "… is a
+  group that cannot be joined" and where to take it out, as JS8Call's Settings refuses its OK.
+  Messages can still be sent to both. If an earlier Nexus saved one in your settings, it stays in
+  the file and in the field but is not joined, so traffic to it gets no automatic replies, and
+  your next Save asks you to take it out. Nothing that saves by itself is held up: window places,
+  band and radio state, and the switches that save when you click them.
 
 - **JS8: a HEARING? reply no longer names the station that asked, as in JS8Call.** A station asking
   who you hear used to find its own call in your reply, usually first, taking one of the four
@@ -501,6 +526,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
   map picker arrived. It now says "Globe, need-colored, live openings", in every language.
 
+- **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
+  (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
+  so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
+  calls, the digipeater path, JS8 Groups, and the Chat, QSO and Band / CQ quick-reply chips. Each
+  box now keeps what you type, and shows the list as it was read when you leave it (`@ARES,
+  @SKCC`). Save keeps what is in the box even when you press Enter without leaving it. A pasted
+  list worked before and still does, and every list is read exactly as before: an empty
+  digipeater path still means direct, with no digipeaters.
+- **Space Wx says how old its solar-wind reading is.** While NOAA's DSCOVR data is not coming in,
+  Nexus keeps its last good reading, and the Bz gauge used to show that reading as if it were
+  current. Each reading now carries the time it was made. Past 30 minutes the gauge says when that
+  was ("last reading 45m ago") instead of how the field looks now, and with no reading at all it
+  says "no solar-wind reading" instead of leaving Bz off the box. The Insights feed no longer raises
+  a solar-wind warning ("turned stormy", "fast stream") from a reading more than 30 minutes old.
+- **No more "wind 0 km/s" when NOAA's plasma data is missing.** When DSCOVR's plasma product does
+  not answer, or its newest reading is not from the same half hour as the magnetic field's, the
+  solar wind's speed and density are now sent as not known, instead of 0. So is the field's total
+  (Bt) when the magnetometer's reading carries Bz without it. The Insights feed's southward-Bz line
+  then leaves out what is not known, rather than reporting a solar wind of 0 km/s or a Bt of 0.0 nT.
 - **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
   the "update available" notice with its Download button no longer turns up beside the prompt
   that installs the update. Settings ▸ Check for updates now works the same way: it downloads a
@@ -515,6 +559,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station drifting a little at Fast or Turbo could show as two rows, because the pane joined
   decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's
   own tolerances, and keeps 10 Hz at Normal and Slow.
+
+- **JS8: the Band activity by offset pane files each signal on the row JS8Call does.** An offset
+  reads in whole hertz as JS8Call shows it (a signal at 1500.9 Hz is on the 1500 row, not 1501). A
+  signal at an offset already on the list stays on that row, and one near two rows joins the lower
+  of them. Before, a signal joined whichever row had been listed first, and two rows could show
+  the same offset.
 
 - **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
   STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8
@@ -552,6 +602,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fold or unfold it yourself, your choice is kept. The 2-D map and the 3-D globe both work this
   way.
 
+- **The S-meter and the receive controls come back on a radio that answers slowly (#385,
+  #376).** Nexus reads the radio's settings back a few at a time and stops when a poll has used
+  its time. Each poll started again at the top of the list, so on a radio that takes a while to
+  answer each read it never reached the bottom. The Yaesu FTX-1 is one: its Hamlib driver waits
+  50 ms after every command. There the S-meter stayed blank, and the Receiver pane listed RF,
+  NB, NR, the notches, AGC and SQL under "Not on this radio" although the radio has all of them.
+  The radio's mode, the VOX, COMP and monitor switches and the monitor level were never read
+  either, and a receive filter width you picked was never sent. A poll that runs out of time now
+  hands the rest of the list to the next one, so every setting gets its turn. A radio that
+  answers quickly is read exactly as before. Not yet checked on the air: on an FTX-1, the
+  S-meter should move within a few seconds of connecting, and the Receiver pane should show RF,
+  NB, NR, the notches, AGC and SQL.
+- **Nexus no longer turns a TS-590S down to 5 W (#381).** Nexus reads the radio's power back so
+  the power slider follows the radio's own knob. On some radios the Hamlib driver answers that
+  read by setting the power to learn its range: it turns the radio up to full power for an
+  instant and then leaves it at its minimum, 5 W on a TS-590S. It did this on every connect and
+  after every mode change, so switching to FT8 or RTTY did it again. Nexus no longer asks these
+  radios for their power: the Kenwood TS-590S, TS-590SG, TS-2000, TS-50S, TS-450S and TS-930, the
+  TRC-80, the Elecraft K2, the Hilberling PT-8000A, the QRP Labs QCX/QDX, the (tr)uSDX, the FX4,
+  SDRuno and SDR Console. A power you set in Nexus still goes to the radio and still stays under
+  your per-mode limits. On these radios the slider no longer follows the knob, so a power turned
+  up at the radio is not pulled back under a limit. Not yet checked on the air: on a TS-590S, set
+  80 W at the radio, connect Nexus, and switch to FT8 and then RTTY; the radio should still be at
+  80 W.
+- **A sound card on the radio's rear jack now transmits under CAT PTT: a new Transmit audio
+  source setting (#381).** When Nexus keyed a radio over CAT, the radio transmitted from its
+  microphone input, so on a TS-590S with a SignaLink on the rear ACC2 jack nothing from Nexus went
+  out, although VOX worked. Settings › Radio › Rig & CAT now has **Transmit audio source (CAT
+  PTT)**, **Front/Mic** or **Rear/Data**, per radio. With Rear/Data, Nexus keys the radio's data
+  input instead, as WSJT-X's Rear/Data choice does, for everything whose audio Nexus plays: FT8
+  and the other digital modes, RTTY sent as audio, PSK, SSTV, APRS, the voice keyer, the soundcard
+  CW keyer and Tune. The Phone cockpit's PTT and RTTY sent on an FSK keying line key the radio as
+  before. **Front/Mic is the default and keys every radio exactly as before.** The choice appears
+  only for CAT PTT on a radio whose Hamlib driver can key either input: the Kenwood TS-480,
+  TS-590S, TS-590SG, TS-890S and TS-990S, the Yaesu FTDX-5000, the ELAD FDM-DUO and a few more.
+  On an FTDX-5000, Hamlib selects the rear input by changing the radio's menu 103, and nothing
+  changes it back, so check that menu before you work phone. Not yet checked on the air: on a
+  TS-590S with a SignaLink on ACC2, choose Rear/Data and press Tune, then send an FT8 over; the
+  radio should put out power both times.
+- **Yaesu FTX-1: Nexus no longer sends the three commands its Hamlib driver gets wrong (#385).**
+  Checked against Yaesu's own FTX-1 CAT reference, the Hamlib driver Nexus uses for the FTX-1
+  turns three of Nexus's controls into different commands. The monitor switch becomes MOX, which
+  makes the radio transmit. The monitor level becomes the monitor's on/off switch. The ATU button
+  changes the radio's TUNER SELECT menu to INT (FAST) and tunes nothing. No control in Nexus sent
+  the monitor switch yet, but the ATU button did, and the monitor level would have now that the
+  radio's settings are all read. On an FTX-1, Nexus now sends none of the three: there is no ATU
+  button (press TUNE on the radio), and the Transmitter pane lists MON under "Not on this radio"
+  although the radio has a monitor, so set it on the radio. Everything else is sent as before.
+  Not yet checked on the air: on an FTX-1, there should be no ATU button and no MON slider, and
+  the radio's TUNER SELECT menu should stay as you set it.
 - **Connect: the Band conditions list on the map is readable in every theme (#382).** The band
   names are now drawn in the theme's own text colour. Before, they used the computer's default
   button colour, so with Windows in light mode they came out black on the dark theme and could
@@ -560,6 +660,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme those words had been too faint to read comfortably. A closed band's word is dimmer, so it
   recedes.
 
+- **Turning the beam keeps an az/el rotator's elevation where it is.** On a rotator with an
+  elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A interface, every azimuth move
+  made by hand also sent the elevation to 0°: a click on the Rotor pane's compass, a typed bearing,
+  the ↗ on a Needed row and the → and LP buttons on a rotor strip each laid the antenna flat on the
+  horizon. Nexus now reads where the antenna is and sends its elevation back with the new bearing.
+  It asks the rotator's control program (Hamlib's rotctld) whether the rotator has an elevation
+  axis rather than going by its name, so an azimuth-only rotator, such as a Rotor-EZ, a DCU-1, a
+  SPID Rot1Prog or a Green Heron RT-21, gets exactly the command it always did. If that program is
+  too busy to answer, the move is refused with a message saying so rather than guessed. A
+  satellite pass steers both axes as before.
+- **Turning the beam from Nexus Remote keeps an az/el rotator's elevation too.** A bearing sent from
+  the Remote page in a browser, typed or from a callsign, still set the elevation of an az/el
+  rotator such as a Yaesu G-5500 to 0°. It now goes through the same check as the desktop: the
+  elevation goes back with the new bearing, an azimuth-only rotator gets exactly the command it
+  always did, and when the rotator's control program is too busy to say which kind it is, nothing
+  is sent.
+- **The Rotor pane's ■ STOP is easy to read in the light theme.** Its red was the dark theme's, and
+  on a light theme's pane it read faintly (about 2.2:1), on the one button that stops the antenna
+  turning. It now takes the same red as the cockpits' Stop TX in every theme, dark and light,
+  high-contrast and night included, and when you point at it, it turns solid red with the pane's
+  own colour for its letters.
+- **The Rotor pane's → lines go away when you press ■ STOP.** The line that shows where the antenna
+  is going (`→ 200°`, and `→ EL 30°` for an elevation) and the dashed target on the compass stayed
+  after STOP until the antenna reached a heading it was no longer going to, so a stopped antenna
+  looked as if it were still turning. They now clear as soon as the rotator confirms the stop. If
+  the stop does not reach it, they stay, since the antenna may still be moving.
+- **The rotator guide names the DF9GR ERC entry as Settings does.** Its list of rotator models still
+  called it "DF9GR ERC (az)" after the picker renamed it "DF9GR ERC, DCU-1 mode (az)" to say which
+  of the board's modes it drives, so the guide sent readers looking for an entry that was not there.
+  The list is now checked against the picker, entry by entry.
+- **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
+  compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
+  cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the
+  248 px the rail takes on a smaller window, and all of it, with the bearing box, at 200 px. The
+  controls now move under the compass when they do not fit beside it, and the line that shows
+  where the antenna is going sits under STOP, so STOP no longer moves down when the antenna starts
+  to turn.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
@@ -749,6 +886,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after you logged a hunted contact, the empty log strip showed that contact's park again and
   kept it. The box now fills with the clicked activator's park, and clears once its contact is
   logged.
+- **A park you type before the call belongs to the call you type next (#383).** Type a park, then
+  the station's call, and the park stays that station's even if a spot for it names another park.
+  Click an activator's spot instead and it is a new station: the box fills with the spot's park,
+  and the park you typed is not logged on that contact, with or without a callbook. After a
+  hunted contact is logged the strip now comes up empty every time, including when the next
+  update arrives straight away.
+- **Connect's stacked panes no longer sit on top of each other.** When a Connect window is narrow
+  enough that its panes stack in one column under the map (a dashboard window dragged narrow, for
+  example), the side panes were drawn over each other and over the bottom row, and in the main
+  window the bottom of the tallest pane could not be scrolled into view. Each pane now takes its
+  own full height in the stack, and the stack scrolls.
+- **The data-source chip and the update button are easy to read in the light themes.** The LIVE,
+  PARTIAL, CACHED and NO LIVE DATA chip on Connect's Conditions pane, on the map's bar and in
+  DXpeditions lettered its word in a green or amber that was hard to read on the light page colour,
+  and the update prompt's Install and restart (or Download) button lettered near-black on its blue.
+  In every light theme the chip's word now takes the theme's text colour, with the green or amber
+  kept on its border, and the button letters in white. The dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

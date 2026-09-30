@@ -2215,6 +2215,11 @@ export interface RadioProfilePatch {
    * on every edit of the rig form. A default on the backend hides drift instead of catching it,
    * which is why the guard below now reads this interface directly. */
   icomDataMode: number
+  /** "Transmit audio source (CAT PTT)" for THIS radio (#381): 'front' keys as every release has
+   * (`T 1`), 'rear' keys the DATA input (`T 3`). Rust defaults it for an old settings file but NOT
+   * on the patch, so a form that dropped it would fail the Save loudly rather than quietly put a
+   * SignaLink radio back on Front/Mic. */
+  txAudioSource: string
   /** THIS radio's amplifier, per-radio because the amp is wired to a radio, not to the station.
    * Absent here these had no serde default, so the patch did not silently drop them — it failed
    * to deserialize at all and took the whole Save with it. */
@@ -2281,9 +2286,18 @@ export async function probeCatPorts(radioId?: number): Promise<CatProbeResult> {
   return invoke<CatProbeResult>('probe_cat_ports', { radioId })
 }
 
-/** Point the antenna rotator at an absolute azimuth (degrees) via rotctld. */
-export async function pointRotator(azDeg: number): Promise<void> {
-  return invoke('point_rotator', { azDeg })
+/** Point the antenna rotator at an absolute azimuth (degrees) via rotctld. An az/el rotator's
+ *  elevation stays where it is, unless `elDeg` gives the one to go with it (the Rotor pane, while
+ *  an elevation it set is still on its way). Without it the call is exactly `{ azDeg }`, the only
+ *  shape the Remote transport takes. */
+export async function pointRotator(azDeg: number, elDeg?: number): Promise<void> {
+  return invoke('point_rotator', elDeg === undefined ? { azDeg } : { azDeg, elDeg })
+}
+
+/** Point an az/el rotator at an elevation (degrees, inside the range its backend declares). The
+ *  azimuth stays where it is, unless `azDeg` gives the one to go with it. Desktop only. */
+export async function pointRotatorElevation(elDeg: number, azDeg?: number): Promise<void> {
+  return invoke('point_rotator_elevation', azDeg === undefined ? { elDeg } : { elDeg, azDeg })
 }
 
 /** Point the rotator at a callsign's station: its own grid or callbook position when Nexus
@@ -2780,6 +2794,12 @@ export async function getJs8State(): Promise<Js8State> {
   return invoke<Js8State>('get_js8_state')
 }
 
+/** Why the JS8 gate would refuse the locator in Settings (the gate's own sentence), or null when
+ *  it would take it. "Send my grid" follows this rather than a copy of the gate's rule. */
+export async function js8LocatorRefusal(): Promise<string | null> {
+  return invoke<string | null>('js8_locator_refusal')
+}
+
 /** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo). Persisted; the slot
  * clock and the boundary decode window follow. Never touches the TX latch. */
 export async function js8SetSpeed(speed: number): Promise<Js8State> {
@@ -3138,6 +3158,14 @@ export async function getPortlessRigModels(): Promise<number[]> {
  *  be read, and the caution is simply not shown. */
 export async function getCatCwUnprovenRigModels(): Promise<number[]> {
   return invoke<number[]>('get_cat_cw_unproven_rig_models')
+}
+
+/** Models whose Hamlib CAT PTT can choose the radio's MIC or DATA input — the only ones Settings
+ *  offers "Transmit audio source (CAT PTT): Rear/Data" on (#381). The set is measured from the
+ *  bundled Hamlib and lives in Rust (`rigmodels::PTT_MIC_DATA_RIGS`); fetched, not copied here.
+ *  An empty array means the rule could not be read, and no radio is offered the choice. */
+export async function getPttMicDataRigModels(): Promise<number[]> {
+  return invoke<number[]>('get_ptt_mic_data_rig_models')
 }
 
 /** One keystroke to a configured SPE amplifier. The set is closed at the Rust boundary; an

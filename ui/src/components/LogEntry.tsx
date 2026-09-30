@@ -449,16 +449,24 @@ export function LogEntry({
   const [logParkRef, setLogParkRef] = useState('')
   // WHOSE park the box holds, and whether a hunt put it there. A prefill is bound to the hunted
   // activator (`hunt: true`); a park the operator typed or picked is bound to the call in the box
-  // (`hunt: false`, and `call: ''` when there was no call yet). Written wherever a park goes INTO
-  // the box and read only while one is there, so a clear leaves it alone. See the prefill below
-  // for why the value alone cannot say.
+  // (`hunt: false`, and `call: ''` when there was no call yet), and follows that call while the
+  // operator types it, so a park typed before any call belongs to the first call TYPED after it
+  // (#383). Written wherever a park goes INTO the box and read only while one is there, so a clear
+  // leaves it alone. See the prefill below for why the value alone cannot say.
   const parkForRef = useRef({ call: '', hunt: false })
-  // The park box as it stands in this commit, for the park prefill. The call-change effect runs
-  // just before it and can empty the box in the same commit, while the rendered `logParkRef`
-  // still holds the value being erased. Synced here on every render; an effect that writes the
-  // box writes this too.
-  const parkBoxRef = useRef(logParkRef)
-  parkBoxRef.current = logParkRef
+  // The park box as it stands, for the park prefill: the LAST value written to it. Every write
+  // goes through `setPark`, so this always has it, even before React renders it. The call-change
+  // effect runs just before the prefill and can empty the box in the same commit, while the
+  // rendered `logParkRef` still holds the value being erased. And it is NOT re-synced from a render
+  // (it was): a render can land ahead of a write still pending from a passive effect, and syncing
+  // from it put the box back to what that render saw. After a hunted log, the spent hunt's refill
+  // was such a write; the hunt's end rendered first, the prefill judged an empty box, and the
+  // refill then landed with nothing left to take it out (#383, N26).
+  const parkBoxRef = useRef('')
+  const setPark = (value: string) => {
+    parkBoxRef.current = value
+    setLogParkRef(value)
+  }
   // Local park-directory suggestions (POTA only) as the operator types the reference.
   const [parkHits, setParkHits] = useState<Park[]>([])
   const [parkPicked, setParkPicked] = useState(false)
@@ -631,8 +639,7 @@ export function LogEntry({
       setLogCountry('')
       setLogImage(null)
       setLogCoords(null)
-      setLogParkRef('') // the park was for the previous call
-      parkBoxRef.current = '' // …and the prefill below decides in this same commit
+      setPark('') // the park was for the previous call; the prefill below decides in this commit
       // The wiped name may have been the CW decoder's copy — un-latch so it can refill for the
       // new call (declared below; the effect callback runs after render, so it's initialized).
       cwNameFilled.current = false
@@ -678,10 +685,14 @@ export function LogEntry({
   // operator's "why are some parks filled and not others": a hunt that lands a render after the
   // call finds the box already cleared, and fills). With no callbook answer nothing clears the box
   // at all, and the first park stayed, differing from the hunt, so it would have been logged as
-  // one the operator typed. So an override is a park the operator TYPED for this call, or typed
-  // before there was one (`parkForRef`), never merely a value that differs from the hunt. A park
-  // an earlier hunt put there is never one: the same activator re-spotted at another park takes
-  // the new park, where the earlier prefill used to hold the box and go out as a typed park.
+  // one the operator typed. So an override is a park the operator TYPED for this call
+  // (`parkForRef`), never merely a value that differs from the hunt. A park an earlier hunt put
+  // there is never one: the same activator re-spotted at another park takes the new park, where the
+  // earlier prefill used to hold the box and go out as a typed park. Nor is a park typed before any
+  // call, for a call that arrives by a click: it belongs to the first call the operator types
+  // (operator, 2026-09-29, #383), so a clicked spot for another park is a new station and fills
+  // its own. It used to count for whatever call came next, and with no callbook the clicked
+  // activator's contact went out at the typed park.
   //
   // ⚠️ THE BOX IS READ AS IT STANDS, NOT AS IT WAS RENDERED (`parkBoxRef`). The race above had a
   // second door. The call-change effect empties the box in the commit this effect decides in, so
@@ -709,21 +720,18 @@ export function LogEntry({
     if (h?.reference && (call === '' || sameCall(h.call, call))) {
       // Prefill (or keep) the hunted park, unless the box holds the operator's own park for this
       // call, so a manual override survives. `parkPicked` suppresses the search dropdown.
-      const override =
-        shown !== '' && shown !== huntRef && !bound.hunt && (bound.call === '' || bound.call === baseCall(call))
+      const override = shown !== '' && shown !== huntRef && !bound.hunt && bound.call === baseCall(call)
       if (!override) {
         setParkPicked(true)
         setLogParkProgram(h.program)
-        setLogParkRef(h.reference)
-        parkBoxRef.current = h.reference
+        setPark(h.reference)
         parkForRef.current = { call: baseCall(h.call), hunt: true }
       }
     } else if (shown !== '' && (shown === huntRef || (bound.hunt && (call === '' || !sameCall(bound.call, call))))) {
       // No hunted station is in the box: drop the pending hunt's own prefill, a park an earlier hunt
       // bound to another station, and, with no call at all, one whose hunt is over, rather than
       // SHOW (and log) a park that is not this call's.
-      setLogParkRef('')
-      parkBoxRef.current = ''
+      setPark('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.hunt?.reference, snap.hunt?.program, logCall])
@@ -1128,7 +1136,7 @@ export function LogEntry({
     setLogCountry('')
     setLogImage(null)
     setLogCoords(null)
-    setLogParkRef('')
+    setPark('')
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
     // station copied stays bound to them — come back later and they get the same one — but the
@@ -1794,7 +1802,15 @@ export function LogEntry({
           value={logCall}
           onChange={(e) => {
             humanCallEditRef.current = true
-            setLogCall(e.target.value.toUpperCase())
+            const next = e.target.value.toUpperCase()
+            // #383: a park the operator typed follows the call as they type it. Typed before any
+            // call, it belongs to the first call typed after it; typed mid-call, to the call being
+            // finished. Only a keystroke here moves it, so a clicked spot is a new station.
+            const bound = parkForRef.current
+            if (!bound.hunt && (bound.call === '' || bound.call === baseCall(logCall))) {
+              parkForRef.current = { call: baseCall(next), hunt: false }
+            }
+            setLogCall(next)
           }}
           onBlur={onCallBlur}
           onKeyDown={onCallEnter}
@@ -1953,7 +1969,7 @@ export function LogEntry({
             className="settings-input mono le-park-ref"
             value={logParkRef}
             onChange={(e) => {
-              setLogParkRef(e.target.value.toUpperCase())
+              setPark(e.target.value.toUpperCase())
               parkForRef.current = { call: baseCall(logCall), hunt: false }
             }}
             onKeyDown={onEnter}
@@ -1976,7 +1992,7 @@ export function LogEntry({
                     onMouseDown={(e) => {
                       e.preventDefault() // pick before the input's onBlur clears the list
                       setParkPicked(true)
-                      setLogParkRef(p.reference)
+                      setPark(p.reference)
                       parkForRef.current = { call: baseCall(logCall), hunt: false }
                       setParkHits([])
                     }}

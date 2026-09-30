@@ -266,6 +266,29 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
   })
 })
 
+// JS8Call's callsign aging (Settings ▸ JS8, CallsignAging, off by default): a call not heard for
+// that many minutes leaves the call-activity list unless it is the selected one
+// (mainwindow.cpp:10209-10233). The rule itself is js8Vocab's `js8ListedStations`; this is its
+// wiring: the setting App hands down, the clock, and the To box as the selection.
+describe('the Stations list under JS8Call’s callsign aging', () => {
+  const calls = () =>
+    Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
+  it('leaves off a call not heard for the aging, lists it with the aging off, and keeps it once selected', async () => {
+    const now = Date.now()
+    const [w0ind, n0grd] = js8Fixture().stations
+    state.current = { ...js8Fixture(), stations: [{ ...w0ind, lastMs: now - 11 * 60_000 }, { ...n0grd, lastMs: now - 60_000 }] }
+    await renderCockpit({ callsignAgingMin: 10 })
+    expect(calls(), 'W0IND, heard 11 minutes ago, is aged out').toEqual(['N0GRD'])
+    await act(async () => {
+      fireEvent.change(document.querySelector('.js8-to') as HTMLInputElement, { target: { value: 'w0ind' } })
+    })
+    expect(calls(), 'selected in the To box, it is listed again').toEqual(['W0IND', 'N0GRD'])
+    cleanup()
+    await renderCockpit()
+    expect(calls(), 'the aging is off by default').toEqual(['W0IND', 'N0GRD'])
+  })
+})
+
 describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () => {
   it('is a CockpitPaneFrame inside the region, one row per offset, ordered by offset', async () => {
     await renderCockpit()

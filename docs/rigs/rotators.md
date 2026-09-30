@@ -77,9 +77,9 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 
 | Model | Hamlib # |
 |---|---|
-| Yaesu GS-232A (az/el) | 601 |
-| Yaesu GS-232B (az/el) | 603 |
-| GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2 | 602 |
+| Yaesu G-5500 / G-5500DC — GS-232B interface (az/el); also any GS-232B, and ERC V4 in its recommended mode (9600) | 603 |
+| Yaesu G-5500 / G-5500DC — GS-232A interface (az/el); also any GS-232A | 601 |
+| GS-232 (generic, az/el) — GS-232 clone boards; also EA4TX ARS-USB, LVB, ST2 | 602 |
 | Yaesu/Kenpro GS-23 (az/el) | 605 |
 | Yaesu/Kenpro GS-232 (az/el) | 606 |
 | AMSAT LVB Tracker (az/el) | 607 |
@@ -91,12 +91,20 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 | Idiom Press Rotor-EZ (az) | 401 |
 | Hy-Gain DCU-1/DCU-1X (az) | 403 |
 | Hy-Gain DCU2/DCU3/YRC-1 (az) | 406 |
-| DF9GR ERC (az) | 404 |
+| DF9GR ERC, DCU-1 mode (az) | 404 |
 | Green Heron RT-21 | 405 |
 | M2 RC2800 (az/el) | 1001 |
 | Prosistel D (az) | 1701 |
 | Prosistel Combi-Track (az/el) | 1703 |
 | Dummy (testing — no hardware) | 1 |
+
+> **Yaesu G-5500 / G-5500DC owners:** the rotator has no computer port of its
+> own, and Hamlib has no model for it: it is driven through a Yaesu **GS-232B**
+> (or the older **GS-232A**) interface, so it is named on those two entries.
+> Pick the one for your interface, put in the interface's serial port, and set
+> the baud to the rate the interface itself is set to (the GS-232 family takes a
+> range, so Nexus leaves it to you). A GS-232 clone board goes on **GS-232
+> (generic)**. The Rotor pane then shows the elevation too (0–180° on a G-5500).
 
 > **EA4TX ARS owners:** there is no EA4TX entry, deliberately. Hamlib's ARS
 > backend (1101/1102) drives a **parallel port**, which Nexus does not offer —
@@ -120,7 +128,13 @@ Once it's configured and answering, rotator control appears throughout the app:
   `312°T (316°M)` (WMM2025 declination). A rotator that **cannot report its
   position** (the Hy-Gain DCU-1 is one — its Hamlib backend has no read-back at
   all) keeps the pane, the slew and the STOP, and shows `—°T` instead of a
-  needle.
+  needle. On a rotator with an **elevation axis** (a G-5500 on its GS-232B, a
+  SPID Rot2Prog, EasyComm) the pane also shows the elevation, `EL 45°`, and an
+  `el°` box: type an elevation and press Enter. It takes only what the rotator
+  reaches (0–180° on a G-5500) and keeps the bearing where it is, and turning
+  the beam keeps the elevation where it is. The one STOP stops both motors.
+  Nexus asks the rotator's own control program (Hamlib's rotctld) whether there
+  is an elevation axis, so an azimuth-only rotator's pane is exactly as before.
 - **RotorStrip in the Phone, CW, Operate, RTTY, PSK, SSTV and JS8 cockpits** — a compact heading strip.
   It **hides when there's nothing to show**, and displays **"ROTOR —"** when a
   rotator is configured but not answering, so you can tell "no rotator" from

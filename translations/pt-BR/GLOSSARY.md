@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,255 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,268 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,10 +20,10 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 117 | The program's name. |
+| Nexus | 122 | The program's name. |
 | QSO / QSOs | 97 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
-| CAT | 82 | Computer Aided Transceiver — the radio control protocol. |
+| CAT | 84 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 79 / 72 | Transmit and receive. Printed on the radio itself. |
 | CW | 68 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 67 | Both the Q-code and the callsign lookup site. |
@@ -37,7 +37,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | SSTV | 41 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
 | Field Day | 34 | The ARRL/RAC event's official name. |
-| USB / LSB / SSB / FM | 33 / 10 / 27 / 21 | Mode names, as marked on the radio. |
+| USB / LSB / SSB / FM | 34 / 10 / 27 / 21 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
 | FT8 / FT4 | 33 / 18 | Mode names. |
 | HF / VHF / UHF | 32 / 18 / 4 | Band ranges. |
@@ -57,7 +57,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | ARRL / RAC / IARU | 20 / 3 / 1 | Organisation names. |
 | SatNOGS | 19 | The satellite database. |
 | AOS / LOS | 19 / 12 | Acquisition and loss of signal, on a satellite pass. |
-| PTT | 18 | Push to talk. Printed on the microphone. |
+| PTT | 22 | Push to talk. Printed on the microphone. |
 | RBN | 18 | Reverse Beacon Network. |
 | QTH | 17 | Q-code: location. |
 | QSL | 16 | The confirmation, the card and the act. |
@@ -77,10 +77,10 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 Also on the list, appearing fewer times each but under the same rule: JS8Call, JTDX, GridTracker,
 MMSSTV, fldigi, N1MM, N3FJP, DXKeeper, Log4OM, HamQTH, PSK Reporter, Telnet, Winlink, WinKeyer,
-K1EL, RIGblaster, OmniRig, Icom, Yaesu, Kenwood, Elecraft, Xiegu, MUF, EME, WSPR, MSK144, Q65,
-JT65, FST4, FST4W, IOTA, ATNO, B4, QRM, QRP, VOX, NOAA, ISS, TLE, Maidenhead, AD1C, and the rig
+K1EL, RIGblaster, SignaLink, OmniRig, Icom, Yaesu, Kenwood, Elecraft, Xiegu, MUF, EME, WSPR, MSK144,
+Q65, JT65, FST4, FST4W, IOTA, ATNO, B4, QRM, QRP, VOX, NOAA, ISS, TLE, Maidenhead, AD1C, and the rig
 model numbers (FT-991A, IC-7300, IC-9700, FTDX10 …) and submode names (DATA-U, USB-D, PKTUSB,
-RTTY-AFSK).
+RTTY-AFSK), and the jack labels printed on a radio (DATA, ACC).
 
 ---
 
@@ -96,19 +96,19 @@ word in, and use only that word in the CSV.
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
 | band | 323 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 230 | The rig itself, and the radio list in Settings. | |
+| radio | 231 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 122 | The Settings screen and every reference to it. | |
 | grid | 120 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
-| audio | 106 | Sound cards, levels, routing. | |
-| station | 108 | Both your own station and the one you are working. | |
+| audio | 108 | Sound cards, levels, routing. | |
+| station | 109 | Both your own station and the one you are working. | |
 | port | 97 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 95 / 30 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 97 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 86 | A satellite pass. | |
-| callsign | 78 | Appears constantly. Whatever you choose, choose it once. | |
+| callsign | 79 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 78 | "Worked before", "stations you have worked". | |
 | frequency | 76 | | |
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
@@ -127,9 +127,9 @@ word in, and use only that word in the CSV.
 | contact | 32 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
 | park / summit | 31 / 8 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 30 | | |
-| antenna | 30 | | |
+| antenna | 31 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
-| cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
+| cockpit | 27 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
 | pane / panel | 22 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |

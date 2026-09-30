@@ -11,6 +11,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
+import { patchSettings } from '../settings/patch'
+import type { Settings } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
 const api = vi.hoisted(() => {
@@ -71,6 +73,7 @@ const js8Defaults = {
   js8Autoreply: true,
   js8Relay: true,
   js8IdleWatchdogMin: 60,
+  js8CallsignAgingMin: 0,
   js8Info: '',
   js8Status: '',
   js8Groups: [] as string[],
@@ -145,6 +148,7 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect((control(fs, 'Transmit speed') as HTMLSelectElement).value).toBe('1')
     expect((control(fs, 'Idle watchdog (minutes)') as HTMLInputElement).value).toBe('60')
     expect((control(fs, 'Heartbeat interval (minutes)') as HTMLInputElement).value).toBe('0')
+    expect((control(fs, 'Callsign aging (minutes)') as HTMLInputElement).value, 'CallsignAging: off').toBe('0')
   })
 
   it('the four speed switches edit one bitmask, independently', async () => {
@@ -169,10 +173,29 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect(idle.value).toBe('0')
   })
 
+  // JS8Call's "Remove callsigns from call activity after" runs 0 ("Disabled") to 1440 minutes,
+  // one at a time (Configuration.ui:464-490).
+  it('callsign aging takes whole minutes from 0 to 1440, and saves', async () => {
+    const fs = await openJs8()
+    const aging = control(fs, 'Callsign aging (minutes)') as HTMLInputElement
+    fireEvent.change(aging, { target: { value: '5000' } })
+    expect(aging.value, 'capped at 1440').toBe('1440')
+    fireEvent.change(aging, { target: { value: '12.7' } })
+    expect(aging.value, 'whole minutes').toBe('12')
+    fireEvent.change(aging, { target: { value: 'abc' } })
+    expect(aging.value, 'junk leaves it alone').toBe('12')
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8CallsignAgingMin: 12 })),
+    )
+  })
+
   it('groups are a comma list, upper-cased, @-prefixed on the way in', async () => {
     const fs = await openJs8()
     const groups = control(fs, 'Groups') as HTMLInputElement
     fireEvent.change(groups, { target: { value: 'ares, @skcc ,,' } })
+    // The box keeps the typed text until it is left (#370), then shows the list as it was read.
+    fireEvent.blur(groups)
     expect(groups.value).toBe('@ARES, @SKCC')
   })
 
@@ -202,15 +225,53 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     }
   })
 
-  it('a settings file that already holds one still loads, and an unrelated save goes through', async () => {
+  // JS8Call refuses OK while either is in its Groups field, whatever else changed
+  // (Configuration.cpp:2449-2453, asked by accept() at :2595), reading the field upper-cased.
+  it('a settings file that already holds one still loads, and no save goes through until it is taken out', async () => {
+    for (const [stored, group] of [[['@APRSIS'], '@APRSIS'], [['@ARES', '@js8net'], '@JS8NET']] as const) {
+      api.get('getSettings').mockImplementation(() =>
+        Promise.resolve({ ...defaultSettings, ...js8Defaults, js8Groups: [...stored], mycall: 'KD9TAW', mygrid: 'EN52' } as never),
+      )
+      api.get('setSettings').mockClear()
+      const fs = await openJs8()
+      expect((control(fs, 'Groups') as HTMLInputElement).value, `${group}: it loads as it was`).toBe(stored.join(', '))
+      fireEvent.change(control(fs, 'Idle watchdog (minutes)'), { target: { value: '30' } })
+      await clickSave()
+      await waitFor(() =>
+        expect(screen.queryByRole('alert')?.textContent ?? '', `${group}: the reason`).toContain(
+          `${group} is a group that cannot be joined`,
+        ),
+      )
+      expect(api.get('setSettings'), `${group}: nothing saved`).not.toHaveBeenCalled()
+      fireEvent.change(control(fs, 'Groups'), { target: { value: '@FUN' } })
+      await clickSave()
+      await waitFor(() => expect(api.get('setSettings'), `${group}: taken out, the Save goes through`).toHaveBeenCalled())
+      cleanup()
+    }
+  })
+
+  // Only the operator's Save is refused. A switch here that saves on the click and a cockpit's
+  // own settings (through the patch seam) never pass through it, and the backend's own writers
+  // (window places, band and rig state) never reach the panel at all.
+  it('refuses only the Save: a switch that saves on the click and a cockpit write still save', async () => {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({ ...defaultSettings, ...js8Defaults, js8Groups: ['@APRSIS'], mycall: 'KD9TAW', mygrid: 'EN52' } as never),
     )
-    const fs = await openJs8()
-    expect((control(fs, 'Groups') as HTMLInputElement).value, 'it loads as it was').toBe('@APRSIS')
-    fireEvent.change(control(fs, 'Idle watchdog (minutes)'), { target: { value: '30' } })
+    await openJs8()
     await clickSave()
-    await waitFor(() => expect(api.get('setSettings'), 'an unrelated change still saves').toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')?.textContent ?? '', 'control: the Save is refused').toContain(
+        '@APRSIS is a group that cannot be joined',
+      ),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('switch', { name: 'Turn on beta updates' }))
+    await waitFor(() => expect(api.get('setBetaUpdates'), 'the beta switch still saves').toHaveBeenCalledWith(true))
+    // The CW cockpit's macro-set switch, as it writes it.
+    await patchSettings((s) => ({ macros: { ...s.macros, activeCwProfile: 2 } }))
+    const sent = api.get('setSettings').mock.lastCall?.[0] as Settings | undefined
+    expect(sent?.macros.activeCwProfile, "a cockpit's own write still saves").toBe(2)
+    expect(sent?.js8Groups, 'and keeps the group as it is').toEqual(['@APRSIS'])
   })
 })
 

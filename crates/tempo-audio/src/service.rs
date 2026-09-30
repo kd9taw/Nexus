@@ -735,7 +735,101 @@ const RIG_POLL_MS: f64 = 750.0;
 /// period. Reads only — every WRITE and operator action in the block runs unbudgeted, because
 /// deferring the ATU press, a filter-width set, a func toggle or a RIT/XIT apply would trade a
 /// stalled reader for a dropped intent.
+///
+/// ⚠️ "PICKS THEM UP ON THE NEXT HEAVY POLL" WAS FALSE UNTIL #385. The next poll started at the
+/// top again, spent the budget in the same place and dropped the same reads; [`ReadTurns`] is
+/// what makes a deferred read come round.
 const HEAVY_POLL_BUDGET_MS: u128 = 250;
+
+/// THE HEAVY POLL'S BUDGETED READ-BACKS, in the order the block issues them. The order is the
+/// point: [`ReadTurns`] resumes a lap at the first read a poll could not afford and skips the
+/// ones that lap has already read, so a new budgeted read goes in here at the position its code
+/// has in the block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum HeavyRead {
+    RfPower,
+    MicGain,
+    Comp,
+    NotchF,
+    Af,
+    Rf,
+    Sql,
+    MonitorGain,
+    Att,
+    Preamp,
+    NrLevel,
+    Agc,
+    Smeter,
+    Mode,
+    Split,
+    Vfo,
+    Func,
+}
+
+/// WHOSE TURN IT IS on the heavy poll's read budget (#385, Yaesu FTX-1).
+///
+/// ⚠️ EVERY POLL USED TO START AT THE TOP. A poll that spent [`HEAVY_POLL_BUDGET_MS`] abandoned
+/// the rest of its reads, and the next poll began with the same reads in the same order, spent
+/// the budget in the same place and abandoned the same tail. On a link where the head alone
+/// costs the budget, the tail was never read at all. The FTX-1's Hamlib backend waits 50 ms
+/// after every command (`post_write_delay`), so each read there costs at least that: measured
+/// against Hamlib 4.7.1, RFPOWER, MICGAIN, COMP, NOTCHF and AF were read on every poll and RF,
+/// SQL, MONITOR_GAIN, ATT, PREAMP, NR, AGC, STRENGTH, the mode read and every DSP func on none.
+/// The operator saw the S-meter die and those controls land in "Not on this radio".
+///
+/// So a lap resumes where the last poll had to stop, and a read the lap has already done waits
+/// for the next lap. A link that fits every read into one poll never stops anywhere and sees
+/// exactly the order it always did.
+///
+/// The sub-cadenced reads (mode, split, VFO, the DSP funcs) are OWED from their tick until a
+/// poll can afford them. Going by the tick alone, a lap that lasted a multiple of four polls
+/// would reach them on the same tick of the four every time and, if it was not theirs, never.
+#[derive(Debug, Default)]
+struct ReadTurns {
+    /// Where this poll's lap resumes; `None` = at the top.
+    resume: Option<HeavyRead>,
+    /// The first read this poll could not afford: where the next poll resumes.
+    refused: Option<HeavyRead>,
+    /// Sub-cadenced reads whose tick has come round and that no poll has afforded yet, one bit
+    /// per [`HeavyRead`].
+    owed: u32,
+}
+
+impl ReadTurns {
+    /// A heavy poll's reads begin: resume where the last poll had to stop, or at the top when
+    /// it finished its lap.
+    fn start_poll(&mut self) {
+        self.resume = self.refused.take();
+    }
+
+    /// A sub-cadenced read's tick has come round.
+    fn owe(&mut self, read: HeavyRead) {
+        self.owed |= 1 << read as u32;
+    }
+
+    /// May this poll issue `read`? Not if this lap has already read it, and not once the budget
+    /// is spent — which also makes it the place the next poll resumes.
+    fn take(&mut self, read: HeavyRead, have_budget: bool) -> bool {
+        if self.resume.is_some_and(|r| read < r) {
+            return false;
+        }
+        if !have_budget {
+            self.refused = Some(self.refused.map_or(read, |r| r.min(read)));
+            return false;
+        }
+        true
+    }
+
+    /// [`Self::take`] for a sub-cadenced read: only while it is owed, and the turn pays it.
+    fn take_owed(&mut self, read: HeavyRead, have_budget: bool) -> bool {
+        let bit = 1 << read as u32;
+        if self.owed & bit == 0 || !self.take(read, have_budget) {
+            return false;
+        }
+        self.owed &= !bit;
+        true
+    }
+}
 
 /// How often to re-attempt an audio device that failed to open (ms).
 ///
@@ -1193,6 +1287,9 @@ pub struct RadioConfig {
     /// The operator's Icom DATA-mode choice (D1/D2/D3) for this radio. 1 = today's
     /// behaviour; see `RadioProfile::icom_data_mode`.
     pub icom_data_mode: u8,
+    /// The active radio's "Transmit audio source (CAT PTT)" — `"front"` (today's `T 1`) or
+    /// `"rear"`; see `RadioProfile::tx_audio_source` and [`cat_ptt_mode`].
+    pub tx_audio_source: String,
     pub rig_model: u32,
     /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
     /// (`Settings::cat_rts_keys_ptt`). Carried in the STARTUP SEED, not left to the first
@@ -1251,6 +1348,7 @@ impl Default for RadioConfig {
             ptt_method: "vox".to_string(),
             radio_label: String::new(),
             icom_data_mode: 1,
+            tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             rig_model: 0,
             cat_rts_keys_ptt: false,
             serial_port: String::new(),
@@ -1986,6 +2084,10 @@ impl Transport {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
             icom_data_mode: p.icom_data_mode,
+            // A monitor never keys, but an ADOPTED one does (`set_ptt_mode(ptt_mode_for(…))`),
+            // and `rig_differs` compares this, so a Rear/Data radio's pooled connection must
+            // carry it or it could never be adopted.
+            tx_audio_source: p.tx_audio_source.clone(),
             ptt_method: p.ptt_method.clone(),
             rig_model: p.rig_model,
             serial_port: p.serial_port.clone(),
@@ -3504,6 +3606,12 @@ struct RadioLoop {
     /// (40 → 80 → 160 … heavy polls, capped), and reset on a successful read.
     func_retry_at: [u32; N_FUNCS],
     func_retry_backoff: [u32; N_FUNCS],
+    /// The DSP func the round-robin reads next. Counted per READ, not derived from
+    /// `rig_poll_ticks`: a read the budget deferred lands on a later tick than its own, and an
+    /// index taken from that tick would skip a func (#385).
+    func_read_next: usize,
+    /// Whose turn it is on the heavy poll's read budget — see [`ReadTurns`].
+    read_turns: ReadTurns,
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
     /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on,
@@ -3801,6 +3909,8 @@ impl RadioLoop {
             func_state: [None; N_FUNCS],
             func_retry_at: [0; N_FUNCS],
             func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_FUNCS],
+            func_read_next: 0,
+            read_turns: ReadTurns::default(),
             tuner_probed: false,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
@@ -6998,8 +7108,14 @@ impl RadioLoop {
                         // its reads and picks them up on the next heavy poll — nothing is lost,
                         // because each of these reads is a periodic mirror with its own miss
                         // counter, and a skip touches no counter at all.
+                        //
+                        // ⚠️ …AND THE NEXT POLL STARTS WHERE THIS ONE STOPPED (`ReadTurns`,
+                        // #385). Asking the budget alone, every poll began at the top and a slow
+                        // link never reached the bottom — the FTX-1's S-meter, AGC and DSP
+                        // funcs. Each read-back below takes its turn through `read_turns`.
                         let have_budget =
                             || poll_started.elapsed().as_millis() < HEAVY_POLL_BUDGET_MS;
+                        self.read_turns.start_poll();
                         // RF power / mic gain / NR / AGC read-backs mirror the rig's real knob
                         // positions into the UI slider (kept separate from the commanded value —
                         // observe never fights a pending set; see observe_rig_power). Each is
@@ -7007,7 +7123,9 @@ impl RadioLoop {
                         // one — the K4 via QK4 Remote — doesn't time out and drop+reconnect the CAT
                         // socket every poll. Only AFTER the dial probe answered, so a half-open link
                         // can't eat a SECOND 2.5 s timeout on the same dead poll.
-                        if self.level_supported[LVL_RFPOWER] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_RFPOWER] != Some(false)
+                            && self.read_turns.take(HeavyRead::RfPower, have_budget())
+                        {
                             let ok = match rig.read_level("RFPOWER") {
                                 Ok(frac) => {
                                     // A reading this low is either a transmitter that will put
@@ -7037,7 +7155,9 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_MICGAIN] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_MICGAIN] != Some(false)
+                            && self.read_turns.take(HeavyRead::MicGain, have_budget())
+                        {
                             let ok = match rig.read_level("MICGAIN") {
                                 Ok(frac) => {
                                     {
@@ -7057,7 +7177,9 @@ impl RadioLoop {
                         // #95's two new reads, gated by the same capability cache as the rest:
                         // three consecutive misses and the loop stops issuing them, so a rig
                         // that has neither never pays a CAT timeout for asking.
-                        if self.level_supported[LVL_COMP] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_COMP] != Some(false)
+                            && self.read_turns.take(HeavyRead::Comp, have_budget())
+                        {
                             let ok = match rig.read_level("COMP") {
                                 Ok(frac) => {
                                     let mut eng = engine_lock(engine);
@@ -7072,7 +7194,9 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_NOTCHF] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_NOTCHF] != Some(false)
+                            && self.read_turns.take(HeavyRead::NotchF, have_budget())
+                        {
                             // NOTCHF is HZ, not a 0..1 fraction — `read_level` normalises the
                             // fractional levels, so this one goes through the raw reader or the
                             // number comes back meaningless. Getting that wrong would put the
@@ -7097,24 +7221,29 @@ impl RadioLoop {
                         // The three analog levels. Same capability cache as everything else
                         // here (3 consecutive misses and the loop stops asking), so a rig that
                         // reports none of them never pays a CAT timeout for the question.
-                        for (slot, token, adopt) in [
+                        for (slot, turn, token, adopt) in [
                             (
                                 LVL_AF,
+                                HeavyRead::Af,
                                 "AF",
                                 Engine::observe_rig_af_gain as fn(&mut Engine, f32),
                             ),
                             (
                                 LVL_RF,
+                                HeavyRead::Rf,
                                 "RF",
                                 Engine::observe_rig_rf_gain as fn(&mut Engine, f32),
                             ),
                             (
                                 LVL_SQL,
+                                HeavyRead::Sql,
                                 "SQL",
                                 Engine::observe_rig_squelch as fn(&mut Engine, f32),
                             ),
                         ] {
-                            if self.level_supported[slot] == Some(false) || !have_budget() {
+                            if self.level_supported[slot] == Some(false)
+                                || !self.read_turns.take(turn, have_budget())
+                            {
                                 continue;
                             }
                             let ok = match rig.read_level(token) {
@@ -7133,7 +7262,9 @@ impl RadioLoop {
                         }
                         // The transmit monitor's GAIN — an ordinary 0..1 level, and the
                         // other half of the `MON` func the round-robin above now polls.
-                        if self.level_supported[LVL_MONITOR_GAIN] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_MONITOR_GAIN] != Some(false)
+                            && self.read_turns.take(HeavyRead::MonitorGain, have_budget())
+                        {
                             let ok = match rig.read_level("MONITOR_GAIN") {
                                 Ok(frac) => {
                                     let mut eng = engine_lock(engine);
@@ -7151,19 +7282,23 @@ impl RadioLoop {
                         // ⚠️ THE TWO DECIBEL LEVELS, through the RAW reader — see [`LVL_ATT`].
                         // Same capability cache as everything else here, so a rig with
                         // neither stops being asked after three misses.
-                        for (slot, read, adopt) in [
+                        for (slot, turn, read, adopt) in [
                             (
                                 LVL_ATT,
+                                HeavyRead::Att,
                                 Rig::read_att_db as fn(&mut Rig) -> Option<u8>,
                                 Engine::observe_rig_att_db as fn(&mut Engine, u8),
                             ),
                             (
                                 LVL_PREAMP,
+                                HeavyRead::Preamp,
                                 Rig::read_preamp_db as fn(&mut Rig) -> Option<u8>,
                                 Engine::observe_rig_preamp_db as fn(&mut Engine, u8),
                             ),
                         ] {
-                            if self.level_supported[slot] == Some(false) || !have_budget() {
+                            if self.level_supported[slot] == Some(false)
+                                || !self.read_turns.take(turn, have_budget())
+                            {
                                 continue;
                             }
                             let ok = match read(rig) {
@@ -7180,7 +7315,9 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_NR] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_NR] != Some(false)
+                            && self.read_turns.take(HeavyRead::NrLevel, have_budget())
+                        {
                             let ok = match rig.read_level("NR") {
                                 Ok(frac) => {
                                     {
@@ -7197,7 +7334,9 @@ impl RadioLoop {
                                 ok,
                             );
                         }
-                        if self.level_supported[LVL_AGC] != Some(false) && have_budget() {
+                        if self.level_supported[LVL_AGC] != Some(false)
+                            && self.read_turns.take(HeavyRead::Agc, have_budget())
+                        {
                             let ok = match rig.read_agc() {
                                 Some(v) => {
                                     {
@@ -7221,7 +7360,9 @@ impl RadioLoop {
                         // alive — if STRENGTH still returns nothing the rig has no CAT S-meter,
                         // so stop polling it (don't burn a round-trip every cycle) and leave the
                         // UI meter empty rather than faking one.
-                        if self.smeter_supported != Some(false) && have_budget() {
+                        if self.smeter_supported != Some(false)
+                            && self.read_turns.take(HeavyRead::Smeter, have_budget())
+                        {
                             match rig.read_smeter_db() {
                                 Some(db) => {
                                     self.smeter_supported = Some(true);
@@ -7275,7 +7416,10 @@ impl RadioLoop {
                         // apply nested inside it, which is correct — `take_passband_request` is
                         // never called, so the operator's click stays QUEUED for the next poll
                         // rather than being drained against a mode we did not read.
-                        if self.rig_poll_ticks.is_multiple_of(4) && have_budget() {
+                        if self.rig_poll_ticks.is_multiple_of(4) {
+                            self.read_turns.owe(HeavyRead::Mode);
+                        }
+                        if self.read_turns.take_owed(HeavyRead::Mode, have_budget()) {
                             // One `m` read gives BOTH the mode (mirror) and the RX passband width.
                             let remote_mode = self.remote_read(engine);
                             let (m, pb) = rig.read_mode_passband();
@@ -7342,10 +7486,12 @@ impl RadioLoop {
                             });
                             detect == crate::baud_ladder::SplitDetect::Native
                         };
+                        if self.rig_poll_ticks.is_multiple_of(4) {
+                            self.read_turns.owe(HeavyRead::Split);
+                        }
                         if (wants_rig_split || can_ask)
                             && !self.audio_rig_split
-                            && self.rig_poll_ticks.is_multiple_of(4)
-                            && have_budget()
+                            && self.read_turns.take_owed(HeavyRead::Split, have_budget())
                         {
                             if let Some((on, vfo)) = rig.read_split() {
                                 // The TX frequency only matters when split is actually on — and
@@ -7584,7 +7730,10 @@ impl RadioLoop {
                         // is exactly what spent the heavy poll's budget out from under the
                         // split read once before and regressed the teardown restore. So: the
                         // probe OR the read, never both in one tick, and both behind the budget.
-                        if self.rig_poll_ticks % 4 == 3 && have_budget() {
+                        if self.rig_poll_ticks % 4 == 3 {
+                            self.read_turns.owe(HeavyRead::Vfo);
+                        }
+                        if self.read_turns.take_owed(HeavyRead::Vfo, have_budget()) {
                             match self.vfo_read_native {
                                 None => {
                                     // Could not ask → "cannot". Silence is not permission.
@@ -7615,8 +7764,12 @@ impl RadioLoop {
                         // "runs 4 s, hangs a few, repeats" symptom. One-at-a-time bounds a tick's
                         // worst case to a single timeout. SET (immediate, optimistic) is unchanged,
                         // so slower GET confirmation costs no responsiveness.
-                        if self.rig_poll_ticks % 4 == 2 && have_budget() {
-                            let i = ((self.rig_poll_ticks / 4) as usize) % RIG_FUNCS.len();
+                        if self.rig_poll_ticks % 4 == 2 {
+                            self.read_turns.owe(HeavyRead::Func);
+                        }
+                        if self.read_turns.take_owed(HeavyRead::Func, have_budget()) {
+                            let i = self.func_read_next % RIG_FUNCS.len();
+                            self.func_read_next = self.func_read_next.wrapping_add(1);
                             if self.func_supported[i] != Some(false) {
                                 match rig.read_func(RIG_FUNCS[i]) {
                                     Some(on) => {
@@ -8705,8 +8858,10 @@ impl RadioLoop {
                             }
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                                 if need_key {
+                                    // Keyed with `ptt_plain`: FSK's tones are the keyed line, not
+                                    // audio, so a Rear/Data radio (#381) keys it as it always has.
                                     self.publish_tx_intent_now(); // before keying
-                                    ptt_err = rig.ptt(true).is_err();
+                                    ptt_err = rig.ptt_plain(true).is_err();
                                 }
                                 k.send(bits.clone(), baud);
                                 self.rtty_busy_until = self.rtty_busy_until.max(now) + chunk_ms;
@@ -8826,8 +8981,9 @@ impl RadioLoop {
                             // PTT immediately before the bits start; the computed
                             // duration rides tx_until_ms so the existing expiry
                             // unkeys the moment the final stop bit ends (+ tail).
+                            // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
                             self.publish_tx_intent_now(); // before keying
-                            ptt_err = rig.ptt(true).is_err();
+                            ptt_err = rig.ptt_plain(true).is_err();
                             k.send(bits.clone(), baud);
                             let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                             self.tx_until_ms =
@@ -9425,7 +9581,11 @@ impl RadioLoop {
                 }
                 // Report only a KEYING failure (a failed unkey is the watchdog's job); a clean
                 // key or any unkey clears our own PTT status.
-                let ptt_failed = rig.ptt(ptt).is_err();
+                //
+                // `ptt_plain`, not `ptt`: this is the operator talking into the radio's own
+                // microphone (or a broker client's key), so a Rear/Data radio (#381) keys it as it
+                // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
+                let ptt_failed = rig.ptt_plain(ptt).is_err();
                 self.report_ptt(engine, ptt && ptt_failed);
                 self.manual_ptt_applied = ptt;
             }
@@ -12249,6 +12409,9 @@ struct Transport {
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
     icom_data_mode: u8,
+    /// "Transmit audio source (CAT PTT)" (#381), the stored word — see [`cat_ptt_mode`], which
+    /// decides whether it keys the DATA input on this radio at all.
+    tx_audio_source: String,
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
@@ -12271,6 +12434,7 @@ impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
             icom_data_mode: c.icom_data_mode,
+            tx_audio_source: c.tx_audio_source.clone(),
             radio_label: LogLabel(if c.radio_label.is_empty() {
                 radio_label("", c.rig_model)
             } else {
@@ -12318,6 +12482,7 @@ impl Transport {
     fn from_settings(s: &Settings) -> Self {
         Self {
             icom_data_mode: s.icom_data_mode,
+            tx_audio_source: s.tx_audio_source.clone(),
             radio_label: LogLabel(
                 s.radios
                     .iter()
@@ -12383,6 +12548,10 @@ impl Transport {
     /// changed (PTT method, rig model, serial port, baud, rigctld TCP port).
     fn rig_differs(&self, o: &Transport) -> bool {
         self.ptt_method != o.ptt_method
+            // The audio source is part of how PTT keys, so it rebuilds exactly as the PTT method
+            // does. Compared by what it DOES, so an unknown word and "front" are the same key.
+            || tempo_app::settings::tx_audio_source_is_rear(&self.tx_audio_source)
+                != tempo_app::settings::tx_audio_source_is_rear(&o.tx_audio_source)
             || self.rig_model != o.rig_model
             || self.serial_port != o.serial_port
             || self.ptt_serial_port != o.ptt_serial_port
@@ -12418,6 +12587,18 @@ impl Transport {
     /// gate and the app's advice parted company last time.
     fn is_omnirig(&self) -> bool {
         tempo_app::settings::rig_conn_is_omnirig(&self.rig_conn)
+    }
+
+    /// What this link's CAT daemon must never be sent, because the radio's Hamlib driver turns it
+    /// into a different command (#381, #385; [`crate::rigmodels::hamlib_never_send`]). Only a
+    /// Hamlib daemon's driver can, so an OmniRig link, which answers from its own rig file, is
+    /// sent everything.
+    fn hamlib_never_send(&self) -> &'static [(crate::rig::HamlibVerb, &'static str)] {
+        if self.is_omnirig() {
+            &[]
+        } else {
+            crate::rigmodels::hamlib_never_send(self.rig_model)
+        }
     }
 
     /// Which OmniRig slot this transport drives.
@@ -12917,7 +13098,7 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
         return PttMode::Cat;
     }
     match t.ptt_method.as_str() {
-        "cat" if t.cat_available() => PttMode::Cat,
+        "cat" if t.cat_available() => cat_ptt_mode(t),
         "rts" => PttMode::Serial {
             port: t.ptt_port().to_string(),
             line: SerialLine::Rts,
@@ -12930,6 +13111,27 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
     }
 }
 
+/// How a CAT-PTT transport keys: the radio's DATA input ([`PttMode::CatData`], `T 3`) when the
+/// operator chose "Transmit audio source (CAT PTT): Rear/Data" (#381) for a radio whose Hamlib
+/// driver has mic/data PTT ([`crate::rigmodels::PTT_MIC_DATA_RIGS`]), and plain
+/// [`PttMode::Cat`] (`T 1`, what every release sent) in every other case.
+///
+/// ⚠️ ONE PLACE, TWO CALLERS. `ptt_mode_for` and `open_rig` both use this, for the reason
+/// `keys_on_the_cat_port` gives: the day they disagreed, an adopted radio keyed differently from a
+/// freshly opened one. Only a Hamlib daemon can honour the choice — the OmniRig shim keys from
+/// its own rig file and the native CI-V daemon from Icom's own PTT — so neither is ever given it.
+fn cat_ptt_mode(t: &Transport) -> PttMode {
+    if tempo_app::settings::tx_audio_source_is_rear(&t.tx_audio_source)
+        && crate::rigmodels::hamlib_ptt_mic_data(t.rig_model)
+        && !t.is_omnirig()
+        && native_civ_addr(t).is_none()
+    {
+        PttMode::CatData
+    } else {
+        PttMode::Cat
+    }
+}
+
 /// Build the [`Rig`] for a transport and report its connection status. For CAT,
 /// launches the bundled `rigctld`, sets the dial/mode, and probes by reading the
 /// frequency back; for serial PTT it opens the control line; for VOX `cat_ok` is
@@ -12938,7 +13140,7 @@ fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
     match t.ptt_method.as_str() {
         // CAT PTT: control + keying both over the CAT daemon (rigctld, the native CI-V
         // daemon, or the OmniRig shim — `cat_available` is what says one can exist).
-        "cat" if t.cat_available() => open_cat(t, PttMode::Cat, allow_coexist, None),
+        "cat" if t.cat_available() => open_cat(t, cat_ptt_mode(t), allow_coexist, None),
         "cat" => (
             Rig::vox(),
             None,
@@ -13293,6 +13495,10 @@ fn finish_cat_open(rig: &mut Rig, t: &Transport) -> CatProbe {
 /// Probe a CAT rig by reading its frequency, mapping failures to a concrete,
 /// operator-actionable message (rigctld unreachable vs. rig not answering).
 fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
+    // Every CAT open passes here before its first read, so this is where a connection learns what
+    // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
+    // that is MOX and its tuner button that is a menu write (#385).
+    rig.set_never_send(t.hamlib_never_send());
     let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
@@ -16152,12 +16358,14 @@ mod tests {
         assert!(!base.rig_differs(&base.clone()));
 
         // Each CAT-affecting field triggers a rebuild ("CAT reconnects on Save").
-        let mutations: [fn(&mut Settings); 5] = [
+        let mutations: [fn(&mut Settings); 6] = [
             |s| s.ptt_method = "vox".to_string(),
             |s| s.rig_model = 311,
             |s| s.serial_port = "/dev/ttyUSB1".to_string(),
             |s| s.baud = 19200,
             |s| s.rigctld_port = 4533,
+            // Rear/Data (#381) is part of how PTT keys, so it rebuilds as the PTT method does.
+            |s| s.tx_audio_source = "rear".to_string(),
         ];
         for mutate in mutations {
             let mut s = test_settings();
@@ -16171,6 +16379,10 @@ mod tests {
         // An audio-only change must NOT rebuild the rig.
         let mut s = test_settings();
         s.audio_in = "Other Card".to_string();
+        assert!(!base.rig_differs(&Transport::from_settings(&s)));
+        // …nor does a transmit-audio-source word that keys exactly as Front/Mic does.
+        let mut s = test_settings();
+        s.tx_audio_source = String::new();
         assert!(!base.rig_differs(&Transport::from_settings(&s)));
     }
 
@@ -17069,6 +17281,709 @@ mod tests {
         // …and a working meter resets it, so a real drop-out recovers at full speed.
         backoff = FUNC_RETRY_BACKOFF_BASE;
         assert_eq!(backoff, FUNC_RETRY_BACKOFF_BASE);
+    }
+
+    /// A rigctld that answers every command only after `delay_ms` — a radio whose every read
+    /// costs a fixed round trip — and logs every command line it was sent. Readings are
+    /// plausible SSB-on-20 m values; anything that is not a read answers `RPRT 0`.
+    fn mock_slow_rigctld(delay_ms: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                    let reply = match l.as_str() {
+                        "f" => "14074000\n",
+                        "m" => "USB\n2400\n",
+                        "t" => "0\n",
+                        "v" => "VFOA\n",
+                        "l STRENGTH" => "-3\n",
+                        "l NOTCHF" => "1000\n",
+                        "l AGC" => "5\n",
+                        "l ATT" | "l PREAMP" => "0\n",
+                        r if r.starts_with("l ") => "0.5\n",
+                        r if r.starts_with("u ") => "0\n",
+                        _ => "RPRT 0\n",
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// Put the loop where every step is a heavy poll that asks nothing but its read-backs: no
+    /// retune pending, and the once-per-connection probes (`\dump_state`, `u TUNER`, the VFO
+    /// `\dump_caps`) already answered — each of those is a one-off, and against a stub a
+    /// multi-line one blocks to the CAT deadline and would spend the budget on its own.
+    fn read_back_scene(engine: &Arc<Mutex<Engine>>, state: &mut RadioLoop) {
+        state.last_mode = engine.lock().unwrap().rig_mode_effective();
+        state.last_dial = engine.lock().unwrap().settings().dial_hz();
+        // `RadioLoop::new` stamps the wall clock here, and the steps below run on a test clock
+        // that starts at 100 s: without this the heavy poll is never due and the scene would
+        // go red asserting nothing about the budget.
+        state.last_rig_poll = 0.0;
+        state.rx_ranges_probed = true;
+        state.tuner_probed = true;
+        state.vfo_read_native = Some(false);
+    }
+
+    /// ⭐ FAILING-FIRST, #385 (Yaesu FTX-1, 1.15): "lost CAT S-meter and RX controls — Not on this
+    /// radio: RF · NB · NR · NR · Auto notch · Manual notch · AGC · SQL".
+    ///
+    /// Every read-back in the heavy poll asks `have_budget()` first, and every poll started at
+    /// the top of the list. On a link where the first few reads spend the 250 ms, the reads
+    /// further down were never issued at all — not "picked up on the next heavy poll", as
+    /// [`HEAVY_POLL_BUDGET_MS`] says, but on no poll, for the whole session. Measured against
+    /// the real Hamlib 4.7.1 FTX-1 backend (model 1051), whose every read costs its own
+    /// `post_write_delay` of 50 ms before the radio answers: over 24 polls RFPOWER, MICGAIN,
+    /// COMP, NOTCHF and AF were read on every one, and RF, SQL, MONITOR_GAIN, ATT, PREAMP, NR,
+    /// AGC, STRENGTH, the mode read and every DSP func on none. That is the reporter's list,
+    /// and the S-meter with it: its fast mirror only runs once the heavy poll has proven
+    /// STRENGTH. 1.15 put six reads ahead of NR/AGC/STRENGTH; 1.14's shorter list already
+    /// starved STRENGTH on HF (#376's intermittent S-meter).
+    ///
+    /// A 60 ms radio, stepped poll after poll: every budgeted read must get its turn.
+    #[test]
+    fn a_slow_link_still_reaches_every_budgeted_read_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_slow_rigctld(60);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        read_back_scene(&engine, &mut state);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // The reads the FTX-1 never got, the S-meter's among them, plus the sub-cadenced mode
+        // read and the first two DSP funcs of the round-robin.
+        let wanted = [
+            "l AF",
+            "l RF",
+            "l SQL",
+            "l MONITOR_GAIN",
+            "l ATT",
+            "l PREAMP",
+            "l NR",
+            "l AGC",
+            "l STRENGTH",
+            "m",
+            "u NB",
+            "u NR",
+        ];
+        let missing = |sent: &[String]| -> Vec<&str> {
+            wanted
+                .iter()
+                .copied()
+                .filter(|w| !sent.iter().any(|l| l == w))
+                .collect()
+        };
+        let mut now = 100_000.0;
+        for _ in 0..24 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            now += 1_000.0; // past RIG_POLL_MS: every step is a heavy poll
+            if missing(&log.lock().unwrap()).is_empty() {
+                break;
+            }
+        }
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            missing(&sent).is_empty(),
+            "a read the budget turned away must get its turn on a later poll — never asked: \
+             {:?}\nwire: {sent:?}",
+            missing(&sent)
+        );
+        // …and what the operator sees: the S-meter and the receive controls the FTX-1 lost.
+        let radio = engine.lock().unwrap().snapshot().radio;
+        assert_eq!(radio.smeter_db, Some(-3), "the CAT S-meter reads");
+        assert!(radio.agc.is_some(), "AGC reads");
+        assert_eq!(radio.nr_level, Some(0.5), "NR level reads");
+        assert_eq!(radio.rf_gain, Some(0.5), "RF gain reads");
+        assert_eq!(radio.squelch, Some(0.5), "squelch reads");
+        assert_eq!(radio.nb, Some(false), "NB reads");
+        assert_eq!(radio.nr, Some(false), "NR reads");
+        assert_eq!(
+            radio.rig_mode.as_deref(),
+            Some("USB"),
+            "the rig's mode reads"
+        );
+    }
+
+    /// …and the ordinary station sees no change: a link that fits every read into one poll reads
+    /// all of them, on every poll, in the block's own order.
+    #[test]
+    fn a_fast_link_reads_every_budgeted_read_back_on_every_poll() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        read_back_scene(&engine, &mut state);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut now = 100_000.0;
+        for poll in 0..3 {
+            log.lock().unwrap().clear();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            now += 1_000.0;
+            let reads: Vec<String> = log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "f" || l.starts_with("l "))
+                .cloned()
+                .collect();
+            assert_eq!(
+                reads,
+                [
+                    "f",
+                    "l RFPOWER",
+                    "l MICGAIN",
+                    "l COMP",
+                    "l NOTCHF",
+                    "l AF",
+                    "l RF",
+                    "l SQL",
+                    "l MONITOR_GAIN",
+                    "l ATT",
+                    "l PREAMP",
+                    "l NR",
+                    "l AGC",
+                    "l STRENGTH",
+                ],
+                "poll {poll}: every read-back, in order"
+            );
+        }
+    }
+
+    /// The turn rule on its own: a poll that runs out resumes the lap where it stopped, the reads
+    /// the lap already did wait for the next one, and a lap that reaches the end starts the next
+    /// poll at the top.
+    #[test]
+    fn a_poll_that_runs_out_hands_the_next_poll_the_rest_of_the_lap() {
+        let mut t = ReadTurns::default();
+        t.start_poll();
+        assert!(t.take(HeavyRead::RfPower, true));
+        assert!(t.take(HeavyRead::MicGain, true));
+        assert!(
+            !t.take(HeavyRead::NotchF, false),
+            "the budget is spent here"
+        );
+        assert!(
+            !t.take(HeavyRead::Smeter, false),
+            "…and for the rest of the poll"
+        );
+
+        t.start_poll();
+        assert!(
+            !t.take(HeavyRead::RfPower, true),
+            "already read on this lap"
+        );
+        assert!(
+            !t.take(HeavyRead::MicGain, true),
+            "already read on this lap"
+        );
+        assert!(
+            t.take(HeavyRead::NotchF, true),
+            "the lap resumes where it stopped"
+        );
+        assert!(t.take(HeavyRead::Smeter, true), "and reaches the bottom");
+
+        t.start_poll();
+        assert!(
+            t.take(HeavyRead::RfPower, true),
+            "a finished lap starts at the top"
+        );
+    }
+
+    /// A sub-cadenced read is owed from its tick until a poll can afford it — its tick passing
+    /// does not cancel it — and taking it pays the debt.
+    #[test]
+    fn an_owed_read_waits_for_a_poll_that_can_afford_it() {
+        let mut t = ReadTurns::default();
+        t.start_poll();
+        assert!(!t.take_owed(HeavyRead::Mode, true), "not due, not read");
+        t.owe(HeavyRead::Mode);
+        assert!(
+            !t.take_owed(HeavyRead::Mode, false),
+            "due, but the budget is spent"
+        );
+
+        t.start_poll(); // a later tick, not the mode read's own
+        assert!(
+            t.take_owed(HeavyRead::Mode, true),
+            "still owed after its tick"
+        );
+        assert!(!t.take_owed(HeavyRead::Mode, true), "paid");
+    }
+
+    /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to
+    /// 5 watts … Does the same on RTTY."
+    ///
+    /// Nothing in Nexus sets 5 W. The write is Hamlib's, inside a READ: 4.7.1's
+    /// `kenwood_get_level(RIG_LEVEL_RFPOWER)` calls `kenwood_get_power_minmax(…, restore = 0)`
+    /// on the first read after a connect and after every mode change, which sends
+    /// `PC;PC000;PC;PC255;PC;PC000;` and never puts the power back. Kenwood's manual says an
+    /// out-of-range `PC` is entered as the minimum or the maximum, so the radio goes to full
+    /// power for an instant and is left at 5 W, while Hamlib hands back the level it read
+    /// first. Executed against a fake TS-590S that clamps as the manual says: 80 W before one
+    /// `l RFPOWER`, 5 W after, and `0.8` returned.
+    ///
+    /// Every CAT connection is opened through [`probe_cat`] before its first read, so that is
+    /// where it must learn that it may never ask this.
+    #[test]
+    fn a_ts590s_connection_never_asks_hamlib_for_its_rf_power() {
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut s = test_settings();
+        s.rig_model = 2031; // Hamlib's TS-590S
+        let t = Transport::from_settings(&s);
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        let _ = probe_cat(&mut rig, &t);
+        assert!(
+            rig.read_level("RFPOWER").is_err(),
+            "reading RF power on this radio writes it: the read must be refused"
+        );
+        assert_eq!(
+            rig.read_meter_f32("RFPOWER"),
+            None,
+            "…by the raw reader too, which the Remote power checks use"
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "l RFPOWER"),
+            "…before it reaches the daemon: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            rig.read_level("MICGAIN").ok(),
+            Some(0.5),
+            "every other level still reads"
+        );
+    }
+
+    /// The same through the radio loop: a heavy poll on a TS-590S reads everything it always did
+    /// except RF power, and writes no power either. The TS-480, whose Hamlib backend reads power
+    /// with a plain `PC;`, is the positive control: it is still asked.
+    #[test]
+    fn the_heavy_poll_leaves_rf_power_alone_on_a_rig_whose_read_writes_it() {
+        for (model, asked) in [(2031u32, false), (2028, true)] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let mut backend = MockBackend::new();
+            let (addr, log) = mock_slow_rigctld(0);
+            let mut s = test_settings();
+            s.rig_model = model;
+            let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+            let _ = probe_cat(&mut rig, &Transport::from_settings(&s));
+            let mut state = loop_state();
+            read_back_scene(&engine, &mut state);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            log.lock().unwrap().clear();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100_000.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let sent = log.lock().unwrap().clone();
+            assert_eq!(
+                sent.iter().any(|l| l == "l RFPOWER"),
+                asked,
+                "model {model}: is RF power read? wire {sent:?}"
+            );
+            assert!(
+                !sent.iter().any(|l| l.starts_with("L RFPOWER")),
+                "model {model}: no power is written by a poll: {sent:?}"
+            );
+            assert!(
+                sent.iter().any(|l| l == "l MICGAIN"),
+                "model {model}: the rest of the poll still runs: {sent:?}"
+            );
+        }
+    }
+
+    /// ⭐ FAILING-FIRST, THE FTX-1 COMMAND SET (#385). Hamlib 4.7.1's FTX-1 driver (model 1051)
+    /// turns three of Nexus's tokens into commands Yaesu's FTX-1 CAT reference defines as
+    /// something else — executed against a fake FTX-1 and read off the wire:
+    ///  * `MON` → `MX` (`ftx1_tx.c`, "Set TX Monitor (MX P1;)"). Yaesu: **MX is MOX**. `U MON 1`
+    ///    sends `MX1;` and the radio TRANSMITS, past every guard Nexus has, because to Nexus it
+    ///    is a DSP switch. `u MON` reads the MOX state.
+    ///  * `MONITOR_GAIN` → `ML0` (`ftx1_audio.c`, P1 taken as the VFO). Yaesu: `ML0` is the
+    ///    monitor's ON/OFF and the level is `ML1`, so the read is a switch shown as a level and
+    ///    a write puts 000-100 into the switch.
+    ///  * `TUNER` → `EX030104`: menu OPERATION SETTING › GENERAL › TUNER SELECT (INT / INT FAST /
+    ///    EXT / ATAS). The ATU button's `U TUNER 2` is clamped to 1 and rewrites the operator's
+    ///    tuner type to INT (FAST), tunes nothing, and the radio "took it".
+    ///
+    /// None is new, but the heavy poll never reached `u MON` or `l MONITOR_GAIN` on this radio
+    /// before its reads started getting their turn (#385), and a reachable reading makes its
+    /// control live. So the connection, like the TS-590S's RF power read (#381), must never
+    /// send them — every other FTX-1 command maps as Yaesu's table says and still goes out.
+    #[test]
+    fn an_ftx1_connection_never_sends_what_its_hamlib_driver_turns_into_mox_or_a_menu_write() {
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut s = test_settings();
+        s.rig_model = 1051; // Hamlib's FTX-1
+        let t = Transport::from_settings(&s);
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        let _ = probe_cat(&mut rig, &t);
+        log.lock().unwrap().clear();
+        assert!(
+            rig.set_func("MON", true).is_err(),
+            "U MON 1 is MX1 — MOX ON, the transmitter"
+        );
+        assert_eq!(
+            rig.read_func("MON"),
+            None,
+            "u MON reads MOX, not the monitor"
+        );
+        assert!(
+            rig.read_level("MONITOR_GAIN").is_err(),
+            "l MONITOR_GAIN reads the monitor's on/off, not its level"
+        );
+        assert!(
+            rig.set_monitor_gain(0.5).is_err(),
+            "L MONITOR_GAIN writes a level into the monitor's on/off"
+        );
+        assert_eq!(rig.read_func("TUNER"), None, "u TUNER reads a menu");
+        assert!(
+            matches!(
+                rig.set_func_value("TUNER", ATU_START_TUNE),
+                FuncSet::Refused(_)
+            ),
+            "U TUNER 2 rewrites the TUNER SELECT menu — and nothing went out, so it is a refusal"
+        );
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "none of it reached the daemon: {:?}",
+            log.lock().unwrap()
+        );
+        // The rest of the radio is driven as before.
+        rig.set_func("VOX", true).unwrap();
+        assert_eq!(rig.read_func("NB"), Some(false));
+        assert_eq!(*log.lock().unwrap(), ["U VOX 1", "u NB"]);
+    }
+
+    /// …and through the radio loop: a MON switch request and an ATU press on an FTX-1 put
+    /// nothing on the wire. The engine accepts both, as it does today (a `set_rig_func
+    /// "monitor"` call, and a tuner the base's `u TUNER` probe reported off).
+    #[test]
+    fn the_loop_never_sends_an_ftx1_its_monitor_switch_or_its_tuner_menu() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut s = test_settings();
+        s.rig_model = 1051;
+        let mut rig = Rig::with_control(Some(addr), PttMode::Vox);
+        let _ = probe_cat(&mut rig, &Transport::from_settings(&s));
+        {
+            let mut e = engine.lock().unwrap();
+            e.request_rig_func("monitor", true);
+            e.observe_rig_tuner(Some(false), true);
+            e.set_tx_enabled(true);
+            e.atu_tune().expect("the engine accepts the press");
+        }
+        let mut state = loop_state();
+        read_back_scene(&engine, &mut state);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        log.lock().unwrap().clear();
+        // With TX armed the first tick asserts the commanded mode (`M PKTUSB`) and skips the
+        // heavy poll, which is where both requests are applied; the next one runs it.
+        let mut now = 100_000.0;
+        for _ in 0..3 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            now += 1_000.0;
+            if log.lock().unwrap().iter().any(|l| l == "f") {
+                break;
+            }
+        }
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            !sent.iter().any(|l| l.starts_with("U MON")),
+            "the monitor switch is MOX on this driver: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("U TUNER")),
+            "the ATU press is a TUNER SELECT menu write on this driver: {sent:?}"
+        );
+        assert!(
+            sent.iter().any(|l| l == "f"),
+            "the poll ran (positive control): {sent:?}"
+        );
+    }
+
+    /// `s` as a settings file carrying `"txAudioSource": source` (or none at all) would load:
+    /// through serde, the way `settings.json` is read.
+    fn with_tx_audio_source(s: Settings, source: Option<&str>) -> Settings {
+        let mut v = serde_json::to_value(&s).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        match source {
+            Some(src) => {
+                obj.insert("txAudioSource".into(), serde_json::json!(src));
+            }
+            None => {
+                obj.remove("txAudioSource");
+            }
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// Key and unkey a rig built the way the loop builds one for `s`, and return the wire.
+    fn key_and_release(s: Settings) -> Vec<String> {
+        let (addr, log) = mock_slow_rigctld(0);
+        let mut rig = Rig::with_control(Some(addr), ptt_mode_for(&Transport::from_settings(&s)));
+        rig.ptt(true).unwrap();
+        rig.ptt(false).unwrap();
+        let wire = log.lock().unwrap().clone();
+        wire
+    }
+
+    /// ⭐ FAILING-FIRST, #381 (TS-590S + a SignaLink): "Transmit audio source (CAT PTT): Rear/Data".
+    ///
+    /// Nexus's CAT key-down is `T 1`, Hamlib's `RIG_PTT_ON`, and on a TS-590S that is `TX;`.
+    /// Kenwood's PC command reference: "TX … 0: SEND (normal transmission using the MIC input),
+    /// 1: DATA SEND (ACC2/USB input) … If no P1 parameter is specified, it is set to 0 (SEND)."
+    /// A SignaLink on ACC2 was never transmitted. WSJT-X keys `RIG_PTT_ON_DATA` — rigctld `T 3`,
+    /// `TX1;` on this radio (executed against Hamlib 4.7.1) — when the operator picks Rear/Data on
+    /// a radio whose driver has mic/data PTT. Nexus now does the same. The release is `T 0` either
+    /// way, exactly as before.
+    #[test]
+    fn a_rear_data_ts590s_keys_its_data_input_and_releases_as_before() {
+        let mut s = test_settings();
+        s.rig_model = 2031; // Hamlib's TS-590S: RIG_PTT_RIG_MICDATA
+        assert_eq!(
+            key_and_release(with_tx_audio_source(s, Some("rear"))),
+            ["T 3", "T 0"],
+            "Rear/Data keys the DATA input (T 3 = RIG_PTT_ON_DATA) and releases with T 0"
+        );
+    }
+
+    /// …and every station that has not chosen Rear/Data, or whose radio cannot, keys exactly as
+    /// it always has: an old settings file, Front/Mic, a value Nexus does not know, a radio whose
+    /// Hamlib driver has no mic/data PTT, an OmniRig link (its own rig file keys the radio), and a
+    /// radio keyed by a serial line on its CAT port (a line has no audio source).
+    #[test]
+    fn front_mic_and_every_radio_that_cannot_choose_key_exactly_as_today() {
+        let mut s = test_settings();
+        s.rig_model = 2031;
+        for (source, why) in [
+            (None, "an old settings file loads as Front/Mic"),
+            (Some("front"), "Front/Mic"),
+            (Some("REAR-ish"), "a value Nexus does not know is Front/Mic"),
+        ] {
+            assert_eq!(
+                key_and_release(with_tx_audio_source(s.clone(), source)),
+                ["T 1", "T 0"],
+                "{why}"
+            );
+        }
+        for (model, why) in [
+            (1042, "FTDX10"),
+            (1051, "FTX-1"),
+            (3073, "IC-7300"),
+            (1033, "VX-1700, whose driver's DATA key is a stub"),
+        ] {
+            let mut other = s.clone();
+            other.rig_model = model;
+            assert_eq!(
+                key_and_release(with_tx_audio_source(other, Some("rear"))),
+                ["T 1", "T 0"],
+                "{why}: no working mic/data PTT, so Rear/Data is not offered or used"
+            );
+        }
+        let mut omni = s.clone();
+        omni.rig_conn = "omnirig".into();
+        let omni = with_tx_audio_source(omni, Some("rear"));
+        assert_eq!(
+            ptt_mode_for(&Transport::from_settings(&omni)),
+            PttMode::Cat,
+            "OmniRig keys from its own rig file"
+        );
+        let mut line = s.clone();
+        line.ptt_method = "rts".into();
+        let line = with_tx_audio_source(line, Some("rear"));
+        assert!(
+            keys_on_the_cat_port(&Transport::from_settings(&line)),
+            "scene"
+        );
+        assert_eq!(
+            ptt_mode_for(&Transport::from_settings(&line)),
+            PttMode::Cat,
+            "a keying line on the CAT port stays line keying"
+        );
+    }
+
+    /// The two keys at the [`Rig`]: `ptt` for a transmission whose audio Nexus plays, `ptt_plain`
+    /// for one whose audio it does not (the operator's microphone, an FSK keyline). They differ
+    /// only on a Rear/Data radio and only on the way down; every release is `T 0`, whichever key
+    /// opened the over, so no unkey path (Stop TX, the watchdog, a teardown) changes.
+    #[test]
+    fn only_a_rear_data_radio_keys_nexus_audio_differently_and_only_on_the_way_down() {
+        for (mode, audio_down) in [(PttMode::Cat, "T 1"), (PttMode::CatData, "T 3")] {
+            let (addr, log) = mock_slow_rigctld(0);
+            let mut rig = Rig::with_control(Some(addr), mode.clone());
+            rig.ptt(true).unwrap();
+            rig.ptt(false).unwrap();
+            rig.ptt_plain(true).unwrap();
+            rig.ptt_plain(false).unwrap();
+            // Crossed: an over keyed by one is released by the other.
+            rig.ptt(true).unwrap();
+            rig.ptt_plain(false).unwrap();
+            rig.ptt_plain(true).unwrap();
+            rig.ptt(false).unwrap();
+            assert!(!rig.keyed, "{mode:?}: released");
+            assert_eq!(
+                *log.lock().unwrap(),
+                [audio_down, "T 0", "T 1", "T 0", audio_down, "T 0", "T 1", "T 0"],
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// Through the radio loop, the two kinds of key-down a Rear/Data radio sees. A transmission
+    /// whose audio Nexus plays — the Tune carrier here, and every FT, RTTY-AFSK, PSK, SSTV, APRS,
+    /// voice-keyer and soundcard-CW over beside it — keys the DATA input. The Phone cockpit's own
+    /// PTT is the operator talking into the radio's microphone, so it keys exactly as before: a
+    /// Rear/Data radio must not go silent in Phone. A CAT broker client's key rides the same
+    /// path and keys as before too: the broker hands the engine a key, not the client's verb.
+    #[test]
+    fn on_a_rear_data_radio_tune_keys_the_data_input_and_the_phone_ptt_the_microphone() {
+        let mut s = test_settings();
+        s.rig_model = 2031;
+        let rear = with_tx_audio_source(s, Some("rear"));
+        // One loop step against a fresh mock rigctld, returning the wire and the loop state.
+        let step_once = |engine: &Arc<Mutex<Engine>>| {
+            let (addr, log) = mock_slow_rigctld(0);
+            let mut rig =
+                Rig::with_control(Some(addr), ptt_mode_for(&Transport::from_settings(&rear)));
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    0.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let wire = log.lock().unwrap().clone();
+            (wire, state)
+        };
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tune(true);
+        let (tune, state) = step_once(&engine);
+        assert!(state.tuning_keyed, "scene: the tune keyed");
+        assert!(
+            tune.iter().any(|l| l == "T 3") && !tune.iter().any(|l| l == "T 1"),
+            "the tune carrier Nexus plays goes out of the DATA input: {tune:?}"
+        );
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+            assert!(e.manual_ptt(), "scene: the operator holds the Phone PTT");
+        }
+        let (phone, state) = step_once(&engine);
+        assert!(
+            state.manual_ptt_applied,
+            "scene: the loop keyed the Phone PTT"
+        );
+        assert!(
+            phone.iter().any(|l| l == "T 1") && !phone.iter().any(|l| l == "T 3"),
+            "the Phone PTT keys the microphone, as it always has: {phone:?}"
+        );
+
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.cat_broker_ptt = true;
+            e.apply_settings(settings);
+            e.set_tx_enabled(true);
+            assert!(
+                e.broker_ptt(true),
+                "scene: a broker client is granted the key"
+            );
+            assert!(
+                e.manual_ptt(),
+                "scene: the broker's key rides the manual PTT"
+            );
+        }
+        let (broker, state) = step_once(&engine);
+        assert!(
+            state.manual_ptt_applied,
+            "scene: the loop keyed the broker's PTT"
+        );
+        assert!(
+            broker.iter().any(|l| l == "T 1") && !broker.iter().any(|l| l == "T 3"),
+            "a broker client's key is keyed as it always was: {broker:?}"
+        );
     }
 
     #[test]
@@ -26292,6 +27207,7 @@ mod tests {
         Transport {
             radio_label: LogLabel(radio_label("", 1035)),
             icom_data_mode: 1,
+            tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             ptt_method: "cat".to_string(),
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),

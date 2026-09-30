@@ -335,6 +335,129 @@ pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
     !matches!(model / 1000, ICOM_BACKEND | KENWOOD_BACKEND)
 }
 
+/// Does Hamlib WRITE this radio's power to answer a READ of it (`get_level RFPOWER`)? (#381)
+///
+/// ⚠️ A READ THAT WRITES. `rigs/kenwood/kenwood.c`, `kenwood_get_level`: the `RIG_LEVEL_RFPOWER`
+/// arm calls `kenwood_get_power_minmax(…, restore = 0)` on the first read after a connect and on
+/// the first after every mode change. That sends `PC;PC000;PC;PC255;PC;PC000;` — read, set 0,
+/// read, set 255, read, set 0 — to learn the power range, and with `restore = 0` nothing puts the
+/// power back. Kenwood's TS-590S PC command reference (`PC`): a value below the minimum is entered
+/// as the minimum and one above the maximum as the maximum. So the radio goes to full power for an
+/// instant and is left at its floor, 5 W on a TS-590S, and Hamlib answers with the level it read
+/// FIRST, so nothing on screen disagrees. Nexus's heavy poll asks for RFPOWER every 750 ms, and
+/// every mode change (FT8, RTTY) set it off again.
+///
+/// MEASURED, not read off the source: Hamlib 4.7.1 (the version Nexus bundles), every
+/// Kenwood-protocol model 2001–2057 driven against a fake radio that clamps `PC` as Kenwood's
+/// manual says, one `l RFPOWER` each, the wire checked for a power set inside the read. These
+/// fourteen wrote. The rest either read with a plain `PC;`/`ZZPC;` (TS-480, TS-570D/S, TS-870S,
+/// TS-890S, TS-990S, the K3/K3S/KX2/KX3/K4, FLEX-6xxx, PowerSDR, Thetis, PiHPSDR, TX-500) or
+/// refuse the read. Only `kenwood_get_level` reaches the probe, and every backend that calls it is
+/// in that range. ⚠️ Re-measure when the bundled Hamlib changes.
+pub fn hamlib_rfpower_read_writes_power(model: u32) -> bool {
+    matches!(
+        model,
+        2001 // TS-50S
+            | 2003 // TS-450S
+            | 2014 // TS-2000 (and the SDR programs that answer as one)
+            | 2021 // Elecraft K2
+            | 2022 // TS-930
+            | 2030 // TRC-80
+            | 2031 // TS-590S
+            | 2037 // TS-590SG
+            | 2046 // Hilberling PT-8000A
+            | 2051 // SDRplay SDRuno
+            | 2052 // QRP Labs QCX/QDX
+            | 2053 // BG2FX FX4
+            | 2055 // DL2MAN (tr)uSDX
+            | 2056 // SDR Console
+    )
+}
+
+/// The Hamlib models whose CAT PTT can choose the radio's MIC or DATA input
+/// (`RIG_PTT_RIG_MICDATA`), and so the only ones Settings offers "Transmit audio source (CAT PTT):
+/// Rear/Data" on (#381). Rear/Data keys with rigctld `T 3`, `RIG_PTT_ON_DATA`, which such a driver
+/// sends as a DATA transmit — `TX1;` on a Kenwood, whose manual reads "1: DATA SEND (ACC2/USB
+/// input)"; a driver without the capability has nothing to send it as. WSJT-X asks the same caps
+/// field before it offers its own Rear/Data.
+///
+/// MEASURED over every model of the bundled Hamlib 4.7.1 by `scripts/gen-hamlib-ptt-micdata.mjs`
+/// (the `ptt_type` value of `rigctl -m <model> -L`; `--dump-caps` cannot show it, see the script),
+/// into `tests/fixtures/hamlib_ptt_micdata.json`, which the test holds this list to, less
+/// [`PTT_DATA_NEVER_KEYS`]. Model 2 is NET rigctl, which passes `T 3` on to the rigctld at the
+/// other end. On the FTDX-5000 (1032) Hamlib keys the DATA input by writing the radio's menu 103
+/// first (`EX1031;` then `TX1;`, `rigs/yaesu/newcat.c:2191-2206`), and a plain `T 1` does not
+/// write it back.
+pub const PTT_MIC_DATA_RIGS: &[u32] = &[
+    2,     // Hamlib NET rigctl
+    1032,  // Yaesu FTDX-5000
+    2028,  // Kenwood TS-480
+    2031,  // Kenwood TS-590S
+    2037,  // Kenwood TS-590SG
+    2039,  // Kenwood TS-990S
+    2041,  // Kenwood TS-890S
+    2046,  // Hilberling PT-8000A
+    2053,  // BG2FX FX4/C/CR/L
+    2055,  // DL2MAN (tr)uSDX
+    3086,  // Icom IC-F8101
+    33001, // ELAD FDM-DUO
+];
+
+/// Measured mic/data models NOT offered Rear/Data, because their driver's DATA key can never key.
+/// The Vertex Standard VX-1700 (1033) declares mic/data PTT, but Hamlib 4.7.1's driver answers a
+/// DATA key in SSB or RTTY with `vx1700_set_ptt_gps_jack`, a stub marked FIXME that returns
+/// `-RIG_EINVAL` whatever it is asked (`rigs/yaesu/vx1700.c:938-952`), and refuses it in every
+/// other mode: `T 3` can never key it, so offering Rear/Data would offer a radio that never
+/// transmits.
+pub const PTT_DATA_NEVER_KEYS: &[u32] = &[1033];
+
+/// Can this model's Hamlib CAT PTT choose MIC or DATA? See [`PTT_MIC_DATA_RIGS`].
+pub fn hamlib_ptt_mic_data(model: u32) -> bool {
+    PTT_MIC_DATA_RIGS.contains(&model)
+}
+
+/// The rigctld (verb, token) pairs Nexus must NEVER send to this model's Hamlib driver, because
+/// the driver turns them into something other than what the radio's own CAT manual defines. The
+/// connection refuses them before a byte is written ([`crate::rig::Rig::set_never_send`]).
+///
+/// **Yaesu FTX-1 (1051)** — executed against a fake FTX-1 answering in the formats of Yaesu's
+/// FTX-1 CAT reference, the wire read per command. The funcs NB, NR, ANF, COMP, VOX and MN, the
+/// levels RFPOWER, MICGAIN, COMP, NOTCHF, AF, RF, SQL, ATT, PREAMP, NR, AGC and STRENGTH, and PTT,
+/// mode, VFO and dial all map as Yaesu's table says. These three do not:
+///  * `MON` → `MX` (`rigs/yaesu/ftx1/ftx1_tx.c`, "Set TX Monitor (MX P1;)"). Yaesu: **MX is
+///    MOX.** `U MON 1` sends `MX1;` and the radio transmits, past every guard Nexus has, because
+///    to Nexus it is a DSP switch. `u MON` reads the MOX state.
+///  * `MONITOR_GAIN` → `ML0` (`ftx1_audio.c` takes P1 for the VFO). Yaesu: `ML0` is the
+///    monitor's on/off and `ML1` its level, so a read shows the switch as a level and a write puts
+///    000-100 into the switch.
+///  * `TUNER` → `EX030104`, the TUNER SELECT menu (INT / INT FAST / EXT / ATAS). `U TUNER 2` is
+///    clamped to 1: it sets the tuner type to INT (FAST) and tunes nothing. The read answers from
+///    the same menu, so refusing it also takes away an ATU button that could only do that.
+///
+/// **The fourteen of [`hamlib_rfpower_read_writes_power`]** — the RF power READ only: their SET
+/// ends at the commanded value, so a power the operator asks for still goes out.
+///
+/// ⚠️ Measured on Hamlib 4.7.1, the version Nexus bundles; re-measure when that changes.
+pub fn hamlib_never_send(model: u32) -> &'static [(crate::rig::HamlibVerb, &'static str)] {
+    use crate::rig::HamlibVerb::{GetFunc, GetLevel, SetFunc, SetLevel};
+    const FTX1: &[(crate::rig::HamlibVerb, &str)] = &[
+        (GetFunc, "MON"),
+        (SetFunc, "MON"),
+        (GetLevel, "MONITOR_GAIN"),
+        (SetLevel, "MONITOR_GAIN"),
+        (GetFunc, "TUNER"),
+        (SetFunc, "TUNER"),
+    ];
+    const RFPOWER_READ: &[(crate::rig::HamlibVerb, &str)] = &[(GetLevel, "RFPOWER")];
+    if model == 1051 {
+        FTX1
+    } else if hamlib_rfpower_read_writes_power(model) {
+        RFPOWER_READ
+    } else {
+        &[]
+    }
+}
+
 /// Catalog entries where **the program is the rig**: CAT is served by an application on a PC
 /// (or by the radio's own Ethernet API), over TCP or a virtual COM pair. None of them is ever
 /// a USB device that enumerates with a descriptor.
@@ -1405,6 +1528,104 @@ mod tests {
                 backend,
                 "model {model} decodes to backend {backend}"
             );
+        }
+    }
+
+    /// #381: the fourteen models whose Hamlib RFPOWER read writes the radio's power, held to the
+    /// measurement together with the models the same run found reading it cleanly.
+    #[test]
+    fn the_radios_whose_power_read_writes_their_power_are_the_measured_fourteen() {
+        for m in [
+            2001, 2003, 2014, 2021, 2022, 2030, 2031, 2037, 2046, 2051, 2052, 2053, 2055, 2056,
+        ] {
+            assert!(hamlib_rfpower_read_writes_power(m), "{m}: its read writes");
+        }
+        // Read with a plain PC; or ZZPC; in the same run.
+        for m in [
+            2004, 2010, 2016, 2028, 2029, 2036, 2039, 2040, 2041, 2043, 2044, 2045, 2047, 2048,
+            2050, 2054,
+        ] {
+            assert!(!hamlib_rfpower_read_writes_power(m), "{m}: reads cleanly");
+        }
+        // Not Kenwood-protocol backends at all: the Yaesu FTX-1 of #385 and an IC-7300.
+        assert!(!hamlib_rfpower_read_writes_power(1051));
+        assert!(!hamlib_rfpower_read_writes_power(3073));
+    }
+
+    /// `PTT_MIC_DATA_RIGS` is exactly what the bundled Hamlib reports, generated and not typed:
+    /// every model of 4.7.1 read, and the mic/data ones listed.
+    #[test]
+    fn the_mic_data_ptt_rigs_are_exactly_the_measured_ones() {
+        use std::collections::BTreeSet;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hamlib_ptt_micdata.json"))
+                .expect("the fixture parses");
+        assert!(
+            fixture["hamlib"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("Hamlib 4.7.1 ")),
+            "the fixture comes from the bundled Hamlib 4.7.1: {}",
+            fixture["hamlib"]
+        );
+        assert!(
+            fixture["models"].as_u64().is_some_and(|n| n >= 300),
+            "every model was read, not a handful: {}",
+            fixture["models"]
+        );
+        assert_eq!(
+            fixture["unread"].as_array().map(Vec::len),
+            Some(0),
+            "no model went unread"
+        );
+        let measured: BTreeSet<u32> = fixture["micData"]
+            .as_array()
+            .expect("the fixture's micData")
+            .iter()
+            .map(|r| r["model"].as_u64().expect("a model") as u32)
+            .collect();
+        let listed: BTreeSet<u32> = PTT_MIC_DATA_RIGS.iter().copied().collect();
+        let never: BTreeSet<u32> = PTT_DATA_NEVER_KEYS.iter().copied().collect();
+        assert!(
+            never.is_subset(&measured),
+            "an exclusion names a model the fixture does not measure as mic/data: {never:?}"
+        );
+        assert_eq!(
+            listed,
+            &measured - &never,
+            "PTT_MIC_DATA_RIGS must be the fixture less PTT_DATA_NEVER_KEYS — run \
+             `node scripts/gen-hamlib-ptt-micdata.mjs`"
+        );
+        // The radios of #381 and #385, by name, so a mis-typed number cannot hide in the set.
+        assert!(hamlib_ptt_mic_data(2031), "TS-590S");
+        assert!(!hamlib_ptt_mic_data(1051), "FTX-1");
+        assert!(!hamlib_ptt_mic_data(1042), "FTDX10");
+        assert!(
+            !hamlib_ptt_mic_data(1033),
+            "VX-1700: its DATA key is a stub"
+        );
+    }
+
+    /// The never-send table: the FTX-1's three mis-mapped tokens in both directions, the RF power
+    /// READ alone on the fourteen, and nothing for a radio whose driver maps what Nexus sends.
+    #[test]
+    fn the_never_send_table_is_the_measured_one() {
+        use crate::rig::HamlibVerb::{GetFunc, GetLevel, SetFunc, SetLevel};
+        let ftx1 = hamlib_never_send(1051);
+        for pair in [
+            (GetFunc, "MON"),
+            (SetFunc, "MON"),
+            (GetLevel, "MONITOR_GAIN"),
+            (SetLevel, "MONITOR_GAIN"),
+            (GetFunc, "TUNER"),
+            (SetFunc, "TUNER"),
+        ] {
+            assert!(ftx1.contains(&pair), "FTX-1: {pair:?}");
+        }
+        assert_eq!(ftx1.len(), 6, "and nothing else on the FTX-1: {ftx1:?}");
+        assert_eq!(hamlib_never_send(2031), &[(GetLevel, "RFPOWER")], "TS-590S");
+        assert_eq!(hamlib_never_send(2014), &[(GetLevel, "RFPOWER")], "TS-2000");
+        for m in [2028, 2041, 2029, 2036, 1042, 3073] {
+            assert!(hamlib_never_send(m).is_empty(), "{m} is sent everything");
         }
     }
 

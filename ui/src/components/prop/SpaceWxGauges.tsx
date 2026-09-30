@@ -3,8 +3,19 @@
 // plain language is the Mission-Control glanceable layer. In Simple mode (`gloss`)
 // each acronym carries a hover/tap plain-English definition so a newcomer is
 // never staring at a cryptic "SFI 142 / Kp 4"; Expert mode assumes fluency.
-import type { SpaceWxView } from '../../types'
-import { sfiImpact, kpImpact, aImpact, xrayImpact, bzImpact, windSpeedImpact, windSpeedKms, type Impact } from '../../propViz'
+import type { SolarWind, SpaceWxView } from '../../types'
+import {
+  sfiImpact,
+  kpImpact,
+  aImpact,
+  xrayImpact,
+  bzImpact,
+  windSpeedImpact,
+  windSpeedKms,
+  solarWindAgeSecs,
+  SOLAR_WIND_STALE_SECS,
+  type Impact,
+} from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
 import { t, type MessageKey } from '../../i18n'
 
@@ -29,6 +40,9 @@ const INDEX = {
 /** The unit printed after the solar-wind speed — a unit symbol, the same in every language. */
 const KMS_UNIT = 'km/s'
 
+/** The value a gauge shows when there is no reading — a mark, not a word. */
+const NO_VALUE = '—'
+
 /** Plain-English glosses for the space-weather acronyms (Simple mode only). Looked up when
  * a gauge renders, not at import — this is module state. */
 const GLOSS: Record<string, { glossKey: MessageKey }> = {
@@ -43,6 +57,7 @@ function Gauge({
   value,
   unit,
   impact,
+  dim,
   gloss,
 }: {
   label: string
@@ -50,6 +65,9 @@ function Gauge({
   /** A unit symbol after the value, smaller, so the number itself stays short in a narrow rail. */
   unit?: string
   impact: Impact
+  /** No severity to show: the reading is old or missing, so the bar stays empty and the line is
+   *  dim — an interpretation in green or amber would read as the field now. */
+  dim?: boolean
   gloss?: boolean
 }) {
   const entry = gloss ? GLOSS[label] : undefined
@@ -77,12 +95,39 @@ function Gauge({
         )}
       </div>
       <div className="swx-bar" aria-hidden="true">
-        <span className="swx-bar-fill" style={{ background: SEV_VAR[impact.sev] }} />
+        <span className="swx-bar-fill" style={{ background: dim ? 'transparent' : SEV_VAR[impact.sev] }} />
       </div>
-      <div className="swx-impact" style={{ color: SEV_VAR[impact.sev] }}>
+      <div className="swx-impact" style={{ color: dim ? 'var(--text-dim)' : SEV_VAR[impact.sev] }}>
         {impact.text}
       </div>
     </div>
+  )
+}
+
+/** "45m ago" / "3h ago", as the openings strip says it. */
+function agoLabel(secs: number): string {
+  const m = Math.round(secs / 60)
+  return m < 60 ? t('prop.opening.ago.mins', { mins: m }) : t('prop.opening.ago.hours', { hours: Math.round(m / 60) })
+}
+
+/** The Bz gauge, honest about its reading. The station keeps its last good solar-wind sample while
+ * NOAA's DSCOVR feed is unreachable, so the sample carries the time its reading was made: past
+ * SOLAR_WIND_STALE_SECS the gauge says when that was instead of interpreting it, and with no sample
+ * at all it says so. An older station sends no time; its sample reads as it always did. */
+function BzGauge({ sw, gloss }: { sw: SolarWind | null; gloss?: boolean }) {
+  if (!sw) {
+    return <Gauge label={INDEX.bz} value={NO_VALUE} impact={{ sev: 'quiet', text: t('prop.spaceWx.bz.none') }} dim gloss={gloss} />
+  }
+  const age = solarWindAgeSecs(sw, Date.now())
+  const stale = age != null && age >= SOLAR_WIND_STALE_SECS
+  return (
+    <Gauge
+      label={INDEX.bz}
+      value={sw.bzNt.toFixed(1)}
+      impact={stale ? { sev: 'quiet', text: t('prop.spaceWx.bz.stale', { ago: agoLabel(age) }) } : bzImpact(sw.bzNt)}
+      dim={stale}
+      gloss={gloss}
+    />
   )
 }
 
@@ -114,14 +159,7 @@ export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean 
         impact={xrayImpact(wx.xrayClass)}
         gloss={gloss}
       />
-      {wx.solarWind && (
-        <Gauge
-          label={INDEX.bz}
-          value={`${wx.solarWind.bzNt.toFixed(1)}`}
-          impact={bzImpact(wx.solarWind.bzNt)}
-          gloss={gloss}
-        />
-      )}
+      <BzGauge sw={wx.solarWind ?? null} gloss={gloss} />
       {/* No speed is drawn rather than a solar wind that has stopped: `windSpeedKms` is null for
           the producer's 0 (the plasma feed did not answer), the rule the dashboard bar reads too. */}
       {windKms != null && (

@@ -283,6 +283,15 @@ Baud continue across to the right.*
 - **PTT Method** — "How transmit is keyed": CAT (via rigctld), Serial RTS, Serial
   DTR, or VOX (no keying). PTT and CAT are independent axes — VOX PTT with full
   CAT control is a valid setup.
+- **Transmit audio source (CAT PTT)** — appears on CAT PTT for a radio whose
+  Hamlib driver can key either of its audio inputs (the Kenwood TS-480, TS-590S,
+  TS-590SG, TS-890S and TS-990S, the Yaesu FTDX-5000, the ELAD FDM-DUO and a few
+  more). **Front/Mic** is how Nexus has always keyed the radio. **Rear/Data** keys
+  its data input instead (Hamlib's data transmit: `TX1;` on a Kenwood), for a sound
+  card on the rear DATA or ACC jack, such as a SignaLink, or on the radio's own USB
+  audio. The symptom it cures: the radio keys but sends no audio from Nexus, while
+  VOX works. The Phone cockpit's PTT and an FSK keyline key as they always have.
+  Per radio.
 - **PTT Serial Port** — appears on RTS/DTR. The COM port your keying line is on,
   for an SO2R controller (u2R/MK2R) that routes PTT separately from CAT. Blank =
   keying shares the CAT port, which is how a single-cable interface like a
@@ -482,10 +491,13 @@ right.*
   rotator attached; **Other Hamlib model #…** takes any model number `rotctl -l`
   knows. Entries say **(az)** or **(az/el)** where the backend declares it, so
   you can tell an azimuth-only model from a full az/el one before you buy into it.
+  The **Yaesu G-5500 / G-5500DC** has no computer port and no Hamlib model of its
+  own: it runs through its GS-232B or GS-232A interface, so it is named on those
+  two entries. Pick the one for your interface.
   One board worth naming: **DF9GR's Easy-Rotor-Control V4** speaks three protocols,
   chosen in its own Service Tool. Configured the way its manual recommends
-  (GS-232B, 9600) it belongs on **Yaesu GS-232B**; only in DCU-1 mode does it
-  belong on the **DF9GR ERC** entry, which runs at 4800.
+  (GS-232B, 9600) it belongs on the **GS-232B interface** entry; only in DCU-1 mode
+  does it belong on the **DF9GR ERC** entry, which runs at 4800.
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:
   SPID Rot2Prog runs at 600, Rot1Prog at 1200, and the Idiom Press Rotor-EZ,
@@ -1094,6 +1106,10 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 - **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
   a Slow station and a Turbo station on the same band both print, each activity row
   marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
+  not heard for this many minutes drops off the cockpit's Stations list (the one you have
+  selected, or one with an unread message for you, stays) and is left out of your
+  `HEARING?` replies. Up to 1440, a day.
 
 **Automatic transmissions**
 
@@ -1129,7 +1145,9 @@ nothing until you enable TX in the cockpit, every session.
 - **STATUS** — what a `STATUS?` query gets back. Blank sends the JS8Call form: `IDLE`,
   the idle minutes, and the app name.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
-  them counts as addressed to you. `@ALLCALL` is everyone and is always on.
+  them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
+  `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
+  this field, and says so.
 
 ### SSTV
 

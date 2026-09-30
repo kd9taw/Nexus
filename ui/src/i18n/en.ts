@@ -2344,6 +2344,9 @@ export const EN = {
   // (FAST_WIND_KMS in propViz.ts), so the two never disagree about the same wind.
   'prop.impact.wind.normal': 'ordinary wind — stable',
   'prop.impact.wind.fast': 'fast stream — high-lat paths may get unsettled',
+  // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
+  'prop.spaceWx.bz.stale': 'last reading {{ago}}',
+  'prop.spaceWx.bz.none': 'no solar-wind reading',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
@@ -5238,6 +5241,13 @@ export const EN = {
   'settings.rigControl.ptt.rts': 'Serial RTS',
   'settings.rigControl.ptt.dtr': 'Serial DTR',
   'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  // #381. Front/Mic and Rear/Data name the radio's two audio inputs and are prose; CAT, PTT, VOX,
+  // USB, the jack labels DATA and ACC, and SignaLink (an interface) are invariant tokens.
+  'settings.rigControl.txAudio.label': 'Transmit audio source (CAT PTT)',
+  'settings.rigControl.txAudio.front': 'Front/Mic',
+  'settings.rigControl.txAudio.rear': 'Rear/Data',
+  'settings.rigControl.txAudio.hint':
+    'Which of the radio’s audio inputs transmits when Nexus keys it over CAT. <b>Front/Mic</b> is how Nexus has always keyed the radio. <b>Rear/Data</b> keys its data input instead: choose it if your sound card reaches the radio through its rear DATA or ACC jack (where a SignaLink plugs in) or its own USB audio, and the radio sends no audio from Nexus although it does on VOX. The Phone cockpit’s PTT is not affected and keys the radio as it always has. <b>Per radio.</b>',
   'settings.rigControl.pttPort.label': 'PTT Serial Port',
   // `{{example}}` is the platform's own device-name example, supplied by the panel as an
   // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
@@ -6337,6 +6347,9 @@ export const EN = {
   'settings.js8.rxSpeeds.label': 'Decode these speeds',
   'settings.js8.rxSpeeds.hint':
     'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+  'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
+  'settings.js8.callsignAgingMin.hint':
+    'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
   'settings.js8.automatic.title': 'Automatic transmissions',
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':
@@ -10101,6 +10114,13 @@ export const EN = {
   'rotor.pane.notAnswering':
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
+  // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
+  // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.
+  'rotor.pane.el.title': 'Elevation above the horizon · this rotator reaches {{min}}–{{max}}°',
+  'rotor.pane.commandedEl.title': 'Commanded elevation — the antenna is on its way',
+  'rotor.pane.el.entry.aria': 'Elevation to move to (degrees, {{min}}–{{max}})',
+  'rotor.pane.el.outside': 'This rotator reaches {{min}}–{{max}}° of elevation',
+  'rotor.pane.hint.azel': 'click the rose or type a bearing or an elevation · headings are TRUE',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

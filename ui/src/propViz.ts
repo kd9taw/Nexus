@@ -22,6 +22,7 @@ import type {
   MapSpot,
   NeedKind,
   SatView,
+  SolarWind,
   SpaceWxView,
   TrendDir,
 } from './types'
@@ -194,6 +195,16 @@ export function windSpeedImpact(kms: number): Impact {
 export function windSpeedKms(wx: SpaceWxView): number | null {
   const kms = wx.solarWind?.speedKms
   return kms != null && kms > 0 ? kms : null
+}
+/** How long a solar-wind sample speaks for "now" — the station's own threshold (SOLAR_WIND_STALE_SECS
+ * in crates/propagation/src/solar_wind.rs; propViz.solarWind.test.ts reads it out of that file). Past
+ * it the insight feed stops speaking from the sample and the gauges say how old the reading is. */
+export const SOLAR_WIND_STALE_SECS = 30 * 60
+/** How old a solar-wind sample is at `nowMs`, in whole seconds (never negative), or null when the
+ * station did not date it — an older station's, whose age cannot be known, so nothing is claimed. */
+export function solarWindAgeSecs(sw: SolarWind, nowMs: number): number | null {
+  if (sw.timeUnix == null) return null
+  return Math.max(0, Math.floor(nowMs / 1000 - sw.timeUnix))
 }
 /** A-index (24 h average of geomagnetic activity — the day's character, where Kp is
  * the last 3 h). NOAA scale: <8 quiet · 8–15 unsettled · 16–29 active · 30+ storm. */

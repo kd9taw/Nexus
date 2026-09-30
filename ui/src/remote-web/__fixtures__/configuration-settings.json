@@ -146,6 +146,7 @@
     "issSstvAutoArm": false,
     "journeyStreakEnabled": false,
     "js8Autoreply": true,
+    "js8CallsignAgingMin": 0,
     "js8CqIntervalMin": 0,
     "js8Groups": [],
     "js8HbAck": false,

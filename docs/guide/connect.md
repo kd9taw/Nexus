@@ -138,7 +138,7 @@ The panes you can assign:
 | Sporadic-E | live VHF Es openings when present |
 | Measured MUF | real ionosonde MUF measurements |
 | Satellite Passes | next amateur-satellite passes over your grid |
-| Rotor | rotator control + compass (appears once a rotctld is configured) |
+| Rotor | rotator control + compass, and the elevation on an az/el rotator (appears once a rotctld is configured) |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
 | Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
 

@@ -50,6 +50,7 @@
   "rigAddr": "",
   "icomNativeCat": false,
   "icomDataMode": 1,
+  "txAudioSource": "front",
   "setRigMode": true,
   "operatingMode": "digital",
   "licenseClass": "open",
