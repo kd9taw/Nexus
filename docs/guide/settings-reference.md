@@ -1133,7 +1133,9 @@ nothing until you enable TX in the cockpit, every session.
 - **STATUS** — what a `STATUS?` query gets back. Blank sends the JS8Call form: `IDLE`,
   the idle minutes, and the app name.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
-  them counts as addressed to you. `@ALLCALL` is everyone and is always on.
+  them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
+  `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
+  this field, and says so.
 
 ### SSTV
 
