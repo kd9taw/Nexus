@@ -90,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
   current value, so it follows the locator when you move.
+- **JS8: band activity aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Band
+  activity aging (minutes)** field, 2 by default as in JS8Call, so the Band activity pane looks
+  different out of the box: a row whose newest decode is 2 minutes old or more leaves the pane,
+  unless RX is on its offset (a double-click on a row puts RX there). Set it to 0 to keep every
+  row, as before. Nothing about decoding or transmitting changes, and a row comes back as soon as
+  its offset decodes again. Up to 1440 minutes, a day. The Remote's Band activity pane follows the
+  station's setting.
 - **JS8: callsign aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Callsign aging
   (minutes)** field, off (0) by default as in JS8Call. Set it, and a station you have not heard
   for that many minutes drops off the JS8 Stations pane, unless it is the one you have selected

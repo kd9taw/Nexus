@@ -29,6 +29,7 @@ export const SETTINGS_KEYS = [
   'js8Relay',
   'js8IdleWatchdogMin',
   'js8CallsignAgingMin',
+  'js8ActivityAgingMin',
   'js8Info',
   'js8Status',
   'js8Groups',
@@ -332,6 +333,8 @@ export const NEWER_SETTINGS = {
   alertEntities: [],
   // A station that predates JS8Call's callsign aging ages no call, which is the setting off.
   js8CallsignAgingMin: 0,
+  // …and one that predates its band-activity aging shows every row, which is that setting off.
+  js8ActivityAgingMin: 0,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -404,6 +407,7 @@ export const SETTINGS_SHAPES = {
   "js8Relay": "boolean",
   "js8IdleWatchdogMin": "number",
   "js8CallsignAgingMin": "number",
+  "js8ActivityAgingMin": "number",
   "js8Info": "string",
   "js8Status": "string",
   "js8Groups": "array",

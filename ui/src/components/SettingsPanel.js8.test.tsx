@@ -74,6 +74,7 @@ const js8Defaults = {
   js8Relay: true,
   js8IdleWatchdogMin: 60,
   js8CallsignAgingMin: 0,
+  js8ActivityAgingMin: 2,
   js8Info: '',
   js8Status: '',
   js8Groups: [] as string[],
@@ -149,6 +150,7 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect((control(fs, 'Idle watchdog (minutes)') as HTMLInputElement).value).toBe('60')
     expect((control(fs, 'Heartbeat interval (minutes)') as HTMLInputElement).value).toBe('0')
     expect((control(fs, 'Callsign aging (minutes)') as HTMLInputElement).value, 'CallsignAging: off').toBe('0')
+    expect((control(fs, 'Band activity aging (minutes)') as HTMLInputElement).value, 'ActivityAging: 2').toBe('2')
   })
 
   it('the four speed switches edit one bitmask, independently', async () => {
@@ -187,6 +189,21 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     await clickSave()
     await waitFor(() =>
       expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8CallsignAgingMin: 12 })),
+    )
+  })
+
+  // JS8Call's "Remove messages from band activity after" runs 0 ("Disabled") to 1440 minutes,
+  // default 2 (Configuration.ui:506-531, Configuration.cpp:1854).
+  it('band activity aging takes whole minutes from 0 to 1440, and saves', async () => {
+    const fs = await openJs8()
+    const aging = control(fs, 'Band activity aging (minutes)') as HTMLInputElement
+    fireEvent.change(aging, { target: { value: '5000' } })
+    expect(aging.value, 'capped at 1440').toBe('1440')
+    fireEvent.change(aging, { target: { value: '0' } })
+    expect(aging.value, 'off is a value').toBe('0')
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8ActivityAgingMin: 0 })),
     )
   })
 

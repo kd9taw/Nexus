@@ -6333,6 +6333,9 @@ export const EN = {
   'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
   'settings.js8.callsignAgingMin.hint':
     'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
+  'settings.js8.activityAgingMin.label': 'Band activity aging (minutes)',
+  'settings.js8.activityAgingMin.hint':
+    '2 by default, as in JS8Call. A row of the Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX is on its offset. 0 keeps every row. Up to 1440 (a day).',
   'settings.js8.automatic.title': 'Automatic transmissions',
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':

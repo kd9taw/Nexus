@@ -848,6 +848,14 @@ pub struct Settings {
     /// left out of HEARING? replies and of the station journal. JS8Call's field runs 0-1440.
     #[serde(default)]
     pub js8_callsign_aging_min: u16,
+    /// JS8Call's band-activity aging (`ActivityAging`, "Remove messages from band activity
+    /// after"), in minutes; 2 is JS8Call's default (Configuration.cpp:1854) and what a file from
+    /// before this setting loads as, and 0 is off. A Band activity row whose newest decode was
+    /// heard this many whole minutes ago leaves the pane, unless RX is on its offset
+    /// (mainwindow.cpp:9845-9856). Display only: nothing the station keeps or sends reads it.
+    /// JS8Call's field runs 0-1440.
+    #[serde(default = "default_js8_activity_aging_min")]
+    pub js8_activity_aging_min: u16,
     /// Free text answered to `INFO?` (JS8Call "My Info").
     #[serde(default)]
     pub js8_info: String,
@@ -4055,6 +4063,11 @@ fn default_js8_idle_watchdog_min() -> u16 {
     60
 }
 
+/// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
+fn default_js8_activity_aging_min() -> u16 {
+    2
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -4099,6 +4112,7 @@ impl Default for Settings {
             js8_relay: default_js8_relay(),
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
             js8_callsign_aging_min: 0,
+            js8_activity_aging_min: default_js8_activity_aging_min(),
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
@@ -8675,6 +8689,10 @@ mod tests {
             s.js8_callsign_aging_min, 0,
             "JS8Call CallsignAging default: off"
         );
+        assert_eq!(
+            s.js8_activity_aging_min, 2,
+            "JS8Call ActivityAging default: 2 minutes"
+        );
         assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
 
         let json = serde_json::to_string(&s).unwrap();
@@ -8688,6 +8706,7 @@ mod tests {
             "\"js8Relay\":true",
             "\"js8IdleWatchdogMin\":60",
             "\"js8CallsignAgingMin\":0",
+            "\"js8ActivityAgingMin\":2",
             "\"js8Info\":\"\"",
             "\"js8Status\":\"\"",
             "\"js8Groups\":[]",
@@ -8703,15 +8722,23 @@ mod tests {
             old.js8_callsign_aging_min, 0,
             "an upgrader's file ages nothing"
         );
+        assert_eq!(
+            old.js8_activity_aging_min, 2,
+            "an upgrader's file ages band activity at JS8Call's 2 minutes"
+        );
         // An explicit opt-out survives the round trip.
         let off: Settings = serde_json::from_str(
-            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"],"js8CallsignAgingMin":30}"#,
+            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"],"js8CallsignAgingMin":30,"js8ActivityAgingMin":0}"#,
         )
         .unwrap();
         assert!(!off.js8_autoreply && !off.js8_relay);
         assert_eq!((off.js8_speed, off.js8_rx_speeds), (3, 2));
         assert_eq!(off.js8_groups, vec!["@FUN".to_string()]);
         assert_eq!(off.js8_callsign_aging_min, 30);
+        assert_eq!(
+            off.js8_activity_aging_min, 0,
+            "band activity aging off stays off, not the default"
+        );
         let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
         assert_eq!(back, off);
 
@@ -8731,6 +8758,7 @@ mod tests {
             "js8Relay",
             "js8IdleWatchdogMin",
             "js8CallsignAgingMin",
+            "js8ActivityAgingMin",
             "js8Info",
             "js8Status",
             "js8Groups",

@@ -81,6 +81,7 @@ import {
   TX_PLATE,
   ageLabel,
   bandActivityByOffset,
+  js8ShownOffsetRows,
   js8UnreadFirst,
   js8UnreadFrom,
   countBits,
@@ -113,6 +114,9 @@ interface Props {
   /** JS8Call's callsign aging from Settings, in minutes (0 = off): the Stations list leaves out
    *  a call not heard for this long (`js8ListedStations`). */
   callsignAgingMin?: number
+  /** JS8Call's band-activity aging, in minutes (Settings ▸ JS8; 0, the default here, is off):
+   *  App hands down the station's setting. */
+  activityAgingMin?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -171,6 +175,7 @@ export function Js8Cockpit({
   theme = 'dark',
   wheelSensitivity,
   callsignAgingMin = 0,
+  activityAgingMin = 0,
   onOpenLogbook,
   panels,
   onOpenSettings,
@@ -559,6 +564,13 @@ export function Js8Cockpit({
         myCall: snap?.mycall ?? '',
       })
     : []
+  // Band activity under JS8Call's aging (js8Vocab.js8ShownOffsetRows), with RX's offset as the
+  // selected one.
+  const shownOffsetRows = js8ShownOffsetRows(offsetRows, {
+    agingMin: activityAgingMin,
+    nowMs: now,
+    selectedHz: snap?.radio.rxOffsetHz ?? null,
+  })
 
   // ⚑ and the lift to the top for a station with an unread message to me (js8Vocab.js8UnreadFrom).
   const unreadFrom = js8 ? js8UnreadFrom(js8.inbox, snap?.mycall ?? '') : new Set<string>()
@@ -717,10 +729,10 @@ export function Js8Cockpit({
       {...closeProps('offsets')}
     >
       <div className="js8-offsets" title={t('js8.panel.offsets.title')}>
-        {offsetRows.length === 0 ? (
+        {shownOffsetRows.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.panel.offsets.empty')}</div>
         ) : (
-          offsetRows.map((r) => (
+          shownOffsetRows.map((r) => (
             <div
               key={r.offsetHz}
               className={`js8-offset-row${r.mine ? ' mine' : ''}${r.directedToMe ? ' directed' : ''}${

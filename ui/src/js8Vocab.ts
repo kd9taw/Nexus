@@ -198,6 +198,25 @@ export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8Offset
   return [...buckets.values()].sort((a, b) => a.offsetHz - b.offsetHz)
 }
 
+/**
+ * Band activity under JS8Call's "Remove messages from band activity after" (`ActivityAging`, 2
+ * minutes by default, Configuration.cpp:1854; the rule at mainwindow.cpp:9845-9856). A row whose
+ * newest decode was heard that many whole minutes ago or more (`utcTimestamp.secsTo(now) / 60 >=
+ * activityAging`) is left off, unless its offset is the selected one; 0 is off. JS8Call's selected
+ * offset is the row the operator clicked. A row here is picked by the double-click that moves RX
+ * to it, so the caller passes the RX offset. Filing is untouched: `bandActivityByOffset` runs over
+ * every decode, as JS8Call's buckets keep their aged frames; only what is shown ages.
+ */
+export function js8ShownOffsetRows(
+  rows: readonly Js8OffsetRow[],
+  o: { agingMin: number; nowMs: number; selectedHz: number | null },
+): Js8OffsetRow[] {
+  if (!(o.agingMin > 0)) return [...rows]
+  return rows.filter(
+    (r) => r.offsetHz === o.selectedHz || Math.trunc((o.nowMs - r.atMs) / 60_000) < o.agingMin,
+  )
+}
+
 /** JS8Call's "Time Delta" face: whole milliseconds of DT (mainwindow.cpp:9936). Units are a
  *  technical token, and the sign matters — an early station reads negative. */
 export function dtLabel(dtS: number): string {

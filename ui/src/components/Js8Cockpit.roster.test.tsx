@@ -370,6 +370,26 @@ describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () =
     expect((api.setTxOffset as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
   })
 
+  // JS8Call's "Remove messages from band activity after" (ActivityAging, 2 minutes by default,
+  // Configuration.cpp:1854): a row older than that is not shown unless its offset is selected
+  // (mainwindow.cpp:9845-9856). Here the selected offset is RX's: the double-click that picks a row
+  // moves RX there. The rule itself is js8Vocab's `js8ShownOffsetRows`.
+  it('with the aging, a row older than it leaves the pane unless RX is on its offset', async () => {
+    const now = Date.now()
+    const [old, , fresh] = js8Fixture().activity
+    state.current = { ...js8Fixture(), activity: [{ ...old, freqHz: 700, atMs: now - 3 * 60_000 }, { ...fresh, freqHz: 1508, atMs: now - 30_000 }] }
+    const offsets = () =>
+      Array.from(document.querySelectorAll('[data-pane="offsets"] .js8-offset-row .js8-freq')).map((c) => c.textContent)
+    await renderCockpit({ activityAgingMin: 2 })
+    expect(offsets(), 'the 700 Hz row, 3 minutes old, has aged out').toEqual(['1508 Hz'])
+    cleanup()
+    await renderCockpit({ activityAgingMin: 2, snap: { ...snap, radio: { ...snap.radio, rxOffsetHz: 700 } } as AppSnapshot })
+    expect(offsets(), 'RX on 700 Hz keeps its row').toEqual(['700 Hz', '1508 Hz'])
+    cleanup()
+    await renderCockpit()
+    expect(offsets(), 'no aging handed down, every row').toEqual(['700 Hz', '1508 Hz'])
+  })
+
   it('is ⊞-hideable like its siblings, and hiding it leaves the transcript', async () => {
     await renderCockpit({ panels: fakePanels(['offsets']) })
     expect(document.querySelector('[data-pane="offsets"]')).toBeNull()

@@ -145,6 +145,7 @@
     "icomNativeCat": false,
     "issSstvAutoArm": false,
     "journeyStreakEnabled": false,
+    "js8ActivityAgingMin": 2,
     "js8Autoreply": true,
     "js8CallsignAgingMin": 0,
     "js8CqIntervalMin": 0,

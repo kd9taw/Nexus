@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   JS8_COMMANDS, JS8_CQS, JS8_SPEEDS, JS8_SPEED_LIST, JS8_QUICK_QUERIES,
   ageLabel, bandActivityByOffset, countBits, dtLabel, estimateFrames, fmtSnr, js8ListedStations, js8UnreadFirst,
-  js8UnreadFrom, utcClock,
+  js8ShownOffsetRows, js8UnreadFrom, utcClock,
 } from './js8Vocab'
 import type { Js8ActivityRow, Js8Heard, Js8InboxEntry } from './types'
 
@@ -230,5 +230,25 @@ describe('js8UnreadFrom / js8UnreadFirst — JS8Call’s flag and "pin messages 
     const rows = ['D1D', 'B1B', 'C1C', 'A1A'].map((call) => ({ call }))
     expect(js8UnreadFirst(rows, new Set(['A1A', 'C1C'])).map((r) => r.call)).toEqual(['C1C', 'A1A', 'D1D', 'B1B'])
     expect(js8UnreadFirst(rows, new Set()).map((r) => r.call), 'none unread').toEqual(['D1D', 'B1B', 'C1C', 'A1A'])
+  })
+})
+
+describe('js8ShownOffsetRows — Band activity under JS8Call’s ActivityAging', () => {
+  const NOW = 1_800_000_000_000
+  const rows = [
+    { offsetHz: 700, atMs: NOW - 2 * 60_000 },
+    { offsetHz: 1200, atMs: NOW - (2 * 60_000 - 1_000) },
+    { offsetHz: 1500, atMs: NOW - 30 * 60_000 },
+  ].map((r) => ({ ...r, snrDb: -10, dtS: 0, speed: 'normal' as const, text: 'X', directedToMe: false, mine: false, lowConf: false }))
+  const shown = (o: Partial<Parameters<typeof js8ShownOffsetRows>[1]>) =>
+    js8ShownOffsetRows(rows, { agingMin: 2, nowMs: NOW, selectedHz: null, ...o }).map((r) => r.offsetHz)
+  it('leaves off a row heard the aging’s whole minutes ago or more, and keeps 1:59', () => {
+    expect(shown({})).toEqual([1200])
+  })
+  it('keeps the selected offset’s row, however old', () => {
+    expect(shown({ selectedHz: 1500 })).toEqual([1200, 1500])
+  })
+  it('0 keeps every row, in order', () => {
+    expect(shown({ agingMin: 0 })).toEqual([700, 1200, 1500])
   })
 })

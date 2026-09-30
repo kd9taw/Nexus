@@ -4935,6 +4935,8 @@ export const ES: PartialCatalog = {
   "settings.js8.rxSpeeds.hint": "Por defecto se decodifican las cuatro a la vez, como hace JS8Call — una estación en Slow y otra en Turbo en la misma banda salen las dos. Desmarca una velocidad para ahorrar CPU en una máquina pequeña; cada fila de actividad lleva su letra de velocidad (E/A/B/C).",
   "settings.js8.callsignAgingMin.label": "Caducidad de indicativos (minutos)",
   "settings.js8.callsignAgingMin.hint": "Apagado (0) por defecto, como en JS8Call. Si no, una estación que no se oye en estos minutos sale de la lista Estaciones, salvo que la tengas seleccionada o tenga un mensaje sin leer para ti, y tus respuestas HEARING? la dejan fuera. Hasta 1440 (un día).",
+  "settings.js8.activityAgingMin.label": "Caducidad de la actividad de banda (minutos)",
+  "settings.js8.activityAgingMin.hint": "2 por defecto, como en JS8Call. Una fila del panel Actividad de banda cuya decodificación más reciente tenga estos minutos sale del panel, salvo que RX esté en su desplazamiento. 0 conserva todas las filas. Hasta 1440 (un día).",
   "settings.js8.automatic.title": "Transmisiones automáticas",
   "settings.js8.hbIntervalMin.label": "Intervalo de heartbeat (minutos)",
   "settings.js8.hbIntervalMin.hint": "0 = un heartbeat solo cuando pulsas HB. Si no, con el chip HB activado sale uno cada tantos minutos en un hueco libre al azar entre 500 y 1000 Hz. El propio chip HB nunca se recuerda entre arranques, y nada transmite si TX está apagado.",

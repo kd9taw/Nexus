@@ -1117,6 +1117,9 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
   not heard for this many minutes drops off the cockpit's Stations list (the one you have
   selected, or one with an unread message for you, stays) and is left out of your
   `HEARING?` replies. Up to 1440, a day.
+- **Band activity aging (minutes)** — 2 by default, as in JS8Call. A row of the cockpit's
+  Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX
+  is on its offset. 0 keeps every row. Up to 1440, a day.
 
 **Automatic transmissions**
 
