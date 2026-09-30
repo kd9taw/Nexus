@@ -801,6 +801,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after you logged a hunted contact, the empty log strip showed that contact's park again and
   kept it. The box now fills with the clicked activator's park, and clears once its contact is
   logged.
+- **A park you type before the call belongs to the call you type next (#383).** Type a park, then
+  the station's call, and the park stays that station's even if a spot for it names another park.
+  Click an activator's spot instead and it is a new station: the box fills with the spot's park,
+  and the park you typed is not logged on that contact, with or without a callbook. After a
+  hunted contact is logged the strip now comes up empty every time, including when the next
+  update arrives straight away.
+- **Connect's stacked panes no longer sit on top of each other.** When a Connect window is narrow
+  enough that its panes stack in one column under the map (a dashboard window dragged narrow, for
+  example), the side panes were drawn over each other and over the bottom row, and in the main
+  window the bottom of the tallest pane could not be scrolled into view. Each pane now takes its
+  own full height in the stack, and the stack scrolls.
+- **The data-source chip and the update button are easy to read in the light themes.** The LIVE,
+  PARTIAL, CACHED and NO LIVE DATA chip on Connect's Conditions pane, on the map's bar and in
+  DXpeditions lettered its word in a green or amber that was hard to read on the light page colour,
+  and the update prompt's Install and restart (or Download) button lettered near-black on its blue.
+  In every light theme the chip's word now takes the theme's text colour, with the green or amber
+  kept on its border, and the button letters in white. The dark themes look exactly as before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

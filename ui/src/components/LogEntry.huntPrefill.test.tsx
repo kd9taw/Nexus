@@ -315,6 +315,77 @@ describe('the park box after the hunted contact is logged', () => {
   })
 })
 
+// #383, THE OPERATOR'S RULING (2026-09-29): "a park you type before any call binds to the first call
+// you TYPE, so a clicked spot for another park counts as a new station." It used to count as the
+// operator's park for WHATEVER call came next, so with no callbook a clicked hunted spot kept the
+// typed park, and that contact went out at it. The two parks always disagree here: the one typed,
+// US-1111, and the clicked spot's, US-3216.
+describe('a park typed before any call belongs to the first call typed after it', () => {
+  const callBox = () => document.querySelector('input.le-call') as HTMLInputElement
+  /** Type a call as the operator does, one keystroke at a time. */
+  const typeCall = (call: string) => {
+    for (let i = 1; i <= call.length; i++) fireEvent.change(callBox(), { target: { value: call.slice(0, i) } })
+  }
+  const logged = () => mockedLog.mock.calls[0][0] as { call: string; ota?: { theirRef?: string } }
+
+  it.each([
+    ['no callbook', false],
+    ['a callbook', true],
+  ])('a hunted spot clicked before any call is typed is a new station and fills its own park (%s)', async (_what, withCallbook) => {
+    if (withCallbook) callbookKnowsThem()
+    const view = render(strip(null, null))
+    await settle()
+    fireEvent.change(park(), { target: { value: 'us-1111' } })
+    // KE7G's spot is clicked: the hunt and the call arrive as App sends them.
+    view.rerender(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(callBox().value).toBe('KE7G'))
+    await settle()
+    // Soft, so a red run also reaches the logged record below.
+    expect.soft(park().value, 'the park typed for no one held against the clicked spot').toBe('US-3216')
+    fireEvent.click(logButton())
+    await waitFor(() => expect(mockedLog).toHaveBeenCalledTimes(1))
+    expect(logged().call).toBe('KE7G')
+    // The box equals the pending hunt, so the engine's own callsign-matched tag supplies US-3216.
+    expect(logged().ota?.theirRef, 'KE7G was logged at the park typed for no one').toBeUndefined()
+    // …and the strip that follows is empty, and stays so when the spent hunt goes (the N13 fix).
+    expect(callBox().value).toBe('')
+    view.rerender(strip(null, { call: 'KE7G', ts: 1 }))
+    await settle()
+    expect(park().value, 'the logged contact’s park came back into the empty strip').toBe('')
+  })
+
+  it('a spot for another station clicked after the call was typed fills its own park, with no callbook', async () => {
+    const view = render(strip(null, null))
+    await settle()
+    fireEvent.change(park(), { target: { value: 'us-1111' } })
+    typeCall('w1abc')
+    await settle()
+    expect(park().value, 'fixture: the typed park stays while its call is typed').toBe('US-1111')
+    // No callbook, so nothing clears the box when the call changes: only the binding can say US-1111
+    // was W1ABC's, not KE7G's.
+    view.rerender(strip(KE7G, { call: 'KE7G', ts: 1 }))
+    await waitFor(() => expect(callBox().value).toBe('KE7G'))
+    await settle()
+    expect(park().value, 'W1ABC’s park held against KE7G’s spot').toBe('US-3216')
+  })
+
+  // THE CONTROL: the park the operator typed stays theirs for the call they typed, against a spot for
+  // that SAME station at another park. The binding follows the call as it is typed, W → W1XYZ.
+  it('keeps the typed park for the call typed after it, against a spot for that call at another park', async () => {
+    const view = render(strip(null, null))
+    await settle()
+    fireEvent.change(park(), { target: { value: 'us-1111' } })
+    typeCall('w1xyz')
+    await settle()
+    view.rerender(strip({ program: 'POTA', reference: 'US-3216', call: 'W1XYZ' }, { call: 'W1XYZ', ts: 1 }))
+    await settle()
+    expect.soft(park().value, 'the park typed for W1XYZ was overwritten by a spot for W1XYZ').toBe('US-1111')
+    fireEvent.click(logButton())
+    await waitFor(() => expect(mockedLog).toHaveBeenCalledTimes(1))
+    expect(logged().ota?.theirRef).toBe('US-1111')
+  })
+})
+
 describe('one station under a portable prefix or suffix, as the engine matches it', () => {
   it('fills the park when the spot says KE7G/P and the log says KE7G', async () => {
     render(strip({ ...KE7G, call: 'KE7G/P' }, { call: 'KE7G', ts: 1 }))

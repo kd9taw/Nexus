@@ -394,7 +394,9 @@ describe('the operator’s strip height (layout L7)', () => {
 
   for (const rails of RAILS)
     it(`the xs stack keeps content-height rows and the pane cap, sized or not (data-rails=${rails})`, () => {
-      expect(winner(RULES, connectChain('xs', rails, false), 'grid-auto-rows')!.value).toBe('auto')
+      // `max-content`, not `auto`: an auto row is floored at the rail's min-height (0) — see the
+      // xs stack below, which computes that floor for every stacked child.
+      expect(winner(RULES, connectChain('xs', rails, false), 'grid-auto-rows')!.value).toBe('max-content')
       const frame = [...connectChain('xs', rails, false), { cls: ['connect-strip'], attrs: { 'data-sized': '' } }, { cls: ['pane-frame'] }]
       expect(winner(RULES, frame, 'max-height')!.value).toBe('calc(0.3 * var(--vh-eff, 100vh))')
     })
@@ -413,4 +415,56 @@ describe('the operator’s strip height (layout L7)', () => {
       if (vp === 'xs') expect(display).toBe('none')
       else expect(display).not.toBe('none')
     })
+})
+
+// THE XS STACK PAINTED ITS PANES OVER EACH OTHER (found in the dashboard window at 760×660, the
+// same on 78e4a975). An `auto` row is only content-height when the item in it lets it be:
+// css-grid §11.5 floors an `auto` minimum at the item's MINIMUM CONTRIBUTION, which is its
+// `min-height` whenever one is set. The rails carry `min-height: 0` for the bounded two-rail grid,
+// and the stack's own box is bounded (it scrolls), so both rail rows sized to 0 px and their
+// content-height frames spilled over the rows under them — in Chrome, rows `280px 0px 0px
+// 331.75px` and ten overlapping pairs of frames. This computes the floor each stacked child's
+// implicit row really gets, from the winners of both properties as they render.
+
+/** The floor css-grid §11.5 gives an implicit row for one item in it: 'content', or what it falls
+ *  to. An `auto` minimum is the item's minimum contribution — its min-height when one is set, its
+ *  content only while min-height is `auto`; a max-/min-content minimum is the content whatever the
+ *  item says. Anything else is a length, not the content. */
+function stackRowFloor(autoRows: string, itemMinHeight: string): string {
+  const t = tracks(autoRows)
+  if (t.length !== 1) return `unmodelled grid-auto-rows: ${autoRows}`
+  const min = /^minmax\(\s*([^,]+?)\s*,/.exec(t[0])?.[1] ?? t[0]
+  if (min === 'max-content' || min === 'min-content') return 'content'
+  if (min === 'auto') return itemMinHeight === 'auto' ? 'content' : itemMinHeight
+  return min
+}
+
+describe('the xs stack: every stacked row holds what is in it', () => {
+  it('the reader itself: an auto row takes the item’s min-height as its floor (the guard can fire)', () => {
+    expect(stackRowFloor('auto', '0')).toBe('0')
+    expect(stackRowFloor('minmax(auto, 300px)', '0')).toBe('0')
+    expect(stackRowFloor('auto', 'auto')).toBe('content')
+    expect(stackRowFloor('max-content', '0')).toBe('content')
+    expect(stackRowFloor('var(--cn-strip-h, auto)', 'auto')).not.toBe('content')
+  })
+
+  for (const rails of RAILS)
+    for (const sized of [false, true]) {
+      it(`no stacked row falls below the rail or strip in it (data-rails=${rails}${sized ? ', a sized strip' : ''})`, () => {
+        const grid = connectChain('xs', rails, false)
+        const autoRows = winner(RULES, grid, 'grid-auto-rows')!.value
+        const stacked: Array<[string, El]> = [
+          ...railsIn(rails).map((side): [string, El] => [`the ${side} rail`, { cls: ['connect-rail'], attrs: { 'data-side': side } }]),
+          ['the strip', { cls: ['connect-strip'], attrs: sized ? { 'data-sized': '' } : {} }],
+        ]
+        for (const [name, el] of stacked) {
+          const minH = winner(RULES, [...grid, el], 'min-height')?.value ?? 'auto'
+          expect(
+            stackRowFloor(autoRows, minH),
+            `${name}: \`grid-auto-rows: ${autoRows}\` with its \`min-height: ${minH}\` lets its row shrink below its ` +
+              'frames, and they paint over the rows under it',
+          ).toBe('content')
+        }
+      })
+    }
 })
