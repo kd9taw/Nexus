@@ -165,6 +165,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and moon** layer in the Layers menu turns it off. During an M-class flare the flare layer's own
   animated sun takes its place, so there is only ever one sun on the map. On a quiet sun the map
   does no extra drawing for it: it moves once a minute, with the greyline.
+- **The moon is on the map too, in its phase.** The map and the 3-D globe show the moon where it
+  is overhead, drawn as much lit as the real one: a thin crescent, a half, a gibbous moon or a full
+  one, and a new moon as a dark disc with a faint rim. It is lit on the side you see lit from where
+  you are: in the northern hemisphere a waxing moon is lit on the right and a waning one on the
+  left, and the other way round in the southern hemisphere. It shares the **Sun and moon** layer
+  and moves once a minute, like the sun. Its place is worked out in Nexus itself, with no download,
+  to within about a third of a degree.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

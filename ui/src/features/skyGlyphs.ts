@@ -1,10 +1,16 @@
-// The sun as a map marker — ONE drawing for the 2-D map's canvas and the 3-D globe's sprite, so the
-// two surfaces show the same glyph (the features/satIcon habit: a second hand-tuned copy drifts on
-// the first tweak). Plain canvas calls, no state; the caller sets globalAlpha.
+// The sun and the moon as map markers — ONE drawing each for the 2-D map's canvas and the 3-D globe's
+// sprites, so the two surfaces show the same glyphs (the features/satIcon habit: a second hand-tuned
+// copy drifts on the first tweak). Plain canvas calls, no state; the caller sets globalAlpha.
 //
-// The glyph has to read as the SUN and not as one more spot: the 15 m and 12 m spot dots are a
-// yellow and an orange disc of about the same size, so the sun carries rays and a glow of its own
-// hue, and a dark outline (the map's marker halo) that holds it apart from land, sea and night.
+// The sun has to read as the SUN and not as one more spot: the 15 m and 12 m spot dots are a yellow
+// and an orange disc of about the same size, so the sun carries rays and a glow of its own hue, and a
+// dark outline (the map's marker halo) that holds it apart from land, sea and night. The moon is
+// told apart by its phase: a dark disc, lit as much as the real one is.
+
+/** The two discs' radii on the 2-D map at marker scale 1 (MapView's `markerScaleFor`), in layout px;
+ *  the 3-D globe keeps their proportion. The moon a little larger, so a thin crescent still shows. */
+export const SUN_DISC = 5.5
+export const MOON_DISC = 6.5
 
 /** `#rrggbb` at `alpha` — a gradient stop in the ink's own hue. The sky tokens are plain hexes
  *  (styles.css MAP SKY); anything else paints nothing rather than a guessed colour. */
@@ -61,5 +67,59 @@ export function drawSun(
   ctx.fill()
   ctx.strokeStyle = halo
   ctx.lineWidth = Math.max(1, r * 0.25)
+  ctx.stroke()
+}
+
+/**
+ * The moon, centred on (`x`, `y`), radius `r`, lit `illuminated` (0 new … 1 full): its whole disc in
+ * `inks.dark`, then the lit part in `inks.lit`, bounded by the lit limb and the terminator — an
+ * ellipse `r·|2k − 1|` wide that bows toward the lit limb while it is a crescent and away from it
+ * once it is gibbous. `litRight` puts the lit limb on the right, as a waxing moon looks from the
+ * northern hemisphere. A dark halo just outside the rim and a thin line of moonlight on it keep even
+ * a new moon findable on a dark sea.
+ */
+export function drawMoon(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  illuminated: number,
+  litRight: boolean,
+  inks: { lit: string; dark: string },
+  halo: string,
+): void {
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fillStyle = inks.dark
+  ctx.fill()
+
+  const k = Math.max(0, Math.min(1, illuminated))
+  if (k > 0.005) {
+    ctx.save()
+    ctx.translate(x, y)
+    if (!litRight) ctx.scale(-1, 1)
+    ctx.beginPath()
+    // Down the lit limb, top to bottom through the right, and back up the terminator: through the
+    // right (anticlockwise) while it is a crescent, through the left once it is gibbous.
+    ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2)
+    const a = r * Math.abs(2 * k - 1)
+    if (k < 0.5) ctx.ellipse(0, 0, a, r, 0, Math.PI / 2, -Math.PI / 2, true)
+    else ctx.ellipse(0, 0, a, r, 0, Math.PI / 2, (3 * Math.PI) / 2, false)
+    ctx.fillStyle = inks.lit
+    ctx.fill()
+    ctx.restore()
+  }
+
+  // The halo wholly outside the disc: on the rim it would eat a thin crescent.
+  const h = Math.max(1.5, r * 0.25)
+  ctx.beginPath()
+  ctx.arc(x, y, r + h / 2, 0, Math.PI * 2)
+  ctx.strokeStyle = halo
+  ctx.lineWidth = h
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.strokeStyle = inkAt(inks.lit, 0.55)
+  ctx.lineWidth = Math.max(0.75, r * 0.1)
   ctx.stroke()
 }

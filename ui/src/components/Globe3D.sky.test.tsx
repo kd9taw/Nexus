@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 //
-// THE SUN ON THE 3-D GLOBE — WHERE IT IS OVERHEAD, AND NOTHING MORE TO DRAW WHILE IT SITS THERE.
+// THE SUN AND THE MOON ON THE 3-D GLOBE — WHERE EACH IS OVERHEAD, THE MOON IN ITS PHASE, AND NOTHING
+// MORE TO DRAW WHILE THEY SIT THERE.
 //
 // The globe lit its day side from a light at the subsolar point but showed no sun. The marker is a
 // sprite just above that point, moved on the globe's existing 60 s sun clock with ONE drawn frame,
@@ -66,7 +67,7 @@ vi.mock('react-globe.gl', async () => {
 
 import Globe3D from './Globe3D'
 import * as ReactGlobe from 'react-globe.gl'
-import { subsolarPoint } from '../mapGeo'
+import { moonAt, subsolarPoint } from '../mapGeo'
 
 type FakeGlobe = { paused: boolean; frames: number; scene: () => THREE_NS.Scene }
 const fake = (ReactGlobe as unknown as { __fake: FakeGlobe }).__fake
@@ -77,15 +78,35 @@ class RO {
   disconnect() {}
 }
 
+type Op = { k: string; a: unknown[] }
+const opsOf = new WeakMap<HTMLCanvasElement, Op[]>()
+
 beforeEach(() => {
   fake.paused = false
   fake.frames = 0
   localStorage.clear()
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
-  const ctx = new Proxy({} as Record<string | symbol, unknown>, {
-    get: (t, k) => (k in t ? t[k] : () => ({ addColorStop() {} })),
+  // A recording context per canvas: the moon's sprite canvas is where its phase is painted.
+  const ctxs = new WeakMap<HTMLCanvasElement, unknown>()
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
+    if (!ctxs.has(this)) {
+      const ops: Op[] = []
+      opsOf.set(this, ops)
+      ctxs.set(
+        this,
+        new Proxy({} as Record<string | symbol, unknown>, {
+          get: (t, k) =>
+            k in t
+              ? t[k]
+              : (...a: unknown[]) => {
+                  ops.push({ k: String(k), a })
+                  return { addColorStop() {} }
+                },
+        }),
+      )
+    }
+    return ctxs.get(this) as RenderingContext
   })
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ctx as unknown as RenderingContext)
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400)
@@ -102,11 +123,11 @@ afterEach(() => {
 const quiet = { source: 'live', asOf: 1, spots: [], openings: [], dxpeditions: { workableNow: [] } } as unknown as PropagationSnapshot
 const DUSK = Date.UTC(2026, 8, 19, 18, 0)
 
-async function mountAt(nowMs: number) {
+async function mountAt(nowMs: number, grid = 'EN52') {
   vi.useFakeTimers({ now: nowMs })
   let r!: ReturnType<typeof render>
   await act(async () => {
-    r = render(<Globe3D myGrid="EN52" prop={quiet} selectedCall={null} onSelectCall={() => {}} stations={[]} />)
+    r = render(<Globe3D myGrid={grid} prop={quiet} selectedCall={null} onSelectCall={() => {}} stations={[]} />)
   })
   return r
 }
@@ -166,5 +187,71 @@ describe('the sun on the 3-D globe', () => {
     const without = await minute()
     expect(without, 'CONTROL: the minute draws something to compare against').toBeGreaterThan(0)
     expect(withSun).toBe(without)
+  })
+})
+
+/** 2026-09-13 21:00 UTC: a waxing crescent, 8.5 % lit, 58° from EN52 — on the face of the globe. */
+const CRESCENT = Date.UTC(2026, 8, 13, 21, 0)
+const moonSprite = () => named('sky-moon') as THREE_NS.Sprite | undefined
+/** The terminator last painted on the moon's sprite, as a fraction of its radius (|2k − 1|), whether
+ *  it bows toward the lit limb (a crescent), and whether the lit limb was mirrored to the left. */
+function painted(): { width: number; crescent: boolean; mirrored: boolean } | null {
+  const image = (moonSprite()?.material.map as { image?: HTMLCanvasElement } | null)?.image
+  const ops = image ? (opsOf.get(image) ?? []) : []
+  const kinds = ops.map((o) => o.k)
+  const e = kinds.lastIndexOf('ellipse')
+  if (e < 0) return null
+  const save = kinds.lastIndexOf('save', e)
+  return {
+    width: (ops[e].a[2] as number) / (ops[e].a[3] as number),
+    crescent: ops[e].a[7] === true,
+    mirrored: ops.slice(save, e).some((o) => o.k === 'scale' && (o.a[0] as number) < 0),
+  }
+}
+
+describe('the moon on the 3-D globe', () => {
+  it('is on the globe where it is overhead, a little above the surface', async () => {
+    await mountAt(CRESCENT)
+    const moon = moonSprite()
+    expect(moon, 'no moon in the scene').toBeTruthy()
+    const want = moonAt(CRESCENT).sublunar
+    expect(moon!.position.y, 'latitude').toBeCloseTo(want.lat, 6)
+    expect(moon!.position.x, 'longitude').toBeCloseTo(want.lon, 6)
+    expect(moon!.position.z).toBeGreaterThan(0)
+    expect(moon!.visible).toBe(true)
+  })
+
+  it('its picture is its phase, lit on the right for a waxing moon seen from the north', async () => {
+    await mountAt(CRESCENT)
+    const k = moonAt(CRESCENT).illuminated
+    const p = painted()
+    expect(p, 'nothing painted on the moon').not.toBeNull()
+    expect(p!.width).toBeCloseTo(Math.abs(2 * k - 1), 6)
+    expect(p!.crescent).toBe(true)
+    expect(p!.mirrored).toBe(false)
+  })
+
+  it('and lit on the left from the southern hemisphere', async () => {
+    await mountAt(CRESCENT, 'QF56')
+    expect(painted()!.mirrored).toBe(true)
+  })
+
+  it('follows the phase on the globe’s clock: a week later the crescent is gibbous', async () => {
+    await mountAt(CRESCENT)
+    vi.setSystemTime(CRESCENT + 7 * 86_400_000)
+    await act(async () => void vi.advanceTimersByTime(60_000))
+    const k = moonAt(Date.now()).illuminated
+    expect(k, 'CONTROL: a week really fills it past half').toBeGreaterThan(0.6)
+    const p = painted()!
+    expect(p.width).toBeCloseTo(Math.abs(2 * k - 1), 3)
+    expect(p.crescent, 'still painted as a crescent').toBe(false)
+    const want = moonAt(Date.now()).sublunar
+    expect(moonSprite()!.position.x, 'and it moved with the moon').toBeCloseTo(want.lon, 3)
+  })
+
+  it('the Sun and moon layer hides the moon too', async () => {
+    await mountAt(CRESCENT)
+    await act(async () => void fireEvent.click(screen.getByRole('checkbox', { name: 'Sun and moon' })))
+    expect(moonSprite()?.visible).toBe(false)
   })
 })

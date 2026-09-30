@@ -90,6 +90,7 @@ import {
   greatCircle,
   terminator,
   subsolarPoint,
+  moonAt,
   inView,
   flareHafMhz,
   flareField,
@@ -105,7 +106,7 @@ import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
-import { drawSun } from '../features/skyGlyphs'
+import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 // A shaded-relief basemap (Natural Earth I 50m, public domain),
 // downsampled to 2048x1024 webp. Bundled offline; drawn behind the World view.
 import reliefUrl from '../assets/earth-relief.webp'
@@ -419,8 +420,8 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
 const layerLabel = (k: LayerKey): string => t(LAYER_LABEL[k].labelKey)
 export const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { visible: true, opacity: 1 },
-  // The sun where it is overhead. On by default and free: it is drawn in the redraws the map already
-  // makes (the 60 s greyline clock moves it), never on a clock of its own.
+  // The sun and the moon where each is overhead. On by default and free: they are drawn in the
+  // redraws the map already makes (the 60 s greyline clock moves them), never on a clock of their own.
   sunMoon: { visible: true, opacity: 1 },
   relief: { visible: true, opacity: 1 },
   muf: { visible: true, opacity: 0.9 },
@@ -506,7 +507,8 @@ const PATH_LP = 'LP'
 // light source, deepening to a dark limb, plus an atmospheric rim glow and a star field — turns
 // the flat disc into a planet floating in space without any WebGL.
 const mapInk = (token: MapToken) => cssVar(token, STANDARD_MAP[token])
-/** The sun's ink (styles.css MAP SKY): one value in every theme, read like the basemap's. */
+/** The sun's and the moon's inks (styles.css MAP SKY): one value each in every theme, read like the
+ *  basemap's. */
 const skyInk = (token: SkyToken) => cssVar(token, STANDARD_SKY[token])
 const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
 /** ⭐ MARKER HALO — how "brighter" is done WITHOUT touching the colour scheme.
@@ -517,7 +519,7 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  a dark outline fixes it by raising the CONTRAST STEP at the marker's edge, so every dot
  *  keeps its exact hue and reads against land, sea, relief raster and greyline alike. Darker
  *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb.
- *  Exported for the 3-D globe's sun, which is the same glyph (features/skyGlyphs). */
+ *  Exported for the 3-D globe's sun and moon, which are the same glyphs (features/skyGlyphs). */
 export const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
 
 /** ⭐ MARKER SCALE — one factor, derived from the canvas, applied to every station/spot/park/
@@ -2012,20 +2014,28 @@ export function MapView({
       }
     }
 
-    // THE SUN where it is overhead, on a quiet sun as well as during a flare. The flare layer draws a
-    // sun only while an M-class flare is on (animated, on its own canvas below), so without this the
-    // map had no sun at all on a quiet day. While the flare layer's sun is up this one stands down:
-    // the two are never drawn together. It moves with the 60 s greyline clock, like the terminator it
-    // sits in the middle of, and has no clock of its own. Over the night shading and the flare field
-    // so neither dims it; under the spots and stations the operator clicks.
-    if (layers.sunMoon.visible && !flarePulsing) {
+    // THE SUN AND THE MOON where each is overhead. Both move with the 60 s greyline clock and have no
+    // clock of their own. Over the night shading and the flare field so neither dims them; under the
+    // spots and stations the operator clicks.
+    if (layers.sunMoon.visible) {
+      ctx.globalAlpha = layers.sunMoon.opacity
+      // The sun, on a quiet sun as well as during a flare. The flare layer draws a sun only while an
+      // M-class flare is on (animated, on its own canvas below), so without this the map had no sun
+      // at all on a quiet day. While the flare layer's sun is up this one stands down: the two are
+      // never drawn together.
       const ss = subsolarPoint(nowMs)
-      const p = inView(kind, proj, ss) ? project(proj, ss) : null
-      if (p) {
-        ctx.globalAlpha = layers.sunMoon.opacity
-        drawSun(ctx, p[0], p[1], 5.5 * ms, skyInk('--map-sun'), MARKER_HALO)
-        ctx.globalAlpha = 1
+      const sp = !flarePulsing && inView(kind, proj, ss) ? project(proj, ss) : null
+      if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, skyInk('--map-sun'), MARKER_HALO)
+      // The moon, in its phase, lit as it looks from the operator's hemisphere: a waxing moon is lit
+      // on the right in the north and on the left in the south. A flare leaves it alone.
+      const moon = moonAt(nowMs)
+      const mp = inView(kind, proj, moon.sublunar) ? project(proj, moon.sublunar) : null
+      if (mp) {
+        const south = (myQth ?? me).lat < 0
+        const inks = { lit: skyInk('--map-moon-lit'), dark: skyInk('--map-moon-dark') }
+        drawMoon(ctx, mp[0], mp[1], MOON_DISC * ms, moon.illuminated, moon.waxing !== south, inks, MARKER_HALO)
       }
+      ctx.globalAlpha = 1
     }
 
     // MUF field — the maximum usable frequency WHERE, as a coarse heatmap (7→35 MHz on

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 //
-// THE SUN IS ALWAYS ON THE MAP — WHERE IT IS OVERHEAD, ON A QUIET SUN AS WELL AS DURING A FLARE.
+// THE SUN AND THE MOON ARE ALWAYS ON THE MAP — WHERE EACH IS OVERHEAD, THE MOON IN ITS PHASE, ON A
+// QUIET SUN AS WELL AS DURING A FLARE.
 //
 // Before this the 2-D map drew a sun only as part of the flare layer, whose canvas does not exist
 // until an M-class flare: on a quiet sun there was no sun anywhere on the map. The marker is drawn
@@ -24,7 +25,7 @@ vi.mock('../api', () => ({
 }))
 
 import { MapView } from './MapView'
-import { makeProjection, project, subsolarPoint } from '../mapGeo'
+import { makeProjection, moonAt, project, subsolarPoint } from '../mapGeo'
 import { gridToLatLon } from '../grid'
 import { STANDARD_SKY } from '../features/skins'
 
@@ -34,27 +35,36 @@ class RO {
   disconnect() {}
 }
 
-/** One `fill()`: the fillStyle it used and every circle in the path it filled. */
-type Fill = { ink: unknown; arcs: Array<{ x: number; y: number; r: number }> }
-const fills = new WeakMap<HTMLCanvasElement, Fill[]>()
+/** Every call a canvas's context took, in order, with the fill ink at that moment. */
+type Op = { k: string; a: unknown[]; ink: unknown }
+const opsOf = new WeakMap<HTMLCanvasElement, Op[]>()
 function recordingContext(canvas: HTMLCanvasElement) {
-  const list: Fill[] = []
-  fills.set(canvas, list)
-  let path: Fill['arcs'] = []
+  const ops: Op[] = []
+  opsOf.set(canvas, ops)
   const store: Record<string | symbol, unknown> = {}
   return new Proxy(store, {
     get: (t, k) => {
       if (k in t) return t[k]
       if (k === 'canvas') return canvas
       return (...a: unknown[]) => {
-        if (k === 'beginPath') path = []
-        if (k === 'arc') path.push({ x: a[0] as number, y: a[1] as number, r: a[2] as number })
-        if (k === 'fill') list.push({ ink: t.fillStyle, arcs: path.slice() })
+        ops.push({ k: String(k), a, ink: t.fillStyle })
         if (k === 'measureText') return { width: 0 }
         return { addColorStop() {} }
       }
     },
   })
+}
+/** One `fill()`: the ink it used and every circle in the path it filled. */
+type Fill = { ink: unknown; arcs: Array<{ x: number; y: number; r: number }> }
+function fillsOf(canvas: HTMLCanvasElement): Fill[] {
+  const out: Fill[] = []
+  let path: Fill['arcs'] = []
+  for (const o of opsOf.get(canvas) ?? []) {
+    if (o.k === 'beginPath') path = []
+    if (o.k === 'arc') path.push({ x: o.a[0] as number, y: o.a[1] as number, r: o.a[2] as number })
+    if (o.k === 'fill') out.push({ ink: o.ink, arcs: path.slice() })
+  }
+  return out
 }
 
 const SUN = STANDARD_SKY['--map-sun']
@@ -116,7 +126,7 @@ const mapCanvas = (c: HTMLElement) => c.querySelector('.map-canvas-wrap > canvas
 const flareCanvas = (c: HTMLElement) => c.querySelector('.map-canvas-wrap > canvas[aria-hidden="true"]')
 /** Filled circles in the sun's ink on `canvas`, newest last. */
 const sunDiscs = (canvas: HTMLCanvasElement) =>
-  (fills.get(canvas) ?? []).filter((f) => f.ink === SUN).flatMap((f) => f.arcs)
+  fillsOf(canvas).filter((f) => f.ink === SUN).flatMap((f) => f.arcs)
 /** Where the map must put the sun at `nowMs` in projection `kind` (the component's own maths). */
 const subsolarOnScreen = (kind: 'world' | 'globe' | 'aeqd', nowMs: number) =>
   project(makeProjection(kind, EN52, W, H, { zoom: 1, rotate: null, panX: 0, panY: 0 }), subsolarPoint(nowMs))!
@@ -141,7 +151,7 @@ describe('the sun on the 2-D map', () => {
     expect(sunDiscs(canvas).length, 'CONTROL: the sun is on by default').toBeGreaterThan(0)
     const box = screen.getByRole('checkbox', { name: 'Sun and moon' })
     expect((box as HTMLInputElement).checked).toBe(true)
-    fills.get(canvas)!.length = 0
+    opsOf.get(canvas)!.length = 0
     await act(async () => void fireEvent.click(box))
     expect(sunDiscs(canvas), 'unticked, the redraw still drew the sun').toEqual([])
     await act(async () => void fireEvent.click(box))
@@ -203,5 +213,136 @@ describe('the sun on the 2-D map', () => {
     const was = subsolarOnScreen('world', DUSK)
     expect(Math.hypot(want[0] - was[0], want[1] - was[1]), 'CONTROL: ten minutes really move it').toBeGreaterThan(3)
     expect(Math.hypot(d.x - want[0], d.y - want[1])).toBeLessThan(0.5)
+  })
+})
+
+// THE MOON, where it is overhead and in its phase. The phase is read off the drawing: the lit part
+// is bounded by the limb and a terminator ellipse r·|2k − 1| wide (features/skyGlyphs.test.ts pins
+// the glyph itself), drawn under a mirror when the lit limb is on the left.
+const MOON_LIT = STANDARD_SKY['--map-moon-lit']
+const MOON_DARK = STANDARD_SKY['--map-moon-dark']
+/** 2026-09-13 21:00 UTC: a waxing crescent, 8.5 % lit, over the eastern Pacific (58° from EN52). */
+const CRESCENT = Date.UTC(2026, 8, 13, 21, 0)
+/** 2026-10-01 09:00 UTC: a waning gibbous, 74 % lit, over the Bahamas (18° from EN52). */
+const WANING = Date.UTC(2026, 9, 1, 9, 0)
+/** USNO's new and full moons (mapGeo.sky.test.ts holds the source). */
+const NEW = Date.parse('2026-09-11T03:27Z')
+const FULL = Date.parse('2026-09-26T16:49Z')
+
+/** The dark disc of the last moon drawn on `canvas`: where it is and how big. */
+function moonDisc(canvas: HTMLCanvasElement) {
+  const discs = fillsOf(canvas).filter((f) => f.ink === MOON_DARK).flatMap((f) => f.arcs)
+  return discs.length ? discs[discs.length - 1] : null
+}
+/** The lit part of the last moon drawn: the terminator's half-width and bow, and whether the lit
+ *  limb was mirrored to the left. */
+function moonLit(canvas: HTMLCanvasElement) {
+  const ops = opsOf.get(canvas) ?? []
+  const kinds = ops.map((o) => o.k)
+  let fill = -1
+  for (let i = ops.length - 1; i >= 0; i--) {
+    if (ops[i].k === 'fill' && ops[i].ink === MOON_LIT) {
+      fill = i
+      break
+    }
+  }
+  if (fill < 0) return null
+  const begin = kinds.lastIndexOf('beginPath', fill)
+  const save = kinds.lastIndexOf('save', begin)
+  const ellipse = ops.slice(begin, fill).find((o) => o.k === 'ellipse')!
+  return {
+    halfWidth: ellipse.a[2] as number,
+    r: ellipse.a[3] as number,
+    crescent: ellipse.a[7] === true,
+    mirrored: ops.slice(save, begin).some((o) => o.k === 'scale' && (o.a[0] as number) < 0),
+  }
+}
+const sublunarOnScreen = (kind: 'world' | 'globe' | 'aeqd', nowMs: number, grid = 'EN52') =>
+  project(makeProjection(kind, gridToLatLon(grid)!, W, H, { zoom: 1, rotate: null, panX: 0, panY: 0 }), moonAt(nowMs).sublunar)!
+
+describe('the moon on the 2-D map', () => {
+  for (const kind of ['world', 'aeqd', 'globe'] as const) {
+    it(`is drawn where it is overhead (${kind})`, async () => {
+      const r = await mountAt(CRESCENT, { projection: kind })
+      const d = moonDisc(mapCanvas(r.container))
+      expect(d, 'no moon on the map').not.toBeNull()
+      const want = sublunarOnScreen(kind, CRESCENT)
+      expect(Math.hypot(d!.x - want[0], d!.y - want[1]), `moon at (${d!.x}, ${d!.y}), overhead point at (${want[0]}, ${want[1]})`).toBeLessThan(0.5)
+      expect(d!.r, 'a moon too small to read its phase').toBeGreaterThanOrEqual(5)
+    })
+  }
+
+  it('shows its phase: a crescent’s terminator is r·|2k − 1| wide and bows toward the lit limb', async () => {
+    const r = await mountAt(CRESCENT, { projection: 'world' })
+    const lit = moonLit(mapCanvas(r.container))
+    expect(lit, 'the moon has no lit part').not.toBeNull()
+    const k = moonAt(CRESCENT).illuminated
+    expect(k, 'CONTROL: this really is a thin crescent').toBeLessThan(0.15)
+    expect(lit!.halfWidth).toBeCloseTo(lit!.r * Math.abs(2 * k - 1), 6)
+    expect(lit!.crescent).toBe(true)
+  })
+
+  it('a waning gibbous moon is lit past the middle, the other way', async () => {
+    const r = await mountAt(WANING, { projection: 'world' })
+    const lit = moonLit(mapCanvas(r.container))!
+    const k = moonAt(WANING).illuminated
+    expect(k, 'CONTROL: this really is gibbous').toBeGreaterThan(0.6)
+    expect(lit.halfWidth).toBeCloseTo(lit.r * Math.abs(2 * k - 1), 6)
+    expect(lit.crescent).toBe(false)
+  })
+
+  it('from the northern hemisphere a waxing moon is lit on the right and a waning one on the left', async () => {
+    const waxing = await mountAt(CRESCENT, { projection: 'world' })
+    expect(moonAt(CRESCENT).waxing, 'CONTROL').toBe(true)
+    expect(moonLit(mapCanvas(waxing.container))!.mirrored, 'waxing, seen from EN52: lit on the right').toBe(false)
+    cleanup()
+    vi.useRealTimers()
+    const waning = await mountAt(WANING, { projection: 'world' })
+    expect(moonAt(WANING).waxing, 'CONTROL').toBe(false)
+    expect(moonLit(mapCanvas(waning.container))!.mirrored, 'waning, seen from EN52: lit on the left').toBe(true)
+  })
+
+  it('from the southern hemisphere it is the other way round', async () => {
+    // QF56 is Sydney: the same waxing crescent is lit on the LEFT in its sky.
+    const r = await mountAt(CRESCENT, { projection: 'world', myGrid: 'QF56' })
+    expect(gridToLatLon('QF56')!.lat, 'CONTROL: QF56 is south of the equator').toBeLessThan(0)
+    expect(moonLit(mapCanvas(r.container))!.mirrored).toBe(true)
+  })
+
+  it('a new moon is a dark disc with no lit part, and a full moon is lit to the far rim', async () => {
+    const r = await mountAt(NEW, { projection: 'world' })
+    expect(moonDisc(mapCanvas(r.container)), 'a new moon must still be on the map').not.toBeNull()
+    expect(moonLit(mapCanvas(r.container)), 'a new moon has nothing lit').toBeNull()
+    cleanup()
+    vi.useRealTimers()
+    const full = await mountAt(FULL, { projection: 'world' })
+    const lit = moonLit(mapCanvas(full.container))!
+    expect(lit.halfWidth / lit.r, 'a full moon is lit across the whole disc').toBeGreaterThan(0.99)
+    expect(lit.crescent).toBe(false)
+  })
+
+  it('on the Globe, a moon on the far side of the planet is not drawn through it', async () => {
+    // At DUSK the moon is over the South Atlantic off Namibia, 114° from EN52: behind a globe centred there.
+    const r = await mountAt(DUSK, { projection: 'globe' })
+    expect(moonDisc(mapCanvas(r.container))).toBeNull()
+    cleanup()
+    vi.useRealTimers()
+    const flat = await mountAt(DUSK, { projection: 'world' })
+    expect(moonDisc(mapCanvas(flat.container)), 'CONTROL: the flat map, which has no far side, does draw it').not.toBeNull()
+  })
+
+  it('the Sun and moon layer turns the moon off too', async () => {
+    const r = await mountAt(CRESCENT, { projection: 'world' })
+    const canvas = mapCanvas(r.container)
+    expect(moonDisc(canvas), 'CONTROL: on by default').not.toBeNull()
+    opsOf.get(canvas)!.length = 0
+    await act(async () => void fireEvent.click(screen.getByRole('checkbox', { name: 'Sun and moon' })))
+    expect(moonDisc(canvas)).toBeNull()
+  })
+
+  it('a flare does not take the moon’s place — only the sun’s', async () => {
+    const r = await mountAt(CRESCENT, { projection: 'world', xrayLong: 2e-4 })
+    expect(flareCanvas(r.container), 'CONTROL: the flare layer’s sun is up').not.toBeNull()
+    expect(moonDisc(mapCanvas(r.container))).not.toBeNull()
   })
 })

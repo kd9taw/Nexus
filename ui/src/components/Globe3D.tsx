@@ -35,11 +35,12 @@ import earthUrl from '../assets/earth-relief.webp'
 import earthNightUrl from '../assets/earth-night.webp'
 import { gridToLatLon } from '../grid'
 import { placeHoverCard, MARKER_HALO } from './MapView'
-import { drawSun, SUN_REACH } from '../features/skyGlyphs'
+import { MOON_DISC, SUN_DISC, SUN_REACH, drawMoon, drawSun } from '../features/skyGlyphs'
 import { STANDARD_SKY, type SkyToken } from '../features/skins'
 import { bandColor, openingModeColor } from '../bandColors'
 import {
   subsolarPoint,
+  moonAt,
   usStateBorders,
   flareField,
   flareRScale,
@@ -336,27 +337,38 @@ function textSprite(text: string, color: string): THREE.Sprite {
   return sp
 }
 
-/** How high above the surface the sun marker sits (globe radii): off the ground, so the sphere never
- *  cuts it in half, and low enough to read as over its own point. */
+/** How high above the surface the sun and moon markers sit (globe radii): off the ground, so the
+ *  sphere never cuts them in half, and low enough to read as over their own points. */
 const SKY_ALT = 0.03
-/** The sprite's size in world units, where the globe's radius is 100: the glyph spans 12 and its disc
- *  5 (`SUN_REACH` radii fill the sprite). */
+/** A sky sprite's size in world units, where the globe's radius is 100: the sun's glyph spans 12 and
+ *  its disc 5 (`SUN_REACH` radii fill the sprite); the moon keeps the 2-D map's proportion to it. */
 const SKY_SCALE = 12
+/** The sun's disc on a sky sprite's canvas of `size` px, and the moon's beside it. */
+const sunDiscOn = (size: number) => size / 2 / SUN_REACH
+const moonDiscOn = (size: number) => (sunDiscOn(size) * MOON_DISC) / SUN_DISC
 
-/** The sun's ink right now (styles.css MAP SKY). The same in every theme by rule
- *  (styles-skins.test.ts), so a sprite drawn once never goes stale on a theme change. */
+/** The sun's and the moon's inks right now (styles.css MAP SKY). The same in every theme by rule
+ *  (styles-skins.test.ts), so a painted sprite never goes stale on a theme change. */
 const skyInkNow = (token: SkyToken) =>
   getComputedStyle(document.documentElement).getPropertyValue(token).trim() || STANDARD_SKY[token]
 
-/** A sprite showing `draw` on a small canvas, named so the scene can be read back: the sun above the
- *  globe, drawn with the 2-D map's own glyph. The globe's depth hides it on the far side. */
-function skySprite(name: string, draw: (ctx: CanvasRenderingContext2D, size: number) => void): THREE.Sprite {
-  const size = 64
+/** Paint (or repaint) a sky sprite's canvas with `draw` — the moon's picture changes with its phase. */
+function paintSky(sprite: THREE.Sprite, draw: (ctx: CanvasRenderingContext2D, size: number) => void): void {
+  const tex = sprite.material.map
+  const c = tex?.image as HTMLCanvasElement | undefined
+  const ctx = c?.getContext('2d')
+  if (!tex || !c || !ctx) return
+  ctx.clearRect(0, 0, c.width, c.height)
+  draw(ctx, c.width)
+  tex.needsUpdate = true
+}
+
+/** A sprite on a small canvas of its own, named so the scene can be read back: the sun or the moon
+ *  above the globe, in the 2-D map's glyphs. The globe's depth hides it on the far side. */
+function skySprite(name: string): THREE.Sprite {
   const c = document.createElement('canvas')
-  c.width = size
-  c.height = size
-  const ctx = c.getContext('2d')
-  if (ctx) draw(ctx, size)
+  c.width = 64
+  c.height = 64
   const mat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })
   const sp = new THREE.Sprite(mat)
   sp.name = name
@@ -482,7 +494,8 @@ const defaultGlobeLayers = (showStates: boolean): GlobeLayers => ({
   decodes: true,
   dxped: false,
   greyline: true,
-  // The sun where it is overhead, like the 2-D map's; moved on the 60 s sun clock, never animated.
+  // The sun and the moon where each is overhead, like the 2-D map's; moved on the 60 s sun clock,
+  // never animated.
   sunMoon: true,
 })
 
@@ -968,35 +981,50 @@ export default function Globe3D({
     return () => clearInterval(id)
   }, [])
 
-  // THE SUN where it is overhead — the light above lights the day side, and this shows where the sun
-  // is. Built once when the globe is ready; everything it adds it disposes.
-  const skyRef = useRef<{ sun: THREE.Sprite } | null>(null)
+  // THE SUN AND THE MOON where each is overhead — the light above lights the day side, and these show
+  // where the sun and the moon are. Built once when the globe is ready; everything they add they
+  // dispose.
+  const skyRef = useRef<{ sun: THREE.Sprite; moon: THREE.Sprite } | null>(null)
   useEffect(() => {
     const g = globeRef.current
     if (!g || !ready) return
-    const sun = skySprite('sky-sun', (ctx, size) =>
-      drawSun(ctx, size / 2, size / 2, size / 2 / SUN_REACH, skyInkNow('--map-sun'), MARKER_HALO),
+    const sun = skySprite('sky-sun')
+    paintSky(sun, (ctx, size) =>
+      drawSun(ctx, size / 2, size / 2, sunDiscOn(size), skyInkNow('--map-sun'), MARKER_HALO),
     )
-    g.scene().add(sun)
-    skyRef.current = { sun }
+    const moon = skySprite('sky-moon') // painted with its phase below
+    g.scene().add(sun, moon)
+    skyRef.current = { sun, moon }
     return () => {
-      g.scene().remove(sun)
-      sun.material.map?.dispose()
-      sun.material.dispose()
+      for (const sp of [sun, moon]) {
+        g.scene().remove(sp)
+        sp.material.map?.dispose()
+        sp.material.dispose()
+      }
       skyRef.current = null
     }
   }, [ready])
-  // Moved on the 60 s clock above and shown or hidden with its layer, written straight into the
-  // scene: the ONE-FRAME list below draws it, so a still globe stays asleep with the sun on it.
+  // Moved on the 60 s clock above, the moon repainted in its phase (lit as it looks from the
+  // operator's hemisphere, like the 2-D map's), and shown or hidden with the layer — all written
+  // straight into the scene: the ONE-FRAME list below draws it, so a still globe stays asleep.
   useEffect(() => {
     const g = globeRef.current
     const sky = skyRef.current
     if (!g || !ready || !sky) return
     const ss = subsolarPoint(nowMs)
-    const c = g.getCoords(ss.lat, ss.lon, SKY_ALT)
-    sky.sun.position.set(c.x, c.y, c.z)
+    const sc = g.getCoords(ss.lat, ss.lon, SKY_ALT)
+    sky.sun.position.set(sc.x, sc.y, sc.z)
+    const moon = moonAt(nowMs)
+    const mc = g.getCoords(moon.sublunar.lat, moon.sublunar.lon, SKY_ALT)
+    sky.moon.position.set(mc.x, mc.y, mc.z)
+    const south = (qth?.lat ?? 0) < 0
+    const inks = { lit: skyInkNow('--map-moon-lit'), dark: skyInkNow('--map-moon-dark') }
+    paintSky(sky.moon, (ctx, size) =>
+      drawMoon(ctx, size / 2, size / 2, moonDiscOn(size), moon.illuminated, moon.waxing !== south, inks, MARKER_HALO),
+    )
     sky.sun.visible = show.sunMoon
-  }, [ready, nowMs, show.sunMoon])
+    sky.moon.visible = show.sunMoon
+  }, [ready, nowMs, show.sunMoon, qth])
 
   // Gated 1 s pulse tick — the 2-D map's pattern: only while a layer that
   // BREATHES is visible and something is actually open, and never for a hidden
@@ -1710,10 +1738,10 @@ export default function Globe3D({
     kickRef.current()
   }, [arcs, points, sectorPolys, statePaths, show, selectedCall, livePass, size.w, size.h])
   // ONE FRAME: everything this component writes straight into the scene — the point clouds, the
-  // line overlays and labels, the satellite scene, and the 1 s breath.
+  // line overlays and labels, the satellite scene, the sun and the moon, and the 1 s breath.
   useEffect(() => {
     frameRef.current()
-  }, [stations, prop, muf, xrayLong, auroraPts, pca, sats, cqzones, workedGrids, nowMs, pulseTick, satFav, satChaseRev])
+  }, [stations, prop, muf, xrayLong, auroraPts, pca, sats, cqzones, workedGrids, nowMs, pulseTick, satFav, satChaseRev, qth])
 
   // Pointer event → wrap LAYOUT coords (the .map-hover tooltip is positioned in the
   // same layout space the globe is sized in). The .app UI zoom makes visual px ≠ layout
