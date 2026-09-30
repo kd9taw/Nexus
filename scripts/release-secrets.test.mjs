@@ -63,6 +63,8 @@ const SEEN = {
   APPLE_API_KEY_ID: [['macos', BUNDLE]],
   APPLE_API_ISSUER_ID: [['macos', BUNDLE]],
   APPLE_API_KEY_CONTENT: [['macos', BUNDLE]],
+  // Another step that compiles the key in (the Linux build step and the Pi container build, #388)
+  // gets its row here in the change that hands it the key; COMPILED_IN lets that step be third-party.
   CLUBLOG_API_KEY: [
     ['windows', 'Cross-build the NSIS installer'],
     ['macos', 'Compile the app'],
@@ -84,7 +86,9 @@ const SEEN = {
 // binary by option_env! (src-tauri/src/lib.rs, crates/propagation/src/live/dxped.rs), so the
 // cargo run that compiles Nexus has to see it, and that same run compiles every crates.io build
 // script and proc macro. The key can be read out of any shipped binary anyway, so a build that
-// reads it learns nothing a download does not. No signing secret gets this exception.
+// reads it learns nothing a download does not. No signing secret gets this exception. Another
+// key compiled in by option_env! (NEXUS_RB_CLIENT_KEY in repeaterbook.rs is one; no release job
+// sets it today) joins this set in the change that wires it, not before.
 const COMPILED_IN = new Set(['CLUBLOG_API_KEY']);
 
 // What makes a step third-party: code nobody here wrote runs in it. Matched against the step's

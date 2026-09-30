@@ -197,7 +197,7 @@ jobs:
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
       #
-      # NO SECRET IN THIS STEP, and that is the point of it. build-linux.sh compiles and runs
+      # NO SIGNING SECRET IN THIS STEP, and that is the point of it. build-linux.sh compiles and runs
       # code nobody here wrote (Hamlib from its release tarball, npm's install scripts, every
       # crates.io build script, the AppImage tooling), and it used to do all of that holding the
       # updater signing key. With no key it builds with `--no-sign`, and the next step signs the
