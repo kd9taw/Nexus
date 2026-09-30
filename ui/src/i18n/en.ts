@@ -2340,6 +2340,9 @@ export const EN = {
   'prop.impact.bz.hardSouth': 'field hard south — storm likely, polar paths fading',
   'prop.impact.bz.south': 'field south — high-lat paths softening soon',
   'prop.impact.bz.neutral': 'field neutral/north — stable',
+  // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
+  'prop.spaceWx.bz.stale': 'last reading {{ago}}',
+  'prop.spaceWx.bz.none': 'no solar-wind reading',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',

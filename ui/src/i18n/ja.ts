@@ -1542,6 +1542,8 @@ export const JA: PartialCatalog = {
   "prop.impact.bz.hardSouth": "磁場が強く南向き — 磁気嵐の可能性、極域パス減衰中",
   "prop.impact.bz.south": "磁場南向き — まもなく高緯度パスが弱まります",
   "prop.impact.bz.neutral": "磁場中立／北向き — 安定",
+  "prop.spaceWx.bz.stale": "最終測定 {{ago}}",
+  "prop.spaceWx.bz.none": "太陽風の測定値なし",
   "prop.impact.a.storm": "荒れた1日 — HF不安定、極域パス不通",
   "prop.impact.a.active": "活発な1日 — パス変動あり",
   "prop.impact.a.unsettled": "やや乱れた1日 — 軽いフェージングあり",

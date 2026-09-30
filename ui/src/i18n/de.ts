@@ -2978,6 +2978,8 @@ export const DE: PartialCatalog = {
   "prop.impact.bz.hardSouth": "Feld stark südlich — Sturm wahrscheinlich, Polarwege schwinden",
   "prop.impact.bz.south": "Feld südlich — Wege über hohe Breiten werden bald schwächer",
   "prop.impact.bz.neutral": "Feld neutral/nördlich — stabil",
+  "prop.spaceWx.bz.stale": "letzte Messung {{ago}}",
+  "prop.spaceWx.bz.none": "keine Sonnenwind-Messung",
   "prop.impact.a.storm": "stürmischer Tag — HF rau, Polarwege tot",
   "prop.impact.a.active": "aktiver Tag — Wege schwanken",
   "prop.impact.a.unsettled": "unruhiger Tag — leichte Fading-Phasen",

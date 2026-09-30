@@ -3374,6 +3374,8 @@ export const ES: PartialCatalog = {
   "prop.impact.a.unsettled": "día revuelto — rachas leves de desvanecimiento",
   "prop.impact.bz.hardSouth": "campo muy al sur — tormenta probable, caminos polares desvaneciéndose",
   "prop.impact.bz.neutral": "campo neutro/norte — estable",
+  "prop.spaceWx.bz.stale": "última lectura {{ago}}",
+  "prop.spaceWx.bz.none": "sin lectura del viento solar",
   "prop.impact.bz.south": "campo al sur — los caminos de latitud alta se ablandarán pronto",
   "prop.impact.kp.quiet": "campo tranquilo — caminos estables",
   "prop.impact.kp.storm": "tormenta geomagnética — caminos polares degradados",
