@@ -587,6 +587,15 @@ jobs:
       - name: scripts/gates still derives the gate list from this workflow
         run: node --test scripts/gates.test.mjs
 
+      # release.yml keeps every secret out of the steps that build or run third-party code
+      # (FFTW, Hamlib, npm, crates.io, the AppImage tooling) and loads the signing key only where
+      # the finished installer is signed. A release exercises that once, in public, so it is read
+      # here on every commit instead, by a test that plants its own violations to prove it can
+      # still see one. Same argument as the suites around it: a tool whose only trigger is
+      # somebody remembering is not a gate.
+      - name: release.yml keeps its secrets out of the third-party builds
+        run: node --test scripts/release-secrets.test.mjs
+
       # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
       # project that is mechanism rather than prose — wrong-remote, release-tag, identity, the
       # per-commit content scrub and the licence/NOTICE guard — and `.githooks/pre-push.test.sh`
