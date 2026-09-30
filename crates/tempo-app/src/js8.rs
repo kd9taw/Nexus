@@ -44,6 +44,11 @@ const JS8_ALLCALL_INTERVAL_MS: u64 = 15 * 60 * 1000;
 /// the FT gate's (`structured_tx_ready`).
 const JS8_NO_LOCATOR: &str =
     "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
+/// …and what it says when a reply or heartbeat falls due outside the licence's privileges: the
+/// sentence shape of CW's, RTTY's and PSK's own refusals.
+const JS8_REFUSED_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
+     privileges, so the automatic reply or heartbeat that came due was dropped, not held for \
+     later.";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
 /// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
@@ -332,9 +337,12 @@ impl Engine {
         // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
         // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
         // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
-        // (:5310), and with TX on it says why (the alert at :5265).
+        // (:5310), and with TX on it says why (the alert at :5265). So is a frequency outside
+        // the licence's privileges, which `plan_tx` refuses before this mode's planner runs:
+        // held, the reply or heartbeat would key after a tune back inside them.
         let no_locator = self.js8_no_usable_locator();
-        if !self.tx_enabled() || no_locator {
+        let outside = !self.tx_allowed();
+        if !self.tx_enabled() || no_locator || outside {
             let mut dropped = false;
             if let Some(p) = self.js8_station.pending_reply() {
                 if p.fires_at_ms <= now_ms {
@@ -346,8 +354,13 @@ impl Engine {
             // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
             // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
             dropped |= self.js8_station.drop_due_heartbeat(now_ms);
-            if dropped && no_locator && self.tx_enabled() {
-                self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
+            if dropped && self.tx_enabled() {
+                let why = if no_locator {
+                    JS8_NO_LOCATOR
+                } else {
+                    JS8_REFUSED_PRIVILEGES
+                };
+                self.js8_last_error = Some(why.to_string());
             }
         }
         let actions = self.js8_station.tick(now_ms);
@@ -2143,6 +2156,65 @@ mod tests {
             st.last_error.as_deref(),
             Some(NO_LOCATOR),
             "…and the cockpit says why"
+        );
+    }
+
+    // ===== outside the licence's privileges: dropped, never held =====
+
+    /// What the JS8 cockpit says when a reply or heartbeat falls due outside privileges.
+    const OUTSIDE_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your license \
+         privileges, so the automatic reply or heartbeat that came due was dropped, not held for \
+         later.";
+
+    /// A reply or heartbeat that falls due while the frequency is outside the licence's
+    /// privileges is dropped, as one that falls due with TX off or with no locator is, so a tune
+    /// back inside them sends nothing stale: the rule CW, RTTY, PSK and the voice keyer keep.
+    #[test]
+    fn outside_privileges_js8_keys_nothing_and_drops_what_falls_due() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.set_license_class("general");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.078 is inside a General's data"
+        );
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: autoreply is on, and a reply counts down"
+        );
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.020 is Extra-only, outside a General's privileges"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 6 * 60); // through the reply and the heartbeat
+        assert!(
+            overs.is_empty(),
+            "nothing keys outside privileges: {overs:?}"
+        );
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none(),
+            "the reply was dropped when it fell due"
+        );
+        assert_eq!(
+            st.hb_next_at_ms,
+            Some(due + 315_000),
+            "the heartbeat was dropped and re-based to the next cycle + the interval"
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(OUTSIDE_PRIVILEGES),
+            "…and the cockpit says why"
+        );
+        e.set_frequency(14.078, "20m", "USB");
+        let after = run_js8_loop_from(&mut e, t0 + 6 * 60 * 1000, 2 * 60);
+        assert!(
+            after.is_empty(),
+            "a tune back inside them sends nothing stale: {after:?}"
         );
     }
 

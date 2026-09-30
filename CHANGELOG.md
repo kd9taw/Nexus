@@ -519,6 +519,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before it started) or when the dial left your privileges used to be held, and it played by
   itself as soon as transmitting was allowed again. It is now dropped. Messages you play once
   transmitting is allowed go out exactly as before, and ■ Stop, Stop TX and PTT work as they did.
+- **JS8: an automatic reply or heartbeat that comes due outside your privileges is dropped, not
+  sent later.** The rule CW, RTTY and PSK keep. With TX on and the frequency outside your license
+  privileges, a reply counting down (to an SNR?, INFO? or other query) or a heartbeat that came due
+  was held, and it went out by itself as soon as you tuned back inside them. It is now dropped, as
+  it already was with TX off or with no locator in Settings, and the JS8 screen says why. A message
+  you queued yourself and a repeating CQ still wait while you are outside your privileges and go
+  out when you tune back in, as before.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such
