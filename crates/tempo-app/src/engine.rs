@@ -1173,6 +1173,9 @@ const RTTY_REFUSED_PRIVILEGES: &str = "RTTY not sent: this frequency is outside 
      them.";
 const RTTY_AUTO_REFUSED: &str = "RTTY auto-sequencer stopped — a transmission was refused (the \
      TX gate closed mid-QSO).";
+/// …and the auto-sequencer's own line when the operator LEFT the RTTY screen mid-QSO
+/// ([`Engine::set_operating_mode_with_reset`]): nothing was refused, the screen was left.
+const RTTY_AUTO_LEFT: &str = "RTTY auto-sequencer stopped: you left the RTTY screen mid-QSO.";
 /// …and the PSK cockpit's, when [`Engine::poll_psk_one`] drops refused overs.
 const PSK_REFUSED_TX_OFF: &str = "PSK stopped: transmit was turned off, so what was still \
      queued was dropped, not held for later. Send it again when you are ready.";
@@ -7544,8 +7547,9 @@ impl Engine {
     /// What leaving RTTY or PSK does to that section's typed-ahead overs, from the one place a
     /// section changes ([`Self::set_operating_mode_with_reset`]): dropped with a notice, never held
     /// for the return. `to` is the section being entered. An RTTY auto QSO ends with the screen,
-    /// with the sequencer's own notice (as a refused over of its own ends it): left running, its
-    /// next over would be queued while the operator is away and key on the return.
+    /// with a line of its own ([`RTTY_AUTO_LEFT`]; nothing was refused, so the refusal line would
+    /// mislead): left running, its next over would be queued while the operator is away and key
+    /// on the return.
     fn drop_queued_overs_on_leaving(&mut self, to: crate::settings::OperatingMode) {
         use crate::settings::OperatingMode;
         let from = self.settings.operating_mode;
@@ -7568,7 +7572,7 @@ impl Engine {
                     seq.abort();
                 }
                 self.rtty_auto_over = false;
-                self.rtty_keyer_error = Some(RTTY_AUTO_REFUSED.to_string());
+                self.rtty_keyer_error = Some(RTTY_AUTO_LEFT.to_string());
             }
         }
         if from == OperatingMode::Keyboard
@@ -26280,10 +26284,11 @@ mod tests {
         }
     }
 
-    /// …and an auto-sequencer QSO ends with the RTTY screen, with the sequencer's existing
-    /// notice, as a refused over of its own ends it. Queued or already on the air, its over
-    /// would otherwise be followed by the next one it queues while the operator is away, held
-    /// until the return and keyed then.
+    /// …and an auto-sequencer QSO ends with the RTTY screen, with a line of its own (the
+    /// operator, 2026-09-30: "RTTY auto-sequencer stopped: you left the RTTY screen mid-QSO."):
+    /// nothing was refused, so the refusal line would mislead. Queued or already on the air, its
+    /// over would otherwise be followed by the next one it queues while the operator is away,
+    /// held until the return and keyed then.
     #[test]
     fn leaving_the_rtty_section_ends_an_auto_qso() {
         for queued in [true, false] {
@@ -26304,7 +26309,7 @@ mod tests {
             );
             assert_eq!(
                 e.rtty_state().keyer_error.as_deref(),
-                Some(RTTY_AUTO_REFUSED),
+                Some(RTTY_AUTO_LEFT),
                 "queued {queued}: the RTTY cockpit says why"
             );
             e.set_rtty_sending(false);
