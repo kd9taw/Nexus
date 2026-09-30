@@ -3374,6 +3374,8 @@ export const FR: PartialCatalog = {
   "prop.impact.a.unsettled": "journée perturbée — légers passages de fading",
   "prop.impact.bz.hardSouth": "champ franchement sud — orage probable, trajets polaires en baisse",
   "prop.impact.bz.neutral": "champ neutre/nord — stable",
+  "prop.spaceWx.bz.stale": "dernière mesure {{ago}}",
+  "prop.spaceWx.bz.none": "aucune mesure du vent solaire",
   "prop.impact.bz.south": "champ sud — trajets à haute latitude bientôt affaiblis",
   "prop.impact.kp.quiet": "champ calme — trajets stables",
   "prop.impact.kp.storm": "orage géomagnétique — trajets polaires dégradés",

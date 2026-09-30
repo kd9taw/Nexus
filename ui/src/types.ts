@@ -786,12 +786,18 @@ export interface SatBinding {
 export interface SolarWind {
   /** Bz (GSM), nT. Negative = southward = geoeffective. */
   bzNt: number
-  /** Total field magnitude Bt, nT. */
-  btNt: number
-  /** Bulk speed, km/s. */
-  speedKms: number
-  /** Proton density, p/cm³. */
-  density: number
+  /** Total field magnitude Bt, nT. `null` = not known (the magnetometer row carried Bz without it;
+   *  an older station sends 0). */
+  btNt: number | null
+  /** Bulk speed, km/s. `null` = not known (the plasma feed did not answer, or its newest reading
+   *  is not from this sample's moment). ⚠️ An OLDER station sends 0 for the same thing — the Sun's
+   *  wind never blows below ~250 km/s, so a reader treats a speed ≤ 0 as not known too. */
+  speedKms: number | null
+  /** Proton density, p/cm³. `null` = not known (an older station sends 0). */
+  density: number | null
+  /** When the magnetometer reading was made, Unix seconds UTC. Absent from an OLDER station, whose
+   *  sample's age cannot be known — see `solarWindAgeSecs` in propViz. */
+  timeUnix?: number
 }
 
 export interface SpaceWxView {
