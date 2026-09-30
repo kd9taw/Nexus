@@ -1995,12 +1995,15 @@ button.nb-chip:hover {
 [data-viewport='xs'] .connect {
   grid-template-columns: minmax(0, 1fr);
   /* The globe row is the only explicit one here too: the rails and the strip auto-place into
-     implicit `auto` rows under it (grid-auto-rows on .connect), in DOM order — so a closed
-     rail or strip takes no row and leaves no gap in the stack. */
+     implicit rows under it, in DOM order — so a closed rail or strip takes no row and leaves
+     no gap in the stack. */
   grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh)));
   /* Every implicit row here is content-height, a strip the operator sized on a wider window
-     included: the stack scrolls, and a stack is not divided (layout L7). */
-  grid-auto-rows: auto;
+     included: the stack scrolls, and a stack is not divided (layout L7). `max-content`, NOT
+     `auto`: an auto row's floor is the item's min-height, the rails carry `min-height: 0` for
+     the two-rail grid, and this box is bounded — so both rail rows came out 0 px tall and their
+     frames painted over the rows under them (connect-layout.test.ts, the xs stack). */
+  grid-auto-rows: max-content;
   grid-template-areas: 'center';
   /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
      .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
