@@ -74,6 +74,9 @@ vi.mock('./api', async (importOriginal) => {
     getPropagation: vi.fn(async () => fx.PROP),
     getFeedHealth: vi.fn(async () => null),
     getXrayNow: vi.fn(async () => null),
+    // NOAA's daily file as the command answers when there is none. The auto-stub's `{}` has no `days`,
+    // so a host that draws the file's newest day (the dashboard bar's SSN) would throw on it.
+    getSolarIndices: vi.fn(async () => null),
     getDxpedWindows: vi.fn(async () => []),
     getSatSchedule: vi.fn(async () => []),
     getSatTrackStatus: vi.fn(async () => null),
