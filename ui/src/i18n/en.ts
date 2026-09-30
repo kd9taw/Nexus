@@ -5198,6 +5198,13 @@ export const EN = {
   'settings.rigControl.ptt.rts': 'Serial RTS',
   'settings.rigControl.ptt.dtr': 'Serial DTR',
   'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  // #381. Front/Mic and Rear/Data name the radio's two audio inputs and are prose; CAT, PTT, VOX,
+  // USB, the jack labels DATA and ACC, and SignaLink (an interface) are invariant tokens.
+  'settings.rigControl.txAudio.label': 'Transmit audio source (CAT PTT)',
+  'settings.rigControl.txAudio.front': 'Front/Mic',
+  'settings.rigControl.txAudio.rear': 'Rear/Data',
+  'settings.rigControl.txAudio.hint':
+    'Which of the radio’s audio inputs transmits when Nexus keys it over CAT. <b>Front/Mic</b> is how Nexus has always keyed the radio. <b>Rear/Data</b> keys its data input instead: choose it if your sound card reaches the radio through its rear DATA or ACC jack (where a SignaLink plugs in) or its own USB audio, and the radio sends no audio from Nexus although it does on VOX. The Phone cockpit’s PTT is not affected and keys the radio as it always has. <b>Per radio.</b>',
   'settings.rigControl.pttPort.label': 'PTT Serial Port',
   // `{{example}}` is the platform's own device-name example, supplied by the panel as an
   // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.

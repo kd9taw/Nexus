@@ -1,0 +1,59 @@
+{
+  "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
+  "models": 303,
+  "micData": [
+    {
+      "model": 2,
+      "name": "Hamlib NET rigctl"
+    },
+    {
+      "model": 1032,
+      "name": "Yaesu FTDX-5000"
+    },
+    {
+      "model": 1033,
+      "name": "Vertex Standard VX-1700"
+    },
+    {
+      "model": 2028,
+      "name": "Kenwood TS-480"
+    },
+    {
+      "model": 2031,
+      "name": "Kenwood TS-590S"
+    },
+    {
+      "model": 2037,
+      "name": "Kenwood TS-590SG"
+    },
+    {
+      "model": 2039,
+      "name": "Kenwood TS-990S"
+    },
+    {
+      "model": 2041,
+      "name": "Kenwood TS-890S"
+    },
+    {
+      "model": 2046,
+      "name": "Hilberling PT-8000A"
+    },
+    {
+      "model": 2053,
+      "name": "BG2FX FX4/C/CR/L"
+    },
+    {
+      "model": 2055,
+      "name": "DL2MAN (tr)uSDX"
+    },
+    {
+      "model": 3086,
+      "name": "Icom IC-F8101"
+    },
+    {
+      "model": 33001,
+      "name": "ELAD FDM-DUO"
+    }
+  ],
+  "unread": []
+}

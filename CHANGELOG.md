@@ -376,6 +376,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up at the radio is not pulled back under a limit. Not yet checked on the air: on a TS-590S, set
   80 W at the radio, connect Nexus, and switch to FT8 and then RTTY; the radio should still be at
   80 W.
+- **A sound card on the radio's rear jack now transmits under CAT PTT: a new Transmit audio
+  source setting (#381).** When Nexus keyed a radio over CAT, the radio transmitted from its
+  microphone input, so on a TS-590S with a SignaLink on the rear ACC2 jack nothing from Nexus went
+  out, although VOX worked. Settings › Radio › Rig & CAT now has **Transmit audio source (CAT
+  PTT)**, **Front/Mic** or **Rear/Data**, per radio. With Rear/Data, Nexus keys the radio's data
+  input instead, as WSJT-X's Rear/Data choice does, for everything whose audio Nexus plays: FT8
+  and the other digital modes, RTTY sent as audio, PSK, SSTV, APRS, the voice keyer, the soundcard
+  CW keyer and Tune. The Phone cockpit's PTT and RTTY sent on an FSK keying line key the radio as
+  before. **Front/Mic is the default and keys every radio exactly as before.** The choice appears
+  only for CAT PTT on a radio whose Hamlib driver can key either input: the Kenwood TS-480,
+  TS-590S, TS-590SG, TS-890S and TS-990S, the Yaesu FTDX-5000, the ELAD FDM-DUO and a few more.
+  On an FTDX-5000, Hamlib selects the rear input by changing the radio's menu 103, and nothing
+  changes it back, so check that menu before you work phone. Not yet checked on the air: on a
+  TS-590S with a SignaLink on ACC2, choose Rear/Data and press Tune, then send an FT8 over; the
+  radio should put out power both times.
 - **Yaesu FTX-1: Nexus no longer sends the three commands its Hamlib driver gets wrong (#385).**
   Checked against Yaesu's own FTX-1 CAT reference, the Hamlib driver Nexus uses for the FTX-1
   turns three of Nexus's controls into different commands. The monitor switch becomes MOX, which

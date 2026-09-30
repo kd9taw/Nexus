@@ -116,7 +116,7 @@ you like.
 | **3** | 844 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
 | **4** | 380 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
 | **5** | 2303 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, satellites, the map, awards, memories. |
-| **6** | 754 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, and the long tail. |
+| **6** | 758 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, and the long tail. |
 
 **Tier 1 on its own is a real release.** 603 rows, about 21,000 characters — roughly 9% of the
 text — and it buys a program whose menus, buttons, status messages and log form are all in

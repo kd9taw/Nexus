@@ -56,6 +56,7 @@ import {
   getAllRigModels,
   getPortlessRigModels,
   getCatCwUnprovenRigModels,
+  getPttMicDataRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -804,6 +805,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // DATA1. `ampModel`/`ampPort` were absent and Rust does NOT default them, so Save failed
     // outright with `missing field ampModel`.
     icomDataMode: s.icomDataMode ?? 1,
+    // ⚠️ PER-RADIO, and Rust carries no serde default on the PATCH (only on the stored profile, so
+    // an old file loads as Front/Mic). Dropping it here would fail the Save loudly rather than
+    // quietly put a Rear/Data radio (#381) back on its microphone.
+    txAudioSource: s.txAudioSource ?? 'front',
     ampModel: s.ampModel ?? '',
     ampPort: s.ampPort ?? '',
     ampFollowBand: s.ampFollowBand ?? false,
@@ -1251,6 +1256,9 @@ export function SettingsPanel({
   /** Models whose CAT CW keyer is unproven and cannot report its own failure, from the backend.
    *  Empty = rule unread, and no caution is shown. Notice only — never blocks a save. */
   const [catCwUnprovenModels, setCatCwUnprovenModels] = useState<number[]>([])
+  /** Models whose CAT PTT can key the radio's MIC or DATA input (#381), from the backend. Empty =
+   *  rule unread, and no radio is offered "Transmit audio source", so every one keys Front/Mic. */
+  const [pttMicDataModels, setPttMicDataModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
@@ -1683,6 +1691,11 @@ export function SettingsPanel({
     // off a keyer that works for him.
     getCatCwUnprovenRigModels()
       .then((m) => mounted && Array.isArray(m) && setCatCwUnprovenModels(m))
+      .catch(() => {})
+    // The backend's "this radio's CAT PTT can choose MIC or DATA" rule (#381), fetched once. On
+    // failure it stays empty and the choice is not offered: the radio keys as it always has.
+    getPttMicDataRigModels()
+      .then((m) => mounted && Array.isArray(m) && setPttMicDataModels(m))
       .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
@@ -4866,6 +4879,29 @@ export function SettingsPanel({
                 </select>
                 <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
               </label>
+
+              {/* #381: which input a CAT key-down selects. Offered where Rust's `cat_ptt_mode` can
+                  honour it — CAT PTT, not OmniRig (its own rig file keys the radio), a radio whose
+                  Hamlib driver has a working mic/data PTT — and hidden everywhere else, where the
+                  radio keys as it always has whatever is stored. */}
+              {form.pttMethod === 'cat' && form.rigConn !== 'omnirig' && pttMicDataModels.includes(form.rigModel) && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.txAudio.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    // Read as Rust reads it (`tx_audio_source_is_rear`), so the box never shows
+                    // Front/Mic for a stored value the radio loop treats as Rear/Data.
+                    value={(form.txAudioSource ?? '').trim().toLowerCase() === 'rear' ? 'rear' : 'front'}
+                    onChange={(e) => update('txAudioSource', e.target.value)}
+                  >
+                    <option value="front">{t('settings.rigControl.txAudio.front')}</option>
+                    <option value="rear">{t('settings.rigControl.txAudio.rear')}</option>
+                  </select>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.txAudio.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              )}
 
               {(form.pttMethod === 'rts' || form.pttMethod === 'dtr') && (
                 <label className="settings-field">
