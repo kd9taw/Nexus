@@ -828,6 +828,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underline, as a bar beside a line, or on the chip's or row's border. A closed band in the Band
   Advisor fades by its lettering instead of turning nearly invisible. The dark themes look exactly
   as before.
+- **Need chips are easy to read in the light themes, wherever they appear.** The NEW ONE, ZONE,
+  BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the Call
+  Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
+  lettered their word in the need's own colour, which was hard to read in every light theme; a
+  DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
+  Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
+  before.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

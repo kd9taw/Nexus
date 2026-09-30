@@ -2240,8 +2240,8 @@ body.resizing-row {
 
 /* Words whose chip or row already has a border in the state colour: the ink only. The Space Wx scale
    chips' borders are fixed colours that read 1.9:1 (R) and 3.1:1 (G) on the light page, so they take
-   the theme's warning and critical colours. Need and satellite chips are Connect's own here; the same
-   chips elsewhere in the app are not part of this change. */
+   the theme's warning and critical colours. Satellite chips are Connect's own here; need chips take the
+   same treatment everywhere in the app (with the need chip's own rules). */
 [data-theme='light'] .cp-mode.good,
 [data-theme='light'] .cp-mode.fair,
 [data-theme='light'] .swsc-chip.swsc-minor,
@@ -2251,7 +2251,6 @@ body.resizing-row {
 [data-theme='light'] .opening-band,
 [data-theme='light'] .getout-list .go-snr,
 [data-theme='light'] .getout-summary strong,
-[data-theme='light'] .connect .need-chip,
 [data-theme='light'] .connect .sat-chip.alive,
 [data-theme='light'] .connect .sat-chip.dead,
 [data-theme='light'] .connect .sat-chip.stale {
@@ -2262,12 +2261,6 @@ body.resizing-row {
 }
 [data-theme='light'] .swsc-chip.swsc-major {
   border-color: var(--alert-critical);
-}
-/* A need chip's border is its need colour mixed toward transparent, 1.9–2.8:1 on the light page for three
-   of the needs; with the word in ink it is the border that has to say which need, so it takes the full
-   colour. */
-[data-theme='light'] .connect .need-chip {
-  border-color: var(--need-color, var(--accent));
 }
 /* Per-path outlook panel (selected station) — the PathPredictor seam surfaced. */
 
@@ -6952,6 +6945,27 @@ select optgroup {
 }
 .need-watch {
   --need-color: var(--need-watch);
+}
+/* NEED CHIPS IN THE LIGHT THEMES, WHEREVER THEY SIT (Band Activity, the Call Roster, the station cards,
+   the WATCH tile, the Needed board, Spots, the Satellites section and Connect). Lettered in its need
+   colour on a tint of that colour, the word read mostly under the 4.5:1 floor in the standard light
+   theme, as low as 1.37:1 (Chrome: a DXPED chip; a new park 2.15:1). So the word takes the theme's ink,
+   and the border, a mix of the need colour that read as low as 1.4:1, takes it at full strength; the
+   tint stays. The DXpedition and state chips carry colours of their own, so they are named here to
+   outrank them, and the fixed POTA and SOTA colours (the rule further down, set for the Needed board's
+   chips, which also colours their marks on the band strip and the band map) give way to the theme's
+   own. Dark is untouched. NeedChip.contrast.test.tsx holds it on every host. */
+[data-theme='light'] .need-chip,
+[data-theme='light'] .need-chip.need-dxped,
+[data-theme='light'] .need-chip.need-state {
+  color: var(--text);
+  border-color: var(--need-color, var(--accent));
+}
+[data-theme='light'] .need-pota {
+  --need-color: var(--need-pota);
+}
+[data-theme='light'] .need-sota {
+  --need-color: var(--need-sota);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
