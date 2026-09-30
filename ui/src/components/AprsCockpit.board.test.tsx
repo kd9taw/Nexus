@@ -27,6 +27,7 @@ vi.mock('../api', () => ({
   })),
   getAprsIsStatus: vi.fn(async () => inet()),
   getAprsStations: vi.fn(async () => ({ stations: [], ttlMin: 60, fadeAfterMin: 20 })),
+  getAprsTxNotice: vi.fn(async () => null),
   aprsAutoArm: vi.fn(async () => true),
   aprsSendBeacon: vi.fn(async () => {}),
   aprsSendMessage: vi.fn(async () => {}),

@@ -1192,6 +1192,13 @@ const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the
 const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
      privileges, so the picture that was waiting was dropped, not held for later. Send it again \
      from inside them.";
+/// …and the APRS cockpit's status line, when what was queued (beacons, messages, automatic acks)
+/// is dropped: by TX Off ([`Engine::set_tx_enabled`]), or refused at [`Engine::poll_aprs_tx`].
+const APRS_REFUSED_TX_OFF: &str = "APRS stopped: transmit was turned off, so what was still \
+     queued was dropped, not held for later. Send it again when you are ready.";
+const APRS_REFUSED_PRIVILEGES: &str = "APRS not sent: this frequency is outside your license \
+     privileges, so what was queued was dropped, not held for later. Send it again from inside \
+     them.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -3297,8 +3304,13 @@ pub struct Engine {
     /// when something decodes: "nothing arrived" is the reading that matters most). Reset on arm.
     aprs_health: AprsHealth,
     /// Pre-rendered APRS TX audio (12 kHz) — beacons, messages, acks. The radio loop keys ONE at a
-    /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it.
+    /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it, and TX Off or a refusal at the
+    /// poll drops it with a notice ([`Self::aprs_tx_notice`]).
     aprs_tx_queue: VecDeque<Vec<f32>>,
+    /// Why what was queued above was last DROPPED instead of sent (TX Off, or a refusal at
+    /// [`Engine::poll_aprs_tx`]): the APRS cockpit's status line. Cleared when the next frame
+    /// keys. `None` = nothing dropped since.
+    aprs_tx_notice: Option<String>,
     /// Rolling APRS message line-number (001..999) for outgoing messages, so the recipient can ack.
     aprs_msg_seq: u16,
     /// Per-STATION state keyed by callsign-SSID — what the map and the station list read. Distinct
@@ -5067,6 +5079,7 @@ impl Engine {
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
+            aprs_tx_notice: None,
             aprs_msg_seq: 0,
             aprs_fm: false,
             fm_channel: false,
@@ -14011,6 +14024,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.sstv_abort = true;
             self.sstv_tx_mode = None;
             self.sstv_tx_progress = None;
+            // …and what APRS still has queued (beacons, messages, automatic acks), which this
+            // used to leave HELD, to key the moment TX came back (the operator, 2026-09-30: "a
+            // refused picture or beacon is dropped with a notice, never sent later"). APRS has no
+            // abort to arm: a frame on the air is the loop's, and its TX-off cut unkeys it.
+            if !self.aprs_tx_queue.is_empty() {
+                tempo_core::applog::info("tx", "APRS not keyed: transmit is off (dropped)");
+                self.aprs_tx_queue.clear();
+                self.aprs_tx_notice = Some(APRS_REFUSED_TX_OFF.to_string());
+            }
             self.tx_queue.clear();
             self.broadcast_queue.clear();
             // `transmitting` is deliberately NOT stamped false: the over in flight
@@ -16764,16 +16786,52 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// Pop the next queued APRS beacon audio for the radio loop to key, or `None` while any TX gate
-    /// is down (Monitor off / outside privileges / anything else owning the transmitter) — the
-    /// queue is then HELD, so a beacon never keys unexpectedly. Ownership comes from the ONE
-    /// arbiter ([`Engine::tx_owner`]): the four-flag copy that used to live here knew nothing of
+    /// Pop the next queued APRS frame's audio (a beacon, a message, an automatic ack) for the radio
+    /// loop to key, or `None`.
+    ///
+    /// ⛔ A REFUSED FRAME IS DROPPED, NEVER HELD (the operator, 2026-09-30: "a refused picture or
+    /// beacon is dropped with a notice, never sent later"). With TX off, or the dial outside the
+    /// licence's privileges, everything still queued is cleared: the log says why once, and the
+    /// APRS cockpit's status line ([`Self::aprs_tx_notice`]) says so. Held, it keyed the moment
+    /// TX was allowed again, at a time the operator did not choose. TX Off itself drops the queue
+    /// ([`Self::set_tx_enabled`]), so the TX-off arm here is the backstop for a latch lowered any
+    /// other way (a watchdog trip, leaving a manual mode for Digital).
+    ///
+    /// HELD while anything else owns the transmitter: that is a wait for the rig, not a refusal,
+    /// and the frame keys when it is free. Ownership comes from the ONE arbiter
+    /// ([`Engine::tx_owner`]): the four-flag copy that used to live here knew nothing of
     /// mic/broker PTT, the voice keyer, CW, RTTY or SSTV.
     pub fn poll_aprs_tx(&mut self) -> Option<Vec<f32>> {
-        if !self.tx_enabled || !self.tx_allowed() || self.tx_owner().is_some() {
+        if self.aprs_tx_queue.is_empty() {
             return None;
         }
+        let refused = if !self.tx_enabled {
+            Some(("transmit is off", APRS_REFUSED_TX_OFF))
+        } else if !self.tx_allowed() {
+            Some((
+                "the dial is outside the licence's privileges",
+                APRS_REFUSED_PRIVILEGES,
+            ))
+        } else {
+            None
+        };
+        if let Some((why, notice)) = refused {
+            tempo_core::applog::info("tx", &format!("APRS not keyed: {why} (dropped)"));
+            self.aprs_tx_queue.clear();
+            self.aprs_tx_notice = Some(notice.to_string());
+            return None;
+        }
+        if self.tx_owner().is_some() {
+            return None;
+        }
+        self.aprs_tx_notice = None;
         self.aprs_tx_queue.pop_front()
+    }
+
+    /// Why what was queued for APRS was last dropped instead of sent, for the APRS cockpit's status
+    /// line; `None` once a frame keys.
+    pub fn aprs_tx_notice(&self) -> Option<&str> {
+        self.aprs_tx_notice.as_deref()
     }
 
     /// Who owns the transmitter right now, if anyone — THE single answer to the
@@ -47067,6 +47125,133 @@ mod tests {
             "expected a TX-off refusal, got: {err}"
         );
         assert!(e.poll_aprs_tx().is_none(), "nothing queued");
+    }
+
+    /// A General in Phone (TX armed on entry) on the APRS channel: where a beacon keys.
+    fn aprs_tx_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.aprs_tune(144.390).unwrap();
+        assert!(e.tx_enabled(), "precondition: TX is armed on 144.390");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 144.390 is inside a General's privileges"
+        );
+        e
+    }
+
+    fn queue_aprs_beacon(e: &mut Engine) {
+        e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]).unwrap();
+    }
+
+    /// ⛔ WHAT APRS HAS QUEUED IS DROPPED BY TX OFF, NEVER HELD (the operator, 2026-09-30: "a
+    /// refused picture or beacon is dropped with a notice, never sent later"). TX Off used to
+    /// leave the queue alone, and what was in it keyed the moment TX came back on.
+    #[test]
+    fn tx_off_drops_what_aprs_has_queued_and_it_does_not_key_when_tx_comes_back() {
+        let mut e = aprs_tx_engine();
+        queue_aprs_beacon(&mut e);
+        e.aprs_send_message("N0CALL", "hello").unwrap();
+        e.set_tx_enabled(false);
+        e.set_tx_enabled(true);
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "what was queued before TX Off keyed when TX came back"
+        );
+        assert_eq!(
+            e.aprs_tx_notice(),
+            Some(APRS_REFUSED_TX_OFF),
+            "the APRS cockpit is told"
+        );
+        queue_aprs_beacon(&mut e);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "a beacon sent once TX is on keys as before"
+        );
+        assert_eq!(
+            e.aprs_tx_notice(),
+            None,
+            "…and the frame that keys clears the notice"
+        );
+    }
+
+    /// …and the latch lowered any other way (a watchdog trip, leaving a manual mode for Digital):
+    /// the poll drops what is queued, as TX Off does.
+    #[test]
+    fn an_aprs_frame_refused_with_tx_off_is_dropped_and_does_not_key_when_tx_comes_back() {
+        let mut e = aprs_tx_engine();
+        queue_aprs_beacon(&mut e);
+        e.tx_enabled = false; // not TX Off: the latch lowered another way
+        assert!(e.poll_aprs_tx().is_none(), "nothing keys with TX off");
+        e.set_tx_enabled(true);
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "the refused beacon keyed when TX came back"
+        );
+        assert_eq!(
+            e.aprs_tx_notice(),
+            Some(APRS_REFUSED_TX_OFF),
+            "the APRS cockpit is told"
+        );
+        queue_aprs_beacon(&mut e);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "a beacon sent once TX is on keys as before"
+        );
+    }
+
+    /// …and outside the licence's privileges: the dial moves into the 2 m CW-only segment while a
+    /// beacon waits, then back. Held, it keyed on the tune back in.
+    #[test]
+    fn an_aprs_frame_refused_outside_privileges_is_dropped_and_does_not_key_after_a_tune_in() {
+        let mut e = aprs_tx_engine();
+        queue_aprs_beacon(&mut e);
+        e.set_frequency(144.050, "2m", "FM");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 144.050 is the 2 m CW-only segment"
+        );
+        assert!(e.poll_aprs_tx().is_none(), "nothing keys outside them");
+        e.set_frequency(144.390, "2m", "FM");
+        assert!(e.tx_allowed(), "precondition: back inside them");
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "the refused beacon keyed after the tune in"
+        );
+        assert_eq!(
+            e.aprs_tx_notice(),
+            Some(APRS_REFUSED_PRIVILEGES),
+            "the APRS cockpit is told"
+        );
+        queue_aprs_beacon(&mut e);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "a beacon sent inside the privileges keys as before"
+        );
+        assert_eq!(
+            e.aprs_tx_notice(),
+            None,
+            "…and the frame that keys clears the notice"
+        );
+    }
+
+    /// …but a frame waiting for the TRANSMITTER is not refused: it keys when the rig is free.
+    #[test]
+    fn an_aprs_frame_waiting_for_the_transmitter_is_held_not_dropped() {
+        let mut e = aprs_tx_engine();
+        queue_aprs_beacon(&mut e);
+        e.set_tune(true);
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "nothing keys over a tune carrier"
+        );
+        assert_eq!(e.aprs_tx_notice(), None, "a wait is not a refusal");
+        e.set_tune(false);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "the beacon keys once the tune ends"
+        );
     }
 
     /// ⭐ THE BEACON SSID FOLLOWS THE CALLSIGN UNTIL THE OPERATOR SAYS OTHERWISE.

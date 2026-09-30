@@ -2,8 +2,8 @@
 // no other: the TX On/Off ARM LATCH below keeps its label and its two tooltips. They are a
 // transmit-path control's accessible name, and every one of those moves in its own batch
 // with the stop-line sweeps re-run. APRS is the sixth cockpit and renders NO stop control —
-// the latch only holds the queue — so nothing here is on a stop-line census. The file
-// graduates to MIGRATED the moment that batch lands.
+// the latch is an arm latch, and turning it off drops what is still queued — so nothing here
+// is on a stop-line census. The file graduates to MIGRATED the moment that batch lands.
 //
 // Everything else operator-visible comes from the catalog. What does NOT: callsign-SSIDs,
 // symbol codes and their table, digipeater paths, the channel list and every dial reading,
@@ -28,6 +28,7 @@ import {
   getAprsHealth,
   getAprsIsStatus,
   getAprsStations,
+  getAprsTxNotice,
   setSettings,
   getSettings,
   type AprsHealth,
@@ -678,6 +679,8 @@ export function AprsCockpit({
   const [msgTo, setMsgTo] = useState('')
   const [msgText, setMsgText] = useState('')
   const [status, setStatus] = useState<string | null>(null)
+  // The engine's last drop notice this board has shown (see the poll below), so each is shown once.
+  const shownTxNotice = useRef<string | null>(null)
   const [nativeNow, setNow] = useState(() => Math.floor(Date.now() / 1000))
   const [me, setMe] = useState<LatLon | null>(null)
   const prefilled = useRef(false)
@@ -795,7 +798,7 @@ export function AprsCockpit({
   // Poll the heard list + decoder health (and tick the age clock) while the cockpit is visible.
   useEffect(() => {
     if (!active || remote) return
-    // The age clock ticks on its own; the four reads are ONE single-flight poll (#335): each
+    // The age clock ticks on its own; the five reads are ONE single-flight poll (#335): each
     // takes the engine mutex, so a tick skips while any of the last set is still out.
     const clock = () => setNow(Math.floor(Date.now() / 1000))
     clock()
@@ -806,6 +809,13 @@ export function AprsCockpit({
         getAprsStations().then((v) => owns() && setRoster((prev) => (sameRoster(prev, v) ? prev : v))),
         getAprsHealth().then((h) => owns() && setHealth(h)),
         getAprsIsStatus().then((s) => owns() && setIsStatus(s)),
+        // What was queued and DROPPED (TX went off, or the dial left the licence privileges) says
+        // so in the status line, once per notice: the engine's own sentence, as a refused send's.
+        getAprsTxNotice().then((n) => {
+          if (!owns() || n === shownTxNotice.current) return
+          shownTxNotice.current = n
+          if (n) setStatus(n)
+        }),
       ]),
     )
     return () => {
