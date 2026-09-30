@@ -11,6 +11,10 @@
 // the picker's own groups; "Remove … from this slot" takes the shown pane out while the slot holds
 // two or more. Both close the menu — the slot has changed under it.
 //
+// ROTATE THE TABS (the dashboard window and the TV page only — the frame passes `onRotate` only
+// there, and only for a slot with tabs): Off or an interval from connectConfig ROTATE_CHOICES, as a
+// radio group. The menu reports that it is open, so the slot does not rotate under it.
+//
 // WHY ONE MENU AND NOT A ROW OF BUTTONS. A box head already carries the title, the content picker
 // and ✕, and a Connect column can be 200 px wide (Map first, or a dragged rail). Three more buttons
 // there (A−, A+, ?) would leave the picker a few pixels, or push ✕ past the frame's clip — the
@@ -26,7 +30,7 @@
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { t } from '../../i18n'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP } from '../../features/panelState'
-import type { PaneId } from '../../features/connectConfig'
+import { ROTATE_CHOICES, type PaneId } from '../../features/connectConfig'
 import { PANES } from './panes'
 
 export function BoxMenu({
@@ -37,6 +41,9 @@ export function BoxMenu({
   addable,
   onAddTab,
   onRemoveTab,
+  rotateSecs,
+  onRotate,
+  onOpenChange,
 }: {
   /** The box's name, already translated — the trigger's accessible name says whose menu it is. */
   title: string
@@ -52,11 +59,17 @@ export function BoxMenu({
   onAddTab?: (paneId: PaneId) => void
   /** Take the shown pane out of the slot. Omitted ⇒ no "Remove" (a slot's only pane). */
   onRemoveTab?: () => void
+  /** The slot's rotation interval in seconds; absent is off. */
+  rotateSecs?: number
+  /** Set or clear it. Omitted ⇒ no rotation choice (the main window, or a one-pane slot). */
+  onRotate?: (secs: number | null) => void
+  /** The menu opened or closed. */
+  onOpenChange?: (open: boolean) => void
 }) {
   const pct = Math.round(textScale * 100)
   const step = (dir: 1 | -1) => onTextScale?.(Math.round((textScale + dir * BOX_SCALE_STEP) * 100) / 100)
   return (
-    <RM.Root>
+    <RM.Root onOpenChange={onOpenChange}>
       <RM.Trigger asChild>
         <button
           type="button"
@@ -145,7 +158,27 @@ export function BoxMenu({
                 {t('connect.box.tab.remove', { title })}
               </RM.Item>
             )}
-            {(onTextScale || onAddTab || onRemoveTab) && helpUrl && <RM.Separator className="box-menu-sep" />}
+            {onRotate && (
+              <>
+                <RM.Separator className="box-menu-sep" />
+                <RM.Label className="box-menu-label">{t('connect.box.rotate.heading')}</RM.Label>
+                <RM.RadioGroup value={String(rotateSecs ?? 0)} onValueChange={(v) => onRotate(Number(v) || null)}>
+                  {[0, ...ROTATE_CHOICES].map((secs) => (
+                    <RM.RadioItem key={secs} value={String(secs)} className="ui-menu-item">
+                      <span className="box-menu-glyph" aria-hidden="true">
+                        <RM.ItemIndicator>●</RM.ItemIndicator>
+                      </span>
+                      {secs === 0
+                        ? t('connect.box.rotate.off')
+                        : secs < 60
+                          ? t('connect.box.rotate.secs', { secs })
+                          : t('connect.box.rotate.mins', { mins: secs / 60 })}
+                    </RM.RadioItem>
+                  ))}
+                </RM.RadioGroup>
+              </>
+            )}
+            {(onTextScale || onAddTab || onRemoveTab || onRotate) && helpUrl && <RM.Separator className="box-menu-sep" />}
             {helpUrl && (
               <RM.Item asChild className="ui-menu-item box-menu-link">
                 <a href={helpUrl} target="_blank" rel="noreferrer" title={t('connect.box.help.title')}>

@@ -48,13 +48,32 @@ export interface ConnectConfig {
    *  The placement rule is "each pane in at most one slot, a slot holds one or more" — the tab
    *  rules below keep it, and `coerceTabs` restores it against any stored value. */
   tabs: Partial<Record<SlotId, PaneId[]>>
+  /** AUTO-ROTATE (2026-09-29): seconds between a slot's tabs, one of ROTATE_CHOICES. Offered and
+   *  honoured only on the dashboard window and the TV page (ConnectView `autoRotate`); absent is
+   *  off, and only a slot with tabs keeps one (`coerceRotate`). An older build ignores it. */
+  rotate: Partial<Record<SlotId, number>>
   overlays: Record<string, boolean> // reserved for B2/B3 map overlays; inert in B1
 }
 
 // PER-SURFACE: which pane sits in which slot is literally this window's board layout.
 const STORAGE_KEY = 'nexus.connect.config'
 export function defaultConnectConfig(): ConnectConfig {
-  return { slots: { ...DEFAULT_SLOTS }, tabs: {}, overlays: {} }
+  return { slots: { ...DEFAULT_SLOTS }, tabs: {}, rotate: {}, overlays: {} }
+}
+
+/** The intervals a slot's tabs can rotate at, in seconds (10 s … 2 min). */
+export const ROTATE_CHOICES = [10, 15, 30, 60, 120] as const
+
+/** Stored intervals made valid: an offered interval, on a slot that holds tabs. Anything else is no
+ *  entry, which is off — so a slot that goes back to one pane forgets its interval. */
+export function coerceRotate(tabs: Partial<Record<SlotId, readonly PaneId[]>>, raw: unknown): Partial<Record<SlotId, number>> {
+  const out: Partial<Record<SlotId, number>> = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const s of SLOT_IDS) {
+    const v = (raw as Record<string, unknown>)[s]
+    if ((tabs[s]?.length ?? 0) > 1 && typeof v === 'number' && (ROTATE_CHOICES as readonly number[]).includes(v)) out[s] = v
+  }
+  return out
 }
 
 /** This view's pane-grid vocabulary. The placement RULES (defaults fill, unknown-id
@@ -92,7 +111,8 @@ export function normalizeConfig(raw: unknown): ConnectConfig {
   if (!raw || typeof raw !== 'object') return defaultConnectConfig()
   const obj = raw as Partial<ConnectConfig> & Record<string, unknown>
   const slots = coerceSlots(obj.slots)
-  return { slots, tabs: coerceTabs(slots, obj.tabs), overlays: coerceOverlays(obj.overlays) }
+  const tabs = coerceTabs(slots, obj.tabs)
+  return { slots, tabs, rotate: coerceRotate(tabs, obj.rotate), overlays: coerceOverlays(obj.overlays) }
 }
 
 // ── TABS: several panes in one slot (2026-09-29) ──────────────────────────────────────────────
@@ -270,13 +290,25 @@ export interface ConnectConfigApi extends ConnectConfig {
   removeTab: (slotId: SlotId) => void
   /** Show one of a slot's tabs. */
   showTab: (slotId: SlotId, paneId: PaneId) => void
+  /** Rotate a slot's tabs every `secs` (one of ROTATE_CHOICES), or stop (null). */
+  setRotate: (slotId: SlotId, secs: number | null) => void
   setOverlay: (overlayId: string, on: boolean) => void
   /** Every slot back to its DEFAULT_SLOTS pane, one pane per slot (⊞ Reset layout — operator
    *  2026-09-13). */
   resetSlots: () => void
   /** Put a whole placement back (⊞ Undo after a Reset or a layout; a layout, with no tabs, is one
    *  pane per slot). Coerced, so every rule above holds whatever it is handed. */
-  restoreSlots: (slots: Record<SlotId, PaneId>, tabs?: Partial<Record<SlotId, PaneId[]>>) => void
+  restoreSlots: (
+    slots: Record<SlotId, PaneId>,
+    tabs?: Partial<Record<SlotId, PaneId[]>>,
+    rotate?: Partial<Record<SlotId, number>>,
+  ) => void
+}
+
+/** A new placement on `c`, keeping only the intervals its tabs still allow: a slot back to one pane
+ *  forgets its rotation. */
+function placed(c: ConnectConfig, next: ConnectPlacement): ConnectConfig {
+  return { ...c, ...next, rotate: coerceRotate(next.tabs, c.rotate) }
 }
 
 export function useConnectConfig(): ConnectConfigApi {
@@ -287,7 +319,7 @@ export function useConnectConfig(): ConnectConfigApi {
   }, [])
 
   const assignPane = useCallback(
-    (slotId: SlotId, paneId: PaneId) => setCfg((c) => commit({ ...c, ...assignBox(c, slotId, paneId) })),
+    (slotId: SlotId, paneId: PaneId) => setCfg((c) => commit(placed(c, assignBox(c, slotId, paneId)))),
     [commit],
   )
 
@@ -295,7 +327,7 @@ export function useConnectConfig(): ConnectConfigApi {
     (slotId: SlotId, paneId: PaneId) =>
       setCfg((c) => {
         const next = addTab(c, slotId, paneId)
-        return next ? commit({ ...c, ...next }) : c
+        return next ? commit(placed(c, next)) : c
       }),
     [commit],
   )
@@ -304,7 +336,7 @@ export function useConnectConfig(): ConnectConfigApi {
     (slotId: SlotId) =>
       setCfg((c) => {
         const next = removeTab(c, slotId)
-        return next ? commit({ ...c, ...next }) : c
+        return next ? commit(placed(c, next)) : c
       }),
     [commit],
   )
@@ -318,6 +350,15 @@ export function useConnectConfig(): ConnectConfigApi {
     [commit],
   )
 
+  const setRotate = useCallback(
+    (slotId: SlotId, secs: number | null) =>
+      setCfg((c) => {
+        const { [slotId]: _was, ...rest } = c.rotate
+        return commit({ ...c, rotate: coerceRotate(c.tabs, secs == null ? rest : { ...rest, [slotId]: secs }) })
+      }),
+    [commit],
+  )
+
   const setOverlay = useCallback(
     (overlayId: string, on: boolean) =>
       setCfg((c) => commit({ ...c, overlays: { ...c.overlays, [overlayId]: on } })),
@@ -325,15 +366,16 @@ export function useConnectConfig(): ConnectConfigApi {
   )
 
   const resetSlots = useCallback(
-    () => setCfg((c) => commit({ ...c, slots: { ...DEFAULT_SLOTS }, tabs: {} })),
+    () => setCfg((c) => commit({ ...c, slots: { ...DEFAULT_SLOTS }, tabs: {}, rotate: {} })),
     [commit],
   )
 
   const restoreSlots = useCallback(
-    (slots: Record<SlotId, PaneId>, tabs?: Partial<Record<SlotId, PaneId[]>>) =>
+    (slots: Record<SlotId, PaneId>, tabs?: Partial<Record<SlotId, PaneId[]>>, rotate?: Partial<Record<SlotId, number>>) =>
       setCfg((c) => {
         const s = coerceSlots(slots)
-        return commit({ ...c, slots: s, tabs: coerceTabs(s, tabs) })
+        const t = coerceTabs(s, tabs)
+        return commit({ ...c, slots: s, tabs: t, rotate: coerceRotate(t, rotate) })
       }),
     [commit],
   )
@@ -344,6 +386,7 @@ export function useConnectConfig(): ConnectConfigApi {
     addTab: addTabTo,
     removeTab: removeTabFrom,
     showTab: showTabIn,
+    setRotate,
     setOverlay,
     resetSlots,
     restoreSlots,

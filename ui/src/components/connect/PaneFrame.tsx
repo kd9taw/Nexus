@@ -30,17 +30,37 @@
 // next pane and showing it, the body the tabpanel. With one pane the head is the title, as it always
 // was. The picker replaces the SHOWN pane; ⋯ ▸ Add a tab and ⋯ ▸ Remove are the menu's.
 //
+// AUTO-ROTATE (2026-09-29, the dashboard window and the TV page only — the host passes `rotateSecs`
+// and `onRotate` only there): with an interval set, the frame shows its next tab every interval, round
+// the slot. It PAUSES while the pointer is over the frame, while anything in it has the KEYBOARD focus
+// and while its ⋯ menu is open, and a pause ends with a fresh interval. Keyboard focus, judged as
+// :focus-visible judges it: the focus a mouse click leaves on the tab or the ⋯ it pressed does not
+// hold the slot once the pointer has gone, or a slot clicked once would never rotate again. The count restarts only when
+// the interval, the shown tab or the slot's tabs change — never on an ordinary re-render, which the
+// dashboard window does on every snapshot. Off (no interval) by default.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every pane's name
 // arrives already translated from the registry (`panes.tsx`, resolved through getters); the
 // picker's B2/B3 groups are named by their tier code, which is not prose. The ✕ uses the
 // cockpit frame's own words (`pane.hide.*`) — one gesture, one sentence, in every view.
-import { useId, type CSSProperties, type KeyboardEvent } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { t } from '../../i18n'
 import { PANES, paneById } from './panes'
 import { BoxMenu } from './BoxMenu'
 import { paneHelpUrl } from './paneHelp'
 import type { PaneContext } from './paneContext'
 import type { PaneId, SlotId } from '../../features/connectConfig'
+
+/** Was the last press a pointer's (true) or a key's (false)? Document-level and capturing, so a Tab
+ *  pressed outside the slot counts; installed once, by the first frame. */
+let lastPressWasPointer = false
+let watchingPresses = false
+function watchPresses() {
+  if (watchingPresses || typeof document === 'undefined') return
+  watchingPresses = true
+  document.addEventListener('pointerdown', () => (lastPressWasPointer = true), true)
+  document.addEventListener('keydown', () => (lastPressWasPointer = false), true)
+}
 
 export function PaneFrame({
   slotId,
@@ -56,6 +76,8 @@ export function PaneFrame({
   addable,
   onAddTab,
   onRemoveTab,
+  rotateSecs,
+  onRotate,
 }: {
   slotId: SlotId
   /** The pane SHOWN in this slot. */
@@ -80,8 +102,31 @@ export function PaneFrame({
   onAddTab?: (paneId: PaneId) => void
   /** Take the shown pane out of the slot — offered only while the slot holds two or more. */
   onRemoveTab?: () => void
+  /** Seconds between tabs, when this slot rotates (the dashboard window and the TV page). */
+  rotateSecs?: number
+  /** Set or clear it. Omitted ⇒ the menu offers no rotation (the main window). */
+  onRotate?: (secs: number | null) => void
 }) {
   const uid = useId()
+  // Auto-rotate. Hooks first: the frame returns null below for an unknown pane.
+  const [pointerIn, setPointerIn] = useState(false)
+  const [focusIn, setFocusIn] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const showTabNow = useRef(onShowTab)
+  useEffect(() => {
+    showTabNow.current = onShowTab
+  })
+  useEffect(watchPresses, [])
+  const tabsKey = tabs && tabs.length > 1 ? tabs.join(' ') : ''
+  const paused = pointerIn || focusIn || menuOpen
+  useEffect(() => {
+    if (!rotateSecs || !tabsKey || paused) return
+    const order = tabsKey.split(' ') as PaneId[]
+    const id = window.setTimeout(() => {
+      showTabNow.current?.(order[(order.indexOf(paneId) + 1) % order.length])
+    }, rotateSecs * 1000)
+    return () => window.clearTimeout(id)
+  }, [rotateSecs, tabsKey, paneId, paused])
   const def = paneById(paneId)
   if (!def) return null
   const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
@@ -107,6 +152,14 @@ export function PaneFrame({
       className="pane-frame"
       data-slot={slotId}
       data-pane={paneId}
+      onPointerEnter={() => setPointerIn(true)}
+      onPointerLeave={() => setPointerIn(false)}
+      onFocus={() => {
+        if (!lastPressWasPointer) setFocusIn(true)
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusIn(false)
+      }}
       style={
         share === undefined
           ? undefined
@@ -172,6 +225,9 @@ export function PaneFrame({
               addable={addable}
               onAddTab={onAddTab}
               onRemoveTab={tabbed ? onRemoveTab : undefined}
+              rotateSecs={rotateSecs}
+              onRotate={tabbed ? onRotate : undefined}
+              onOpenChange={setMenuOpen}
             />
           )}
           {onHide && (

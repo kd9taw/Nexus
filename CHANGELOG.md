@@ -178,6 +178,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reopens on the tab it was showing. The ready-made layouts are one pane per slot: picking one, or
   **Reset layout**, takes the tabs away, and **Undo** brings them back. Layouts saved before this open
   exactly as they were.
+- **Connect in the dashboard window and on the TV page: a slot's tabs can take turns.** In a slot
+  with tabs, **⋯ ▸ Rotate the tabs** shows them one after another, every 10 s, 15 s, 30 s, 1 min or
+  2 min. It is off until you pick an interval, and it waits while the mouse is over the slot, while
+  you are in it with the keyboard and while its menu is open. The main window's Connect never
+  rotates.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

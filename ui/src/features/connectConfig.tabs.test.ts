@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_SLOTS,
   PANE_IDS,
+  ROTATE_CHOICES,
   SLOT_IDS,
   addTab,
   addableTo,
@@ -18,6 +19,7 @@ import {
   removeTab,
   showTab,
   slotBoxes,
+  coerceRotate,
   type ConnectConfig,
   type PaneId,
   type SlotId,
@@ -245,5 +247,25 @@ describe('a layout with tabs is not a preset', () => {
       const extra = PANE_IDS.find((p) => !Object.values(pre.slots).includes(p))!
       expect(connectLayoutNow({ ...now, tabs: { [s]: [pre.slots[s], extra] } }), `${id} + a tab`).toBe('custom')
     }
+  })
+})
+
+describe('auto-rotate: which slots may rotate, and how fast', () => {
+  const tabbed = { left2: ['bandTiles', 'clock'] as PaneId[] }
+
+  it('the operator picks from 10 s, 15 s, 30 s, 1 min and 2 min', () => {
+    expect([...ROTATE_CHOICES]).toEqual([10, 15, 30, 60, 120])
+  })
+
+  it('a stored interval is kept for a slot with tabs, and dropped for a one-pane slot, an unoffered interval or junk', () => {
+    expect(coerceRotate(tabbed, { left2: 15 })).toEqual({ left2: 15 })
+    expect(coerceRotate(tabbed, { left1: 15 }), 'left1 holds one pane: nothing to rotate').toEqual({})
+    for (const v of [0, 7, 45, -10, '15', null, Number.NaN]) expect(coerceRotate(tabbed, { left2: v }), String(v)).toEqual({})
+    for (const junk of [null, 5, 'x', []]) expect(coerceRotate(tabbed, junk), JSON.stringify(junk)).toEqual({})
+  })
+
+  it('a layout saved before this rotates nothing: normalize reads no intervals', () => {
+    expect(normalizeConfig({ slots: DEFAULT_SLOTS, tabs: tabbed }).rotate).toEqual({})
+    expect(normalizeConfig({ slots: DEFAULT_SLOTS, tabs: tabbed, rotate: { left2: 30 } }).rotate).toEqual({ left2: 30 })
   })
 })

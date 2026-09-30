@@ -151,6 +151,11 @@ interface Props {
   onPopOut?: () => void
   /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
   rigBand?: string | null
+  /** AUTO-ROTATE a slot's tabs (⋯ ▸ Rotate the tabs), offered and run only where the host says so:
+   *  the dashboard window (DetachedPanel's Connect) and the TV page (ConnectTv), never the main
+   *  window's Connect (the operator's pick, 2026-09-29: "Auto-rotating boxes on the dashboard/TV").
+   *  Without it a stored interval is inert and the menu offers none. */
+  autoRotate?: boolean
 }
 
 export function ConnectView({
@@ -168,6 +173,7 @@ export function ConnectView({
   onSelectSat,
   onPopOut,
   rigBand,
+  autoRotate,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -222,7 +228,7 @@ export function ConnectView({
   // panes with nothing on screen able to bring them back.
   const [mapFull, setMapFull] = useState(false)
   // Basic/Expert + the per-slot pane assignment (persisted; basic-default, remember-last).
-  const { slots, tabs, assignPane, addTab, removeTab, showTab, resetSlots, restoreSlots } = useConnectConfig()
+  const { slots, tabs, rotate, assignPane, addTab, removeTab, showTab, setRotate, resetSlots, restoreSlots } = useConnectConfig()
   // Band focus (advisor/opening row click) — the map highlights that band's heat
   // + spots; click the same band again (or the clear chip) to release.
   const [focusBand, setFocusBand] = useState<string | null>(null)
@@ -472,7 +478,7 @@ export function ConnectView({
   // A preset sets the whole board in one tap and its widths are most of what it changes, so an
   // Undo that left them would not put the operator's arrangement back — and a saved arrangement
   // is never overwritten silently. A width drag is still no undo step of its own.
-  const beforeSwitch = useRef<{ slots: typeof slots; tabs: typeof tabs; rails?: RailWidths } | null>(null)
+  const beforeSwitch = useRef<{ slots: typeof slots; tabs: typeof tabs; rotate: typeof rotate; rails?: RailWidths } | null>(null)
   const change = <A extends unknown[]>(fn: (...a: A) => void) => (...a: A) => {
     beforeSwitch.current = null
     fn(...a)
@@ -511,7 +517,7 @@ export function ConnectView({
   const pickLayout = (id: ConnectPresetId) => {
     if (layoutNow === id) return // already on screen: a tap must not spend the one Undo on nothing
     const p = CONNECT_PRESETS[id]
-    beforeSwitch.current = { slots, tabs, rails: widths.pref }
+    beforeSwitch.current = { slots, tabs, rotate, rails: widths.pref }
     // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes
     // go and how much room each gets, never how big their words are — the rule it already keeps for
     // the map's own settings. Reset layout is what puts every pane back at the app's size.
@@ -538,6 +544,8 @@ export function ConnectView({
       addable={addableTo({ slots, tabs }, s)}
       onAddTab={change((p: PaneId) => addTab(s, p))}
       onRemoveTab={change(() => removeTab(s))}
+      rotateSecs={autoRotate ? rotate[s] : undefined}
+      onRotate={autoRotate ? change((secs: number | null) => setRotate(s, secs)) : undefined}
     />
   )
   const rail = (side: 'left' | 'right', ids: readonly SlotId[]) => {
@@ -609,13 +617,13 @@ export function ConnectView({
               beforeSwitch.current = null
               panels.undo()
               if (before) {
-                restoreSlots(before.slots, before.tabs)
+                restoreSlots(before.slots, before.tabs, before.rotate)
                 if (before.rails) widths.setPrefs(before.rails)
               }
             }}
             canUndo={panels.canUndo}
             onReset={() => {
-              beforeSwitch.current = { slots, tabs }
+              beforeSwitch.current = { slots, tabs, rotate }
               panels.reset()
               resetSlots()
               widths.resetAll()

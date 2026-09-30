@@ -102,6 +102,13 @@ slot's only pane is not offered, since that slot would be empty. Each slot reope
 on the tab it was showing. A layout from the Panels menu, or **Reset layout**, puts
 one pane back in each slot; **Undo** brings the tabs back.
 
+In the dashboard window and on the TV page, a slot with tabs can also show them in
+turn: **⋯ ▸ Rotate the tabs** and pick 10 s, 15 s, 30 s, 1 min or 2 min. It is off
+until you pick one. It waits while the mouse is over the slot, while you are in it
+with the keyboard and while its menu is open, and starts the interval again after.
+The main window's Connect never rotates, so what you are looking at while you
+operate never changes by itself.
+
 **Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one
 of the four, or **Custom** once you have moved or resized anything yourself.

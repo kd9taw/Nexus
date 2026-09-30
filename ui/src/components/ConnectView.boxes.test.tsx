@@ -399,3 +399,173 @@ describe('tabs — several panes in one slot', () => {
     expect(factorOf(container, 'left2')).toBe('1.1')
   })
 })
+
+describe('auto-rotate — a slot’s tabs in turn, on the dashboard window and the TV page only', () => {
+  const CONFIG = 'nexus.connect.config'
+  const cfg = () => JSON.parse(localStorage.getItem(CONFIG) ?? 'null')
+  const paneIn = (c: HTMLElement, s: SlotId) => frameOf(c, s)?.getAttribute('data-pane')
+  const store = (rotate?: Record<string, number>) =>
+    localStorage.setItem(
+      CONFIG,
+      JSON.stringify({ slots: DEFAULT_SLOTS, tabs: { left2: ['bandTiles', 'clock', 'greyline'] }, ...(rotate ? { rotate } : {}), overlays: {} }),
+    )
+  async function mountRotating(autoRotate = true) {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<ConnectView {...props} autoRotate={autoRotate} />)
+    })
+    return r
+  }
+  const tick = async (ms: number) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms)
+    })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows the next tab every interval, round the slot and back to the first', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating()
+    expect(paneIn(container, 'left2')).toBe('bandTiles')
+    await tick(9_999)
+    expect(paneIn(container, 'left2'), 'not before the interval').toBe('bandTiles')
+    await tick(1)
+    expect(paneIn(container, 'left2')).toBe('clock')
+    await tick(10_000)
+    expect(paneIn(container, 'left2')).toBe('greyline')
+    await tick(10_000)
+    expect(paneIn(container, 'left2')).toBe('bandTiles')
+  })
+
+  it('a re-render mid-interval does not restart the count (the window re-renders on every snapshot)', async () => {
+    store({ left2: 10 })
+    const { container, rerender } = await mountRotating()
+    await tick(6_000)
+    await act(async () => {
+      rerender(<ConnectView {...props} stations={[]} autoRotate />)
+    })
+    await tick(4_000)
+    expect(paneIn(container, 'left2')).toBe('clock')
+  })
+
+  it('pauses while the pointer is over the slot, and starts a fresh interval when it leaves', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating()
+    fireEvent.pointerEnter(frameOf(container, 'left2'))
+    await tick(60_000)
+    expect(paneIn(container, 'left2'), 'paused under the pointer').toBe('bandTiles')
+    fireEvent.pointerLeave(frameOf(container, 'left2'))
+    await tick(9_999)
+    expect(paneIn(container, 'left2')).toBe('bandTiles')
+    await tick(1)
+    expect(paneIn(container, 'left2')).toBe('clock')
+  })
+
+  it('pauses while the slot has the keyboard focus', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating()
+    const tab = within(frameOf(container, 'left2')).getByRole('tab', { name: 'Bands for you' })
+    fireEvent.keyDown(document.body, { key: 'Tab' }) // the keyboard is what moves focus here
+    act(() => tab.focus())
+    await tick(60_000)
+    expect(paneIn(container, 'left2'), 'paused while focused').toBe('bandTiles')
+    act(() => tab.blur())
+    await tick(10_000)
+    expect(paneIn(container, 'left2')).toBe('clock')
+  })
+
+  it('the focus a mouse click leaves behind does not hold the slot once the pointer has gone', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating()
+    const f = frameOf(container, 'left2')
+    const tab = within(f).getByRole('tab', { name: 'Clock' })
+    fireEvent.pointerEnter(f)
+    fireEvent.pointerDown(tab, { button: 0, pointerType: 'mouse' })
+    act(() => tab.focus())
+    fireEvent.click(tab)
+    expect(paneIn(container, 'left2'), 'control: the click showed the tab').toBe('clock')
+    fireEvent.pointerLeave(f)
+    expect(document.activeElement, 'the clicked tab keeps the focus').toBe(tab)
+    await tick(10_000)
+    expect(paneIn(container, 'left2')).toBe('greyline')
+  })
+
+  it('pauses while the slot’s ⋯ menu is open', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating()
+    openMenu(container, 'left2')
+    await tick(60_000)
+    expect(paneIn(container, 'left2')).toBe('bandTiles')
+  })
+
+  it('is OFF by default: a slot with tabs and no interval stays where it is', async () => {
+    store()
+    const { container } = await mountRotating()
+    await tick(300_000)
+    expect(paneIn(container, 'left2')).toBe('bandTiles')
+  })
+
+  it('⋯ ▸ Rotate the tabs: the operator picks the interval, and Off stops it', async () => {
+    store()
+    const { container } = await mountRotating()
+    let menu = openMenu(container, 'left2')
+    expect(within(menu).getByText('Rotate the tabs')).toBeTruthy()
+    const choice = (name: string) => within(menu).getByRole('menuitemradio', { name })
+    expect(choice('Off').getAttribute('aria-checked')).toBe('true')
+    expect(within(menu).getAllByRole('menuitemradio').map((i) => i.textContent?.replace('●', '').trim())).toEqual([
+      'Off',
+      '10 s',
+      '15 s',
+      '30 s',
+      '1 min',
+      '2 min',
+    ])
+    fireEvent.click(choice('15 s'))
+    expect(cfg().rotate).toEqual({ left2: 15 })
+    await tick(15_000)
+    expect(paneIn(container, 'left2')).toBe('clock')
+    menu = openMenu(container, 'left2')
+    expect(within(menu).getByRole('menuitemradio', { name: '15 s' }).getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Off' }))
+    expect(cfg().rotate).toEqual({})
+    await tick(60_000)
+    expect(paneIn(container, 'left2')).toBe('clock')
+  })
+
+  it('a slot with one pane offers no rotation', async () => {
+    store()
+    const { container } = await mountRotating()
+    expect(within(openMenu(container, 'left1')).queryByText('Rotate the tabs')).toBeNull()
+  })
+
+  it('NEVER in the main window: no choice in the menu, and a stored interval does not rotate', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating(false)
+    await tick(120_000)
+    expect(paneIn(container, 'left2')).toBe('bandTiles')
+    expect(within(openMenu(container, 'left2')).queryByText('Rotate the tabs')).toBeNull()
+  })
+
+  it('a slot back to one pane forgets its interval; Reset layout clears it, and Undo brings it back', async () => {
+    store({ left2: 10 })
+    const { container } = await mountRotating()
+    fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+    expect(cfg().rotate).toEqual({})
+    fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+    expect(cfg().rotate).toEqual({ left2: 10 })
+    await tick(10_000)
+    expect(paneIn(container, 'left2')).toBe('clock')
+    // Remove two of the three tabs: one pane left, nothing to rotate.
+    fireEvent.click(within(openMenu(container, 'left2')).getByRole('menuitem', { name: /^Remove / }))
+    fireEvent.click(within(openMenu(container, 'left2')).getByRole('menuitem', { name: /^Remove / }))
+    expect(cfg().tabs).toEqual({})
+    expect(cfg().rotate).toEqual({})
+  })
+})

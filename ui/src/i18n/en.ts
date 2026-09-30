@@ -7213,6 +7213,11 @@ export const EN = {
   'connect.box.tabs.aria': 'Panes in this slot',
   'connect.box.tab.add': 'Add a tab',
   'connect.box.tab.remove': 'Remove {{title}} from this slot',
+  // AUTO-ROTATE (the dashboard window and the TV page only): the heading over the choices, and the choices, bare durations like dxped.alarm.lead.option.
+  'connect.box.rotate.heading': 'Rotate the tabs',
+  'connect.box.rotate.off': 'Off',
+  'connect.box.rotate.secs': '{{secs}} s',
+  'connect.box.rotate.mins': '{{mins}} min',
   // ── Close + resize (2026-09-13) ── A ⊞ Panels entry names the pane AND where it comes back:
   // which pane sits in a slot is the operator's pick, so the title alone says nothing about
   // where the space will be taken from.
