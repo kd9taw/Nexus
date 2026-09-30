@@ -218,6 +218,12 @@ describe('repeaterMemory', () => {
     expect(repeaterMemory(chan({ duplex: 'simplex' }), 'CALL').kind).toBe('repeater')
   })
 
+  it('carries a DCS code, so the bank and its CHIRP export keep what opens the machine', () => {
+    const m = repeaterMemory(chan({ toneMode: 'dtcs', dtcsCode: 23 }), 'W9ABC 94')
+    expect(m).toMatchObject({ toneMode: 'dtcs', dtcsCode: 23, kind: 'repeater' })
+    expect(m.ctcssEncHz).toBeUndefined()
+  })
+
   it('leaves the site undefined when the caller has no record (a reloaded list)', () => {
     const m = repeaterMemory(chan(), 'W9ABC 94')
     expect(m.lat).toBeUndefined()

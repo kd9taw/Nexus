@@ -210,19 +210,61 @@ fn hearham_mode_words(mode: &str) -> Vec<&'static str> {
     out
 }
 
-/// The CTCSS tone in a hearham tone field. A machine that runs several modes can have one
+/// The 104 standard DCS codes (the set CHIRP's generic CSV accepts), each written as its
+/// three octal digits read as a decimal number, the way [`Channel::dtcs_code`] holds one.
+const DCS_CODES: [u16; 104] = [
+    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74, 114, 115, 116, 122, 125, 131,
+    132, 134, 143, 145, 152, 155, 156, 162, 165, 172, 174, 205, 212, 223, 225, 226, 243, 244, 245,
+    246, 251, 252, 255, 261, 263, 265, 266, 271, 274, 306, 311, 315, 325, 331, 332, 343, 346, 351,
+    356, 364, 365, 371, 411, 412, 413, 423, 431, 432, 445, 446, 452, 454, 455, 462, 464, 465, 466,
+    503, 506, 516, 523, 526, 532, 546, 565, 606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712,
+    723, 731, 732, 734, 743, 754,
+];
+
+/// A DCS code in one part of a hearham tone field. Every shape the directory used on
+/// 2026-09-30 is read: "DCS023", "DCS 043", "DCS411N", "D023", "DPL411", "DPL 432" and the
+/// two-digit "DCS51" (code 051). Only a standard code is taken ("DCS 740" is none), and a
+/// bare number, a trailing "*" or ".0" is not, since what those mean is not written down.
+fn hearham_dcs_part(part: &str) -> Option<u16> {
+    let p = part.trim().to_ascii_uppercase();
+    let rest = p
+        .strip_prefix("DCS")
+        .or_else(|| p.strip_prefix("DPL"))
+        .or_else(|| p.strip_prefix('D'))?;
+    let digits = rest.trim_start();
+    let digits = digits.strip_suffix('N').unwrap_or(digits);
+    if !(2..=3).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let code: u16 = digits.parse().ok()?;
+    DCS_CODES.contains(&code).then_some(code)
+}
+
+/// The squelch a hearham tone field asks for: a CTCSS tone or a DCS code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Squelch {
+    Ctcss(f32),
+    Dcs(u16),
+}
+
+/// The squelch in a hearham tone field. A machine that runs several modes can have one
 /// parameter per mode joined with `/`: "CC1/146.2" (the DMR colour code, then the FM tone),
-/// "NAC293/100.0", "67.0/CC9/RAN1/NAC293/C/CAN0" (58 rows on 2026-09-30). The tone is the
-/// part that reads as one. Two different tones ("88.5/71.9") are left unknown rather than
-/// guessed at. A field with no `/` reads exactly as [`tone_hz`] reads it.
-fn hearham_tone(field: &str) -> Option<f32> {
-    let mut tones = field.split('/').filter_map(tone_hz);
-    let tone = tones.next()?;
-    tones.all(|t| t == tone).then_some(tone)
+/// "NAC293/100.0", "67.0/CC9/RAN1/NAC293/C/CAN0", "NAC353/D244" (58 rows on 2026-09-30). The
+/// squelch is the part that reads as a tone or a DCS code. Parts that disagree, two different
+/// tones ("88.5/71.9") or a tone and a code ("77.0/D454"), are left unknown rather than
+/// guessed at. A field with no `/` reads as [`tone_hz`] or [`hearham_dcs_part`] reads it.
+fn hearham_squelch(field: &str) -> Option<Squelch> {
+    let mut found = field.split('/').filter_map(|part| {
+        tone_hz(part)
+            .map(Squelch::Ctcss)
+            .or_else(|| hearham_dcs_part(part).map(Squelch::Dcs))
+    });
+    let first = found.next()?;
+    found.all(|s| s == first).then_some(first)
 }
 
 /// The DMR colour code in a hearham tone field: its `"CCn"` part, alone or joined with
-/// `/` as in [`hearham_tone`].
+/// `/` as in [`hearham_squelch`].
 fn hearham_cc(field: &str) -> Option<u8> {
     field.split('/').find_map(cc_code)
 }
@@ -230,7 +272,7 @@ fn hearham_cc(field: &str) -> Option<u8> {
 /// Parse the hearham.com `/api/repeaters/v1` payload (bare array; `frequency` +
 /// `offset` in Hz as integers; tones as strings — `"0.00"`/`""` = none, and DMR
 /// rows carry the color code as `"CC2"` in `encode`, joined with `/` to the FM tone
-/// on a machine that runs both, see [`hearham_tone`]).
+/// on a machine that runs both, see [`hearham_squelch`]).
 ///
 /// `mode` can name several modes ([`hearham_mode_words`]). A machine is FM when any
 /// of them is FM or NFM (or the mode is empty), and each digital flag comes from its
@@ -254,15 +296,29 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
             let enc = jstr(v, "encode");
             let dec = jstr(v, "decode");
             let is_dmr = names(&["DMR"]) || hearham_cc(&enc).is_some();
+            let up = hearham_squelch(&enc);
+            let down = hearham_squelch(&dec);
+            let ctcss = |s: Option<Squelch>| match s {
+                Some(Squelch::Ctcss(hz)) => Some(hz),
+                _ => None,
+            };
+            // DCS is the uplink's (`encode`). A channel carries ONE code for both directions,
+            // so a downlink naming a different tone or code (a cross-mode machine) leaves the
+            // code unread rather than guessed at.
+            let dcs = match (up, down) {
+                (Some(Squelch::Dcs(code)), None) => Some(code),
+                (Some(Squelch::Dcs(code)), Some(Squelch::Dcs(d))) if d == code => Some(code),
+                _ => None,
+            };
             Some(RepeaterRecord {
                 source: RepeaterSource::Hearham,
                 source_id: jstr(v, "id"),
                 callsign: jstr(v, "callsign"),
                 output_mhz,
                 input_mhz: (freq_hz + offset_hz) / 1e6,
-                ctcss_enc_hz: hearham_tone(&enc),
-                ctcss_dec_hz: hearham_tone(&dec),
-                dcs: None,
+                ctcss_enc_hz: ctcss(up),
+                ctcss_dec_hz: ctcss(down),
+                dcs,
                 lat,
                 lon,
                 city: jstr(v, "city"),
@@ -732,8 +788,13 @@ mod tests {
     /// below are the directory's own (every distinct value, counted 2026-09-30); the rest of the
     /// row is filler.
     fn hh_row(mode: &str, encode: &str) -> RepeaterRecord {
+        hh_row_tones(mode, encode, "")
+    }
+
+    /// [`hh_row`] with the downlink tone field (`decode`) too.
+    fn hh_row_tones(mode: &str, encode: &str, decode: &str) -> RepeaterRecord {
         let json = format!(
-            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
+            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"{decode}","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
         );
         let mut recs = parse_hearham_json(&json);
         assert_eq!(recs.len(), 1, "the {mode:?} row did not parse");
@@ -874,6 +935,74 @@ mod tests {
             (c.mode, c.tone_mode, c.rtone_hz),
             (ChanMode::Fm, ToneMode::Tone, 146.2)
         );
+    }
+
+    /// hearham writes a DCS code in its tone field in several shapes, and every shape in the
+    /// directory on 2026-09-30 is here. Each reads as its code, so the machine exports DTCS with
+    /// it; read as a tone it was no squelch at all. A code outside the 104 standard ones, a bare
+    /// number, and a trailing "*" or ".0" (their meaning is not written down) are not read.
+    #[test]
+    fn a_hearham_dcs_code_in_any_of_the_directorys_shapes_is_read() {
+        let cases: [(&str, Option<u16>); 15] = [
+            ("DCS023", Some(23)),
+            ("DCS 043", Some(43)),
+            ("DCS411N", Some(411)),
+            ("D023", Some(23)),
+            ("DPL411", Some(411)),
+            ("DPL 432", Some(432)),
+            ("DCS51", Some(51)),
+            ("NAC353/D244", Some(244)),
+            ("D244/NAC293", Some(244)),
+            ("DCS 740", None),
+            ("DCS100", None),
+            ("DCS017", None),
+            ("D031*", None),
+            ("DCS172.0", None),
+            ("023", None),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(encode, want)| {
+                let got = hh_row("FM", encode).dcs;
+                (got != want).then(|| format!("{encode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "DCS codes");
+
+        // What the operator exports: DTCS with the code, and no CTCSS read out of it.
+        let r = hh_row("NFM", "DCS023");
+        assert_eq!(r.ctcss_enc_hz, None);
+        let c = to_channel(&r);
+        assert_eq!((c.tone_mode, c.dtcs_code), (ToneMode::Dtcs, 23));
+    }
+
+    /// The channel carries ONE squelch setting for both directions, so a DCS code whose other
+    /// settings contradict it is left unread rather than guessed at: a tone and a code in one
+    /// field ("77.0/D454"), or a downlink that names a different tone or code (a cross-mode
+    /// machine, "D311" up and "100" down). A downlink with the same code, or one Nexus cannot
+    /// read ("D031*"), leaves the uplink's code standing. Every pair below is one the directory
+    /// writes.
+    #[test]
+    fn a_hearham_dcs_code_that_its_other_settings_contradict_is_not_read() {
+        let cases: [(&str, &str, Option<u16>, Option<f32>); 7] = [
+            ("DCS023", "DCS023", Some(23), None),
+            ("D031", "D031*", Some(31), None),
+            ("DCS172", "DCS172.0", Some(172), None),
+            ("77.0/D454", "", None, None),
+            ("DCS365", "DCS364", None, None),
+            ("D311", "100", None, None),
+            ("D244/NAC293", "131.8/NAC293", None, None),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(encode, decode, dcs, tone)| {
+                let r = hh_row_tones("NFM", encode, decode);
+                let got = (r.dcs, r.ctcss_enc_hz);
+                (got != (dcs, tone))
+                    .then(|| format!("{encode:?}/{decode:?}: got {got:?}, want {:?}", (dcs, tone)))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "contradicted DCS codes");
     }
 
     /// A mode the record has no field for is never FM on its own, and a plain or empty mode is
