@@ -2020,9 +2020,10 @@ button.nb-chip:hover {
    direction/people hidden). A cockpit pane that ever hosts BandAdvisor/SpaceWx would
    have been silently column-stripped by the global spelling (fix-round D7, 2026-07-31). */
 .connect .pane-body .swx-strip {
-  /* The strip is also a `.panel`: `.panel { display: flex }` comes later in the sheet than
-     `.swx-strip`'s grid at the same specificity, so it won and the gauges stood one per row. This
-     selector outranks both (SpaceWxGauges.layout.test.tsx computes the winner). */
+  /* The strip is also a `.panel`, and the `.panel` rule's flex display comes later in the sheet
+     than `.swx-strip`'s grid at the same specificity, so it won and the gauges stood one per row.
+     This selector outranks both (SpaceWxGauges.layout.test.tsx computes the winner). No braces in
+     this comment: connectLayout.test.ts reads this rule's body up to its first closing brace. */
   display: grid;
   grid-template-columns: repeat(2, 1fr);
 }
