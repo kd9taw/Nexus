@@ -2,7 +2,8 @@
 //! daemon-over-TCP pattern as the `rigctld` CAT path, so Nexus needs no C dependency.
 //! The operator runs `rotctld -m <model> -r <port> -t <tcp>` (or points a rig with a
 //! built-in rotor); Nexus connects and sends `P <az> <el>` to turn the antenna and `p`
-//! to read where it is.
+//! to read where it is, and asks `\dump_state` what the rotator's backend accepts — whether it
+//! has an elevation axis at all, and the elevation range it reaches ([`Limits`]).
 //!
 //! ⭐ **A COMMAND THAT GOT NO ANSWER IS A FAILURE.** This module used to say the opposite,
 //! and it is the worst defect the 2026-08-18 rotor review found. `point`/`point_azel` read
@@ -62,6 +63,12 @@ const POLL_DEADLINE_MS: u64 = 1_500;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// rotctld `P` — point to `az_deg` (normalized to [0,360)), elevation 0.
+///
+/// ⚠️ **Elevation 0 is a COMMAND, not a blank.** On an az/el rotator this line lays the antenna
+/// on the horizon. It is right for a rotator with no elevation axis, and for the satellite
+/// track's fallback after a mount has REFUSED elevation; a manual move goes through
+/// [`point_keeping`], which sends it only when there is no elevation to keep: no elevation axis
+/// (or a daemon that declares nothing), or a rotator that cannot report where it is.
 pub fn point_line(az_deg: f64) -> String {
     format!("P {} 0\n", wire_az(az_deg))
 }
@@ -120,6 +127,21 @@ fn connect(addr: &str) -> std::io::Result<TcpStream> {
 /// line whatever was asked. Nothing at all by the deadline is an ERROR — never an empty string
 /// a caller might read as an ack.
 fn ask(addr: &str, line: &str, want_lines: usize, deadline_ms: u64) -> std::io::Result<String> {
+    exchange(addr, line, deadline_ms, |text| {
+        let complete = text.lines().filter(|l| !l.trim().is_empty()).count();
+        complete >= want_lines || text.lines().any(|l| l.trim_start().starts_with("RPRT"))
+    })
+}
+
+/// [`ask`] with its own rule for when a reply is whole: `done` is asked of everything read so
+/// far each time it ends with a newline. `\dump_state` needs this — its length depends on the
+/// Hamlib that answers ([`dump_state_done`]).
+fn exchange(
+    addr: &str,
+    line: &str,
+    deadline_ms: u64,
+    done: impl Fn(&str) -> bool,
+) -> std::io::Result<String> {
     let mut s = connect(addr)?;
     s.write_all(line.as_bytes())?;
     let deadline = Instant::now() + Duration::from_millis(deadline_ms);
@@ -139,11 +161,7 @@ fn ask(addr: &str, line: &str, want_lines: usize, deadline_ms: u64) -> std::io::
             Ok(n) => {
                 out.extend_from_slice(&buf[..n]);
                 let text = String::from_utf8_lossy(&out);
-                let complete = text.lines().filter(|l| !l.trim().is_empty()).count();
-                if text.ends_with('\n')
-                    && (complete >= want_lines
-                        || text.lines().any(|l| l.trim_start().starts_with("RPRT")))
-                {
+                if text.ends_with('\n') && done(&text) {
                     return Ok(text.to_string());
                 }
             }
@@ -255,6 +273,242 @@ pub fn read_position(addr: &str) -> std::io::Result<(f64, Option<f64>)> {
 /// erroring twice a second.
 pub fn read_azimuth(addr: &str) -> Option<f64> {
     read_position(addr).ok().map(|(az, _)| az)
+}
+
+/// What a rotctld says its backend accepts: Hamlib's own `\dump_state`, asked of the running
+/// daemon. It is therefore the Hamlib the station actually runs — the bundled 4.7.1, a system
+/// Hamlib, or an external rotctld on another machine — rather than a table kept in Nexus.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Limits {
+    /// The Hamlib rotator model the daemon runs.
+    pub model: u32,
+    pub min_az: f64,
+    pub max_az: f64,
+    pub min_el: f64,
+    pub max_el: f64,
+    /// Hamlib's `rot_type`, where the daemon states it (protocol 1: rotctld 4.5.5 and the bundled
+    /// 4.7.1); `None` from a protocol-0 daemon (4.3.1), whose `\dump_state` has no such line.
+    pub kind: Option<RotKind>,
+}
+
+/// Hamlib's `rot_type`, as `\dump_state` prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotKind {
+    Az,
+    El,
+    AzEl,
+    Other,
+}
+
+/// Hamlib model 405, the Green Heron RT-21 ([`Limits::elevation`]).
+const RT21: u32 = 405;
+
+impl Limits {
+    /// The elevation range this backend accepts, or `None` when it has no elevation axis: one
+    /// declared azimuth-only (`rot_type=Az`), or one with an empty declared range — how the
+    /// Rotor-EZ, DCU-1 and ERC family say it (`rot_type=Other`, elevation 0–0), and how every
+    /// azimuth-only backend says it to a daemon too old to print `rot_type`.
+    ///
+    /// `Other` counts when it declares a range: EasyComm II and III (the SatNOGS rotators'
+    /// protocol) forward the elevation they are given, and Hamlib's frontend refuses one outside
+    /// the range — the same test the satellite track already relies on.
+    ///
+    /// ⚠️ **Except the Green Heron RT-21.** Its backend declares 0–90° because an RT-21 can drive
+    /// elevation through a SECOND controller on a second serial port (rotctld's `-R`); without one
+    /// it drops the elevation it is sent and reports 0 (Hamlib's `rotorez.c`). Nexus's own daemon
+    /// is never given `-R`, and a daemon cannot say whether it was (it is a command-line option,
+    /// not a setting rotctld reports), so an RT-21 is azimuth-only here: sent exactly the line it
+    /// always was, and shown no elevation it cannot move.
+    pub fn elevation(&self) -> Option<(f64, f64)> {
+        (self.max_el > self.min_el && self.kind != Some(RotKind::Az) && self.model != RT21)
+            .then_some((self.min_el, self.max_el))
+    }
+}
+
+/// Parse a `\dump_state` reply, in either shape Hamlib prints: protocol `1` (rotctld 4.5.5 and
+/// the bundled 4.7.1: the model, then `min_az=…` lines, `rot_type=…` and `done`) or protocol `0`
+/// (4.3.1: seven bare lines — protocol, model, min_az, max_az, min_el, max_el, south_zero).
+/// `None` for anything else.
+pub fn parse_limits(reply: &str) -> Option<Limits> {
+    let lines: Vec<&str> = reply
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let protocol: u32 = lines.first()?.parse().ok()?;
+    let model: u32 = lines.get(1)?.parse().ok()?;
+    if protocol == 0 {
+        let at = |i: usize| lines.get(i)?.parse::<f64>().ok();
+        return Some(Limits {
+            model,
+            min_az: at(2)?,
+            max_az: at(3)?,
+            min_el: at(4)?,
+            max_el: at(5)?,
+            kind: None,
+        });
+    }
+    let field = |key: &str| {
+        lines
+            .iter()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+            .map(str::trim)
+    };
+    let num = |key: &str| field(key)?.parse::<f64>().ok();
+    let kind = field("rot_type").map(|t| match t {
+        "AzEl" => RotKind::AzEl,
+        "Az" => RotKind::Az,
+        "El" => RotKind::El,
+        _ => RotKind::Other,
+    });
+    Some(Limits {
+        model,
+        min_az: num("min_az")?,
+        max_az: num("max_az")?,
+        min_el: num("min_el")?,
+        max_el: num("max_el")?,
+        kind,
+    })
+}
+
+/// A `\dump_state` reply is whole at its `done` line (protocol 1), at seven lines when it began
+/// with protocol `0`, or at an `RPRT` refusal.
+fn dump_state_done(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.iter().any(|l| *l == "done" || l.starts_with("RPRT"))
+        || (lines.first() == Some(&"0") && lines.len() >= 7)
+}
+
+/// Ask the rotctld at `addr` what its backend accepts ([`Limits`]). It never touches the serial
+/// line: rotctld answers from what it already holds.
+///
+/// `Ok(None)` when the daemon ANSWERED and declared nothing — it refused the command, answered
+/// something else, or hung up on it, as a rotctld-compatible server that is not Hamlib may.
+///
+/// ⚠️ **An unanswered `\dump_state` is an `Err`, never `Ok(None)`.** rotctld runs one command at a
+/// time for all of its clients, so a busy one (another program's command waiting on a slow
+/// controller) answers late, and reading "no answer" as "no elevation axis" would send a G-5500
+/// the `P <az> 0` this module stopped sending. An unreachable daemon is an `Err` too.
+pub fn read_limits(addr: &str) -> std::io::Result<Option<Limits>> {
+    match exchange(addr, "\\dump_state\n", POLL_DEADLINE_MS, dump_state_done) {
+        Ok(reply) => Ok(parse_limits(&reply)),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "rotctld did not say within {POLL_DEADLINE_MS} ms whether this rotator has an \
+                 elevation axis, so Nexus did not move it. rotctld answers that without asking \
+                 the rotator, so it is busy with another program's command, or stuck: try again"
+            ),
+        )),
+        Err(e) => Err(e),
+    }
+}
+
+/// A reported angle as the wire carries it: to the tenth of a degree, inside `lo..=hi`.
+fn kept(deg: f64, lo: f64, hi: f64) -> String {
+    format!("{:.1}", ((deg * 10.0).round() / 10.0).clamp(lo, hi))
+}
+
+/// The `P` line a manual move sends: the axes asked for (`az`, `el`), and any axis left out kept
+/// where the rotator reports it. `limits` is what the daemon declared (`None`: it declared
+/// nothing); `at` is the position the rotator reported, `None` when it has none to give. Pure, so
+/// every rule below is a test.
+///
+/// - No elevation axis, or nothing declared: [`point_line`], exactly the line an azimuth move
+///   always sent; an elevation asked for is refused, since it would reach no axis.
+/// - An elevation axis: an elevation asked for must lie inside the declared range (a typed 200°
+///   is refused, never clamped onto the stop); a kept one goes back as reported. An azimuth
+///   asked for is wrapped into 0–360 as it always was; a kept one goes back RAW, because a
+///   G-5500 is a 450° rotator and a reading of 400° sent as 40° would swing the mast a whole turn
+///   the other way.
+/// - A rotator that does not report the elevation (a backend with no read-back, such as
+///   EasyComm I): nothing can be kept, and an azimuth move sends the line it always did. One
+///   that does not report the azimuth refuses an elevation move, which would otherwise have to
+///   send the mast to a bearing nobody chose.
+pub fn manual_line(
+    az: Option<f64>,
+    el: Option<f64>,
+    limits: Option<&Limits>,
+    at: Option<(f64, Option<f64>)>,
+) -> Result<String, String> {
+    if az.is_none() && el.is_none() {
+        return Err("nothing to point".to_string());
+    }
+    if az.is_some_and(|a| !a.is_finite()) || el.is_some_and(|e| !e.is_finite()) {
+        return Err("a bearing or an elevation that is not a number".to_string());
+    }
+    let (Some(l), Some((lo, hi))) = (limits, limits.and_then(Limits::elevation)) else {
+        return match (az, limits) {
+            (Some(a), _) if el.is_none() => Ok(point_line(a)),
+            (_, Some(_)) => Err("this rotator has no elevation axis".to_string()),
+            (_, None) => Err(
+                "this rotctld does not say whether the rotator has an elevation axis, so Nexus \
+                 sends it none"
+                    .to_string(),
+            ),
+        };
+    };
+    let el = match (el, at.and_then(|(_, e)| e)) {
+        (Some(e), _) if (lo..=hi).contains(&e) => format!("{e:.1}"),
+        (Some(e), _) => {
+            return Err(format!(
+                "{e}° is outside the {lo}–{hi}° this rotator's elevation reaches"
+            ))
+        }
+        (None, Some(reported)) => kept(reported, lo, hi),
+        // No elevation reported, so none to keep (`az` is set: both-`None` returned above).
+        (None, None) => {
+            return az
+                .map(point_line)
+                .ok_or_else(|| "nothing to point".to_string())
+        }
+    };
+    let az = match (az, at) {
+        (Some(a), _) => wire_az(a),
+        (None, Some((reported, _))) => kept(reported, l.min_az, l.max_az),
+        (None, None) => {
+            return Err(
+                "the rotator does not report its azimuth, so an elevation move would have to \
+                 guess one — turn it to a bearing first"
+                    .to_string(),
+            )
+        }
+    };
+    Ok(format!("P {az} {el}\n"))
+}
+
+/// Point the rotator, keeping any axis the caller leaves out where the rotator reports it — the
+/// manual slew, the ↗ point-at-call and the Rotor pane's elevation. `Ok` only on `RPRT 0`.
+///
+/// ⭐ **An azimuth move used to be `P <az> 0` on every rotator** ([`point_line`]). On an az/el
+/// mount that commands the ELEVATION to zero — a G-5500 on a GS-232B gets `W200 000` on its
+/// serial line (measured through Hamlib's own GS-232B backend) — so every turn of the beam laid
+/// the antenna on the horizon. This asks the daemon whether the rotator has an elevation axis
+/// ([`read_limits`]) and, when it does, where it is ([`read_position`]), and sends that back
+/// ([`manual_line`]). A rotator with no elevation axis (declared azimuth-only, the RT-21, or a
+/// rotctld that declares nothing) is sent exactly the line it always was, and is not asked for
+/// its position first. A daemon that does not answer the question is sent nothing.
+pub fn point_keeping(addr: &str, az: Option<f64>, el: Option<f64>) -> std::io::Result<()> {
+    let limits = read_limits(addr)?;
+    let keeps =
+        limits.as_ref().and_then(Limits::elevation).is_some() && (az.is_none() || el.is_none());
+    let at = if keeps {
+        match read_position(addr) {
+            Ok(at) => Some(at),
+            // An answer that there is no position to give (RPRT -11/-4): nothing to keep.
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported => None,
+            Err(e) => return Err(e),
+        }
+    } else {
+        None
+    };
+    let line = manual_line(az, el, limits.as_ref(), at).map_err(std::io::Error::other)?;
+    command(addr, &line)
 }
 
 #[cfg(test)]
@@ -473,5 +727,270 @@ mod tests {
         // …and the convenience wrapper still degrades to None for the 2 s polls.
         let (addr, _rx) = stage(Behave::Say("RPRT -11\n"));
         assert_eq!(read_azimuth(&addr), None);
+    }
+
+    /// A rotctld on loopback that answers each of up to `n` connections (one command each, as
+    /// this client always sends) with `answer(command)`, handing back each line it was sent —
+    /// recorded BEFORE the answer goes out, so a caller that has its reply finds its line here.
+    /// An empty answer is silence: that socket stays open, unanswered, past the client's deadline.
+    fn script(
+        n: usize,
+        answer: impl Fn(&str) -> String + Send + 'static,
+    ) -> (String, mpsc::Receiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        l.set_nonblocking(true).expect("non-blocking accept");
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(8);
+            let mut held = Vec::new();
+            while held.len() < n && Instant::now() < until {
+                let Ok((mut s, _)) = l.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                let _ = s.set_nonblocking(false);
+                let mut line = String::new();
+                let mut reader = std::io::BufReader::new(s.try_clone().expect("clone"));
+                let _ = reader.read_line(&mut line);
+                let reply = answer(line.trim_end());
+                let _ = tx.send(line);
+                let _ = s.write_all(reply.as_bytes());
+                held.push(s);
+            }
+            // Keep every connection open a while: a complete reply needs no close, and a silent
+            // one must meet the client's deadline, not a hang-up.
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        (addr, rx)
+    }
+
+    /// What real Hamlib backends answer `\dump_state` with, captured from rotctld 4.5.5 driving
+    /// each over a pseudo-terminal (the bundled 4.7.1 prints the same shape). The GS-232B (603)
+    /// is the G-5500's interface.
+    const GS232B_STATE: &str = "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                                max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n";
+    /// The Idiom Press Rotor-EZ (401): azimuth only, said the family's way — `Other`, 0–0.
+    const ROTOR_EZ_STATE: &str = "1\n401\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                                  max_el=0.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+    /// The Green Heron RT-21 (405): `Other` with 0–90°, for a second controller Nexus never has.
+    const RT21_STATE: &str = "1\n405\nmin_az=0.000000\nmax_az=359.899994\nmin_el=0.000000\n\
+                              max_el=90.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+    /// EasyComm II (202): `Other` with 0–180°, an az/el protocol.
+    const EASYCOMM2_STATE: &str = "1\n202\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                                   max_el=180.000000\nsouth_zero=0\nrot_type=Other\ndone\n";
+    /// The F1TE tracker (604): az/el, and no position read-back at all in Hamlib.
+    const F1TE_STATE: &str = "1\n604\nmin_az=-180.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                              max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n";
+
+    /// A G-5500 on a GS-232B at 123° / 45°, as a scripted rotctld.
+    fn g5500(cmd: &str) -> String {
+        match cmd {
+            "\\dump_state" => GS232B_STATE.to_string(),
+            "p" => "123.000000\n45.000000\n".to_string(),
+            _ => "RPRT 0\n".to_string(),
+        }
+    }
+
+    fn lines(rx: &mpsc::Receiver<String>) -> Vec<String> {
+        rx.try_iter().map(|l| l.trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn dump_state_is_read_in_both_shapes_hamlib_has_used() {
+        let l = parse_limits(GS232B_STATE).expect("protocol 1");
+        assert_eq!(
+            l,
+            Limits {
+                model: 603,
+                min_az: -180.0,
+                max_az: 450.0,
+                min_el: 0.0,
+                max_el: 180.0,
+                kind: Some(RotKind::AzEl)
+            }
+        );
+        assert_eq!(l.elevation(), Some((0.0, 180.0)), "the G-5500's 0–180°");
+        // Hamlib 4.3.1: protocol 0, seven bare lines and no rot_type.
+        let old = parse_limits("0\n603\n-180.000000\n450.000000\n0.000000\n180.000000\n0\n")
+            .expect("protocol 0");
+        assert_eq!(
+            (old.model, old.kind, old.elevation()),
+            (603, None, Some((0.0, 180.0)))
+        );
+        // Neither shape: a refusal, garbage, an empty answer, a protocol-1 reply cut short.
+        for junk in ["RPRT -4\n", "hello\n", "", "1\n603\ndone\n", "1\n"] {
+            assert_eq!(parse_limits(junk), None, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn an_elevation_axis_is_what_the_backend_declares() {
+        let declared = |state: &str| parse_limits(state).expect("a declaration").elevation();
+        assert_eq!(declared(GS232B_STATE), Some((0.0, 180.0)));
+        // EasyComm, the SatNOGS rotators' protocol, is `Other` with a range: it has one.
+        assert_eq!(declared(EASYCOMM2_STATE), Some((0.0, 180.0)));
+        // The Rotor-EZ family says "none" as `Other` with 0–0.
+        assert_eq!(declared(ROTOR_EZ_STATE), None);
+        // The RT-21 declares 0–90° for a second controller that Nexus's daemon never has.
+        assert_eq!(declared(RT21_STATE), None);
+        // M2's RC2800_EARLY_AZ (1002) declares Az WITH an elevation range: rot_type says none.
+        assert_eq!(
+            declared(
+                "1\n1002\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                 max_el=180.000000\nsouth_zero=0\nrot_type=Az\ndone\n"
+            ),
+            None
+        );
+        // A protocol-0 daemon's azimuth-only backend: an empty range.
+        assert_eq!(
+            declared("0\n401\n0.000000\n360.000000\n0.000000\n0.000000\n0\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_manual_move_keeps_the_axis_it_was_not_given() {
+        let gs232b = parse_limits(GS232B_STATE).unwrap();
+        let at = Some((123.0, Some(45.0)));
+        // ⭐ THE BUG, as a line: an azimuth move keeps the elevation instead of `P 200.0 0`.
+        assert_eq!(
+            manual_line(Some(200.0), None, Some(&gs232b), at),
+            Ok("P 200.0 45.0\n".into())
+        );
+        // An elevation move keeps the azimuth — RAW: 400° on a 450° G-5500 stays 400°, where
+        // 40° would swing the mast a whole turn back.
+        assert_eq!(
+            manual_line(None, Some(60.0), Some(&gs232b), Some((400.0, Some(45.0)))),
+            Ok("P 400.0 60.0\n".into())
+        );
+        assert_eq!(
+            manual_line(Some(10.0), Some(170.0), Some(&gs232b), None),
+            Ok("P 10.0 170.0\n".into())
+        );
+        // What was typed beyond the mount is refused, never clamped onto the stop.
+        let e = manual_line(None, Some(181.0), Some(&gs232b), at).unwrap_err();
+        assert!(e.contains("0–180°"), "{e}");
+        assert!(manual_line(None, Some(-1.0), Some(&gs232b), at).is_err());
+        // A kept reading a hair past a stop goes back as the stop.
+        assert_eq!(
+            manual_line(Some(90.0), None, Some(&gs232b), Some((1.0, Some(180.4)))),
+            Ok("P 90.0 180.0\n".into())
+        );
+        assert!(manual_line(Some(f64::NAN), None, Some(&gs232b), at).is_err());
+        assert!(manual_line(None, None, Some(&gs232b), at).is_err());
+    }
+
+    #[test]
+    fn a_rotator_that_reports_no_position_keeps_nothing_and_still_points() {
+        // The F1TE tracker is az/el with no read-back: there is no elevation to keep, so an
+        // azimuth move is the line it always was — not a refusal of a move that works today.
+        let f1te = parse_limits(F1TE_STATE).unwrap();
+        assert_eq!(
+            manual_line(Some(200.0), None, Some(&f1te), None),
+            Ok(point_line(200.0))
+        );
+        // An elevation move has no azimuth to keep, and never sends the mast to 0° instead.
+        let e = manual_line(None, Some(30.0), Some(&f1te), None).unwrap_err();
+        assert!(e.contains("does not report its azimuth"), "{e}");
+        // Both axes given need no reading.
+        assert_eq!(
+            manual_line(Some(200.0), Some(30.0), Some(&f1te), None),
+            Ok("P 200.0 30.0\n".into())
+        );
+    }
+
+    #[test]
+    fn an_azimuth_only_rotator_is_sent_exactly_the_line_it_always_was() {
+        let rotor_ez = parse_limits(ROTOR_EZ_STATE).unwrap();
+        let rt21 = parse_limits(RT21_STATE).unwrap();
+        for limits in [Some(&rotor_ez), Some(&rt21), None] {
+            assert_eq!(
+                manual_line(Some(200.0), None, limits, None),
+                Ok(point_line(200.0))
+            );
+            assert!(
+                manual_line(None, Some(30.0), limits, None).is_err(),
+                "an elevation reaches no axis"
+            );
+        }
+    }
+
+    #[test]
+    fn point_keeping_asks_the_daemon_then_sends_the_elevation_back() {
+        let (addr, rx) = script(3, g5500);
+        point_keeping(&addr, Some(200.0), None).expect("RPRT 0");
+        assert_eq!(lines(&rx), ["\\dump_state", "p", "P 200.0 45.0"]);
+
+        // Azimuth-only rotators, the RT-21 among them: no position read, and today's line.
+        for state in [ROTOR_EZ_STATE, RT21_STATE] {
+            let (addr, rx) = script(2, move |cmd| match cmd {
+                "\\dump_state" => state.to_string(),
+                _ => "RPRT 0\n".to_string(),
+            });
+            point_keeping(&addr, Some(200.0), None).expect("RPRT 0");
+            assert_eq!(
+                lines(&rx),
+                [
+                    "\\dump_state".to_string(),
+                    point_line(200.0).trim_end().to_string()
+                ]
+            );
+        }
+
+        // A rotctld that is not Hamlib, and refuses `\dump_state`: today's line again.
+        let (addr, rx) = script(2, |cmd| {
+            if cmd == "\\dump_state" {
+                "RPRT -4\n"
+            } else {
+                "RPRT 0\n"
+            }
+            .to_string()
+        });
+        point_keeping(&addr, Some(200.0), None).expect("RPRT 0");
+        assert_eq!(lines(&rx)[1], point_line(200.0).trim_end());
+
+        // An az/el rotator with no read-back: the position is asked, refused, and the azimuth
+        // still goes out as it always did.
+        let (addr, rx) = script(3, |cmd| match cmd {
+            "\\dump_state" => F1TE_STATE.to_string(),
+            "p" => "RPRT -11\n".to_string(),
+            _ => "RPRT 0\n".to_string(),
+        });
+        point_keeping(&addr, Some(200.0), None).expect("RPRT 0");
+        assert_eq!(
+            lines(&rx),
+            ["\\dump_state", "p", point_line(200.0).trim_end()]
+        );
+
+        // An elevation outside the mount's range reaches no command at all.
+        let (addr, rx) = script(3, g5500);
+        assert!(point_keeping(&addr, None, Some(200.0)).is_err());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !lines(&rx).iter().any(|l| l.starts_with('P')),
+            "refused before the wire"
+        );
+    }
+
+    #[test]
+    fn an_unanswered_dump_state_is_not_an_azimuth_only_rotator() {
+        // rotctld runs one command at a time for every client, so a busy one leaves the question
+        // unanswered. Reading that as "no elevation axis" would send a G-5500 `P <az> 0`, so
+        // nothing is sent at all, and the error says why.
+        let (addr, rx) = script(2, |cmd| {
+            if cmd == "\\dump_state" {
+                String::new()
+            } else {
+                "RPRT 0\n".to_string()
+            }
+        });
+        let e = point_keeping(&addr, Some(200.0), None).expect_err("cannot tell");
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut, "{e}");
+        assert!(e.to_string().contains("elevation axis"), "{e}");
+        assert_eq!(lines(&rx), ["\\dump_state"], "nothing reached the rotator");
+        // …while one that answers by hanging up is a server that declares nothing.
+        let (addr, _rx) = stage(Behave::Hangup);
+        assert_eq!(read_limits(&addr).expect("an answer of sorts"), None);
     }
 }

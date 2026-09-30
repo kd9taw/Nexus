@@ -10067,6 +10067,13 @@ export const EN = {
   'rotor.pane.notAnswering':
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
+  // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
+  // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.
+  'rotor.pane.el.title': 'Elevation above the horizon · this rotator reaches {{min}}–{{max}}°',
+  'rotor.pane.commandedEl.title': 'Commanded elevation — the antenna is on its way',
+  'rotor.pane.el.entry.aria': 'Elevation to move to (degrees, {{min}}–{{max}})',
+  'rotor.pane.el.outside': 'This rotator reaches {{min}}–{{max}}° of elevation',
+  'rotor.pane.hint.azel': 'click the rose or type a bearing or an elevation · headings are TRUE',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

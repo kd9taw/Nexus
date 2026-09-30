@@ -2526,6 +2526,14 @@ export interface QrzLookup {
 export interface RotatorState {
   azDeg: number | null
   reading: 'position' | 'noPosition' | 'notAnswering'
+  /** The elevation the rotator reports; null when it reports none, and whenever its backend
+   *  declares no elevation axis. */
+  elDeg?: number | null
+  /** The elevation range that backend declares (a G-5500 on a GS-232B: 0–180), from rotctld's
+   *  own `\dump_state`: null when it has no elevation axis, and ABSENT when rotctld did not answer
+   *  that question this time, so the pane keeps what it last knew instead of blinking the
+   *  elevation out while a busy rotctld catches up. */
+  elRange?: [number, number] | null
 }
 
 /** What a point-at-call aimed at (`point_rotator_at_call`): the bearing, and what it was taken

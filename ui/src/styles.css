@@ -1048,9 +1048,18 @@ button.nb-chip:hover {
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* Rotor pane — compass rose + live needle. */
+/* Rotor pane — compass rose + live needle.
+   THE ROW WRAPS (2026-09-29, measured in Chrome over the Connect TV page). Beside the 148 px rose
+   a Connect rail leaves the column 122 px at the stock 300 px and 70 px at the sm tier's 248, and
+   on the base tree ■ STOP ran past the pane's edge, where the frame clips it with no scroll to
+   reach it: by 6 px at 300, 50 px at 248, 91 px at 200 (the rail minimum), at every zoom. An
+   az/el rotator's elevation box made it 72 px at 300. So the column stays beside the rose while
+   it gets its basis — two 3.25em boxes and a gap, which still fit in the 107 px left when the
+   pane body grows a scrollbar — and goes under the rose when it cannot, where the pane scrolls to
+   it; inside the column the boxes and STOP wrap too. */
 .rotor-row {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
 }
@@ -1090,6 +1099,7 @@ button.nb-chip:hover {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+  flex: 1 1 7em;
 }
 .rotor-az {
   font-size: 1.6em;
@@ -1100,16 +1110,32 @@ button.nb-chip:hover {
   font-size: 0.7em;
   font-weight: 500;
 }
+/* The elevation, on a rotator whose backend declares an elevation axis: under the bearing, a
+   step smaller. */
+.rotor-el {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
 .rotor-slewing {
   color: var(--alert-warning);
   font-family: var(--font-mono);
 }
 .rotor-entry {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
-.rotor-entry .settings-input {
-  width: 5em;
+/* Narrow enough for the bearing and the elevation side by side; no spinner arrows, which would
+   cover the digits at this width (a typed value goes out on Enter, as it always did). */
+.rotor-entry input.settings-input {
+  width: 3.25em;
+  padding: 0 var(--space-2);
+  -moz-appearance: textfield;
+}
+.rotor-entry input.settings-input::-webkit-outer-spin-button,
+.rotor-entry input.settings-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 .rotor-stop {
   background: transparent;

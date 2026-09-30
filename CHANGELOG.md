@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Yaesu G-5500 / G-5500DC by name in the rotator picker.** The G-5500 has no computer port
+  and no Hamlib model of its own: it is driven through a Yaesu GS-232B or GS-232A interface. So
+  Settings ▸ Radio ▸ Rotator now names it on those two entries, **Yaesu G-5500 / G-5500DC —
+  GS-232B interface** and **— GS-232A interface**, each still any GS-232B or GS-232A. A GS-232
+  clone board still belongs on **GS-232 (generic)**. The saved setting is the same model number
+  as before, so a rotator you have already set up is unchanged, and the rotator guide and the
+  settings reference say which entry to pick.
+- **The Rotor pane shows and sets the elevation of an az/el rotator.** On a rotator with an
+  elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A, the Rotor pane in Connect shows
+  the elevation under the bearing (`EL 45°`) and has an `el°` box beside the bearing box: type an
+  elevation and press Enter, for EME, a pass you steer by hand, or parking the antenna. It takes
+  only what the rotator can reach (0–180° on a G-5500) and refuses anything else before sending
+  it, and the bearing stays where it is. While the antenna is on its way the pane shows
+  `→ EL 30°`, as it does for a bearing, and a bearing and an elevation typed one after the other
+  both get there. The one ■ STOP stops both motors. Nexus asks the rotator's own control program
+  whether it has an elevation axis, so a rotator without one gets exactly the pane it had. The
+  Remote page's rotator control is unchanged.
 - **Watch list: a note on each entry (#390).** Every entry on the watch list (Settings ▸ Spots &
   Alerts) has a note field of its own, for why the call is there and when it can come off, such
   as `Samoa DXp 9/27-10/3`. Type the note when you add the entry, or later in the field on its
@@ -525,6 +542,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme those words had been too faint to read comfortably. A closed band's word is dimmer, so it
   recedes.
 
+- **Turning the beam keeps an az/el rotator's elevation where it is.** On a rotator with an
+  elevation axis, such as a Yaesu G-5500 on its GS-232B or GS-232A interface, every azimuth move
+  made by hand also sent the elevation to 0°: a click on the Rotor pane's compass, a typed bearing,
+  the ↗ on a Needed row and the → and LP buttons on a rotor strip each laid the antenna flat on the
+  horizon. Nexus now reads where the antenna is and sends its elevation back with the new bearing.
+  It asks the rotator's control program (Hamlib's rotctld) whether the rotator has an elevation
+  axis rather than going by its name, so an azimuth-only rotator, such as a Rotor-EZ, a DCU-1, a
+  SPID Rot1Prog or a Green Heron RT-21, gets exactly the command it always did. If that program is
+  too busy to answer, the move is refused with a message saying so rather than guessed. A
+  satellite pass steers both axes as before. Turning the beam from Nexus Remote in a browser still
+  sends the elevation to 0°.
+- **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
+  compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
+  cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the
+  248 px the rail takes on a smaller window, and all of it, with the bearing box, at 200 px. The
+  controls now move under the compass when they do not fit beside it, and the line that shows
+  where the antenna is going sits under STOP, so STOP no longer moves down when the antenna starts
+  to turn.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
