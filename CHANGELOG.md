@@ -500,6 +500,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elevation goes back with the new bearing, an azimuth-only rotator gets exactly the command it
   always did, and when the rotator's control program is too busy to say which kind it is, nothing
   is sent.
+- **The Rotor pane's ■ STOP is easy to read in the light theme.** Its red was the dark theme's, and
+  on a light theme's pane it read faintly (about 2.2:1), on the one button that stops the antenna
+  turning. It now takes the same red as the cockpits' Stop TX in every theme, dark and light,
+  high-contrast and night included, and when you point at it, it turns solid red with the pane's
+  own colour for its letters.
 - **The Rotor pane's ■ STOP no longer runs off the edge of a narrow Connect rail.** Beside the
   compass, the stock 300 px rail left too little room for the bearing box and STOP, so STOP was
   cut off at the pane's edge with no way to scroll to it: a little at 300 px, most of it at the

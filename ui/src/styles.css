@@ -1137,18 +1137,22 @@ button.nb-chip:hover {
   -webkit-appearance: none;
   margin: 0;
 }
+/* STOP takes the stop colour every other stop control takes (`--state-weak`, both themes), not the
+   dark theme's #f87171, which lettered at 2.2:1 on every light theme; hovered, it letters in the
+   panel's own colour on that red, so each theme's red is matched by its own ink.
+   RotorPane.contrast.test.tsx measures it in every mode and skin. */
 .rotor-stop {
   background: transparent;
-  border: 1px solid #f87171;
-  color: #f87171;
+  border: 1px solid var(--state-weak);
+  color: var(--state-weak);
   border-radius: var(--radius-sm);
   font-weight: 700;
   padding: var(--space-1) var(--space-2);
   cursor: pointer;
 }
 .rotor-stop:hover {
-  background: #f87171;
-  color: #111;
+  background: var(--state-weak);
+  color: var(--panel);
 }
 .rotor-hint {
   margin: 0;
