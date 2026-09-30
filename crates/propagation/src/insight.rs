@@ -183,8 +183,10 @@ pub fn generate_insights(
 
     // 2b. Solar wind — the LEADING geomagnetic warning. Kp/A lag real conditions by hours;
     // a southward IMF (Bz negative) or a fast stream tells the operator polar/high-latitude
-    // paths are about to fade before Kp catches up.
-    if let Some(sw) = solar_wind {
+    // paths are about to fade before Kp catches up. Only from a sample young enough to lead
+    // anything: the station keeps its last good sample while DSCOVR is unreachable, and past
+    // SOLAR_WIND_STALE_SECS that sample is history, not "turned stormy".
+    if let Some(sw) = solar_wind.filter(|sw| !sw.is_stale(now)) {
         if sw.bz_nt <= -5.0 {
             let strong = sw.bz_nt <= -10.0;
             out.push(Insight {
@@ -198,20 +200,28 @@ pub fn generate_insights(
                     "Solar wind turned stormy (magnetic field tilted south) — polar paths to EU/Asia will fade over the next 1–2 h{}",
                     if strong { "; watch for aurora on 6m/2m" } else { "" }
                 ),
-                technical: format!(
-                    "IMF Bz {:.1} nT south, Bt {:.1} nT, wind {:.0} km/s (DSCOVR real-time — leads Kp)",
-                    sw.bz_nt, sw.bt_nt, sw.speed_kms
-                ),
+                // The speed only when it is known: with the plasma feed down there is none to
+                // print, and "wind 0 km/s" read as a solar wind that had stopped.
+                technical: match sw.speed_kms {
+                    Some(speed) => format!(
+                        "IMF Bz {:.1} nT south, Bt {:.1} nT, wind {:.0} km/s (DSCOVR real-time — leads Kp)",
+                        sw.bz_nt, sw.bt_nt, speed
+                    ),
+                    None => format!(
+                        "IMF Bz {:.1} nT south, Bt {:.1} nT (DSCOVR real-time — leads Kp)",
+                        sw.bz_nt, sw.bt_nt
+                    ),
+                },
                 band: None,
             });
-        } else if sw.speed_kms >= 600.0 {
+        } else if let Some(speed_kms) = sw.speed_kms.filter(|&speed_kms| speed_kms >= 600.0) {
             out.push(Insight {
                 kind: InsightKind::SolarWind,
                 level: InsightLevel::Caution,
                 plain: "Fast solar-wind stream arriving — high-latitude paths may get unsettled in the next few hours".to_string(),
                 technical: format!(
                     "solar wind {:.0} km/s, Bz {:.1} nT (DSCOVR real-time — leads Kp)",
-                    sw.speed_kms, sw.bz_nt
+                    speed_kms, sw.bz_nt
                 ),
                 band: None,
             });
@@ -691,8 +701,9 @@ mod tests {
         let sw = crate::solar_wind::SolarWind {
             bz_nt: -12.0,
             bt_nt: 14.0,
-            speed_kms: 650.0,
-            density: 6.0,
+            speed_kms: Some(650.0),
+            density: Some(6.0),
+            time_unix: NOW,
         };
         let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[], None, Some(&sw));
         let s = ins
@@ -706,8 +717,9 @@ mod tests {
         let calm = crate::solar_wind::SolarWind {
             bz_nt: 2.0,
             bt_nt: 5.0,
-            speed_kms: 380.0,
-            density: 4.0,
+            speed_kms: Some(380.0),
+            density: Some(4.0),
+            time_unix: NOW,
         };
         let none = generate_insights(
             NOW,
@@ -719,5 +731,62 @@ mod tests {
             Some(&calm),
         );
         assert!(!none.iter().any(|i| i.kind == InsightKind::SolarWind));
+    }
+
+    /// A solar-wind sample from the magnetometer alone — the plasma product down — with `bz` at
+    /// `tag`, built by the parser the live feed uses, so the test sees what the station sees.
+    fn wind_without_plasma(tag: &str, bz: &str) -> crate::solar_wind::SolarWind {
+        crate::solar_wind::assemble(
+            &serde_json::json!([["time_tag", "bz_gsm", "bt"], [tag, bz, "14.0"]]),
+            &serde_json::Value::Null,
+        )
+        .expect("a dated magnetometer reading is a sample")
+    }
+
+    /// NOW (1_700_000_000) is 22:13:20 UTC on 14 Nov 2023; this reading is a minute before it.
+    const A_MINUTE_AGO: &str = "2023-11-14 22:12:20.000";
+
+    #[test]
+    fn a_southward_bz_with_the_plasma_feed_down_never_reports_a_wind_of_zero() {
+        let sw = wind_without_plasma(A_MINUTE_AGO, "-12.0");
+        let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[], None, Some(&sw));
+        let s = ins
+            .iter()
+            .find(|i| i.kind == InsightKind::SolarWind)
+            .expect("control: a strongly southward Bz still warns");
+        assert!(
+            !s.technical.contains(" 0 km/s"),
+            "the technical line reported a solar wind of zero: {}",
+            s.technical
+        );
+        assert!(
+            !s.technical.contains("km/s"),
+            "no speed is known, so none may be printed: {}",
+            s.technical
+        );
+    }
+
+    /// The solar-wind lines LEAD Kp by an hour or two, which a reading from two hours ago cannot do:
+    /// it is history, and presenting it as "turned stormy" is the stale value this feed must not show.
+    #[test]
+    fn a_solar_wind_reading_older_than_half_an_hour_warns_nothing() {
+        let old = wind_without_plasma("2023-11-14 20:13:20.000", "-12.0"); // two hours before NOW
+        let ins = generate_insights(NOW, &wx(150.0, 2.0, 1e-7), None, &[], &[], None, Some(&old));
+        assert!(
+            !ins.iter().any(|i| i.kind == InsightKind::SolarWind),
+            "a two-hour-old reading was presented as a leading indicator"
+        );
+        // Control: the same field, a minute old, does warn.
+        let fresh = wind_without_plasma(A_MINUTE_AGO, "-12.0");
+        let ins = generate_insights(
+            NOW,
+            &wx(150.0, 2.0, 1e-7),
+            None,
+            &[],
+            &[],
+            None,
+            Some(&fresh),
+        );
+        assert!(ins.iter().any(|i| i.kind == InsightKind::SolarWind));
     }
 }

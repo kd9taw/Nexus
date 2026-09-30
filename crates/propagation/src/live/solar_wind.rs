@@ -32,7 +32,7 @@ pub fn fetch_solar_wind() -> Result<SolarWind, String> {
         .build()
         .map_err(|e| e.to_string())?;
     let mag = get_json(&c, MAG_URL)?;
-    // Plasma is best-effort; assemble() fills speed/density with 0 if it's absent.
+    // Plasma is best-effort; assemble() leaves speed/density NOT KNOWN (None) if it's absent.
     let plasma = get_json(&c, PLASMA_URL).unwrap_or(Value::Null);
     assemble(&mag, &plasma).ok_or_else(|| "no valid solar-wind sample".to_string())
 }
