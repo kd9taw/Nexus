@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
+  **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
+  reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this
+  entry the port box asks for its address (`127.0.0.1:12000` on the same PC), and the hint under it
+  says to turn on UDP Control in PstRotatorAz's Setup. The hint also warns that Hamlib's backend for
+  it, including the one Nexus ships, writes the bearing it sends with a formatting bug (123.4° goes
+  out as `123.400002.2`), so PstRotatorAz may not turn to it. Nobody has tried that against a real
+  PstRotatorAz yet. The saved setting is the model number, 3, so a rotator already set up that way is
+  unchanged and now shows by name.
 - **The Yaesu G-5500 / G-5500DC by name in the rotator picker.** The G-5500 has no computer port
   and no Hamlib model of its own: it is driven through a Yaesu GS-232B or GS-232A interface. So
   Settings ▸ Radio ▸ Rotator now names it on those two entries, **Yaesu G-5500 / G-5500DC —

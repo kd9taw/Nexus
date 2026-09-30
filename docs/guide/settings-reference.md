@@ -498,6 +498,9 @@ right.*
   chosen in its own Service Tool. Configured the way its manual recommends
   (GS-232B, 9600) it belongs on the **GS-232B interface** entry; only in DCU-1 mode
   does it belong on the **DF9GR ERC** entry, which runs at 4800.
+  **PstRotatorAz / PstRotator (UDP)** is Hamlib model 3, for YO3DMU's PstRotatorAz.
+  It is the one entry that talks over the network rather than a serial port (see
+  the next item).
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:
   SPID Rot2Prog runs at 600, Rot1Prog at 1200, and the Idiom Press Rotor-EZ,
@@ -505,7 +508,11 @@ right.*
   RC2800 and the Prosistels are the 9600 that used to be handed to everyone. At
   the wrong rate a rotator never answers and reads exactly like broken hardware,
   so the hint under the field names your model's rate and says plainly when the
-  saved value cannot work.
+  saved value cannot work. For **PstRotatorAz** the port is its UDP address,
+  `127.0.0.1:12000` on the same PC, and the baud does not matter. Turn on UDP
+  Control in PstRotatorAz's Setup. The hint there also warns that Hamlib's backend
+  for it writes the bearing it sends oddly (123.4° goes out as `123.400002.2`), so
+  PstRotatorAz may not turn to it.
 - **External rotctld (advanced)** — a `host:port` for a rotctld you run yourself,
   or one on another machine. It OVERRIDES the model and port above and stops the
   integrated daemon. It needs the port: a bare host name is not an address.

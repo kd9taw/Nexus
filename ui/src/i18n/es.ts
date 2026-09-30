@@ -5275,6 +5275,7 @@ export const ES: PartialCatalog = {
   "settings.rotator.baud.hint.any": "Ponlo igual que la velocidad de tu controlador — Hamlib no da una velocidad fija para este modelo.",
   "settings.rotator.baud.hint.fixed": "Este controlador funciona a {{rate}} baudios — la velocidad que declara su backend de Hamlib. Déjalo así.",
   "settings.rotator.baud.hint.wrong": "<b>Este controlador funciona a {{rate}} baudios, no a {{set}}</b> — a la velocidad equivocada no responde nunca y parece hardware averiado. Pon {{rate}}, o vuelve a elegir el modelo arriba para que se rellene.",
+  "settings.rotator.port.hint.pstRotator": "PstRotatorAz: escribe {{address}} como puerto y activa UDP Control en su Setup (los baudios no se usan). Su backend de Hamlib puede estropear el rumbo que envía — {{sent}} para {{bearing}}° —, así que puede que PstRotatorAz no gire hacia él.",
   "settings.rotator.baud.title": "Velocidad en baudios del controlador de rotor",
   "settings.rotator.calibration.az.aria": "Ajuste de calibración de azimut (grados)",
   "settings.rotator.calibration.el.aria": "Ajuste de calibración de elevación (grados)",

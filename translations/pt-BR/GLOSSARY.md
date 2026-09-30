@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,239 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,240 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -52,7 +52,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | PSK / PSK31 | 23 / 8 | Mode names. |
 | QSY | 22 | Q-code: change frequency. |
 | SmartSDR / FlexRadio | 22 / 9 | Product names. |
-| Hamlib / rigctld | 22 / 13 | The radio-control library and its daemon. |
+| Hamlib / rigctld | 23 / 13 | The radio-control library and its daemon. |
 | DXpedition | 21 | The activity. Widely used unchanged. |
 | ARRL / RAC / IARU | 20 / 3 / 1 | Organisation names. |
 | SatNOGS | 19 | The satellite database. |
@@ -104,7 +104,7 @@ word in, and use only that word in the CSV.
 | grid | 117 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 108 | Sound cards, levels, routing. | |
 | station | 109 | Both your own station and the one you are working. | |
-| port | 97 | Serial and network ports. | |
+| port | 98 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 97 / 30 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 86 | A satellite pass. | |

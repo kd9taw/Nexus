@@ -96,6 +96,7 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 | M2 RC2800 (az/el) | 1001 |
 | Prosistel D (az) | 1701 |
 | Prosistel Combi-Track (az/el) | 1703 |
+| PstRotatorAz / PstRotator (UDP) | 3 |
 | Dummy (testing — no hardware) | 1 |
 
 > **Yaesu G-5500 / G-5500DC owners:** the rotator has no computer port of its
@@ -111,6 +112,18 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 > it could never have worked with the serial port and baud the picker asks for.
 > An **ARS-USB** speaks GS-232, so use **GS-232 (generic)** with the ARS's own
 > COM port.
+
+> **PstRotatorAz users:** pick **PstRotatorAz / PstRotator (UDP)**, Hamlib model
+> 3. PstRotatorAz takes its commands over UDP, so the port is its address, not a
+> serial port: `127.0.0.1:12000` when it runs on the same PC. The baud does not
+> matter. Turn on **UDP Control** in PstRotatorAz's Setup and keep it on its
+> default port 12000, because Hamlib listens for its position reply on 12001
+> only. Leave **External rotctld (advanced)** empty: that box is for a
+> `rotctld`, which PstRotatorAz is not. One caveat: Hamlib's PstRotator backend,
+> including the one Nexus ships, writes the bearing it sends with a formatting
+> bug, so 123.4° goes out as `123.400002.2`. Nobody has tried that against a
+> real PstRotatorAz yet, so if the antenna does not turn to where you point it,
+> that is the likely reason: please report it.
 
 There's also an **External rotctld (advanced)** field: enter a `host:port` to
 point Nexus at a `rotctld` you run yourself (or one on another machine). It

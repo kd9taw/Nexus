@@ -3518,6 +3518,7 @@ export const JA: PartialCatalog = {
   "settings.rotator.baud.hint.any": "コントローラー側に設定されているレートに合わせてください。このモデルではHamlibは固定レートを定めていません。",
   "settings.rotator.baud.hint.fixed": "このコントローラーは{{rate}}ボーで動作します（Hamlibバックエンドが宣言するレートです）。このままにしてください。",
   "settings.rotator.baud.hint.wrong": "<b>このコントローラーは{{set}}ではなく{{rate}}ボーで動作します</b>。レートが違うと一切応答せず、ハードウェア故障のように見えます。{{rate}}に設定するか、上でモデルを選び直して自動入力してください。",
+  "settings.rotator.port.hint.pstRotator": "PstRotatorAz：ポートに{{address}}を入力し、PstRotatorAzのSetupでUDP Controlをオンにしてください（ボーレートは使われません）。そのHamlibバックエンドは送信する方位を崩すことがあり（{{bearing}}°が{{sent}}として送られます）、PstRotatorAzがその方位に向かない場合があります。",
   "settings.rotator.external.label": "外部rotctld（上級者向け）",
   "settings.rotator.external.placeholder": "host:port — 例: {{example}}",
   "settings.rotator.external.aria": "外部rotctldのアドレス（上級者向け）",
