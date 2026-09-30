@@ -25,6 +25,7 @@ import {
   parseRules,
   tokensAt,
   toRgb,
+  topSplit,
   winnerAt,
   type El,
   type Mode,
@@ -240,4 +241,76 @@ describe('the band tiles’ colours read in every mode and theme', () => {
     const otherEdge = [...RULES, ...parseRules('.bt-tile.is-open { border-color: var(--border); }', { n: 1e6 })]
     expect(tileProblems(otherEdge, BASE_MODES).some((p) => p.includes('is-open: no edge carries the band colour'))).toBe(true)
   }, 60_000)
+})
+
+// ── the words fit, in every language ─────────────────────────────────────────────────────────
+
+/** The widest word a tile must hold on one line: "Marginal", 11 px bold at 0.02em, in DejaVu Sans —
+ *  the widest UI font the app meets (`system-ui` on Linux and the Pi). MEASURED in Chrome, 2026-09-29:
+ *  56 px at Normal text size. At the grid's old 64 px floor a tile had 45 px for its word, and
+ *  "Marginal" was cut on every default layout from 1024 to 3440 wide. The no-data phrases are longer
+ *  (up to 100 px, "Pas de données") but break at their spaces, and none of their words is wider.
+ *  Re-measure this constant if the word's font changes; never nudge it to pass. */
+const WIDEST_WORD_PX = 56
+const TEXT_SCALES = [1, 1.12, 1.25] // Settings ▸ Text size: Normal / Large / Larger
+
+/** A resolved length: `12px`, or the sheet's `calc(<n>px * <n>)`. */
+function lengthPx(v: string): number {
+  const t = v.trim()
+  const calc = /^calc\(\s*(-?[\d.]+)px\s*\*\s*(-?[\d.]+)\s*\)$/.exec(t)
+  if (calc) return Number(calc[1]) * Number(calc[2])
+  const px = /^(-?[\d.]+)px$/.exec(t)
+  if (px) return Number(px[1])
+  throw new Error(`not a length this guard reads: "${v}"`)
+}
+/** A shorthand's values, split at its top-level spaces (`calc(8px * 1)` stays whole). */
+const valuesOf = (v: string) => topSplit(v.trim().replace(/\s+(?![^(]*\))/g, ','))
+
+function fitProblems(rules: Rule[]): string[] {
+  const out: string[] = []
+  const grid = document.querySelector('.band-tiles')!
+  const tile = tiles()[0]
+  const word = tile.querySelector('.bt-word')!
+  for (const mode of BASE_MODES)
+    for (const scale of TEXT_SCALES) {
+      const tokens = new Map(tokensFor(rules, mode, chainOf(tile)))
+      tokens.set('--text-scale', String(scale))
+      const cols = winner(rules, mode, chainOf(grid), 'grid-template-columns')?.value ?? ''
+      const floor = /minmax\(\s*(.+?)\s*,\s*1fr\s*\)/.exec(expandWith(tokens, cols))?.[1]
+      if (!floor) {
+        out.push(`${mode}: the tile grid has no minmax floor (${cols})`)
+        continue
+      }
+      const pad = winner(rules, mode, chainOf(tile), 'padding', 'padding-inline', 'padding-left')!
+      const padParts = valuesOf(expandWith(tokens, pad.value)).map(lengthPx)
+      const padX = pad.prop === 'padding' ? (padParts[1] ?? padParts[0]) : padParts[padParts.length - 1]
+      const border = /(-?[\d.]+)px/.exec(winner(rules, mode, chainOf(tile), 'border', 'border-width')!.value)
+      const room = lengthPx(floor) - 2 * padX - 2 * Number(border?.[1] ?? 0)
+      const need = WIDEST_WORD_PX * scale
+      if (room < need) out.push(`${mode} at text ×${scale}: the narrowest tile leaves ${room.toFixed(1)} px for a ${need.toFixed(1)} px word`)
+    }
+  // A phrase longer than the tile wraps at its spaces, and a word longer than it breaks: never cut.
+  const ws = winner(rules, 'dark', chainOf(word), 'white-space')?.value ?? 'normal'
+  if (/nowrap|pre/.test(ws)) out.push(`the word is kept on one line (white-space: ${ws}), so a longer phrase is cut`)
+  const wrap = winner(rules, 'dark', chainOf(word), 'overflow-wrap', 'word-wrap')?.value ?? 'normal'
+  if (!/break-word|anywhere/.test(wrap)) out.push(`a word wider than its tile is not broken (overflow-wrap: ${wrap})`)
+  return out
+}
+
+describe('the band tiles’ words fit', () => {
+  it('the narrowest tile holds the widest word at every text size, and a longer phrase wraps instead of being cut', () => {
+    render(<BandTiles prop={snap(BANDS)} nowMs={NOW_MS} />)
+    expect(fitProblems(RULES)).toEqual([])
+  })
+
+  it('FIRES: the old 64 px floor, and a word kept on one line, are refused', () => {
+    render(<BandTiles prop={snap(BANDS)} nowMs={NOW_MS} />)
+    const oldFloor = [...RULES, ...parseRules('.band-tiles { grid-template-columns: repeat(auto-fill, minmax(calc(64px * var(--text-scale)), 1fr)); }', { n: 1e6 })]
+    expect(fitProblems(oldFloor)).toContain('dark at text ×1: the narrowest tile leaves 45.0 px for a 56.0 px word')
+    const oneLine = [...RULES, ...parseRules('.bt-word { white-space: nowrap; overflow-wrap: normal; }', { n: 1e6 })]
+    expect(fitProblems(oneLine)).toEqual([
+      'the word is kept on one line (white-space: nowrap), so a longer phrase is cut',
+      'a word wider than its tile is not broken (overflow-wrap: normal)',
+    ])
+  })
 })

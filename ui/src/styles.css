@@ -3174,10 +3174,13 @@ body.resizing-row {
    pane grid, never by this. The letters are the theme's inks; the band colour (`--bt-color`, set per
    tile) is only ever a tint and an edge: Open a solid edge, Marginal a dashed one (a second channel
    besides hue), Closed no tint and dim letters (it recedes, never red), no data hollow and neutral.
-   Guard: BandTiles.test.tsx, every mode and theme. */
+   Guard: BandTiles.test.tsx, every mode and theme.
+   THE FLOOR holds the widest word on one line: "Marginal" is 56 px in the widest UI font the app
+   meets (DejaVu Sans, Linux and the Pi; measured in Chrome, and BandTiles.test.tsx computes the room
+   at every text size). At 64 px it was cut on every default layout. */
 .band-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(calc(64px * var(--text-scale)), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(calc(76px * var(--text-scale)), 1fr));
   gap: var(--space-1);
 }
 .bt-tile {
@@ -3226,14 +3229,13 @@ body.resizing-row {
   font-weight: 700;
   line-height: 1.1;
 }
+/* A longer phrase (the no-data words run to "Pas de données") wraps at its spaces; nothing is cut. */
 .bt-word {
   max-width: 100%;
-  overflow: hidden;
   font-size: calc(11px * var(--text-scale));
   font-weight: 700;
   letter-spacing: 0.02em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 .bt-marks {
   position: absolute;
