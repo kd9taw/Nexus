@@ -52,6 +52,31 @@ function fmtFreq(khz: number): string {
   return `${(khz / 1000).toFixed(4)} MHz`
 }
 
+/**
+ * WHOSE FILTERS: the view's own record, or the Connect box's (`pane`). Two copies for the reason
+ * the Spots and Needed panes keep theirs (#345): a chip in the box and a chip on the POTA/SOTA view
+ * must never move each other. Written out as literals, in one table, so storage-scope.test.ts can
+ * read every key this board writes. Per surface, both: a board in a pop-out keeps its own too.
+ */
+const OTA_KEYS = {
+  view: {
+    program: 'nexus.ota.program',
+    bandFilter: 'nexus.ota.bandFilter',
+    modeFilter: 'nexus.ota.modeFilter',
+    sort: 'nexus.ota.sortKey',
+    sortAsc: 'nexus.ota.sortAsc',
+    hideWorked: 'nexus.ota.hideWorked',
+  },
+  box: {
+    program: 'nexus.connect.ota.program',
+    bandFilter: 'nexus.connect.ota.bandFilter',
+    modeFilter: 'nexus.connect.ota.modeFilter',
+    sort: 'nexus.connect.ota.sortKey',
+    sortAsc: 'nexus.connect.ota.sortAsc',
+    hideWorked: 'nexus.connect.ota.hideWorked',
+  },
+} as const
+
 /** Truncate a park/summit name to `max` chars, appending '…' when cut. */
 function truncName(name: string, max = 28): string {
   if (name.length <= max) return name
@@ -145,6 +170,14 @@ interface Props {
   /** Station actions for an observed view, each present only while the station offers it. The
    *  view never tunes: a hunt hands the spot on once the station has tagged it. */
   remote?: OtaRemote
+  /** Hosted as a BOX of Connect rather than as the view: the hunter's list and nothing else. The
+   *  list, its filters, its sort and HUNT are the view's own — the same component, the same
+   *  `handleHunt` — with the box's own copy of the filters (OTA_KEYS.box). What a box leaves out:
+   *  the heading and pop-out (the frame's head names it), the activation strip and the park
+   *  directory (the activator's side and a one-time setup, both a click away on the view), and the
+   *  source line. Its band, mode and sort rows open on a Filter button, as the Spots pane's bar
+   *  does: a box is a few inches tall. */
+  pane?: boolean
 }
 
 export type OtaRemote = {
@@ -156,15 +189,16 @@ export type OtaRemote = {
   selfSpot?: () => void
 }
 
-export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote }: Props) {
+export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote, pane = false }: Props) {
   const observed = observation !== undefined
+  const keys = pane ? OTA_KEYS.box : OTA_KEYS.view
   // Program + band filter persist for the same reason the sort and mode do: the operator
   // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
   // falls back to the default rather than throwing.
   // PER-SURFACE, all of them: program, filters and sort describe what THIS board is
   // showing. A POTA board beside a SOTA board is the multi-window payoff.
   const [program, setProgram] = useState<Program>(() => {
-    const raw = surfaceGet('nexus.ota.program')
+    const raw = surfaceGet(keys.program)
     return raw === 'POTA' || raw === 'SOTA' || raw === 'Both' ? raw : 'POTA'
   })
   const [nativeSpots, setSpots] = useState<OtaSpot[]>([])
@@ -174,7 +208,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // Band filter — set of band strings; empty = All.
   const [bandFilter, setBandFilter] = useState<string[]>(() => {
     try {
-      const raw = surfaceGet('nexus.ota.bandFilter')
+      const raw = surfaceGet(keys.bandFilter)
       const v: unknown = raw == null ? null : JSON.parse(raw)
       return Array.isArray(v) && v.every((x) => typeof x === 'string') ? v : []
     } catch {
@@ -189,36 +223,40 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // filed against the Spots panel. Stored raw like modeFilter below (no JSON) so a
   // hand-edited or stale value simply falls back to the default.
   const [sortKey, setSortKey] = useState<OtaSort>(() => {
-    const raw = surfaceGet('nexus.ota.sortKey')
+    const raw = surfaceGet(keys.sort)
     return isOtaSort(raw) ? raw : 'value'
   })
-  const [sortAsc, setSortAsc] = useState(() => surfaceGet('nexus.ota.sortAsc') === '1')
+  const [sortAsc, setSortAsc] = useState(() => surfaceGet(keys.sortAsc) === '1')
   // Hide worked today (operator decision 2026-09-17): an activator already logged AT THIS PARK
   // since 0000Z is an activation you have; the board is for the ones you still need today.
   // DEFAULT ON, per-surface like every other filter here, stored raw ('1'/'0') in the sortAsc
   // shape so a stale or hand-edited value falls back to on rather than to a silent off.
-  const [hideWorked, setHideWorked] = useState(() => surfaceGet('nexus.ota.hideWorked') !== '0')
+  const [hideWorked, setHideWorked] = useState(() => surfaceGet(keys.hideWorked) !== '0')
   useEffect(() => {
-    surfaceSet('nexus.ota.hideWorked', hideWorked ? '1' : '0')
-  }, [hideWorked])
+    surfaceSet(keys.hideWorked, hideWorked ? '1' : '0')
+  }, [keys, hideWorked])
   useEffect(() => {
-    surfaceSet('nexus.ota.sortKey', sortKey)
-  }, [sortKey])
+    surfaceSet(keys.sort, sortKey)
+  }, [keys, sortKey])
   useEffect(() => {
-    surfaceSet('nexus.ota.sortAsc', sortAsc ? '1' : '0')
-  }, [sortAsc])
+    surfaceSet(keys.sortAsc, sortAsc ? '1' : '0')
+  }, [keys, sortAsc])
   useEffect(() => {
-    surfaceSet('nexus.ota.program', program)
-  }, [program])
+    surfaceSet(keys.program, program)
+  }, [keys, program])
   useEffect(() => {
-    surfaceSet('nexus.ota.bandFilter', JSON.stringify(bandFilter))
-  }, [bandFilter])
+    surfaceSet(keys.bandFilter, JSON.stringify(bandFilter))
+  }, [keys, bandFilter])
   const [modeFilter, setModeFilter] = useState<string>(
-    () => surfaceGet('nexus.ota.modeFilter') ?? 'All',
+    () => surfaceGet(keys.modeFilter) ?? 'All',
   )
   useEffect(() => {
-    surfaceSet('nexus.ota.modeFilter', modeFilter)
-  }, [modeFilter])
+    surfaceSet(keys.modeFilter, modeFilter)
+  }, [keys, modeFilter])
+  // A box's band, mode and sort rows open on its Filter button (the `pane` note above), and the
+  // button says "Filtered" while a band or a mode is hiding rows, so a short list explains itself.
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const narrowed = bandFilter.length > 0 || modeFilter !== 'All'
 
   const loadSpots = useCallback(async (p: Program) => {
     if (observed) return
@@ -530,8 +568,11 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     : ''
 
   return (
-    <section className="panel pota-view pota-hunter">
-      <div className="panel-header">
+    // The box is marked by an ATTRIBUTE, never a class on this list: layout-single-deficit.test
+    // reasons about this exact class list, and `[data-ota-box] x` keeps every box rule at (0,2,0),
+    // below Touch density's `:root[data-touch] .filter-chip`.
+    <section className="panel pota-view pota-hunter" data-ota-box={pane ? '' : undefined}>
+      {!pane && <div className="panel-header">
         <h2>{OTA_TITLE}</h2>
         <span className="awards-sub">{t('ota.subtitle')}</span>
         {/* Multi-monitor tear-off — the pop-out the per-surface filter records were
@@ -547,7 +588,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             {t('ota.popOut.label')}
           </button>
         )}
-      </div>
+      </div>}
 
       {/* Hunting banner — shown when a hunt target is active */}
       {hunt && (
@@ -573,7 +614,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       )}
 
       {/* My activation — while active, every QSO I log is stamped with MY park (my_ref). */}
-      {(!observed || activating || remote?.startActivation) && <div className={`pota-activation${activating ? ' active' : ''}`}>
+      {!pane && (!observed || activating || remote?.startActivation) && <div className={`pota-activation${activating ? ' active' : ''}`}>
         {activating ? (
           <>
             <span className="pota-act-text">
@@ -624,7 +665,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       </div>}
 
       {/* Local park directory — download/import once, then search offline in the log form. */}
-      <div className="pota-parklist">
+      {!pane && <div className="pota-parklist">
         <span className="pota-parklist-status">
           {parkN > 0
             ? t('ota.parks.have', { formatted: parkN.toLocaleString() })
@@ -672,7 +713,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
           }}
         />
         </>}
-      </div>
+      </div>}
 
       {/* Program toggle + band/mode filters + refresh */}
       <div className="pota-controls">
@@ -721,14 +762,30 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               aria-label={t('ota.refresh.title')}
             >
               <RefreshCw size={12} className={loading ? 'spin' : ''} aria-hidden="true" />
-              {t('ota.refresh.label')}
+              {/* A box keeps its one control row to one line where it can: the icon alone (its
+                  name is the button's aria-label), and no time line — the list re-reads every
+                  minute on its own, and a failed read says so in a toast. */}
+              {!pane && t('ota.refresh.label')}
             </button>
-            {lastUpdatedLabel && (
+            {lastUpdatedLabel && !pane && (
               <span className="pota-last-updated">{lastUpdatedLabel}</span>
             )}
           </div>}
+          {/* A box's Filter button: the three rows below open on it (the `pane` note). */}
+          {pane && (
+            <button
+              type="button"
+              className={`filter-chip${filtersOpen || narrowed ? ' active' : ''}`}
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              title={t('ota.filter.toggle.title')}
+            >
+              {narrowed ? t('spots.filter.toggle.active') : t('spots.filter.toggle.idle')}
+            </button>
+          )}
         </div>
 
+        {(!pane || filtersOpen) && <>
         {/* Band filter chips */}
         {availableBands.length > 0 && (
           <div className="pota-filter-row" role="group" aria-label={t('ota.filter.band.aria')}>
@@ -808,6 +865,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             {sortAsc ? '▲' : '▼'}
           </button>
         </div>
+        </>}
       </div>
 
       {/* Spot list */}
@@ -924,7 +982,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         </ul>
       )}
 
-      {!observed && <p className="settings-hint pota-source-hint">
+      {!observed && !pane && <p className="settings-hint pota-source-hint">
         {t('ota.source.hint', { source: SOURCES[program] })}
       </p>}
     </section>

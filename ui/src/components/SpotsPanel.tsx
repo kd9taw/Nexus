@@ -118,9 +118,12 @@ export interface SpotsPanelProps {
  *  - `modes` are the modes it opens on, and they are an ALLOW-list: a mode that first appears
  *    later stays hidden until its chip is ticked. The view's HIDDEN set does the opposite (a new
  *    mode shows) — right for a firehose, wrong for Phone's "SSB/AM/FM spots on the band you're
- *    on", which a digital mode turning up must not quietly widen.
+ *    on", which a digital mode turning up must not quietly widen. ABSENT (Connect's Spots box, the
+ *    firehose in a box), the pane keeps the view's rule — a hidden set, every mode shown — in its
+ *    own copy.
  *  - `band` is the radio's band ('' off the plan), and the band filter FOLLOWS it: that band's
- *    chip is lit while it does, and unticking it stops following.
+ *    chip is lit while it does, and unticking it stops following. ABSENT, there is nothing to
+ *    follow and no follow switch is kept (the Connect box, which is not on any band).
  *
  * As a pane it draws no heading of its own (the frame's head names it) and its filter bar opens
  * on the funnel only: the bar is several lines of chips, a pane is a few inches tall, and the
@@ -128,8 +131,8 @@ export interface SpotsPanelProps {
  */
 export interface SpotsPane {
   readonly scope: string
-  readonly modes: readonly string[]
-  readonly band: string
+  readonly modes?: readonly string[]
+  readonly band?: string
 }
 
 /** View-session state: the Spots panel unmounts on every view switch, which wiped all
@@ -176,21 +179,27 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
   // a watched station wears the same WATCH tile on this board.
   const watchOf = useWatchMatch()
   // Whose copy of every filter below: the view's own keys, or this pane's (see SpotsPane). The
-  // memos below key on `isPane`, never on `pane`: the host passes a fresh object every render.
+  // memos below key on booleans (`isPane`, `allowModes`), never on `pane`: the host passes a fresh
+  // object every render.
   const host = pane?.scope
   const isPane = pane != null
+  // Which mode rule this host keeps: an ALLOW-list when the pane names the modes it opens on, the
+  // view's hidden set otherwise (SpotsPane). Keyed on the NAMES, never on `pane`: Connect's box is
+  // a pane that keeps the view's rule.
+  const allowModes = pane?.modes != null
   // ONE flat mode filter: the SPECIFIC modes present (CW/Phone/FT8/FT4/RTTY/Digital…), each a
   // show/hide toggle. The view stores the HIDDEN set (empty = all shown) so a mode that first
-  // appears mid-session shows by default instead of being silently hidden. A pane stores the
-  // SHOWN set instead — it opens on named modes, and a new one must not widen it by arriving.
-  // One key per semantic, each kept by the host it belongs to; a chip toggles membership in
-  // whichever this host keeps, which flips that chip either way.
-  const [hiddenModes, setHiddenModes] = useSessionState<string[]>('nexus.spots.hiddenModes', [], pane ? null : host)
-  const [shownModes, setShownModes] = useSessionState<string[]>('nexus.spots.shownModes', [...(pane?.modes ?? [])], pane ? host : null)
+  // appears mid-session shows by default instead of being silently hidden. A pane that names its
+  // modes stores the SHOWN set instead — it opens on them, and a new one must not widen it by
+  // arriving. One key per semantic, each kept by the host it belongs to; a chip toggles membership
+  // in whichever this host keeps, which flips that chip either way.
+  const [hiddenModes, setHiddenModes] = useSessionState<string[]>('nexus.spots.hiddenModes', [], allowModes ? null : host)
+  const [shownModes, setShownModes] = useSessionState<string[]>('nexus.spots.shownModes', [...(pane?.modes ?? [])], allowModes ? host : null)
   const [bands, setBands] = useSessionState<string[]>('nexus.spots.bands', [], host) // empty = all
   // A pane FOLLOWS the radio's band until that band's chip is unticked (SpotsPane). `bands` is
-  // then the operator's OTHER picks, and the filter is both. The view keeps no such switch.
-  const [followBand, setFollowBand] = useSessionState('nexus.spots.followBand', true, pane ? host : null)
+  // then the operator's OTHER picks, and the filter is both. The view, and a pane with no band to
+  // follow, keep no such switch.
+  const [followBand, setFollowBand] = useSessionState('nexus.spots.followBand', true, pane?.band != null ? host : null)
   const [sort, setSort] = useSessionState<{ key: SortKey; dir: 'asc' | 'desc' }>('nexus.spots.sort', { key: 'age', dir: 'asc' }, host)
   const [filtersOpen, setFiltersOpen] = useSessionState('nexus.spots.filtersOpen', false, host)
   // Freeform search over the firehose: space-separated terms AND together, each term
@@ -266,11 +275,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     return [...set].sort()
   }, [spots])
 
-  // Is a mode's chip lit? The view keeps the HIDDEN set, a pane the SHOWN one (see above).
-  const modeShown = (m: string) => (pane ? shownModes.includes(m) : !hiddenModes.includes(m))
+  // Is a mode's chip lit? The view keeps the HIDDEN set, a pane naming its modes the SHOWN one.
+  const modeShown = (m: string) => (allowModes ? shownModes.includes(m) : !hiddenModes.includes(m))
   // Toggle a mode's visibility: membership in whichever set this host keeps flips its chip.
   const toggleMode = (m: string) =>
-    (pane ? setShownModes : setHiddenModes)((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]))
+    (allowModes ? setShownModes : setHiddenModes)((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]))
   const toggleBand = (b: string) => {
     // The band a pane follows: its chip IS the follow switch. Lit, a click stops following (and
     // drops the band from the other picks too, or the chip would stay lit); dark, it follows again.
@@ -305,7 +314,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
 
   const hasActiveFilters =
     shownBands.length > 0 ||
-    (pane ? availableModes.some((m) => !shownModes.includes(m)) : hiddenModes.length > 0) ||
+    (allowModes ? availableModes.some((m) => !shownModes.includes(m)) : hiddenModes.length > 0) ||
     licensedOnly ||
     localOnly ||
     hideWorked ||
@@ -330,7 +339,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
       if (licensedOnly && !s.licensed) return false
       if (localOnly && s.spotterLocal === false) return false
       const mode = s.submode ?? s.mode
-      if (isPane ? !shownModes.includes(mode) : hiddenModes.includes(mode)) return false
+      if (allowModes ? !shownModes.includes(mode) : hiddenModes.includes(mode)) return false
       if (shownBands.length > 0 && !shownBands.includes(s.band)) return false
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
       if (states.length > 0 && (!s.state || !states.includes(s.state))) return false
@@ -388,7 +397,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
       return c * dir
     })
     return { rows: filtered, workedHidden: worked }
-  }, [spots, isPane, hiddenModes, shownModes, shownBands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall, watchOf])
+  }, [spots, allowModes, hiddenModes, shownModes, shownBands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall, watchOf])
 
   // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
   // that is on by default. Counted against everything else the operator has chosen, so it says
@@ -398,9 +407,12 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     [spots, localOnly],
   )
 
+  // `data-col` names the column a header heads, so a host that drops a column (Connect's narrow
+  // box, styles.css) can drop its header with it — the Needed board's zone column is the precedent.
   const th = (key: SortKey, label: string) => (
     <button
       type="button"
+      data-col={key}
       className={`np-th${sort.key === key ? ' active' : ''}`}
       onClick={() =>
         setSort((p) =>
@@ -623,10 +635,9 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 setBands([])
                 // "Clear to see all", on a pane too: every mode on the board right now, and the
                 // band no longer followed. A mode that arrives later still waits for its chip.
-                if (pane) {
-                  setShownModes([...availableModes])
-                  setFollowBand(false)
-                } else setHiddenModes([])
+                if (allowModes) setShownModes([...availableModes])
+                else setHiddenModes([])
+                if (pane?.band != null) setFollowBand(false)
                 setStates([])
                 setSpotterConts([])
                 setSpotterEntities([])
@@ -651,8 +662,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
           {th('band', t('spots.column.band'))}
           {th('freq', t('spots.column.freq'))}
           {th('mode', t('spots.column.mode'))}
-          <span className="np-th-static">{t('spots.column.spotter')}</span>
-          <span className="np-th-static">{t('spots.column.comment')}</span>
+          <span className="np-th-static" data-col="spotter">{t('spots.column.spotter')}</span>
+          <span className="np-th-static" data-col="comment">{t('spots.column.comment')}</span>
         </div>
         {rows.length === 0 ? (
           <div className="np-empty">

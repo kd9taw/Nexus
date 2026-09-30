@@ -3187,6 +3187,8 @@ export const EN = {
   'ota.filter.mode.aria': 'Mode filter',
   'ota.filter.mode.label': 'Mode',
   'ota.filter.all': 'All',
+  // The Connect box's Filter button (its label is the Spots board's own Filter / Filtered).
+  'ota.filter.toggle.title': 'Show or hide the band, mode and sort choices',
   // The sort picker. The <option> VALUES ('value', 'activator' …) are persisted tokens and
   // stay in the code; these are the words beside them.
   'ota.sort.aria': 'Sort spots',
@@ -7310,6 +7312,13 @@ export const EN = {
   'connect.clock.sun.up': 'Sun up all day',
   'connect.clock.sun.down': 'Sun down all day',
   'connect.clock.noGrid': "Set your grid in Settings for today's sunrise and sunset.",
+
+  // ---- The Spots and POTA/SOTA boxes: the two boards themselves (their words are the boards').
+  // The POTA/SOTA box's name is the programmes' names, a token in the registry, not an entry.
+  // Each one-line state is what a screen with no board to lend shows (the wall display).
+  'connect.pane.spots.title': 'Spots',
+  'connect.pane.spots.basic': "The spot list isn't available on this screen.",
+  'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',

@@ -144,6 +144,17 @@ Clicking a receiver row selects it on the map. Stations that heard you appear as
 
 ---
 
+## Spots and POTA / SOTA Boxes
+
+Two boxes put the hunting lists in the Connect grid; pick either from any box's menu. Neither is in a default or ready-made layout.
+
+- **Spots** is the Spots screen's list itself: every cluster and RBN spot, with the Spots screen's search and Filter chips (Heard on my continent and Hide worked start on). A click on a row works the station exactly as it does on the Spots screen: the radio goes to the spot's frequency and mode, and the matching cockpit opens.
+- **POTA / SOTA** is the POTA/SOTA screen's hunter list itself: the POTA, SOTA and Both tabs, Hide worked today, Refresh and **HUNT**, which tags your next contact with the park or summit and goes to the station, as it does on that screen. Its band, mode and sort choices open on its Filter button.
+
+Neither box transmits. Each keeps its own filters, apart from its screen's, so a chip in one never moves the other. The Spots box drops columns as it narrows (call, frequency and mode at its narrowest; the age, country and comment from about 360 px; every column from about 640 px) and scrolls inside itself. The wall display (TV page) is served no spot list, so there each box shows one line saying the list is not available.
+
+---
+
 ## Per-Path Outlook
 
 Clicking any station or spot opens a "Path to X" panel with a 24-hour band workability predictor. This honors the **Prediction engine** selected in Settings: the internal **HeuristicEngine** (the default) — a physics-lite model driven by MUF, D-layer absorption, greyline timing, and current SFI/Kp from the cached SWPC values — or the native **ITU-R P.533/P.372 engine**, a full standards-based point-to-point ionospheric prediction. The UI badges the result as **"modelled"** — it is a model output, not measured propagation data (the external VOACAP program is not integrated).

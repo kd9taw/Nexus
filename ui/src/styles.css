@@ -17420,6 +17420,80 @@ button.cq-skiptx1.on {
 .np-board .sp-grid .np-row {
   grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr);
 }
+/* ── THE SPOTS BOARD AS A CONNECT BOX (components/connect/SpotsBox.tsx) ───────────────────
+   The same board as a pane (`.np-board`, above), in a Connect slot: a rail from 200 to 720 px
+   wide, a third of the bottom strip, the wall display. Two things differ from the Phone pane.
+
+   1. CONTENT HEIGHT, AND THE PANE BODY IS THE ONE SCROLLER. A Connect slot's height is a rail
+      share, or in the bottom strip an AUTO row that stops at 30 % of the window — sized by its
+      content. The pane's zero-basis grid would give the list no rows at all in that row, so here
+      the board takes its natural height, `.pane-body { overflow: auto }` scrolls it in every slot
+      alike, and the grid is no scroller of its own: its sticky column headings then stick to the
+      pane body, the scroller they are in.
+   2. ITS COLUMNS FOLLOW ITS OWN WIDTH. SpotsBox stamps `data-fit` from its own clientWidth (CSS
+      px): s (under 360) — call, frequency, mode; m (under 640) — age, call, entity, frequency,
+      mode, comment; l — the pane's nine. A narrow box drops columns rather than scrolling sideways.
+   3. THE HEAD KEEPS TO ONE LINE WHERE IT FITS. The search field gives up its fixed 240 px and a
+      large basis (the flex line breaks on the basis, so a 10em one wrapped the Filter button onto
+      a second line in a 300 px rail), so the count, the search and Filter share one line from
+      about 260 px and the head wraps inside the box, never widening it, below that.
+   4. A CALL TOO LONG FOR ITS COLUMN ELLIPSIZES inside its own button — the Logbook's rule
+      (`.log-cell > .qrz-link-call`): a cell's text-overflow cannot reach into a button, so
+      `KP4/W1ABC` in a 200 px rail was cut mid-glyph. */
+.cn-spots .np-board,
+.cn-spots .np-board > .np-grid {
+  flex: none;
+}
+.cn-spots .np-board > .np-grid {
+  overflow: visible;
+}
+.cn-spots .np-search {
+  flex: 1 1 6em;
+  min-width: 0;
+}
+.cn-spots .np-search input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.cn-spots .np-call {
+  min-width: 0;
+  overflow: hidden;
+}
+.cn-spots .np-call > .qrz-link-call {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.cn-spots[data-fit='m'] .sp-grid .np-row {
+  grid-template-columns: 40px minmax(64px, 1fr) minmax(0, 1.2fr) 60px 52px minmax(0, 1fr);
+}
+.cn-spots[data-fit='s'] .sp-grid .np-row {
+  grid-template-columns: minmax(0, 1fr) 3.9em 3.5em;
+  gap: var(--space-1);
+}
+.cn-spots[data-fit='m'] .sp-state,
+.cn-spots[data-fit='m'] .np-band,
+.cn-spots[data-fit='m'] .sp-spotter,
+.cn-spots[data-fit='m'] [data-col='state'],
+.cn-spots[data-fit='m'] [data-col='band'],
+.cn-spots[data-fit='m'] [data-col='spotter'],
+.cn-spots[data-fit='s'] .np-age,
+.cn-spots[data-fit='s'] .np-entity,
+.cn-spots[data-fit='s'] .sp-state,
+.cn-spots[data-fit='s'] .np-band,
+.cn-spots[data-fit='s'] .sp-spotter,
+.cn-spots[data-fit='s'] .np-why,
+.cn-spots[data-fit='s'] [data-col='age'],
+.cn-spots[data-fit='s'] [data-col='entity'],
+.cn-spots[data-fit='s'] [data-col='state'],
+.cn-spots[data-fit='s'] [data-col='band'],
+.cn-spots[data-fit='s'] [data-col='spotter'],
+.cn-spots[data-fit='s'] [data-col='comment'] {
+  display: none;
+}
 .sp-state {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
@@ -19683,6 +19757,56 @@ button.cq-skiptx1.on {
 }
 .pota-refresh-btn .spin {
   animation: pota-spin 0.8s linear infinite;
+}
+/* ── THE POTA/SOTA BOARD AS A CONNECT BOX (PotaSotaView `pane`, marked `data-ota-box`) ────
+   The view's hunter list in a Connect slot: a rail from 200 to 720 px, a third of the bottom
+   strip. Measured in Chrome at 1920×1080, the view's own control stack — the program tabs in
+   their padded, ruled row, Hide worked on a line of its own, Refresh with its time line —
+   filled a 219 px rail box before the first card. So in a box the controls are one wrapping row
+   of plain chips (no touch floor here: Touch density still raises them, `:root[data-touch]`
+   outranks this), the cards lose some padding, and a card's frequency line may wrap between its
+   parts instead of running under HUNT. In a card too narrow for its text beside HUNT (the 200 px
+   rail) HUNT goes under the text, at the right: the text keeps the card's width rather than a
+   100 px column that stacked the call, the reference and each badge a line apiece (152 px a card,
+   measured). The list scrolls in the pane body. */
+[data-ota-box] .pota-controls {
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+[data-ota-box] .pota-controls-row {
+  gap: var(--space-1);
+}
+[data-ota-box] .filter-row {
+  padding: 0;
+  border-bottom: 0;
+  gap: var(--space-1);
+}
+[data-ota-box] .filter-chip {
+  min-height: 0;
+  padding: 3px 9px;
+}
+[data-ota-box] .pota-refresh-row {
+  margin-left: 0;
+}
+[data-ota-box] .pota-spot-list {
+  margin-top: 0;
+  gap: var(--space-1);
+}
+[data-ota-box] .pota-spot-v2 {
+  flex-wrap: wrap;
+  padding: 6px var(--space-2);
+  gap: var(--space-2);
+}
+[data-ota-box] .pota-spot-main {
+  flex: 1 1 11em;
+}
+[data-ota-box] .pota-spot-meta {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+[data-ota-box] .pota-hunt-btn {
+  margin-left: auto;
+  padding: 4px 10px;
 }
 
 /* Zero-config detected-radio list (Settings → rig control). */

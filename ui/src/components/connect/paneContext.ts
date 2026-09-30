@@ -4,9 +4,12 @@
 import type { Theme } from '../../useTheme'
 import type { LatLon } from '../../grid'
 import type { MapIntent } from '../MapView'
+import type { SpotsPanelProps } from '../SpotsPanel'
+import type { OtaSpotClickArg } from '../PotaSotaView'
 import type {
   AlertView,
   AmpStatus,
+  AppSnapshot,
   BandOutlook,
   DxpedWindow,
   GettingOut,
@@ -17,9 +20,24 @@ import type {
   NoaaScalesView,
   PathPrediction,
   PropagationSnapshot,
+  SpotRow,
   Station,
   WorkableCard,
 } from '../../types'
+
+/** The Spots board as its window has it: the feed it lists and the wiring its view is given (App's
+ *  `spotsBoard`, the object the Spots view and the Phone cockpit's Spots pane get). */
+export interface SpotsFeed {
+  rows: SpotRow[]
+  board: Omit<SpotsPanelProps, 'spots' | 'pane'>
+}
+
+/** The POTA/SOTA board's wiring as its window has it — what the POTA/SOTA view is given. */
+export interface OtaBoard {
+  snap: AppSnapshot
+  onHunt: (arg: OtaSpotClickArg) => void
+  onSnap: (s: AppSnapshot) => void
+}
 
 export interface PaneContext {
   // environment (B2/B3-ready; B1 panes mostly read prop/selection)
@@ -65,6 +83,13 @@ export interface PaneContext {
   scales: NoaaScalesView | null
   alerts: AlertView[]
   muf: MufStation[]
+  /** The Spots box's list and its Work, exactly the Spots board's (SpotsFeed). ABSENT where the
+   *  window has no Spots board to lend — the wall display, whose read-only server serves neither
+   *  the spot list nor any command — and then the box shows its one-line state and no Work. */
+  spotsFeed?: SpotsFeed
+  /** The POTA/SOTA box's wiring, exactly the POTA/SOTA board's (OtaBoard). Absent ⇒ its one-line
+   *  state and no HUNT, as above. */
+  otaBoard?: OtaBoard
   // callbacks
   onSelectCall: (call: string | null) => void
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void

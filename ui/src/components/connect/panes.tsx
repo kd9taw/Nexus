@@ -14,7 +14,8 @@
 // distances, SNR, CQ zones, grids, the `P.533` recommendation number, and every word the
 // BACKEND sends (the advisory headline and its banners, the workability, the window text).
 // No transmit control renders on any of these panes — ▶ Work moves the rig and opens a
-// cockpit; it keys nothing.
+// cockpit; it keys nothing. The Spots and POTA/SOTA boxes are the two boards themselves, and
+// their Work and HUNT are the boards' own (the window lends its wiring through the context).
 import type { ReactNode } from 'react'
 import { t } from '../../i18n'
 import { T } from '../../i18n/T'
@@ -49,6 +50,8 @@ import { getoutSummary } from '../../features/getout'
 import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
 import { MeasuredMuf } from '../prop/MeasuredMuf'
+import { PotaSotaView } from '../PotaSotaView'
+import { SpotsBox } from './SpotsBox'
 import {
   NEED_CHIP,
   dxpedWorkMode,
@@ -77,6 +80,10 @@ export type PaneCategory = 'core' | 'b2' | 'b3' // picker optgroups; extension s
 
 /** The ITU recommendation's number — a document name, the same in every language. */
 const ENGINE_P533 = 'P.533'
+
+/** The POTA/SOTA box's name: the two programmes' own names, as the POTA/SOTA view's title prints
+ *  them — tokens, never a catalog entry. */
+const OTA_BOX_TITLE = 'POTA / SOTA'
 
 /** Unit symbols printed beside a reading. A unit is a token — MHz is MHz, dB is dB and km is
  * km in every language — and the guard is told so by these constants. */
@@ -708,6 +715,29 @@ export const PANES: PaneDef[] = [
     // Basic line is only a description.
     basic: () => t('connect.pane.clock.basic'),
     expert: (c) => <ClockPane myGrid={c.myGrid} />,
+  },
+  {
+    // THE SPOTS BOX — the Spots board itself, with the window's own Spots wiring (SpotsBox). A
+    // window with no Spots board to lend (the wall display) gets the Basic line, and no Work.
+    id: 'spots',
+    get title() {
+      return t('connect.pane.spots.title')
+    },
+    category: 'core',
+    basic: () => t('connect.pane.spots.basic'),
+    expert: (c) => (c.spotsFeed ? <SpotsBox feed={c.spotsFeed} /> : null),
+  },
+  {
+    // THE POTA/SOTA BOX — the POTA/SOTA board itself as a box (`pane`): its list, filters, sort and
+    // HUNT, with the window's own hunt wiring. Self-fetching, as the view is. No wiring ⇒ Basic.
+    id: 'pota',
+    title: OTA_BOX_TITLE,
+    category: 'core',
+    basic: () => t('connect.pane.pota.basic'),
+    expert: (c) =>
+      c.otaBoard ? (
+        <PotaSotaView snap={c.otaBoard.snap} onHunt={c.otaBoard.onHunt} onSnap={c.otaBoard.onSnap} pane />
+      ) : null,
   },
 ]
 

@@ -3088,6 +3088,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
+          // The Spots and POTA/SOTA boxes are the two boards themselves: the Spots view's own
+          // `spotsBoard` and feed, and the POTA/SOTA view's own hunt wiring, handed over whole so
+          // a Work or a HUNT from a box is the view's act. A browser's POTA/SOTA board is
+          // RemoteOta, a different surface, so a browser's box gets no hunt wiring (its one line).
+          spotsFeed={{ rows: allSpots, board: spotsBoard }}
+          otaBoard={remote ? undefined : { snap, onHunt: handleHuntSpot, onSnap: setSnap }}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.

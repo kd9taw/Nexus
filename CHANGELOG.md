@@ -159,6 +159,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
   it. A click on it still moves the keyboard there, so click back into Nexus before using a
   keyboard shortcut such as Esc. On macOS and Linux the button does not appear yet.
+- **Connect: a Spots box and a POTA / SOTA box.** Pick **Spots** or **POTA / SOTA** from any
+  Connect box's menu. Each is the list from its own screen, in a box:
+  - **Spots** lists every spot on the air, as the Spots screen does, with the same search and
+    Filter chips; Heard on my continent and Hide worked start on, as they do there.
+  - **POTA / SOTA** lists the activators on the air, with the POTA, SOTA and Both tabs, Hide
+    worked today, Refresh and **HUNT**. Its band, mode and sort choices open on its Filter button.
+
+  A click on a spot, or on **HUNT**, does what it does on those screens: the radio goes to the
+  station and the right screen opens. Nothing transmits. Each box keeps its own filters, so a chip
+  in a box never changes the Spots or POTA / SOTA screen, or the other way round. A narrow box
+  shows fewer columns (call, frequency and mode at its narrowest; the age, country and comment
+  from about 360 px; every column from about 640 px), and the list scrolls inside the box. Neither box is in the
+  default layout or a ready-made one, so nobody's Connect changes on the update. The wall display
+  (the TV page) shows no spot list, and each box says so there.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

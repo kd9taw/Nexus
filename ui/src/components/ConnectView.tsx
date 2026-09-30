@@ -39,7 +39,7 @@ import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailH
 import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
-import type { PaneContext } from './connect/paneContext'
+import type { OtaBoard, PaneContext, SpotsFeed } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
 import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
 import type { RailWidths } from '../features/connectRails'
@@ -151,6 +151,12 @@ interface Props {
   onPopOut?: () => void
   /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
   rigBand?: string | null
+  /** The Spots box's list and wiring: this window's Spots board, lent whole (paneContext
+   *  SpotsFeed). Omitted ⇒ the box shows its one-line state and offers no Work. */
+  spotsFeed?: SpotsFeed
+  /** The POTA/SOTA box's wiring: this window's POTA/SOTA board's (paneContext OtaBoard). Omitted ⇒
+   *  its one-line state and no HUNT. */
+  otaBoard?: OtaBoard
 }
 
 export function ConnectView({
@@ -168,6 +174,8 @@ export function ConnectView({
   onSelectSat,
   onPopOut,
   rigBand,
+  spotsFeed,
+  otaBoard,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -451,6 +459,8 @@ export function ConnectView({
     onWorkSpot,
     onPoint: remote&&!remoteRotator?undefined:onPoint,
     toggleFocusBand,
+    spotsFeed,
+    otaBoard,
   }
   const chromeHidden = mapFull && !map3d
 
