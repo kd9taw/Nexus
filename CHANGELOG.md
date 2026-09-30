@@ -447,6 +447,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Globe map no longer shows what is behind the planet on its face.** On Connect's Globe map, a
+  spot, a decoded station, a park, a DXpedition, an APRS station or a satellite on the far side of
+  the planet was drawn on the side facing you, where a line from it straight through the Earth
+  comes out: a 20 m spot in Sydney showed over the eastern Pacific on a globe centred on the US
+  Midwest. Now only what is on your side of the planet is drawn, and only that answers a hover or a
+  click. The same goes for your QTH marker when you turn the globe away from it, a satellite's
+  trail, the long path of the Selected path layer, Band heat, the Ionosonde MUF, Aurora oval,
+  Proton polar cap and Flare blackout markers, the grid labels and the CQ-zone numbers. A ★
+  satellite's footprint still shows the part on your side while the satellite itself is behind the
+  planet, and "No located stations yet" still shows only while none of your decoded stations has a
+  grid. The Flat and Beam maps and the 3D globe are unchanged.
 - **Settings: commas, and spaces in the quick-reply chips, can be typed in the list fields
   (#370).** Six boxes on Settings ▸ Digital that hold a list ate the separator as it was typed,
   so `W1ABC,K2DEF` came out as `W1ABCK2DEF` and a chip could not say `TNX QSO`: APRS-IS Watched
