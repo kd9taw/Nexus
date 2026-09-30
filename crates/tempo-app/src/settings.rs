@@ -842,6 +842,12 @@ pub struct Settings {
     /// of 5; 0 disables. The ordinary 6-min wall-clock watchdog is a separate clock.
     #[serde(default = "default_js8_idle_watchdog_min")]
     pub js8_idle_watchdog_min: u16,
+    /// JS8Call's callsign aging (`CallsignAging`), in minutes; 0 = off, JS8Call's default, and
+    /// what a file from before this setting loads as. A station not heard for this long leaves
+    /// the JS8 Stations list (unless it is selected or has an unread message for me), and is
+    /// left out of HEARING? replies and of the station journal. JS8Call's field runs 0-1440.
+    #[serde(default)]
+    pub js8_callsign_aging_min: u16,
     /// Free text answered to `INFO?` (JS8Call "My Info").
     #[serde(default)]
     pub js8_info: String,
@@ -4050,6 +4056,7 @@ impl Default for Settings {
             js8_autoreply: default_js8_autoreply(),
             js8_relay: default_js8_relay(),
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
+            js8_callsign_aging_min: 0,
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
@@ -8611,6 +8618,10 @@ mod tests {
             s.js8_idle_watchdog_min, 60,
             "JS8Call TxIdleWatchdog default"
         );
+        assert_eq!(
+            s.js8_callsign_aging_min, 0,
+            "JS8Call CallsignAging default: off"
+        );
         assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
 
         let json = serde_json::to_string(&s).unwrap();
@@ -8623,6 +8634,7 @@ mod tests {
             "\"js8Autoreply\":true",
             "\"js8Relay\":true",
             "\"js8IdleWatchdogMin\":60",
+            "\"js8CallsignAgingMin\":0",
             "\"js8Info\":\"\"",
             "\"js8Status\":\"\"",
             "\"js8Groups\":[]",
@@ -8634,14 +8646,19 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
+        assert_eq!(
+            old.js8_callsign_aging_min, 0,
+            "an upgrader's file ages nothing"
+        );
         // An explicit opt-out survives the round trip.
         let off: Settings = serde_json::from_str(
-            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"]}"#,
+            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"],"js8CallsignAgingMin":30}"#,
         )
         .unwrap();
         assert!(!off.js8_autoreply && !off.js8_relay);
         assert_eq!((off.js8_speed, off.js8_rx_speeds), (3, 2));
         assert_eq!(off.js8_groups, vec!["@FUN".to_string()]);
+        assert_eq!(off.js8_callsign_aging_min, 30);
         let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
         assert_eq!(back, off);
 
@@ -8660,6 +8677,7 @@ mod tests {
             "js8Autoreply",
             "js8Relay",
             "js8IdleWatchdogMin",
+            "js8CallsignAgingMin",
             "js8Info",
             "js8Status",
             "js8Groups",

@@ -4276,6 +4276,8 @@ export const DE: PartialCatalog = {
   "settings.js8.speed.hint": "Die Geschwindigkeit, mit der deine Frames rausgehen, und die Periode, der die Sendeuhr folgt: Slow 30 s, Normal 15 s, Fast 10 s, Turbo 6 s. Normal läuft auf dem größten Teil des Bandes. Die Geschwindigkeits-Chips in der JS8-Kopfzeile ändern dieselbe Einstellung.",
   "settings.js8.rxSpeeds.label": "Diese Geschwindigkeiten dekodieren",
   "settings.js8.rxSpeeds.hint": "Standardmäßig werden alle vier gleichzeitig dekodiert, wie in JS8Call — eine Slow-Station und eine Turbo-Station auf demselben Band erscheinen beide. Eine Geschwindigkeit abwählen, um auf einem kleinen Rechner CPU zu sparen; jede Aktivitätszeile trägt ihren Geschwindigkeitsbuchstaben (E/A/B/C).",
+  "settings.js8.callsignAgingMin.label": "Rufzeichen-Alterung (Minuten)",
+  "settings.js8.callsignAgingMin.hint": "Standardmäßig aus (0), wie in JS8Call. Sonst verschwindet eine Station, die so viele Minuten nicht gehört wurde, aus der Liste „Stationen“, außer du hast sie ausgewählt oder sie hat eine ungelesene Nachricht für dich, und deine HEARING?-Antworten lassen sie weg. Bis 1440 (ein Tag).",
   "settings.js8.automatic.title": "Automatische Aussendungen",
   "settings.js8.hbIntervalMin.label": "Heartbeat-Intervall (Minuten)",
   "settings.js8.hbIntervalMin.hint": "0 = ein Heartbeat nur, wenn du HB drückst. Sonst geht bei eingeschaltetem HB-Chip alle so viele Minuten einer raus, auf einem zufälligen freien Platz zwischen 500 und 1000 Hz. Der HB-Chip selbst wird nie über einen Neustart hinweg gemerkt, und nichts tastet, solange TX aus ist.",

@@ -91,6 +91,7 @@ impl Engine {
                 0 => 0,
                 m => m.max(5),
             },
+            callsign_aging_min: s.js8_callsign_aging_min,
             // A group JS8Call will not let be joined (@APRSIS, @JS8NET) is never joined here,
             // whatever put it in Settings: an older Nexus accepted one, and the Remote can write
             // the list. Settings keeps it as written, and the panel refuses every Save while one
@@ -592,7 +593,8 @@ impl Engine {
         let Some(path) = &self.js8_journal_path else {
             return;
         };
-        let Ok(text) = serde_json::to_string(&self.js8_station.snapshot()) else {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        let Ok(text) = serde_json::to_string(&self.js8_station.snapshot(now_ms)) else {
             return;
         };
         self.station.journals.replace(
@@ -1447,7 +1449,7 @@ mod tests {
         e.js8_inbox_mark(id, InboxState::Read).unwrap();
         e.js8_inbox_mark(id, InboxState::Unread).unwrap();
         e.js8_inbox_delete(id).unwrap();
-        let last = serde_json::to_string(&e.js8_station.snapshot()).unwrap();
+        let last = serde_json::to_string(&e.js8_station.snapshot(0)).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(100));
         let queued = !journal.exists();
         release(dir.join("pending_msgs.json.tmp"));
@@ -2362,6 +2364,35 @@ mod tests {
         assert!(
             e.js8_state().pending_reply.is_some(),
             "control: a query to a joined group is answered"
+        );
+    }
+
+    // ===== callsign aging =====
+
+    /// JS8Call's callsign aging reaches the station from Settings (`js8_station_config`, the one
+    /// seam), and a settings file from before the setting ages nothing, as JS8Call's default.
+    #[test]
+    fn the_callsign_aging_setting_reaches_the_station() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            js8_callsign_aging_min: 10,
+            ..Settings::default()
+        });
+        e.js8_enter();
+        assert_eq!(
+            e.js8_station.config().callsign_aging_min,
+            10,
+            "the setting reaches the station"
+        );
+        let older: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW","mygrid":"EN52"}"#)
+            .expect("an older settings file loads");
+        let mut e = Engine::with_settings(older);
+        e.js8_enter();
+        assert_eq!(
+            e.js8_station.config().callsign_aging_min,
+            0,
+            "an older file ages nothing"
         );
     }
 }

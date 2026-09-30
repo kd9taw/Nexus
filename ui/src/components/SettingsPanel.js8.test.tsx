@@ -73,6 +73,7 @@ const js8Defaults = {
   js8Autoreply: true,
   js8Relay: true,
   js8IdleWatchdogMin: 60,
+  js8CallsignAgingMin: 0,
   js8Info: '',
   js8Status: '',
   js8Groups: [] as string[],
@@ -147,6 +148,7 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect((control(fs, 'Transmit speed') as HTMLSelectElement).value).toBe('1')
     expect((control(fs, 'Idle watchdog (minutes)') as HTMLInputElement).value).toBe('60')
     expect((control(fs, 'Heartbeat interval (minutes)') as HTMLInputElement).value).toBe('0')
+    expect((control(fs, 'Callsign aging (minutes)') as HTMLInputElement).value, 'CallsignAging: off').toBe('0')
   })
 
   it('the four speed switches edit one bitmask, independently', async () => {
@@ -169,6 +171,23 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect(idle.value).toBe('30')
     fireEvent.change(idle, { target: { value: '-4' } })
     expect(idle.value).toBe('0')
+  })
+
+  // JS8Call's "Remove callsigns from call activity after" runs 0 ("Disabled") to 1440 minutes,
+  // one at a time (Configuration.ui:464-490).
+  it('callsign aging takes whole minutes from 0 to 1440, and saves', async () => {
+    const fs = await openJs8()
+    const aging = control(fs, 'Callsign aging (minutes)') as HTMLInputElement
+    fireEvent.change(aging, { target: { value: '5000' } })
+    expect(aging.value, 'capped at 1440').toBe('1440')
+    fireEvent.change(aging, { target: { value: '12.7' } })
+    expect(aging.value, 'whole minutes').toBe('12')
+    fireEvent.change(aging, { target: { value: 'abc' } })
+    expect(aging.value, 'junk leaves it alone').toBe('12')
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8CallsignAgingMin: 12 })),
+    )
   })
 
   it('groups are a comma list, upper-cased, @-prefixed on the way in', async () => {

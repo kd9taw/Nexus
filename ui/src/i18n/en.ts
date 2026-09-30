@@ -6314,6 +6314,9 @@ export const EN = {
   'settings.js8.rxSpeeds.label': 'Decode these speeds',
   'settings.js8.rxSpeeds.hint':
     'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+  'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
+  'settings.js8.callsignAgingMin.hint':
+    'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
   'settings.js8.automatic.title': 'Automatic transmissions',
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':

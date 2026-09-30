@@ -3898,6 +3898,8 @@ export const JA: PartialCatalog = {
   "settings.js8.speed.hint": "フレームを送る速度と、送信クロックが従う周期:Slow 30 秒、Normal 15 秒、Fast 10 秒、Turbo 6 秒。バンドの大半は Normal です。JS8 ヘッダーの速度チップもこの同じ設定を変えます。",
   "settings.js8.rxSpeeds.label": "デコードする速度",
   "settings.js8.rxSpeeds.hint": "JS8Call と同じく、既定では 4 つすべてを同時にデコードします — 同じバンドの Slow 局と Turbo 局が両方表示されます。非力なマシンで CPU を節約するには速度のチェックを外してください。アクティビティの各行には速度の文字(E/A/B/C)が付きます。",
+  "settings.js8.callsignAgingMin.label": "コールサインのエージング(分)",
+  "settings.js8.callsignAgingMin.hint": "JS8Call と同じく既定はオフ(0)。設定すると、この分数のあいだ受信のない局は局リストから外れ(選択中の局と、自局宛ての未読メッセージがある局を除く)、HEARING? の応答にも含まれません。最大 1440(1 日)。",
   "settings.js8.automatic.title": "自動送信",
   "settings.js8.hbIntervalMin.label": "ハートビート間隔(分)",
   "settings.js8.hbIntervalMin.hint": "0 = HB を押したときだけ送信。それ以外は HB チップがオンの間、この分数ごとに 500〜1000 Hz の空きスロットへランダムに 1 回送ります。HB チップ自体は次回起動に引き継がれず、TX がオフなら何も送信しません。",

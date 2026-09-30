@@ -4924,6 +4924,8 @@ export const FR: PartialCatalog = {
   "settings.js8.speed.hint": "La vitesse à laquelle vos trames partent, et la période que suit l’horloge TX : Slow 30 s, Normal 15 s, Fast 10 s, Turbo 6 s. Normal est ce que pratique l’essentiel de la bande. Les puces de vitesse de l’en-tête JS8 modifient ce même réglage.",
   "settings.js8.rxSpeeds.label": "Décoder ces vitesses",
   "settings.js8.rxSpeeds.hint": "Les quatre sont décodées en même temps par défaut, comme le fait JS8Call — une station en Slow et une en Turbo sur la même bande s’affichent toutes deux. Décochez une vitesse pour ménager le processeur d’une petite machine ; chaque ligne d’activité porte sa lettre de vitesse (E/A/B/C).",
+  "settings.js8.callsignAgingMin.label": "Vieillissement des indicatifs (minutes)",
+  "settings.js8.callsignAgingMin.hint": "Désactivé (0) par défaut, comme dans JS8Call. Sinon, une station qui n’a pas été entendue depuis ce nombre de minutes quitte la liste Stations, sauf si vous l’avez sélectionnée ou si elle a un message non lu pour vous, et vos réponses HEARING? l’omettent. Jusqu’à 1440 (un jour).",
   "settings.js8.automatic.title": "Émissions automatiques",
   "settings.js8.hbIntervalMin.label": "Intervalle des heartbeats (minutes)",
   "settings.js8.hbIntervalMin.hint": "0 = un heartbeat seulement quand vous appuyez sur HB. Sinon, tant que la puce HB est active, un heartbeat part toutes les N minutes sur un créneau libre tiré au sort entre 500 et 1000 Hz. La puce HB elle-même n’est jamais mémorisée d’un lancement à l’autre, et rien n’émet tant que TX est coupé.",

@@ -85,6 +85,7 @@ import {
   dtLabel,
   estimateFrames,
   fmtSnr,
+  js8ListedStations,
   utcClock,
 } from '../js8Vocab'
 
@@ -107,6 +108,9 @@ interface Props {
   onSetTxEnabled?: (on: boolean) => void
   theme?: string
   wheelSensitivity?: number
+  /** JS8Call's callsign aging from Settings, in minutes (0 = off): the Stations list leaves out
+   *  a call not heard for this long (`js8ListedStations`). */
+  callsignAgingMin?: number
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -164,6 +168,7 @@ export function Js8Cockpit({
   onSetTxEnabled,
   theme = 'dark',
   wheelSensitivity,
+  callsignAgingMin = 0,
   onOpenLogbook,
   panels,
   onOpenSettings,
@@ -521,6 +526,16 @@ export function Js8Cockpit({
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
   const now = js8DisplayNow(js8)
+  // The list only: the station keeps every call it heard, so the log strip, the rotator and the
+  // To box still know an aged one, as JS8Call's call activity does.
+  const listedStations = js8
+    ? js8ListedStations(js8.stations, js8.inbox, {
+        agingMin: callsignAgingMin,
+        nowMs: now,
+        selectedCall,
+        myCall: snap?.mycall ?? '',
+      })
+    : []
 
   const hbTitle =
     js8?.hbOn && js8.armed.hb
@@ -722,7 +737,7 @@ export function Js8Cockpit({
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
-          sortPinnedFirst(js8.stations, pins).map((h) => {
+          sortPinnedFirst(listedStations, pins).map((h) => {
             // The DX columns JS8Call carries (mainwindow.cpp:10296-10362): distance and
             // azimuth from MY grid to theirs, then the logbook's answer about this call. The
             // grid falls back to the one in the log when the station has not sent one — the

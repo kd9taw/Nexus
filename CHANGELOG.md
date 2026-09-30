@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
   current value, so it follows the locator when you move.
+- **JS8: callsign aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Callsign aging
+  (minutes)** field, off (0) by default as in JS8Call. Set it, and a station you have not heard
+  for that many minutes drops off the JS8 Stations pane, unless it is the one you have selected
+  or it has an unread message for you, and your automatic HEARING? replies leave it out. It is
+  not saved with the heard list either, so it does not come back when Nexus restarts. Up to 1440
+  minutes, a day, as in JS8Call. The Remote's Stations pane follows the station's setting.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

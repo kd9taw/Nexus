@@ -1939,14 +1939,16 @@ export function SettingsPanel({
       .map((g) => g.trim().toUpperCase().replace(/^@+/, ''))
       .filter(Boolean)
       .map((g) => `@${g}`)
-  // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
+  // Whole non-negative minutes, up to `max`; junk leaves the stored value alone (never coerces
+  // to 0).
   const updateMinutes = (
-    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin',
+    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin' | 'js8CallsignAgingMin',
     raw: string,
+    max = Infinity,
   ) => {
     const n = Number(raw)
     if (raw.trim() === '' || Number.isNaN(n)) return
-    updateNum(key, Math.max(0, Math.floor(n)))
+    updateNum(key, Math.min(max, Math.max(0, Math.floor(n))))
   }
 
   // The RF digipeater path, edited as one comma-separated field for the same reason as the
@@ -8404,6 +8406,23 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.js8.rxSpeeds.hint')}</span>
               </div>
+              {/* JS8Call's "Remove callsigns from call activity after" (CallsignAging): 0,
+                  "Disabled", to 1440 minutes (Configuration.ui:464-490). */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.callsignAgingMin.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={1440}
+                  value={String(form.js8CallsignAgingMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8CallsignAgingMin', e.target.value, 1440)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.callsignAgingMin.hint')}</span>
+              </label>
             </div>
 
             <div className="settings-featgroup">

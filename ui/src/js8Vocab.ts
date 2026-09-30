@@ -6,7 +6,7 @@
 // side, js8::proto::command, is the wire authority and this table must agree with it), and
 // invariant formatters. None of it is prose and none of it goes through the catalog
 // (i18n/index.ts, the invariant-token rule): a translated command name would not be answered.
-import type { Js8ActivityRow, Js8Speed } from './types'
+import type { Js8ActivityRow, Js8Heard, Js8InboxEntry, Js8Speed } from './types'
 
 export const JS8 = 'JS8'
 export const HB = 'HB'
@@ -202,4 +202,36 @@ export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8Offset
  *  technical token, and the sign matters — an early station reads negative. */
 export function dtLabel(dtS: number): string {
   return `${Math.round(dtS * 1000)} ms`
+}
+
+/** JS8Call's `Radio::base_callsign` (Radio.cpp:117-133): the longer side of the first '/', the
+ *  right-hand side on a tie, upper-cased. */
+function js8BaseCall(call: string): string {
+  const c = call.trim().toUpperCase(), slash = c.indexOf('/')
+  if (slash < 0) return c
+  return c.length - slash - 1 >= slash ? c.slice(slash + 1) : c.slice(0, slash)
+}
+
+/**
+ * The Stations list under JS8Call's callsign aging (mainwindow.cpp:10209-10233). With an aging of
+ * `agingMin` minutes (0, JS8Call's default, is off: `CallsignAging`, Configuration.cpp:1853), a
+ * call last heard that many whole minutes ago or more (`utcTimestamp.secsTo(now) / 60 >=
+ * callsignAging`) is left off, unless it is the selected call or has an unread message to me in
+ * the inbox: to my call or its base, from that call (`m_rxInboxCountCache`, :9404-9416). The order
+ * is kept, and nothing is dropped from `stations` itself: JS8Call ages its list, not its memory.
+ */
+export function js8ListedStations(
+  stations: readonly Js8Heard[],
+  inbox: readonly Js8InboxEntry[],
+  o: { agingMin: number; nowMs: number; selectedCall: string; myCall: string },
+): Js8Heard[] {
+  if (!(o.agingMin > 0)) return [...stations]
+  const me = o.myCall.trim().toUpperCase()
+  const toMe = (to: string) => to !== '' && (to === me || to === js8BaseCall(me))
+  const unreadFrom = new Set(
+    inbox.filter((e) => e.state === 'unread' && toMe(e.to.trim().toUpperCase())).map((e) => e.from),
+  )
+  return stations.filter(
+    (h) => h.call === o.selectedCall || unreadFrom.has(h.call) || Math.trunc((o.nowMs - h.lastMs) / 60_000) < o.agingMin,
+  )
 }

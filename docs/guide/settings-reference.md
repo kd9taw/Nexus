@@ -1094,6 +1094,10 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 - **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
   a Slow station and a Turbo station on the same band both print, each activity row
   marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
+  not heard for this many minutes drops off the cockpit's Stations list (the one you have
+  selected, or one with an unread message for you, stays) and is left out of your
+  `HEARING?` replies. Up to 1440, a day.
 
 **Automatic transmissions**
 
