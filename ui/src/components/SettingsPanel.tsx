@@ -1971,7 +1971,12 @@ export function SettingsPanel({
   // Whole non-negative minutes, up to `max`; junk leaves the stored value alone (never coerces
   // to 0).
   const updateMinutes = (
-    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin' | 'js8CallsignAgingMin',
+    key:
+      | 'js8HbIntervalMin'
+      | 'js8CqIntervalMin'
+      | 'js8IdleWatchdogMin'
+      | 'js8CallsignAgingMin'
+      | 'js8ActivityAgingMin',
     raw: string,
     max = Infinity,
   ) => {
@@ -8493,6 +8498,23 @@ export function SettingsPanel({
                   autoComplete="off"
                 />
                 <span className="settings-hint">{t('settings.js8.callsignAgingMin.hint')}</span>
+              </label>
+              {/* JS8Call's "Remove messages from band activity after" (ActivityAging): 0,
+                  "Disabled", to 1440 minutes, 2 by default (Configuration.ui:506-531). */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.activityAgingMin.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={1440}
+                  value={String(form.js8ActivityAgingMin ?? 2)}
+                  placeholder="2"
+                  onChange={(e) => updateMinutes('js8ActivityAgingMin', e.target.value, 1440)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.activityAgingMin.hint')}</span>
               </label>
             </div>
 

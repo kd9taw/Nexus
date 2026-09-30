@@ -37,6 +37,9 @@ pub struct RepeaterRecord {
     pub ctcss_dec_hz: Option<f32>,
     /// DCS code (uplink), when the machine uses digital code squelch.
     pub dcs: Option<u16>,
+    /// DCS code on the downlink, when the source gives one. The same code as `dcs` makes the
+    /// channel DCS both ways; without it the code is sent only ([`to_channel`]).
+    pub dcs_dec: Option<u16>,
     pub lat: f64,
     pub lon: f64,
     pub city: String,
@@ -47,6 +50,8 @@ pub struct RepeaterRecord {
     pub dstar: bool,
     pub fusion: bool,
     pub dmr_color_code: Option<u8>,
+    /// Channel width, kHz, when the source says: RepeaterBook's "FM Bandwidth"; hearham's
+    /// "NFM" is recorded as the narrowband 12.5. A narrow machine programs as NFM.
     pub bandwidth_khz: Option<f32>,
     /// On-air per the directory (RB "Operational Status", hearham `operational`).
     pub operational: bool,
@@ -72,6 +77,18 @@ fn jf64(v: &serde_json::Value, k: &str) -> Option<f64> {
         Some(serde_json::Value::Number(n)) => n.as_f64(),
         Some(serde_json::Value::String(s)) => s.trim().parse().ok(),
         _ => None,
+    }
+}
+
+/// A bandwidth in kHz: a number, or a string of one, with or without the unit RepeaterBook's
+/// own pages print ("12.5", 12.5, "12.5 kHz"). Anything else is not known.
+fn jkhz(v: &serde_json::Value, k: &str) -> Option<f32> {
+    match v.get(k) {
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim().to_ascii_lowercase();
+            t.strip_suffix("khz").unwrap_or(&t).trim().parse().ok()
+        }
+        _ => jf64(v, k).map(|b| b as f32),
     }
 }
 
@@ -160,6 +177,11 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 } else {
                     None
                 },
+                dcs_dec: if tsq.starts_with(['D', 'd']) {
+                    dcs_code(&tsq)
+                } else {
+                    None
+                },
                 lat,
                 lon,
                 city: jstr(v, "Nearest City"),
@@ -170,7 +192,7 @@ pub fn parse_repeaterbook_json(json: &str) -> Vec<RepeaterRecord> {
                 dstar: jyes(v, "D-Star"),
                 fusion: jyes(v, "System Fusion"),
                 dmr_color_code: jf64(v, "DMR Color Code").map(|c| c as u8),
-                bandwidth_khz: jf64(v, "FM Bandwidth").map(|b| b as f32),
+                bandwidth_khz: jkhz(v, "FM Bandwidth"),
                 // RB reports "On-air" / "Off-air" / "Unknown"; only a positive
                 // off-air marks it down (unknown machines still get programmed).
                 operational: !status.eq_ignore_ascii_case("off-air"),
@@ -210,19 +232,61 @@ fn hearham_mode_words(mode: &str) -> Vec<&'static str> {
     out
 }
 
-/// The CTCSS tone in a hearham tone field. A machine that runs several modes can have one
+/// The 104 standard DCS codes (the set CHIRP's generic CSV accepts), each written as its
+/// three octal digits read as a decimal number, the way [`Channel::dtcs_code`] holds one.
+const DCS_CODES: [u16; 104] = [
+    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74, 114, 115, 116, 122, 125, 131,
+    132, 134, 143, 145, 152, 155, 156, 162, 165, 172, 174, 205, 212, 223, 225, 226, 243, 244, 245,
+    246, 251, 252, 255, 261, 263, 265, 266, 271, 274, 306, 311, 315, 325, 331, 332, 343, 346, 351,
+    356, 364, 365, 371, 411, 412, 413, 423, 431, 432, 445, 446, 452, 454, 455, 462, 464, 465, 466,
+    503, 506, 516, 523, 526, 532, 546, 565, 606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712,
+    723, 731, 732, 734, 743, 754,
+];
+
+/// A DCS code in one part of a hearham tone field. Every shape the directory used on
+/// 2026-09-30 is read: "DCS023", "DCS 043", "DCS411N", "D023", "DPL411", "DPL 432" and the
+/// two-digit "DCS51" (code 051). Only a standard code is taken ("DCS 740" is none), and a
+/// bare number, a trailing "*" or ".0" is not, since what those mean is not written down.
+fn hearham_dcs_part(part: &str) -> Option<u16> {
+    let p = part.trim().to_ascii_uppercase();
+    let rest = p
+        .strip_prefix("DCS")
+        .or_else(|| p.strip_prefix("DPL"))
+        .or_else(|| p.strip_prefix('D'))?;
+    let digits = rest.trim_start();
+    let digits = digits.strip_suffix('N').unwrap_or(digits);
+    if !(2..=3).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let code: u16 = digits.parse().ok()?;
+    DCS_CODES.contains(&code).then_some(code)
+}
+
+/// The squelch a hearham tone field asks for: a CTCSS tone or a DCS code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Squelch {
+    Ctcss(f32),
+    Dcs(u16),
+}
+
+/// The squelch in a hearham tone field. A machine that runs several modes can have one
 /// parameter per mode joined with `/`: "CC1/146.2" (the DMR colour code, then the FM tone),
-/// "NAC293/100.0", "67.0/CC9/RAN1/NAC293/C/CAN0" (58 rows on 2026-09-30). The tone is the
-/// part that reads as one. Two different tones ("88.5/71.9") are left unknown rather than
-/// guessed at. A field with no `/` reads exactly as [`tone_hz`] reads it.
-fn hearham_tone(field: &str) -> Option<f32> {
-    let mut tones = field.split('/').filter_map(tone_hz);
-    let tone = tones.next()?;
-    tones.all(|t| t == tone).then_some(tone)
+/// "NAC293/100.0", "67.0/CC9/RAN1/NAC293/C/CAN0", "NAC353/D244" (58 rows on 2026-09-30). The
+/// squelch is the part that reads as a tone or a DCS code. Parts that disagree, two different
+/// tones ("88.5/71.9") or a tone and a code ("77.0/D454"), are left unknown rather than
+/// guessed at. A field with no `/` reads as [`tone_hz`] or [`hearham_dcs_part`] reads it.
+fn hearham_squelch(field: &str) -> Option<Squelch> {
+    let mut found = field.split('/').filter_map(|part| {
+        tone_hz(part)
+            .map(Squelch::Ctcss)
+            .or_else(|| hearham_dcs_part(part).map(Squelch::Dcs))
+    });
+    let first = found.next()?;
+    found.all(|s| s == first).then_some(first)
 }
 
 /// The DMR colour code in a hearham tone field: its `"CCn"` part, alone or joined with
-/// `/` as in [`hearham_tone`].
+/// `/` as in [`hearham_squelch`].
 fn hearham_cc(field: &str) -> Option<u8> {
     field.split('/').find_map(cc_code)
 }
@@ -230,7 +294,7 @@ fn hearham_cc(field: &str) -> Option<u8> {
 /// Parse the hearham.com `/api/repeaters/v1` payload (bare array; `frequency` +
 /// `offset` in Hz as integers; tones as strings — `"0.00"`/`""` = none, and DMR
 /// rows carry the color code as `"CC2"` in `encode`, joined with `/` to the FM tone
-/// on a machine that runs both, see [`hearham_tone`]).
+/// on a machine that runs both, see [`hearham_squelch`]).
 ///
 /// `mode` can name several modes ([`hearham_mode_words`]). A machine is FM when any
 /// of them is FM or NFM (or the mode is empty), and each digital flag comes from its
@@ -254,15 +318,33 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
             let enc = jstr(v, "encode");
             let dec = jstr(v, "decode");
             let is_dmr = names(&["DMR"]) || hearham_cc(&enc).is_some();
+            let up = hearham_squelch(&enc);
+            let down = hearham_squelch(&dec);
+            let ctcss = |s: Option<Squelch>| match s {
+                Some(Squelch::Ctcss(hz)) => Some(hz),
+                _ => None,
+            };
+            // DCS is the uplink's (`encode`). The downlink confirms it only by giving the SAME
+            // code; any other downlink (none, a tone, another code, one Nexus cannot read) leaves
+            // it send-only, with the receiver open (`to_channel`), never guessed at.
+            let dcs = match up {
+                Some(Squelch::Dcs(code)) => Some(code),
+                _ => None,
+            };
+            let dcs_dec = match down {
+                Some(Squelch::Dcs(code)) if dcs == Some(code) => Some(code),
+                _ => None,
+            };
             Some(RepeaterRecord {
                 source: RepeaterSource::Hearham,
                 source_id: jstr(v, "id"),
                 callsign: jstr(v, "callsign"),
                 output_mhz,
                 input_mhz: (freq_hz + offset_hz) / 1e6,
-                ctcss_enc_hz: hearham_tone(&enc),
-                ctcss_dec_hz: hearham_tone(&dec),
-                dcs: None,
+                ctcss_enc_hz: ctcss(up),
+                ctcss_dec_hz: ctcss(down),
+                dcs,
+                dcs_dec,
                 lat,
                 lon,
                 city: jstr(v, "city"),
@@ -273,7 +355,7 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
                 dstar: names(&["D-STAR", "DSTAR"]),
                 fusion: names(&["YSF", "C4FM", "FUSION"]),
                 dmr_color_code: hearham_cc(&enc),
-                bandwidth_khz: None,
+                bandwidth_khz: names(&["NFM"]).then_some(NARROW_FM_KHZ),
                 operational: jf64(v, "operational").unwrap_or(1.0) != 0.0,
                 open_use: jstr(v, "restriction").is_empty(),
                 distance_km: 0.0,
@@ -527,6 +609,10 @@ pub fn filter_sort(
 /// rather than a +/- shift. The largest conventional shift is 23cm's 12–20 MHz.
 const MAX_SHIFT_MHZ: f64 = 30.0;
 
+/// The narrowband FM channel width. A machine whose source gives this bandwidth or less
+/// (RepeaterBook's "FM Bandwidth" 12.5; hearham's "NFM" is recorded as it) is an NFM channel.
+const NARROW_FM_KHZ: f32 = 12.5;
+
 /// Convert a picked repeater into a programmable [`Channel`].
 ///
 /// Duplex/offset derive from `input − output`: within ±1 Hz ⇒ simplex; a
@@ -534,7 +620,10 @@ const MAX_SHIFT_MHZ: f64 = 30.0;
 /// like +1.0 MHz on 2m stay correct); beyond [`MAX_SHIFT_MHZ`] ⇒ `Split` with
 /// the absolute input frequency. Tone: uplink PL ⇒ `Tone` (the safe default —
 /// TSQL would mute a machine that doesn't transmit tone); downlink-only tone ⇒
-/// `TSql`; DCS ⇒ `Dtcs`. Mode: FM unless the record is digital-only.
+/// `TSql`; DCS ⇒ `Dtcs`, both ways only when the downlink gives the same code and
+/// otherwise send-only ([`Channel::dtcs_tx_only`], the DCS counterpart of `Tone`, for the
+/// same reason). Mode: FM, or NFM for a machine its source marks narrow
+/// ([`NARROW_FM_KHZ`]), unless the record is digital-only.
 pub fn to_channel(r: &RepeaterRecord) -> Channel {
     let diff = r.input_mhz - r.output_mhz;
     let (duplex, offset_mhz) = if diff.abs() < 1e-6 {
@@ -553,7 +642,11 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         (None, None, None) => (ToneMode::None, 88.5, 88.5),
     };
     let mode = if r.fm {
-        ChanMode::Fm
+        if r.bandwidth_khz.is_some_and(|khz| khz <= NARROW_FM_KHZ) {
+            ChanMode::Nfm
+        } else {
+            ChanMode::Fm
+        }
     } else if r.dmr {
         ChanMode::Dmr
     } else if r.dstar {
@@ -585,6 +678,7 @@ pub fn to_channel(r: &RepeaterRecord) -> Channel {
         rtone_hz: rtone,
         ctone_hz: ctone,
         dtcs_code: r.dcs.unwrap_or(23),
+        dtcs_tx_only: r.dcs.is_some() && r.dcs_dec != r.dcs,
         mode,
         comment: if r.city.is_empty() {
             r.callsign.clone()
@@ -732,8 +826,13 @@ mod tests {
     /// below are the directory's own (every distinct value, counted 2026-09-30); the rest of the
     /// row is filler.
     fn hh_row(mode: &str, encode: &str) -> RepeaterRecord {
+        hh_row_tones(mode, encode, "")
+    }
+
+    /// [`hh_row`] with the downlink tone field (`decode`) too.
+    fn hh_row_tones(mode: &str, encode: &str, decode: &str) -> RepeaterRecord {
         let json = format!(
-            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
+            r#"[{{"id":1,"callsign":"W9TST","latitude":42.3,"longitude":-89.0,"city":"Rockford, Illinois","group":"","internet_node":"","mode":"{mode}","encode":"{encode}","decode":"{decode}","frequency":146940000,"offset":-600000,"description":"","power":"unknown","operational":1,"restriction":""}}]"#
         );
         let mut recs = parse_hearham_json(&json);
         assert_eq!(recs.len(), 1, "the {mode:?} row did not parse");
@@ -793,8 +892,8 @@ mod tests {
         assert_eq!(to_channel(&r).mode, ChanMode::Fm);
     }
 
-    /// "NFM" is narrow FM, so an NFM machine is an FM machine. Nothing in the model exports a
-    /// narrow channel yet (`to_channel` never writes `ChanMode::Nfm`), so it programs as FM.
+    /// "NFM" is narrow FM, so an NFM machine is an FM machine: listed, and addable. It programs
+    /// as a narrow channel ([`a_machine_its_source_marks_narrow_is_an_nfm_channel`]).
     #[test]
     fn a_hearham_nfm_machine_is_fm() {
         let wrong = wrong_flags(&[
@@ -804,7 +903,7 @@ mod tests {
             ("NXDN/NFM", &["FM"]),
         ]);
         assert_eq!(wrong, Vec::<String>::new(), "NFM");
-        assert_eq!(to_channel(&hh_row("NFM", "100.0")).mode, ChanMode::Fm);
+        assert_eq!(to_channel(&hh_row("NFM", "100.0")).mode, ChanMode::Nfm);
     }
 
     /// FM beside a mode the record has no field for (P25, NXDN, M17) is still FM.
@@ -874,6 +973,270 @@ mod tests {
             (c.mode, c.tone_mode, c.rtone_hz),
             (ChanMode::Fm, ToneMode::Tone, 146.2)
         );
+    }
+
+    /// hearham writes a DCS code in its tone field in several shapes, and every shape in the
+    /// directory on 2026-09-30 is here. Each reads as its code, so the machine exports DTCS with
+    /// it; read as a tone it was no squelch at all. A code outside the 104 standard ones, a bare
+    /// number, and a trailing "*" or ".0" (their meaning is not written down) are not read.
+    #[test]
+    fn a_hearham_dcs_code_in_any_of_the_directorys_shapes_is_read() {
+        let cases: [(&str, Option<u16>); 15] = [
+            ("DCS023", Some(23)),
+            ("DCS 043", Some(43)),
+            ("DCS411N", Some(411)),
+            ("D023", Some(23)),
+            ("DPL411", Some(411)),
+            ("DPL 432", Some(432)),
+            ("DCS51", Some(51)),
+            ("NAC353/D244", Some(244)),
+            ("D244/NAC293", Some(244)),
+            ("DCS 740", None),
+            ("DCS100", None),
+            ("DCS017", None),
+            ("D031*", None),
+            ("DCS172.0", None),
+            ("023", None),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(encode, want)| {
+                let got = hh_row("FM", encode).dcs;
+                (got != want).then(|| format!("{encode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "DCS codes");
+
+        // What the operator exports: DTCS with the code, and no CTCSS read out of it.
+        let r = hh_row("NFM", "DCS023");
+        assert_eq!(r.ctcss_enc_hz, None);
+        let c = to_channel(&r);
+        assert_eq!((c.tone_mode, c.dtcs_code), (ToneMode::Dtcs, 23));
+    }
+
+    /// The uplink's DCS code is the machine's, and the downlink only confirms it: the same
+    /// code there makes the channel DCS both ways, anything else (a tone on a cross-mode
+    /// machine, another code, "D031*" that Nexus cannot read) leaves it send-only
+    /// ([`a_dcs_code_on_the_uplink_only_exports_as_send_only_dcs`]). A field whose own parts
+    /// disagree, a tone and a code ("77.0/D454"), gives neither. Every pair below is one the
+    /// directory writes.
+    #[test]
+    fn a_hearham_dcs_code_is_the_uplinks_and_only_the_same_downlink_code_confirms_it() {
+        // (encode, decode, the uplink's code, the downlink's code, the uplink's CTCSS)
+        type Case<'a> = (&'a str, &'a str, Option<u16>, Option<u16>, Option<f32>);
+        let cases: [Case; 7] = [
+            ("DCS023", "DCS023", Some(23), Some(23), None),
+            ("D031", "D031*", Some(31), None, None),
+            ("DCS172", "DCS172.0", Some(172), None, None),
+            ("77.0/D454", "", None, None, None),
+            ("DCS365", "DCS364", Some(365), None, None),
+            ("D311", "100", Some(311), None, None),
+            ("D244/NAC293", "131.8/NAC293", Some(244), None, None),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|&(encode, decode, dcs, dcs_dec, tone)| {
+                let r = hh_row_tones("NFM", encode, decode);
+                let got = (r.dcs, r.dcs_dec, r.ctcss_enc_hz);
+                (got != (dcs, dcs_dec, tone)).then(|| {
+                    format!(
+                        "{encode:?}/{decode:?}: got {got:?}, want {:?}",
+                        (dcs, dcs_dec, tone)
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new(), "uplink and downlink DCS codes");
+    }
+
+    /// A one-row RepeaterBook export carrying `bandwidth` as the raw JSON value of its
+    /// "FM Bandwidth" field (`null` = absent).
+    fn rb_row_bw(bandwidth: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"{{"results":[{{"Callsign":"W9NAR","Frequency":"146.9400","Input Freq":"146.3400","PL":"103.5","TSQ":"","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"7","FM Analog":"Yes","FM Bandwidth":{bandwidth}}}]}}"#
+        );
+        let mut recs = parse_repeaterbook_json(&json);
+        assert_eq!(recs.len(), 1, "the {bandwidth} row did not parse");
+        recs.remove(0)
+    }
+
+    /// A machine its source marks narrow is a narrow (NFM) channel: hearham's "NFM" word (55
+    /// rows on 2026-09-30) and RepeaterBook's "FM Bandwidth" of 12.5 kHz, written as a number or
+    /// with the unit RepeaterBook's own pages print. Everything else stays wide FM.
+    #[test]
+    fn a_machine_its_source_marks_narrow_is_an_nfm_channel() {
+        let hearham = [
+            ("NFM", ChanMode::Nfm),
+            ("P25/NFM", ChanMode::Nfm),
+            ("DMR/NFM", ChanMode::Nfm),
+            ("FM", ChanMode::Fm),
+            ("YSF/FM", ChanMode::Fm),
+        ];
+        let repeaterbook = [
+            (r#""12.5""#, ChanMode::Nfm),
+            ("12.5", ChanMode::Nfm),
+            (r#""12.5 kHz""#, ChanMode::Nfm),
+            (r#""25""#, ChanMode::Fm),
+            (r#""25 kHz""#, ChanMode::Fm),
+            (r#""wide""#, ChanMode::Fm),
+            ("null", ChanMode::Fm),
+        ];
+        let mut wrong: Vec<String> = hearham
+            .iter()
+            .filter_map(|&(mode, want)| {
+                let got = to_channel(&hh_row(mode, "100.0")).mode;
+                (got != want).then(|| format!("hearham {mode:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        wrong.extend(repeaterbook.iter().filter_map(|&(bw, want)| {
+            let got = to_channel(&rb_row_bw(bw)).mode;
+            (got != want).then(|| format!("RepeaterBook {bw}: got {got:?}, want {want:?}"))
+        }));
+        assert_eq!(wrong, Vec::<String>::new(), "narrow channels");
+    }
+
+    /// What the operator's radio gets: both export files write a narrow machine's mode as NFM.
+    #[test]
+    fn a_narrow_machine_exports_as_nfm_in_both_files() {
+        let c = to_channel(&hh_row("NFM", "100.0"));
+        let chirp = crate::chirp::to_chirp_csv(std::slice::from_ref(&c), 8, "");
+        let row = chirp.lines().nth(1).expect("a CHIRP row");
+        assert_eq!(
+            row.split(',').nth(10),
+            Some("NFM"),
+            "CHIRP Mode column: {row}"
+        );
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        let row = csv.lines().nth(1).expect("a CSV row");
+        assert_eq!(
+            row.split(',').nth(10),
+            Some("NFM"),
+            "generic CSV Mode column: {row}"
+        );
+    }
+
+    /// A one-row RepeaterBook export with its uplink (`PL`) and downlink (`TSQ`) tone fields.
+    fn rb_row_tones(pl: &str, tsq: &str) -> RepeaterRecord {
+        let json = format!(
+            r#"{{"results":[{{"Callsign":"W9DCS","Frequency":"146.9400","Input Freq":"146.3400","PL":"{pl}","TSQ":"{tsq}","Lat":"42.5","Long":"-89.0","State ID":"55","Rptr ID":"8","FM Analog":"Yes"}}]}}"#
+        );
+        let mut recs = parse_repeaterbook_json(&json);
+        assert_eq!(recs.len(), 1, "the {pl}/{tsq} row did not parse");
+        recs.remove(0)
+    }
+
+    /// One CSV line split into its fields, honouring the quotes `csv_field` puts around a
+    /// value with a comma in it (a city such as "Rockford, Illinois" in the comment).
+    fn csv_fields(line: &str) -> Vec<String> {
+        let (mut out, mut cur, mut quoted) = (Vec::new(), String::new(), false);
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' if quoted && chars.peek() == Some(&'"') => {
+                    cur.push('"');
+                    chars.next();
+                }
+                '"' => quoted = !quoted,
+                ',' if !quoted => out.push(std::mem::take(&mut cur)),
+                _ => cur.push(ch),
+            }
+        }
+        out.push(cur);
+        out
+    }
+
+    /// The columns a record's CHIRP row carries, read back by CHIRP's own column names.
+    fn chirp_columns(r: &RepeaterRecord, names: &[&str]) -> Vec<String> {
+        let csv = crate::chirp::to_chirp_csv(&[to_channel(r)], 8, "");
+        let mut lines = csv.lines();
+        let header = csv_fields(lines.next().expect("a header"));
+        let row = csv_fields(lines.next().expect("a CHIRP row"));
+        names
+            .iter()
+            .map(|name| {
+                header
+                    .iter()
+                    .position(|h| h == name)
+                    .and_then(|i| row.get(i))
+                    .map_or_else(|| format!("<no {name} column>"), |v| v.to_string())
+            })
+            .collect()
+    }
+
+    /// A machine whose source gives its DCS code on the uplink only is send-only DCS: CHIRP's
+    /// Cross mode "DTCS->", the code on transmit and the receiver open, which is the DCS
+    /// counterpart of `Tone`. As DTCS both ways, a machine whose output carries no code would
+    /// keep the radio squelched. hearham's uplink-only rows (32 on 2026-09-30) and
+    /// RepeaterBook's PL-only rows alike. A downlink that gives the same code stays DTCS both
+    /// ways; a downlink with a tone or another code (a cross-mode machine) is send-only too.
+    #[test]
+    fn a_dcs_code_on_the_uplink_only_exports_as_send_only_dcs() {
+        let cases = [
+            (
+                "hearham, uplink only",
+                hh_row_tones("FM", "DCS023", ""),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "hearham, both ways",
+                hh_row_tones("FM", "DCS023", "DCS023"),
+                ["DTCS", "023", "Tone->Tone"],
+            ),
+            (
+                "hearham, tone down",
+                hh_row_tones("NFM", "D311", "100"),
+                ["Cross", "311", "DTCS->"],
+            ),
+            (
+                "RepeaterBook, PL only",
+                rb_row_tones("D023", ""),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "RepeaterBook, PL and TSQ",
+                rb_row_tones("D023", "D023"),
+                ["DTCS", "023", "Tone->Tone"],
+            ),
+            (
+                "RepeaterBook, tone down",
+                rb_row_tones("D023", "100.0"),
+                ["Cross", "023", "DTCS->"],
+            ),
+            (
+                "a CTCSS machine",
+                hh_row_tones("FM", "100.0", ""),
+                ["Tone", "023", "Tone->Tone"],
+            ),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(what, r, want)| {
+                let got = chirp_columns(r, &["Tone", "DtcsCode", "CrossMode"]);
+                (got != want).then(|| format!("{what}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert_eq!(
+            wrong,
+            Vec::<String>::new(),
+            "send-only DCS in the CHIRP export"
+        );
+    }
+
+    /// The generic CSV names send-only DCS in its Tone Mode column with CHIRP's word for it.
+    #[test]
+    fn send_only_dcs_is_named_in_the_generic_csv() {
+        let c = to_channel(&hh_row_tones("FM", "DCS023", ""));
+        let csv = crate::memchan::to_generic_csv(std::slice::from_ref(&c), "");
+        let mut lines = csv.lines();
+        let header = csv_fields(lines.next().expect("a header"));
+        let row = csv_fields(lines.next().expect("a CSV row"));
+        let at = |name: &str| {
+            header
+                .iter()
+                .position(|h| h == name)
+                .map(|i| row[i].as_str())
+        };
+        assert_eq!((at("Tone Mode"), at("DCS")), (Some("DTCS->"), Some("023")));
     }
 
     /// A mode the record has no field for is never FM on its own, and a plain or empty mode is

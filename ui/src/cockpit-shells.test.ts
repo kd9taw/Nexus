@@ -951,13 +951,14 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
     const auto = lastOn('grid-auto-rows')
     expect(rows, '.connect: no grid-template-rows declared').not.toBeNull()
     // …unless the OPERATOR has sized the strip (layout L7): its divider writes `--cn-strip-h`, and
-    // the row is then exactly the height asked for — not a cap that pays out. Unset, the row is the
-    // `auto` this guard has always required, and any other spelling (a fixed max, a bare length, a
-    // different fallback) still fails here.
+    // the row is then exactly the height asked for — not a cap that pays out. Unset, the row's max is
+    // the `auto` this guard has always required, over the 4em floor that keeps a pane's title bar
+    // below the floor (connect-layout.test.ts computes it); any other spelling (a fixed max, a bare
+    // length, a different fallback) still fails here.
     expect(
       auto,
-      '.connect: the strip row is implicit, so grid-auto-rows IS its track — and unsized it must be auto',
-    ).toBe('var(--cn-strip-h, auto)')
+      '.connect: the strip row is implicit, so grid-auto-rows IS its track — and unsized its max must be auto',
+    ).toBe('var(--cn-strip-h, minmax(4em, auto))')
     // Paren-aware top-level track split (minmax(a, b) is one track).
     const tracks: string[] = []
     let depth = 0
@@ -973,10 +974,10 @@ describe('Connect strip cap caps the PANES, not the grid track', () => {
     if (cur) tracks.push(cur)
     expect(
       tracks,
-      `.connect rows are \`${rows}\` — the map row alone is explicit. A second explicit row is ` +
-        'where a fixed max would return: it is maximized to its full value before the fr row ' +
-        'expands (§11.6), so it is a floor, not a cap.',
-    ).toEqual(['minmax(0, 1fr)'])
+      `.connect rows are \`${rows}\` — the map row alone is explicit, flexible over the rails' floor. ` +
+        'A second explicit row is where a fixed max would return: it is maximized to its full value ' +
+        'before the fr row expands (§11.6), so it is a floor, not a cap.',
+    ).toEqual(['minmax(max(calc(8em + var(--space-3)), min(calc(10em + var(--space-3)), calc(100% - 4em - var(--space-3)))), 1fr)'])
   })
 
   it('.connect-strip > .pane-frame carries the zoom-corrected max-height cap', () => {

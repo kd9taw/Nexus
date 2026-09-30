@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,308 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,312 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -24,7 +24,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | QSO / QSOs | 97 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 84 | Computer Aided Transceiver — the radio control protocol. |
-| TX / RX | 79 / 72 | Transmit and receive. Printed on the radio itself. |
+| TX / RX | 79 / 73 | Transmit and receive. Printed on the radio itself. |
 | CW | 68 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 67 | Both the Q-code and the callsign lookup site. |
 | CQ | 63 | The call. Translating it would be strange on the air and on screen. |
@@ -48,7 +48,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | POTA / SOTA | 28 / 10 | Parks and Summits On The Air — programme names. |
 | CSV | 24 | File format. |
 | CHIRP | 23 | The radio-programming program. |
-| UTC | 26 | The time standard. Never "TUC". |
+| UTC | 27 | The time standard. Never "TUC". |
 | PSK / PSK31 | 23 / 8 | Mode names. |
 | QSY | 22 | Q-code: change frequency. |
 | SmartSDR / FlexRadio | 22 / 9 | Product names. |
@@ -95,7 +95,7 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 324 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| band | 326 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 231 | The rig itself, and the radio list in Settings. | |
 | mode | 212 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
@@ -114,7 +114,7 @@ word in, and use only that word in the CSV.
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 52 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
-| decode | 51 | Both noun and verb. | |
+| decode | 52 | Both noun and verb. | |
 | spot / spots | 33 / 53 | A cluster or RBN spot. Both noun and verb. | |
 | needed | 53 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
 | import / export | 45 / 42 | ADIF import and export. | |
@@ -130,7 +130,7 @@ word in, and use only that word in the CSV.
 | antenna | 31 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
 | cockpit | 30 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 23 / 12 | The movable boxes inside a cockpit. | |
+| pane / panel | 24 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
 | exchange | 15 | The contest exchange. | |

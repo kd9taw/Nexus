@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProgChannel } from '../types'
+import { emptyBank, findEquivalent, saveFavoriteFromDial } from './memories'
 import {
   autoRadiusMi,
   bandOfMhz,
@@ -216,6 +217,40 @@ describe('repeaterMemory', () => {
 
   it('is a repeater when it has a tone even on a simplex shift (tone-access machine)', () => {
     expect(repeaterMemory(chan({ duplex: 'simplex' }), 'CALL').kind).toBe('repeater')
+  })
+
+  it('carries a DCS code, so the bank and its CHIRP export keep what opens the machine', () => {
+    const m = repeaterMemory(chan({ toneMode: 'dtcs', dtcsCode: 23 }), 'W9ABC 94')
+    expect(m).toMatchObject({ toneMode: 'dtcs', dtcsCode: 23, kind: 'repeater' })
+    expect(m.ctcssEncHz).toBeUndefined()
+  })
+
+  it('carries a send-only DCS code as CHIRP Cross "DTCS->", the code on transmit only', () => {
+    const m = repeaterMemory(chan({ toneMode: 'dtcs', dtcsCode: 23, dtcsTxOnly: true }), 'W9ABC 94')
+    expect(m).toMatchObject({ toneMode: 'cross', dtcsCode: 23, kind: 'repeater' })
+    expect([m.ctcssEncHz, m.ctcssDecHz, m.dtcsRxCode]).toEqual([undefined, undefined, undefined])
+  })
+
+  it('keeps a narrow machine narrow, so the bank and its CHIRP export say NFM', () => {
+    expect(repeaterMemory(chan({ mode: 'nfm' }), 'W9ABC 94').mode).toBe('NFM')
+    expect(repeaterMemory(chan(), 'W9ABC 94').mode).toBe('FM')
+  })
+
+  it('an FM-starred machine re-read as narrow is still starred, and starring it adds no second memory', () => {
+    // Starred while its directory entry still read as FM: the old reading made it an FM memory.
+    const starred = saveFavoriteFromDial(emptyBank(), repeaterMemory(chan(), 'W9ABC 94'))
+    expect(starred.result).toBe('added')
+    // The same machine re-read as narrow now comes back as an NFM channel.
+    const narrow = repeaterMemory(chan({ mode: 'nfm' }), 'W9ABC 94')
+    expect(narrow.mode).toBe('NFM')
+    // Program's star reads it as starred (the lookup behind the ★ and its unstar) ...
+    const hit = findEquivalent(starred.bank, narrow)
+    expect(hit?.id).toBe(starred.bank.memories[0].id)
+    expect(hit?.favorite).toBe(true)
+    // ... and starring it again finds that memory instead of adding an NFM duplicate.
+    const again = saveFavoriteFromDial(starred.bank, narrow)
+    expect(again.result).toBe('exists')
+    expect(again.bank.memories).toHaveLength(1)
   })
 
   it('leaves the site undefined when the caller has no record (a reloaded list)', () => {

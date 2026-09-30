@@ -284,6 +284,36 @@ describe('the JS8 Stations list takes its callsign aging from Settings', () => {
   })
 })
 
+// …and the band-activity aging, the same seam for the Band activity pane (js8ShownOffsetRows).
+describe('the JS8 Band activity pane takes its aging from Settings', () => {
+  it('a row older than the aging in Settings is not shown', async () => {
+    const api = await import('./api')
+    const now = Date.now()
+    const row = (freqHz: number, agoMs: number) => ({
+      atMs: now - agoMs, speed: 'normal', freqHz, snrDb: -9, dtS: 0.1, from: 'W0OLD', text: `W0OLD: @HB HEARTBEAT ${freqHz}`,
+      directedToMe: false, mine: false, complete: true, lowConf: false,
+    })
+    vi.mocked(api.getSettings).mockImplementation(async () => ({ ...defaultSettings, js8ActivityAgingMin: 2 }) as never)
+    vi.mocked(api.getJs8State).mockImplementation(
+      async () => ({ ...js8State, activity: [row(700, 3 * 60_000), row(1508, 30_000)] }) as never,
+    )
+    try {
+      await mountOn('js8')
+      await waitFor(
+        () =>
+          expect(
+            onScreen('[data-pane="offsets"] .js8-offset-row .js8-freq').map((c) => c.textContent),
+            'the 700 Hz row, 3 minutes old, has aged out',
+          ).toEqual(['1508 Hz']),
+        { timeout: 3000 },
+      )
+    } finally {
+      vi.mocked(api.getSettings).mockImplementation(async () => null as never)
+      vi.mocked(api.getJs8State).mockImplementation(async () => js8State as never)
+    }
+  })
+})
+
 // ── the SHAPE guard: the next cockpit, not this one ─────────────────────────────────────────
 //
 // The defect above was not a JS8 mistake, it was a MISSING PAIRING: a view can be given a

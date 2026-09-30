@@ -231,6 +231,18 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
     expect(row.querySelector('.js8-snr')!.textContent).toBe('-19')
   })
 
+  it('shows a station’s offset in whole hertz truncated, as JS8Call’s call activity does', async () => {
+    // JS8Call prints `cd.offset` (mainwindow.cpp:10280), the decoder's frequency held in an int
+    // (:4029, decodedtext.cpp:248), so 1508.9 Hz reads 1508: the Band activity pane's rule.
+    const [w0ind, n0grd] = js8Fixture().stations
+    state.current = { ...js8Fixture(), stations: [{ ...w0ind, freqHz: 1508.9 }, n0grd] }
+    await renderCockpit()
+    const offsets = Array.from(stationRow('W0IND').querySelectorAll('.js8-cell'))
+      .map((c) => c.textContent ?? '')
+      .filter((text) => text.endsWith(' Hz'))
+    expect(offsets, '1508.9 Hz is on the 1508 row, not rounded up').toEqual(['1508 Hz'])
+  })
+
   it('takes the grid from the LOG when the station has not sent one (JS8Call’s fallback)', async () => {
     log.current = [{ ...logFixture()[0], call: 'N0GRD', grid: 'FN31' }]
     await renderCockpit()
@@ -289,6 +301,39 @@ describe('the Stations list under JS8Call’s callsign aging', () => {
   })
 })
 
+// A MSG to me is filed UNREAD, and JS8Call shows it in its call list (mainwindow.cpp:10199-10251):
+// ⚑ "Message Available" on the station, and the station lifted to the top of the list.
+describe('a station with an unread message for me', () => {
+  const calls = () =>
+    Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
+  const unread = (from: string, state: 'unread' | 'read' = 'unread') => ({
+    id: 7, from, to: 'KD9TAW', text: 'HELLO', path: [from], state, atMs: 1_757_000_020_000, freqHz: 900, snrDb: -19,
+  })
+  it('is flagged ⚑ and listed first; one without a message is not flagged', async () => {
+    state.current = { ...js8Fixture(), inbox: [unread('N0GRD')] }
+    await renderCockpit()
+    expect(calls(), 'N0GRD, with an unread message, heads the list').toEqual(['N0GRD', 'W0IND'])
+    const flag = Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).find((c) => c.textContent === '⚑')
+    expect(flag, 'no ⚑ on the station with an unread message').toBeTruthy()
+    expect(flag!.getAttribute('title')).toMatch(/Unread message for you from N0GRD/)
+    expect(
+      Array.from(stationRow('W0IND').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑'),
+      'W0IND has no message and no flag',
+    ).toBe(false)
+  })
+  it('a message read is neither flagged nor lifted, and a ★ pin still comes first', async () => {
+    state.current = { ...js8Fixture(), inbox: [unread('N0GRD', 'read')] }
+    await renderCockpit()
+    expect(calls(), 'read: the engine’s order').toEqual(['W0IND', 'N0GRD'])
+    expect(Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑')).toBe(false)
+    cleanup()
+    window.localStorage.setItem(JS8_PINS_KEY, 'W0IND')
+    state.current = { ...js8Fixture(), inbox: [unread('N0GRD')] }
+    await renderCockpit()
+    expect(calls(), 'the operator’s ★ pin, then the message').toEqual(['W0IND', 'N0GRD'])
+  })
+})
+
 describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () => {
   it('is a CockpitPaneFrame inside the region, one row per offset, ordered by offset', async () => {
     await renderCockpit()
@@ -323,6 +368,26 @@ describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () =
     })
     expect(setRxOffset).toHaveBeenCalledWith(700)
     expect((api.setTxOffset as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
+  })
+
+  // JS8Call's "Remove messages from band activity after" (ActivityAging, 2 minutes by default,
+  // Configuration.cpp:1854): a row older than that is not shown unless its offset is selected
+  // (mainwindow.cpp:9845-9856). Here the selected offset is RX's: the double-click that picks a row
+  // moves RX there. The rule itself is js8Vocab's `js8ShownOffsetRows`.
+  it('with the aging, a row older than it leaves the pane unless RX is on its offset', async () => {
+    const now = Date.now()
+    const [old, , fresh] = js8Fixture().activity
+    state.current = { ...js8Fixture(), activity: [{ ...old, freqHz: 700, atMs: now - 3 * 60_000 }, { ...fresh, freqHz: 1508, atMs: now - 30_000 }] }
+    const offsets = () =>
+      Array.from(document.querySelectorAll('[data-pane="offsets"] .js8-offset-row .js8-freq')).map((c) => c.textContent)
+    await renderCockpit({ activityAgingMin: 2 })
+    expect(offsets(), 'the 700 Hz row, 3 minutes old, has aged out').toEqual(['1508 Hz'])
+    cleanup()
+    await renderCockpit({ activityAgingMin: 2, snap: { ...snap, radio: { ...snap.radio, rxOffsetHz: 700 } } as AppSnapshot })
+    expect(offsets(), 'RX on 700 Hz keeps its row').toEqual(['700 Hz', '1508 Hz'])
+    cleanup()
+    await renderCockpit()
+    expect(offsets(), 'no aging handed down, every row').toEqual(['700 Hz', '1508 Hz'])
   })
 
   it('is ⊞-hideable like its siblings, and hiding it leaves the transcript', async () => {

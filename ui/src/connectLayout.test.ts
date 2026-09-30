@@ -218,7 +218,7 @@ describe('connect layout invariants', () => {
       // The resolver really is seeing the [data-viewport] competitors: at xs the stacked
       // template wins, at lg the two-rail one does. Without this, the assertions above would
       // pass on a resolver that had silently skipped every rival rule. (Since the 2026-09-13
-      // close + resize work the rows are `minmax(0, 1fr)` in BOTH layouts — the strip rides an
+      // close + resize work both layouts have ONE flexible row — the strip rides an
       // implicit row — so the two-rail discriminator is its areas, which full screen replaces.)
       expect(winner(chainAt('xs', false), 'grid-template-rows')!.value).toContain('280px')
       expect(winner(chainAt('lg', false), 'grid-template-areas')!.value).toBe("'left center right'")

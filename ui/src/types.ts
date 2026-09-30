@@ -3517,6 +3517,10 @@ export interface Settings {
    * station not heard for this long leaves the Stations list, unless it is selected or has an
    * unread message for me, and HEARING? replies. */
   js8CallsignAgingMin: number
+  /** JS8Call's band-activity aging in minutes (2, the default; 0 = off; JS8Call's field runs
+   * 0-1440): a Band activity row whose newest decode is this old leaves the pane, unless RX is on
+   * its offset. Display only. */
+  js8ActivityAgingMin: number
   /** Free text answered to INFO?. */
   js8Info: string
   /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */
@@ -4453,6 +4457,8 @@ export interface RepeaterRecord {
   ctcssEncHz?: number | null
   ctcssDecHz?: number | null
   dcs?: number | null
+  /** The downlink's DCS code, when the source gives one; the same code as `dcs` = both ways. */
+  dcsDec?: number | null
   lat: number
   lon: number
   city: string
@@ -4519,6 +4525,8 @@ export interface ProgChannel {
   rtoneHz: number
   ctoneHz: number
   dtcsCode: number
+  /** With toneMode 'dtcs': the code on transmit only, the receiver open (CHIRP Cross "DTCS->"). */
+  dtcsTxOnly?: boolean
   mode: 'fm' | 'nfm' | 'am' | 'dmr' | 'dstar' | 'fusion'
   comment: string
   dmrColorCode?: number | null

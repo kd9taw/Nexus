@@ -125,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
   current value, so it follows the locator when you move.
+- **JS8: band activity aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Band
+  activity aging (minutes)** field, 2 by default as in JS8Call, so the Band activity pane looks
+  different out of the box: a row whose newest decode is 2 minutes old or more leaves the pane,
+  unless RX is on its offset (a double-click on a row puts RX there). Set it to 0 to keep every
+  row, as before. Nothing about decoding or transmitting changes, and a row comes back as soon as
+  its offset decodes again. Up to 1440 minutes, a day. The Remote's Band activity pane follows the
+  station's setting.
 - **JS8: callsign aging, as in JS8Call.** Settings ▸ Digital ▸ JS8 has a new **Callsign aging
   (minutes)** field, off (0) by default as in JS8Call. Set it, and a station you have not heard
   for that many minutes drops off the JS8 Stations pane, unless it is the one you have selected
@@ -650,6 +657,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need-colored, live openings", but Chase DX, like every intent, has opened on the Globe since the
   map picker arrived. It now says "Globe, need-colored, live openings", in every language.
 
+- **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
+  you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
+  relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of
+  the list, just under any station you pinned with ★, and a notice says a new message arrived.
+  Mark it read or delete it in the Inbox. Before, a message to you went by in the activity list
+  and was kept nowhere, although the Inbox said such messages appear there. Nothing is sent back:
+  JS8Call also answers such a message with an ACK, and Nexus does not. Messages to you stay until
+  you delete them (the newest 100 are kept); messages held for other stations still go after 48
+  hours, and a flood of messages to you can never push one of those out.
+- **JS8: the Stations pane shows each station's offset the way JS8Call does.** The offset is whole
+  hertz with the fraction dropped, so a station at 1508.9 Hz reads 1508 Hz, where it used to be
+  rounded up to 1509. It now matches the Band activity pane and JS8Call's own call list.
+- **Connect at a large zoom: the side panes can be used again.** With the app pinned at a large
+  zoom on a smaller screen (for example 175 % on 1920×1080), the top bar and Connect's header leave
+  the pane grid little height. The bottom row kept its full height, and each side pane shrank to a
+  sliver: its title was cut off and its pane picker and ✕ could not be reached (in Japanese, none
+  of the four). Now every pane keeps its title bar, with its picker and ✕, in view and a line of
+  the pane under it: the bottom row gives up the height it was holding, and where even that does
+  not fit, Connect scrolls. At the usual sizes and zooms nothing moves; on a 1024×768 screen with
+  the zoom pinned at 100 %, the side panes also take a little of the bottom row's height, so a
+  two-line title still shows a line of its pane.
 - **CW: a message that could not go out is dropped, not sent later on its own.** When CW could not
   be sent because transmit was off (for example after leaving the CW screen part-way through a
   message) or the frequency was outside your license privileges, what was still waiting used to be
@@ -692,6 +720,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digital filter was on, and could not be added to a channel list. They are now listed and can be
   added, starred and exported as FM channels, and a `YSF/FM` machine keeps its +YSF badge. An `NFM`
   machine is programmed as ordinary FM, since Program does not write narrow channels yet.
+- **Program writes a narrow repeater as a narrow channel.** A machine whose directory marks it
+  narrow, hearham's `NFM` or a RepeaterBook bandwidth of 12.5 kHz, now goes out as `NFM` in the
+  CHIRP and CSV files (the Remote's export too) and is starred into Memories as NFM, so the radio
+  uses the narrow deviation the machine expects. That is 55 machines in the hearham directory.
+  A narrow machine you had already starred as FM is still that one memory: Memories counts NFM and
+  FM on the same frequency and tone as the same channel, so starring it again or importing it adds
+  no second copy. **Tune now** and recalling the memory still set the radio to ordinary FM: Nexus
+  has no narrow-FM setting for the rig on any radio yet.
+- **Program exports the DCS code of a hearham repeater.** The hearham directory writes a DCS
+  machine's code in its tone field (`DCS023`, `D023`, `DCS 043`, `DPL411` and a few other
+  spellings), and Program read none of them, so 138 FM machines went out with no code and would not
+  open. They now export with their code, in the CHIRP and CSV files and when starred into
+  Memories. **Tune now** still sets no code on the radio: Nexus has no DCS setting for the rig. A code
+  that is not one of the 104 standard ones, or an entry that lists a tone and a code together, still
+  gets none rather than a guess.
+- **A repeater that takes its DCS code only on its input is programmed that way.** When the
+  directory gives a machine's DCS code for its input alone (32 hearham machines, and a RepeaterBook
+  machine with a DCS code in PL but not in TSQ), Program now exports it as DCS on transmit only,
+  CHIRP's Cross mode `DTCS->`, with the receiver left open: in the CHIRP and CSV files, the Remote's
+  export and when starred into Memories. As DCS both ways, it kept the radio squelched on a machine
+  whose output carries no code. A machine that lists the same code on its output stays DCS both
+  ways, and the 4 hearham machines that list a tone or a different code on their output, which got
+  no code before, now go out the same send-only way. CHIRP files from Program and Memories carry two
+  more columns at the end, `RxDtcsCode` and `CrossMode`.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read
@@ -1108,6 +1160,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every light theme they now take the theme's text colour, with the colour kept on the chip's
   border. The same goes for Connect's boxes in the dashboard rail beside the cockpits, and for the
   BAND OPEN and NEW PARK badges in the POTA/SOTA box. The dark themes look exactly as before.
+- **Need chips are easy to read in the light themes, wherever they appear.** The NEW ONE, ZONE,
+  BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA and WATCH chips in Band Activity, on the Call
+  Roster and the Stations list, on the Needed board, in Spots and in the Satellites section
+  lettered their word in the need's own colour, which was hard to read in every light theme; a
+  DXPED chip nearly vanished. The word now takes the theme's text colour everywhere, as on
+  Connect, and the need's colour stays on the chip's border. The dark themes look exactly as
+  before.
+- **Connect's MUF, next satellite pass and scope source are easy to read in the light themes.**
+  Band Outlook's MUF (14.2 MHz), Satellite Passes' next pass time (in 10 min) and the scope's
+  source badge (AUDIO) were lettered in the accent colour, which was hard to read on the light
+  page. In the light themes they now take the theme's text colour, underlined in the accent. The
+  dark themes look exactly as before.
+- **Closed bands and the NEW ONE chip are easy to read in the dark themes.** The Band Advisor
+  faded a closed band's row, and Band Outlook a closed mode chip, by making them see-through, which
+  left the row's "Closed" and its reason and the struck-through mode very hard to read in the dark
+  themes (and the mode chip in the light ones too). They now fade by their colour instead, and a
+  closed band's name in the 24-hour chart and the Best Band table takes the same dimmer grey. The
+  NEW ONE need chip letters its word in the theme's text colour in every theme, with its magenta
+  kept on the chip.
+- **The Kp outlook and the TV page use the theme's own warning colours.** The Kp outlook's bars
+  and storm line, and the TV page's "stale" and "no link" chips, were drawn in a fixed amber and
+  red in every theme, whatever the theme or the amber colour picked in Settings. They now take the
+  theme's warning and critical colours: in the dark themes the amber is a little lighter and the
+  storm red becomes the critical orange, and in the light themes the bars are dark enough to see.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way

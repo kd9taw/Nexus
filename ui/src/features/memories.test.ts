@@ -286,6 +286,42 @@ describe('CHIRP CSV round-trip', () => {
     expect(back[2]).toMatchObject({ mode: 'FT8', kind: 'digital', rxMhz: 14.074 })
   })
 
+  it('exports send-only DCS as CHIRP Cross "DTCS->" and reads it back as the same memory', () => {
+    const sendOnly = mem({
+      name: 'W9DCS',
+      mode: 'FM',
+      kind: 'repeater',
+      rxMhz: 146.94,
+      offsetDir: 'minus',
+      offsetMhz: 0.6,
+      toneMode: 'cross',
+      dtcsCode: 23,
+    })
+    const [header, row] = toChirpCsv([sendOnly]).trim().split('\r\n')
+    const names = header.split(',')
+    const f = row.split(',')
+    const at = (name: string) => f[names.indexOf(name)]
+    expect([at('Tone'), at('DtcsCode'), at('CrossMode')]).toEqual(['Cross', '023', 'DTCS->'])
+    const [back] = parseChirpCsv(toChirpCsv([sendOnly]))
+    expect(back).toMatchObject({ toneMode: 'cross', dtcsCode: 23 })
+    expect([back.ctcssEncHz, back.ctcssDecHz, back.dtcsRxCode]).toEqual([undefined, undefined, undefined])
+  })
+
+  it('gives every row a cross mode CHIRP accepts, since CHIRP rejects a row whose CrossMode is empty', () => {
+    const rows = toChirpCsv([
+      mem({ name: 'Tone', rxMhz: 146.94, toneMode: 'tone', ctcssEncHz: 103.5 }),
+      mem({ id: 'm2', name: 'Dcs', rxMhz: 146.82, toneMode: 'dtcs', dtcsCode: 23 }),
+      mem({ id: 'm3', name: 'Plain', rxMhz: 146.52 }),
+      // A cross row imported without a CrossMode keeps CHIRP's own default, as before.
+      mem({ id: 'm4', name: 'Imported', rxMhz: 147.0, toneMode: 'cross', ctcssEncHz: 100, ctcssDecHz: 123, dtcsCode: 23 }),
+    ])
+      .trim()
+      .split('\r\n')
+    const names = rows[0].split(',')
+    const crossModes = rows.slice(1).map((r) => r.split(',')[names.indexOf('CrossMode')])
+    expect(crossModes).toEqual(['Tone->Tone', 'Tone->Tone', 'Tone->Tone', 'Tone->Tone'])
+  })
+
   it('escapes and re-parses names with commas/quotes', () => {
     const back = parseChirpCsv(toChirpCsv([mem({ name: 'Net, "the big one"', rxMhz: 7.2, mode: 'LSB' })]))
     expect(back[0].name).toBe('Net, "the big one"')
@@ -568,5 +604,17 @@ describe('findEquivalent', () => {
     expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'FM', ctcssEncHz: 100 })).toBeUndefined()
     expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'USB', ctcssEncHz: 103.5 })).toBeUndefined()
     expect(findEquivalent(emptyBank(), { rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5 })).toBeUndefined()
+  })
+
+  it('reads NFM as the same machine as FM: narrow is how it is programmed, not which machine it is', () => {
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'NFM', ctcssEncHz: 103.5 })?.id).toBe('m-rptr')
+    expect(findEquivalent(bank, { rxMhz: 146.94, mode: 'nfm', ctcssEncHz: 103.5 })?.id).toBe('m-rptr')
+    expect(memoryKey({ rxMhz: 146.94, mode: 'NFM', ctcssEncHz: 103.5 })).toBe(
+      memoryKey({ rxMhz: 146.94, mode: 'FM', ctcssEncHz: 103.5 }),
+    )
+    // Only NFM joins FM: broadcast-wide FM, AM and the sidebands stay other channels.
+    for (const other of ['WFM', 'AM', 'NAM', 'USB']) {
+      expect(findEquivalent(bank, { rxMhz: 146.94, mode: other, ctcssEncHz: 103.5 })).toBeUndefined()
+    }
   })
 })

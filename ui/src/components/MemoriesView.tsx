@@ -22,6 +22,7 @@ import {
   deleteGroup,
   deleteMemories,
   deleteMemory,
+  isSendOnlyDcs,
   memoriesStore,
   moveFavorite,
   moveMemory,
@@ -320,7 +321,7 @@ function rowSummary(m: Memory, myGrid: string, units: Units): string {
   if ((m.toneMode === 'tone' || m.toneMode === 'tsql') && m.ctcssEncHz) {
     parts.push(m.ctcssEncHz.toFixed(1))
   }
-  if (m.toneMode === 'dtcs' && m.dtcsCode) parts.push(`D${m.dtcsCode}`)
+  if ((m.toneMode === 'dtcs' || isSendOnlyDcs(m)) && m.dtcsCode) parts.push(`D${m.dtcsCode}`)
   if (m.net) parts.push(`${m.net.days.map((d) => DAY_LABELS[d]).join('')} ${m.net.utcTime}z`)
   // Repeaters starred from the Program picker know where they physically are.
   const off = siteOffset(m, myGrid)

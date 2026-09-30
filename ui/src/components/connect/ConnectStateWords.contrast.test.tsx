@@ -437,6 +437,10 @@ const SHIPPED = RULES.filter(
 
 if (RULES.filter((r) => !SHIPPED.includes(r)).some((r) => r.decls.some((d) => d.prop.startsWith('--'))))
   throw new Error('a light-theme state-word rule declares a custom property: the shipped sheet no longer shares the token table')
+/** The accent's words as they shipped: the light-theme rules on them, removed (the same token table, like SHIPPED's). */
+const ACCENT_SHIPPED = RULES.filter((r) => !(r.selector.startsWith("[data-theme='light'] ") && /\.(cp-muf|sat-when|mini-spectrum-src)\b/.test(r.selector)))
+if (RULES.filter((r) => !ACCENT_SHIPPED.includes(r)).some((r) => r.decls.some((d) => d.prop.startsWith('--'))))
+  throw new Error('a light-theme accent-word rule declares a custom property: the shipped sheet no longer shares the token table')
 
 const role = (id: string) => PALETTE_ROLES.find((x) => x.id === id)!
 const PRESETS: Record<string, string>[] = [
@@ -478,7 +482,7 @@ const winnerMode = (mode: Mode): Mode => mode.split(' ').filter((p, i) => i === 
 
 /** The rules this change added declare no custom property, so the shipped sheet's tokens ARE the sheet's:
  *  one token table serves both (the token walk is the expensive half of every lookup). */
-const TOKEN_RULES = (rules: Rule[]) => (rules === SHIPPED ? RULES : rules)
+const TOKEN_RULES = (rules: Rule[]) => (rules === SHIPPED || rules === ACCENT_SHIPPED ? RULES : rules)
 /** Each prefix of a word's chain, keyed once: its shape, and the custom properties its nodes set inline. */
 const KEYS = new WeakMap<Word, { shape: string[]; vars: string[] }>()
 function keysOf(w: Word) {
@@ -604,6 +608,8 @@ function wordOf(rules: Rule[], mode: Mode, w: Word) {
   const fg = [0, 1, 2].map((k) => Math.round(raw[k] * o + bg[k] * (1 - o))) as unknown as Rgb
   return { raw, fg, bg, ratio: contrast(fg, bg), ink }
 }
+/** The theme's accent, resolved at the word. */
+const accentAt = (rules: Rule[], mode: Mode, w: Word, at: number) => hex(colourAt(rules, mode, w, at, 'var(--accent)', [0, 0, 0]))
 /** The theme's own inks at the word: its text colours and its accent. Anything else is a state colour. */
 const NEUTRAL = ['--text', '--text-dim', '--text-faint', '--accent', '--accent-ink', '--readout']
 const neutralAt = (rules: Rule[], mode: Mode, w: Word, at: number) =>
@@ -623,9 +629,11 @@ function unreadable(rules: Rule[], words: Word[], modes: readonly Mode[]): strin
 describe('every state-coloured word on Connect reads in every light theme', () => {
   let all: Word[] = []
   let state: Word[] = []
+  let accent: Word[] = []
   beforeAll(async () => {
     all = await renderAll()
     state = all.filter((w) => shown(RULES, 'dark', w) && !neutralAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at).has(hex(wordOf(RULES, 'dark', w).raw)))
+    accent = all.filter((w) => shown(RULES, 'dark', w) && hex(wordOf(RULES, 'dark', w).raw) === accentAt(RULES, 'dark', w, inkOf(RULES, 'dark', w).at))
   }, 120_000)
 
   // THE INVENTORY: every kind of state word on Connect, each in every state the data above puts it in. Exact,
@@ -633,11 +641,11 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   // and a new state word must be looked at before it joins; either way this list is where it shows.
   const INVENTORY = [
     'amp-fault: .amp-fault.amp-alarm', 'amp-fault: .amp-fault.amp-warn', 'amp-link: .amp-link', 'amp-link: .amp-link.amp-down',
-    'bbt-band: .bbt-band [mark]', 'bbt-band: .bbt-band [recede]',
+    'bbt-band: .bbt-band [mark]',
     'cfeed-ends: .cfeed-ends', 'chase-open: .chase-open.o-open', 'cp-mode: .cp-mode.fair', 'cp-mode: .cp-mode.good',
     'cp-work: .cp-work.w-excellent', 'cp-work: .cp-work.w-fair', 'cp-work: .cp-work.w-good', 'getout-summary: strong', 'go-snr: .go-snr',
-    'heatmap-band: .heatmap-name [mark]', 'heatmap-band: .heatmap-name [recede]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
-    'need-chip: .need-chip.need-band', 'need-chip: .need-chip.need-dxped', 'need-chip: .need-chip.need-entity', 'need-chip: .need-chip.need-mode',
+    'heatmap-band: .heatmap-name [mark]', 'kp-line: .kp-line.good', 'kp-line: .kp-line.warn',
+    'need-chip: .need-chip.need-band', 'need-chip: .need-chip.need-dxped', 'need-chip: .need-chip.need-mode',
     'need-chip: .need-chip.need-state', 'opening-band: .opening-band', 'opening-new: .opening-new', 'prop-prov: .prop-prov.prov-live',
     'rotor-slewing: .rotor-slewing', 'rotor-stop: .rotor-stop', 'sat-chip: .sat-chip.dead', 'sat-chip: .sat-chip.stale',
     'sat-stale: .sat-stale', 'swsc-chip: .swsc-chip.swsc-major', 'swsc-chip: .swsc-chip.swsc-minor', 'swx-impact: .swx-impact [mark]',
@@ -685,8 +693,8 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   }, 240_000)
 
   // The words with no border of their own that says their state: each must carry an underline or a bar in the
-  // light themes (a closed band's grey excepted: it recedes, unmarked). The rest keep the state on their
-  // chip's or row's border, or (Space Wx) on the gauge's bar above; those are measured in the report. The
+  // light themes. The rest keep the state on their chip's or row's border, or (Space Wx) on the gauge's bar
+  // above; those are measured in the report. (A closed band's grey is no state: it recedes, below.) The
   // Spots board's mode badges letter in the page colour on their mode's fill, which carries the mode, and
   // read 4.5:1 in every light theme as they are.
   const MARKED = ['bbt-band', 'heatmap-band', 'cp-work', 'amp-link', 'kp-line', 'sat-stale', 'rotor-slewing', 'amp-fault']
@@ -699,9 +707,8 @@ describe('every state-coloured word on Connect reads in every light theme', () =
         // A bar's colour may arrive in the `border-left` shorthand: the colour is its var() or hex.
         const bar = declAt(RULES, mode, w, i, 'border-left-color', 'border-left')?.match(/var\(--[\w-]+[^)]*\)|#[0-9a-fA-F]{3,8}\b/)?.[0] ?? null
         const mark = line === 'underline' ? declAt(RULES, mode, w, i, 'text-decoration-color') : bar
-        const recedes = w.nodes.some((n) => n.getAttribute('data-state-ink') === 'recede')
         if (!mark) {
-          if (MARKED.includes(w.kind) && !recedes) low.push(`${w.what} ${mode}: no underline or bar carries its state`)
+          if (MARKED.includes(w.kind)) low.push(`${w.what} ${mode}: no underline or bar carries its state`)
           continue
         }
         const bg = surfaceOf(RULES, mode, w)
@@ -753,6 +760,68 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     expect(lowEdges(badges)).toEqual([])
   }, 60_000)
 
+  // THE ACCENT'S WORDS (operator, 2026-09-30: "Ink, accent as the mark"). A word Connect letters in the theme's accent: the
+  // MUF, Satellite Passes' next pass time, the scope's source badge and the openings' note. The accent was tuned as a
+  // mark, and as lettering on the light page it read 4.25:1 (Chrome), so a word that did takes the theme's ink in the
+  // light themes and keeps the accent as its underline. The census is the standard dark theme's again, where their ink is
+  // the accent, and it is exact.
+  const ACCENT_INVENTORY = [
+    '.mini-spectrum-src', '.opening-note', '.sat-when', 'strong',
+    // The two boards in the Spots and POTA/SOTA boxes (their screens' own palette).
+    '.np-filter-toggle.active', '.np-th.active', '.pota-badge.pota-badge-new', '.pota-hunt-btn', '.pota-spot-ref',
+  ].sort()
+  // Of the boards' accent words, the Spots board's Filter toggle and sorted heading read as they are. NEW PARK is a
+  // chip: its accent went to its edge, held with BAND OPEN by the badges' test above. The POTA/SOTA board's HUNT
+  // (3.45:1) and park reference (4.25:1) are that board's on every screen that shows it, and N54's (2026-09-30):
+  // named here, and held to the floor once that lands.
+  const ACCENT_HELD_ELSEWHERE = ['.pota-badge.pota-badge-new', '.pota-hunt-btn', '.pota-spot-ref']
+  /** The light themes, and the standard light theme under each accent preset: the accent is these words' own colour. */
+  const ACCENT_LIGHT: Mode[] = [...LIGHT, ...role('accent').presets.slice(1).map((p) => withRoles('light', { accent: p.id }))]
+  const ownOf = (w: Word) => {
+    const own = w.nodes[w.nodes.length - 1]
+    return own.classList.length ? `.${[...own.classList].join('.')}` : own.tagName.toLowerCase()
+  }
+  it('every word lettered in the accent reads 4.5:1 in every light theme and accent, and one that left it keeps the accent as its underline', () => {
+    expect([...new Set(accent.map(ownOf))].sort()).toEqual(ACCENT_INVENTORY)
+    const low: string[] = []
+    for (const w of accent.filter((x) => !ACCENT_HELD_ELSEWHERE.includes(ownOf(x))))
+      for (const mode of ACCENT_LIGHT) {
+        if (!shown(RULES, mode, w)) continue
+        const { fg, bg, ratio, raw, ink } = wordOf(RULES, mode, w)
+        if (ratio < 4.5) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+        if (hex(raw) === accentAt(RULES, mode, w, ink.at)) continue
+        const i = w.chain.length - 1
+        const mark = declAt(RULES, mode, w, i, 'text-decoration-line') === 'underline' ? declAt(RULES, mode, w, i, 'text-decoration-color') : null
+        if (mark !== 'var(--accent)') {
+          low.push(`${w.what} ${mode}: lettered in ${hex(raw)}, and the accent is not its underline (${mark})`)
+          continue
+        }
+        const c = colourAt(RULES, mode, w, i, mark, bg)
+        if (contrast(c, bg) < 3) low.push(`${w.what} ${mode}: the underline ${hex(c)} on ${hex(bg)} = ${contrast(c, bg).toFixed(2)}:1`)
+      }
+    expect(low).toEqual([])
+  }, 120_000)
+
+  it('in every dark theme each word lettered in the accent keeps it, with no underline', () => {
+    const moved: string[] = []
+    for (const w of accent)
+      for (const mode of DARK) {
+        const now = wordOf(RULES, mode, w)
+        if (hex(now.raw) !== accentAt(RULES, mode, w, now.ink.at)) moved.push(`${w.what} ${mode}: lettered in ${hex(now.raw)}, not the accent`)
+        const line = declAt(RULES, mode, w, w.chain.length - 1, 'text-decoration-line', 'text-decoration')
+        if (line && line !== 'none') moved.push(`${w.what} ${mode}: underlined in dark`)
+      }
+    expect(moved).toEqual([])
+  }, 60_000)
+
+  it('FIRES: the accent words as they shipped are caught in the light theme, at the ratio Chrome measured', () => {
+    const found = unreadable(ACCENT_SHIPPED, accent, ['light'])
+    const has = (re: RegExp) => found.some((m) => re.test(m))
+    expect(has(/ outlook \.strong "14\.2 MHz" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the MUF').toBe(true)
+    expect(has(/ satPasses \.sat-when ".*" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the next pass').toBe(true)
+    expect(has(/ scope \.mini-spectrum-src "AUDIO" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the scope badge').toBe(true)
+  }, 60_000)
+
   it('the reader itself: its element-by-element tokens are cssCascade.tokensAt, wherever no node sets one inline', () => {
     const plain = state.filter((w) => keysOf(w).vars.every((v) => v === '[]')).slice(0, 25)
     expect(plain.length, 'words with no inline token').toBeGreaterThan(10)
@@ -768,10 +837,11 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     const has = (re: RegExp) => found.some((m) => re.test(m))
     expect(has(/ spacewx \.swx-impact ".*" light: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
     expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
-    expect(has(/ kpOutlook \.kp-line\.warn .* light: #f5a524 on #e5eaf0 = 1\.69:1/), 'the Kp storm line').toBe(true)
+    // The storm line's own colour is the theme's warning now that --state-warn is (it was the fixed #f5a524, 1.69:1).
+    expect(has(/ kpOutlook \.kp-line\.warn .* light: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
     // Beside the cockpits, in the boxes' boards and on the NOW bar, before their light rules: a need chip in
-    // the rail (Connect's rule stopped at `.connect`), the POTA/SOTA box's BAND OPEN (1.65:1 here, 1.66:1 in
-    // Chrome: the badge's tint rounds a unit apart), and the bar's PROP CACHED.
+    // the rail, the POTA/SOTA box's BAND OPEN (1.65:1 here, 1.66:1 in Chrome: the badge's tint rounds a unit
+    // apart), and the bar's PROP CACHED.
     expect(has(/^dash chase \.need-chip\.need-band "BAND" light: #a16207 on #d5c9b8 = 3\.02:1$/), "the rail's need chip").toBe(true)
     expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
     expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
@@ -779,4 +849,29 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     const badge = unreadable(SHIPPED, all.filter((w) => w.kind === 'pota-badge'), ['light'])
     expect(badge.some((m) => / pota \.pota-badge\.pota-badge-new "NEW PARK" light: #0174ab on #bcd5e4 = 3\.3[67]:1$/.test(m)), 'NEW PARK').toBe(true)
   }, 60_000)
+
+  // A CLOSED BAND RECEDES BY ITS INK, NEVER BY FADING (operator, 2026-09-30: "Closed rows and chips fade by colour instead of
+  // transparency"). The Band Advisor's closed rows and Band Outlook's closed mode chips faded by opacity, and a closed
+  // band's name in the 24-hour chart and the Best Band table lettered in the closed grey. In the dark theme, in Chrome,
+  // the row's "Closed" read 1.98:1, the reason under it 2.26:1, the chip 2.05:1 and the names 4.47:1. Each now recedes by
+  // its ink alone, so every word they letter is held to 4.5:1 in every theme, light and dark, with nothing dimming it.
+  const isClosed = (w: Word) =>
+    w.nodes.some((n) => (n.classList.contains('ba-row') && n.classList.contains('is-closed')) || n.getAttribute('data-state-ink') === 'recede') ||
+    w.nodes[w.nodes.length - 1].matches('.cp-mode.closed')
+  // The Band Advisor's word is the Band conditions list's pill (`.bc-state`), which dims its own letters when closed.
+  const CLOSED_INVENTORY = ['.ba-band', '.ba-modeled.bc-state.is-closed', '.ba-people', '.ba-reason', '.bbt-band', '.cp-mode.closed', '.heatmap-name', '.heatmap-rel']
+  it('a closed band recedes by its ink: every word it letters reads 4.5:1 in every theme, and nothing dims it', () => {
+    const closed = all.filter(isClosed)
+    expect([...new Set(closed.map(ownOf))].sort()).toEqual(CLOSED_INVENTORY)
+    const low: string[] = []
+    for (const w of closed)
+      for (const mode of [...LIGHT, ...DARK]) {
+        if (!shown(RULES, mode, w)) continue
+        const o = opacityOf(RULES, mode, w)
+        if (o !== 1) low.push(`${w.what} ${mode}: dimmed to ${o}`)
+        const { fg, bg, ratio } = wordOf(RULES, mode, w)
+        if (ratio < 4.5) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+      }
+    expect(low).toEqual([])
+  }, 120_000)
 })

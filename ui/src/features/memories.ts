@@ -38,7 +38,8 @@ export type OffsetDir = 'simplex' | 'plus' | 'minus' | 'split'
 
 /** CHIRP's tone taxonomy (the interchange standard): 'tone' = CTCSS encode only
  * (normal repeater access), 'tsql' = encode+decode squelch, 'dtcs' = digital
- * code squelch, 'cross' kept only for CSV round-trip fidelity. */
+ * code squelch, 'cross' kept for CSV round-trip fidelity and for send-only DCS
+ * ([`isSendOnlyDcs`]). */
 export type ToneMode = 'none' | 'tone' | 'tsql' | 'dtcs' | 'cross'
 
 /** Recurring net schedule + alert opt-in (kind === 'hfnet'; alerts are Phase 2 —
@@ -397,9 +398,12 @@ export function useMemories(): MemoriesBank {
 // ---------------------------------------------------------------------------
 
 /** Merge/dedupe identity: same channel = same freq (to the kHz), mode, and tone.
- * Used by Program + pack imports so re-importing never piles duplicates. */
+ * Used by Program + pack imports so re-importing never piles duplicates. NFM is the same
+ * machine as FM: narrow is how a repeater is programmed, not which one it is, so one starred
+ * as FM before its directory said narrow stays that memory (and is not starred twice). */
 export function memoryKey(m: Pick<Memory, 'rxMhz' | 'mode' | 'ctcssEncHz'>): string {
-  return `${m.rxMhz.toFixed(4)}|${m.mode.toUpperCase()}|${m.ctcssEncHz ?? 0}`
+  const mode = m.mode.toUpperCase()
+  return `${m.rxMhz.toFixed(4)}|${mode === 'NFM' ? 'FM' : mode}|${m.ctcssEncHz ?? 0}`
 }
 
 /** The memory in `bank` equivalent to `probe` under [`memoryKey`], if any. The
@@ -674,9 +678,26 @@ export function siteOffset(
 // CHIRP CSV round-trip (the universal radio-programming interchange)
 // ---------------------------------------------------------------------------
 
-/** The canonical CHIRP header (column order matters to CHIRP's importer). */
+/** The canonical CHIRP header. CHIRP reads its columns by name (Location first), so
+ * `RxDtcsCode` and `CrossMode` ride at the end; CHIRP rejects a row whose `CrossMode`
+ * is empty, so every row writes one. */
 export const CHIRP_HEADER =
-  'Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE'
+  'Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE,RxDtcsCode,CrossMode'
+
+/** Send-only DCS, CHIRP's Cross "DTCS->" (the code on transmit, the receiver open): the one
+ * cross mode the bank writes itself, as a cross memory that carries a DCS code and no tone or
+ * receive code. Any other cross memory exports CHIRP's default cross mode, as before. */
+export function isSendOnlyDcs(
+  m: Pick<Memory, 'toneMode' | 'dtcsCode' | 'ctcssEncHz' | 'ctcssDecHz' | 'dtcsRxCode'>,
+): boolean {
+  return (
+    m.toneMode === 'cross' &&
+    !!m.dtcsCode &&
+    m.ctcssEncHz === undefined &&
+    m.ctcssDecHz === undefined &&
+    m.dtcsRxCode === undefined
+  )
+}
 
 /** The band-standard repeater offset (MHz) — used ONLY for CHIRP export when a
  * plus/minus repeater carries no explicit offset. Nexus stores 0/absent = "band
@@ -743,6 +764,8 @@ export function toChirpRow(m: Memory, location: number): string {
     '',
     '',
     '',
+    String(m.dtcsRxCode ?? m.dtcsCode ?? 23).padStart(3, '0'),
+    isSendOnlyDcs(m) ? 'DTCS->' : 'Tone->Tone',
   ]
   return cols.join(',')
 }
@@ -814,6 +837,7 @@ export function parseChirpCsv(text: string): Memory[] {
   const iCTone = col('cToneFreq')
   const iDtcs = col('DtcsCode')
   const iDtcsPol = col('DtcsPolarity')
+  const iCross = col('CrossMode')
   const iSkip = col('Skip')
   const iComment = col('Comment')
   const out: Memory[] = []
@@ -868,7 +892,9 @@ export function parseChirpCsv(text: string): Memory[] {
         m.ctcssEncHz = c
         m.ctcssDecHz = c
       }
-    } else if (toneMode === 'cross') {
+    } else if (toneMode === 'cross' && at(iCross) !== 'DTCS->') {
+      // Send-only DCS ("DTCS->") uses no tone, so its default rToneFreq/cToneFreq are not read:
+      // the memory stays one `isSendOnlyDcs` recognises and exports the same way again.
       const r = Number(at(iRTone))
       if (Number.isFinite(r) && r > 0) m.ctcssEncHz = r
       const c = Number(at(iCTone))

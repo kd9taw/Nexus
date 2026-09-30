@@ -63,12 +63,19 @@
 // What this file still does NOT prove is what the BACKEND does with the command — `halt_tx`
 // reaching the bridge is not `halt_tx` unkeying a rig. That is `reference-tx-safety-invariants`
 // territory and belongs to the Rust suites.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AppSnapshot } from './types'
 import App from './App'
+
+// A 30 s budget for every test and hook here, for the machine and not for the checks. Each test mounts the real App, and
+// in three full-suite runs on a loaded box (2026-09-29 and 30) vitest's default budgets ran out with nothing wrong: "Test
+// timed out in 5000ms" on RTTY's latch, RTTY's Auto toggle and JS8's Tune, and "Hook timed out in 10000ms" on the mount
+// before RTTY's Tune and Esc and JS8's Esc. No assertion, fixture or wait below is changed: a stop that stops reaching
+// the wire still fails at its own assertion, well inside the budget.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 // ── the recorder ────────────────────────────────────────────────────────────────────────────
 type BridgeCall = { cmd: string; args?: Record<string, unknown> }
