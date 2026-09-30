@@ -164,8 +164,8 @@ ok "linuxdeploy-plugin-gtk pinned at ${gtk_plugin_rev:0:10} (sha256 verified)"
 # is present" as a FATAL error, not a warning — it bundles both artifacts and then exits 1 with
 # "A public key has been found, but no private key". `--no-sign` is the supported way to build
 # without the key, and it is passed exactly when no key is present. That is how release.yml runs
-# this script: the key is never in the environment of the builds here, and its next step signs
-# the finished AppImage. A local build with the key in ~/.nexus-build.env still signs, below.
+# this script: its build job never sees the key, and a separate job signs the finished AppImage.
+# A local build with the key in ~/.nexus-build.env still signs, below.
 no_sign=(); [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || no_sign=(--no-sign)
 ( cd "$REPO/src-tauri" && cargo tauri build --features radio,custom-protocol --bundles deb,appimage "${no_sign[@]}" )
 # Kill the premature signature immediately — before the repack, so there is no window in which a
@@ -392,7 +392,7 @@ rm -rf "$work"
 
 # --- Sign, now that the bytes are final ---------------------------------------------------------
 # Unsigned when no key is present: a developer build, and release.yml, which signs the finished
-# AppImage in a step of its own so that the key is never in this script's environment.
+# AppImage in a job of its own so that the key never reaches the runner that runs this script.
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
   # It must not exist yet: the build's own signature was deleted above, so anything here would be
   # a signature over pre-repack bytes and every Linux self-update would fail verification.
@@ -406,7 +406,7 @@ if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
     || die "the .sig is older than the AppImage it signs — refusing to publish it"
   ok "AppImage signed for self-update"
 else
-  warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage left unsigned (a developer build, or release.yml, which signs it next)"
+  warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage left unsigned (a developer build, or release.yml, which signs it in its own job)"
 fi
 
 fi  # end: an AppImage was produced

@@ -18,6 +18,11 @@
 //   3. No third-party step runs while the Apple signing identity is in a keychain: it is
 //      imported after every build and deleted once the bundle is signed.
 //   4. A step that holds a secret does not hand it on through $GITHUB_ENV or $GITHUB_OUTPUT.
+//   5. No JOB that builds or runs third-party code holds a signing secret, whichever of its steps
+//      holds it: the updater key signs the Windows and Linux installers in a job of its own, on a
+//      runner that builds nothing. macOS is the one exception (see SIGNS_IN_BUNDLER).
+//   6. Every artifact a job downloads is uploaded by a job it needs, so splitting a job cannot
+//      leave a later step reading a file nothing hands it.
 //
 // WHAT IT CANNOT CHECK. Step scoping keeps a key out of a build's environment. It is not a
 // boundary against code that sets out to find the key: a hosted runner is handed the secrets
@@ -50,9 +55,9 @@ const TEXT = fs.readFileSync(WORKFLOW, 'utf8');
 const DEEPCW = 'Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)';
 const IMPORT = 'Import the signing certificate into an ephemeral keychain';
 const BUNDLE = 'Bundle, sign and notarize the DMG';
+const SIGN_STEP = 'Sign the NSIS installer and the AppImage';
 const SIGN = [
-  ['linux-x86', 'Sign the AppImage for self-update'],
-  ['windows', 'Sign the NSIS installer for self-update'],
+  ['sign-updaters', SIGN_STEP],
   ['macos', BUNDLE],
 ];
 const SEEN = {
@@ -90,6 +95,20 @@ const SEEN = {
 // key compiled in by option_env! (NEXUS_RB_CLIENT_KEY in repeaterbook.rs is one; no release job
 // sets it today) joins this set in the change that wires it, not before.
 const COMPILED_IN = new Set(['CLUBLOG_API_KEY']);
+
+// Rule 5's exception. Apple's codesign and notarization run inside tauri's bundler, which makes
+// and signs the macOS updater tarball in the same run, so the macOS job cannot hand its keys to a
+// job of its own. It keeps them at step scope instead: every compile first, the certificate
+// imported after the last build, the keychain deleted once the bundle is signed (rule 3).
+const SIGNS_IN_BUNDLER = new Set(['macos']);
+
+// Every secret but these is signing-grade for rule 5: the compiled-in keys, and the job token
+// (read-only in the build jobs).
+const signingGrade = (secret) => !COMPILED_IN.has(secret) && secret !== 'GITHUB_TOKEN';
+
+// GitHub's own checkout and artifact actions. They are the platform the runner already is, so they
+// do not make a JOB third-party for rule 5; a step running one is still never handed a secret.
+const PLATFORM = /^actions\/(?:checkout|download-artifact|upload-artifact)@/;
 
 // What makes a step third-party: code nobody here wrote runs in it. Matched against the step's
 // commands with its shell comment lines removed. A `uses:` step always counts, because an
@@ -220,7 +239,7 @@ function refsIn(value) {
 function model(entries, items) {
   const jobs = new Map();
   const job = (id) => {
-    if (!jobs.has(id)) jobs.set(id, { id, steps: [], refs: [] });
+    if (!jobs.has(id)) jobs.set(id, { id, steps: [], refs: [], needs: [] });
     return jobs.get(id);
   };
   const workflowRefs = [];
@@ -229,10 +248,13 @@ function model(entries, items) {
     const [a, b, c, d, f, g] = e.path;
     if (a === 'jobs' && b !== undefined) {
       const j = job(b);
+      // `needs: x`, `needs: [x, y]`, or a block list of them.
+      if (c === 'needs') j.needs = [...(j.needs ?? []), ...e.value.replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean)];
       if (c === 'steps' && d !== undefined) {
-        const s = (j.steps[Number(d)] ??= { index: Number(d), env: new Map(), entries: [] });
+        const s = (j.steps[Number(d)] ??= { index: Number(d), env: new Map(), with: new Map(), entries: [] });
         s.entries.push(e);
         if (f === 'env' && g !== undefined) s.env.set(g, e.value);
+        else if (f === 'with' && g !== undefined) s.with.set(g, e.value);
         else if (['name', 'uses', 'run'].includes(f) && g === undefined) s[f] = e.value;
       }
     }
@@ -315,6 +337,48 @@ function violations(wf) {
       }
       if (/\bsecurity\s+delete-keychain\b/.test(run)) open = null;
     }
+    // Rule 5. Step scoping keeps a key out of a build's environment, but code in any step of a job
+    // can reach every secret the job references (see WHAT IT CANNOT CHECK), so a job that runs
+    // third-party code must not reference a signing secret at all.
+    if (!SIGNS_IN_BUNDLER.has(j.id)) {
+      const foreign = j.steps.find((s) => s && !PLATFORM.test(s.uses ?? '') && thirdParty(s));
+      for (const s of foreign ? j.steps : []) {
+        for (const secret of s ? [...s.sees].filter(signingGrade) : []) {
+          v.push(`job ${j.id}: step "${s.label}" holds ${secret} on a runner that also runs third-party code (step "${foreign.label}": ${thirdParty(foreign)}); sign in a job that builds nothing`);
+        }
+      }
+    }
+  }
+  // Rule 6. Every artifact a job downloads comes from a job it needs, directly or through another.
+  // A named download of an artifact nothing upstream uploads fails the run; a PATTERN that matches
+  // nothing succeeds and leaves the next step without its files, which is the quiet one.
+  const uploads = [];
+  for (const j of wf.jobs.values()) {
+    for (const s of j.steps) {
+      if (s && /^actions\/upload-artifact@/.test(s.uses ?? '') && s.with.has('name')) uploads.push({ job: j.id, name: s.with.get('name') });
+    }
+  }
+  const upstream = (id, seen = new Set()) => {
+    for (const n of wf.jobs.get(id)?.needs ?? []) if (!seen.has(n)) upstream(n, seen.add(n));
+    return seen;
+  };
+  const glob = (p) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  for (const j of wf.jobs.values()) {
+    const needed = upstream(j.id);
+    for (const s of j.steps) {
+      if (!s || !/^actions\/download-artifact@/.test(s.uses ?? '')) continue;
+      const want = s.with.get('name') ?? s.with.get('pattern');
+      if (!want) {
+        v.push(`job ${j.id}, step "${s.label}": downloads every artifact of the run; name the ones it reads`);
+        continue;
+      }
+      // An upload named with an expression (`nexus-pi-${{ matrix.base }}`) is one artifact per value.
+      const from = uploads.filter((u) => glob(want).test(u.name.replace(/\$\{\{[^}]*\}\}/g, 'X')));
+      if (!from.length) v.push(`job ${j.id}, step "${s.label}": downloads "${want}", which no job uploads`);
+      else if (!from.some((u) => needed.has(u.job))) {
+        v.push(`job ${j.id}, step "${s.label}": downloads "${want}" from job ${[...new Set(from.map((u) => u.job))].join(', ')}, which job ${j.id} does not need`);
+      }
+    }
   }
   // The table itself: a stale row is a map that lies.
   for (const [secret, rows] of Object.entries(SEEN)) {
@@ -387,6 +451,7 @@ test('the build steps are recognised as third-party, and the signing steps are n
     ['macos', 'Compile the app'],
     ['macos', 'Verify the artifacts'],
     ['pi', 'Build .deb in a debian:${{ matrix.base }} container'],
+    ['updater-signer', 'Install tauri-cli'],
   ];
   for (const [j, name] of builds) {
     assert.ok(thirdParty(findStep(WF, j, name)), `job ${j}, step "${name}" is not recognised as third-party`);
@@ -398,7 +463,7 @@ test('the build steps are recognised as third-party, and the signing steps are n
   }
 });
 
-test('release.yml: no step that builds or runs third-party code can see a secret', () => {
+test('release.yml: no step or job that builds or runs third-party code can see a secret', () => {
   const v = violations(WF);
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
 });
@@ -438,10 +503,10 @@ test('a secret written straight into a build command is reported', () => {
 test('the key handed to a Verify step, instead of whether it exists, is reported', () => {
   const planted = plant(
     TEXT,
-    "          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}\n        run: |\n          set -euo pipefail\n          exe=",
-    '          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}\n        run: |\n          set -euo pipefail\n          exe=',
+    "          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}\n        run: |\n          set -euo pipefail\n          bundle=",
+    '          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}\n        run: |\n          set -euo pipefail\n          bundle=',
   );
-  reported(planted, 'job windows, step "Verify installer": apt (package scripts run as root) runs in a step that is handed TAURI_SIGNING_PRIVATE_KEY');
+  reported(planted, 'job macos, step "Verify the artifacts": rigctld (built from the Hamlib tarball) runs in a step that is handed TAURI_SIGNING_PRIVATE_KEY');
 });
 
 test('a secret used in an expression the test cannot classify is reported', () => {
@@ -456,11 +521,37 @@ test('a secret used in an expression the test cannot classify is reported', () =
 test('a key re-exported to $GITHUB_ENV is reported', () => {
   const planted = plant(
     TEXT,
-    '          cargo tauri signer sign --app-version "$ver" "$exe" >/dev/null\n',
-    '          cargo tauri signer sign --app-version "$ver" "$exe" >/dev/null\n' +
+    '          signer/cargo-tauri signer sign --app-version "$ver" "$exe" >/dev/null\n',
+    '          signer/cargo-tauri signer sign --app-version "$ver" "$exe" >/dev/null\n' +
       '          echo "K=$TAURI_SIGNING_PRIVATE_KEY" >> "$GITHUB_ENV"\n',
   );
-  reported(planted, 'job windows, step "Sign the NSIS installer for self-update": writes TAURI_SIGNING_PRIVATE_KEY where the steps after it can read it');
+  reported(planted, `job sign-updaters, step "${SIGN_STEP}": writes TAURI_SIGNING_PRIVATE_KEY where the steps after it can read it`);
+});
+
+test('the updater key handed to a build job is reported, whichever step holds it', () => {
+  // Verify artifacts runs no build, but its job does: rule 5 reports the job, rule 2 the step.
+  const planted = plant(
+    TEXT,
+    '      - name: Verify artifacts\n        run: |\n',
+    '      - name: Verify artifacts\n        env:\n          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}\n        run: |\n',
+  );
+  reported(planted, 'job linux-x86: step "Verify artifacts" holds TAURI_SIGNING_PRIVATE_KEY on a runner that also runs third-party code (step "');
+});
+
+test('a third-party step added to the signing job is reported', () => {
+  const planted = plant(
+    TEXT,
+    `      - name: ${SIGN_STEP}\n`,
+    `      - name: Install minisign\n        run: sudo apt-get install -y minisign\n\n      - name: ${SIGN_STEP}\n`,
+  );
+  reported(planted, `job sign-updaters: step "${SIGN_STEP}" holds TAURI_SIGNING_PRIVATE_KEY on a runner that also runs third-party code (step "Install minisign": apt`);
+});
+
+test('an artifact downloaded from a job not needed, or from no job at all, is reported', () => {
+  const unneeded = plant(TEXT, 'smoke-windows, sign-updaters, macos', 'smoke-windows, macos');
+  reported(unneeded, 'downloads "nexus-updater-sigs" from job sign-updaters, which job publish does not need');
+  const typo = plant(TEXT, '          pattern: nexus-updater-sigs\n', '          pattern: nexus-updater-sig\n');
+  reported(typo, 'downloads "nexus-updater-sig", which no job uploads');
 });
 
 test('the signing certificate imported before the builds is reported', () => {
@@ -482,12 +573,8 @@ test('the keychain left in place after bundling is reported', () => {
 });
 
 test('a stale row in SEEN is reported', () => {
-  const planted = plant(
-    TEXT,
-    '      - name: Sign the AppImage for self-update\n',
-    '      - name: Sign the AppImage\n',
-  );
-  reported(planted, 'SEEN lists TAURI_SIGNING_PRIVATE_KEY for job linux-x86, step "Sign the AppImage for self-update", which does not exist');
+  const planted = plant(TEXT, `      - name: ${SIGN_STEP}\n`, '      - name: Sign the installers\n');
+  reported(planted, `SEEN lists TAURI_SIGNING_PRIVATE_KEY for job sign-updaters, step "${SIGN_STEP}", which does not exist`);
 });
 
 test('the reader refuses what it cannot place', () => {
