@@ -8,6 +8,9 @@
 //     the page scrolled sideways (every language once a box was hidden and the label grew);
 //   - Getting Out: its direction line kept its place beside the 108 px rose and ran past the box's
 //     right edge, cut off.
+// Space Wx is Connect's box and needs Connect's fit here too: its gauge strip is also a `.panel`, whose
+// flex column comes later in the sheet than the strip's grid, so without a rule of the box's own the
+// gauges stand one per row and the 30-day lines start under the box's fold (measured on Connect).
 // The controls: a cockpit's ⊞ keeps its one-line label, and the direction line keeps a basis, so it
 // drops under the rose only where it cannot stand beside it.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
@@ -53,14 +56,14 @@ const LIVE = {
   asOf: Math.floor(Date.now() / 1000),
 } as unknown as PropagationSnapshot
 
-const mountRail = () =>
+const mountRail = (prop: PropagationSnapshot = LIVE) =>
   render(
     <DashRail
       section="cw"
       myGrid="EN52"
       theme="dark"
       stations={[]}
-      prop={LIVE}
+      prop={prop}
       needByCall={new Map()}
       onHide={() => {}}
     />,
@@ -124,5 +127,24 @@ describe('Getting Out at the rail’s floor', () => {
     // rose at EVERY width, in Connect's wide boxes too.
     expect(css(dir, 'flex-basis'), 'the line has no basis of its own').toBe('8em')
     expect(css(dir, 'flex-grow'), 'beside the rose the line no longer fills the row').toBe('1')
+  })
+})
+
+describe('Space Wx at the rail’s floor', () => {
+  it('the gauges stand two to a row, as in a Connect box, and the solar-wind speed’s unit may drop under its value', () => {
+    const windy = {
+      ...LIVE,
+      spaceWx: { ...LIVE.spaceWx, solarWind: { bzNt: -3.4, btNt: 6.1, speedKms: 487, density: 5.2, timeUnix: Math.floor(Date.now() / 1000) } },
+    } as PropagationSnapshot
+    mountRail(windy)
+    const strip = document.querySelector<HTMLElement>('.dash-rail .swx-strip')
+    expect(strip, 'control: the rail draws the Space Wx gauges').not.toBeNull()
+    expect(css(strip!, 'display'), 'the panel’s column wins: one gauge per row').toBe('grid')
+    expect(css(strip!, 'grid-template-columns')).toBe('repeat(2, 1fr)')
+    const unit = strip!.querySelector<HTMLElement>('.swx-vu')
+    expect(unit, 'control: the solar-wind speed is drawn with its unit').not.toBeNull()
+    // Two to a row at the 200 px floor, a column is ~77 px: the speed and its unit do not fit side by side.
+    expect(css(unit!, 'flex-wrap'), 'the unit runs past its column’s edge').toBe('wrap')
+    expect(css(unit!, 'justify-content')).toBe('flex-end')
   })
 })

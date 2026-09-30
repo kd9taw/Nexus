@@ -2088,17 +2088,19 @@ button.nb-chip:hover {
    cockpit pane grids now, and these are ~250px-RAIL adaptations (columns stripped,
    direction/people hidden). A cockpit pane that ever hosts BandAdvisor/SpaceWx would
    have been silently column-stripped by the global spelling (fix-round D7, 2026-07-31). */
-.connect .pane-body .swx-strip {
+.connect .pane-body .swx-strip,
+.dash-boxes .pane-body .swx-strip {
   /* The strip is also a `.panel`, and the `.panel` rule's flex display comes later in the sheet
      than `.swx-strip`'s grid at the same specificity, so it won and the gauges stood one per row.
-     This selector outranks both (SpaceWxGauges.layout.test.tsx computes the winner). No braces in
-     this comment: connectLayout.test.ts reads this rule's body up to its first closing brace. */
+     This selector outranks both, in a Connect box and in the dashboard rail beside the cockpits
+     (SpaceWxGauges.layout.test.tsx and DashRail.fit.test.tsx compute the winner). */
   display: grid;
   grid-template-columns: repeat(2, 1fr);
 }
 /* Two to a row, a column in the 200 px rail is ~77 px: the solar-wind speed's unit drops under its
    value there instead of running past the column's edge, and stays beside it in a wider column. */
-.connect .pane-body .swx-vu {
+.connect .pane-body .swx-vu,
+.dash-boxes .pane-body .swx-vu {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
