@@ -134,6 +134,35 @@ describe('bandActivityByOffset — JS8Call’s offset-bucketed band-activity tab
     const normalApart = bandActivityByOffset([row(1_000, 1500, 'A', { speed: 'turbo' }), row(2_000, 1530, 'B')])
     expect(normalApart.map((r) => r.offsetHz), 'a Normal decode 30 Hz from a Turbo bucket does not').toEqual([1500, 1530])
   })
+
+  // JS8Call files a decode at `frequencyOffset()`, the int the decoder's float frequency is handed
+  // in as (decodedtext.cpp:248 → decodedtext.h:80): truncated, never rounded.
+  it('files a decode at its offset truncated to whole hertz', () => {
+    expect(bandActivityByOffset([row(1_000, 1500.9, 'A')]).map((r) => r.offsetHz), '1500.9 Hz files at 1500').toEqual([1500])
+    // 1510.6 Hz files at 1510, inside Normal's 10 Hz of 1500; rounded it would be 1511, outside.
+    const out = bandActivityByOffset([row(1_000, 1500, 'A'), row(2_000, 1510.6, 'B')])
+    expect(out.map((r) => [r.offsetHz, r.text]), 'a truncated offset joins its neighbour').toEqual([[1510, 'B']])
+  })
+
+  // An offset already filed takes the decode as it is (mainwindow.cpp:3969); only a new offset
+  // looks for a neighbour to take over (:3970-3981).
+  it('files a decode at its own offset when that offset is already filed, whatever else is in range', () => {
+    // A Turbo bucket at 1500 and a Normal one at 1520 stand apart (20 Hz is over Normal's 10). A
+    // Turbo decode at 1520 lands on 1520, though 1500 is within Turbo's 32 Hz.
+    const out = bandActivityByOffset([
+      row(1_000, 1500, 'A', { speed: 'turbo' }),
+      row(2_000, 1520, 'B'),
+      row(3_000, 1520, 'C', { speed: 'turbo' }),
+    ])
+    expect(out.map((r) => [r.offsetHz, r.text])).toEqual([[1500, 'A'], [1520, 'C']])
+  })
+
+  // A new offset takes over the first filed offset `generateOffsets` meets counting up from
+  // offset − range (mainwindow.cpp:3972-3979, :3730-3739): the lowest in range, not the oldest.
+  it('a new offset takes over the lowest filed offset in range, not the one filed first', () => {
+    const out = bandActivityByOffset([row(1_000, 1520, 'A'), row(2_000, 1500, 'B'), row(3_000, 1510, 'C')])
+    expect(out.map((r) => [r.offsetHz, r.text])).toEqual([[1510, 'C'], [1520, 'A']])
+  })
 })
 
 describe('dtLabel — JS8Call’s Time Delta face (whole ms, signed)', () => {

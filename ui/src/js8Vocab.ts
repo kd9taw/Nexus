@@ -142,7 +142,7 @@ export function estimateFrames(
 
 /** One bucket: the newest decode heard at that offset. */
 export interface Js8OffsetRow {
-  /** The bucket key — the newest decode's offset, rounded to whole Hz. */
+  /** The bucket key — the newest decode's offset, truncated to whole Hz as JS8Call's is. */
   offsetHz: number
   atMs: number
   snrDb: number
@@ -167,9 +167,11 @@ export interface Js8OffsetRow {
  * carries the bucket's key, exactly as JS8Call re-keys a bucket on a nearby decode.
  */
 export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8OffsetRow[] {
-  const buckets: Js8OffsetRow[] = []
+  const buckets = new Map<number, Js8OffsetRow>()
   for (const r of [...rows].sort((a, b) => a.atMs - b.atMs)) {
-    const hz = Math.round(r.freqHz)
+    // JS8Call's `frequencyOffset()`: the decoder's frequency held in an int, so truncated
+    // (decodedtext.cpp:248, decodedtext.h:80).
+    const hz = Math.trunc(r.freqHz)
     const row: Js8OffsetRow = {
       offsetHz: hz,
       atMs: r.atMs,
@@ -181,14 +183,19 @@ export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8Offset
       mine: r.mine,
       lowConf: r.lowConf,
     }
-    // A decode within its own speed's rxThreshold of a bucket JOINS it, and the bucket takes the
-    // NEW offset as its key (mainwindow.cpp:3968-3981, the tolerance of the decode being filed).
-    const tolerance = JS8_SPEEDS[r.speed].rxThresholdHz
-    const hit = buckets.findIndex((b) => Math.abs(b.offsetHz - hz) <= tolerance)
-    if (hit === -1) buckets.push(row)
-    else buckets[hit] = row
+    // A decode at an offset already filed goes there (mainwindow.cpp:3969). One at a new offset
+    // takes over the filed offset within its own speed's rxThreshold that `generateOffsets` meets
+    // first counting up from offset − range, the lowest in range, and that bucket takes the NEW
+    // offset as its key (:3970-3981, :3730-3739).
+    if (!buckets.has(hz)) {
+      const range = JS8_SPEEDS[r.speed].rxThresholdHz
+      for (let prev = hz - range; prev <= hz + range; prev++) {
+        if (buckets.delete(prev)) break
+      }
+    }
+    buckets.set(hz, row)
   }
-  return buckets.sort((a, b) => a.offsetHz - b.offsetHz)
+  return [...buckets.values()].sort((a, b) => a.offsetHz - b.offsetHz)
 }
 
 /** JS8Call's "Time Delta" face: whole milliseconds of DT (mainwindow.cpp:9936). Units are a

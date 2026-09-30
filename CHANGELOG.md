@@ -437,6 +437,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's
   own tolerances, and keeps 10 Hz at Normal and Slow.
 
+- **JS8: the Band activity by offset pane files each signal on the row JS8Call does.** An offset
+  reads in whole hertz as JS8Call shows it (a signal at 1500.9 Hz is on the 1500 row, not 1501). A
+  signal at an offset already on the list stays on that row, and one near two rows joins the lower
+  of them. Before, a signal joined whichever row had been listed first, and two rows could show
+  the same offset.
+
 - **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
   STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8
   cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
