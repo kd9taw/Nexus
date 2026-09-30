@@ -77,6 +77,7 @@ import { NeededPanel } from './components/NeededPanel'
 import { PotaSotaView } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
+import { DashboardBar, StayBehindToggle } from './components/DashboardBar'
 import { MapView } from './components/MapView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
@@ -601,8 +602,15 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }
 
   if (panel === 'connect') {
+    // THE DASHBOARD WINDOW: the clock and space-weather bar across the top, the
+    // station from the shared snapshot and the indices from this window's own propagation poll
+    // above. Its toggle keeps the window behind the others where the shell offers that; the
+    // window's size, place and that choice are the shell's (`window_state` in src-tauri).
     return (
       <DetachedShell>
+        <DashboardBar call={snap?.mycall ?? ''} grid={snap?.mygrid ?? ''} prop={prop}>
+          <StayBehindToggle />
+        </DashboardBar>
         <ConnectView
           myGrid={snap?.mygrid ?? ''}
           theme={theme}

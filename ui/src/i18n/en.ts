@@ -4803,6 +4803,14 @@ export const EN = {
   'tv.noLink': 'no link to Nexus',
   'tv.stale': 'data {{min}} min old',
   'tv.waiting': 'Waiting for the first propagation picture from Nexus…',
+  // ---- The dashboard bar (components/DashboardBar.tsx): the clock and space-weather
+  // line across the top of the Connect pop-out and the TV page. The index names (SFI, Kp, A,
+  // X-ray, SW) and `UTC` are tokens, not catalog strings.
+  'dash.bar.aria': 'Clock and space weather',
+  'dash.index.sw.title': 'Solar wind speed, km/s',
+  'dash.behind.label': 'Stay behind',
+  'dash.behind.title': 'Keep this window behind your other windows, even when you click on it, so it can fill the screen behind Nexus',
+  'dash.behind.failed': 'Could not change whether this window stays behind',
   'freq.channel.rxOnly': 'receive only',
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',
@@ -7223,6 +7231,9 @@ export const EN = {
   'connect.layout.listFirst.title': 'The chase and spot lists in two wide columns, with a small map between them and the bottom row closed',
   'connect.layout.dashboard.label': 'Dashboard',
   'connect.layout.dashboard.title': 'Seven panes open at once around a smaller map: conditions on the left, activity on the right, what is coming along the bottom',
+  // The dashboard window's wall-display layout: a frame of panes around a full-height map.
+  'connect.layout.frame.label': 'Frame',
+  'connect.layout.frame.title': 'Two panes down each side of a map that runs the full height, for a dashboard on a screen of its own: band conditions and space weather on the left, who is hearing you and what to chase on the right',
   'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
 
   // Pane names, as they read in the picker and in each pane's header.

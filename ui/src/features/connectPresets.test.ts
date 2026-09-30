@@ -88,6 +88,30 @@ describe('the presets are well formed', () => {
   })
 })
 
+// FRAME — the wall-display layout for the dashboard window: two boxes down each side of a map that
+// runs the full height, the arrangement a station keeps on a screen of its own beside the radio.
+describe('Frame — the wall-display layout', () => {
+  it('is the fourth choice, after the three that shipped, so no stored pick is renumbered', () => {
+    expect(CONNECT_PRESET_IDS).toEqual(['mapFirst', 'listFirst', 'dashboard', 'frame'])
+  })
+
+  it('two panes down each side, and the bottom row closed, so the map runs the full height', () => {
+    const p = CONNECT_PRESETS.frame
+    expect([...p.hidden].sort()).toEqual(['bottom1', 'bottom2', 'bottom3'])
+    expect(SLOT_IDS.filter((s) => !p.hidden.includes(s))).toEqual(['left1', 'left2', 'right1', 'right2'])
+  })
+
+  it('its columns, top to bottom: band conditions over space weather on the left, who hears you over what to chase on the right', () => {
+    const p = CONNECT_PRESETS.frame
+    expect([p.slots.left1, p.slots.left2]).toEqual(['bandAdvisor', 'spacewx'])
+    expect([p.slots.right1, p.slots.right2]).toEqual(['getout', 'chase'])
+  })
+
+  it('400 px columns, wide enough to read a box from across the desk', () => {
+    expect(CONNECT_PRESETS.frame.rails).toEqual({ left: 400, right: 400 })
+  })
+})
+
 describe('which layout is on screen', () => {
   it('nothing picked: the stock arrangement reads as Standard', () => {
     expect(connectLayoutNow({ slots: { ...DEFAULT_SLOTS }, panels: { v: 1, state: {}, share: {} }, rails: { left: null, right: null } })).toBe('standard')

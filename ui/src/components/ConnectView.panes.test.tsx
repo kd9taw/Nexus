@@ -454,7 +454,7 @@ describe('resizing the rails', () => {
 // read back from the records they write, so a moved or resized pane reads Custom and nothing
 // snaps back. The preset table itself is guarded in features/connectPresets.test.ts.
 describe('layout presets — ⊞ Panels ▸ Layout', () => {
-  const LABEL: Record<ConnectPresetId, string> = { mapFirst: 'Map first', listFirst: 'List first', dashboard: 'Dashboard' }
+  const LABEL: Record<ConnectPresetId, string> = { mapFirst: 'Map first', listFirst: 'List first', dashboard: 'Dashboard', frame: 'Frame' }
   const CONFIG = 'nexus.connect.config'
   const layouts = () => screen.getByRole('group', { name: 'Layout' })
   const openMenu = () => {

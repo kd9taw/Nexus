@@ -82,15 +82,16 @@ you make things is remembered per window, and a saved width is trimmed to fit a
 smaller screen. **Reset layout** returns Connect to exactly how it first opened,
 including which pane sits in each slot.
 
-**Layouts.** The Panels menu opens with three ready-made arrangements of the same
+**Layouts.** The Panels menu opens with four ready-made arrangements of the same
 panes, and names the layout on screen: **Standard** (how Connect first opens), one
-of the three, or **Custom** once you have moved or resized anything yourself.
+of the four, or **Custom** once you have moved or resized anything yourself.
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|
 | Map first | Conditions, Band Advisor | Chase, Space Wx | closed | the narrowest, 200 px |
 | List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
 | Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
+| Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height | 400 px |
 
 A layout applies only when you pick it, and nothing snaps back afterwards: change a
 pane or a width and the menu reads Custom. Over an arrangement of your own the menu
@@ -99,6 +100,19 @@ layout closes stay in their slots, so ticking one in the menu brings back what t
 layout parked there. On a smaller window the columns narrow to fit (the map keeps
 its 280 px minimum). A layout never changes the map's own settings: the Globe, 3D,
 Flat or Beam pick, the layers and the colouring stay as you left them for each intent.
+
+**Connect in its own window.** **⧉ Pop out** in the Connect header opens Connect as a
+dashboard window for a second monitor or a screen of its own. It opens at 1600 × 1000,
+or your whole screen if that is smaller, with the full layout, and a bar across the top
+shows your callsign and grid, a big UTC clock beside your local time, and the day's SFI,
+Kp, A, X-ray and solar-wind speed (a dash for each when there is no live data, and a
+note when the numbers are old). Close it and it comes back on the same monitor, in the
+same place and at the same size; if that monitor is gone it opens in the middle of your
+main screen, sized to fit. The window keeps its own layout, so a layout picked there
+leaves the main window's Connect as it was. On Windows the bar also has a **Stay
+behind** button: pressed, the window stays behind your other windows even when you click
+on it, so it can fill a screen behind Nexus without covering the cockpit. A click on it
+still moves the keyboard to it, so click back into Nexus before a keyboard shortcut.
 
 The panes you can assign:
 

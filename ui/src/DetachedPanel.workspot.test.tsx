@@ -80,6 +80,9 @@ vi.mock('./api', () => ({
   workSpot: vi.fn(() => Promise.resolve(null)),
   setFrequency: vi.fn(() => Promise.resolve(null)),
   setHuntTarget: vi.fn(() => Promise.resolve(null)),
+  // The dashboard bar's Stay behind toggle asks once on mount; not offered here.
+  getWindowBehind: vi.fn(() => Promise.resolve({ supported: false, on: false })),
+  setWindowBehind: vi.fn(() => Promise.resolve({ supported: false, on: false })),
 }))
 
 const mockedWorkSpot = vi.mocked(workSpot)

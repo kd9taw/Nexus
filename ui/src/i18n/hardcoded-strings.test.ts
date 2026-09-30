@@ -169,6 +169,9 @@ const MIGRATED = [
   'openingAlert.ts',
   'stormAlert.ts',
   'tv/ConnectTv.tsx',
+  // The dashboard bar over the Connect pop-out and the TV page: the index names, `UTC` and the
+  // clock digits are tokens; its prose (the Stay behind toggle, the hover words) is the catalog's.
+  'components/DashboardBar.tsx',
   'components/DxpeditionsView.tsx',
   'features/dxpedChase.ts',
   'features/dxpedAlarm.ts',

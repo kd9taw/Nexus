@@ -946,6 +946,23 @@ export async function dockBandmapWindow(side: 'left' | 'right' | 'none'): Promis
   await invoke('dock_bandmap_window', { side })
 }
 
+/** Whether the CALLING window can stay behind other windows (the Connect dashboard, on a
+ *  platform that offers it), and whether it does. */
+export interface WindowBehind {
+  supported: boolean
+  on: boolean
+}
+
+export async function getWindowBehind(): Promise<WindowBehind> {
+  return invoke<WindowBehind>('get_window_behind')
+}
+
+/** Keep the calling window behind other windows (or let it come forward): applied now and
+ *  remembered for its next open. Rejects where the window or the platform cannot. */
+export async function setWindowBehind(on: boolean): Promise<WindowBehind> {
+  return invoke<WindowBehind>('set_window_behind', { on })
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
