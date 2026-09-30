@@ -674,7 +674,8 @@ describe('every state-coloured word on Connect reads in every light theme', () =
     const has = (re: RegExp) => found.some((m) => re.test(m))
     expect(has(/ spacewx \.swx-impact ".*" light: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
     expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
-    expect(has(/ kpOutlook \.kp-line\.warn .* light: #f5a524 on #e5eaf0 = 1\.69:1/), 'the Kp storm line').toBe(true)
+    // The storm line's own colour is the theme's warning now that --state-warn is (it was the fixed #f5a524, 1.69:1).
+    expect(has(/ kpOutlook \.kp-line\.warn .* light: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
   }, 60_000)
 
   // A CLOSED BAND RECEDES BY ITS INK, NEVER BY FADING (operator, 2026-09-30: "Closed rows and chips fade by colour instead of

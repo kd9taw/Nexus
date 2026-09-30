@@ -293,3 +293,41 @@ describe('no background hides behind an undefined token (the --bg-panel mechanis
     expect(bad, `unresolvable tokens in the banner rules:\n${bad.join('\n')}`).toHaveLength(0)
   })
 })
+
+describe('every --state-* colour the app paints with is the theme\'s own, in every theme', () => {
+  // Two of them were declared by no theme (found 2026-09-30): `--state-warn` and `--state-bad`. The Kp outlook's bars,
+  // its storm line in the dark theme and the TV page's "stale" and "no link" chips painted their fallbacks, #f5a524
+  // and #e5484d, in every theme and under every preset. They are the theme's warning and critical colours (operator,
+  // 2026-09-30: "the two colour names map to the theme's own colours"), declared where --state-good, --state-ok and
+  // --state-weak are. A --state-* colour lives in the theme blocks, so it must resolve there, and without its fallback.
+  const code = (() => {
+    const found: string[] = []
+    const root = fileURLToPath(new URL('.', import.meta.url))
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir)) {
+        const p = join(dir, e)
+        if (statSync(p).isDirectory()) walk(p)
+        else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) found.push(readFileSync(p, 'utf8'))
+      }
+    }
+    walk(root)
+    return found.join('\n')
+  })()
+  /** Set on an element by its component (`--state-ink`, a word's own state colour): not a theme colour. */
+  const perElement = new Set([...code.matchAll(/['"](--state-[\w-]+)['"]\s*:/g)].map((m) => m[1]))
+  const used = [...new Set([...CSS.matchAll(/var\(\s*(--state-[\w-]+)/g), ...code.matchAll(/var\(\s*(--state-[\w-]+)/g)].map((m) => m[1]))]
+    .filter((t) => !perElement.has(t))
+    .sort()
+
+  it('finds the --state-* colours the sheet and the code paint with (the scan cannot silently empty out)', () => {
+    expect(used).toEqual(expect.arrayContaining(['--state-bad', '--state-good', '--state-warn', '--state-weak']))
+    expect([...perElement], 'the per-element one it leaves out').toEqual(['--state-ink'])
+  })
+
+  it.each(THEMES)('each is declared in %s, and --state-warn and --state-bad are its warning and critical colours', (theme) => {
+    expect(used.filter((t) => !TOKENS[theme].has(t)), 'declared by no theme block').toEqual([])
+    // With a fallback no theme colour has, so a token that falls through cannot pass by matching one.
+    expect(hex(toRgb(expand('var(--state-warn, #010203)', theme), [0, 0, 0])!)).toBe(hex(tokenRgb('--alert-warning', theme)!))
+    expect(hex(toRgb(expand('var(--state-bad, #010203)', theme), [0, 0, 0])!)).toBe(hex(tokenRgb('--alert-critical', theme)!))
+  })
+})

@@ -2217,8 +2217,9 @@ body.resizing-row {
   text-decoration-color: var(--alert-warning);
 }
 
-/* Lines: the bar down the left edge. The Kp storm line's own colour (a fallback orange: no theme
-   defines --state-warn) read 1.7:1 even as a mark here, so its bar takes the theme's warning colour. */
+/* Lines: the bar down the left edge. The Kp storm line's own colour (then a fixed fallback orange, before
+   --state-warn was the theme's warning) read 1.7:1 even as a mark here, so its bar takes the theme's
+   warning colour. */
 [data-theme='light'] .kp-line.warn,
 [data-theme='light'] .kp-line.good,
 [data-theme='light'] .sat-stale,
@@ -3771,6 +3772,8 @@ body.resizing-row {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  --state-warn: var(--alert-warning);
+  --state-bad: var(--alert-critical);
   /* ASKED FOR, NOT YET CONFIRMED — the Remote optimistic dial and the confirming indicator on a
      control whose command is still out. De-emphasised ink rather than a colour of its own: the
      signal is "this is not the station's word yet", which is the same thing --text-dim says
@@ -3878,6 +3881,8 @@ body.resizing-row {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  --state-warn: var(--alert-warning);
+  --state-bad: var(--alert-critical);
   --state-pending: var(--text-dim);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
   /* The light --need-* inks do NOT live here — see the palette further down. */
@@ -15347,9 +15352,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 
 /* The destructive variant. Without this the Reset control renders IDENTICALLY to the "Back up"
    link beside it — same accent, same weight — which is the wrong affordance for the one action
-   in this block that cannot be undone. `--state-bad` is not defined by either theme; every other
-   use in this file supplies the same literal fallback, so this one does too rather than inventing
-   a token half the tree would not resolve. */
+   in this block that cannot be undone. It takes the sheet's red, the destructive colour, and not
+   `--state-bad`, which is the theme's critical alert colour. */
 .settings-linkbtn.danger {
   color: var(--state-weak);
 }

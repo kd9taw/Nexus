@@ -847,6 +847,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed band's name in the 24-hour chart and the Best Band table takes the same dimmer grey. The
   NEW ONE need chip letters its word in the theme's text colour in every theme, with its magenta
   kept on the chip.
+- **The Kp outlook and the TV page use the theme's own warning colours.** The Kp outlook's bars
+  and storm line, and the TV page's "stale" and "no link" chips, were drawn in a fixed amber and
+  red in every theme, whatever the theme or the amber colour picked in Settings. They now take the
+  theme's warning and critical colours: in the dark themes the amber is a little lighter and the
+  storm red becomes the critical orange, and in the light themes the bars are dark enough to see.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
