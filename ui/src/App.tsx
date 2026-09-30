@@ -86,6 +86,7 @@ import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alert
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
+import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
 import { TopBar } from './components/TopBar'
@@ -120,8 +121,6 @@ import {
   getNeedAlerts,
   setWatchList,
   getAllSpots,
-  getXrayNow,
-  getDxpedWindows,
   getSatSchedule,
   getSatTrackStatus,
   getIssPass,
@@ -145,7 +144,6 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
-  getKpForecast,
   getOtaMapSpots,
 } from './api'
 import {
@@ -916,62 +914,36 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       clearInterval(id)
     }
   }, [])
-  // Storm FORECAST heads-up, app-wide. The Kp outlook pane fetches this too, but an
-  // alert that only fires while its own pane is open is not an alert — and the
-  // backend serves both from one 15-minute cache, so the second caller is free.
-  // stormAlert.ts dedups by the predicted onset time, so this announces once per
-  // forecast event however often it is polled.
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getKpForecast()
-        .then((f) => live && processStormForecast(f, kpNowRef.current))
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 900_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [])
+  // These three alerts WATCH the window's one poll of their feeds (features/connectFeeds): the Kp
+  // outlook box, Connect's map and its chase boxes read the same feeds, so a box on screen adds no
+  // request of its own (each used to be polled twice while one was open). Each watcher runs for the
+  // whole session, so its feed is asked for on arrival and every cycle, as before.
+  //
+  // Storm FORECAST heads-up, app-wide: an alert that only fired while the Kp box is open would not
+  // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
+  // forecast event however often it is asked.
+  useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getXrayNow()
-        .then((x) => {
-          if (!live) return
-          xrayFastRef.current = x.flux
-          processFlare(effectiveXray(x.flux, null))
-        })
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 60_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [])
+  useEffect(
+    () =>
+      watchFeed(XRAY_NOW, (x) => {
+        xrayFastRef.current = x.flux
+        processFlare(effectiveXray(x.flux, null))
+      }),
+    [],
+  )
   // DXpedition best-shot windows for the chase alerts (server-cached climatology;
   // 10 min is generous). Best-effort — without it the loud spotted-alert still
   // works from the snapshot's cards; only the quiet modelled-only toast needs it.
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getDxpedWindows()
-        .then((list) => {
-          if (live) dxpedWindowsRef.current = new Map(list.map((w) => [w.call.toUpperCase(), w]))
-        })
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 600_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [])
+  useEffect(
+    () =>
+      watchFeed(DXPED_WINDOWS, (list) => {
+        dxpedWindowsRef.current = new Map(list.map((w) => [w.call.toUpperCase(), w]))
+      }),
+    [],
+  )
   // Live-feed liveness for the Now-Bar connector pills (same cadence as prop).
   const [feedHealth, setFeedHealth] = useState<FeedHealth | null>(null)
   useEffect(() => {

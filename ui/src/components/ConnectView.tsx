@@ -10,36 +10,23 @@
 // The panes are an assignable wrap-the-globe grid: every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
-import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense } from 'react'
-import type {
-  GettingOut,
-  MapSpot,
-  NeedAlert,
-  NeedTag,
-  PathPrediction,
-  PropagationSnapshot,
-  Station,
-  WorkableCard,
-} from '../types'
-import type { AlertView, AmpStatus, MufStation, NoaaScalesView } from '../types'
+import { useState, useId, useMemo, useRef, lazy, Suspense } from 'react'
+import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
+import type { AmpStatus } from '../types'
 import type { Theme } from '../useTheme'
-import { getPathOutlook, getBandOutlook, getGettingOut, getSpaceWxScales, getKc2gMuf, getXrayNow, getDxpedWindows } from '../api'
-import type { DxpedWindow } from '../types'
 import { effectiveXray } from '../flareAlert'
-import { latLonToGrid } from '../grid'
 import { gpuCapableForGlobe } from '../gpu'
 import { MapView, type MapIntent } from './MapView'
 // The 3-D WebGL globe is LAZY-loaded: three.js only downloads when an operator turns on
 // 3-D mode, so the 2-D default (which runs anywhere) never pays for it.
 const Globe3D = lazy(() => import('./Globe3D'))
-import { provLabel } from './connect/paneFormat'
 import { PaneFrame } from './connect/PaneFrame'
+import { remoteFeeds, resolveSelection, usePaneContext } from './connect/usePaneContext'
 import { paneById } from './connect/panes'
 import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
 import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
-import type { PaneContext } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
 import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
 import type { RailWidths } from '../features/connectRails'
@@ -47,7 +34,6 @@ import { CONNECT_PANELS, usePanelLayout } from '../features/panelState'
 import { surfaceGet, surfaceId, surfaceSet } from '../features/windowScope'
 import { loadIntentSetup, saveIntentSetup, type MapChoice } from '../features/intentMapSettings'
 import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
-import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
 import { useStationCapability } from '../stationAccess'
@@ -180,10 +166,6 @@ export function ConnectView({
   const onSelectCall=remote?setRemoteSelection:nativeOnSelectCall
   const prop=remote?remoteConnect.value?.prop??null:nativeProp
   const myGrid=remote?remoteConnect.value?.mygrid??'':nativeMyGrid
-  const prov = prop ? provLabel(prop.source, prop.asOf) : null
-  // Fetched here, once, and handed to every pane through the context — the panes that
-  // need it include plain render functions that cannot hold a hook of their own.
-  const entityCentroids = useEntityCentroids()
   const [intent, setIntent] = useState<MapIntent>(() =>
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
@@ -230,228 +212,43 @@ export function ConnectView({
   // NOTE: focus is a deliberate user action and STICKS until toggled — a modeled-open-
   // but-unheard band is a legitimate focus target; the map just doesn't dim when a
   // focused band has no spots (MapView), so focusing it can't black out the map.
-  // Resolve the selection against EVERYTHING plotted: my decoded stations, the
-  // live cluster/RBN/PSKR spots, and the DXpedition cards — so clicking ANY map
-  // pixel populates the selection pane (the map's "so what").
-  const selStation = useMemo(
-    () => (selectedCall ? (stations.find((s) => s.call === selectedCall) ?? null) : null),
-    [selectedCall, stations],
-  )
-  const selSpot = useMemo<MapSpot | null>(
-    () =>
-      selectedCall && !selStation
-        ? (prop?.spots?.find((sp) => sp.call === selectedCall) ?? null)
-        : null,
-    [selectedCall, selStation, prop],
-  )
-  // Gated on !selStation: a DXpedition call we ALSO decoded locally renders as the
-  // decoded station (worked from the cockpit) — the dxped card's advertised band may
-  // differ from the band it was actually heard on, and the Work button must never
-  // route the rig off what the operator is looking at.
-  const selDxped = useMemo<WorkableCard | null>(
-    () =>
-      selectedCall && !selStation
-        ? (prop?.dxpeditions.workableNow.find((c) => c.call === selectedCall) ?? null)
-        : null,
-    [selectedCall, selStation, prop],
-  )
-  // Per-path outlook for the selection (the PathPredictor seam): a station's
-  // reported grid when we have one, else the spot's coordinates as a Maidenhead
-  // square (centroid-placed spots = the entity's grid — approximate, labeled).
-  const selGrid = useMemo(() => {
-    if (!selectedCall) return null
-    if (selStation?.grid) return selStation.grid
-    if (selSpot) return latLonToGrid(selSpot.lat, selSpot.lon)
-    return null
-  }, [selectedCall, selStation, selSpot])
+  // WHAT THE BOXES READ: the selection resolved against everything plotted (a click on ANY map pixel
+  // fills the selection box), the window's one poll of Connect's feeds, and the path outlook for the
+  // selection — built by the code the dashboard rail beside the cockpits uses too
+  // (connect/usePaneContext), so a box reads the same in both places and nothing is polled twice.
+  // The hosted Remote page polls nothing: its copies come from the station's `connect` and `path`
+  // collections (`remoteFeeds` is the mapping this view's own effect used to make).
+  const selection = useMemo(() => resolveSelection(selectedCall, stations, prop), [selectedCall, stations, prop])
+  const selGrid = selection.selGrid
   const remotePath=useNavigation<PathData>('path',selGrid??'',!!selGrid)
-  const [nativePathPred, setPathPred] = useState<PathPrediction | null>(null)
-  const pathPred=remote?(remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null):nativePathPred
-  useEffect(() => {
-    if(remote)return
-    if (!selGrid) {
-      setPathPred(null)
-      return
-    }
-    let live = true
-    getPathOutlook(selGrid)
-      .then((p) => live && setPathPred(p))
-      .catch(() => {})
-    return () => {
-      live = false
-    }
-  }, [selGrid,remote])
-  const pathOpen = pathPred?.bands.filter((b) => b.workability !== 'Closed') ?? []
-
-  // The no-selection general "Band outlook (modelled)": modeled per-band workability
-  // + MUF to a long-haul DX ring. Fetched only when no station is selected; refreshed
-  // on the prop cadence so the modeled day tracks the current space weather.
-  const [bandOutlook, setBandOutlook] = useState<PathPrediction | null>(null)
-  // ⭐ KEPT WARM UNCONDITIONALLY, on its own cadence — like `getout` below.
-  //
-  // This used to early-return `if (selectedCall) return` and hang off `prop?.asOf`. Both
-  // were written for the ONE consumer visible from here: the map/outlook strip, which
-  // shows `pathPred` instead whenever a station is selected (:419/:441), so it genuinely
-  // does not need this value then. But `bandOutlook` is also read UNCONDITIONALLY by three
-  // panes — Chase (ChasePane.tsx:44), the Chase feed (ChaseFeedPane.tsx:25) and the
-  // band-outlook heatmap (connect/panes.tsx:274/:569) — and for them the guard was
-  // starvation: selecting a station froze their openness/"best window" column at whatever
-  // it last held, indefinitely, while every sibling pane kept updating off its own poll.
-  // That is the operator report ("the Chase section stays stuck on old information"), and it
-  // was never pop-out-specific — the detached window only made it obvious, because it sits
-  // on a second monitor for hours with a selection active.
-  //
-  // The `prop?.asOf` dep was the second half: `asOf` is stamped only on a real SWPC fetch
-  // and served from a 300 s cache (PROP_TTL_SECS, src-tauri/src/lib.rs:1239), so even with
-  // nothing selected this refreshed at most every five minutes rather than on any poll.
-  // A plain interval is both simpler and honest about the cadence.
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getBandOutlook()
-        .then((p) => live && setBandOutlook(p))
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 60_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  const outlookOpen = bandOutlook?.bands.filter((b) => b.workability !== 'Closed') ?? []
-  // "Am I getting out?" — who is hearing me now (observed). Polled on the prop
-  // cadence; the backend reads the live PSK Reporter / RBN firehose each call.
-  const [getout, setGetout] = useState<GettingOut | null>(null)
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getGettingOut()
-        .then((g) => live && setGetout(g))
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 30_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  // B3 live external feeds (desktop-only; cached server-side, polled on the TTL cadence).
-  // Graceful: any failure leaves the last value, never throws — the panes degrade honestly.
-  const [scales, setScales] = useState<NoaaScalesView | null>(null)
-  const [alerts, setAlerts] = useState<AlertView[]>([])
-  const [muf, setMuf] = useState<MufStation[]>([])
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () => {
-      getSpaceWxScales()
-        .then((s) => {
-          if (live) {
-            setScales(s.scales)
-            setAlerts(s.alerts)
-          }
-        })
-        .catch(() => {})
-      getKc2gMuf()
-        .then((m) => live && setMuf(m))
-        .catch(() => {})
-    }
-    load()
-    // 5 min = the kc2g MUF cache TTL; the 15-min SWPC scales cache is intentionally
-    // over-polled (harmless — the server serves cached, so it's a cheap freshness check).
-    const id = window.setInterval(load, 300_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  // X-ray fast lane (60 s) so the map's D-RAP flare layer moves at ~1 min cadence
-  // during an event instead of the 5-min prop snapshot. Best-effort: a failed
-  // fetch just leaves the snapshot's value driving the layer.
-  const [xrayNow, setXrayNow] = useState<number | null>(null)
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getXrayNow()
-        .then((x) => live && setXrayNow(x.flux))
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 60_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-  // The one flux value the map renders (dev-override > fast lane > snapshot).
-  const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
-  // DXpedition best-shot windows (server-cached climatology) — the selection
-  // pane shows the selected expedition's line. 10-min poll is generous.
-  const [dxpedWindows, setDxpedWindows] = useState<Map<string, DxpedWindow>>(new Map())
-  useEffect(() => {
-    if(remote)return
-    let live = true
-    const load = () =>
-      getDxpedWindows()
-        .then((list) => {
-          if (live) setDxpedWindows(new Map(list.map((w) => [w.call.toUpperCase(), w])))
-        })
-        .catch(() => {})
-    load()
-    const id = window.setInterval(load, 600_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [remote])
-
-  useEffect(()=>{
-    if(!remote)return
-    const d=remoteConnect.value,age=remoteConnect.ageMs
-    setBandOutlook(d?.bandOutlook??null);setGetout(d?.gettingOut??null)
-    const scales=d?.scales&&d.scales.ageMs+age<d.scales.validForMs?d.scales.value:null
-    setScales(scales?.[0]??null);setAlerts(scales?.[1]??[])
-    setMuf(d?.muf&&d.muf.ageMs+age<d.muf.validForMs?d.muf.value:[])
-    setXrayNow(d?.xray&&d.prop.asOf+Math.floor((d.sourceAgeMs+age)/1000)-d.xray.asOf<120?d.xray.flux:null)
-    setDxpedWindows(new Map())
-  },[remote,remoteConnect.value,remoteConnect.ageMs])
-
-  // One context handed to every pane (built from the already-lifted state above).
-  const ctx: PaneContext = {
+  const remoteFeedValues = useMemo(
+    () => (remote ? remoteFeeds(remoteConnect.value, remoteConnect.ageMs) : null),
+    [remote, remoteConnect.value, remoteConnect.ageMs],
+  )
+  const { ctx, xrayNow } = usePaneContext({
     myGrid,
-    entityCentroids,
     theme,
     intent,
     prop,
-    prov,
     needByCall,
-    needAlerts: needAlerts ?? [],
-    amp: amp ?? null,
+    needAlerts,
+    amp,
     // The Remote browser's copy carries no radio band of its own here.
     rigBand: remote ? null : (rigBand ?? null),
     selectedCall,
-    selStation,
-    selSpot,
-    selDxped,
-    selDxpedWindow: selDxped ? (dxpedWindows.get(selDxped.call.toUpperCase()) ?? null) : null,
-    dxpedWindows,
-    selGrid,
-    pathPred,
-    bandOutlook,
-    pathOpen,
-    outlookOpen,
-    getout,
-    focusBand,
-    scales,
-    alerts,
-    muf,
+    selection,
     onSelectCall,
     onWorkSpot,
     onPoint: remote&&!remoteRotator?undefined:onPoint,
+    focusBand,
     toggleFocusBand,
-  }
+    remote: remoteFeedValues
+      ? { feeds: remoteFeedValues, pathPred: remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null }
+      : null,
+  })
+  const { pathPred, bandOutlook, muf } = ctx
+  // The one flux value the map renders (dev-override > fast lane > snapshot).
+  const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
   const chromeHidden = mapFull && !map3d
 
   // CLOSE + RESIZE (operator-approved 2026-09-13). Visibility is per SLOT, in the shared

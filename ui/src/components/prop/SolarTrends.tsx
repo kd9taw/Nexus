@@ -16,9 +16,8 @@
 //
 // The sunspot number here is SWPC's DAILY count. The propagation model's sunspot input is the
 // smoothed R12, a different quantity, and nothing here reaches it.
-import { useEffect, useState } from 'react'
-import { getSolarIndices } from '../../api'
-import type { DailySolarIndex, DailySolarIndices } from '../../types'
+import type { DailySolarIndex } from '../../types'
+import { SOLAR_INDICES, useFeed } from '../../features/connectFeeds'
 import { t } from '../../i18n'
 
 /** The index names — technical tokens, the same on every ham's screen (SpaceWxGauges' rule). */
@@ -30,8 +29,6 @@ const SSN = 'SSN'
  * further behind for a few hours; three days is the first age the ordinary schedule never shows. */
 export const STALE_AFTER_DAYS = 3
 
-/** Matches the server's one-hour cache; the file changes about once a day. */
-const POLL_MS = 3_600_000
 const DAY_S = 86_400
 
 /** "Sep 28" — one day of the file. The rows are UTC days, so the label is too. Date formatting
@@ -105,21 +102,11 @@ function TrendRow({ index, days, pick }: { index: string; days: DailySolarIndex[
 
 export function SolarTrends() {
   // undefined = still asking (nothing drawn yet); null = nothing to show.
-  const [ix, setIx] = useState<DailySolarIndices | null | undefined>(undefined)
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getSolarIndices()
-        .then((v) => live && setIx(v))
-        // A failed refresh keeps what is on screen: its dates already say how old it is.
-        .catch(() => live && setIx((cur) => cur ?? null))
-    load()
-    const id = window.setInterval(load, POLL_MS)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [])
+  // The window's one poll of the file (features/connectFeeds, on the server's one-hour cache), so the
+  // box in Connect, in the dashboard rail and in the pop-out shares it. A failed refresh keeps what is
+  // on screen: its dates already say how old it is.
+  const held = useFeed(SOLAR_INDICES)
+  const ix = held.settled ? (held.value ?? null) : undefined
 
   if (ix === undefined) return null
   if (!ix || ix.days.length === 0) return <p className="swx-trend-none">{t('connect.solar.unavailable')}</p>
