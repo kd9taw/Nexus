@@ -7,7 +7,7 @@
 // snapshot, operator grid, heard stations, need-state, and selection lifted in
 // App. Selecting a station on the map highlights its great-circle path here; the
 // surrounding panes answer "what's open, where to point, what do I need" at a glance.
-// The panes are an assignable wrap-the-globe grid (HamClock-style): every panel is a
+// The panes are an assignable wrap-the-globe grid: every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
 import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense } from 'react'

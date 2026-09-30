@@ -383,10 +383,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Alerts',
     tab: 'spots',
     keywords: ['alert', 'notify', 'my call', 'cq', 'new dxcc', 'new grid', 'rare', 'watch list',
-      'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier',
+      'watch list notes', 'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier',
       // The geographic alert scope (#174). An operator narrowing their alerts searches for the
       // PLACE ("europe", "country"), never for the word the label uses.
-      'continent', 'europe', 'country', 'entity', 'dxcc', 'region', 'only'],
+      'continent', 'europe', 'country', 'entity', 'dxcc', 'region', 'only',
+      // The pop-up switch (#391), in the words of the report: "how do I turn off the popup
+      // notifications in the bottom right". The search is punctuation-blind, so 'popup' covers
+      // 'pop-up' too.
+      'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------
@@ -617,7 +621,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'connect-web',
     label: 'Connect on a TV',
     tab: 'appearance',
-    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan', 'hamclock',
+    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan',
       'network', 'web page', 'cast', 'chromecast', 'firestick', 'fire stick', 'tablet',
       'phone', 'remote view', 'read only', 'shack tv'],
   },

@@ -85,7 +85,7 @@ describe('processDxpedAlerts', () => {
     expect(beeps).toHaveBeenCalledTimes(1)
     expect(toasts).toHaveBeenCalledTimes(1)
     expect(toasts.mock.calls[0][0]).toContain('window open NOW')
-    expect(toasts.mock.calls[0][3]).toMatchObject({ prominent: true, actionLabel: 'Work' })
+    expect(toasts.mock.calls[0][3]).toMatchObject({ alert: true, prominent: true, actionLabel: 'Work' })
     processDxpedAlerts([card({})], null, null, onWork) // same day → silent
     expect(toasts).toHaveBeenCalledTimes(1)
   })
@@ -97,6 +97,7 @@ describe('processDxpedAlerts', () => {
     expect(toasts).toHaveBeenCalledTimes(1)
     expect(toasts.mock.calls[0][0]).toContain('not yet spotted')
     expect(toasts.mock.calls[0][1]).toBe('info')
+    expect(toasts.mock.calls[0][3], 'a chase notice is an alert (#391)').toMatchObject({ alert: true })
   })
 
   it('a loud alert also consumes the quiet slot for the day', () => {

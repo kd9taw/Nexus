@@ -12,7 +12,12 @@
 //! 2. with it released: the rows, read from the store;
 //! 3. under the lock again: the change, made only while the rows it read are still the rows the
 //!    log holds ([`StationCore::unchanged_since`]) — otherwise planned again, and after
-//!    [`PLANS`] plans refused as `LogBusy` ([`RowRefusal::Busy`]).
+//!    [`PLANS`] plans refused as `LogBusy` ([`RowRefusal::Busy`]);
+//! 4. with it released again: the store's answer. The store checks each row it writes against
+//!    the row the plan read, and turns the change back when another window changed one first —
+//!    a commit the count in step 3 cannot have caught yet, since this window's writer looks for
+//!    other windows' commits only every `FOREIGN_POLL`. The change is then planned again, within
+//!    the same [`PLANS`].
 //!
 //! Each step 3 is O(the rows changed): the decision about each row, the index following its
 //! pairs, a channel send to the writer. The command then waits for its change to reach the disk
@@ -36,6 +41,29 @@ use crate::station::{
 /// What a change to one row came to: made (`Some` of what the caller answered), found nothing
 /// to change (`None`), or refused ([`RowRefusal`]) — or `Err`, the store could not be read.
 pub type RowOutcome<T> = Result<Result<Option<T>, RowRefusal>, String>;
+
+/// ★ A command's change, made until the store takes it: `make` plans and makes the change — any
+/// function here — and the store's answer is waited for, with every lock released. A change the
+/// store turns back, because another window changed a row it read before the store wrote it, is
+/// made again on the rows as they now stand: [`PLANS`] makings in all. What the last making
+/// answered, and its durability, resolved: the command's own wait then says what became of it,
+/// a change turned back every time included.
+///
+/// For a command that waits for its change. A caller that does not — the upload worker, the
+/// companion import — makes the change once: turned back, it is not made, and its work is done
+/// again later.
+///
+/// ⚠️ It waits: never call it holding a lock.
+pub fn until_written<T>(mut make: impl FnMut() -> (T, Durability)) -> (T, Durability) {
+    let mut made = make();
+    for _ in 1..PLANS {
+        if !made.1.turned_back(crate::logstore::DURABLE_WAIT) {
+            break;
+        }
+        made = make();
+    }
+    made
+}
 
 /// ★ Plan a change to the contact `id` with the Engine lock released and make it under the lock
 /// — the by-id change every command makes (an edit, a QSL mark, a satellite tag, a delete).
@@ -215,6 +243,11 @@ pub fn qsl_sent(id: RecordId, via: Option<tempo_core::logbook::QslVia>) -> LogOp
 /// ([`station::push_target`]: by its id while it is still that contact, or — a push that names
 /// no row — the newest with its push key), planned with the Engine lock released. Whether a
 /// record was stamped, and the durability of the stamp.
+///
+/// The upload worker does not wait for its stamp: one the store turns back, because another
+/// window changed the contact after the plan read it, is simply not made, and the next push makes
+/// it (the service answers Duplicate, and that is stamped). The operator's push waits, and makes
+/// it again ([`until_written`]).
 pub fn stamp_push(
     engine: &Mutex<Engine>,
     pushed: &QsoRecord,
@@ -237,6 +270,8 @@ pub fn stamp_push(
         let Some(rows) = station::stamped_rows(&[target], service, &status) else {
             return (false, Durability::default());
         };
+        #[cfg(test)]
+        tests::race();
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
             e.station_mut()
                 .commit_planned(
@@ -287,6 +322,8 @@ pub fn stamp_lotw_batch(
         let Some(pairs) = pairs else {
             return (report, Durability::default());
         };
+        #[cfg(test)]
+        tests::race();
         let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
             e.station_mut()
@@ -393,6 +430,9 @@ fn mark_lotw_uploaded_in_chunks(
                     .is_ok()
             });
             if ok {
+                if d.turned_back(crate::logstore::DURABLE_WAIT) {
+                    continue;
+                }
                 made = Some((n, d));
                 break;
             }

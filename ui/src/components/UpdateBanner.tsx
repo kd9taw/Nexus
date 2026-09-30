@@ -7,6 +7,9 @@
 //
 // The Install button never installs by surprise. It refuses while the radio is busy and says
 // why, because installing restarts the app and a restart mid-QSO loses the contact.
+//
+// Where Nexus updates itself this is the ONLY update prompt (2026-09-29): the old "update
+// available" notice with its Download button speaks only where the self-updater cannot.
 
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The version string and
@@ -21,7 +24,7 @@ function pct(done: number, total: number): number {
 }
 
 export function UpdateBanner({ update }: { update: SelfUpdate }) {
-  const { phase, version, blockReason, progress, error, install, dismiss } = update
+  const { phase, version, blockReason, progress, error, install, dismiss, downloadInstead } = update
   // 'available'/'downloading' stay silent: nothing is asked of the operator until it is ready to
   // go, and a progress bar for something they did not request is just noise.
   if (phase !== 'ready' && phase !== 'installing' && phase !== 'error') return null
@@ -34,6 +37,17 @@ export function UpdateBanner({ update }: { update: SelfUpdate }) {
           <span className="update-detail" title={error ?? ''}>
             {error ? error.slice(0, 120) : t('update.unknownError')}
           </span>
+          {/* Where Nexus updates itself this banner is the only update prompt, so a failed
+              install must not end here: the way out is the download page, as the old notice's
+              Download button was. It wears the banner's primary style: it is the next step. */}
+          <button
+            type="button"
+            className="update-install"
+            onClick={downloadInstead}
+            title={t('update.downloadInstead.title')}
+          >
+            {t('update.download')}
+          </button>
           <button
             type="button"
             className="update-close"

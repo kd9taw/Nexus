@@ -111,7 +111,7 @@ export function useUnits(): Units {
   return units
 }
 
-const KM_PER_MI = 1.609344
+export const KM_PER_MI = 1.609344
 
 /** Distance from km → the display string ("128 km" / "80 mi"). */
 export function fmtDistanceKm(km: number, u: Units): string {

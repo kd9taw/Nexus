@@ -51,7 +51,7 @@ import {
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
-import { withErrorToast, pushToast, dismissToast } from './toast'
+import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
@@ -170,7 +170,8 @@ import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
+import { pointedTo } from './components/rotorPointAt'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
@@ -192,7 +193,6 @@ import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
-import { maybeCheckForUpdate } from './features/updateCheck'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
 // renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
@@ -528,12 +528,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const pskPanels = usePanelLayout(PSK_PANELS)
   const js8Panels = usePanelLayout(JS8_PANELS)
 
-  // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
-  // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
-  useEffect(() => {
-    void maybeCheckForUpdate()
-  }, [])
-
   // Operate MODE: 'dx' (FT8/FT4 structured cockpit) or 'msg' (Tempo two-way
   // calling). The FT8/FT4 ⇄ Tempo switch binds the radio tier+mode and swaps only
   // the cockpit; Connect/Map/Prop/Logbook/Awards are GLOBAL views selected from the
@@ -838,7 +832,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             openingAlertRef.current.set(key, tnow)
             const spec = openingToastSpec(o)
             if (spec.beepHz != null) doubleBeep(spec.beepHz)
-            pushToast(spec.message, spec.kind, spec.ttlMs, spec.prominent ? { prominent: true } : {})
+            pushToast(spec.message, spec.kind, spec.ttlMs, spec.prominent ? { alert: true, prominent: true } : { alert: true })
           }
           // Honest-state: surface non-live propagation in the Now-Bar lane.
           if (p.source === 'offline') {
@@ -1084,6 +1078,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     if (remote) setSettings(remote.settings)
   }, [remote?.settings])
+  // #391: the corner pop-ups follow the setting. A settings file without it (and the Remote page,
+  // which is never sent it) keeps them on, as they always were.
+  useEffect(() => {
+    setPopupNotifications(settings?.popupNotifications !== false)
+  }, [settings?.popupNotifications])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes.
@@ -1369,7 +1368,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // time `pounceAlert` is set; this is the visual half plus the one-click work.
   const { alert: pounceAlert, dismiss: dismissPounce } = usePounce()
   // Signed self-update: downloads quietly, installs only on an explicit press that the engine
-  // refuses while the radio is busy (see useSelfUpdate / update_install_block).
+  // refuses while the radio is busy (see useSelfUpdate / update_install_block). It is also the
+  // one owner of the launch's update prompt: the old "update available" notice speaks only
+  // where the self-updater cannot (features/updateCheck.ts).
   const selfUpdate = useSelfUpdate(!!settings?.betaUpdates)
   const handlePounceWork = useCallback(
     (a: PounceAlert) => {
@@ -2028,8 +2029,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Point the antenna rotator at a needed call (great-circle bearing from your grid).
   const handlePointAntenna = useCallback(async (call: string, longPath = false) => {
     try {
-      // A browser gets no bearing back: the station resolves it.
-      const bearing: number | null | undefined = await pointRotatorAtCall(call, longPath)
+      // A browser gets nothing back: the station resolves it.
+      const pointed: PointedAt | null | undefined = await pointRotatorAtCall(call, longPath)
       // ⚠️ THE TOAST NAMES THE PATH. A heading with no path is half an answer — the same
       // reason `azimuthTitle` says "short path" out loud on every bearing Nexus displays.
       //
@@ -2040,12 +2041,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // …and the PARAMS are object literals at each call site for the same reason: the
       // guard counts a call site unreadable when the key OR the params come from a
       // variable, so hoisting them into `where` traded one unreadable site for another.
+      // …and what the bearing was taken to: the station's grid, or only its country's centre.
       pushToast(
-        bearing == null
+        pointed == null
           ? t('remote.b1.rotatorPointing', { call })
           : longPath
-            ? t('shell.rotator.pointedLong', { bearing: Math.round(bearing), call })
-            : t('shell.rotator.pointed', { bearing: Math.round(bearing), call }),
+            ? t('shell.rotator.pointedLong', { bearing: Math.round(pointed.bearing), call, to: pointedTo(pointed) })
+            : t('shell.rotator.pointed', { bearing: Math.round(pointed.bearing), call, to: pointedTo(pointed) }),
         'success',
         3000,
       )

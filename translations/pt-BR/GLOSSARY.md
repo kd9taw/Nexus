@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,259 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,289 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,8 +20,8 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 119 | The program's name. |
-| QSO / QSOs | 96 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
+| Nexus | 126 | The program's name. |
+| QSO / QSOs | 97 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 82 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 80 / 72 | Transmit and receive. Printed on the radio itself. |
@@ -33,7 +33,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | DX | 52 | Distant station / distance working. |
 | ADIF | 49 | The log file format. |
 | WSJT-X | 47 | The program Nexus is compatible with. |
-| DXCC | 43 | The award programme and the entity list. |
+| DXCC | 44 | The award programme and the entity list. |
 | SSTV | 41 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
 | Field Day | 34 | The ARRL/RAC event's official name. |
@@ -95,15 +95,15 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 315 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 228 | The rig itself, and the radio list in Settings. | |
+| band | 316 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| radio | 229 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 157 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
-| log / logbook | 135 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
+| log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 122 | The Settings screen and every reference to it. | |
-| grid | 113 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
+| grid | 117 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 112 | Sound cards, levels, routing. | |
-| station | 123 | Both your own station and the one you are working. | |
+| station | 125 | Both your own station and the one you are working. | |
 | port | 97 | Serial and network ports. | |
 | dial | 95 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 98 / 30 | The verbs. The abbreviations TX/RX stay English. | |
@@ -130,7 +130,7 @@ word in, and use only that word in the CSV.
 | antenna | 30 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
 | cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 18 / 12 | The movable boxes inside a cockpit. | |
+| pane / panel | 22 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
 | exchange | 15 | The contest exchange. | |

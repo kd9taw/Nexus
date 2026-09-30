@@ -94,6 +94,35 @@ describe('roster filters: a corrupt stored value never hides rows silently', () 
   })
 })
 
+describe('roster filters: the distance cap (#386)', () => {
+  it('keeps a stored cap through a save and a load', () => {
+    const f = { neededOnly: true, hideWorked: false, hideBlocked: false, maxDistanceKm: 1609.344 }
+    saveRosterFilters(f)
+    expect(loadRosterFilters()).toEqual(f)
+  })
+
+  it('reads a value stored before the cap existed exactly as before: no cap, and no key for one', () => {
+    localStorage.setItem(ROSTER_FILTER_KEY, '{"neededOnly":true,"hideWorked":false,"hideBlocked":false}')
+    expect(loadRosterFilters()).toStrictEqual({ neededOnly: true, hideWorked: false, hideBlocked: false })
+  })
+
+  it.each([
+    ['zero', '0'],
+    ['negative', '-5'],
+    ['a string', '"1000"'],
+    ['null', 'null'],
+    ['too large to be finite', '1e999'],
+    ['an object', '{}'],
+    ['a boolean', 'true'],
+  ])('a cap that is %s means no cap, never a roster cut down with no limit picked', (_label, raw) => {
+    localStorage.setItem(
+      ROSTER_FILTER_KEY,
+      `{"neededOnly":false,"hideWorked":true,"hideBlocked":false,"maxDistanceKm":${raw}}`,
+    )
+    expect(loadRosterFilters()).toStrictEqual({ neededOnly: false, hideWorked: true, hideBlocked: false })
+  })
+})
+
 describe('decode filter: round trip and sanitizing', () => {
   it('defaults to All when nothing has ever been stored', () => {
     expect(loadDecodeFilter()).toBe('all')

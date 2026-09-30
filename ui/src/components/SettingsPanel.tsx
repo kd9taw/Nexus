@@ -7,7 +7,7 @@ import { useRemotePreferences } from '../remote-web/useRemotePreferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { JS8_SPEED_LIST } from '../js8Vocab'
+import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
@@ -573,11 +573,23 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
  * backend (404) is the DCU-1 flavour at a FIXED 4800, so an ERC V4 owner following the
  * vendor's setup who picks the entry with their board's name on it gets a rotator that never
  * answers. Both labels now say which mode they are; the vendor-recommended path is model 603.
+ *
+ * ⭐ THE YAESU G-5500 IS NAMED ON ITS INTERFACES' ENTRIES, NOT BESIDE THEM (2026-09-29). Hamlib
+ * has no G-5500 model because the rotator has no computer port: it is driven through a GS-232B or
+ * GS-232A interface, or a GS-232 clone board, so the entry that works is that interface's model.
+ * The setting stores ONE number and a <select> shows the first option carrying it, so a separate
+ * "G-5500" entry saving 603 would be displayed as the other 603 entry after a save — the list
+ * would name something the operator did not pick. The name leads each label, with the interface
+ * straight after it, so a closed select too narrow for the whole label still shows both.
  */
 export const ROTATOR_MODELS: { model: number; label: string }[] = [
-  { model: 601, label: 'Yaesu GS-232A (az/el)' },
-  { model: 603, label: 'Yaesu GS-232B (az/el) — also ERC V4 in its recommended mode (9600)' },
-  { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
+  {
+    model: 603,
+    label:
+      'Yaesu G-5500 / G-5500DC — GS-232B interface (az/el); also any GS-232B, and ERC V4 in its recommended mode (9600)',
+  },
+  { model: 601, label: 'Yaesu G-5500 / G-5500DC — GS-232A interface (az/el); also any GS-232A' },
+  { model: 602, label: 'GS-232 (generic, az/el) — GS-232 clone boards; also EA4TX ARS-USB, LVB, ST2' },
   { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
   { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
   { model: 607, label: 'AMSAT LVB Tracker (az/el)' },
@@ -3137,6 +3149,18 @@ export function SettingsPanel({
       setTab('contesting')
       setError(t('settings.save.fdPositionName'))
       setPosNameInvalid(true)
+      return
+    }
+    // JS8Call will not let @APRSIS or @JS8NET be joined as a group: its Settings refuses the save
+    // ("%1 is a group that cannot be joined", Configuration.cpp:2449-2453). ON THE CHANGE, as the
+    // position name above: a settings file from a Nexus that accepted one loads and is not
+    // refused on an unrelated save, and the engine never joins it either way.
+    const js8Groups = form.js8Groups ?? []
+    const js8GroupsChanged = js8Groups.join(',') !== (savedRef.current?.js8Groups ?? []).join(',')
+    const unjoinable = js8Groups.find((g) => JS8_UNJOINABLE_GROUPS.includes(g))
+    if (js8GroupsChanged && unjoinable) {
+      setTab('digital')
+      setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
@@ -9259,6 +9283,24 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-alerts">
             <legend>{t('settings.alerts.legend')}</legend>
             <div className="settings-grid">
+              {/* #391: the corner's pop-ups. ON unless the file says false, so an old settings
+                  file keeps them; what still pops up with them off is `popsUpWhenOff` (toast.ts). */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.popups.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.popupNotifications !== false}
+                    className={`toggle${form.popupNotifications !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('popupNotifications', form.popupNotifications === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.popups.hint')}</span>
+              </div>
+
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.alerts.myCall.label')}</span>

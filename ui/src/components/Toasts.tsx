@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
-import { dismissToast, subscribeToasts, type Toast, type ToastKind } from '../toast'
+import { dismissToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 
 const KIND_CLASS: Record<ToastKind, string> = {
   error: 'kind-error',
@@ -18,7 +18,8 @@ const KIND_CLASS: Record<ToastKind, string> = {
 
 export function Toasts() {
   const [toasts, setToasts] = useState<Toast[]>([])
-  useEffect(() => subscribeToasts(setToasts), [])
+  // What pops up, not every toast raised: with pop-ups off (#391) the bus keeps the rest.
+  useEffect(() => subscribePopups(setToasts), [])
   // ⚠️ IDS WHOSE ACTION IS IN FLIGHT OR HAS FAILED (R3). Radix closes a Root when its Action is
   // pressed — right for a one-shot action, wrong for one that can FAIL, and it is the second
   // half of the bug: even once the click handler stopped dismissing unconditionally, Radix's

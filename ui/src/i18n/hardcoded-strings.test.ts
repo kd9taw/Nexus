@@ -385,6 +385,8 @@ const MIGRATED = [
   'components/AprsRailSeam.tsx',
   'components/LinkPill.tsx',
   'components/panes/CockpitPaneFrame.tsx',
+  // ⊞ Panels ▸ Arrange (layout L3): born migrated; the panes' names are the cockpit's.
+  'components/panes/ArrangePanes.tsx',
   'features/profiles.ts',
   'features/registry.ts',
   // Batch 18 (2026-08-19) — the Operate cockpit: its header, the waterfall strip, the two

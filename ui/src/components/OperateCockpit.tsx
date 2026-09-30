@@ -23,6 +23,7 @@ import type {
   ModeRequest,
   NeedAlert,
   NeedTag,
+  PointedAt,
   QrzLookup,
   Settings,
   SourceKind,
@@ -54,6 +55,7 @@ import { qrzLookup, resolveEntity } from '../api'
 import { pushToast } from '../toast'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
+import { pointedTo } from './rotorPointAt'
 import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
@@ -1513,9 +1515,10 @@ export function OperateCockpit({
               // other cockpits share. This one keeps its own `operate.rotor.*` wording.
               onPointAt={(call, longPath) =>
                 pointRotatorAtCall(call, longPath)
-                  .then((bearing: number | null | undefined) =>
-                    // A browser gets no bearing back: the station resolves it.
-                    pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : longPath ? t('shell.rotator.pointedLong', { bearing: Math.round(bearing), call }) : t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
+                  .then((pointed: PointedAt | null | undefined) =>
+                    // A browser gets nothing back: the station resolves it. The toast names what
+                    // the bearing was taken to, as every point-at-call's does (`pointedTo`).
+                    pushToast(pointed == null ? t('remote.b1.rotatorPointing', { call }) : longPath ? t('shell.rotator.pointedLong', { bearing: Math.round(pointed.bearing), call, to: pointedTo(pointed) }) : t('operate.rotor.pointed', { call, deg: Math.round(pointed.bearing), to: pointedTo(pointed) }), 'info'),
                   )
                   // `{{error}}` is the backend's own refusal, passed through as a value.
                   .catch((e) =>

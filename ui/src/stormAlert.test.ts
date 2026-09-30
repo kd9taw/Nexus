@@ -50,12 +50,13 @@ describe('the measured storm alert fires on the edge, not every poll', () => {
   it('is quiet at G1 and prominent from G2', () => {
     processStorm(5.1)
     expect(toast.push.mock.calls[0][1]).toBe('info')
+    expect(toast.push.mock.calls[0][3], 'a storm is an alert (#391)').toEqual({ alert: true })
     expect(beep.double).not.toHaveBeenCalled()
     resetStormAlerts()
     toast.push.mockClear()
     processStorm(7.2)
     expect(toast.push.mock.calls[0][1]).toBe('error')
-    expect(toast.push.mock.calls[0][3]).toEqual({ prominent: true })
+    expect(toast.push.mock.calls[0][3]).toEqual({ alert: true, prominent: true })
   })
 
   /// ⚠️ THE HYSTERESIS IS THE WHOLE POINT. Kp hovering either side of 5 must not

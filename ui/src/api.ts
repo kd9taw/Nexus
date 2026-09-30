@@ -45,6 +45,8 @@ import type {
   ModeRequest,
   NeedAlert,
   QrzLookup,
+  PointedAt,
+  RotatorState,
   QrzPushResult,
   RouteMode,
   RoutingRule,
@@ -1395,6 +1397,22 @@ export async function openDownloadPage(): Promise<void> {
   return invoke('open_download_page')
 }
 
+/** How this install takes an update (Rust `update_route`), decided by the package it was
+ * installed from. Ask it only where the updater plugin's API exists: a page without one (the
+ * Remote page, a plain browser) has nothing to ask. */
+export interface UpdateRoute {
+  /** True for the packages the signed self-updater can replace: the Windows setup, the AppImage
+   *  and the macOS app. False for the .deb packages and a build run straight from cargo, which
+   *  keep the notice that opens the download page. */
+  selfUpdate: boolean
+  /** The download page, for the way out when a self-update fails. */
+  downloadPage: string
+}
+
+export async function updateRoute(): Promise<UpdateRoute> {
+  return invoke<UpdateRoute>('update_route')
+}
+
 /** Liveness of the background live feeds (cluster/RBN + PSK Reporter MQTT) for the
  *  Now-Bar connector pills. */
 export async function getFeedHealth(): Promise<FeedHealth> {
@@ -2261,10 +2279,19 @@ export async function pointRotator(azDeg: number): Promise<void> {
   return invoke('point_rotator', { azDeg })
 }
 
-/** Point the rotator at a callsign's DXCC entity; resolves to the bearing it pointed to.
- *  `longPath` takes the reciprocal — the same great circle the other way. */
-export async function pointRotatorAtCall(call: string, longPath = false): Promise<number> {
-  return invoke<number>('point_rotator_at_call', { call, longPath })
+/** Point the rotator at a callsign's station: its own grid or callbook position when Nexus
+ *  knows one, else the centre of its country. Resolves to the bearing and what it was taken to
+ *  (a browser gets nothing back: the station resolves it). `longPath` takes the reciprocal — the
+ *  same great circle the other way. */
+export async function pointRotatorAtCall(call: string, longPath = false): Promise<PointedAt> {
+  return invoke<PointedAt>('point_rotator_at_call', { call, longPath })
+}
+
+/** The grid the log form holds for the call it is logging — typed, or filled in from the
+ *  callbook — so pointing the rotator at that call aims at the station. `''` forgets it for
+ *  that call. Fire-and-forget, like `setCwPeerInfo`. */
+export async function setLogFormGrid(call: string, grid: string): Promise<void> {
+  await invoke('set_log_form_grid', { call, grid })
 }
 
 /** Current rotator azimuth (degrees), or null if rotctld is unset/unreachable. */
@@ -2280,6 +2307,12 @@ export async function stopRotator(): Promise<void> {
 
 export async function readRotator(): Promise<number | null> {
   return invoke<number | null>('read_rotator')
+}
+
+/** The Rotor pane's poll: where the rotator is and what the read found, `null` with no rotator
+ *  configured. Desktop only: a browser reads the station's heading through its own collection. */
+export async function readRotatorState(): Promise<RotatorState | null> {
+  return invoke<RotatorState | null>('read_rotator_state')
 }
 
 /** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).

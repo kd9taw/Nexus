@@ -26,13 +26,16 @@
 //!   offset, as `sendHeartbeat` does, mainwindow.cpp:6256). A periodic heartbeat is due one
 //!   interval after the next transmit cycle (:6311) and `next_frame` releases it at the boundary
 //!   of that period; the end of every message and directed traffic to me re-base it the same
-//!   way (:3706). Replies/ACKs never QSY (`FreqHint::Dial`).
+//!   way (:3706). Replies and ACKs never QSY (`FreqHint::Dial`); the HB-ACK is the exception.
 //! - HB-ACK (default off): only with HB + autoreply + `hb_ack`, an empty outbox and no QSO pause,
-//!   answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`. An incoming `HEARTBEAT SNR` is
-//!   never answered (no ack-of-an-ack loop).
-//! - Autoreply: only to my own call, `@ALLCALL`, and joined groups; only the autoreply subset
+//!   answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`, on a free heartbeat spot picked
+//!   as the heartbeat's is but with no own-offset rule (`sendHeartbeatAck`, :6299). An incoming
+//!   `HEARTBEAT SNR` is never answered (no ack-of-an-ack loop).
+//! - Autoreply: only to my own call and joined groups, never to a query addressed to `@ALLCALL`
+//!   (JS8Call's `!isAllCall`, mainwindow.cpp:8834-8869), and only the autoreply subset
 //!   (`Command::is_autoreply`, = upstream `autoreply_cmds {0,2,3,4,6,9,10,11,12,13,14,16,30}`);
-//!   `@ALLCALL` replies are rate-limited to one per station per `allcall_reply_interval_ms`.
+//!   an empty INFO or grid draws no reply (:8841, :8861). `QUERY MSGS` on `@ALLCALL` is answered
+//!   only when a message waits, once per station per `allcall_reply_interval_ms` (:8812, :9275).
 //! - Relay (`>`): retransmit `rest *DE* MYCALL`; at the final hop parse the chain to `A>B>C` and
 //!   answer `A>B>C ACK` (unless the embedded text is itself an autoreply command).
 //! - Store-and-forward: `MSG TO:` stores a `Store` inbox row keyed to the base callsign; the next
@@ -43,7 +46,11 @@
 use crate::phy::{Speed, Word87, I3};
 use crate::proto::callsign::{split_portable, CallRef};
 use crate::proto::command::Command;
-use crate::proto::compose::{frames, ComposeError};
+// Every composer below hands `frames_with_grid` the station's locator, as JS8Call hands
+// `buildMessageFrames` `my_grid().left(4)` for every message (mainwindow.cpp:5434, :7885):
+// compose puts the square in a compound callsign's announcement (varicode.cpp:2125) and
+// nowhere else.
+use crate::proto::compose::{frames_with_grid, ComposeError};
 use crate::proto::frame::{encode_frame, format_snr, Frame};
 use crate::proto::reassembly::{Message, MessageEvent};
 use std::collections::HashMap;
@@ -111,9 +118,9 @@ pub enum Origin {
     CqRepeat,
 }
 
-/// Where a frame wants to transmit. `HbSubband` is the heartbeat's free offset in 500..1000 Hz
-/// (`find_free_freq_offset`), picked once per message; everything else stays on the dial
-/// (replies/ACK/HB-ack never QSY).
+/// Where a frame wants to transmit. `HbSubband` is a free heartbeat spot in 500..1000 Hz
+/// (`find_free_freq_offset`), picked once per message, for a heartbeat or an HB-ACK; everything
+/// else stays on the dial (replies and ACKs never QSY).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FreqHint {
     Dial,
@@ -366,7 +373,6 @@ impl Station {
         self.record_heard(m, &mut actions);
 
         let to_me = m.to_text.eq_ignore_ascii_case(&self.base());
-        let to_allcall = m.to_text.eq_ignore_ascii_case("@ALLCALL");
         let to_group = self
             .cfg
             .groups
@@ -409,26 +415,35 @@ impl Station {
             return actions; // a CQ is displayed; the operator answers it, not the autoreply engine
         }
 
-        // Directed command autoreply / relay / store-and-forward.
+        // Directed command autoreply / relay / store-and-forward. JS8Call acts on no command that
+        // is not addressed to me, @ALLCALL or a group I joined (mainwindow.cpp:8601), and a relay
+        // (`>`, :8908), a MSG TO: (:9012) or a QUERY MSG n (:9171) never on @ALLCALL either.
+        let mine = to_me || to_group;
         if let Some(cmd) = m.cmd {
             if self.cfg.relay && cmd == Command::Relay {
-                self.handle_relay(m, now_ms, &mut actions);
+                if mine {
+                    self.handle_relay(m, now_ms, &mut actions);
+                }
                 return actions;
             }
             if cmd == Command::MsgTo {
-                self.handle_msg_to(m, now_ms, &mut actions);
+                if mine {
+                    self.handle_msg_to(m, now_ms, &mut actions);
+                }
                 return actions;
             }
             if cmd == Command::QueryMsgs || is_query_msg(m) {
-                self.handle_query_msg(m, now_ms, &mut actions);
+                self.handle_query_msg(m, mine, now_ms, &mut actions);
                 return actions;
             }
+            // Never an @ALLCALL query: JS8Call's SNR?/INFO?/STATUS?/GRID?/HEARING? replies each
+            // carry `!isAllCall` (mainwindow.cpp:8834, :8839, :8849, :8859, :8869).
             if self.cfg.autoreply
                 && cmd.is_autoreply()
-                && (to_me || to_allcall || to_group)
+                && (to_me || to_group)
                 && !self.is_me(&m.from)
             {
-                self.autoreply(m, cmd, to_allcall, now_ms, &mut actions);
+                self.autoreply(m, cmd, now_ms, &mut actions);
             }
         }
         actions
@@ -553,35 +568,33 @@ impl Station {
         if let Some(id) = self.stored_for(&to) {
             text.push_str(&format!(" MSG ID {id}"));
         }
-        self.schedule_reply(Origin::HbAck, &to, &text, FreqHint::Dial, now_ms, actions);
+        // On a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
+        // (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299); `next_frame` picks it.
+        let spot = FreqHint::HbSubband(0.0);
+        self.schedule_reply(Origin::HbAck, &to, &text, spot, now_ms, actions);
     }
 
     fn autoreply(
         &mut self,
         m: &Message,
         cmd: Command,
-        to_allcall: bool,
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
         let from = split_portable(&m.from).0.to_ascii_uppercase();
-        if to_allcall {
-            // rate-limit @ALLCALL replies to one per station per interval.
-            if let Some(&last) = self.allcall_replied.get(&from) {
-                if now_ms.saturating_sub(last) < self.cfg.allcall_reply_interval_ms {
-                    actions.push(StationAction::RateLimited { from });
-                    return;
-                }
-            }
-            self.allcall_replied.insert(from.clone(), now_ms);
-            self.prune_allcall(now_ms); // keep the map self-limiting, not one entry per call ever
-        }
         let reply = match cmd {
             Command::SnrQuery => Some(format!("{from} SNR {}", format_snr(m.snr_db))),
+            // Nothing set, nothing said: JS8Call skips an empty grid or INFO
+            // (mainwindow.cpp:8861-8863, :8841-8843).
+            Command::GridQuery if self.cfg.grid.is_empty() => None,
+            Command::InfoQuery if self.cfg.info.is_empty() => None,
             Command::GridQuery => Some(format!("{from} GRID {}", self.cfg.grid)),
-            Command::InfoQuery => Some(format!("{from} INFO {}", self.cfg.info)),
-            Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text())),
-            Command::HearingQuery => Some(format!("{from} HEARING {}", self.hearing_text())),
+            Command::InfoQuery => Some(format!(
+                "{from} INFO {}",
+                self.expand_grid_macros(&self.cfg.info)
+            )),
+            Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text(now_ms))),
+            Command::HearingQuery => Some(self.hearing_reply(&from)),
             Command::Nack | Command::Ack => None, // acks are logged, not answered
             _ => None,
         };
@@ -675,10 +688,23 @@ impl Station {
         self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
     }
 
-    fn handle_query_msg(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
+    /// `mine`: addressed to my call or a group I joined (not @ALLCALL, not another station).
+    fn handle_query_msg(
+        &mut self,
+        m: &Message,
+        mine: bool,
+        now_ms: u64,
+        actions: &mut Vec<StationAction>,
+    ) {
         let from = split_portable(&m.from).0.to_ascii_uppercase();
-        // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it.
-        if let Some(id) = query_msg_id(m) {
+        // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it,
+        // only when the query was addressed to me (mainwindow.cpp:8601, :9171). Anything else
+        // it may be draws no reply at all: JS8Call's buffered QUERY skips every miss
+        // (:9194-9233) and never answers it as a QUERY MSGS.
+        if m.cmd != Some(Command::QueryMsgs) {
+            let Some(id) = query_msg_id(m).filter(|_| mine) else {
+                return;
+            };
             if let Some(e) = self.inbox.iter_mut().find(|e| {
                 e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&from)
             }) {
@@ -693,15 +719,23 @@ impl Station {
                     now_ms,
                     actions,
                 );
-                return;
             }
+            return;
         }
-        // `QUERY MSGS` (do you have any for me?) → offer the first stored id, else NO.
+        // `QUERY MSGS` (do you have any for me?) → offer the first stored id, else NO. On
+        // @ALLCALL, JS8Call answers only YES, and says NO to a directed query alone
+        // (mainwindow.cpp:9255-9278); an @ALLCALL reply then holds the sender off for the
+        // interval (:9377-9379, checked first at :8812).
         if self.cfg.autoreply && self.addressed_to_me(&m.to_text) {
+            let to_allcall = m.to_text.eq_ignore_ascii_case("@ALLCALL");
             let reply = match self.stored_for(&from) {
                 Some(id) => format!("{from} YES MSG ID {id}"),
+                None if to_allcall => return,
                 None => format!("{from} NO"),
             };
+            if to_allcall && self.allcall_held_off(&from, now_ms, actions) {
+                return;
+            }
             self.schedule_reply(
                 Origin::AutoReply,
                 &from,
@@ -713,6 +747,28 @@ impl Station {
         }
     }
 
+    /// JS8Call's @ALLCALL cache: a station answered on @ALLCALL is held off for
+    /// `allcall_reply_interval_ms` (15 minutes; mainwindow.cpp:8812). True, and `RateLimited`,
+    /// while it is held off; otherwise it is recorded as answered now.
+    fn allcall_held_off(
+        &mut self,
+        from: &str,
+        now_ms: u64,
+        actions: &mut Vec<StationAction>,
+    ) -> bool {
+        if let Some(&last) = self.allcall_replied.get(from) {
+            if now_ms.saturating_sub(last) < self.cfg.allcall_reply_interval_ms {
+                actions.push(StationAction::RateLimited {
+                    from: from.to_string(),
+                });
+                return true;
+            }
+        }
+        self.allcall_replied.insert(from.to_string(), now_ms);
+        self.prune_allcall(now_ms); // keep the map self-limiting, not one entry per call ever
+        false
+    }
+
     fn stored_for(&self, call: &str) -> Option<u32> {
         self.inbox
             .iter()
@@ -720,23 +776,43 @@ impl Station {
             .map(|e| e.id)
     }
 
-    fn status_text(&self) -> String {
+    /// A set STATUS, or JS8Call's default, "IDLE <MYIDLE> VERSION <MYVERSION>"
+    /// (Configuration.cpp:1858), with Nexus for the version.
+    fn status_text(&self, now_ms: u64) -> String {
         if self.cfg.status.is_empty() {
-            format!("IDLE {} VERSION Nexus", self.idle_minutes())
+            format!(
+                "IDLE {} VERSION Nexus",
+                idle_since(self.idle_minutes(now_ms))
+            )
         } else {
-            clamp_str(&self.cfg.status, MAX_INFO_LEN)
+            clamp_str(&self.expand_grid_macros(&self.cfg.status), MAX_INFO_LEN)
         }
     }
 
-    fn hearing_text(&self) -> String {
-        let mut calls: Vec<&Heard> = self.heard.iter().collect();
+    /// JS8Call's `<MYGRID4>` and `<MYGRID12>` (`buildMacroValues`, mainwindow.cpp:7024-7025): the
+    /// locator's first 4 and first 12 characters, upper-cased, stand wherever the token does
+    /// (`replaceMacros`, :181-194, which walks its map in key order, `<MYGRID12>` first). JS8Call's
+    /// editor has upper-cased the text by then; the token is matched here whatever its case, for
+    /// the same result. Its other macros are not Nexus's, and their tokens are left as typed.
+    fn expand_grid_macros(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for (token, n) in [("<MYGRID12>", 12), ("<MYGRID4>", 4)] {
+            let value: String = self.cfg.grid.chars().take(n).collect();
+            out = replace_ignoring_ascii_case(&out, token, &value.to_ascii_uppercase());
+        }
+        out
+    }
+
+    /// JS8Call's HEARING? reply (mainwindow.cpp:8868-8905): "<FROM> HEARING" (:8903), then up to
+    /// four calls, newest first (:8873-8883), never the station that asked (:8890). JS8Call also
+    /// skips calls older than its callsign aging (:8894), a setting that ships off (CallsignAging
+    /// 0, Configuration.cpp:1853) and that Nexus does not have, so nothing is aged out here.
+    fn hearing_reply(&self, from: &str) -> String {
+        let mut calls: Vec<&Heard> = self.heard.iter().filter(|h| h.call != from).collect();
         calls.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
-        calls
-            .iter()
-            .take(4)
-            .map(|h| h.call.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut words = vec![format!("{from} HEARING")];
+        words.extend(calls.iter().take(4).map(|h| h.call.clone()));
+        words.join(" ")
     }
 
     fn schedule_reply(
@@ -847,6 +923,29 @@ impl Station {
         }
     }
 
+    /// Drop a heartbeat that has fallen due while nothing may transmit, and re-base the
+    /// interval, as JS8Call does: `checkRepeat` (mainwindow.cpp:5723) sends it anyway, `startTx`
+    /// finds TX off (`ensureCanTransmit`, :5295) and calls `on_stopTxButton_clicked` (:5304),
+    /// which clears the queue and re-bases the heartbeat (`resetAutomaticIntervalTransmissions
+    /// (false, false)`, :7397 → `resetHeartbeatTimer`, :3720). An on-demand heartbeat (interval
+    /// 0) is simply dropped. "Due" is `checkRepeat`'s test, `secsTo(next) <= 0`: under a second
+    /// before `next`. The engine calls this while its TX latch is down or Settings has no
+    /// locator (`ensureCallsignSet`, :5309, fails the same way). True when one was dropped.
+    pub fn drop_due_heartbeat(&mut self, now_ms: u64) -> bool {
+        let Some(next) = self.hb_next_ms else {
+            return false;
+        };
+        if !self.hb_on || now_ms + 1000 <= next {
+            return false;
+        }
+        self.hb_next_ms = if self.cfg.hb_interval_min == 0 {
+            None
+        } else {
+            Some(self.hb_due_after(now_ms))
+        };
+        true
+    }
+
     /// A periodic heartbeat's next deadline: `nextTransmitCycle()` + the interval
     /// (`on_hbMacroButton_toggled`, mainwindow.cpp:6319).
     fn hb_due_after(&self, now_ms: u64) -> u64 {
@@ -948,7 +1047,7 @@ impl Station {
         text: &str,
         freq_hint: FreqHint,
     ) -> Result<OutMsg, ComposeError> {
-        let seq = frames(&self.cfg.mycall, None, text, self.cfg.speed)?;
+        let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, None, text, self.cfg.speed)?;
         Ok(OutMsg {
             origin,
             display: format!("{}: {text}", self.base()),
@@ -967,7 +1066,8 @@ impl Station {
         now_ms: u64,
     ) -> Result<usize, ComposeError> {
         self.mark_active(now_ms);
-        let seq = frames(&self.cfg.mycall, to, text, self.cfg.speed)?;
+        let text = self.expand_grid_macros(text);
+        let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, to, &text, self.cfg.speed)?;
         let n = seq.len();
         let out = OutMsg {
             origin: Origin::Operator,
@@ -988,12 +1088,19 @@ impl Station {
     ) -> Result<usize, ComposeError> {
         self.mark_active(now_ms);
         let word = cmd.text().trim();
+        let arg = self.expand_grid_macros(arg);
         let line = if arg.is_empty() {
             format!("{} {word}", to.render())
         } else {
             format!("{} {word} {arg}", to.render())
         };
-        let seq = frames(&self.cfg.mycall, None, &line, self.cfg.speed)?;
+        let seq = frames_with_grid(
+            &self.cfg.mycall,
+            &self.cfg.grid,
+            None,
+            &line,
+            self.cfg.speed,
+        )?;
         let n = seq.len();
         let out = OutMsg {
             origin: Origin::Operator,
@@ -1016,8 +1123,19 @@ impl Station {
     /// `origin`. Shared so a change to the wire text can never drift between them.
     fn compose_cq(&self, idx: u8, origin: Origin) -> Result<OutMsg, ComposeError> {
         let cqs = crate::proto::alphabet::CQS[(idx & 7) as usize];
-        let line = format!("{cqs} {}", self.cfg.grid);
-        let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
+        // The 4-character square, as JS8Call's CQ carries it (its default CQ text is
+        // `CQ CQ CQ <MYGRID4>`, and `sendCQ` falls back to `my_grid().left(4)`,
+        // mainwindow.cpp:6344): a longer locator spills into a data frame that keys on the
+        // next period.
+        let grid4: String = self.cfg.grid.chars().take(4).collect();
+        let line = format!("{cqs} {grid4}");
+        let seq = frames_with_grid(
+            &self.cfg.mycall,
+            &self.cfg.grid,
+            None,
+            line.trim(),
+            self.cfg.speed,
+        )?;
         Ok(OutMsg {
             origin,
             display: format!("{}: @ALLCALL {line}", self.base()),
@@ -1047,7 +1165,13 @@ impl Station {
         // that keys on the next period.
         let grid4: String = self.cfg.grid.chars().take(4).collect();
         let line = format!("HEARTBEAT {grid4}");
-        let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
+        let seq = frames_with_grid(
+            &self.cfg.mycall,
+            &self.cfg.grid,
+            None,
+            line.trim(),
+            self.cfg.speed,
+        )?;
         let out = OutMsg {
             origin: Origin::Heartbeat,
             display: format!("{}: @HB {line}", self.base()),
@@ -1239,8 +1363,17 @@ impl Station {
             })
     }
 
-    pub fn idle_minutes(&self) -> u16 {
-        0
+    /// Whole minutes since the operator last acted: every operator send and entering the tier
+    /// (`mark_active`), the baseline the idle watchdog reads. It is the count JS8Call's
+    /// once-a-minute `incrementIdleTimer` keeps and its UI activity resets (mainwindow.cpp:
+    /// 10969-10979). A station never marked active has no baseline and reads 0, as JS8Call's
+    /// count starts at 0.
+    pub fn idle_minutes(&self, now_ms: u64) -> u16 {
+        if self.last_activity_ms == 0 {
+            return 0;
+        }
+        let minutes = now_ms.saturating_sub(self.last_activity_ms) / 60_000;
+        u16::try_from(minutes).unwrap_or(u16::MAX)
     }
 
     pub fn idle_tripped(&self) -> bool {
@@ -1274,6 +1407,38 @@ impl Station {
         self.allcall_replied = s.allcall_replied.into_iter().collect();
         self.next_inbox_id = s.next_inbox_id.max(1);
     }
+}
+
+/// JS8Call's `<MYIDLE>` for an idle count: `since()` of the last activity (mainwindow.cpp:
+/// 121-130), upper-cased, with "NOW" read as "0M" (:7018-7019). The count is whole minutes, so
+/// `since()`'s seconds branch never applies.
+fn idle_since(minutes: u16) -> String {
+    let secs = u64::from(minutes) * 60;
+    if secs >= 86_400 {
+        format!("{}D", secs / 86_400)
+    } else if secs >= 3_600 {
+        format!("{}H", secs / 3_600)
+    } else if secs >= 60 {
+        format!("{}M", secs / 60)
+    } else {
+        "0M".to_string()
+    }
+}
+
+/// Every non-overlapping `token` in `text`, found left to right whatever its ASCII case, replaced
+/// by `value` (`QString::replace`, as JS8Call's `replaceMacros` calls it). ASCII case-folding moves
+/// no byte, so an offset found in the folded copy is an offset in `text`.
+fn replace_ignoring_ascii_case(text: &str, token: &str, value: &str) -> String {
+    let folded = text.to_ascii_uppercase();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (at, _) in folded.match_indices(token) {
+        out.push_str(&text[last..at]);
+        out.push_str(value);
+        last = at + token.len();
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// JS8Call's `findFreeFreqOffset(500, 1000, 50)` (mainwindow.cpp:5592), the heartbeat's call,
@@ -1422,7 +1587,11 @@ mod tests {
         );
         let f = drain(&mut s, 5000).expect("HB-ack after the delay");
         assert_eq!(f.origin, Origin::HbAck);
-        assert_eq!(f.freq_hint, FreqHint::Dial, "an HB-ack never QSYs");
+        assert_eq!(
+            f.freq_hint,
+            FreqHint::HbSubband(500.0),
+            "an HB-ack goes on a free heartbeat spot (sendHeartbeatAck, mainwindow.cpp:6299)"
+        );
         assert_eq!(f.display, "KD9TAW: W1AW HEARTBEAT SNR -05");
         // An incoming HEARTBEAT SNR is never answered (no ack-of-an-ack). The heartbeat is a
         // periodic one not yet due, so nothing of our own is scheduled in the window and
@@ -1471,32 +1640,246 @@ mod tests {
         assert_eq!(f.display, "KD9TAW: W1AW SNR -07");
     }
 
+    /// The one query JS8Call answers on @ALLCALL, `QUERY MSGS` with a message waiting, holds the
+    /// sender off for 15 minutes (the @ALLCALL cache: set when the reply is queued,
+    /// mainwindow.cpp:9377-9379, and checked first, :8812); another station is still answered.
     #[test]
     fn allcall_replies_are_rate_limited_to_one_per_station_per_interval() {
         let mut s = Station::new(cfg());
-        let a1 = s.on_event(
-            &directed("W1AW", "@ALLCALL", Some(Command::SnrQuery), None, "", -7),
+        for call in ["K1ABC", "N0XYZ"] {
+            store_for(&mut s, call, 0);
+        }
+        assert_eq!(
+            allcall_query_msgs(&mut s, "K1ABC", 1000).len(),
+            1,
+            "answered once"
+        );
+        assert!(
+            allcall_query_msgs(&mut s, "K1ABC", 100_000).is_empty(),
+            "the same station inside 15 minutes is held off"
+        );
+        assert_eq!(
+            allcall_query_msgs(&mut s, "N0XYZ", 200_000).len(),
+            1,
+            "a DIFFERENT station is still answered"
+        );
+        assert_eq!(
+            allcall_query_msgs(&mut s, "K1ABC", 1000 + 15 * 60 * 1000).len(),
+            1,
+            "…and the first again, 15 minutes on"
+        );
+    }
+
+    /// Store a `MSG TO:` for `call` at my station (W1AW leaves it, addressed to me).
+    fn store_for(s: &mut Station, call: &str, t: u64) {
+        let body = format!("{call} FRIDAY CONTACT");
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::MsgTo), None, &body, -5),
+            t,
+        );
+    }
+
+    /// `call` asks @ALLCALL `QUERY MSGS` at `t`; every message the station keys in reply (one
+    /// entry per message: a frame's `display` is its whole message's, so count first frames).
+    fn allcall_query_msgs(s: &mut Station, call: &str, t: u64) -> Vec<String> {
+        s.on_event(
+            &directed(call, "@ALLCALL", Some(Command::QueryMsgs), None, "", -5),
+            t,
+        );
+        (0..3u64)
+            .filter_map(|k| drain(s, t + 2000 + k * 15_000))
+            .filter(|f| f.first)
+            .map(|f| f.display)
+            .collect()
+    }
+
+    /// `QUERY MSGS` on @ALLCALL is answered only when a message waits for the asker: "YES MSG ID
+    /// n", and never "NO" (mainwindow.cpp:9255-9278: the NO is `!isAllCall`).
+    #[test]
+    fn an_allcall_query_msgs_is_answered_only_when_a_message_waits() {
+        let mut s = Station::new(cfg());
+        assert_eq!(
+            allcall_query_msgs(&mut s, "K1ABC", 1000),
+            Vec::<String>::new(),
+            "nothing stored for K1ABC: no reply at all, never NO"
+        );
+        store_for(&mut s, "K1ABC", 100_000);
+        let id = s.inbox()[0].id;
+        assert_eq!(
+            allcall_query_msgs(&mut s, "K1ABC", 200_000),
+            vec![format!("KD9TAW: K1ABC YES MSG ID {id}")],
+            "a waiting message is offered"
+        );
+    }
+
+    /// Everything the station keys over six periods from `from_ms` (one entry per frame).
+    fn keyed_displays(s: &mut Station, from_ms: u64) -> Vec<String> {
+        (0..6u64)
+            .filter_map(|k| drain(s, from_ms + k * 15_000))
+            .map(|f| f.display)
+            .collect()
+    }
+
+    /// JS8Call acts on no command that is not addressed to me, @ALLCALL or a group I joined
+    /// (`if (!isAllCall && !toMe && !isGroupCall) continue;`, mainwindow.cpp:8601), and it never
+    /// relays one addressed to @ALLCALL (`d.cmd == ">" && !isAllCall`, :8908).
+    #[test]
+    fn a_relay_request_not_addressed_to_me_is_not_relayed() {
+        for to in ["K1ABC", "@ALLCALL"] {
+            let mut s = Station::new(cfg());
+            let acts = s.on_event(
+                &directed("W1AW", to, Some(Command::Relay), None, "N0XYZ HELLO", -5),
+                1000,
+            );
+            let relayed = acts
+                .iter()
+                .any(|a| matches!(a, StationAction::Relayed { .. }));
+            assert!(
+                !relayed && keyed_displays(&mut s, 2000).is_empty(),
+                "a relay request to {to} is not relayed, got {acts:?}"
+            );
+        }
+    }
+
+    /// …nor stores a `MSG TO:` that was addressed to someone else, or to @ALLCALL
+    /// (`d.cmd == " MSG TO:" && !isAllCall`, :9012).
+    #[test]
+    fn a_msg_to_not_addressed_to_me_is_not_stored() {
+        for to in ["K1ABC", "@ALLCALL"] {
+            let mut s = Station::new(cfg());
+            s.on_event(
+                &directed("W1AW", to, Some(Command::MsgTo), None, "N0XYZ HELLO", -5),
+                1000,
+            );
+            assert!(
+                s.inbox().is_empty(),
+                "a MSG TO: sent to {to} is not stored at my station"
+            );
+        }
+    }
+
+    /// …nor delivers a stored message to a `QUERY MSG n` addressed to someone else, or to
+    /// @ALLCALL (`d.cmd == " QUERY" && !isAllCall`, :9171).
+    #[test]
+    fn a_query_msg_not_addressed_to_me_is_not_delivered() {
+        for to in ["K1ABC", "@ALLCALL"] {
+            let mut s = Station::new(cfg());
+            store_for(&mut s, "N0XYZ", 0);
+            let id = s.inbox()[0].id;
+            s.on_event(
+                &directed(
+                    "N0XYZ",
+                    to,
+                    Some(Command::Query),
+                    None,
+                    &format!("MSG {id}"),
+                    -5,
+                ),
+                1000,
+            );
+            assert_eq!(
+                (s.inbox()[0].state, keyed_displays(&mut s, 2000)),
+                (InboxState::Store, Vec::new()),
+                "a QUERY MSG {id} sent to {to} delivers nothing"
+            );
+        }
+    }
+
+    /// …and a `QUERY MSG n` that matches nothing waiting for the asker draws no reply at all:
+    /// JS8Call's buffered QUERY skips every miss (mainwindow.cpp:9194-9233) and is never
+    /// answered as a `QUERY MSGS` (no YES, no NO).
+    #[test]
+    fn a_query_msg_that_matches_nothing_draws_no_reply() {
+        let mut s = Station::new(cfg());
+        store_for(&mut s, "N0XYZ", 0);
+        s.on_event(
+            &directed("N0XYZ", "KD9TAW", Some(Command::Query), None, "MSG 99", -5),
             1000,
         );
-        assert!(a1
-            .iter()
-            .any(|a| matches!(a, StationAction::ReplyPending { .. })));
-        // second request from the same station inside 15 min → rate-limited, no reply queued.
-        let a2 = s.on_event(
-            &directed("W1AW", "@ALLCALL", Some(Command::SnrQuery), None, "", -7),
-            2000,
+        assert_eq!(
+            keyed_displays(&mut s, 2000),
+            Vec::<String>::new(),
+            "QUERY MSG 99 (no such message) draws no reply"
         );
-        assert!(a2
-            .iter()
-            .any(|a| matches!(a, StationAction::RateLimited { from } if from == "W1AW")));
-        // a DIFFERENT station is still answered.
-        let a3 = s.on_event(
-            &directed("K1ABC", "@ALLCALL", Some(Command::SnrQuery), None, "", -7),
-            3000,
+    }
+
+    /// JS8Call answers no query addressed to @ALLCALL: `SNR?`, `INFO?`, `STATUS?`, `GRID?` and
+    /// `HEARING?` each carry `!isAllCall` (mainwindow.cpp:8834, :8839, :8849, :8859, :8869).
+    #[test]
+    fn queries_to_allcall_draw_no_automatic_reply() {
+        for cmd in [
+            Command::SnrQuery,
+            Command::InfoQuery,
+            Command::StatusQuery,
+            Command::GridQuery,
+            Command::HearingQuery,
+        ] {
+            let mut s = Station::new(StationConfig {
+                info: "RIG IC7300".into(),
+                ..cfg()
+            });
+            let acts = s.on_event(&directed("W1AW", "@ALLCALL", Some(cmd), None, "", -7), 1000);
+            let sent: Vec<String> = (0..4u64)
+                .filter_map(|k| drain(&mut s, 5000 + k * 15_000))
+                .map(|f| f.display)
+                .collect();
+            let pending = acts
+                .iter()
+                .any(|a| matches!(a, StationAction::ReplyPending { .. }));
+            assert!(
+                !pending && sent.is_empty(),
+                "{cmd:?} to @ALLCALL draws no automatic reply, got {acts:?} / {sent:?}"
+            );
+        }
+    }
+
+    /// …while a query to my own call or to a group I joined is answered as before.
+    #[test]
+    fn a_query_to_my_call_or_a_joined_group_is_still_answered() {
+        for to in ["KD9TAW", "@RAGCHEW"] {
+            let mut s = Station::new(StationConfig {
+                groups: vec!["@RAGCHEW".into()],
+                ..cfg()
+            });
+            s.on_event(
+                &directed("W1AW", to, Some(Command::SnrQuery), None, "", -7),
+                1000,
+            );
+            let f = drain(&mut s, 5000).expect("the SNR reply");
+            assert_eq!(f.display, "KD9TAW: W1AW SNR -07", "a query to {to}");
+        }
+    }
+
+    /// Where JS8Call has nothing to say it says nothing: an empty INFO (mainwindow.cpp:8841-8843)
+    /// or an empty grid (:8861-8863) draws no reply, even to a query addressed to me.
+    #[test]
+    fn an_empty_info_or_grid_draws_no_reply() {
+        for cmd in [Command::InfoQuery, Command::GridQuery] {
+            let mut s = Station::new(StationConfig {
+                info: String::new(),
+                grid: String::new(),
+                ..cfg()
+            });
+            s.on_event(&directed("W1AW", "KD9TAW", Some(cmd), None, "", -7), 1000);
+            assert_eq!(
+                drain(&mut s, 5000).map(|f| f.display),
+                None,
+                "{cmd:?} with nothing set draws no reply"
+            );
+        }
+        let mut s = Station::new(StationConfig {
+            info: "RIG IC7300".into(),
+            ..cfg()
+        });
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::InfoQuery), None, "", -7),
+            1000,
         );
-        assert!(a3
-            .iter()
-            .any(|a| matches!(a, StationAction::ReplyPending { .. })));
+        assert_eq!(
+            drain(&mut s, 5000).map(|f| f.display).as_deref(),
+            Some("KD9TAW: W1AW INFO RIG IC7300"),
+            "control: a set INFO is answered"
+        );
     }
 
     #[test]
@@ -1739,9 +2122,10 @@ mod tests {
         s.set_hb(true, 0);
         // queue an automatic reply, then let the clock run past the watchdog.
         s.on_event(
-            &directed("W1AW", "@ALLCALL", Some(Command::SnrQuery), None, "", -7),
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -7),
             0,
         );
+        assert_eq!(s.pending_len(), 1, "precondition: a reply is pending");
         let acts = s.tick(5 * 60 * 1000);
         assert!(acts.iter().any(|a| matches!(a, StationAction::IdleTripped)));
         assert!(s.idle_tripped() && !s.config().autoreply && !s.config().relay && !s.hb_on());
@@ -2149,6 +2533,306 @@ mod tests {
         );
     }
 
+    /// Every frame the station keys over six periods from `from_ms`, as it reads on the air.
+    fn keyed_wire(s: &mut Station, from_ms: u64) -> Vec<(Frame, bool, bool)> {
+        (0..6u64)
+            .filter_map(|k| drain(s, from_ms + k * 15_000))
+            .map(|f| {
+                let (frame, i3) = crate::proto::frame::decode_word(&f.word, f.speed)
+                    .expect("what the station keys decodes");
+                (frame, i3.first, i3.last)
+            })
+            .collect()
+    }
+
+    /// One `CQ CQ CQ <grid>` frame from KD9TAW, first and last: a whole CQ on the air.
+    fn one_cq_frame(grid: &str) -> Vec<(Frame, bool, bool)> {
+        let cq = Frame::Heartbeat {
+            call: "KD9TAW".into(),
+            grid: Some(grid.into()),
+            is_cq: true,
+            idx: 0,
+        };
+        vec![(cq, true, true)]
+    }
+
+    /// The CQ carries the 4-character square, as JS8Call's does: its default CQ text is
+    /// `CQ CQ CQ <MYGRID4>` (Configuration.cpp:1860; the macro is `my_grid().left(4)`,
+    /// mainwindow.cpp:7024), and `sendCQ` falls back to `my_grid().left(4)` when that text is
+    /// empty (:6344). Given the whole 6-character locator, the CQ grammar stops at the square,
+    /// the locator spills into a data frame, and every CQ keyed on two periods in a row.
+    #[test]
+    fn a_clicked_cq_with_a_six_character_locator_is_one_frame_carrying_the_square() {
+        let mut c = cfg();
+        c.grid = "EN52HW".into();
+        let mut s = Station::new(c);
+        s.call_cq(0, 0).unwrap();
+        assert_eq!(
+            keyed_wire(&mut s, 0),
+            one_cq_frame("EN52"),
+            "one CQ, one frame, the 4-character square"
+        );
+    }
+
+    /// …and so is a CQ the repeat schedule sends: both buttons compose through `compose_cq`.
+    #[test]
+    fn a_repeated_cq_with_a_six_character_locator_is_one_frame_carrying_the_square() {
+        let mut c = cfg();
+        c.grid = "EN52HW".into();
+        c.cq_interval_min = 1;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 0, 0);
+        s.tick(60_000);
+        assert_eq!(
+            keyed_wire(&mut s, 60_000),
+            one_cq_frame("EN52"),
+            "one repeated CQ, one frame, the 4-character square"
+        );
+    }
+
+    /// A 4-character locator was already right and stays exactly as it was.
+    #[test]
+    fn a_cq_with_a_four_character_locator_is_unchanged() {
+        let mut s = Station::new(cfg()); // EN52
+        s.call_cq(0, 0).unwrap();
+        assert_eq!(keyed_wire(&mut s, 0), one_cq_frame("EN52"));
+    }
+
+    /// A compound callsign's directed message leads with JS8Call's compound announcement,
+    /// `` `MYCALL GRID4 `` (varicode.cpp:2125, live under `ALLOW_SEND_COMPOUND_DIRECTED`,
+    /// :1934), and every message JS8Call builds is handed the square for it
+    /// (`buildMessageFrames(…, my_grid().left(4), …)`, mainwindow.cpp:5434). The station
+    /// composed without one, so the announcement went out with no grid. (A `/P` call is not
+    /// compound: it rides the directed frame's portable bit, in JS8Call too.)
+    #[test]
+    fn a_compound_callsigns_directed_message_announces_the_square() {
+        let mut c = cfg();
+        c.mycall = "KD9TAW/QRP".into();
+        c.grid = "EN52HW".into();
+        let mut s = Station::new(c);
+        s.send_command(&CallRef::Base("W1AW".into()), Command::SnrQuery, "", 0)
+            .unwrap();
+        let announcement = Frame::Compound {
+            call: "KD9TAW/QRP".into(),
+            grid: Some("EN52".into()),
+        };
+        let directed = Frame::CompoundDirected {
+            call: "W1AW".into(),
+            cmd: Command::SnrQuery,
+            num: None,
+        };
+        assert_eq!(
+            keyed_wire(&mut s, 0),
+            vec![(announcement, true, false), (directed, false, true)],
+            "the compound announcement carries the 4-character square"
+        );
+    }
+
+    /// The first frame the station keys from `from_ms`, as it reads on the air.
+    fn first_on_air(s: &mut Station, from_ms: u64) -> Option<Frame> {
+        keyed_wire(s, from_ms).into_iter().next().map(|(f, _, _)| f)
+    }
+
+    /// KD9TAW/QRP, a compound callsign, with a 6-character locator.
+    fn compound_station() -> Station {
+        Station::new(StationConfig {
+            mycall: "KD9TAW/QRP".into(),
+            grid: "EN52HW".into(),
+            ..cfg()
+        })
+    }
+
+    /// …a typed message to a station takes the same route: JS8Call frames the message box at
+    /// the start of the over (`appendMessage`, mainwindow.cpp:5492 → :5344), through the same
+    /// `buildMessageFrames` that is handed the square (:5434)…
+    #[test]
+    fn a_compound_callsigns_typed_message_announces_the_square() {
+        let mut s = compound_station();
+        s.send(Some(&CallRef::Base("W1AW".into())), "SNR?", 0)
+            .unwrap();
+        assert_eq!(
+            first_on_air(&mut s, 0),
+            Some(Frame::Compound {
+                call: "KD9TAW/QRP".into(),
+                grid: Some("EN52".into()),
+            }),
+            "the typed message's announcement carries the square"
+        );
+    }
+
+    /// A heartbeat that falls due while nothing may transmit is dropped and its interval
+    /// re-based, as JS8Call's is: `checkRepeat` (mainwindow.cpp:5723) sends it anyway, `startTx`
+    /// finds TX off (`ensureCanTransmit`, :5295) and calls `on_stopTxButton_clicked` (:5304),
+    /// which clears the queue and re-bases the heartbeat (`resetAutomaticIntervalTransmissions`,
+    /// :7397 → :3720). "Due" is `checkRepeat`'s: `secsTo(next) <= 0`, under a second before it.
+    #[test]
+    fn a_heartbeat_due_while_tx_is_off_is_dropped_and_re_based() {
+        let mut c = cfg();
+        c.hb_interval_min = 5;
+        let mut s = Station::new(c);
+        s.set_hb(true, 67_250); // due at 376 s
+        assert!(
+            !s.drop_due_heartbeat(375_000),
+            "not dropped a whole second early"
+        );
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(376_000),
+            "a whole second early is not due yet"
+        );
+        assert!(s.drop_due_heartbeat(375_001), "dropped once due");
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(391_000 + 300_000),
+            "due: dropped, and re-based to the next transmit cycle + the interval"
+        );
+        assert!(drain(&mut s, 390_000).is_none(), "and nothing is queued");
+    }
+
+    /// …and an on-demand one (interval 0) is simply dropped: JS8Call's single press sends it at
+    /// once, and TX being off discards it the same way.
+    #[test]
+    fn an_on_demand_heartbeat_pressed_while_tx_is_off_is_dropped() {
+        let mut s = Station::new(cfg()); // interval 0
+        s.set_hb(true, 1_000);
+        assert!(s.drop_due_heartbeat(1_000), "dropped");
+        assert_eq!(s.hb_next_ms(), None, "the on-demand heartbeat is dropped");
+        assert!(drain(&mut s, 15_000).is_none(), "and nothing is queued");
+    }
+
+    /// JS8Call sends to @APRSIS and @JS8NET as to any group: both are packable destinations
+    /// (varicode.cpp:217, :259), and `isGroupAllowed` (:1314-1320), which names them, is asked
+    /// only when a group is JOINED (Configuration.cpp:1016, :2450). A message with one in the
+    /// To field goes out as the same directed traffic as the line typed with it.
+    #[test]
+    fn a_message_to_aprsis_or_js8net_goes_out_as_directed_traffic() {
+        for to in ["@APRSIS", "@JS8NET"] {
+            let dest = CallRef::parse(to).expect("a packable group");
+            let mut s = Station::new(cfg());
+            if let Err(e) = s.send(Some(&dest), "GRID EN52", 0) {
+                panic!("{to}: JS8Call sends it, got {e:?}");
+            }
+            let wire = keyed_wire(&mut s, 0);
+            assert!(
+                matches!(
+                    wire.first(),
+                    Some((Frame::Directed { from, to: d, cmd: Command::Grid, .. }, true, _))
+                        if from.render() == "KD9TAW" && *d == dest
+                ),
+                "{to}: a GRID directed to {to} from KD9TAW: {wire:?}"
+            );
+            let mut typed = Station::new(cfg());
+            typed.send(None, &format!("{to} GRID EN52"), 0).unwrap();
+            assert_eq!(
+                wire,
+                keyed_wire(&mut typed, 0),
+                "{to}: the same frames as the line typed with it"
+            );
+        }
+    }
+
+    /// A station whose locator is `grid`, with INFO and STATUS set.
+    fn macro_station(grid: &str, info: &str, status: &str) -> Station {
+        Station::new(StationConfig {
+            grid: grid.into(),
+            info: info.into(),
+            status: status.into(),
+            ..cfg()
+        })
+    }
+
+    /// The reply the station schedules to `cmd` from W1AW, as it goes out.
+    fn reply_to(s: &mut Station, cmd: Command) -> Option<String> {
+        s.on_event(&directed("W1AW", "KD9TAW", Some(cmd), None, "", -7), 1000);
+        drain(s, 5000).map(|f| f.display)
+    }
+
+    /// JS8Call answers INFO? and STATUS? with the text's macros replaced (`replaceMacros`,
+    /// mainwindow.cpp:8845, :8855), `<MYGRID4>` and `<MYGRID12>` among them: the locator's first 4
+    /// and first 12 characters, upper-cased (`buildMacroValues`, :7024-7025; `replaceMacros`,
+    /// :181-194). An 8-character locator tells the two apart.
+    #[test]
+    fn info_and_status_replies_expand_the_grid_macros() {
+        let mut s = macro_station("EN52hw12", "QTH <MYGRID4> LOC <MYGRID12>", "");
+        assert_eq!(
+            reply_to(&mut s, Command::InfoQuery).as_deref(),
+            Some("KD9TAW: W1AW INFO QTH EN52 LOC EN52HW12"),
+            "INFO? is answered with the macros replaced"
+        );
+        let mut s = macro_station("EN52hw12", "", "PORTABLE IN <MYGRID4>");
+        assert_eq!(
+            reply_to(&mut s, Command::StatusQuery).as_deref(),
+            Some("KD9TAW: W1AW STATUS PORTABLE IN EN52"),
+            "STATUS? is answered with the macros replaced"
+        );
+    }
+
+    /// Everything the operator sends is framed with its macros replaced: JS8Call runs the message
+    /// box through `replaceMacros` whenever it frames it (`appendMessage`, :5345, from
+    /// `prepareNextMessageFrame`, :5492). Its editor has upper-cased the text by then, so a token
+    /// typed in lower case is replaced here too.
+    #[test]
+    fn a_sent_message_expands_the_grid_macros() {
+        let mut s = macro_station("EN52HW12", "", "");
+        s.send(None, "MY GRID IS <mygrid12>", 0).unwrap();
+        assert_eq!(
+            drain(&mut s, 0).map(|f| f.display).as_deref(),
+            Some("KD9TAW: MY GRID IS EN52HW12"),
+            "a typed message"
+        );
+        let mut s = macro_station("EN52HW12", "", "");
+        let w1aw = CallRef::Base("W1AW".into());
+        s.send_command(&w1aw, Command::Msg, "QRV FROM <MYGRID4>", 0)
+            .unwrap();
+        assert_eq!(
+            drain(&mut s, 0).map(|f| f.display).as_deref(),
+            Some("KD9TAW: W1AW MSG QRV FROM EN52"),
+            "a command's text"
+        );
+    }
+
+    /// An HB-ACK goes on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
+    /// (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299), not on the dial.
+    #[test]
+    fn an_hb_ack_goes_on_a_free_heartbeat_spot() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        c.hb_interval_min = 5; // our own heartbeat is not due in this window
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        s.on_event(&heartbeat("W1AW", -5), 1000);
+        let mut rng = || 3u32; // the first draw: 500 + 50 × 3
+        let f = s
+            .next_frame(5000, &|_| false, &mut rng)
+            .expect("the HB-ACK after its countdown");
+        assert_eq!(f.origin, Origin::HbAck, "precondition: the HB-ACK");
+        assert_eq!(
+            f.freq_hint,
+            FreqHint::HbSubband(650.0),
+            "the HB-ACK goes on a free heartbeat spot"
+        );
+    }
+
+    /// …and so does an automatic reply: JS8Call puts a queued reply in the same message box
+    /// (`processTxQueue`, :9671) and frames it the same way.
+    #[test]
+    fn a_compound_callsigns_automatic_reply_announces_the_square() {
+        let mut s = compound_station();
+        s.on_event(
+            &directed("W1AW", "KD9TAW/QRP", Some(Command::SnrQuery), None, "", -5),
+            0,
+        );
+        assert_eq!(
+            first_on_air(&mut s, 1000), // cfg()'s reply countdown is 1 s
+            Some(Frame::Compound {
+                call: "KD9TAW/QRP".into(),
+                grid: Some("EN52".into()),
+            }),
+            "the automatic reply's announcement carries the square"
+        );
+    }
+
     #[test]
     fn halt_mid_queue_produces_nothing_afterward_and_is_idempotent() {
         let mut s = Station::new(cfg());
@@ -2348,36 +3032,24 @@ mod tests {
 
     #[test]
     fn allcall_replied_self_prunes_past_the_interval() {
+        // A station answered on @ALLCALL (its QUERY MSGS, with a message waiting) is remembered.
+        let answer = |s: &mut Station, call: &str, t: u64| {
+            store_for(s, call, t);
+            s.on_event(
+                &directed(call, "@ALLCALL", Some(Command::QueryMsgs), None, "", -7),
+                t,
+            );
+        };
         let mut s = Station::new(cfg());
         // positive control: a few distinct stations inside the interval are all remembered.
         for i in 0..5u32 {
-            s.on_event(
-                &directed(
-                    &format!("K{i}XYZ"),
-                    "@ALLCALL",
-                    Some(Command::SnrQuery),
-                    None,
-                    "",
-                    -7,
-                ),
-                i as u64 * 1000,
-            );
+            answer(&mut s, &format!("K{i}XYZ"), i as u64 * 1000);
         }
         assert_eq!(s.allcall_len(), 5);
         // flood distinct callsigns spread over long gaps → entries older than the 15-min interval
         // are dropped, so the map never grows one-per-station-ever.
         for i in 0..5000u32 {
-            s.on_event(
-                &directed(
-                    &format!("W{i:04}"),
-                    "@ALLCALL",
-                    Some(Command::SnrQuery),
-                    None,
-                    "",
-                    -7,
-                ),
-                1_000_000 + i as u64 * 1000,
-            );
+            answer(&mut s, &format!("W{i:04}"), 1_000_000 + i as u64 * 1000);
         }
         assert!(
             s.allcall_len() <= 16 * 60 + 5,
@@ -2486,5 +3158,95 @@ mod tests {
         assert!(acts
             .iter()
             .any(|a| matches!(a, StationAction::Relayed { .. })));
+    }
+
+    /// The STATUS? reply's text when STATUS is not set: JS8Call's default status, "IDLE <MYIDLE>
+    /// VERSION <MYVERSION>" (Configuration.cpp:1858). <MYIDLE> is `since()` of the operator's
+    /// last activity, upper-cased, "NOW" read as "0M" (mainwindow.cpp:7018-7019, :121-130), and
+    /// the idle count is whole minutes since the operator last acted (:10969-10979).
+    #[test]
+    fn a_status_reply_says_how_long_the_operator_has_been_idle() {
+        let t0 = 3_600_000_000; // the operator's last act
+        for (idle_ms, want) in [
+            (30_000, "IDLE 0M"),
+            (5 * 60_000 + 30_000, "IDLE 5M"),
+            (95 * 60_000, "IDLE 1H"),
+            (49 * 3_600_000, "IDLE 2D"),
+        ] {
+            let mut s = Station::new(cfg()); // STATUS not set
+            s.mark_active(t0);
+            let at = t0 + idle_ms;
+            s.on_event(
+                &directed("W1AW", "KD9TAW", Some(Command::StatusQuery), None, "", -7),
+                at,
+            );
+            assert_eq!(
+                drain(&mut s, at + 5_000).map(|f| f.display),
+                Some(format!("KD9TAW: W1AW STATUS {want} VERSION Nexus")),
+                "{idle_ms} ms idle"
+            );
+        }
+    }
+
+    /// The idle count is whole minutes since the last operator act, and 0 before the station has
+    /// a baseline (a fresh station, before the operator enters JS8), as JS8Call's starts at 0.
+    #[test]
+    fn the_idle_count_is_whole_minutes_since_the_last_act() {
+        let mut s = Station::new(cfg());
+        assert_eq!(s.idle_minutes(3_600_000_000), 0, "no baseline yet");
+        s.mark_active(3_600_000_000);
+        assert_eq!(s.idle_minutes(3_600_000_000 + 59_999), 0, "under a minute");
+        assert_eq!(
+            s.idle_minutes(3_600_000_000 + 7 * 60_000),
+            7,
+            "seven minutes"
+        );
+    }
+
+    /// `call` heard in a heartbeat at `t`, so the heard list knows when.
+    fn heard_at(s: &mut Station, call: &str, t: u64) {
+        let MessageEvent::Message(mut m) = heartbeat(call, -10) else {
+            unreachable!("heartbeat() builds a message");
+        };
+        m.first_ms = t;
+        m.last_ms = t;
+        s.on_event(&MessageEvent::Message(m), t);
+    }
+
+    /// The HEARING? reply `querier` draws at `t`.
+    fn hearing_reply(s: &mut Station, querier: &str, t: u64) -> Option<String> {
+        let MessageEvent::Message(mut m) =
+            directed(querier, "KD9TAW", Some(Command::HearingQuery), None, "", -7)
+        else {
+            unreachable!("directed() builds a message");
+        };
+        m.first_ms = t;
+        m.last_ms = t;
+        s.on_event(&MessageEvent::Message(m), t);
+        drain(s, t + 5_000).map(|f| f.display)
+    }
+
+    /// JS8Call's HEARING? reply (mainwindow.cpp:8868-8905): "<FROM> HEARING" (:8903) and up to four
+    /// calls, newest first (:8873-8883), never the station that asked (:8890).
+    #[test]
+    fn a_hearing_reply_names_the_newest_four_but_never_the_asker() {
+        let mut s = Station::new(cfg());
+        for (i, call) in ["K1ABC", "N0XYZ", "W1AW", "K2DEF", "K3GHI", "K4JKL"]
+            .iter()
+            .enumerate()
+        {
+            heard_at(&mut s, call, 10_000 + i as u64 * 1_000);
+        }
+        assert_eq!(
+            hearing_reply(&mut s, "W1AW", 60_000).as_deref(),
+            Some("KD9TAW: W1AW HEARING K4JKL K3GHI K2DEF N0XYZ"),
+            "the asker is skipped and takes no place in the four"
+        );
+        let mut s = Station::new(cfg());
+        assert_eq!(
+            hearing_reply(&mut s, "W1AW", 60_000).as_deref(),
+            Some("KD9TAW: W1AW HEARING"),
+            "with nobody else heard, the reply names nobody"
+        );
     }
 }

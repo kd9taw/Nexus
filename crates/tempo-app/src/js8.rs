@@ -39,6 +39,11 @@ const JS8_LOW_CONF: f32 = 0.17;
 const JS8_SEEN_CAP: usize = 64;
 /// JS8Call's @ALLCALL reply cap: one reply per station per 15 minutes.
 const JS8_ALLCALL_INTERVAL_MS: u64 = 15 * 60 * 1000;
+/// JS8Call starts no transmission without a locator in Settings (`ensureCallsignSet`,
+/// mainwindow.cpp:5264-5268, "Please enter your grid locator in the settings."). The words are
+/// the FT gate's (`structured_tx_ready`).
+const JS8_NO_LOCATOR: &str =
+    "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
 /// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
@@ -86,11 +91,14 @@ impl Engine {
                 0 => 0,
                 m => m.max(5),
             },
+            // A group JS8Call will not let be joined (@APRSIS, @JS8NET) is never joined here,
+            // whatever put it in Settings: an older Nexus accepted one, and the Remote can write
+            // the list. Settings keeps it as written, and the panel refuses a save that adds one.
             groups: s
                 .js8_groups
                 .iter()
                 .map(|g| g.trim().to_ascii_uppercase())
-                .filter(|g| !g.is_empty())
+                .filter(|g| !g.is_empty() && ::js8::proto::callsign::may_join_group(g))
                 .collect(),
             info: s.js8_info.clone(),
             status: s.js8_status.clone(),
@@ -224,7 +232,9 @@ impl Engine {
                 hb: self.js8_hb_on && live,
                 cq: self.js8_station.cq_on() && live,
             },
-            idle_minutes: self.js8_station.idle_minutes(),
+            idle_minutes: self
+                .js8_station
+                .idle_minutes(tempo_core::timing::now_unix_ms() as u64),
             idle_limit_min: self.js8_station.config().idle_watchdog_min,
             idle_tripped,
             activity: self.js8_activity.iter().cloned().collect(),
@@ -318,11 +328,24 @@ impl Engine {
         // arming TX ten minutes later must not fire a reply to a query nobody is waiting
         // for. The countdown was shown the whole time (the cockpit's "would have replied"
         // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
-        if !self.tx_enabled() {
+        // No locator in Settings is the same case: JS8Call's `startTx` refuses there too
+        // (`ensureCallsignSet`, mainwindow.cpp:5309), through the same `on_stopTxButton_clicked`
+        // (:5310), and with TX on it says why (the alert at :5265).
+        let no_locator = self.js8_no_usable_locator();
+        if !self.tx_enabled() || no_locator {
+            let mut dropped = false;
             if let Some(p) = self.js8_station.pending_reply() {
                 if p.fires_at_ms <= now_ms {
                     self.js8_station.cancel_pending_reply();
+                    dropped = true;
                 }
+            }
+            // …and a heartbeat that falls due is dropped and its interval re-based, so turning
+            // TX back on sends nothing: JS8Call's `startTx` finds TX off (`ensureCanTransmit`,
+            // mainwindow.cpp:5295) and `on_stopTxButton_clicked` re-bases it (:5304 → :7397).
+            dropped |= self.js8_station.drop_due_heartbeat(now_ms);
+            if dropped && no_locator && self.tx_enabled() {
+                self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
             }
         }
         let actions = self.js8_station.tick(now_ms);
@@ -333,7 +356,10 @@ impl Engine {
     fn js8_handle_events(&mut self, events: Vec<MessageEvent>, low_conf: bool, now_ms: u64) {
         for ev in events {
             let row = match &ev {
-                MessageEvent::Frame(rx) => Some(self.js8_row_for_frame(rx, low_conf)),
+                MessageEvent::Frame(rx) => {
+                    self.js8_file_band_activity(rx.freq_hz, rx.speed, rx.at_ms);
+                    Some(self.js8_row_for_frame(rx, low_conf))
+                }
                 // A single-frame message IS its frame row; only multi-frame text (or an
                 // incomplete/force-closed buffer) earns a second, reassembled row.
                 MessageEvent::Message(m) if m.frames > 1 || !m.complete => Some(Js8ActivityRow {
@@ -360,6 +386,27 @@ impl Engine {
             let actions = self.js8_station.on_event(&ev, now_ms);
             self.js8_handle_actions(actions);
         }
+    }
+
+    /// File a decoded frame in the band activity, as JS8Call's decode path does for every frame
+    /// (mainwindow.cpp:3967-4016), at its whole-hertz offset (`frequencyOffset()`, the decoder's
+    /// float truncated to an int). An offset not yet filed first takes over the filed offset
+    /// within the speed's `rxThreshold` of it that `generateOffsets` meets first counting up
+    /// from offset − range (:3970-3981, :3730-3739), so a drifting signal keeps one entry.
+    fn js8_file_band_activity(&mut self, freq_hz: f32, speed: Js8Speed, at_ms: u64) {
+        let offset = freq_hz as i32;
+        if !self.js8_band_activity.contains_key(&offset) {
+            let range = speed.drift_hz() as i32;
+            let prev = self
+                .js8_band_activity
+                .range(offset - range..=offset + range)
+                .next()
+                .map(|(&o, _)| o);
+            if let Some(prev) = prev {
+                self.js8_band_activity.remove(&prev);
+            }
+        }
+        self.js8_band_activity.insert(offset, at_ms);
     }
 
     /// One decoded frame → its activity row (JS8Call's display line, byte-exact).
@@ -564,10 +611,6 @@ impl Engine {
         use ::js8::proto::compose::ComposeError as E;
         match e {
             E::NoCallsign => "Set your callsign in Settings before transmitting JS8.".to_string(),
-            E::ForbiddenDestination => {
-                "JS8Call refuses @APRSIS and @JS8NET as destinations, and so does Nexus."
-                    .to_string()
-            }
             E::Empty => "Nothing to send.".to_string(),
             E::TooLong { frames, max } => format!(
                 "That message needs {frames} frames; the cap at this speed is {max} \
@@ -575,6 +618,29 @@ impl Engine {
                  Shorten it or send it in parts."
             ),
         }
+    }
+
+    /// Settings holds no locator JS8Call would transmit with. JS8Call refuses to start with an
+    /// empty one (`my_grid().trimmed().isEmpty()`, mainwindow.cpp:5264) and its Settings dialog
+    /// refuses to save a malformed one (Configuration.cpp:2443), so between them it sends
+    /// neither. Nexus's Settings field can hold either, so the gate refuses both, by JS8Call's
+    /// own rule (`is_station_locator`) on the trimmed text it stores (Configuration.cpp:2749).
+    fn js8_no_usable_locator(&self) -> bool {
+        !::js8::proto::grid::is_station_locator(self.settings.mygrid.trim())
+    }
+
+    /// JS8Call's `ensureCallsignSet` (mainwindow.cpp:5257-5271), which its Enter asks before
+    /// anything is queued (:749): a callsign first, then a locator. Every operator send asks it.
+    fn js8_identity_set(&self) -> Result<(), String> {
+        if self.settings.mycall.trim().is_empty() {
+            return Err(Self::js8_compose_error(
+                ::js8::proto::compose::ComposeError::NoCallsign,
+            ));
+        }
+        if self.js8_no_usable_locator() {
+            return Err(JS8_NO_LOCATOR.to_string());
+        }
+        Ok(())
     }
 
     /// Operator send: `to` is a callsign or @group (None = plain text, which compose
@@ -589,11 +655,12 @@ impl Engine {
             ),
             None => None,
         };
-        let r = self
-            .js8_station
-            .send(to_ref.as_ref(), text.trim(), now_ms)
-            .map(|_| ())
-            .map_err(Self::js8_compose_error);
+        let r = self.js8_identity_set().and_then(|()| {
+            self.js8_station
+                .send(to_ref.as_ref(), text.trim(), now_ms)
+                .map(|_| ())
+                .map_err(Self::js8_compose_error)
+        });
         self.js8_after_verb(&r);
         r
     }
@@ -605,11 +672,12 @@ impl Engine {
             .ok_or_else(|| format!("{to} is not a callsign or @group JS8 can address"))?;
         let command =
             ::js8::Command::from_id(cmd).ok_or_else(|| format!("unknown JS8 command {cmd}"))?;
-        let r = self
-            .js8_station
-            .send_command(&to_ref, command, arg.trim(), now_ms)
-            .map(|_| ())
-            .map_err(Self::js8_compose_error);
+        let r = self.js8_identity_set().and_then(|()| {
+            self.js8_station
+                .send_command(&to_ref, command, arg.trim(), now_ms)
+                .map(|_| ())
+                .map_err(Self::js8_compose_error)
+        });
         self.js8_after_verb(&r);
         r
     }
@@ -617,10 +685,11 @@ impl Engine {
     /// CQ (`idx` into the CQS table: 0 "CQ CQ CQ" … 7 "CQ"). Counts as Operator origin.
     pub fn js8_call_cq(&mut self, idx: u8) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
-        let r = self
-            .js8_station
-            .call_cq(idx, now_ms)
-            .map_err(Self::js8_compose_error);
+        let r = self.js8_identity_set().and_then(|()| {
+            self.js8_station
+                .call_cq(idx, now_ms)
+                .map_err(Self::js8_compose_error)
+        });
         self.js8_after_verb(&r);
         r
     }
@@ -759,18 +828,40 @@ impl Engine {
     /// (`!tx_enabled || tuning || !tx_allowed()`, `tier_is_rx_only`, operating mode
     /// Digital), so `tx_enabled` — the FIRST operator act — is already true here.
     ///
-    /// Order: identity gate → decode-only refusal → one-frame-per-period latch → station
-    /// outbox → origin gate (the SECOND act, re-read at plan time every slot) → wall-clock
-    /// watchdog (all origins but Heartbeat) → f0 → book → plan. Nothing here moves the dial
-    /// (invariant 9). Booking is at plan time, the beacon / QSO arms' rule.
+    /// Order: identity gate (a callsign for every frame, a locator for a message's first) →
+    /// decode-only refusal → one-frame-per-period latch → station outbox → origin gate (the
+    /// SECOND act, re-read at plan time every slot) → wall-clock watchdog (all origins but
+    /// Heartbeat) → f0 → book → plan. Nothing here moves the dial (invariant 9). Booking is at
+    /// plan time, the beacon / QSO arms' rule.
     pub fn plan_js8_tx(&mut self, slot: u64) -> Option<TxPlan> {
         // Identity, fail-closed: Js8Mode declares `structured_identity`, so a blank or
-        // unparsable MYCALL refuses here (`needs_grid = false` — JS8 frames carry the
-        // grid optionally; NMAXGRID means "no grid"). `proto::compose` additionally
-        // refuses a MYCALL that cannot be base-packed, before anything is queued.
+        // unparsable MYCALL refuses here (`needs_grid = false`: the FT gate's 4-or-6-character
+        // grid rule is not JS8Call's, whose locator rule follows). `proto::compose`
+        // additionally refuses a MYCALL that cannot be base-packed, before anything is queued.
         if self.structured_tx_ready(false).is_err() {
             self.set_transmitting(false);
             return None;
+        }
+        // …and no transmission STARTS without a locator JS8Call would accept, as in JS8Call:
+        // `startTx` (mainwindow.cpp:4768) → `ensureCreateMessageReady` → `ensureCallsignSet`
+        // (:5309, :5264-5268). The frames after a message's first go out through `stopTx` →
+        // `prepareNextMessageFrame` (:4825), which never asks again, so a message already on
+        // the air finishes. Refused before `next_frame`: nothing is released, popped or keyed,
+        // and `js8_tick` drops a reply or heartbeat that falls due meanwhile.
+        if self.js8_no_usable_locator() {
+            let queue = self.js8_station.queue();
+            if queue.first().is_none_or(|next| next.first) {
+                if !queue.is_empty() {
+                    // …and everything waiting is dropped, as JS8Call's refusal does
+                    // (`on_stopTxButton_clicked` → `resetMessage` → `resetMessageTransmitQueue`,
+                    // :5310 → :7396 → :5383-5391), so nothing old goes out once a locator is
+                    // set. The CQ repeat and the heartbeat keep their schedules.
+                    self.js8_station.drop_queue();
+                    self.js8_last_error = Some(JS8_NO_LOCATOR.to_string());
+                }
+                self.set_transmitting(false);
+                return None;
+            }
         }
         let speed = self.js8_tx_speed();
         // Decode-only refusal, in the planner and not the builder (the FT arms' rule):
@@ -788,21 +879,25 @@ impl Engine {
         }
         let period_ms = u64::from(speed.period_s()) * 1000;
         let period_start_ms = slot.saturating_mul(period_ms);
-        // JS8Call's "free HB slot" rule, `isFreqOffsetFree(f, 50)` (mainwindow.cpp:5566): nothing
-        // heard within 50 Hz in the last 30 s. The 50 is `findFreeFreqOffset(500, 1000, 50)`'s
-        // own argument at every speed, not the signal's bandwidth. Snapshot the heard table
-        // first — the station is borrowed mutably by `next_frame` below.
+        // JS8Call's "free HB slot" rule, `isFreqOffsetFree(f, 50)` (mainwindow.cpp:5566-5590): the
+        // operator's own offset is free (`freq() == f`, :5572); any other is taken while the band
+        // activity holds an offset within 50 Hz heard in the last 30 s (:5579-5587). The 50 is
+        // `findFreeFreqOffset(500, 1000, 50)`'s own argument at every speed, not the signal's
+        // bandwidth. Its other exception, an offset in the directed cache (:5572), never holds on
+        // the air: only `initializeDummyData` (:1658) marks one. Snapshot the band activity first
+        // — the station is borrowed mutably by `next_frame` below.
         let bw = 50.0;
-        let heard: Vec<(f32, u64)> = self
-            .js8_station
-            .heard()
+        let own = self.tx_offset_hz().trunc();
+        let activity: Vec<(f32, u64)> = self
+            .js8_band_activity
             .iter()
-            .map(|h| (h.freq_hz, h.last_ms))
+            .map(|(&o, &at)| (o as f32, at))
             .collect();
         let busy = move |f: f32| {
-            heard
-                .iter()
-                .any(|&(hf, at)| (hf - f).abs() < bw && period_start_ms.saturating_sub(at) < 30_000)
+            f != own
+                && activity.iter().any(|&(o, at)| {
+                    (o - f).abs() < bw && period_start_ms.saturating_sub(at) < 30_000
+                })
         };
         let mut seed = self.js8_rng;
         let next = {
@@ -861,13 +956,17 @@ impl Engine {
         }
         // f0: the operator's TX offset, or the station's HB sub-band pick — an AUDIO
         // offset only. JS8Call's `sendHeartbeat` (mainwindow.cpp:6279) keeps an operator at
-        // or below 1000 Hz on their own offset; its `heartbeat_anywhere` has no Nexus
+        // or below 1000 Hz on their own offset; `sendHeartbeatAck` (:6299) has no such rule,
+        // so an HB-ACK always takes the pick. Its `heartbeat_anywhere` has no Nexus
         // setting, and upstream it defaults off, which is this. A pick outside 500–1000 Hz
         // cannot come from a correct station; fall back to the operator's offset rather
         // than trust it.
+        let own_offset = self.tx_offset_hz() <= 1000.0;
         let f0 = match tf.freq_hint {
             FreqHint::Dial => self.tx_offset_hz(),
-            FreqHint::HbSubband(_) if self.tx_offset_hz() <= 1000.0 => self.tx_offset_hz(),
+            FreqHint::HbSubband(_) if tf.origin == Origin::Heartbeat && own_offset => {
+                self.tx_offset_hz()
+            }
             FreqHint::HbSubband(f) if (500.0..=1000.0).contains(&f) => f,
             FreqHint::HbSubband(_) => self.tx_offset_hz(),
         };
@@ -935,6 +1034,7 @@ mod tests {
     fn queue_copy_budget_counts_remaining_frames_instead_of_messages() {
         let mut e = Engine::with_settings(Settings {
             mycall: "N0CALL".into(),
+            mygrid: "AA00".into(),
             ..Default::default()
         });
         e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
@@ -1022,6 +1122,20 @@ mod tests {
             "latch down at launch → nothing is armed"
         );
         assert!(st.queue.is_empty() && st.pending_reply.is_none() && st.activity.is_empty());
+    }
+
+    /// A JS8 heartbeat's grid is somewhere the station told us it is: the rotator's point-at-call
+    /// reads it from the heard list (`Engine::station_grids`), after the roster's.
+    #[test]
+    fn a_heard_js8_grid_reaches_the_point_at_call() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        assert!(e.station_grids("EC1DD").heard.is_empty());
+        e.js8_ingest(
+            &[row(&hb("EC1DD", "IN52"), whole(), Js8Speed::Normal, 1500.0)],
+            4,
+        );
+        assert_eq!(e.station_grids("ec1dd").heard, vec!["IN52".to_string()]);
     }
 
     /// The RX chain end to end: `Decode.raw` → `RawDecode` → `Reassembler` → `Station`, with the
@@ -1468,8 +1582,12 @@ mod tests {
     /// period boundary, the transmit decision (`poll_tx`'s plan → build → commit, the plan
     /// kept for its offset). Returns (period start, f0) for each over that keyed.
     fn run_js8_loop(e: &mut Engine, secs: u64) -> Vec<(u64, f32)> {
+        run_js8_loop_from(e, tempo_core::timing::now_unix_ms() as u64, secs)
+    }
+
+    /// `run_js8_loop` from `t0` (ms, the wall-clock axis) instead of from now.
+    fn run_js8_loop_from(e: &mut Engine, t0: u64, secs: u64) -> Vec<(u64, f32)> {
         let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
-        let t0 = tempo_core::timing::now_unix_ms() as u64;
         let mut last = t0 / period_ms;
         let mut overs = Vec::new();
         for k in 0..=secs {
@@ -1649,6 +1767,92 @@ mod tests {
         );
     }
 
+    /// The clicked CQ on the real path: with a 6-character locator in Settings it is ONE over
+    /// (JS8Call's CQ carries `my_grid().left(4)`, mainwindow.cpp:6344), booked with the square.
+    #[test]
+    fn a_js8_cq_with_a_six_character_locator_keys_one_over() {
+        let mut e = hb_engine("EN52HW", 0, 1500.0);
+        e.js8_call_cq(0).expect("CQ queued");
+        let overs = run_js8_loop(&mut e, 60);
+        assert_eq!(
+            overs.len(),
+            1,
+            "one CQ over in the minute after the click, got {overs:?}"
+        );
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(
+            booked,
+            vec!["KD9TAW: @ALLCALL CQ CQ CQ EN52".to_string()],
+            "…booked once, with the square it carried"
+        );
+    }
+
+    /// An HB-ACK keys on a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
+    /// (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299), and is booked there. Unlike
+    /// the heartbeat's (`sendHeartbeat`, :6279), that pick has no "at or below 1000 Hz, stay on
+    /// your own offset" rule, so an operator at 777 Hz still gets a spot (777 is never one).
+    #[test]
+    fn a_js8_hb_ack_keys_on_a_free_heartbeat_spot_not_the_operators_offset() {
+        let mut e = hb_engine("EN52", 30, 777.0); // our own heartbeat is 30 min away
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB-ack on");
+        e.js8_ingest(
+            &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 1200.0)],
+            now_unix_secs() / 15,
+        );
+        let overs = run_js8_loop(&mut e, 60);
+        let [(_, f0)] = overs[..] else {
+            panic!("one HB-ACK over, got {overs:?}");
+        };
+        assert!(
+            f0 != 777.0 && (500.0..=950.0).contains(&f0) && f0 % 50.0 == 0.0,
+            "the HB-ACK keys on a free heartbeat spot, not the operator's 777 Hz: {f0}"
+        );
+        let row = e
+            .js8_state()
+            .activity
+            .last()
+            .cloned()
+            .expect("the over's row");
+        assert_eq!(
+            (row.text.as_str(), row.freq_hz),
+            ("KD9TAW: W1AW HEARTBEAT SNR -07", f0),
+            "…and it is booked where it keyed"
+        );
+    }
+
+    /// A heartbeat that falls due while the TX latch is down is dropped and its interval
+    /// re-based, as JS8Call's is (`startTx` → `ensureCanTransmit` fails →
+    /// `on_stopTxButton_clicked`, mainwindow.cpp:5304 → :7397), so turning TX back on sends
+    /// nothing.
+    #[test]
+    fn a_js8_heartbeat_due_while_tx_is_off_is_not_sent_when_tx_comes_back() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.set_tx_enabled(false);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let off = run_js8_loop_from(&mut e, t0, 6 * 60); // through the due moment, latch down
+        assert!(off.is_empty(), "control: nothing keys with the latch down");
+        let rebased = e.js8_state().hb_next_at_ms;
+        e.set_tx_enabled(true);
+        let on = run_js8_loop_from(&mut e, t0 + 6 * 60 * 1000, 2 * 60);
+        assert!(on.is_empty(), "turning TX back on sends nothing: {on:?}");
+        // Dropped in its due second (the boundary before `due` + under 1 s), so the next cycle
+        // is that boundary + 16 s, and the interval goes on top: `due` + 315 s.
+        assert_eq!(
+            rebased,
+            Some(due + 315_000),
+            "…because it was dropped and re-based to the next cycle + the interval"
+        );
+    }
+
     /// Interval 0 is JS8Call's single press: one heartbeat, once (`on_hbMacroButton_toggled`,
     /// :6326).
     #[test]
@@ -1660,6 +1864,478 @@ mod tests {
             overs.len(),
             1,
             "one heartbeat in three minutes, got {overs:?}"
+        );
+    }
+
+    // ===== no locator in Settings: JS8Call transmits nothing =====
+
+    /// The refusal the operator reads, word for word.
+    const NO_LOCATOR: &str =
+        "Set your Maidenhead grid (e.g. EN52) in Settings before transmitting JS8.";
+
+    /// `SNR?` from `from` to my call, as it decodes.
+    fn snr_query_to_me(from: &str) -> modes::Decode {
+        let query = Frame::Directed {
+            from: CallRef::Base(from.to_string()),
+            to: CallRef::Base("KD9TAW".to_string()),
+            cmd: Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        row(&query, whole(), Js8Speed::Normal, 1200.0)
+    }
+
+    /// JS8Call's Enter asks `ensureCallsignSet` before anything is queued (mainwindow.cpp:749),
+    /// and with no locator that refuses (:5264-5268, "Please enter your grid locator in the
+    /// settings."). Every operator send refuses, queues nothing and says where the locator goes.
+    #[test]
+    fn js8_sends_refuse_with_no_locator_and_say_where_to_set_it() {
+        for grid in ["", "  "] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            let refused = Err(NO_LOCATOR.to_string());
+            assert_eq!(
+                e.js8_send(None, "TEST".into()),
+                refused,
+                "{grid:?}: a message"
+            );
+            let snr = Command::SnrQuery.id();
+            let query = e.js8_send_command("W1AW".into(), snr, String::new());
+            assert_eq!(query, refused, "{grid:?}: a directed query");
+            assert_eq!(e.js8_call_cq(0), refused, "{grid:?}: a CQ");
+            let st = e.js8_state();
+            assert!(
+                st.queue.is_empty(),
+                "{grid:?}: nothing queued: {:?}",
+                st.queue
+            );
+            assert_eq!(
+                st.last_error.as_deref(),
+                Some(NO_LOCATOR),
+                "{grid:?}: the cockpit says why"
+            );
+        }
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_send(None, "TEST".into())
+            .expect("control: with a locator the same send queues");
+        let mut blank = Engine::new("", "", 0);
+        blank.js8_enter();
+        assert_eq!(
+            blank.js8_send(None, "TEST".into()),
+            Err("Set your callsign in Settings before transmitting JS8.".to_string()),
+            "with neither, the callsign is asked for first, as in ensureCallsignSet"
+        );
+    }
+
+    /// The refusal drops everything waiting to go, as JS8Call's does (`resetMessageTransmitQueue`,
+    /// mainwindow.cpp:5383-5391: its frame and message queues), so a locator set afterwards sends
+    /// nothing old. The CQ repeat's schedule is its own: the call it queued is dropped with the
+    /// rest, and the repeat stays armed for its next time.
+    #[test]
+    fn a_start_refused_for_the_locator_drops_the_queue_and_nothing_old_goes_out_later() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_send(None, "FIRST".into()).expect("queues");
+        e.js8_send(None, "SECOND".into()).expect("queues");
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.settings.mygrid = "EN5".into(); // a slip in Settings
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let refused = run_js8_loop_from(&mut e, t0, 75); // the CQ repeat queues its call at 60 s
+        assert!(refused.is_empty(), "nothing keys: {refused:?}");
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the queue was dropped at the refusal: {:?}",
+            st.queue
+        );
+        assert!(
+            st.cq_on && st.cq_next_at_ms.is_some_and(|next| next > t0 + 75_000),
+            "the CQ repeat keeps its schedule: {:?}",
+            st.cq_next_at_ms
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
+        );
+        e.settings.mygrid = "EN52".into();
+        let later = run_js8_loop_from(&mut e, t0 + 75_000, 20);
+        assert!(
+            later.is_empty(),
+            "setting the locator sends nothing old: {later:?}"
+        );
+    }
+
+    /// JS8Call never holds a malformed locator: its Settings dialog refuses to save one
+    /// (Configuration.cpp:2443, the `Maidenhead::ExtendedValidator` set at :1332), so it never
+    /// transmits one. Nexus's Settings field can hold one, and the JS8 gate refuses it with the
+    /// same words as no locator. JS8Call's rule accepts 4 to 12 characters in whole pairs, in
+    /// either case.
+    #[test]
+    fn js8_refuses_a_malformed_locator_as_it_refuses_none() {
+        for grid in [
+            "EN5",
+            "EN52H",
+            "ZZ99",
+            "EN52HW1",
+            "EN52 HW",
+            "BP51AD95RF00A",
+        ] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            assert_eq!(
+                e.js8_send(None, "TEST".into()),
+                Err(NO_LOCATOR.to_string()),
+                "{grid:?} is refused"
+            );
+        }
+        for grid in ["en52", " EN52HW ", "EN52HW12", "BP51AD95RF", "BP51AD95RF00"] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            if let Err(err) = e.js8_send(None, "TEST".into()) {
+                panic!("control: {grid:?} is a locator JS8Call accepts, got {err}");
+            }
+        }
+    }
+
+    /// …and it starts nothing on the air either.
+    #[test]
+    fn a_malformed_locator_keys_nothing() {
+        let mut e = hb_engine("EN5", 0, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let overs = run_js8_loop(&mut e, 40);
+        assert!(
+            overs.is_empty(),
+            "nothing keys with the locator EN5: {overs:?}"
+        );
+    }
+
+    /// Automatic traffic meets the same refusal when its transmission would start (`startTx` →
+    /// `ensureCreateMessageReady` → `ensureCallsignSet`, :4768 → :5309), and the
+    /// `on_stopTxButton_clicked` that follows (:5310) drops it: the reply is gone and the
+    /// heartbeat re-based to the next cycle + the interval (:7397 → :3720). So setting the
+    /// locator afterwards sends nothing stale.
+    #[test]
+    fn with_no_locator_js8_keys_nothing_and_drops_what_falls_due() {
+        let mut e = hb_engine("", 5, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.js8_ingest(&[snr_query_to_me("W1AW")], now_unix_secs() / 15);
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: autoreply is on, and a reply counts down"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 6 * 60); // through the reply and the heartbeat
+        assert!(overs.is_empty(), "nothing keys with no locator: {overs:?}");
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_none(),
+            "the reply was dropped when it fell due"
+        );
+        assert_eq!(
+            st.hb_next_at_ms,
+            Some(due + 315_000),
+            "the heartbeat was dropped and re-based to the next cycle + the interval"
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
+        );
+        e.settings.mygrid = "EN52".into();
+        e.js8_apply_station_config();
+        let after = run_js8_loop_from(&mut e, t0 + 6 * 60 * 1000, 2 * 60);
+        assert!(
+            after.is_empty(),
+            "setting the locator sends nothing stale: {after:?}"
+        );
+    }
+
+    /// With TX off, JS8Call's `ensureCanTransmit` refuses first (:5304) and the locator's alert
+    /// never comes: the heartbeat is dropped as Q6's is, and nothing is said.
+    #[test]
+    fn with_tx_off_a_heartbeat_dropped_with_no_locator_says_nothing() {
+        let mut e = hb_engine("", 5, 1500.0);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let due = e.js8_state().hb_next_at_ms.expect("scheduled");
+        e.set_tx_enabled(false);
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        run_js8_loop_from(&mut e, t0, 6 * 60);
+        let st = e.js8_state();
+        assert_eq!(
+            st.hb_next_at_ms,
+            Some(due + 315_000),
+            "control: the heartbeat was dropped and re-based"
+        );
+        assert_eq!(st.last_error, None, "TX off refuses first, and silently");
+    }
+
+    /// Only a transmission's START asks. JS8Call sends the frames after a message's first
+    /// through `stopTx` → `prepareNextMessageFrame` (:4825), which never asks again: a message
+    /// already on the air finishes, and the next one does not start. Its refusal drops it, as
+    /// JS8Call's `on_stopTxButton_clicked` → `resetMessage` clears the queue (:7396, :5240-5243).
+    #[test]
+    fn a_js8_message_on_the_air_finishes_when_the_locator_goes_and_the_next_does_not_start() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
+            .expect("queues");
+        e.js8_send(None, "SECOND".into()).expect("queues");
+        let queue = e.js8_state().queue;
+        let long = queue
+            .iter()
+            .filter(|q| q.display.ends_with("FRAMES"))
+            .count();
+        assert!(
+            long > 1,
+            "control: the first message is multi-frame: {queue:?}"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let first = run_js8_loop_from(&mut e, t0, 15); // exactly one period boundary
+        assert_eq!(first.len(), 1, "control: the first frame keyed");
+        e.settings.mygrid = String::new(); // the locator goes while the message is on the air
+        let rest = run_js8_loop_from(&mut e, t0 + 15_000, 5 * 60);
+        assert!(
+            rest.len() >= long - 1,
+            "the message on the air finishes: {} of {} more frames",
+            rest.len(),
+            long - 1
+        );
+        assert_eq!(
+            rest.len(),
+            long - 1,
+            "…and the next one never starts: {rest:?}"
+        );
+        let st = e.js8_state();
+        assert!(
+            st.queue.is_empty(),
+            "the second message is dropped when its start is refused: {:?}",
+            st.queue
+        );
+        assert_eq!(
+            st.last_error.as_deref(),
+            Some(NO_LOCATOR),
+            "…and the cockpit says why"
+        );
+    }
+
+    // ===== the free heartbeat spot: JS8Call's band activity =====
+
+    /// A data frame at `freq`: a message's continuation, which carries no callsign.
+    fn continuation(freq: f32) -> modes::Decode {
+        let data = Frame::Data {
+            text: "HELLO WORLD".into(),
+            dense: false,
+        };
+        let i3 = I3 {
+            first: false,
+            last: false,
+            data: true,
+        };
+        row(&data, i3, Js8Speed::Normal, freq)
+    }
+
+    /// The one heartbeat over an on-demand heartbeat keys in the next 20 s, and its offset.
+    fn heartbeat_offset(e: &mut Engine) -> f32 {
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let overs = run_js8_loop(e, 20);
+        let [(_, f0)] = overs[..] else {
+            panic!("one heartbeat over, got {overs:?}");
+        };
+        f0
+    }
+
+    /// JS8Call's free-spot test reads its band activity (`isFreqOffsetFree`, mainwindow.cpp:
+    /// 5579-5587), where every decoded frame is filed (:4013). A station in the middle of a long
+    /// message sends frames that carry no callsign, and its offset stays taken.
+    #[test]
+    fn a_spot_heard_only_in_continuation_frames_is_taken() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_ingest(&[continuation(900.0)], now_unix_secs() / 15);
+        e.js8_rng = 2; // the first draw is 900 Hz, the second 500 Hz
+        assert_eq!(
+            heartbeat_offset(&mut e),
+            500.0,
+            "900 Hz is taken, so the second draw is used"
+        );
+    }
+
+    /// …except the operator's own offset, which the test calls free whatever was heard there
+    /// (`freq() == f`, :5572): an HB-ACK may go out where the operator already is.
+    #[test]
+    fn the_operators_own_offset_counts_as_a_free_spot() {
+        let mut e = hb_engine("EN52", 30, 700.0); // our own heartbeat is 30 min away
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB-ack on");
+        e.js8_ingest(
+            &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 700.0)],
+            now_unix_secs() / 15,
+        );
+        e.js8_rng = 23; // the first draw is 700 Hz, the second 800 Hz
+        let overs = run_js8_loop(&mut e, 60);
+        let [(_, f0)] = overs[..] else {
+            panic!("one HB-ACK over, got {overs:?}");
+        };
+        assert_eq!(
+            f0, 700.0,
+            "W1AW was heard at 700 Hz, but that is the operator's own offset, so it is free"
+        );
+    }
+
+    /// A drifting signal keeps one entry: a frame at an offset not yet filed takes over the one
+    /// filed within the speed's `rxThreshold` (:3970-3981), so the spot the signal left is free.
+    #[test]
+    fn a_drifting_signal_keeps_one_band_activity_entry() {
+        for (drifted, free) in [(false, false), (true, true)] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            let slot = now_unix_secs() / 15;
+            e.js8_ingest(&[continuation(745.0)], slot); // 45 Hz from 700
+            if drifted {
+                e.js8_ingest(&[continuation(752.0)], slot); // 7 Hz on: 52 Hz from 700
+            }
+            e.js8_rng = 6; // the first two draws are 700 Hz, the third 500 Hz
+            let f0 = heartbeat_offset(&mut e);
+            assert_eq!(
+                f0 == 700.0,
+                free,
+                "drifted {drifted}: 700 Hz is {} ({f0})",
+                if free { "free" } else { "taken" }
+            );
+        }
+    }
+
+    /// …and the entry that moves is the first one `generateOffsets` meets counting up from
+    /// offset − range (:3730-3739, then the first hit, :3975-3979), not the nearest: a frame at
+    /// 750 Hz takes over the stale 740 and leaves the fresh 755, which still holds 800 Hz.
+    #[test]
+    fn a_new_frame_takes_over_the_lowest_band_activity_entry_in_range() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let now = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_file_band_activity(740.0, Js8Speed::Normal, now - 60_000);
+        e.js8_file_band_activity(755.0, Js8Speed::Normal, now - 5_000);
+        e.js8_file_band_activity(750.0, Js8Speed::Normal, now);
+        e.js8_rng = 4; // the first draw is 800 Hz, the second 500 Hz
+        assert_eq!(
+            heartbeat_offset(&mut e),
+            500.0,
+            "755 Hz, heard 5 s ago, still holds 800 Hz"
+        );
+    }
+
+    /// A frame is filed at its offset truncated to whole hertz, as `DecodedText` takes the
+    /// decoder's float into an int (decodedtext.cpp:248 → decodedtext.h:80): 750.9 Hz is filed
+    /// at 750, a full 50 Hz from 800, which stays free.
+    #[test]
+    fn a_frame_is_filed_at_its_offset_truncated_to_whole_hertz() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_ingest(&[continuation(750.9)], now_unix_secs() / 15);
+        e.js8_rng = 4; // the first draw is 800 Hz
+        assert_eq!(
+            heartbeat_offset(&mut e),
+            800.0,
+            "filed at 750 Hz, 800 Hz is free"
+        );
+    }
+
+    // ===== @APRSIS and @JS8NET: destinations JS8Call sends to =====
+
+    /// A message with @APRSIS or @JS8NET in the To field is sent and keys, as in JS8Call, whose
+    /// `isGroupAllowed` (varicode.cpp:1314-1320) guards joining a group, never sending to one.
+    #[test]
+    fn a_js8_message_to_aprsis_or_js8net_is_sent() {
+        for to in ["@APRSIS", "@JS8NET"] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            assert_eq!(
+                e.js8_send(Some(to.into()), "GRID EN52".into()),
+                Ok(()),
+                "{to}: the send is accepted"
+            );
+            let overs = run_js8_loop(&mut e, 2 * 60);
+            assert!(!overs.is_empty(), "{to}: and it keys");
+        }
+    }
+
+    // ===== <MYGRID4> / <MYGRID12> =====
+
+    /// The operator's send reaches the station with JS8Call's grid macros still in it, and goes out
+    /// with them replaced by Settings' locator (`buildMacroValues`, mainwindow.cpp:7024-7025).
+    #[test]
+    fn a_js8_send_goes_out_with_the_grid_macros_replaced() {
+        let mut e = hb_engine("EN52hw", 0, 1500.0);
+        e.js8_send(None, "QTH <MYGRID4>, <MYGRID12> TO BE EXACT".into())
+            .expect("queues");
+        let queue = e.js8_state().queue;
+        assert_eq!(
+            queue.first().map(|q| q.display.as_str()),
+            Some("KD9TAW: QTH EN52, EN52HW TO BE EXACT"),
+            "the queued message carries the locator"
+        );
+    }
+
+    // ===== the idle count (JS8Call's <MYIDLE>) =====
+
+    /// The cockpit's idle chip ("Idle 12/60 min") counts the whole minutes since the operator's
+    /// last act, the count JS8Call's idle timer keeps (mainwindow.cpp:10969-10979).
+    #[test]
+    fn the_js8_idle_count_is_the_minutes_since_the_operators_last_act() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        let now = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(now - 12 * 60_000 - 5_000);
+        assert_eq!(
+            e.js8_state().idle_minutes,
+            12,
+            "twelve minutes since the last act"
+        );
+        e.js8_send(None, "TEST".into()).expect("queues");
+        assert_eq!(e.js8_state().idle_minutes, 0, "an operator send resets it");
+    }
+
+    // ===== groups that cannot be joined =====
+
+    /// JS8Call will not let @APRSIS or @JS8NET be joined (`isGroupAllowed`, varicode.cpp:1314-1320,
+    /// asked when a group is added and when Settings is saved, Configuration.cpp:1016, :2450). A
+    /// settings file written by a Nexus that accepted one still loads, and the station does not
+    /// join it: a query to @APRSIS draws no automatic reply, while one to a real group does.
+    #[test]
+    fn a_stored_aprsis_or_js8net_group_is_not_joined() {
+        let older =
+            r#"{"mycall":"KD9TAW","mygrid":"EN52","js8Groups":["@APRSIS","@ares","@JS8NET"]}"#;
+        let settings: Settings = serde_json::from_str(older).expect("an older settings file loads");
+        assert_eq!(
+            settings.js8_groups,
+            vec!["@APRSIS", "@ares", "@JS8NET"],
+            "the file's list is kept as written"
+        );
+        let mut e = Engine::with_settings(settings);
+        e.js8_enter();
+        assert_eq!(
+            e.js8_station.config().groups,
+            vec!["@ARES".to_string()],
+            "only the group that can be joined is joined"
+        );
+        let query = |to: &str| Frame::Directed {
+            from: CallRef::Base("W1AW".to_string()),
+            to: CallRef::parse(to).expect("a group"),
+            cmd: Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        let slot = now_unix_secs() / 15;
+        e.js8_ingest(
+            &[row(&query("@APRSIS"), whole(), Js8Speed::Normal, 1200.0)],
+            slot,
+        );
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "a query to @APRSIS draws no automatic reply"
+        );
+        e.js8_ingest(
+            &[row(&query("@ARES"), whole(), Js8Speed::Normal, 1200.0)],
+            slot,
+        );
+        assert!(
+            e.js8_state().pending_reply.is_some(),
+            "control: a query to a joined group is answered"
         );
     }
 }

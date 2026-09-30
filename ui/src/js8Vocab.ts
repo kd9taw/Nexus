@@ -33,13 +33,16 @@ export interface Js8SpeedInfo {
   periodS: number
   /** §97.119 airtime cap: frames × period < 600 s (compose::max_frames). */
   maxFrames: number
+  /** `JS8::Submode::rxThreshold`, in Hz: how far a decode may drift and still be the same
+   *  signal. 10 is the default (JS8Submode.cpp:62); Fast and Turbo set 16 and 32 (:122-123). */
+  rxThresholdHz: number
 }
 
 export const JS8_SPEEDS: Record<Js8Speed, Js8SpeedInfo> = {
-  slow: { key: 'slow', idx: 0, label: 'Slow', letter: 'E', periodS: 30, maxFrames: 19 },
-  normal: { key: 'normal', idx: 1, label: 'Normal', letter: 'A', periodS: 15, maxFrames: 39 },
-  fast: { key: 'fast', idx: 2, label: 'Fast', letter: 'B', periodS: 10, maxFrames: 59 },
-  turbo: { key: 'turbo', idx: 3, label: 'Turbo', letter: 'C', periodS: 6, maxFrames: 99 },
+  slow: { key: 'slow', idx: 0, label: 'Slow', letter: 'E', periodS: 30, maxFrames: 19, rxThresholdHz: 10 },
+  normal: { key: 'normal', idx: 1, label: 'Normal', letter: 'A', periodS: 15, maxFrames: 39, rxThresholdHz: 10 },
+  fast: { key: 'fast', idx: 2, label: 'Fast', letter: 'B', periodS: 10, maxFrames: 59, rxThresholdHz: 16 },
+  turbo: { key: 'turbo', idx: 3, label: 'Turbo', letter: 'C', periodS: 6, maxFrames: 99, rxThresholdHz: 32 },
 }
 /** Display / index order (= Speed::ALL). */
 export const JS8_SPEED_LIST: readonly Js8SpeedInfo[] = [
@@ -71,6 +74,12 @@ export const JS8_COMMANDS: readonly Js8Command[] = CMD_TEXTS.map((text, id) => (
 }))
 /** The five one-click asks on a station row: SNR? GRID? INFO? HEARING? QUERY MSGS. */
 export const JS8_QUICK_QUERIES: readonly Js8Command[] = [0, 4, 16, 3, 12].map((id) => JS8_COMMANDS[id])
+/** GRID, which a station row's one-click "send my grid" sends with the whole locator, as
+ *  JS8Call's query menu does (mainwindow.cpp:6656-6668). */
+export const JS8_GRID: Js8Command = JS8_COMMANDS[15]
+/** The groups JS8Call will not let be joined (`isGroupAllowed`, varicode.cpp:1314-1320). A
+ *  message may still be sent to either. */
+export const JS8_UNJOINABLE_GROUPS: readonly string[] = ['@APRSIS', '@JS8NET']
 
 /** JS8Call's SNR rendering: sign always, two digits (`+07`, `-12`). */
 export function fmtSnr(db: number): string {
@@ -131,12 +140,6 @@ export function estimateFrames(
 // the slot clock are they". Nexus's `activity` pane is the first; this is the second, built
 // from the same rows so no engine state is added for it.
 
-/** The bucket tolerance, in Hz. A decode within this of an existing bucket JOINS it, and the
- *  bucket takes the NEW offset as its key (mainwindow.cpp:3968-3981). 10 Hz is
- *  `JS8::Submode::rxThreshold` for every shipping submode (JS8Submode.cpp:62 — the default;
- *  no submode's Data literal overrides it). */
-export const JS8_OFFSET_TOLERANCE_HZ = 10
-
 /** One bucket: the newest decode heard at that offset. */
 export interface Js8OffsetRow {
   /** The bucket key — the newest decode's offset, rounded to whole Hz. */
@@ -178,7 +181,10 @@ export function bandActivityByOffset(rows: readonly Js8ActivityRow[]): Js8Offset
       mine: r.mine,
       lowConf: r.lowConf,
     }
-    const hit = buckets.findIndex((b) => Math.abs(b.offsetHz - hz) <= JS8_OFFSET_TOLERANCE_HZ)
+    // A decode within its own speed's rxThreshold of a bucket JOINS it, and the bucket takes the
+    // NEW offset as its key (mainwindow.cpp:3968-3981, the tolerance of the decode being filed).
+    const tolerance = JS8_SPEEDS[r.speed].rxThresholdHz
+    const hit = buckets.findIndex((b) => Math.abs(b.offsetHz - hz) <= tolerance)
     if (hit === -1) buckets.push(row)
     else buckets[hit] = row
   }

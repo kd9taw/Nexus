@@ -365,3 +365,65 @@ describe('the picker itself', () => {
     expect((other as HTMLInputElement).value).toBe('2801')
   })
 })
+
+describe('the Yaesu G-5500 by its own name', () => {
+  // The operator's request: "You need to add Yaesu G5500 az/el rotator". Hamlib has no G-5500
+  // model, because the rotator has no computer port: it is driven through a GS-232B or GS-232A
+  // interface, or a GS-232 clone board, and the entry that works is that interface's model. So the
+  // name goes ON those entries. The setting stores one number, and a <select> shows the FIRST
+  // option carrying the saved value, so a second "G-5500" entry beside "GS-232B" would be shown in
+  // its place after a save, naming something the operator did not pick.
+  const labelOf = (model: number) => ROTATOR_MODELS.find((r) => r.model === model)?.label ?? ''
+
+  it('no two entries save the same model number', () => {
+    const models = ROTATOR_MODELS.map((r) => r.model)
+    expect(models.filter((m, i) => models.indexOf(m) !== i)).toEqual([])
+  })
+
+  it('a G-5500 owner finds it by name: on the GS-232B entry first, then the GS-232A one', () => {
+    expect(ROTATOR_MODELS.filter((r) => r.label.includes('G-5500')).map((r) => r.model)).toEqual([
+      603, 601,
+    ])
+    // The name leads, and the interface follows it, so a closed <select> too narrow for the
+    // whole label still shows both.
+    expect(labelOf(603)).toMatch(/^Yaesu G-5500 \/ G-5500DC — GS-232B interface \(az\/el\)/)
+    expect(labelOf(601)).toMatch(/^Yaesu G-5500 \/ G-5500DC — GS-232A interface \(az\/el\)/)
+    // Both stay the interface's entry for everything else that runs on it.
+    expect(labelOf(603)).toMatch(/any GS-232B/)
+    expect(labelOf(603)).toMatch(/ERC V4 in its recommended mode/)
+    expect(labelOf(601)).toMatch(/any GS-232A/)
+  })
+
+  it('a GS-232 clone board points at the generic entry', () => {
+    expect(labelOf(602)).toMatch(/^GS-232 \(generic, az\/el\) — GS-232 clone boards/)
+    expect(labelOf(602)).toMatch(/EA4TX ARS-USB, LVB, ST2/)
+  })
+
+  it.each([
+    [603, 'GS-232B'],
+    [601, 'GS-232A'],
+  ])('after a save of model %i the list still names the G-5500 and its %s', async (model, iface) => {
+    await openRotator(model, 9600)
+    const shown = rotSelect().selectedOptions[0]?.textContent ?? ''
+    expect(rotSelect().value).toBe(String(model))
+    expect(shown).toContain('Yaesu G-5500 / G-5500DC')
+    expect(shown).toContain(iface)
+  })
+
+  it('picking it saves the Hamlib model number and shows what was picked', async () => {
+    await openRotator(0, 9600)
+    fireEvent.change(rotSelect(), { target: { value: '603' } })
+    expect(rotSelect().value).toBe('603')
+    expect(rotSelect().selectedOptions[0]?.textContent).toContain('GS-232B interface')
+  })
+
+  it('picking it leaves the baud alone: GS-232B is a 1200–9600 range, not a fact', async () => {
+    for (const rate of [4800, 9600, 1200]) {
+      cleanup()
+      await openRotator(0, rate)
+      fireEvent.change(rotSelect(), { target: { value: '603' } })
+      expect(baudBox().value).toBe(String(rate))
+    }
+    expect(CAPS.get(603)).toMatchObject({ min: 1200, max: 9600, axes: 'azel', minEl: 0, maxEl: 180 })
+  })
+})

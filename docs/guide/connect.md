@@ -63,7 +63,7 @@ preference, not a recommendation.*
 
 ### The pane grid
 
-Around the globe is a **HamClock-style assignable pane grid** — seven slots
+Around the globe is an **assignable pane grid** — seven slots
 (left ×2, right ×2, bottom ×3). Each pane frame has a picker in its corner: click
 it and choose what that slot shows. Every pane renders in full; the one-line
 plain-language version of a pane is what you see while it is waiting on data,

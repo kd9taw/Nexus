@@ -92,6 +92,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the page's own included: it stays dark until your voice keys the rig, unless something else is
   on the air. It is the same stop control with the same name for screen readers, and a press at
   the shack reads as before.
+- **Watch list: a note on each entry (#390).** Every entry on the watch list (Settings ▸ Spots &
+  Alerts) has a note field of its own, for why the call is there and when it can come off, such
+  as `Samoa DXp 9/27-10/3`. Type the note when you add the entry, or later in the field on its
+  row: it is saved when you leave the field or press Enter. Empty the field to remove the note.
+  Your existing watch list comes up exactly as it was, with no notes, and a note changes nothing
+  about what alerts or what the Call Roster, the Stations list and Spots mark.
+- **Call Roster: show only the stations within a distance you choose (#386).** The Call Roster's
+  filter row has a new picker beside Hide blocked. Pick **Within 1000 mi**, for example, and the
+  stations farther from your grid square than that leave the list, so a band full of stations you
+  cannot reach stops crowding the ones you can. The choices run from 250 to 5000, in miles or
+  kilometres as the Units setting says (Settings ▸ Station ▸ Operator & Radio). It starts at
+  **Any distance**, which shows every station, as before. A station you have not heard send a grid
+  yet has no known distance, so it always stays on the list, and so does the station you are
+  working. The choice is remembered with the roster's other filters.
+- **A switch for the pop-ups in the bottom-right corner (#391).** Settings ▸ Spots & Alerts ▸
+  Alerts ▸ **Pop-up notifications**, on unless you turn it off. Off, the confirmations (Logged QSO,
+  Saved, a QSY, an upload to QRZ) and the alerts (a new DXCC, a station calling you, a band
+  opening, space weather, a DXpedition you chase coming on) stop popping up; their sounds are
+  unchanged. What must be seen still pops up: every error, every notice about transmitting, the
+  radio or the log (TX locked, nothing to log, TX turned back on), and every message with a
+  button, such as an alarm's Stop, an Undo or an update's Download. Pop-out windows follow the
+  same switch; the Remote page's own pop-ups are unchanged.
+- **The mouse wheel moves the Phone cockpit's sliders (#384).** Point at a slider and scroll. AF
+  gain, RF gain, squelch, noise reduction, mic gain, the speech processor, the monitor and the Sub
+  receiver's levels move 2% a notch, RF power 1%, the manual notch 10 Hz, the Icom scope reference
+  0.5 dB and the Flex one 5 dB. The scope's G and Z move one step, where scrolling over them used
+  to tune the radio. A trackpad works the same way. A slider moves exactly as it would under your
+  hand, so RF power stays within your power limit and nothing done with the wheel keys the
+  transmitter. Only the slider under the pointer moves, never one you clicked earlier, and a scroll
+  that starts elsewhere and passes over a slider keeps scrolling. On the Remote page a run of
+  notches is sent as one change once the wheel stops, as a drag is.
 - **New York QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the NYQP committee's own 2026 rules: the third Saturday of October from 1400Z for twelve hours,
   every US band except 30, 17 and 12 m (60 m and everything from 6 m up count), phone 1 point, CW 2
@@ -107,6 +138,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the New York counties worked. **FT8 and FT4 earn no credit**, because their contest messages
   have no room for a county. The Cabrillo export writes `CONTEST: NY-QSO-PARTY` and your county
   code as `LOCATION` for a New York entry, as the sponsor's sample log does.
+- **JS8: send your grid to a station in one click, as in JS8Call.** Each station in the JS8
+  cockpit's Stations pane has a new button beside the quick queries, **GRID** followed by your
+  locator. One click sends that station your locator, the way JS8Call's menu item "GRID … - Send
+  my current station Maidenhead grid locator" does. It is greyed out until Settings has a locator.
+- **JS8: the `<MYGRID4>` and `<MYGRID12>` macros, as in JS8Call.** Type either in a JS8 message,
+  or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
+  4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the
+  current value, so it follows the locator when you move.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the
@@ -290,6 +329,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **⊞ Panels ▸ Undo last change** and **Reset layout** cover the column dividers. **⊞ Panels ▸
   Side rail on the left** moves the rail (Stations in Classic; Band Activity and Rx Frequency in
   Roster) to the left of the window. A layout you set before this opens exactly as you left it.
+- **Phone, CW and JS8: arrange the panes.** ⊞ Panels on these three cockpits now starts with an
+  **Arrange** section: the screen's three columns, each listing the panes on screen in it, and
+  beside each pane ▲ ▼ to move it up or down in its column and ◀ ▶ to move it into the column beside
+  it. Phone's voice keyer and JS8's log move up and down only: each keeps its column, so a message
+  being sent, a recording in progress or a half-typed contact is never cut off by a move. Phone's
+  and CW's log form stays at the foot of its column, and CW's Rig controls stay at the top of the
+  middle one. A divider between two panes stays with them while they stand together. On a narrower
+  window the second column follows the first. **Undo last change** and **Reset layout** cover a move
+  like any other change, and each window keeps its own arrangement. Until you move something, each
+  cockpit looks exactly as it did.
 - **APRS: a wider station list, and the map on either side.** A divider between the map and the
   column with the beacon form, the message form and the station list sets that column's width,
   from 260 px up to half the view (and never less than today's 420 px), so the station table can
@@ -318,6 +367,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is no divider.
 
 ### Changed
+
+- **JS8: @APRSIS and @JS8NET can no longer be joined as groups, as in JS8Call.** Saving Settings
+  with either in the JS8 Groups field is refused with "… is a group that cannot be joined", as
+  JS8Call's Settings refuses it. Messages can still be sent to both. If an earlier Nexus saved one
+  in your settings, it stays in the file and in the field but is not joined, so traffic to it gets
+  no automatic replies. Other changes still save, and the next edit of the Groups field asks you
+  to take it out.
+
+- **JS8: a HEARING? reply no longer names the station that asked, as in JS8Call.** A station asking
+  who you hear used to find its own call in your reply, usually first, taking one of the four
+  places. The reply now lists the four stations you heard most recently, not counting the one
+  asking.
+
+- **JS8: heartbeat acknowledgements go on a free spot between 500 and 1000 Hz, as JS8Call's
+  do.** With HB-ack on, the acknowledgement of a heartbeat you heard used to go out on your own
+  offset. It now takes a free spot between 500 and 999 Hz, picked the same way as your
+  heartbeat's, and the Activity pane shows it there. Unlike the heartbeat, it does this even when
+  your own offset is 1000 Hz or lower, as in JS8Call.
+
+- **JS8: a heartbeat that comes due while TX is off is skipped, as in JS8Call.** With HB on and
+  TX off, the heartbeat that came due used to wait and go out the moment you turned TX back on.
+  Now it is dropped and the next one is counted from then, so turning TX on sends nothing until
+  the next heartbeat is due.
+
+- **JS8: no automatic replies to questions sent to @ALLCALL, as in JS8Call.** A station asking
+  everyone (@ALLCALL) for SNR, INFO, STATUS, GRID or HEARING used to get an answer from every
+  Nexus station with autoreply on. JS8Call stations never answer those, and Nexus now doesn't
+  either. Questions sent to your call, or to a group you joined, are answered as before. Nexus
+  also stays quiet where JS8Call does: no reply to INFO? when your info is empty or to GRID?
+  when no locator is set, and an @ALLCALL QUERY MSGS gets an answer only when a message is
+  waiting for that station (at most once every 15 minutes), never a NO.
+
+- **JS8: nothing is transmitted until Settings has your locator, as in JS8Call.** With the Grid
+  field in Settings (Operator & Radio) empty, JS8 used to transmit anyway, and heartbeats and CQs
+  went out without your square. Now Send, CQ and the query buttons are refused with a message
+  saying where to set it, and an automatic reply or heartbeat that comes due is dropped, with the
+  same message in the JS8 cockpit. A message already going out when the locator is cleared still
+  finishes.
+
+- **JS8: a malformed locator stops JS8 transmitting, as a missing one does.** JS8 used to send
+  with whatever was typed in the Grid field, so a slip such as "EN5" made every heartbeat go out as
+  two frames. JS8 now takes only a locator JS8Call's own Settings would accept: 4 to 12 characters
+  in whole pairs (EN52, EN52HW, EN52HW12 and so on), in upper or lower case. Anything else is
+  refused with the same message as no locator. FT8 and FT4 keep their own rule.
+
+- **JS8: what is waiting to go is dropped when a missing or malformed locator stops it, as in
+  JS8Call.** Messages queued when the locator was cleared or mistyped, a repeating CQ's call
+  among them, used to wait and go out the moment a locator was set, however long afterwards. They
+  are now dropped when the start is refused, as JS8Call drops its queue. A repeating CQ and the
+  heartbeat stay armed and carry on at their next times once the locator is fixed.
+
+- **JS8: the free spot for a heartbeat or its acknowledgement is chosen from everything heard,
+  as in JS8Call.** A spot used to count as taken only when a station whose callsign had been
+  decoded was heard there in the last 30 seconds. Now every decoded frame counts, including the
+  middle frames of a long message, which carry no callsign, and a signal that drifts counts once,
+  where it is now. Your own offset always counts as free, as it does in JS8Call.
+
+- **JS8: a message can be addressed to @APRSIS or @JS8NET, as in JS8Call.** With either in the
+  To field, Send used to refuse, saying JS8Call refuses them. JS8Call sends to both like any
+  group; it only stops you joining them. A JS8Call station that gates to APRS-IS forwards what it
+  hears addressed to @APRSIS: `@APRSIS GRID <locator>` puts your position on APRS-IS, and
+  `@APRSIS CMD <text>` puts `<text>` on APRS-IS as a packet from your call, such as an APRS
+  message to another station or to a gateway (JS8Call's own example is the EMAIL-2 email
+  gateway). The command list and a typed `@APRSIS …` line already sent these; now the To field
+  does too.
+- **Phone: Space presses the buttons in ⊞ Panels.** When a button in the ⊞ Panels menu has the
+  focus (an Arrange move, **Undo last change** or **Reset layout**), Space now presses it, as it
+  does anywhere else. Before, Space keyed the transmitter there and the button did nothing.
+  Everywhere else in Phone, Space is still push-to-talk. Letting go of Space still unkeys, wherever
+  the focus has moved.
 
 - **The dividers no longer take room of their own.** In Phone, CW, JS8 and Operate, the divider
   under a scope or waterfall and the dividers between panes now sit in the space that was already
@@ -386,6 +505,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One update prompt.** On Windows, macOS and the Linux AppImage, where Nexus updates itself,
+  the "update available" notice with its Download button no longer turns up beside the prompt
+  that installs the update. Settings ▸ Check for updates now works the same way: it downloads a
+  newer version and offers to install it (again, even if you chose Not now), or tells you that
+  you are up to date. If an update fails to install, its message now has a Download button that
+  opens the download page. The notice still appears when Nexus cannot check for updates itself,
+  and it stays on the .deb packages (the PC one and both Raspberry Pi ones). The PC .deb no
+  longer downloads the AppImage in the background and offers an Install button that could not
+  work there. Installing is still your call: Install waits while you transmit, tune, work a
+  station, run CQ or have TX enabled, and the beta channel works as before.
+- **JS8: the Band activity by offset pane groups Fast and Turbo signals as JS8Call does.** A
+  station drifting a little at Fast or Turbo could show as two rows, because the pane joined
+  decodes within 10 Hz at every speed. It now allows 16 Hz at Fast and 32 Hz at Turbo, JS8Call's
+  own tolerances, and keeps 10 Hz at Normal and Slow.
+
+- **JS8: the idle time is counted, in the STATUS reply and on the cockpit's idle chip.** With no
+  STATUS text set, a STATUS? reply said "IDLE 0" however long you had been away, and the JS8
+  cockpit's idle chip always read 0. Both now count the minutes since you last sent something or
+  opened JS8, and the reply writes it as JS8Call does: "IDLE 5M", "IDLE 1H", "IDLE 2D".
+
+- **A rotator controller switched on after Nexus comes online by itself.** Nexus runs Hamlib's
+  rotator program for you, and that program quits at once when the controller's port is not
+  there, which is what a USB controller that is still switched off looks like. Nexus used to start
+  it again only when you saved Settings or switched radios, so every command failed with
+  "Connection refused (os error 61)" until you did. Now it tries again every 5 seconds while a
+  rotator is set up, and the rotator answers a few seconds after you switch it on, with nothing to
+  save. The Connections log says once that it could not start, not every 5 seconds. While the
+  controller is off, a command says "The rotator controller isn't answering. Is it switched on and
+  plugged in?", and the Rotor pane and the rotor strip say the same, where the pane used to say
+  that pointing and STOP still work. A rotator that answers but reports no position, such as the
+  Hy-Gain DCU-1, keeps its own message. An external rotctld that refuses the connection is named by
+  its address.
+- **Pointing the rotator at a callsign aims at the station, not the middle of its country.** The
+  → button on a cockpit's rotor strip, the ↗ on Needed rows and the other point-at buttons used to
+  turn the beam to the centre of the station's country: from JO21EV that is 207° for EC1DD, whose
+  own grid is at 227°, and 299° for AA1AA instead of 291°. They now aim at the station itself when
+  Nexus already knows where it is: the grid in the log form (typed, or filled in from the
+  callbook), a grid the station sent on FT8, FT4 or JS8 this session, what a callbook lookup
+  returned, or the grid on your last contact with it. A closer location, such as a six-character
+  grid or the callbook's own position, is used only when it lies inside the square the station is
+  sending, so a callbook address never overrides where a portable station says it is. Nothing is
+  looked up when you point. The message after pointing says what the bearing was taken to: the
+  station's grid, its callbook position, or the centre of its country when nothing closer is known.
+  The long path is still the exact opposite heading. Pointing from Nexus Remote in a browser still
+  aims at the country centre.
 - **JS8: the heartbeat goes out once per interval, on the offset JS8Call would use.** With a
   six-character locator in Settings, every heartbeat went out on two periods in a row, because
   the last two characters spilled into a second frame. It now carries the four-character square,
@@ -399,10 +563,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat acknowledgements are unchanged. Not yet checked on the air: turn HB on with a
   5-minute interval and check that one heartbeat goes out about five minutes later, shown in the
   Activity pane at an offset between 500 and 1000 Hz.
+- **JS8: a CQ goes out as one frame when your locator has six characters.** With a
+  six-character locator in Settings, every CQ, clicked or repeated, went out on two periods in
+  a row: first a CQ with no locator, then the locator on its own. It now carries the
+  four-character square, as JS8Call's CQ does, so it is one frame again. A four-character
+  locator is unchanged.
+- **JS8: with a compound callsign, directed messages announce your square, as JS8Call's do.**
+  A compound callsign such as KD9TAW/QRP starts each directed message and reply with a frame
+  that announces the callsign, and JS8Call puts your four-character square in that frame. Nexus
+  sent it without one; it now carries the square. A /P callsign is not compound and is
+  unchanged.
+- **JS8: Nexus no longer relays, stores or answers traffic addressed to other stations.** With
+  relay on (the default), Nexus relayed any relay request it heard on the band, even one
+  addressed to another station or to @ALLCALL. It also stored MSG TO: messages meant for someone
+  else, and could hand a stored message to a QUERY MSG sent to another station. JS8Call acts only
+  on what is addressed to your call or to a group you joined, and so does Nexus now. A QUERY MSG
+  for a message that isn't there now gets no answer, as in JS8Call.
 - **Operate Classic: moving the divider between the Rx Frequency column and Stations no longer
   narrows Band Activity.** Its first step used to take Band Activity from about 41 % of the
   width to about 37 % (76 px on a 1920 px window) as well as moving the two columns it sits
   between. Now only those two move.
+- **Two windows sharing one data folder no longer undo each other's changes.** With two Nexus
+  windows on one data folder (the two-radio setup), a change you made to a contact in one window
+  could, rarely, undo a change the other window had just made to the same contact: an upload
+  stamp, a QSL mark, an edit. It could also bring back a contact the other window had just
+  deleted, and neither window said so. The logbook now refuses to save over a change it has not
+  seen. Your change is made again on the contact as it now stands, and both changes stay. If
+  the other window deleted the contact, or changed what you were editing, you are told so
+  instead. A change that had to wait while the logbook was busy, and finds the contact changed
+  in the meantime, is not saved over it: the save notice and the quit prompt name it, so you can
+  make it again. Update both windows, because a window still running 1.15 can still undo the
+  other's changes.
+- **Clear log removes only the contacts this window had.** With two windows on one data folder,
+  Clear log also removed any contact the other window had logged since this window last took
+  the log in. It now removes exactly the contacts this window had when you pressed it.
 - **The NEW tag on a propagation opening reads in the light theme.** Its letters were the page's
   colour on the amber tag, 3.6:1 against it; they are black now, 4.8:1 or better whichever Amber
   you picked. The dark theme is unchanged.
@@ -539,6 +733,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (KE7G/P and KF7XYZ/P) are no longer taken for the same one. Clicking a station also tells your
   own call apart the same way, so an operator signing VE7/ followed by their call can work other
   VE7/ stations.
+- **The park box no longer comes back empty or stale (#383).** Clicking an activator's spot could
+  still leave the park box empty under a hunt line naming the park, when you had typed a park
+  before entering the previous station's call and your callbook had looked that call up. And
+  after you logged a hunted contact, the empty log strip showed that contact's park again and
+  kept it. The box now fills with the clicked activator's park, and clears once its contact is
+  logged.
 - **Dividers stay under the pointer and never go dead.** On a 1024×768 screen, Phone's scope
   divider could be dragged past the height the screen can actually give the scope. The extra
   distance was dead: dragging back up moved nothing until the pointer had come all the way
@@ -4048,7 +4248,7 @@ A released section is history and is not rewritten, so two credits it got wrong 
   TV" served a plain digest — a band table and some numbers. It now serves Connect
   itself: the same map with every layer (grayline, spots, MUF, aurora, satellites,
   parks on the air), the same panes, live in any browser on your network — a shack TV,
-  a Fire Stick's browser, a tablet — as a HamClock-style wall display. Still read-only
+  a Fire Stick's browser, a tablet — as a wall display. Still read-only
   in the strict sense: the server accepts nothing but reads, a short fixed list of
   propagation and space-weather feeds is all a browser can ask for, and everything
   else is refused. Your log, your needs board and the frequency you are on are still
@@ -10572,7 +10772,7 @@ ever fired during a Field Day event, and said so nowhere.
 **Settings ▸ Logging & Connectors ▸ N1MM+ Integration** now has a **Broadcast every QSO** switch.
 Turn it on and each logged contact goes out as an N1MM contact packet, event or not — from the
 digital modes, from the CW and Phone cockpits, from a hand-typed logbook entry, all of them. Point
-OpenHamClock or GridTracker at the address and every QSO plots on its map as you log it. The
+a map app such as GridTracker at the address and every QSO plots on its map as you log it. The
 packet leaves at the moment the QSO is logged, in the same breath as the HRD one. Turn the switch
 on with the address field empty and Nexus fills in the usual local target for you. The address
 field now also states which of the two it is doing, so a configured-but-silent output can never

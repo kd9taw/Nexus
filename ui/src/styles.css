@@ -1465,7 +1465,7 @@ button.nb-chip:hover {
   border-bottom: 1px solid var(--border);
 }
 /* World-first: the map is a full-bleed surface and the propagation info FLOATS
-   over it as a translucent card (HamClock/Geochron model — everything around the
+   over it as a translucent card (the wall-map model — everything around the
    world), instead of a co-equal side column. */
 /* Wrap-the-globe assignable pane grid (B1): the globe is the center cell; reassignable
    panes frame it (a left rail, a right rail, a bottom strip). The map keeps a definite size —
@@ -4485,8 +4485,8 @@ body.resizing-row {
 /* ---- MAP BASEMAP: the map's land and sea (MapView.tsx; features/skins.ts STANDARD_MAP) -------
    The map bakes its basemap from these tokens: the sea, the land (darker on the globe), the
    coastlines, the US state borders, the globe's rim and its lit and deep ocean. The standard
-   basemap is dark in BOTH themes on purpose (a map should read as a map, as HamClock's and
-   Geochron's do), so both themes declare the same values, per the layout contract. A dark
+   basemap is dark in BOTH themes on purpose (a map should read as a map, as wall maps
+   do), so both themes declare the same values, per the layout contract. A dark
    built-in theme brings its own in its THEMES block; a light one keeps these. Plain hexes: the
    canvas reads them as strings. styles-skins.test.ts holds every mode to the table. */
 :root,
@@ -12347,6 +12347,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 0 5px;
 }
+/* #390 — an entry's own note, edited in place. Compact, so a long list stays a list (a Settings
+   field's touch-sized box on every row would double its height), and on a BOUNDED basis: the rows
+   are left unbounded on purpose (the note above the md+ `.settings-hint` cap), and a field free
+   to grow would stretch across a 3440px window to hold a dozen words. */
+.watchlist-notes {
+  flex: 0 1 30em;
+  min-width: 8em;
+  padding: 1px var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.watchlist-notes:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .watchlist-remove {
   margin-left: auto;
   color: var(--state-weak);
@@ -12382,6 +12401,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-dim);
   white-space: nowrap;
+}
+/* The add row's note field: room for a dozen words, wrapping onto its own line when the row is
+   narrow, and never the whole width of a wide window. */
+.watchlist-notes-new {
+  flex: 0 1 22em;
+  min-width: 12em;
 }
 .watchlist-add-btn {
   padding: 5px var(--space-4);
@@ -15648,6 +15673,69 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
   cursor: default;
 }
+/* ⊞ Panels ▸ Arrange (layout L3, components/panes/ArrangePanes) — where each pane of a grid cockpit
+   stands, above the entries: the three columns, each pane with ▲ ▼ ◀ ▶. Separated from the entries
+   the way Connect's layouts are. */
+.panels-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.panels-arrange-head {
+  font-size: var(--fs-label);
+  font-weight: 600;
+}
+.panels-arrange-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.panels-arrange-colhead {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.panels-arrange-pane {
+  display: flex;
+  flex-direction: column;
+}
+.panels-arrange-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.panels-arrange-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+}
+.panels-arrange-moves {
+  display: flex;
+  gap: 2px;
+}
+.panels-arrange-btn {
+  min-width: 1.8em;
+  padding: 0 var(--space-1);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.panels-arrange-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.panels-arrange-btn:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
 /* ⊞ Panels ▸ Layout — Connect's layout presets (ConnectView), above the entries. A column of
    full-width choices rather than a chip row: the popover is 220px wide, where three chips side by
    side wrap at Large text or in German. The one on screen is FILLED — a change of form, not of
@@ -17542,6 +17630,17 @@ button.cq-skiptx1.on {
 }
 .or-filter input {
   accent-color: var(--accent);
+}
+/* #386 — the distance cap, a compact picker among the filters, in Band Activity's sort picker's
+   look (`.od-sort select`). The `select` base rule owns the arrow (background-image and
+   padding-right, both !important); this sets the face, the ink and the box. */
+.or-distance {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: var(--fs-label);
 }
 .or-grid {
   flex: 1;

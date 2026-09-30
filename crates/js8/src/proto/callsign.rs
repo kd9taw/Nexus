@@ -348,13 +348,11 @@ pub fn is_compound_call(s: &str) -> bool {
         })
 }
 
-/// varicode.cpp:1322-1328 `isGroupAllowed`: operators may not transmit to `@APRSIS` or `@JS8NET`.
-pub fn may_transmit_to(c: &CallRef) -> bool {
-    match c {
-        CallRef::Js8Net => false,
-        CallRef::Group(i) => GROUPS.get(*i as usize) != Some(&"@APRSIS"),
-        _ => true,
-    }
+/// JS8Call's `isGroupAllowed` (varicode.cpp:1314-1320): @APRSIS and @JS8NET cannot be joined.
+/// JS8Call asks it when a group is added and when Settings is saved (Configuration.cpp:1016,
+/// :2450), on upper-cased text, and never on transmit: a message may be sent to either.
+pub fn may_join_group(group: &str) -> bool {
+    !matches!(group, "@APRSIS" | "@JS8NET")
 }
 
 #[cfg(test)]
@@ -571,13 +569,9 @@ mod tests {
     }
 
     #[test]
-    fn transmit_guard_refuses_aprsis_and_js8net() {
-        // mainwindow.cpp:4043 / :4068 via varicode.cpp isGroupAllowed.
-        assert!(!may_transmit_to(&CallRef::Js8Net));
-        assert!(!may_transmit_to(&CallRef::parse("@APRSIS").unwrap()));
-        assert!(may_transmit_to(&CallRef::AllCall));
-        assert!(may_transmit_to(&CallRef::parse("@POTA").unwrap()));
-        assert!(may_transmit_to(&CallRef::Base("W1AW".into())));
-        assert!(may_transmit_to(&CallRef::Placeholder));
+    fn aprsis_and_js8net_cannot_be_joined() {
+        assert!(!may_join_group("@APRSIS"));
+        assert!(!may_join_group("@JS8NET"));
+        assert!(may_join_group("@FUN"), "control: any other group may be");
     }
 }

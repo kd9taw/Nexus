@@ -7,8 +7,8 @@
 //! inbound contactinfo (its UDP intake is spectrum/freq data only).
 //!
 //! The same datagram serves a SECOND audience, which is why the fields here are
-//! not all contest fields: live map/dashboard consumers (OpenHamClock,
-//! GridTracker) plot each broadcast contact as it is logged, contest or not. So
+//! not all contest fields: live map/dashboard consumers (GridTracker
+//! and similar) plot each broadcast contact as it is logged, contest or not. So
 //! Nexus emits contactinfo on two paths — per Field Day contact from the radio
 //! loop, and (when the operator enables it) per ORDINARY logged QSO from the
 //! shell's log forwarder. Those two read disjoint logs, so a contact is never
@@ -244,7 +244,7 @@ mod tests {
     }
 
     /// The general-logging path DOES have a grid, and it is the field a map
-    /// consumer (OpenHamClock, GridTracker) plots the contact from.
+    /// consumer (GridTracker and similar) plots the contact from.
     #[test]
     fn a_grid_is_broadcast_when_the_record_carries_one() {
         let c = N1mmContact {

@@ -115,6 +115,25 @@ describe('bandActivityByOffset — JS8Call’s offset-bucketed band-activity tab
   it('is empty for an empty feed', () => {
     expect(bandActivityByOffset([])).toEqual([])
   })
+
+  // JS8Call joins a decode to a bucket within the rxThreshold of the NEW decode's submode
+  // (mainwindow.cpp:3971): 10 Hz at Slow and Normal, the default (JS8Submode.cpp:62), 16 at Fast
+  // and 32 at Turbo (:122-123).
+  it('joins within the new decode\'s own speed tolerance: 10 Hz Slow/Normal, 16 Fast, 32 Turbo', () => {
+    for (const [speed, tol] of [['slow', 10], ['normal', 10], ['fast', 16], ['turbo', 32]] as const) {
+      const join = bandActivityByOffset([row(1_000, 1500, 'A', { speed }), row(2_000, 1500 + tol, 'B', { speed })])
+      expect(join.map((r) => r.offsetHz), `${speed}: ${tol} Hz joins`).toEqual([1500 + tol])
+      const apart = bandActivityByOffset([row(1_000, 1500, 'A', { speed }), row(2_000, 1501 + tol, 'B', { speed })])
+      expect(apart.map((r) => r.offsetHz), `${speed}: ${tol + 1} Hz stays apart`).toEqual([1500, 1501 + tol])
+    }
+  })
+
+  it('takes the tolerance from the decode being filed, not from the bucket', () => {
+    const turboJoins = bandActivityByOffset([row(1_000, 1500, 'A'), row(2_000, 1530, 'B', { speed: 'turbo' })])
+    expect(turboJoins.map((r) => r.offsetHz), 'a Turbo decode 30 Hz from a Normal bucket joins it').toEqual([1530])
+    const normalApart = bandActivityByOffset([row(1_000, 1500, 'A', { speed: 'turbo' }), row(2_000, 1530, 'B')])
+    expect(normalApart.map((r) => r.offsetHz), 'a Normal decode 30 Hz from a Turbo bucket does not').toEqual([1500, 1530])
+  })
 })
 
 describe('dtLabel — JS8Call’s Time Delta face (whole ms, signed)', () => {

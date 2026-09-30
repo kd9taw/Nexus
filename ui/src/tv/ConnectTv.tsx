@@ -1,4 +1,4 @@
-// The FULL Connect view, in a plain browser — the shack-TV / HamClock-replacement page.
+// The FULL Connect view, in a plain browser — the shack-TV wall-display page.
 //
 // This renders the SAME `ConnectView` the desktop app renders: the real map with every
 // layer (grayline, spots, MUF, aurora, satellites, parks), the real panes, the real

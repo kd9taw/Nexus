@@ -18,6 +18,7 @@ import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../re
 // moves exactly as PTT Method and the drive slider did) and the CAT pill's two states.
 import { useRef } from 'react'
 import { AmpStrip } from './AmpStrip'
+import { WheelRange } from './WheelRange'
 import type { ReactNode } from 'react'
 import type { AppSnapshot } from '../types'
 import { isOnAir } from '../types'
@@ -62,6 +63,9 @@ export interface CockpitHeaderPower {
   title?: string
   onPointerDown?: () => void
   onPointerUp?: () => void
+  /** How far one mouse-wheel notch moves the slider (#384); a wheel burst is a drag, between the
+   *  two ends above. Omitted: the wheel does nothing here, as in every cockpit but Phone. */
+  wheelStep?: number
 }
 
 export interface CockpitHeaderProps {
@@ -427,7 +431,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <input {...powerInput} disabled={(!control && !remotePower) || powerValue == null}
+            <WheelRange wheelStep={power.wheelStep} {...powerInput} disabled={(!control && !remotePower) || powerValue == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}

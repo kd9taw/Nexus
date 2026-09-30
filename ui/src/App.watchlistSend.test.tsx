@@ -96,7 +96,12 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-const LAUNCH = [newWatchFilter('call', 'VP8*', { cqOnly: true, minSnr: -10, label: 'Falklands' }), newWatchFilter('grid', 'EM7*')]
+// The first entry carries everything an entry can besides its identity — the alert's gates, a label
+// and the operator's own note (#390) — and none of it may reach the station.
+const LAUNCH = [
+  newWatchFilter('call', 'VP8*', { cqOnly: true, minSnr: -10, label: 'Falklands', notes: 'Falklands DXp, until 10/15' }),
+  newWatchFilter('grid', 'EM7*'),
+]
 
 describe('the desktop sends the station its watch list', () => {
   it('on launch, identity only, and reads the board after it', async () => {

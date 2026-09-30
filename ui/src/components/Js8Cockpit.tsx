@@ -5,7 +5,7 @@
 // in the code is the mode's own vocabulary (js8Vocab.ts): JS8, HB, CQ, @ALLCALL, the speed
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { useJs8Context } from '../remote-web/useJs8Context'
 import { useDecoderSettings } from '../remote-web/useDecoderSettings'
@@ -20,8 +20,10 @@ import { PaneSeam } from './PaneSeam'
 import { regionColsStyle } from '../features/paneColumns'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
+import { ArrangePanes } from './panes/ArrangePanes'
 import { panelHost } from '../features/panelHost'
-import { JS8_PANEL_IDS, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
+import { JS8_PANEL_IDS, JS8_PANELS, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
+import { regionGroups } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
@@ -69,6 +71,7 @@ import {
   JS8,
   JS8_COMMANDS,
   JS8_CQS,
+  JS8_GRID,
   JS8_QUICK_QUERIES,
   JS8_SPEEDS,
   JS8_SPEED_LIST,
@@ -377,6 +380,17 @@ export function Js8Cockpit({
       if (s) setJs8(s)
     })
   }
+  // JS8Call's query menu sends a station your locator in one click, `<call> GRID <my_grid()>`
+  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657); so is the button, and
+  // the engine refuses a send with no locator whatever the button says.
+  const sendMyGrid = (call: string) => {
+    if (!canControl) return
+    if (refuseIfUnready()) return
+    const grid = (snapRef.current?.mygrid ?? '').trim().toUpperCase()
+    void withErrorToast(() => js8SendCommand(call, JS8_GRID.id, grid), t('js8.toast.command.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
   const setSpeed = (idx: number) => {
     if (!canControl) {
       if (js8 && JS8_SPEEDS[js8.speed].idx !== idx) decoderSettings.change({ action: 'decoder.js8Speed', expectedSpeed: JS8_SPEEDS[js8.speed].idx, speed: idx })
@@ -404,10 +418,14 @@ export function Js8Cockpit({
   // "band of empty black" rebuilt. useRegionCols owns data-cols/data-flow.
   // The main track carries BOTH decode surfaces (the transcript and the offset table), so it
   // is present while either is: hiding only `activity` must not strand `offsets` in no column.
-  const activityPresent = shown('activity') || shown('offsets')
-  const auxPresent = shown('stations') || shown('inbox')
-  const logPresent = shown('log')
-  const populated = [activityPresent, auxPresent, logPresent].filter(Boolean).length
+  //
+  // WHERE EACH PANE STANDS (layout L3, ⊞ Panels ▸ Arrange): the columns are the record's placement,
+  // or the stock grouping (features/panelPlace), and "has something to hold" is counted on them. The
+  // log pane needs a snapshot to render, so that is part of whether it is on screen.
+  const place = panels?.layout.place
+  const paneShown = (id: Js8PanelId): boolean => shown(id) && (id !== 'log' || snap != null)
+  const placed3 = regionGroups(JS8_PANELS.arrange!, place, 3, paneShown)
+  const populated = placed3.filter((g) => g.ids.length > 0).length
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
   // The columns, for the dividers between them to measure (panes/RegionColumnSeams).
   const mainColRef = useRef<HTMLDivElement>(null)
@@ -415,7 +433,19 @@ export function Js8Cockpit({
   const logColRef = useRef<HTMLDivElement>(null)
   // Two tracks with the log hidden are activity | stations + inbox: the second track is the
   // stations column, and the width divider on its left edge says so.
-  const auxInLogTrack = cols === 2 && !logPresent
+  const auxInLogTrack = cols === 2 && placed3[2].ids.length === 0
+  // The columns as this tier renders them: a | b | log at three; at two, a | b when the log column
+  // is empty and a + b | log otherwise; at one, a + b over the log.
+  const rendered: Js8PanelId[][] =
+    cols === 3 || auxInLogTrack
+      ? placed3.map((g) => g.ids)
+      : [[...placed3[0].ids, ...placed3[1].ids], placed3[2].ids]
+  /** Whether `below` sits directly under `above` in one rendered column — what makes them a pair. */
+  const adjacent = (above: Js8PanelId, below: Js8PanelId) =>
+    rendered.some((ids) => {
+      const i = ids.indexOf(above)
+      return i >= 0 && ids[i + 1] === below
+    })
 
   // THE DIVIDERS BETWEEN PANES IN A COLUMN (layout L2): Activity | Band activity (the two decode
   // surfaces) and Stations | Inbox. Each pair is adjacent in its column at every tier, and a
@@ -430,8 +460,8 @@ export function Js8Cockpit({
   const offsetsFrameRef = useRef<HTMLElement>(null)
   const stationsFrameRef = useRef<HTMLElement>(null)
   const inboxFrameRef = useRef<HTMLElement>(null)
-  const decodePair = panels != null && flow === 'fill' && shown('activity') && shown('offsets')
-  const heardPair = panels != null && flow === 'fill' && shown('stations') && shown('inbox')
+  const decodePair = panels != null && flow === 'fill' && shown('activity') && shown('offsets') && adjacent('activity', 'offsets')
+  const heardPair = panels != null && flow === 'fill' && shown('stations') && shown('inbox') && adjacent('stations', 'inbox')
   /** The grow a share of 1 stands for in the decode pair: the mean of its stock weights 2 and 1. */
   const DECODE_SPLIT = 1.5
   const pairedShare = (paired: boolean, id: Js8PanelId, k: number) => {
@@ -442,6 +472,7 @@ export function Js8Cockpit({
   const activityPin = usePinnedScroll<HTMLDivElement>()
   const units = useUnits()
   const myGrid = snap?.mygrid ?? ''
+  const ownGrid = myGrid.trim().toUpperCase()
 
   // ONE row per offset, from the same activity feed (js8Vocab.bandActivityByOffset) — the
   // pane adds no engine state, it reads the decodes the transcript already carries.
@@ -761,6 +792,15 @@ export function Js8Cockpit({
                     {q.label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="cw-macro js8-query js8-send-grid"
+                  disabled={!canControl || !ownGrid}
+                  onClick={() => sendMyGrid(h.call)}
+                  title={ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined}
+                >
+                  {ownGrid ? `${JS8_GRID.label} ${ownGrid}` : JS8_GRID.label}
+                </button>
               </span>
             </div>
             )
@@ -874,6 +914,24 @@ export function Js8Cockpit({
     />
   )
 
+  // Each placed pane by its id, KEYED by it (layout L3), with a pair's divider right after the pane
+  // above it: a move within a column is a React move, not a remount, and the pinned log never
+  // changes column.
+  const paneEls: Record<Js8PanelId, React.ReactNode> = {
+    scope: null,
+    activity: activityPane,
+    offsets: offsetsPane,
+    stations: stationsPane,
+    inbox: inboxPane,
+    log: logPane,
+  }
+  const slots = (ids: readonly Js8PanelId[]) =>
+    ids.flatMap((id, i) => [
+      <Fragment key={id}>{paneEls[id]}</Fragment>,
+      ...(id === 'activity' && ids[i + 1] === 'offsets' && decodeSeam ? [<Fragment key="seam-decode">{decodeSeam}</Fragment>] : []),
+      ...(id === 'stations' && ids[i + 1] === 'inbox' && heardSeam ? [<Fragment key="seam-heard">{heardSeam}</Fragment>] : []),
+    ])
+
   return (
     <main className="layout single js8-cockpit">
       {snap && (
@@ -970,6 +1028,18 @@ export function Js8Cockpit({
                 onUndo={panels.undo}
                 canUndo={panels.canUndo}
                 onReset={panels.reset}
+                // ⊞ Arrange (layout L3): where each region pane stands. Undo and Reset above cover it.
+                lead={
+                  panels.movePane ? (
+                    <ArrangePanes
+                      spec={JS8_PANELS.arrange!}
+                      layout={panels.layout}
+                      shown={paneShown}
+                      labels={js8PanelLabels()}
+                      onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                    />
+                  ) : undefined
+                }
               />
             ) : undefined
           }
@@ -1046,50 +1116,34 @@ export function Js8Cockpit({
           (layout L2) ride the region after its columns and move only the boundaries between
           them — Phone's twin, which says why. */}
       <div className="cockpit-panes" ref={panesRef} style={regionColsStyle(panels?.layout.cols)}>
-        {cols === 3 ? (
+        {/* The columns the placement gives at this tier (`rendered`, above), each ONE flat keyed
+            list — a pane that stays in its column keeps its fiber across a tier flip — with the two
+            pair dividers riding directly under the pane above them, wherever the pair is adjacent
+            (layout L3). The keys and refs of the columns are unchanged: main, aux, log. */}
+        {cols === 3 || auxInLogTrack ? (
           <>
             <div className="cockpit-col" key="main" ref={mainColRef}>
-              {activityPane}
-              {decodeSeam}
-              {offsetsPane}
+              {slots(rendered[0])}
             </div>
             <div className="cockpit-col" key="aux" ref={auxColRef}>
-              {stationsPane}
-              {heardSeam}
-              {inboxPane}
+              {slots(rendered[1])}
             </div>
-            <div className="cockpit-col" key="log" ref={logColRef}>
-              {logPane}
-            </div>
-          </>
-        ) : auxInLogTrack ? (
-          <>
-            <div className="cockpit-col" key="main" ref={mainColRef}>
-              {activityPane}
-              {decodeSeam}
-              {offsetsPane}
-            </div>
-            <div className="cockpit-col" key="aux" ref={auxColRef}>
-              {stationsPane}
-              {heardSeam}
-              {inboxPane}
-            </div>
+            {cols === 3 && (
+              <div className="cockpit-col" key="log" ref={logColRef}>
+                {slots(rendered[2])}
+              </div>
+            )}
           </>
         ) : (
           <>
-            {(activityPresent || auxPresent) && (
+            {rendered[0].length > 0 && (
               <div className="cockpit-col" key="main" ref={mainColRef}>
-                {activityPane}
-                {decodeSeam}
-                {offsetsPane}
-                {stationsPane}
-                {heardSeam}
-                {inboxPane}
+                {slots(rendered[0])}
               </div>
             )}
-            {logPresent && (
+            {rendered[1].length > 0 && (
               <div className="cockpit-col" key="log" ref={logColRef}>
-                {logPane}
+                {slots(rendered[1])}
               </div>
             )}
           </>

@@ -139,7 +139,7 @@ export type MapToken = (typeof MAP_TOKENS)[number]
 
 /** The standard basemap, in both standard themes and on a light built-in theme: a map should read
  *  as a MAP (filled land and sea), not a wireframe, and this one is deliberately theme-agnostic
- *  and dark (like HamClock or Geochron), so it looks intentional in any theme. MapView also paints
+ *  and dark (as wall maps are), so it looks intentional in any theme. MapView also paints
  *  it where no sheet is loaded. */
 export const STANDARD_MAP: Readonly<Record<MapToken, string>> = {
   '--map-ocean': '#0f2334', // deep sea

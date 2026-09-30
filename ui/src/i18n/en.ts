@@ -908,6 +908,10 @@ export const EN = {
   'update.downloadFailed':
     "Couldn't open your browser — download Nexus yourself from {{url}}",
   'update.copyLink': 'Copy link',
+  // The Download button on a failed self-update (the banner's way out), and the note Settings'
+  // "Check for updates" shows while the update it found downloads.
+  'update.downloadInstead.title': 'Open the download page and install the update yourself',
+  'update.downloading': 'Downloading Nexus {{version}}. You can install it when the download finishes.',
   'update.checkFailed': 'Could not reach the update server to check for updates',
   'update.upToDate': "You're on the latest Nexus ({{current}})",
   'update.unreadable': "Couldn't read the latest release info",
@@ -2907,6 +2911,9 @@ export const EN = {
   'watchlist.item.remove.title': 'Remove from watch list',
   // `{{value}}` is the call, prefix, grid or entity the operator typed.
   'watchlist.item.remove.aria': 'Remove {{value}}',
+  // #390 — an entry's own note, edited in place on its row. `{{value}}` as above.
+  'watchlist.item.notes.aria': 'Notes for {{value}}',
+  'watchlist.item.notes.placeholder': 'Add a note',
   'watchlist.add.kind.aria': 'Watch kind',
   // The <option> VALUES ('call', 'dxcc', 'grid') are persisted tokens and stay in the code.
   'watchlist.add.kind.call': 'Call / prefix',
@@ -2918,6 +2925,11 @@ export const EN = {
   'watchlist.add.value.placeholder.dxcc': 'e.g. {{entity}}',
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
+  'watchlist.add.notes.aria': 'Notes for the new entry',
+  'watchlist.add.notes.placeholder': 'Notes (optional): why, and until when',
+  // The tooltip on both note fields, the add row's and each entry's.
+  'watchlist.notes.title':
+    'Your own note on this entry: why it is on the list, and when it can come off. It changes nothing about what alerts.',
   'watchlist.add.submit': 'Add',
   // The WATCH tile on the Call Roster, the Stations list and Spots — one word on all three,
   // echoing this list's own name. `{{what}}` is the entry that matched: the operator's label
@@ -3092,6 +3104,9 @@ export const EN = {
   'settings.pounce.threshold.atnoZoneOrState': 'New entity, zone, or US state',
 
   'settings.alerts.legend': 'Alerts',
+  'settings.alerts.popups.label': 'Pop-up notifications',
+  'settings.alerts.popups.hint':
+    'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',
@@ -4971,6 +4986,8 @@ export const EN = {
   // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
   'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
   'settings.save.fdPositionName': 'Name this position on the Contesting tab before hosting or joining a club event — the club band board shows this name.',
+  'settings.save.js8GroupCannotJoin':
+    '{{group}} is a group that cannot be joined. Take it out of Groups under JS8 on the Digital tab before saving.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 
@@ -6573,7 +6590,7 @@ export const EN = {
   // ── Settings ▸ Logging & Connectors ▸ Integrations & Feeds ─────────────────────────
   // ⚠️ Everything this section names on the wire is invariant and stays in the panel: the
   // UDP addresses and ports it offers as field examples, the file names (ALL.TXT, .wav) and
-  // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD, OpenHamClock) inside these
+  // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD) inside these
   // sentences. Two labels are invariant as WHOLE strings and are still in the panel because
   // they are nothing but names — `WSJT-X UDP API` and `PSK Reporter`, the same rule that
   // leaves the Phone/CW/Digital tab labels literal. So are the cluster presets, which name
@@ -6748,7 +6765,7 @@ export const EN = {
     'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
   'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
   'settings.n1mm.broadcastAll.hint':
-    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point OpenHamClock or GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
 
   // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
   // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
@@ -7876,7 +7893,7 @@ export const EN = {
 
   // The rotor's two answers. `{{call}}` is a callsign, `{{deg}}` a bearing and `{{error}}`
   // the backend's own refusal — all three pass through verbatim.
-  'operate.rotor.pointed': 'Rotator → {{call}}: {{deg}}°',
+  'operate.rotor.pointed': 'Rotator → {{call}}: {{deg}}° ({{to}})',
   'operate.rotor.failed': 'Rotator: {{error}}',
 
   // ── Operate ▸ the merged operating strip ────────────────────────────────────────────
@@ -8044,6 +8061,13 @@ export const EN = {
   'operate.roster.filter.hideBlocked': 'Hide blocked',
   'operate.roster.filter.hideBlocked.title':
     'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',
+  // #386 — the distance cap. `{{distance}}` is a number and its unit ("1000 mi", "1500 km"), in the
+  // units chosen in Settings.
+  'operate.roster.filter.distance.aria': 'Maximum distance',
+  'operate.roster.filter.distance.title':
+    'Show only the stations within this distance of your grid square. A station you have not heard send a grid yet has no known distance, so it always stays on the list, and so does the station you are working.',
+  'operate.roster.filter.distance.any': 'Any distance',
+  'operate.roster.filter.distance.within': 'Within {{distance}}',
   // Two whole labels: the button names the station when there is one to name.
   'operate.roster.spot.label': 'Spot',
   'operate.roster.spot.label.call': 'Spot {{call}}',
@@ -8423,6 +8447,7 @@ export const EN = {
   'js8.station.empty': 'No stations heard yet — the heard list fills as heartbeats and CQs decode',
   'js8.station.select.title': 'Write to {{call}} (fills the To box and the log strip)',
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
+  'js8.station.sendGrid.title': 'Send your grid square {{grid}} to {{call}}',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
   'js8.station.pin.title': 'Pin {{call}} to the top of this list',
   'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
@@ -8845,7 +8870,7 @@ export const EN = {
   'cw.filter.failed': 'Could not set filter width',
   // `{{call}}` is a callsign, `{{bearing}}` a heading in degrees and `{{error}}` the engine's
   // own words — all three arrive invariant.
-  'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}°',
+  'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}° ({{to}})',
   'cw.rotator.failed': 'Rotator: {{error}}',
   'cw.record.start.aria': 'Record QSO audio',
   'cw.record.stop.aria': 'Stop recording this QSO',
@@ -9527,8 +9552,8 @@ export const EN = {
   'shell.recall.done.setMode': '{{name}} — {{freq}} MHz · set {{mode}} on the rig',
   'shell.net.reminder': 'Net {{until}}: {{name}} — {{freq}} {{mode}}',
   'shell.net.tune': 'Tune',
-  'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}})',
-  'shell.rotator.pointedLong': '↗ Pointing antenna long path to {{bearing}}° ({{call}})',
+  'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}}, {{to}})',
+  'shell.rotator.pointedLong': '↗ Pointing antenna long path to {{bearing}}° ({{call}}, {{to}})',
   'shell.rotator.failed': "Couldn't point the antenna at {{call}}",
   // `WSJT-X`, `JTDX` and `MSHV` are program names and `:2237` their agreed UDP port.
   'shell.source.companion': 'Source: {{source}} — listening for WSJT-X/JTDX/MSHV on :2237',
@@ -9711,6 +9736,19 @@ export const EN = {
   'panels.undo.title': 'Put the layout back the way it was before the last change',
   'panels.reset': 'Reset layout',
   'panels.reset.title': 'Show every panel again (the stock layout)',
+  // ⊞ Panels ▸ Arrange (layout L3): where each pane of a grid cockpit stands, in the menu above the
+  // entries. `{{pane}}` is the pane's name as its ⊞ entry reads it.
+  'panels.arrange.heading': 'Arrange',
+  'panels.arrange.column.a': 'Column 1',
+  'panels.arrange.column.b': 'Column 2',
+  'panels.arrange.column.log': 'Log column',
+  'panels.arrange.logForm': 'The log form stays at the foot of this column.',
+  'panels.arrange.pinned': 'Stays in its column, so nothing in progress is lost; it moves up and down.',
+  'panels.arrange.narrow': 'On a narrower window, column 2 follows column 1.',
+  'panels.arrange.up.aria': 'Move {{pane}} up',
+  'panels.arrange.down.aria': 'Move {{pane}} down',
+  'panels.arrange.left.aria': 'Move {{pane}} to the column on the left',
+  'panels.arrange.right.aria': 'Move {{pane}} to the column on the right',
 
   // ── The cockpit pane frame ──────────────────────────────────────────────────────────
   // `{{title}}` is the pane's own name, supplied by the cockpit.
@@ -9949,6 +9987,13 @@ export const EN = {
   // magnetic marks, `WMM`, `AOS`/`LOS`, `az`, `rotctld` and the SAT/ROTOR plates. The ■ buttons
   // on both surfaces stop ROTATION and the satellite track — never a transmission.
   'rotor.stop.failed': 'Rotator stop: {{error}}',
+  // What a point-at-call's bearing was taken to, the `{{to}}` at the end of every "pointing
+  // antenna" toast: the station's own grid, the position its callbook entry gives, or only the
+  // centre of its country (a tester was sent 20° wide by that and could not tell). `{{grid}}` is
+  // a Maidenhead locator and `{{country}}` a DXCC entity name, both interpolated verbatim.
+  'rotor.pointed.to.grid': 'their grid {{grid}}',
+  'rotor.pointed.to.position': 'their callbook position',
+  'rotor.pointed.to.country': 'the centre of {{country}}: no grid known for them',
 
   'rotor.strip.aria': 'Rotator',
   'rotor.strip.az.title': 'Rotator at {{deg}}° true',
@@ -10006,7 +10051,7 @@ export const EN = {
   'rotor.strip.lost.silent': 'Rotator not answering',
   'rotor.strip.lost.stopped': 'Rotator stopped answering',
   'rotor.strip.lost.silent.title':
-    'A rotator is configured but not answering — check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
+    "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it. If it is, check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log",
   'rotor.strip.lost.stopped.title':
     'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
   'rotor.strip.lost.open.aria': '{{state}} — open the rotator settings',
@@ -10083,6 +10128,10 @@ export const EN = {
   'rotor.pane.stop.title': 'Stop rotation NOW',
   'rotor.pane.hint': 'click the rose or type a bearing · headings are TRUE',
   'rotor.pane.hint.noPosition': 'no position from this rotator — pointing and STOP still work',
+  // Nothing answered the read at all: the controller is off or unplugged, or rotctld is not
+  // running (a tester read "Error 61" here). Shown as the hint and as the readout's tooltip.
+  'rotor.pane.notAnswering':
+    "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────

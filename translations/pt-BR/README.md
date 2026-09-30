@@ -111,16 +111,16 @@ you like.
 
 | Tier | Rows | What it covers |
 |---:|---:|---|
-| **1** | **603** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
+| **1** | **617** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 313 | First run — the setup wizard and the Getting Started guide. The first thing a new operator meets. |
-| **3** | 844 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
-| **4** | 384 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
-| **5** | 2303 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, satellites, the map, awards, memories. |
+| **3** | 853 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
+| **4** | 386 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
+| **5** | 2308 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, satellites, the map, awards, memories. |
 | **6** | 812 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, and the long tail. |
 
-**Tier 1 on its own is a real release.** 603 rows, about 21,000 characters — roughly 9% of the
+**Tier 1 on its own is a real release.** 617 rows, about 21,000 characters — roughly 9% of the
 text — and it buys a program whose menus, buttons, status messages and log form are all in
-Portuguese, with the rest quietly falling back to English. Tiers 1 and 2 together (916 rows) is
+Portuguese, with the rest quietly falling back to English. Tiers 1 and 2 together (930 rows) is
 the point where a new Brazilian operator can install Nexus and never meet an English screen until
 they go looking for one.
 

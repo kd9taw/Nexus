@@ -22,10 +22,12 @@ import {
   getSettings,
   pointRotator,
   readRotator,
+  readRotatorState,
   stopRotator,
   stopSatTrack,
 } from '../../api'
-import type { SatTrackStatus } from '../../types'
+import type { RotatorState, SatTrackStatus } from '../../types'
+import { useStationControl } from '../../stationAccess'
 import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
@@ -59,6 +61,13 @@ export function RotorPane() {
   // Is a rotator CONFIGURED at all? Split from "is it reading back", because the two are
   // different stations and only one of them should lose the pane — see the null branch below.
   const [configured, setConfigured] = useState(false)
+  // What the last read found (desktop only). ⚠️ A rotator that reports no position and one that
+  // does not answer at all are different stations: the Hy-Gain DCU-1 has no read-back and still
+  // points; a controller that is switched off answers nothing, and "pointing still works" is
+  // then untrue (a tester read "Error 61" on every command). A browser keeps its own read, and
+  // this stays null there.
+  const [reading, setReading] = useState<RotatorState['reading'] | null>(null)
+  const local = useStationControl()
   const alive = useRef(true)
 
   useEffect(() => {
@@ -72,13 +81,20 @@ export function RotorPane() {
     // I/O), so a tick skips while the last read is still out.
     const stop = pollSingleFlight('rotor pane', 2_000, (owns) =>
       Promise.allSettled([
-        readRotator()
-          .then((v) => {
-            if (owns()) setAz(v)
-          })
-          .catch(() => {
-            if (owns()) setAz(null)
-          }),
+        (local
+          ? readRotatorState().then((st) => {
+              if (!owns()) return
+              setAz(st?.azDeg ?? null)
+              setReading(st?.reading ?? null)
+            })
+          : readRotator().then((v) => {
+              if (owns()) setAz(v)
+            })
+        ).catch(() => {
+          if (!owns()) return
+          setAz(null)
+          setReading(null)
+        }),
         getSatTrackStatus().then((t) => {
           if (owns()) setSatTrack(t)
         }),
@@ -91,7 +107,7 @@ export function RotorPane() {
       alive.current = false
       stop()
     }
-  }, [])
+  }, [local])
 
   // ⭐ A ROTATOR YOU CANNOT READ IS STILL A ROTATOR YOU CAN POINT. This used to be
   // `if (az == null) return null`, which deleted the rose, the click-to-slew, the typed bearing
@@ -132,6 +148,7 @@ export function RotorPane() {
   const cur = az != null ? needle(az, R - 8) : null
   const tgt = target != null ? needle(target, R - 2) : null
   const mag = az != null ? magneticDeg(az, declination) : null
+  const silent = az == null && reading === 'notAnswering'
 
   return (
     <section className="rotor-pane panel">
@@ -180,7 +197,9 @@ export function RotorPane() {
             className="rotor-az mono"
             title={
               az == null
-                ? t('rotor.pane.az.title.unknown')
+                ? silent
+                  ? t('rotor.pane.notAnswering')
+                  : t('rotor.pane.az.title.unknown')
                 : mag != null
                   ? t('rotor.pane.az.title.magnetic', { deg: Math.round(az), mag })
                   : t('rotor.pane.az.title')
@@ -249,7 +268,11 @@ export function RotorPane() {
             </button>
           </div>
           <p className="rotor-hint">
-            {az == null ? t('rotor.pane.hint.noPosition') : t('rotor.pane.hint')}
+            {az != null
+              ? t('rotor.pane.hint')
+              : silent
+                ? t('rotor.pane.notAnswering')
+                : t('rotor.pane.hint.noPosition')}
           </p>
         </div>
       </div>

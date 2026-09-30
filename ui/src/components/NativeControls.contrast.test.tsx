@@ -288,6 +288,37 @@ describe('the three mixed controls paint their own face', () => {
   })
 })
 
+// ── The roster's distance picker (OperateRoster.tsx, #386) ─────────────────────────────────────
+
+/** The Call Roster's distance picker, read off the rendered DOM. */
+function rosterDistance(): Control[] {
+  const r = render(
+    <OperateRoster stations={[heard]} myGrid="EN52" currentSlot={100} needByCall={new Map()} selectedCall={null}
+      onSelect={() => {}} onCall={() => {}} />,
+  )
+  const s = r.container.querySelector<HTMLSelectElement>('select.or-distance')
+  expect(s, 'the roster has no distance picker').not.toBeNull()
+  const out = [{ name: 'Operate roster distance picker', chain: chainOf(s!) }]
+  cleanup()
+  return out
+}
+
+describe('the roster’s distance picker paints its own face (#386)', () => {
+  it('is not left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, rosterDistance())).toEqual([])
+  })
+
+  it('reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, rosterDistance())).toEqual([])
+  })
+
+  it('FIRES: the picker with neither its own rule nor the select base look is caught', () => {
+    const bare = RULES.filter((r) => r.selector !== '.or-distance' && r.selector !== 'select')
+    expect(bare.length, 'the rules under test are not in the sheet').toBe(RULES.length - 2)
+    expect(leftToTheBrowser(bare, rosterDistance())).toContain('Operate roster distance picker: the browser draws its face')
+  })
+})
+
 // ── The fully native three (PotaSotaView.tsx, SatellitesView.tsx) ──────────────────────────────
 
 const POTA_SNAP = { hunt: null, radio: { dialMhz: 14.285 } } as unknown as AppSnapshot
@@ -412,5 +443,45 @@ describe('the watch list × paints its own face', () => {
     )
     const left = leftToTheBrowser(shipped, watchlistRemoves())
     expect(left.some((m) => m.endsWith('the browser draws its face')), left.join('\n')).toBe(true)
+  })
+})
+
+// ── The watch list's note fields (WatchlistPanel.tsx, #390) ────────────────────────────────────
+
+/** The note field on each entry of a watch list holding two, and the add row's, off the DOM. */
+function watchlistNotes(): Control[] {
+  localStorage.setItem('nexus.watchlist', JSON.stringify([
+    { id: 'call-VP8-a1', kind: 'call', value: 'VP8*', notes: 'Falklands, until November' },
+    { id: 'grid-FN31-b2', kind: 'grid', value: 'FN31', cqOnly: true },
+  ]))
+  const r = render(<WatchlistPanel />)
+  const out = [...r.container.querySelectorAll<HTMLInputElement>('input.watchlist-notes, input.watchlist-notes-new')].map((i) => ({
+    name: `Watch list note "${i.getAttribute('aria-label')}"`,
+    chain: chainOf(i),
+  }))
+  cleanup()
+  localStorage.removeItem('nexus.watchlist')
+  return out
+}
+
+describe('the watch list’s note fields paint their own face (#390)', () => {
+  it('renders one on each entry and one to add with (a guard over none is inert)', () => {
+    expect(watchlistNotes().length).toBe(3)
+  })
+
+  it('none is left to the browser for its face, ink or border', () => {
+    expect(leftToTheBrowser(RULES, watchlistNotes())).toEqual([])
+  })
+
+  it('each reads 4.5:1 on its own face, in both themes and every mode', () => {
+    expect(unreadable(RULES, watchlistNotes())).toEqual([])
+  })
+
+  it('FIRES: an entry’s note field with no rule of its own is caught', () => {
+    const bare = RULES.filter((r) => r.selector !== '.watchlist-notes')
+    expect(bare.length, 'the rule under test is not in the sheet').toBe(RULES.length - 1)
+    expect(leftToTheBrowser(bare, watchlistNotes())).toContain(
+      `Watch list note "${t('watchlist.item.notes.aria', { value: 'VP8*' })}": the browser draws its face`,
+    )
   })
 })

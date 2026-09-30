@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { UpdateBanner } from './UpdateBanner'
 import type { SelfUpdate } from '../useSelfUpdate'
+import { t } from '../i18n'
 
 function upd(over: Partial<SelfUpdate> = {}): SelfUpdate {
   return {
@@ -13,6 +14,7 @@ function upd(over: Partial<SelfUpdate> = {}): SelfUpdate {
     error: null,
     install: vi.fn(),
     dismiss: vi.fn(),
+    downloadInstead: vi.fn(),
     ...over,
   }
 }
@@ -82,5 +84,29 @@ describe('UpdateBanner', () => {
     render(<UpdateBanner update={upd({ phase: 'error', error: 'signature mismatch' })} />)
     expect(screen.getByText('Update failed')).toBeTruthy()
     expect(screen.getByText(/signature mismatch/)).toBeTruthy()
+  })
+
+  // The banner is now the only update prompt where Nexus updates itself (2026-09-29), so a
+  // failed install must not strand the operator: the error offers the download page, as the old
+  // notice's Download button did.
+  it('a failed update offers the download page instead', () => {
+    const downloadInstead = vi.fn()
+    render(
+      <UpdateBanner
+        update={upd({ phase: 'error', error: 'Read-only file system (os error 30)', downloadInstead })}
+      />,
+    )
+    const btn = screen.getByRole('button', { name: t('update.download') })
+    expect(btn.getAttribute('title')).toBe(t('update.downloadInstead.title'))
+    fireEvent.click(btn)
+    expect(downloadInstead).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers the download page only once installing has failed', () => {
+    for (const phase of ['ready', 'installing'] as const) {
+      render(<UpdateBanner update={upd({ phase })} />)
+      expect(screen.queryByRole('button', { name: t('update.download') }), phase).toBeNull()
+      cleanup()
+    }
   })
 })

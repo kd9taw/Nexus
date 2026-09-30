@@ -1,6 +1,6 @@
 // A WSJT-X / GridTracker-style Call Roster: one row per heard station as aligned,
 // sortable columns (Call · Calling · Need · Country · State · Grid · Dist · Brg · SNR · Age) with
-// roster filters (Needed-only, Hide-worked) and double-click-to-work. This is the
+// roster filters (Needed-only, Hide-worked, a distance cap) and double-click-to-work. This is the
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
 //
@@ -25,7 +25,7 @@ import {
   azimuthTo,
 } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
-import { useUnits } from '../units'
+import { KM_PER_MI, fmtDistanceKm, useUnits } from '../units'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { alertsForSurface, chaseRank, confirmOnlyOnWorkedBand, isActivityTag, strongestNeed } from '../features/needs'
@@ -118,6 +118,10 @@ const ACTIVE_ROSTER_CYCLES = 3
  */
 const ROSTER_TOKENS = { snr: 'SNR', cq: 'CQ', b4: 'B4' } as const
 
+/** #386 — the distance cap's choices, in the operator's OWN unit: round miles to an imperial
+ *  operator and round kilometres to a metric one, rather than one list converted into odd numbers. */
+const DISTANCE_STEPS: readonly number[] = [250, 500, 1000, 1500, 2000, 3000, 5000]
+
 /** Row freshness → opacity: full-strength when just heard, dimming as a station
  * ages toward the drop-off, so live stations visually pop over lingering ones.
  * Pure + exported for test. Floor 0.5 keeps an aging row readable. */
@@ -192,6 +196,15 @@ export function OperateRoster({
       return next
     })
   }
+  // #386 — the distance cap as the operator reads it: stored in km, shown in their unit. A stored
+  // cap no choice matches (Units changed since it was picked) is offered as a choice of its own, so
+  // the picker never reads "Any distance" over a roster it is still cutting.
+  const kmPerUnit = units === 'imperial' ? KM_PER_MI : 1
+  const capInUnits = filters.maxDistanceKm != null ? Math.round(filters.maxDistanceKm / kmPerUnit) : null
+  const distanceSteps =
+    capInUnits != null && !DISTANCE_STEPS.includes(capInUnits)
+      ? [...DISTANCE_STEPS, capInUnits].sort((a, b) => a - b)
+      : DISTANCE_STEPS
   // The operator's country exclusion. Shared with Band Activity through one app-global key,
   // so the two panes can never show different bands.
   const countries = useCountryExclude()
@@ -279,6 +292,19 @@ export function OperateRoster({
           countries.hidden,
         ),
     )
+    // #386 — the distance cap, on the distance the Dist column prints (our grid to theirs). A
+    // station whose distance is not known — no grid heard from it, or no grid set for this
+    // station — is kept: absence is not a match, the country exclusion's rule. The station being
+    // worked or selected stays, as under every filter here.
+    const maxKm = filters.maxDistanceKm
+    if (maxKm != null)
+      f = f.filter(
+        (x) =>
+          x.distKm <= maxKm ||
+          !Number.isFinite(x.distKm) ||
+          x.s.call === selectedCall ||
+          x.s.call === workingCall,
+      )
     if (neededOnly) f = f.filter((x) => x.stillNeeded)
     // Hide worked keeps a worked station only while it still fills a need — and a park or
     // summit you have not worked in the activation running now IS one (`NewPark`), so an
@@ -367,6 +393,7 @@ export function OperateRoster({
     neededOnly,
     hideWorked,
     filters.hideBlocked,
+    filters.maxDistanceKm,
     hideCalls.entries,
     watchOf,
     ignoredCalls,
@@ -449,6 +476,26 @@ export function OperateRoster({
               onChange={(e) => setFilter({ hideBlocked: e.target.checked })}
             /> {t('operate.roster.filter.hideBlocked')}
           </label>
+        {/* #386 — the distance cap. It shows its own value, so a roster it has thinned says why,
+            and its tooltip says what it never hides. The <option> VALUES are numbers in the
+            operator's unit; the labels carry that unit. */}
+        <select
+          className="or-distance"
+          value={capInUnits != null ? String(capInUnits) : ''}
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            setFilter({ maxDistanceKm: n > 0 ? n * kmPerUnit : undefined })
+          }}
+          aria-label={t('operate.roster.filter.distance.aria')}
+          title={t('operate.roster.filter.distance.title')}
+        >
+          <option value="">{t('operate.roster.filter.distance.any')}</option>
+          {distanceSteps.map((n) => (
+            <option key={n} value={String(n)}>
+              {t('operate.roster.filter.distance.within', { distance: fmtDistanceKm(n * kmPerUnit, units) })}
+            </option>
+          ))}
+        </select>
         {/* Beside the row count, so a thinned roster always says why. The picker itself
             lives in the Band Activity chip bar — one control for one shared list. */}
         <CountryHiddenChip

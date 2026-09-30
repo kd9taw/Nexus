@@ -62,6 +62,7 @@ vi.mock('../api', () => ({
   resolveEntity: vi.fn(async () => null),
   searchParks: vi.fn(async () => []),
   setCwPeerInfo: vi.fn(async () => {}),
+  setLogFormGrid: vi.fn(async () => {}),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),

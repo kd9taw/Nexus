@@ -1304,6 +1304,11 @@ a new one is genuinely an event.
 
 *Alerts in Nexus 1.10.3. New grid and Rare grid continue to the right.*
 
+- **Pop-up notifications** — the messages in the bottom-right corner, on unless you turn them
+  off. Off, the confirmations (Logged QSO, Saved, a QSY) and the alerts (a new DXCC, a station
+  calling you, a band opening, space weather, a DXpedition you chase coming on) stop popping up.
+  Their sounds are unchanged. Errors, notices about transmitting, the radio or the log, and any
+  message with a button (an alarm's Stop, an Undo, an update's Download) still pop up.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
 - **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. "Loud alert on a
@@ -1320,7 +1325,11 @@ a new one is genuinely an event.
 Each band choice governs both halves of a need: whether it makes a sound and
 whether it paints an icon. Set **New grid** to VHF+ and an HF FT8 roster stops
 showing GRID chips — the icons follow the setting, not just the alerts.
-- **Watch list** — the calls you want flagged wherever they turn up.
+- **Watch list** — the calls you want flagged wherever they turn up. Each entry can
+  carry a note of your own, such as why it is there and when it can come off
+  (`Samoa DXp 9/27-10/3`): type it when you add the entry, or later in the field
+  on its row, which saves when you leave it. A note changes nothing about what
+  alerts.
 
 ---
 
@@ -1502,7 +1511,7 @@ Test N3FJP button continue to the right.*
   stack on one host, and 12060 is often already taken by another logger." Blank
   = off. An address alone sends nothing outside a Field Day event.
 - **Broadcast every QSO** — send the contact packet for **every** logged QSO, not
-  just Field Day: point OpenHamClock or GridTracker at the address and each
+  just Field Day: point a map app such as GridTracker at the address and each
   contact plots as you log it. "One packet per QSO: this never doubles up with
   the Field Day broadcast." Off by default; turning it on with a blank address
   fills in `127.0.0.1:12060` visibly, rather than as a hidden default.
