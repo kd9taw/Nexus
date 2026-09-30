@@ -58,7 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: send your grid to a station in one click, as in JS8Call.** Each station in the JS8
   cockpit's Stations pane has a new button beside the quick queries, **GRID** followed by your
   locator. One click sends that station your locator, the way JS8Call's menu item "GRID … - Send
-  my current station Maidenhead grid locator" does. It is greyed out until Settings has a locator.
+  my current station Maidenhead grid locator" does. It is greyed out while Settings has no
+  locator, or one JS8 will not send (such as EN5), and its tooltip then says what to set.
 - **JS8: the `<MYGRID4>` and `<MYGRID12>` macros, as in JS8Call.** Type either in a JS8 message,
   or put it in your INFO or STATUS text (Settings ▸ Digital ▸ JS8), and it goes out as the first
   4 or the first 12 characters of the locator in Settings. An INFO or STATUS reply sends the

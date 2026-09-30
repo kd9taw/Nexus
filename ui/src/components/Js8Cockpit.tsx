@@ -43,6 +43,7 @@ import {
   js8Enter,
   js8InboxDelete,
   js8InboxMark,
+  js8LocatorRefusal,
   js8Send,
   js8SendCommand,
   js8SetSpeed,
@@ -381,8 +382,9 @@ export function Js8Cockpit({
     })
   }
   // JS8Call's query menu sends a station your locator in one click, `<call> GRID <my_grid()>`
-  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657); so is the button, and
-  // the engine refuses a send with no locator whatever the button says.
+  // (mainwindow.cpp:6656-6668), and is disabled while none is set (:6657). The button is disabled
+  // whenever the JS8 gate refuses the locator (`locatorRefusal`), and the engine refuses such a
+  // send whatever the button says.
   const sendMyGrid = (call: string) => {
     if (!canControl) return
     if (refuseIfUnready()) return
@@ -473,6 +475,26 @@ export function Js8Cockpit({
   const units = useUnits()
   const myGrid = snap?.mygrid ?? ''
   const ownGrid = myGrid.trim().toUpperCase()
+  // JS8Call's Settings refuse a malformed locator (Configuration.cpp:2443-2446), so its GRID menu
+  // item only ever meets a good one or none, and is disabled for none (mainwindow.cpp:6657).
+  // Nexus's Settings can hold a malformed one, which the JS8 gate refuses. "Send my grid" asks
+  // that gate, its one rule, whenever the locator changes: disabled while it refuses, with its
+  // reason as the tooltip, and until it has answered. The Remote never asks (it cannot send).
+  const [locatorRefusal, setLocatorRefusal] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!active || !canControl) return
+    let live = true
+    void js8LocatorRefusal()
+      .then((reason) => {
+        if (live) setLocatorRefusal(reason)
+      })
+      .catch(() => {
+        if (live) setLocatorRefusal(undefined)
+      })
+    return () => {
+      live = false
+    }
+  }, [active, canControl, myGrid])
 
   // ONE row per offset, from the same activity feed (js8Vocab.bandActivityByOffset) — the
   // pane adds no engine state, it reads the decodes the transcript already carries.
@@ -795,9 +817,12 @@ export function Js8Cockpit({
                 <button
                   type="button"
                   className="cw-macro js8-query js8-send-grid"
-                  disabled={!canControl || !ownGrid}
+                  disabled={!canControl || locatorRefusal !== null}
                   onClick={() => sendMyGrid(h.call)}
-                  title={ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined}
+                  title={
+                    locatorRefusal ??
+                    (ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: h.call }) : undefined)
+                  }
                 >
                   {ownGrid ? `${JS8_GRID.label} ${ownGrid}` : JS8_GRID.label}
                 </button>

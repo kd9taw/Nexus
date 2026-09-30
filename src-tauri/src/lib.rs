@@ -15473,6 +15473,13 @@ async fn get_js8_state(state: State<'_, SharedEngine>) -> Result<tempo_app::dto:
     with_engine(&state, |eng| eng.js8_state()).await
 }
 
+/// Why the JS8 gate would refuse the locator in Settings, or None when it would take it. The
+/// cockpit's "send my grid" follows this, the gate's own rule, rather than a copy of it.
+#[tauri::command]
+async fn js8_locator_refusal(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
+    with_engine(&state, |eng| eng.js8_locator_refusal().map(str::to_string)).await
+}
+
 /// Persist the engine's settings after a JS8 verb changed one of them (the engine holds
 /// settings, the command layer owns the file — the `purge_log` shape).
 fn js8_persist_settings(eng: &Engine) {
@@ -30272,6 +30279,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_psk_state,
             js8_enter,
             get_js8_state,
+            js8_locator_refusal,
             js8_set_speed,
             js8_set_rx_speeds,
             js8_send,

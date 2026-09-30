@@ -630,6 +630,13 @@ impl Engine {
         !::js8::proto::grid::is_station_locator(self.settings.mygrid.trim())
     }
 
+    /// The gate's reason for refusing the locator in Settings, or None when it would take it: the
+    /// cockpit's "send my grid" is disabled, with this as its tooltip, whenever the gate says no.
+    /// It asks the gate's own rule above, so the two cannot disagree.
+    pub fn js8_locator_refusal(&self) -> Option<&'static str> {
+        self.js8_no_usable_locator().then_some(JS8_NO_LOCATOR)
+    }
+
     /// JS8Call's `ensureCallsignSet` (mainwindow.cpp:5257-5271), which its Enter asks before
     /// anything is queued (:749): a callsign first, then a locator. Every operator send asks it.
     fn js8_identity_set(&self) -> Result<(), String> {
@@ -1995,6 +2002,24 @@ mod tests {
             if let Err(err) = e.js8_send(None, "TEST".into()) {
                 panic!("control: {grid:?} is a locator JS8Call accepts, got {err}");
             }
+        }
+    }
+
+    /// "Send my grid" asks this gate, never a copy of its rule: `js8_locator_refusal` is the
+    /// gate's own reason exactly when a send is refused for the locator, and None exactly when
+    /// the same send goes through.
+    #[test]
+    fn the_locator_refusal_is_the_js8_gates_own_answer() {
+        for grid in [
+            "", "  ", "EN5", "EN52H", "ZZ99", "EN52 HW", "en52", " EN52HW ", "EN52HW12",
+        ] {
+            let mut e = hb_engine(grid, 5, 1500.0);
+            let refusal = e.js8_locator_refusal().map(str::to_string);
+            assert_eq!(
+                refusal,
+                e.js8_send(None, "TEST".into()).err(),
+                "{grid:?}: the button's answer is the gate's"
+            );
         }
     }
 
