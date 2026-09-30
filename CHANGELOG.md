@@ -159,6 +159,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers
   it. A click on it still moves the keyboard there, so click back into Nexus before using a
   keyboard shortcut such as Esc. On macOS and Linux the button does not appear yet.
+- **A dashboard rail beside the cockpits.** Tick **Dashboard rail** in a cockpit's **⊞ Panels**
+  menu, or press **Dashboard** at the right end of the NOW bar, and a column of Connect boxes
+  stands at the right of the cockpit: the Clock, Bands for you, Space Wx and Getting Out, so the
+  time, the bands and who hears you stay in view while you operate. It is off until you turn it
+  on, and Operate, Phone, CW, RTTY, PSK, SSTV, APRS and JS8 each remember their own choice. Each
+  box has the same menu as a Connect box, so any Connect box can take its place; its **✕** closes
+  it, and the rail's own **⊞ Panels** brings it back or resets the rail. Drag the rail's left edge
+  to make it wider or narrower, and the line between two boxes to share the height between them;
+  both work from the keyboard too. The rail appears only on a large window (about 1600 px wide at
+  your zoom, which includes a 1366×768 laptop at its usual 85 %), and the cockpit beside it is
+  never narrower than it is on a 1024×768 screen. Clicking a station in the rail selects it in the
+  rail only, never the station your cockpit is working, and the rail has no transmit control.
+  Within a window, Connect's boxes, the rail's and the alerts share one request per feed: the rail
+  asks for what the same boxes on Connect ask for, and opening Connect no longer asks for the
+  X-ray reading and the DXpedition windows twice. On a window 2400 px wide or wider, Operate's QSO strip keeps its two rows while
+  the rail is shown, as it does on a smaller screen.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

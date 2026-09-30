@@ -7218,6 +7218,22 @@ export const EN = {
   'connect.rail.handle.title': 'Drag, or use the arrow keys, to resize ({{label}}). Double-click to reset.',
   // The divider between the map and the bottom panels (layout L7); its tooltip is paneSeam.title.
   'connect.strip.height.label': 'Bottom panel row height',
+  // ── The dashboard rail (components/DashRail): Connect's panels in a column beside a cockpit. Its
+  // name is also its landmark's and the ⊞ Panels row that turns it on; its title heads the rail and
+  // names the NOW bar's switch. The slot words finish "Choose what the {{slot}} slot shows" and a ⊞
+  // entry's "{{title}} · {{where}}"; `{{above}}`/`{{below}}` are two panels' names.
+  'dashRail.name': 'Dashboard rail',
+  'dashRail.title': 'Dashboard',
+  'dashRail.width.label': 'Dashboard rail width',
+  'dashRail.split.label': 'Split between {{above}} and {{below}}',
+  'dashRail.hide.label': 'Hide the dashboard rail',
+  'dashRail.hide.title': 'Hide the dashboard rail beside this cockpit (⊞ Panels or the NOW bar brings it back)',
+  'dashRail.crash.label': 'The dashboard rail',
+  'dashRail.slot.where.rail1': 'top',
+  'dashRail.slot.where.rail2': 'upper middle',
+  'dashRail.slot.where.rail3': 'lower middle',
+  'dashRail.slot.where.rail4': 'bottom',
+  'dashRail.menu.small': 'Needs a larger window (or a smaller zoom) to show. Remembered for this section.',
   // ── Layout presets (the UI redesign, 2026-09-26) ── The ⊞ Panels menu's Layout section. The
   // name beside the heading says which layout is on screen: Standard (the stock layout, which
   // Reset layout restores), a preset's own name, or Custom once the operator moves or resizes
@@ -9649,6 +9665,9 @@ export const EN = {
   'nowbar.prop.offline': 'NO LIVE DATA',
   'nowbar.prop.title':
     'Propagation nowcast data is {{source}} — separate from the Cluster/PSKR connection pills',
+  // The dashboard rail's switch, the bar's last chip (its label is dashRail.title).
+  'nowbar.rail.on.title': 'Hide the dashboard rail beside this cockpit',
+  'nowbar.rail.off.title': 'Show the dashboard rail beside this cockpit (a column of Connect panels)',
   // The connector pills. Each state is a WHOLE sentence: "connected but quiet" and "cannot
   // reach the server" are different claims, and they were one broken-looking "waiting" once.
   'nowbar.feed.live.value': 'live {{age}}',

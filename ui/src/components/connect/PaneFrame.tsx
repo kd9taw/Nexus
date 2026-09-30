@@ -19,34 +19,45 @@
 // arrives already translated from the registry (`panes.tsx`, resolved through getters); the
 // picker's B2/B3 groups are named by their tier code, which is not prose. The ✕ uses the
 // cockpit frame's own words (`pane.hide.*`) — one gesture, one sentence, in every view.
-import type { CSSProperties } from 'react'
+//
+// THE DASHBOARD RAIL beside the cockpits renders these same frames in its own four slots
+// (components/DashRail): the slot id is the host's, and `frameRef` hands a divider between two
+// frames (PaneSeam) the boxes it measures and repaints — a ref, never a size.
+import type { CSSProperties, Ref } from 'react'
 import { t } from '../../i18n'
 import { PANES, paneById } from './panes'
 import type { PaneContext } from './paneContext'
 import type { PaneId, SlotId } from '../../features/connectConfig'
 
-export function PaneFrame({
+export function PaneFrame<S extends string = SlotId>({
   slotId,
+  slotName,
   paneId,
   ctx,
   onAssign,
   share,
   onHide,
+  frameRef,
 }: {
-  slotId: SlotId
+  slotId: S
+  /** The slot as the picker's accessible name says it. Omitted ⇒ the slot id (Connect's). */
+  slotName?: string
   paneId: PaneId
   ctx: PaneContext
-  onAssign: (slotId: SlotId, paneId: PaneId) => void
+  onAssign: (slotId: S, paneId: PaneId) => void
   /** Rail frames only: this pane's flex share of its rail (default split 1:1). */
   share?: number
   /** Close this slot. Omitted ⇒ no ✕. */
   onHide?: () => void
+  /** The frame's own box, for a divider beside it to measure and repaint. Omitted ⇒ no ref. */
+  frameRef?: Ref<HTMLElement>
 }) {
   const def = paneById(paneId)
   if (!def) return null
   const body = def.expert(ctx) // null when there is no data yet → falls back to basic() below
   return (
     <section
+      ref={frameRef}
       className="pane-frame"
       data-slot={slotId}
       data-pane={paneId}
@@ -62,7 +73,7 @@ export function PaneFrame({
           <select
             className="pane-pick"
             value={paneId}
-            aria-label={t('connect.slot.pick.aria', { slot: slotId })}
+            aria-label={t('connect.slot.pick.aria', { slot: slotName ?? slotId })}
             title={t('connect.slot.pick.title')}
             onChange={(e) => onAssign(slotId, e.target.value as PaneId)}
           >

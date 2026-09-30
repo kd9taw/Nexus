@@ -55,6 +55,11 @@ export const PER_SURFACE = [
   // The two rail widths the operator dragged (2026-09-13). A width is a statement about one
   // window's shape: a pop-out inherits it on first open and clamps it against its own box.
   'nexus.connect.railWidths',
+  // The dashboard rail beside the cockpits (features/dashRail): which box is in each slot, whether it
+  // shows beside each section, and its width — statements about THIS window, like Connect's.
+  'nexus.dashrail.config',
+  'nexus.dashrail.sections',
+  'nexus.dashrail.width',
   'nexus.decodes.filter',
   // The Phone cockpit's Needed pane's own filter record (#345). The board's `neededFilters`
   // under another name, for the same reason: what THIS board shows. Never that key — a chip in

@@ -723,6 +723,14 @@ describe('the stop line, computed against the real cockpits', () => {
       connect:
         'ConnectView.panes.test.tsx — "hiding every pane leaves every control outside the ' +
         'panes on screen" (Connect renders no transmit control; PRESENCE-ONLY, by name)',
+      // The dashboard rail's four slots. The rail is a sibling of the cockpit in App's shell and
+      // renders no transmit control; what is swept is that it costs no cockpit a stop control:
+      // with the rail on, every control on each cockpit's list below is on screen, no more disabled
+      // than with it off, and not inside the rail — in the real App, every operating cockpit.
+      dashrail:
+        'DashRail.stopLine.test.tsx — every operating cockpit\'s stop-line list, rail off vs on ' +
+        '(PRESENCE + DISABLED, by name, not layout); DashRail.test.tsx — no transmit control in the ' +
+        'rail, every box in the registry placed in it',
     }
     const here = new Set(CASES.map((c) => c.view))
     for (const vocab of ALL_PANEL_VOCABULARIES) {

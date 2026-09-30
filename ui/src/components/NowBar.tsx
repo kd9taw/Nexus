@@ -3,7 +3,7 @@
 // the likelihood and the bearing, the backend's own advisory `reason`, and the three FEED
 // NAMES (Cluster, Phone, PSKR — the services' own). What moved is the prose around them.
 import type { ReactNode } from 'react'
-import { Activity, Radio, SignalHigh, Target } from 'lucide-react'
+import { Activity, PanelRight, Radio, SignalHigh, Target } from 'lucide-react'
 import { t, type MessageKey } from '../i18n'
 import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
@@ -28,6 +28,10 @@ interface Props {
    * 'qso'/'openings' → Band first, 'rate' → Out first, 'needs'/'activation' →
    * Need first. Omitted = default order. */
   emphasis?: 'qso' | 'needs' | 'rate' | 'openings' | 'activation'
+  /** The dashboard rail's switch for the cockpit on screen (components/DashRail): App passes it only
+   *  beside an operating cockpit and only where the window can show the rail (`lg` and up), so the
+   *  bar never offers a button that changes nothing. Omitted = no button. */
+  rail?: { on: boolean; onToggle: () => void }
 }
 
 /** Compact relative age, e.g. "12s" / "4m" / "2h". The unit letter rides inside the message
@@ -146,7 +150,7 @@ const BAND_WORD: Record<'open' | 'marginal' | 'closed', { wordKey: MessageKey }>
 }
 const BAND_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok' }
 
-export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true }: Props) {
+export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true, rail }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
   const condition = useBandConditions()(band)
@@ -290,6 +294,21 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
           />
           <FeedPill name="PSKR" status={feedHealth.pskr} />
         </>
+      )}
+
+      {rail && (
+        // The bar's last chip, so it sits over the column it opens. A toggle, not a status: it says
+        // whether the rail is on, and the press is the whole of it.
+        <button
+          type="button"
+          className="nb-chip nb-rail"
+          aria-pressed={rail.on}
+          onClick={rail.onToggle}
+          title={rail.on ? t('nowbar.rail.on.title') : t('nowbar.rail.off.title')}
+        >
+          <PanelRight size={13} aria-hidden="true" />
+          <span className="nb-k">{t('dashRail.title')}</span>
+        </button>
       )}
     </div>
   )

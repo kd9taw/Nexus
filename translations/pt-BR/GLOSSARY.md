@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,258 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,272 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -121,7 +121,7 @@ word in, and use only that word in the CSV.
 | upload | 61 | Sending the log to LoTW, QRZ, eQSL, ClubLog. | |
 | satellite | 41 | | |
 | entity | 37 | A DXCC entity. Not the same thing as a country — the distinction matters to the award. | |
-| section | 36 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
+| section | 37 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
 | cluster | 34 | The DX cluster. | |
 | waterfall | 42 | The scrolling spectrum display. | |
 | contact | 32 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
@@ -129,7 +129,7 @@ word in, and use only that word in the CSV.
 | beacon | 30 | | |
 | antenna | 30 | | |
 | memories | 28 | Saved channels — the Memories screen. | |
-| cockpit | 26 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
+| cockpit | 29 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
 | pane / panel | 22 / 12 | The movable boxes inside a cockpit. | |
 | operator | 22 | The person at the key. | |
 | keyer | 21 | The CW keyer. | |
