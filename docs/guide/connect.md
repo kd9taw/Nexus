@@ -82,7 +82,9 @@ you make things is remembered per window, and a saved width is trimmed to fit a
 smaller screen. **Reset layout** returns Connect to exactly how it first opened,
 including which pane sits in each slot.
 
-**A pane's own menu.** Each pane's header has a **⋯** button beside the ✕. Its
+**A pane's own menu.** Each pane's header has a **⋯** button beside the ✕ (the
+picker next to it is a little narrower to make room, and in the narrowest columns a
+long pane title can end in "…"). Its
 **A+ Larger text** and **A− Smaller text** make that pane's words bigger or smaller,
 from 80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a
 press; the menu stays open and shows the size, so you can press again. Only the

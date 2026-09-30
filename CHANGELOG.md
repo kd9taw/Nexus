@@ -163,7 +163,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header, beside the ✕. Its **A+ Larger text** and **A− Smaller text** step that pane's words from
   80% to 160% of your Text size (Settings ▸ Appearance ▸ Workspace), 10% a press. The menu stays
   open and shows the size, so you can press again. Only the words change: the pane keeps its place
-  and its size, its header stays as it was, and a pane whose text no longer fits scrolls. Each pane
+  and its size, its header stays as it was, and a pane whose text no longer fits scrolls. To make
+  room for the ⋯, the pane picker beside the title is a little narrower, and in the narrowest
+  columns a long title can end in "…" rather than push ✕ out of view. Each pane
   keeps its own size in each window, a layout picked from ⊞ Panels keeps the sizes, and **Reset
   layout** puts every pane back at 100%. Layouts saved before this open with every pane at 100%.
 - **Connect: each pane links to its part of the manual.** A pane's **⋯** menu names the pane in

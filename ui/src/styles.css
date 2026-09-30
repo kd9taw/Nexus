@@ -2037,6 +2037,22 @@ button.nb-chip:hover {
 .pane-acts > .pane-pick {
   min-width: 0;
 }
+/* A CONNECT PANE'S HEAD, SINCE ITS ⋯ (2026-09-29). One more control costs a head ~22 px, and a head
+   that wraps onto a second line takes that height from its pane. Two things make the room instead:
+   the picker stops at 7em — its closed label is the pane's name, which the title beside it already
+   shows — and the title may put an ellipsis on a single word too long for what is left (German
+   "Bandprognose" in a 200 px column) instead of pushing ✕ out of the frame; words still wrap between
+   each other, as they always did. Measured in Chrome against the base, in all five languages, at
+   1024–2290 wide, in default and 200 px columns: no head taller than before, ✕ and ⋯ inside every
+   frame, a title cut only at the 200 px column floor. `[data-slot]` keeps it to Connect's frames. */
+.pane-frame[data-slot] .pane-acts > .pane-pick {
+  max-width: 7em;
+}
+.pane-frame[data-slot] > .pane-head > .pane-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pane-close {
   flex: none;
   font-size: var(--fs-micro);
