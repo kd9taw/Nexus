@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 
 // Responsive size-class driver.
 //
@@ -19,6 +19,29 @@ export function classifyViewport(effW: number): ViewportClass {
   if (effW < 1600) return 'md'
   if (effW < 2400) return 'lg'
   return 'xl'
+}
+
+const VIEWPORT_CLASSES: readonly string[] = ['xs', 'sm', 'md', 'lg', 'xl']
+
+function readViewportClass(): ViewportClass | null {
+  const v = document.documentElement.getAttribute('data-viewport')
+  return v != null && VIEWPORT_CLASSES.includes(v) ? (v as ViewportClass) : null
+}
+
+function subscribeViewportClass(onChange: () => void): () => void {
+  if (typeof MutationObserver === 'undefined') return () => {}
+  const mo = new MutationObserver(onChange)
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-viewport'] })
+  return () => mo.disconnect()
+}
+
+/**
+ * The size class `useViewport` publishes on <html>, as a value a component can decide from — the
+ * dashboard rail renders nothing below `lg`. It READS the published class and never computes its
+ * own, so a component and the stylesheet cannot disagree about the window; null until the first stamp.
+ */
+export function useViewportClass(): ViewportClass | null {
+  return useSyncExternalStore(subscribeViewportClass, readViewportClass, () => null)
 }
 
 /** Read the live `--ui-zoom` (defaults to 1 if unset/invalid). */

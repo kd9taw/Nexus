@@ -232,6 +232,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { durableGet, durableSet } from './durableStore'
 import { windowInstance } from './windowScope'
 import { SLOT_IDS, type SlotId } from './connectConfig'
+import { DASH_SLOT_IDS, type DashSlotId } from './dashRail'
 import {
   coerceColumnOrder,
   coercePlacement,
@@ -1044,6 +1045,22 @@ export const CONNECT_PANELS: PanelVocabulary<SlotId> = {
   panelIds: SLOT_IDS,
 }
 
+/** The dashboard rail's four slots (components/DashRail, a column of Connect boxes beside the
+ *  cockpits). Connect's split exactly: which box sits in a slot is PLACEMENT, in
+ *  `nexus.dashrail.config` (features/dashRail), and this record says whether a slot is shown and how
+ *  it shares the column with its neighbours — so a closed slot keeps its box, and the rail's own ⊞
+ *  brings the same box back.
+ *
+ *  THE STOP LINE holds here by Connect's route: the rail renders NO transmit control (its boxes are
+ *  Connect's, which key nothing — ▶ Work moves the rig and opens a cockpit), and it is a sibling of
+ *  the cockpit in the app shell, never inside a cockpit shell, so no id here can reach a cockpit's
+ *  header or dock. Swept in DashRail.stopLine.test.tsx (declared in stop-line.test.tsx ELSEWHERE). No
+ *  hide here ends anything in flight, so no entry carries a note. */
+export const DASH_PANELS: PanelVocabulary<DashSlotId> = {
+  view: 'dashrail',
+  panelIds: DASH_SLOT_IDS,
+}
+
 /**
  * EVERY vocabulary in the app, so the stop-line name backstop cannot silently miss one.
  * It missed the Operate cockpit for the whole life of the rule — the guard listed the four
@@ -1065,6 +1082,7 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
   PSK_PANELS,
   JS8_PANELS,
   CONNECT_PANELS,
+  DASH_PANELS,
 ]
 
 /**

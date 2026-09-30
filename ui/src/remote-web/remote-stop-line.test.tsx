@@ -206,6 +206,8 @@ it('every cockpit vocabulary has a Remote stop case, or is declared elsewhere', 
     operate: 'FtStopControl',
     // Connect draws no transmit control.
     connect: 'no transmit control',
+    // The dashboard rail's slots: the rail draws no transmit control, and it is not on the hosted page.
+    dashrail: 'no transmit control; not on the hosted page',
   }
   for (const vocab of ALL_PANEL_VOCABULARIES)
     expect(CASES.some(c => c.view === vocab.view) || vocab.view in ELSEWHERE, `${vocab.view} has no Remote stop case`).toBe(true)

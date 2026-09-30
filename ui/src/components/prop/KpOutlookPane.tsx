@@ -11,8 +11,7 @@
 // final. Bars past the measured edge are hollow and the boundary is marked, so a
 // forecast can never be read as a reading. Same rule the rest of the propagation
 // stack follows.
-import { useEffect, useState } from 'react'
-import { getKpForecast } from '../../api'
+import { KP_FORECAST, useFeed } from '../../features/connectFeeds'
 import type { KpForecast, KpPoint } from '../../types'
 import { t, type MessageKey } from '../../i18n'
 
@@ -53,21 +52,9 @@ function slot(unix: number): string {
 }
 
 export function KpOutlookPane() {
-  const [fc, setFc] = useState<KpForecast | null>(null)
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      getKpForecast()
-        .then((v) => live && setFc(v))
-        .catch(() => {})
-    load()
-    // Matches the server's 15-min cache; SWPC republishes every 30 min.
-    const id = window.setInterval(load, 900_000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
-  }, [])
+  // The window's one poll of the forecast (features/connectFeeds, on the server's 15-minute cache;
+  // SWPC republishes every 30), shared with App's storm heads-up, which watches the same feed.
+  const fc: KpForecast | null = useFeed(KP_FORECAST).value ?? null
 
   // No series at all = we have never had the feed. Say so; a flat line at zero would
   // read as "quiet", which is a forecast we do not have.

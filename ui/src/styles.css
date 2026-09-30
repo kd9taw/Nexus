@@ -552,6 +552,12 @@ button.nb-chip:hover {
 .nb-need {
   margin-left: auto;
 }
+/* The dashboard rail's switch (App passes it beside a cockpit, at lg and up): the bar's last chip,
+   so it sits over the column it opens. Pressed is the rail on screen. */
+.nb-rail[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--text);
+}
 .nb-src {
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -2028,6 +2034,28 @@ button.nb-chip:hover {
   color: var(--text);
   border-color: var(--accent);
 }
+/* The dashboard rail's head (components/DashRail; its structure is cockpit-panes.css `.dash-rail-head`):
+   the title reads like a pane title, a step heavier, and gives way to the ⊞ menu and ✕ beside it. */
+.dash-rail-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-micro);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+/* In the rail's head the ⊞ label may take two lines: at the 200 px floor "⊞ Bereiche · 1
+   ausgeblendet" is wider than the whole rail, even on a line of its own. The menu around it must
+   give way too (`.panels-menu` is `flex: 0 0 auto`), or the label keeps its one-line width. A
+   cockpit's ⊞ keeps its one line. */
+.dash-head .panels-menu {
+  flex-shrink: 1;
+}
+.dash-head .panels-menu-btn {
+  white-space: normal;
+}
 .pane-body {
   flex: 1;
   min-height: 0;
@@ -2149,19 +2177,27 @@ button.nb-chip:hover {
 .amp-fault.amp-warn {
   color: var(--alert-warning);
 }
-.connect .pane-body .ba-row {
+/* The dashboard rail beside the cockpits (`.dash-boxes`, components/DashRail) is the same kind of
+   narrow rail of Connect boxes, so the Band Advisor's rail fits reach it too, at the same (0,3,0).
+   Cockpit pane grids are still outside both. */
+.connect .pane-body .ba-row,
+.dash-boxes .pane-body .ba-row {
   grid-template-columns: 40px 1fr 78px;
 }
 .connect .pane-body .ba-dir,
-.connect .pane-body .ba-people {
+.connect .pane-body .ba-people,
+.dash-boxes .pane-body .ba-dir,
+.dash-boxes .pane-body .ba-people {
   display: none;
 }
-.connect .pane-body .ba-reason {
+.connect .pane-body .ba-reason,
+.dash-boxes .pane-body .ba-reason {
   grid-column: 1 / -1;
   font-size: var(--fs-micro);
   color: var(--text-faint);
 }
-.connect .pane-body .ba-rows {
+.connect .pane-body .ba-rows,
+.dash-boxes .pane-body .ba-rows {
   max-height: 100%; /* the pane body is the scroller now; no fixed 44vh cap */
   overflow-y: auto;
 }
@@ -2676,8 +2712,12 @@ body.resizing-row {
 }
 
 /* Getting-out compass rose (Phase D) — where the operator's signal lands, by octant. */
+/* The direction line stands beside the rose while 8em of it fits there and drops under the rose where
+   it does not: in a 200 px box the 108 px rose left it ~60 px, and "little/nothing" ran past the box's
+   right edge, cut off. Wider boxes lay out as before. */
 .getout-rose-wrap {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
@@ -2705,6 +2745,7 @@ body.resizing-row {
   font-weight: 600;
 }
 .getout-dir {
+  flex: 1 1 8em;
   margin: 0;
   font-size: var(--fs-micro);
   color: var(--text-dim);
@@ -15942,6 +15983,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   font-size: var(--fs-label);
 }
+/* The dashboard rail's row in a cockpit's ⊞ Panels (components/dashRailSwitch). The rail is not one
+   of this cockpit's panes — Undo and Reset below never touch it — so it stands apart, over a rule. */
+.panels-menu-rail {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
 .panels-menu-actions {
   display: flex;
   gap: var(--space-2);
@@ -16725,6 +16772,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 [data-viewport='xl'] .cq-break {
   display: none;
+}
+/* …EXCEPT BESIDE THE DASHBOARD RAIL. "The one row always fits at xl" is a claim about a cockpit as
+   wide as an xl WINDOW (≥ 2400 effective px, the cockpit ~2312), and the rail takes up to 720 px of
+   it: at 2560×1440, an ordinary xl monitor, the strip beside a default rail is ~2172 px, under the
+   width the one-row decision was measured for, and it would wrap wherever a long member happened to
+   fall — the mid-QSO jump this break point exists to prevent. So while the rail is on screen
+   (App stamps `data-dash-rail='on'` on the shell) the strip keeps the lg arrangement at every width: the
+   same two stable rows the 1366×768 laptop has always had. operate-classic-grid.test.ts computes it. */
+.shell[data-dash-rail='on'] .cq-break {
+  display: block;
 }
 /* Transmit-period + Skip Tx1 + next-slot countdown — absorbed from the status row
    (cs-* → cq-*), enablement unchanged (they never disabled on rx-only tiers). */

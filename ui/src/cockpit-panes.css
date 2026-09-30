@@ -514,3 +514,72 @@
 .cockpit-col--contact { order: -1; overflow: visible; }
 .cockpit-col--quiet { display: none; }
 .ph-scope-panel--quiet { display: none; }
+
+/* THE DASHBOARD RAIL (components/DashRail) — a column of Connect boxes beside the operating cockpit:
+   the third child of App's `.shell`, after the navigation rail and the cockpit, and never inside a
+   cockpit shell, so it adds no child kind to one and no pane of one sits in it.
+
+   ITS WIDTH is `--dash-rail-w`, written inline by the rail: the operator's stored preference fitted
+   into the window on load, on every resize and on every zoom change (features/dashRail), never wider
+   than what the window has BEYOND the 1024×768 floor window — so the cockpit beside it is never
+   narrower than on the supported floor, where every cockpit is built and swept to work. Shrink 1 and
+   the 200 px floor (RAIL_MIN, where its handle can still be grabbed) are the belt to those braces:
+   should a cockpit's own content ever refuse its share, the rail gives way first, and the shell never
+   scrolls sideways.
+
+   ITS OWN BOX DOES NOT CLIP, deliberately: the ⊞ menu in its head is anchored to its right edge and
+   220 px wide, so from a 200 px rail it opens over the cockpit's edge instead of being cut off. The
+   boxes clip themselves (`.pane-frame`) and scroll inside their bodies, the pane contract's legal fate
+   for a short box. */
+.dash-rail {
+  flex: 0 1 var(--dash-rail-w, 300px);
+  min-width: 200px;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+/* The width divider: absolutely placed in the rail's left padding, the rail's full height, over no
+   box (Connect's rail-handle rule). Overrides the base divider's gap-straddling margin. */
+.dash-rail-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  margin: 0;
+}
+/* The head — the title, then the rail's own ⊞ menu and its ✕ as one group: content height, always.
+   It WRAPS: where the title and the group do not fit on one line (the 200 px floor, or a label grown
+   by a hidden box — "⊞ Bereiche · 1 ausgeblendet"), the group goes under the title, at the rail's
+   right edge. On one line the ✕ went past the window's edge and the page scrolled sideways (measured
+   in German, Spanish and French at 1366×768 and 1920×1080). */
+.dash-rail-head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.dash-rail-acts {
+  flex: 0 1 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The boxes: a flex column split by each frame's share (the frame's inline
+   `flex: var(--connect-share) 1 0`, exactly Connect's rail), a divider in the gap between two. */
+.dash-rail-col {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
