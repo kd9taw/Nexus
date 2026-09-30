@@ -39,7 +39,9 @@
 // RTTY and SSTV the latch was never in the document and the sweep proved nothing about the
 // one control the rule names BY NAME (gating it on a panel id in either cockpit was green).
 // Phone and CW arm elsewhere and legitimately have no latch on screen; their `stopControls`
-// say so by not listing one.
+// say so by not listing one. The same holds for their two feeds (`spots`, `needed`): each
+// renders only with the board App lends it, so both cases lend one — without it the two ids
+// were in the sweep and their panes never on screen, and hiding them proved nothing.
 //
 // WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Six can —
 // Operate's Tx messages, its two decode panes and its two rosters, Phone's voice keyer — and
@@ -416,6 +418,10 @@ const fdStatus = {
   log: [{ call: 'W1AW', band: '20m', mode: 'PH', class: '3A', section: 'EMA', whenUnix: 100 }],
 } as unknown as FieldDayStatus
 
+/** The Spots and Needed boards as App lends them to Phone and CW (#345, plan H8), empty. */
+const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }
+const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
+
 /**
  * One cockpit's stop-line case. `stopControls` are accessible-name matchers for the controls
  * that END a transmission AND RENDER OUTSIDE EVERY ⊞-REMOVABLE PANE — the set the guarantee
@@ -464,6 +470,8 @@ const phone: Case<(typeof PHONE_PANEL_IDS)[number]> = {
         spots={[]}
         panels={panels}
         fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
       />,
     ),
 }
@@ -487,6 +495,8 @@ const cw: Case<(typeof CW_PANEL_IDS)[number]> = {
         spots={[]}
         panels={panels}
         fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
       />,
     ),
 }
@@ -617,7 +627,16 @@ const phoneDual: Case<(typeof PHONE_PANEL_IDS)[number]> = {
   cockpit: 'Phone with a Sub receiver',
   render: (panels) =>
     render(
-      <PhoneCockpit snap={dualSnap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} fieldDay={fdStatus} />,
+      <PhoneCockpit
+        snap={dualSnap}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={panels}
+        fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
+      />,
     ),
 }
 const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
@@ -625,7 +644,16 @@ const cwDual: Case<(typeof CW_PANEL_IDS)[number]> = {
   cockpit: 'CW with a Sub receiver',
   render: (panels) =>
     render(
-      <CwCockpit snap={dualSnap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} fieldDay={fdStatus} />,
+      <CwCockpit
+        snap={dualSnap}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        panels={panels}
+        fieldDay={fdStatus}
+        spotsBoard={spotsBoard}
+        neededBoard={neededBoard}
+      />,
     ),
 }
 
@@ -696,6 +724,18 @@ describe('the stop line, computed against the real cockpits', () => {
       c.render(panelsWith<string>([]))
       await settle()
       expect(document.querySelector('[data-receiver="sub"]'), `${c.cockpit}: no SUB row`).not.toBeNull()
+      cleanup()
+    }
+  })
+
+  it('Phone’s and CW’s two feeds are on screen with nothing hidden — else hiding them would sweep nothing', async () => {
+    for (const c of [phone, cw, phoneDual, cwDual] as Array<Case<any>>) {
+      c.render(panelsWith<string>([]))
+      await settle()
+      for (const id of ['spots', 'needed']) {
+        expect(c.ids, `${c.cockpit}: "${id}" left the vocabulary`).toContain(id)
+        expect(document.querySelector(`[data-pane="${id}"]`), `${c.cockpit}: the ${id} pane is not on screen`).not.toBeNull()
+      }
       cleanup()
     }
   })

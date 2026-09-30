@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,282 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,291 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -45,7 +45,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | RF | 30 | Radio frequency (as in RF power, RF gain). |
 | eQSL | 30 | Service name. |
 | RTTY | 28 | The mode. |
-| POTA / SOTA | 24 / 9 | Parks and Summits On The Air — programme names. |
+| POTA / SOTA | 28 / 10 | Parks and Summits On The Air — programme names. |
 | CSV | 24 | File format. |
 | CHIRP | 23 | The radio-programming program. |
 | UTC | 26 | The time standard. Never "TUC". |
@@ -95,9 +95,9 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 323 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| band | 324 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 231 | The rig itself, and the radio list in Settings. | |
-| mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
+| mode | 212 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 122 | The Settings screen and every reference to it. | |
@@ -115,8 +115,8 @@ word in, and use only that word in the CSV.
 | power | 52 | RF power, in watts. | |
 | confirmed | 50 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 51 | Both noun and verb. | |
-| spot / spots | 32 / 49 | A cluster or RBN spot. Both noun and verb. | |
-| needed | 50 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
+| spot / spots | 33 / 53 | A cluster or RBN spot. Both noun and verb. | |
+| needed | 53 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
 | import / export | 45 / 42 | ADIF import and export. | |
 | upload | 61 | Sending the log to LoTW, QRZ, eQSL, ClubLog. | |
 | satellite | 41 | | |

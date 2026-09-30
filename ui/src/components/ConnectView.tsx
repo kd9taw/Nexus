@@ -27,6 +27,7 @@ import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailH
 import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
+import type { OtaBoard, SpotsFeed } from './connect/paneContext'
 import { SLOT_IDS, useConnectConfig, type SlotId } from '../features/connectConfig'
 import { CONNECT_PRESET_IDS, CONNECT_PRESETS, connectLayoutNow, layoutPanels, type ConnectPresetId } from '../features/connectPresets'
 import type { RailWidths } from '../features/connectRails'
@@ -137,6 +138,12 @@ interface Props {
   onPopOut?: () => void
   /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
   rigBand?: string | null
+  /** The Spots box's list and wiring: this window's Spots board, lent whole (paneContext
+   *  SpotsFeed). Omitted ⇒ the box shows its one-line state and offers no Work. */
+  spotsFeed?: SpotsFeed
+  /** The POTA/SOTA box's wiring: this window's POTA/SOTA board's (paneContext OtaBoard). Omitted ⇒
+   *  its one-line state and no HUNT. */
+  otaBoard?: OtaBoard
 }
 
 export function ConnectView({
@@ -154,6 +161,8 @@ export function ConnectView({
   onSelectSat,
   onPopOut,
   rigBand,
+  spotsFeed,
+  otaBoard,
 }: Props) {
   const remoteConnect=useNavigation<ConnectData>('connect')
   const remoteSats=useNavigation<SatelliteData>('satellites')
@@ -245,6 +254,8 @@ export function ConnectView({
     remote: remoteFeedValues
       ? { feeds: remoteFeedValues, pathPred: remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null }
       : null,
+    spotsFeed,
+    otaBoard,
   })
   const { pathPred, bandOutlook, muf } = ctx
   // The one flux value the map renders (dev-override > fast lane > snapshot).

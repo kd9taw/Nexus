@@ -84,6 +84,11 @@ describe('the chrome', () => {
     expect((p.needByCall as Map<string, unknown>).size).toBe(0)
     // …and no work handler exists for ConnectView to render an affordance from.
     expect(p.onWorkSpot).toBeUndefined()
+    // …nor any board to lend the Spots and POTA/SOTA boxes: no list, no Work, no HUNT. With
+    // neither, each box is its one line (ConnectView.boards.test.tsx renders that with the real
+    // view), and the server serves neither list nor any command (connect_web.rs's allowlist).
+    expect(p.spotsFeed).toBeUndefined()
+    expect(p.otaBoard).toBeUndefined()
   })
 
   it('wears the same dashboard bar as the Connect pop-out: the station, the clocks, the indices, its own chips last', async () => {

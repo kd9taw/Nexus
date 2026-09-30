@@ -17,6 +17,7 @@ export const PANE_IDS = [
   'greyline', 'bandHours', 'esNowcast', 'measuredMuf', 'chaseFeed', 'satPasses', 'rotor', 'contests',
   'scope', 'amp', 'kpOutlook', 'bandTiles',
   'clock',
+  'spots', 'pota',
 ] as const
 export type PaneId = (typeof PANE_IDS)[number]
 

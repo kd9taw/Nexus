@@ -39,7 +39,7 @@ import {
   useKeyedFeed,
 } from '../../features/connectFeeds'
 import { provLabel } from './paneFormat'
-import type { PaneContext } from './paneContext'
+import type { OtaBoard, PaneContext, SpotsFeed } from './paneContext'
 
 /** What the selected call resolves to, against EVERYTHING plotted: a decoded station, a live spot,
  *  a DXpedition card — so a click on any map pixel fills the selection box. */
@@ -143,6 +143,10 @@ export interface PaneContextInput {
   toggleFocusBand: (band: string) => void
   /** The hosted Remote page's copies (never polled here); null on every desktop surface. */
   remote: { feeds: ConnectFeedValues; pathPred: PathPrediction | null } | null
+  /** The Spots and POTA/SOTA boxes' boards, lent by the window (PaneContext `spotsFeed` / `otaBoard`);
+   *  absent where it has none to lend, and those boxes then show their one line. */
+  spotsFeed?: SpotsFeed
+  otaBoard?: OtaBoard
 }
 
 /** A box context, and the X-ray reading the map's flare layer draws (it is not a box's). */
@@ -182,6 +186,8 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     scales: f.scales,
     alerts: f.alerts,
     muf: f.muf,
+    spotsFeed: i.spotsFeed,
+    otaBoard: i.otaBoard,
     onSelectCall: i.onSelectCall,
     onWorkSpot: i.onWorkSpot,
     onPoint: i.onPoint,

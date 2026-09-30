@@ -144,7 +144,7 @@ The panes you can assign:
 | Band Outlook | modelled workable bands to DX (or the path to a selected call) |
 | Openings | detected band openings around you |
 | Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
-| Getting Out | who is hearing you right now, on a compass |
+| Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Best Band → Region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |
 | NCDXF Beacons | the NCDXF beacon schedule, with heard badges |
@@ -159,6 +159,16 @@ The panes you can assign:
 | Rotor | rotator control + compass, and the elevation on an az/el rotator (appears once a rotctld is configured) |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
 | Clock | UTC and local time in large digits, the date, and today's sunrise and sunset at your grid |
+| Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |
+| POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
+
+The **Spots** and **POTA / SOTA** boxes are those screens' own lists, so a click on a spot or on
+**HUNT** does what it does there, and nothing transmits. In Connect's own window (**⧉ Pop out**)
+they work the same way, through that window's own Needed and POTA/SOTA boards, and the main
+window follows to the screen the station needs. Each box keeps its own filters, apart from
+the screen's. In a narrow box the Spots list shows the call, the frequency and the mode, adds the
+age, the country and the comment as the box widens, and shows every column from about 640 px;
+the list scrolls inside the box. The wall display (the TV page) shows no spot list, and each box says so there.
 
 The default layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,

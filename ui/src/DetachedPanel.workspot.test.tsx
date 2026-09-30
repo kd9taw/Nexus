@@ -75,6 +75,8 @@ vi.mock('./api', () => ({
   getBandPlan: vi.fn(() => Promise.resolve([])),
   getPropagation: vi.fn(() => Promise.resolve(null)),
   getNeedAlerts: vi.fn(() => Promise.resolve([])),
+  // The Connect window polls the spot list for its Spots box (the band-map pop-outs' 15 s poll).
+  getAllSpots: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve(null)),
   pointRotatorAtCall: vi.fn(() => Promise.resolve(null)),
   workSpot: vi.fn(() => Promise.resolve(null)),

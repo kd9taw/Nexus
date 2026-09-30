@@ -2780,23 +2780,46 @@ body.resizing-row {
   flex-direction: column;
   gap: 3px;
 }
+/* A row is the call, where (octant and distance), the band, the SNR and how long ago — the full
+   list, so every receiver the station reports. One line where the box has room (about 280 px
+   of list), each cell at a FIXED width so the columns line up down the list; a narrower box wraps
+   the same cells onto a second line, every row at the same place, because the cells' widths decide
+   it and not their text, with the SNR and the age pushed right (`.go-snr`'s auto margin). It was a
+   three-track grid holding four cells, so the SNR always fell under the call. */
 .getout-list li {
-  display: grid;
-  grid-template-columns: 1fr auto 2.6em;
+  display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
   font-size: var(--fs-micro);
 }
 .getout-list .go-call {
+  flex: 1 1 5.5em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   font-family: var(--font-mono);
 }
 .getout-list .go-where {
+  flex: 0 0 8em;
   color: var(--text-dim);
 }
 .getout-list .go-band {
+  flex: 0 0 2.6em;
   font-family: var(--font-mono);
   color: var(--text-faint);
+  text-align: right;
+}
+.getout-list .go-snr {
+  flex: 0 0 3.6em;
+  text-align: right;
+}
+.getout-list .go-age {
+  flex: 0 0 2.6em;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -17469,12 +17492,12 @@ button.cq-skiptx1.on {
 .sp-grid .np-row {
   grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
 }
-/* ── THE TWO BOARDS AS PHONE PANES (#345) ─────────────────────────────────────────────────
-   The Spots and Needed boards render inside a CockpitPaneFrame on the Phone cockpit, as fill
-   panes. This is the content half of that, in the sanctioned place (`.pane-body > .cw-decode`
-   is the precedent): `.np-pane` is Phone's wrapper, `.np-board` the board's own root when it is
-   hosted as a pane (SpotsPane / NeededPane) — never `.layout.single.needed-panel`, which is
-   the VIEW's shell and sizes a view.
+/* ── THE TWO BOARDS AS PHONE AND CW PANES (#345, plan H8) ─────────────────────────────────
+   The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
+   fill panes. This is the content half of that, in the sanctioned place (`.pane-body >
+   .cw-decode` is the precedent): `.np-pane` is the cockpits' wrapper, `.np-board` the board's
+   own root when it is hosted as a pane (SpotsPane / NeededPane) — never
+   `.layout.single.needed-panel`, which is the VIEW's shell and sizes a view.
 
    1. FILL, with the board's GRID as the one scroller. At the bounded tiers `height: 100%`
       resolves against the body's definite height, and each level below is a column flex whose
@@ -17541,6 +17564,80 @@ button.cq-skiptx1.on {
 }
 .np-board .sp-grid .np-row {
   grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr);
+}
+/* ── THE SPOTS BOARD AS A CONNECT BOX (components/connect/SpotsBox.tsx) ───────────────────
+   The same board as a pane (`.np-board`, above), in a Connect slot: a rail from 200 to 720 px
+   wide, a third of the bottom strip, the wall display. Two things differ from the Phone pane.
+
+   1. CONTENT HEIGHT, AND THE PANE BODY IS THE ONE SCROLLER. A Connect slot's height is a rail
+      share, or in the bottom strip an AUTO row that stops at 30 % of the window — sized by its
+      content. The pane's zero-basis grid would give the list no rows at all in that row, so here
+      the board takes its natural height, `.pane-body { overflow: auto }` scrolls it in every slot
+      alike, and the grid is no scroller of its own: its sticky column headings then stick to the
+      pane body, the scroller they are in.
+   2. ITS COLUMNS FOLLOW ITS OWN WIDTH. SpotsBox stamps `data-fit` from its own clientWidth (CSS
+      px): s (under 360) — call, frequency, mode; m (under 640) — age, call, entity, frequency,
+      mode, comment; l — the pane's nine. A narrow box drops columns rather than scrolling sideways.
+   3. THE HEAD KEEPS TO ONE LINE WHERE IT FITS. The search field gives up its fixed 240 px and a
+      large basis (the flex line breaks on the basis, so a 10em one wrapped the Filter button onto
+      a second line in a 300 px rail), so the count, the search and Filter share one line from
+      about 260 px and the head wraps inside the box, never widening it, below that.
+   4. A CALL TOO LONG FOR ITS COLUMN ELLIPSIZES inside its own button — the Logbook's rule
+      (`.log-cell > .qrz-link-call`): a cell's text-overflow cannot reach into a button, so
+      `KP4/W1ABC` in a 200 px rail was cut mid-glyph. */
+.cn-spots .np-board,
+.cn-spots .np-board > .np-grid {
+  flex: none;
+}
+.cn-spots .np-board > .np-grid {
+  overflow: visible;
+}
+.cn-spots .np-search {
+  flex: 1 1 6em;
+  min-width: 0;
+}
+.cn-spots .np-search input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.cn-spots .np-call {
+  min-width: 0;
+  overflow: hidden;
+}
+.cn-spots .np-call > .qrz-link-call {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.cn-spots[data-fit='m'] .sp-grid .np-row {
+  grid-template-columns: 40px minmax(64px, 1fr) minmax(0, 1.2fr) 60px 52px minmax(0, 1fr);
+}
+.cn-spots[data-fit='s'] .sp-grid .np-row {
+  grid-template-columns: minmax(0, 1fr) 3.9em 3.5em;
+  gap: var(--space-1);
+}
+.cn-spots[data-fit='m'] .sp-state,
+.cn-spots[data-fit='m'] .np-band,
+.cn-spots[data-fit='m'] .sp-spotter,
+.cn-spots[data-fit='m'] [data-col='state'],
+.cn-spots[data-fit='m'] [data-col='band'],
+.cn-spots[data-fit='m'] [data-col='spotter'],
+.cn-spots[data-fit='s'] .np-age,
+.cn-spots[data-fit='s'] .np-entity,
+.cn-spots[data-fit='s'] .sp-state,
+.cn-spots[data-fit='s'] .np-band,
+.cn-spots[data-fit='s'] .sp-spotter,
+.cn-spots[data-fit='s'] .np-why,
+.cn-spots[data-fit='s'] [data-col='age'],
+.cn-spots[data-fit='s'] [data-col='entity'],
+.cn-spots[data-fit='s'] [data-col='state'],
+.cn-spots[data-fit='s'] [data-col='band'],
+.cn-spots[data-fit='s'] [data-col='spotter'],
+.cn-spots[data-fit='s'] [data-col='comment'] {
+  display: none;
 }
 .sp-state {
   color: var(--text-dim);
@@ -19805,6 +19902,56 @@ button.cq-skiptx1.on {
 }
 .pota-refresh-btn .spin {
   animation: pota-spin 0.8s linear infinite;
+}
+/* ── THE POTA/SOTA BOARD AS A CONNECT BOX (PotaSotaView `pane`, marked `data-ota-box`) ────
+   The view's hunter list in a Connect slot: a rail from 200 to 720 px, a third of the bottom
+   strip. Measured in Chrome at 1920×1080, the view's own control stack — the program tabs in
+   their padded, ruled row, Hide worked on a line of its own, Refresh with its time line —
+   filled a 219 px rail box before the first card. So in a box the controls are one wrapping row
+   of plain chips (no touch floor here: Touch density still raises them, `:root[data-touch]`
+   outranks this), the cards lose some padding, and a card's frequency line may wrap between its
+   parts instead of running under HUNT. In a card too narrow for its text beside HUNT (the 200 px
+   rail) HUNT goes under the text, at the right: the text keeps the card's width rather than a
+   100 px column that stacked the call, the reference and each badge a line apiece (152 px a card,
+   measured). The list scrolls in the pane body. */
+[data-ota-box] .pota-controls {
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+[data-ota-box] .pota-controls-row {
+  gap: var(--space-1);
+}
+[data-ota-box] .filter-row {
+  padding: 0;
+  border-bottom: 0;
+  gap: var(--space-1);
+}
+[data-ota-box] .filter-chip {
+  min-height: 0;
+  padding: 3px 9px;
+}
+[data-ota-box] .pota-refresh-row {
+  margin-left: 0;
+}
+[data-ota-box] .pota-spot-list {
+  margin-top: 0;
+  gap: var(--space-1);
+}
+[data-ota-box] .pota-spot-v2 {
+  flex-wrap: wrap;
+  padding: 6px var(--space-2);
+  gap: var(--space-2);
+}
+[data-ota-box] .pota-spot-main {
+  flex: 1 1 11em;
+}
+[data-ota-box] .pota-spot-meta {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+[data-ota-box] .pota-hunt-btn {
+  margin-left: auto;
+  padding: var(--space-1) 10px;
 }
 
 /* Zero-config detected-radio list (Settings → rig control). */

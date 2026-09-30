@@ -138,9 +138,20 @@ The getting-out panel polls every 30 seconds from the live MQTT spot buffer (180
 
 - Total distinct receiver count
 - Furthest reception in km
-- Up to 6 named receivers with direction octant, band, and SNR
+- Every receiver in that window, most distant first, each with its direction octant and distance, band, the SNR it heard you at, and how long ago; the list scrolls inside the box
 
 Clicking a receiver row selects it on the map. Stations that heard you appear as green halo dots on the map regardless of whether the getting-out panel is open.
+
+---
+
+## Spots and POTA / SOTA Boxes
+
+Two boxes put the hunting lists in the Connect grid; pick either from any box's menu. Neither is in a default or ready-made layout.
+
+- **Spots** is the Spots screen's list itself: every cluster and RBN spot, with the Spots screen's search and Filter chips (Heard on my continent and Hide worked start on). A click on a row works the station exactly as it does on the Spots screen: the radio goes to the spot's frequency and mode, and the matching cockpit opens.
+- **POTA / SOTA** is the POTA/SOTA screen's hunter list itself: the POTA, SOTA and Both tabs, Hide worked today, Refresh and **HUNT**, which tags your next contact with the park or summit and goes to the station, as it does on that screen. Its band, mode and sort choices open on its Filter button.
+
+Neither box transmits. In the Connect pop-out (the dashboard window) the two boxes work through that window's own Needed and POTA/SOTA boards, the paths its board pop-outs use, and the main window follows the Work to the matching cockpit. Each keeps its own filters, apart from its screen's, so a chip in one never moves the other. The Spots box drops columns as it narrows (call, frequency and mode at its narrowest; the age, country and comment from about 360 px; every column from about 640 px) and scrolls inside itself. The wall display (TV page) is served no spot list, so there each box shows one line saying the list is not available.
 
 ---
 

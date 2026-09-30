@@ -201,6 +201,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asks for what the same boxes on Connect ask for, and opening Connect no longer asks for the
   X-ray reading and the DXpedition windows twice. On a window 2400 px wide or wider, Operate's QSO strip keeps its two rows while
   the rail is shown, as it does on a smaller screen.
+- **Connect: a Spots box and a POTA / SOTA box.** Pick **Spots** or **POTA / SOTA** from any
+  Connect box's menu. Each is the list from its own screen, in a box:
+  - **Spots** lists every spot on the air, as the Spots screen does, with the same search and
+    Filter chips; Heard on my continent and Hide worked start on, as they do there.
+  - **POTA / SOTA** lists the activators on the air, with the POTA, SOTA and Both tabs, Hide
+    worked today, Refresh and **HUNT**. Its band, mode and sort choices open on its Filter button.
+
+  A click on a spot, or on **HUNT**, does what it does on those screens: the radio goes to the
+  station and the right screen opens. Nothing transmits. Each box keeps its own filters, so a chip
+  in a box never changes the Spots or POTA / SOTA screen, or the other way round. A narrow box
+  shows fewer columns (call, frequency and mode at its narrowest; the age, country and comment
+  from about 360 px; every column from about 640 px), and the list scrolls inside the box. Neither box is in the
+  default layout or a ready-made one, so nobody's Connect changes on the update. The wall display
+  (the TV page) shows no spot list, and each box says so there.
+- **The Spots and POTA / SOTA boxes work in Connect's own window too.** In the window **⧉ Pop
+  out** opens, the two boxes show the same lists as in the main window, and a click on a spot or
+  on **HUNT** moves the radio exactly as that window's own Needed and POTA/SOTA boards do; the
+  main window then follows to the matching screen (on CW and Phone with the call ready in the
+  log). Nothing transmits. The wall display still has neither list, and nothing on it can move
+  the radio.
+- **Getting Out lists everyone who hears you.** The Getting Out box on Connect lists every station
+  that has decoded you in the last half hour, not only the first six, most distant first: the
+  call, the direction and distance, the band, the SNR they heard you at and how long ago. The list
+  scrolls inside the box, one line per station where the box has room, and a click still shows the
+  station on the map.
+- **Spots and Needed on the CW screen.** ⊞ Panels on the CW cockpit has the Phone screen's two
+  entries, **Spots** and **Needed**, and both start unticked, so nobody's CW screen changes on the
+  update. Tick one and it joins the screen. On a wide window Spots goes under CW Decode and the
+  Sent echo, and the transcript keeps three quarters of that column; Needed goes under Band
+  Activity and the copilot. On a narrower window both go at the bottom of the left-hand column,
+  below the rig controls, Band Activity and the copilot, with a divider between them that you drag
+  to share the height (the split is remembered). On a small window the column scrolls, so hide a
+  pane you do not need to give them more room. **Spots** opens on the CW spots on the band your
+  radio is on (a skimmer's RTTY or FT8 decode in the CW part of the band stays out) and moves with
+  the radio when you change band; its Filter chips widen it to other modes and bands. **Needed**
+  opens on the CW needs, and its chips widen it the same way. Each pane keeps its own filters, so a
+  chip on the CW screen never changes the Spots or Needed screen, or the Phone screen's panes. A
+  click on a row does exactly what it does on those screens: the radio goes to the station and the
+  call goes into the log; a phone or digital spot, once you have widened the list to it, opens its
+  own screen. Nothing transmits. **Reset layout** unticks both again. On the Remote page the panes
+  show the spots and needs the station already shares, and say so when it does not.
 - **Night: a darker, warmer screen after dark.** Settings ▸ Appearance ▸ Theme has a new
   **Night** row under High contrast: Off, On, or **Auto**, which turns Night on at dusk and off at
   dawn at your grid square (when the sun is 6° below the horizon there). Night dims and warms the

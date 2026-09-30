@@ -45,6 +45,14 @@ export const PER_SURFACE = [
   // The Layers panel folded to its pill (MapLayersPanel) — per window, like the Conditions rail,
   // and one record for the 2-D and 3-D panels, which sit in the same place.
   'nexus.connect.layersPanel.collapsed',
+  // Connect's POTA/SOTA box keeps its OWN copy of the board's filters (PotaSotaView OTA_KEYS.box),
+  // per window like the view's `nexus.ota.*` below: a chip in the box never moves the view's.
+  'nexus.connect.ota.bandFilter',
+  'nexus.connect.ota.hideWorked',
+  'nexus.connect.ota.modeFilter',
+  'nexus.connect.ota.program',
+  'nexus.connect.ota.sortAsc',
+  'nexus.connect.ota.sortKey',
   'nexus.connect.map3d',
   // The map's full-screen chrome-hide. Per-surface for the same reason map3d is — it is a
   // statement about ONE window — and the one per-surface key here that is deliberately read
@@ -65,6 +73,9 @@ export const PER_SURFACE = [
   // under another name, for the same reason: what THIS board shows. Never that key — a chip in
   // the pane and one on the Needed view must not move each other.
   'nexus.phone.neededFilters',
+  // …and the CW cockpit's (plan H8: CW gains Phone's two feeds), for the same reason and apart
+  // from both of the above.
+  'nexus.cw.neededFilters',
   'nexus.decodes.hideB4',
   'nexus.decodes.hideBlocked',
   'nexus.decodes.hideConfirmed',
@@ -268,7 +279,9 @@ const SESSION_SCOPED = [
   // The band a PANE of the board follows, and the modes it opens on as an allow-list (#345: the
   // Phone cockpit's Spots pane). Each is kept only by that pane; the view keeps `hiddenModes`
   // instead and no follow switch at all. A pane keeps EVERY key here as its own copy,
-  // `<key>.<scope>` (`nexus.spots.bands.phone`): same store, same lifetime, same verdict.
+  // `<key>.<scope>` (`nexus.spots.bands.phone`): same store, same lifetime, same verdict. Connect's
+  // Spots box is a pane that names no modes and follows no band, so it keeps `hiddenModes` in
+  // its copy (`nexus.spots.hiddenModes.connect`), the view's rule, and no follow switch.
   'nexus.spots.followBand',
   'nexus.spots.shownModes',
   'nexus.spots.hiddenModes',
@@ -375,8 +388,24 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.logbook.globe',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
-  // host of a PANE of it passes (NeededPane — the Phone cockpit's, #345).
-  'components/NeededPanel.tsx:key': ['neededFilters', 'nexus.phone.neededFilters'],
+  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8).
+  'components/NeededPanel.tsx:key': ['neededFilters', 'nexus.phone.neededFilters', 'nexus.cw.neededFilters'],
+  // The POTA/SOTA board's filters, read and written through its key table (OTA_KEYS): the view's
+  // own six, or the Connect box's six.
+  'components/PotaSotaView.tsx:keys': [
+    'nexus.ota.program',
+    'nexus.ota.bandFilter',
+    'nexus.ota.modeFilter',
+    'nexus.ota.sortKey',
+    'nexus.ota.sortAsc',
+    'nexus.ota.hideWorked',
+    'nexus.connect.ota.program',
+    'nexus.connect.ota.bandFilter',
+    'nexus.connect.ota.modeFilter',
+    'nexus.connect.ota.sortKey',
+    'nexus.connect.ota.sortAsc',
+    'nexus.connect.ota.hideWorked',
+  ],
 }
 
 const routed = new Set<string>()
@@ -562,6 +591,15 @@ describe('call sites agree with the classification', () => {
     const phone = readFileSync(join(SRC, 'components/PhoneCockpit.tsx'), 'utf8')
     expect(phone).toContain("const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'")
     expect(phone).toContain('pane={{ filterKey: PHONE_NEEDED_FILTERS,')
+    const cw = readFileSync(join(SRC, 'components/CwCockpit.tsx'), 'utf8')
+    expect(cw).toContain("const CW_NEEDED_FILTERS = 'nexus.cw.neededFilters'")
+    expect(cw).toContain('pane={{ filterKey: CW_NEEDED_FILTERS,')
+    // The POTA/SOTA board's key table: every key the seam claims is a literal in it, the board
+    // reads through it and nothing else, and it picks the box's half only as a box.
+    const ota = readFileSync(join(SRC, 'components/PotaSotaView.tsx'), 'utf8')
+    for (const k of INDIRECT['components/PotaSotaView.tsx:keys']) expect(ota).toContain(`'${k}'`)
+    expect(ota).toContain('const keys = pane ? OTA_KEYS.box : OTA_KEYS.view')
+    expect(ota).not.toMatch(/surface(?:Get|Set)\(\s*'nexus\.(?:connect\.)?ota\./)
   })
 
   it('scopes BOTH writers of a key written from two components', () => {
