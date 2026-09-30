@@ -7385,10 +7385,11 @@ impl Engine {
         // when you leave"): the section's queue is cleared, the log says so once, and its ⚠
         // line tells the operator on their return, so nothing keys when they come back. Bound
         // HERE, to the act of leaving: every section change (the nav, a spot click that opens
-        // another cockpit, the Remote) passes through this method, and a section re-asserting
-        // itself (a view entry) leaves nothing. The over in flight is untouched, as a section
-        // change has always left it: nothing arms an abort for a one-shot over (the latches
-        // above cut only a LATCHED stream).
+        // another cockpit, an SSTV channel pick, the Remote) passes through this method, and a
+        // section re-asserting itself (a view entry) leaves nothing. The over in flight is left
+        // as a section change has always left it: nothing here arms an abort for a one-shot
+        // over (the latches above cut only a LATCHED stream), so it finishes where TX stays
+        // armed, and the loop's TX-off cut ends it where the disarm below lowers the latch.
         self.drop_queued_overs_on_leaving(om);
         // The other half of the context pair (see the tier line): which section the operator is
         // in decides what every transmit, CAT and audio line beneath it means. Logged only when
@@ -7524,12 +7525,13 @@ impl Engine {
             //
             // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
             // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
-            // their aborts — and a section change is not an operator pressing TX Off: the over
-            // in flight finishes. Nothing queued is held either: RTTY's and PSK's went as the
-            // section was left (above), and CW's goes at the loop's next `poll_cw_one`, which
-            // drops a refused send and says so (operator, 2026-09-30). So: lower the latch, bump
-            // the gate generation (an over planned while armed must not commit), and nothing
-            // else. One bit changes, and it is the operator's.
+            // their aborts — and a section change is not an operator pressing TX Off: nothing
+            // here arms an abort. The over in flight is the loop's: with the latch down, its
+            // TX-off cut ends a non-slot over (a manual mode's). Nothing queued is held either:
+            // RTTY's and PSK's went as the section was left (above), and CW's goes at the loop's
+            // next `poll_cw_one`, which drops a refused send and says so (operator, 2026-09-30).
+            // So: lower the latch, bump the gate generation (an over planned while armed must
+            // not commit), and nothing else. One bit changes, and it is the operator's.
             if self.tx_enabled {
                 tempo_core::applog::info("tx", "transmit disarmed by leaving a manual mode");
             }
