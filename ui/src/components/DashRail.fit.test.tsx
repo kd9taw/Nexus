@@ -224,6 +224,9 @@ describe('the boards at the rail’s floor', () => {
       return el
     })
     expect(css(tabs, 'flex-wrap'), '“POTA SOTA Beide” runs 5 px past a 175 px box').toBe('wrap')
+    // …and the row itself may narrow to the box, or it keeps its one-line width and has nothing to wrap
+    // (`.filter-row { flex: 0 0 auto }`: Chrome measured the wrapping row still 168 px in a 147 px row).
+    expect(css(tabs, 'flex-shrink'), 'the tabs row keeps its one-line width').toBe('1')
     cleanup()
     // THE CONTROL: the POTA / SOTA screen is not a box.
     render(<PotaSotaView snap={APP_SNAPSHOT as unknown as AppSnapshot} onHunt={() => {}} onSnap={() => {}} />)
@@ -233,5 +236,6 @@ describe('the boards at the rail’s floor', () => {
       return el
     })
     expect(css(screenTabs, 'flex-wrap')).toBeNull()
+    expect(css(screenTabs, 'flex-shrink')).toBe('0')
   })
 })

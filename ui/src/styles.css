@@ -19950,7 +19950,9 @@ button.cq-skiptx1.on {
    rail) HUNT goes under the text, at the right: the text keeps the card's width rather than a
    100 px column that stacked the call, the reference and each badge a line apiece (152 px a card,
    measured). The list scrolls in the pane body. The programme tabs wrap too: at the dashboard rail's
-   floor (a 175 px box) "POTA SOTA Beide" ran 5 px past it, and "Ambos" and "Les deux" as far. */
+   floor (a 175 px box) "POTA SOTA Beide" ran 5 px past it, and "Ambos" and "Les deux" as far. The
+   row must also be let narrow to the box (`.filter-row` is `flex: 0 0 auto`), or it keeps its
+   one-line width and has nothing to wrap. */
 [data-ota-box] .pota-controls {
   gap: var(--space-1);
   margin-bottom: var(--space-1);
@@ -19959,6 +19961,7 @@ button.cq-skiptx1.on {
   gap: var(--space-1);
 }
 [data-ota-box] .filter-row {
+  flex-shrink: 1;
   flex-wrap: wrap;
   padding: 0;
   border-bottom: 0;
