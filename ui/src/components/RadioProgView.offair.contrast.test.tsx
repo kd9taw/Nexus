@@ -45,6 +45,7 @@ const api = vi.hoisted(() => {
     },
   })
   const result = { source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false, coverageGap: null, missingStates: [],
+    lists: [{ source: 'repeaterbook', fetchedUtc: 1_700_000_000, stale: false }], rsgbUnavailable: false, rsgbBeyond: [],
     rows: [machine('W3ZGD', 146.865, true), machine('N3OFF', 146.94, false), machine('K3DWN', 147.09, false)] } as unknown as RepeaterSearchResult
   return { repeaterSearch: vi.fn(async () => result), radioprogListProjects: vi.fn(async () => []) }
 })
