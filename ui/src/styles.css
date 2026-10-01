@@ -16353,11 +16353,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 
 /* ⊞ Panels — show/hide this screen's panels. Menu-only removal (no per-panel ✕ an
    inch from a decode list), with Undo + Reset in the footer. */
-.panels-menu {
+.panels-menu,
+.connect-layout-menu {
   position: relative;
   flex: 0 0 auto;
 }
-.panels-menu-btn {
+.panels-menu-btn,
+.connect-layout-btn {
   font-size: var(--fs-label);
   font-weight: 600;
   white-space: nowrap;
@@ -16369,11 +16371,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
 }
 .panels-menu-btn:hover,
-.panels-menu-btn.active {
+.panels-menu-btn.active,
+.connect-layout-btn:hover,
+.connect-layout-btn.active {
   color: var(--text);
   border-color: var(--accent);
 }
-.panels-menu-pop {
+.panels-menu-pop,
+.connect-layout-pop {
   position: absolute;
   top: 100%;
   right: 0;
@@ -16450,7 +16455,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding-top: var(--space-2);
   border-top: 1px solid var(--border);
 }
-.panels-menu-actions button {
+.panels-menu-actions button,
+.connect-layout-actions button {
   flex: 1;
   font-size: var(--fs-label);
   padding: var(--space-1);
@@ -16460,11 +16466,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.panels-menu-actions button:hover:not(:disabled) {
+.panels-menu-actions button:hover:not(:disabled),
+.connect-layout-actions button:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
 }
-.panels-menu-actions button:disabled {
+.panels-menu-actions button:disabled,
+.connect-layout-actions button:disabled {
   color: var(--text-faint);
   cursor: default;
 }
@@ -16584,6 +16592,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   font-size: var(--fs-micro);
   line-height: var(--lh-tight);
+}
+/* Connect's own Layout button (ConnectView LayoutMenu) — the same picker behind a door of its own,
+   beside ⊞ Panels and wearing its look (the shared rules above). The two stand together in one group
+   wherever the header puts them. The popover's Undo sits under the picker's own rule, so its row
+   needs no second one (⊞ Panels' footer draws a border-top because entries sit above it). */
+.connect-header-menus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.connect-layout-actions {
+  display: flex;
+  gap: var(--space-2);
 }
 .cockpit-txstate {
   font-size: 0.8rem;

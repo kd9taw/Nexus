@@ -1076,6 +1076,8 @@ export const FR: PartialCatalog = {
   "connect.layout.frame.label": "Cadre",
   "connect.layout.frame.title": "Deux panneaux de chaque côté d'une carte sur toute la hauteur, pour un tableau de bord sur son propre écran : à gauche les conditions de bande et la météo spatiale, à droite qui vous entend et quoi chasser",
   "connect.layout.replaces": "En choisir une remplace votre propre disposition. « Annuler le dernier changement » la rétablit.",
+  "connect.layout.button": "Disposition",
+  "connect.layout.button.title": "Choisir une disposition pour cet écran : Carte d'abord, Listes d'abord, Tableau de bord ou Cadre",
   "connect.slot.pick.aria": "Choisir ce qu'affiche l'emplacement {{slot}}",
   "connect.slot.pick.title": "Choisir ce qu'affiche cet emplacement",
   "contests.group.later": "Plus tard",

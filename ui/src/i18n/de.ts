@@ -4766,6 +4766,8 @@ export const DE: PartialCatalog = {
   "connect.layout.frame.label": "Rahmen",
   "connect.layout.frame.title": "Zwei Bereiche an jeder Seite einer Karte in voller Höhe, für ein Dashboard auf einem eigenen Bildschirm: links Bandbedingungen und Weltraumwetter, rechts wer dich hört und was es zu jagen gibt",
   "connect.layout.replaces": "Eine Auswahl ersetzt deine eigene Anordnung. „Letzte Änderung rückgängig“ holt sie zurück.",
+  "connect.layout.button": "Layout",
+  "connect.layout.button.title": "Wähle ein Layout für diese Ansicht: Karte zuerst, Listen zuerst, Übersicht oder Rahmen",
   "connect.pane.advisory.title": "Bedingungen",
   "connect.pane.bandAdvisor.title": "Band-Berater",
   "connect.pane.bandTiles.title": "Bänder für Sie",

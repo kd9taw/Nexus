@@ -4499,6 +4499,8 @@ export const JA: PartialCatalog = {
   "connect.layout.frame.label": "フレーム",
   "connect.layout.frame.title": "地図を縦いっぱいに表示し、その左右にパネルを2つずつ配置（専用画面のダッシュボード向け）：左はバンドコンディションと宇宙天気、右はあなたを受信している局と追うべき局",
   "connect.layout.replaces": "選ぶと独自の配置が置き換わります。「直前の変更を元に戻す」で元に戻せます。",
+  "connect.layout.button": "レイアウト",
+  "connect.layout.button.title": "この画面のレイアウトを選択：地図優先、リスト優先、ダッシュボード、フレーム",
   "connect.pane.advisory.title": "コンディション",
   "connect.pane.bandAdvisor.title": "バンドアドバイザー",
   "connect.pane.bandTiles.title": "自局向けのバンド",

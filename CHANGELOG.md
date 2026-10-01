@@ -200,6 +200,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   touches the map, and it only ever turns Satellites on: every other layer stays as you had it,
   untick Satellites afterwards and it stays off, and **Undo last change** turns it back off along
   with the rest of the layout (unless you had it on before you picked Frame).
+- **Connect: a Layout button.** The layouts are one click away now: **Layout** in Connect's header,
+  beside **⊞ Panels**, opens **Map first**, **List first**, **Dashboard** and **Frame**, says which
+  layout is on screen (**Standard**, one of the four, or **Custom**) and has **Undo last change**.
+  It is the same picker that opens at the top of **⊞ Panels**, so a pick made in either shows in
+  both, and either Undo takes it back. The dashboard window, the TV page and the Remote Connect
+  page have the button too.
 - **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
   **Stay behind** button. Pressed, the window stays behind your other windows even when you click
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers

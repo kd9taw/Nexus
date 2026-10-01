@@ -7304,6 +7304,11 @@ export const EN = {
   'connect.layout.frame.label': 'Frame',
   'connect.layout.frame.title': 'Two panes down each side of a map that runs the full height, for a dashboard on a screen of its own: band conditions and space weather on the left, who is hearing you and what to chase on the right',
   'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
+  // Connect's own Layout button (the operator's pick, 2026-10-01): it opens the same picker as the
+  // ⊞ Panels menu's Layout section, beside ⊞ Panels in Connect's header. The title names the four
+  // layouts by their own labels above.
+  'connect.layout.button': 'Layout',
+  'connect.layout.button.title': 'Choose a layout for this screen: Map first, List first, Dashboard or Frame',
 
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Conditions',

@@ -10,7 +10,7 @@
 // The panes are an assignable wrap-the-globe grid: every panel is a
 // reassignable pane with a Basic (one plain sentence) and Expert (full data) view; the
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
-import { useState, useId, useMemo, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense, type ReactNode } from 'react'
 import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
 import type { AmpStatus } from '../types'
 import type { Theme } from '../useTheme'
@@ -113,6 +113,101 @@ const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => 
   listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
   dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
   frame: { label: () => t('connect.layout.frame.label'), title: () => t('connect.layout.frame.title') },
+}
+
+/** THE LAYOUT PICKER. ONE component, drawn behind two doors: Connect's own Layout button
+ * (LayoutMenu, below) and the top of ⊞ Panels, where it has always been. Both are handed the same
+ * read-back and the same pick, so the two can never disagree about what is on screen. A column of
+ * choices, not a chip row: the popover is 220 px wide, where three chips side by side wrap at Large
+ * text or in German. The words over the operator's own arrangement say what a tap costs before it is
+ * made. Its ids are its own (`useId`), so the two doors never share one. */
+function LayoutPicker({ now, onPick }: { now: ConnectPresetId | 'standard' | 'custom'; onPick: (id: ConnectPresetId) => void }) {
+  const id = useId()
+  return (
+    <div className="connect-layouts" role="group" aria-labelledby={`${id}-head`}>
+      <div className="connect-layouts-head">
+        <span id={`${id}-head`}>{t('connect.layout.heading')}</span>
+        <span className="connect-layout-now">
+          {now === 'standard'
+            ? t('connect.layout.standard')
+            : now === 'custom'
+              ? t('connect.layout.custom')
+              : LAYOUT_WORDS[now].label()}
+        </span>
+      </div>
+      {CONNECT_PRESET_IDS.map((p) => (
+        <button
+          key={p}
+          type="button"
+          className={`connect-layout-opt${now === p ? ' active' : ''}`}
+          aria-pressed={now === p}
+          aria-describedby={now === 'custom' ? `${id}-cost` : undefined}
+          title={LAYOUT_WORDS[p].title()}
+          onClick={() => onPick(p)}
+        >
+          {LAYOUT_WORDS[p].label()}
+        </button>
+      ))}
+      {now === 'custom' && (
+        <span className="connect-layout-note" id={`${id}-cost`}>
+          {t('connect.layout.replaces')}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** CONNECT'S LAYOUT BUTTON (the operator's pick, 2026-10-01: "A visible Layout button"). The layouts
+ * sat only at the top of ⊞ Panels, and the operator went looking for them on Connect and did not find
+ * them. This opens the same LayoutPicker with the same Undo — the panel record's one history, so an
+ * Undo pressed here or in ⊞ Panels takes back the same step (the picker's own words name that button).
+ * It closes as ⊞ Panels does: a click anywhere else, or Escape, which goes back to the button and does
+ * NOT stop propagating — on Connect Escape is also the stop (App), and it has to get there. */
+function LayoutMenu({ picker, onUndo, canUndo }: { picker: ReactNode; onUndo: () => void; canUndo: boolean }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [open])
+  return (
+    <div className="connect-layout-menu" ref={rootRef}>
+      <button
+        type="button"
+        ref={btnRef}
+        className={`connect-layout-btn${open ? ' active' : ''}`}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        title={t('connect.layout.button.title')}
+      >
+        {t('connect.layout.button')}
+      </button>
+      {open && (
+        <div
+          className="connect-layout-pop"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setOpen(false)
+              btnRef.current?.focus({ preventScroll: true })
+            }
+          }}
+        >
+          {picker}
+          <div className="connect-layout-actions">
+            <button type="button" onClick={onUndo} disabled={!canUndo} title={t('panels.undo.title')}>
+              {t('panels.undo')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
@@ -340,7 +435,6 @@ export function ConnectView({
   // screen is READ BACK from the placement, the panel record and the stored rail widths — never
   // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
   const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref })
-  const layoutsId = useId()
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
   const pickLayout = (id: ConnectPresetId) => {
@@ -360,6 +454,25 @@ export function ConnectView({
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
     if (turnedOn.length) setMapLayersRev((n) => n + 1)
   }
+  // The ONE Undo, behind both doors (⊞ Panels and the Layout button): the panel record steps back,
+  // and the placement, widths and map layers a layout replaced come back with it.
+  const undoLayout = () => {
+    const before = beforeSwitch.current
+    beforeSwitch.current = null
+    panels.undo()
+    if (before) {
+      restoreSlots(before.slots, before.tabs, before.rotate)
+      if (before.rails) widths.setPrefs(before.rails)
+      if (before.mapLayers) {
+        for (const { layer, map } of before.mapLayers.turnedOn) {
+          if (map === '2d') setIntentMapLayer(before.mapLayers.intent, layer, false)
+          else setGlobeLayer(layer, false)
+        }
+        setMapLayersRev((n) => n + 1)
+      }
+    }
+  }
+  const picker = <LayoutPicker now={layoutNow} onPick={pickLayout} />
 
   // TABS (features/connectConfig): a slot holds one or more panes and shows one. Showing a tab is not
   // an arrangement change, so it leaves the one Undo alone; adding or removing one is, like a pick.
@@ -438,78 +551,34 @@ export function ConnectView({
               </button>
             ))}
           </div>
-          {/* The restore surface for a closed pane, and Reset layout. Always in the header, so
-              with every pane closed the way back is still one click away. */}
-          <PanelsMenu
-            items={SLOT_IDS.map((s) => ({
-              id: s,
-              label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
-              state: panels.stateOf(s),
-            }))}
-            onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
-            onUndo={() => {
-              const before = beforeSwitch.current
-              beforeSwitch.current = null
-              panels.undo()
-              if (before) {
-                restoreSlots(before.slots, before.tabs, before.rotate)
-                if (before.rails) widths.setPrefs(before.rails)
-                if (before.mapLayers) {
-                  for (const { layer, map } of before.mapLayers.turnedOn) {
-                    if (map === '2d') setIntentMapLayer(before.mapLayers.intent, layer, false)
-                    else setGlobeLayer(layer, false)
-                  }
-                  setMapLayersRev((n) => n + 1)
-                }
-              }
-            }}
-            canUndo={panels.canUndo}
-            onReset={() => {
-              beforeSwitch.current = { slots, tabs, rotate }
-              panels.reset()
-              resetSlots()
-              widths.resetAll()
-              // '' reads back as "never set": the strip's own height (a height is not an undo step,
-              // like the widths).
-              surfaceSet('nexus.split.connect.strip', '')
-              setStripEpoch((n) => n + 1)
-            }}
-            lead={
-              // THE LAYOUT PICKER. A column of choices, not a chip row: the popover is 220 px wide,
-              // where three chips side by side wrap at Large text or in German. The words over
-              // the operator's own arrangement say what a tap costs before it is made.
-              <div className="connect-layouts" role="group" aria-labelledby={`${layoutsId}-head`}>
-                <div className="connect-layouts-head">
-                  <span id={`${layoutsId}-head`}>{t('connect.layout.heading')}</span>
-                  <span className="connect-layout-now">
-                    {layoutNow === 'standard'
-                      ? t('connect.layout.standard')
-                      : layoutNow === 'custom'
-                        ? t('connect.layout.custom')
-                        : LAYOUT_WORDS[layoutNow].label()}
-                  </span>
-                </div>
-                {CONNECT_PRESET_IDS.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`connect-layout-opt${layoutNow === id ? ' active' : ''}`}
-                    aria-pressed={layoutNow === id}
-                    aria-describedby={layoutNow === 'custom' ? `${layoutsId}-cost` : undefined}
-                    title={LAYOUT_WORDS[id].title()}
-                    onClick={() => pickLayout(id)}
-                  >
-                    {LAYOUT_WORDS[id].label()}
-                  </button>
-                ))}
-                {layoutNow === 'custom' && (
-                  <span className="connect-layout-note" id={`${layoutsId}-cost`}>
-                    {t('connect.layout.replaces')}
-                  </span>
-                )}
-              </div>
-            }
-          />
+          {/* The Layout button and ⊞ Panels stand together, whatever else the header holds (the
+              pop-out and the TV page have no Pop out to pack them against). */}
+          <div className="connect-header-menus">
+            <LayoutMenu picker={picker} onUndo={undoLayout} canUndo={panels.canUndo} />
+            {/* The restore surface for a closed pane, and Reset layout. Always in the header, so
+                with every pane closed the way back is still one click away. */}
+            <PanelsMenu
+              items={SLOT_IDS.map((s) => ({
+                id: s,
+                label: t('connect.panels.item', { title: paneById(slots[s])?.title ?? '', where: SLOT_WHERE[s]() }),
+                state: panels.stateOf(s),
+              }))}
+              onToggle={change((id: string, show: boolean) => panels.setPanelState(id as SlotId, show ? 'docked' : 'removed'))}
+              onUndo={undoLayout}
+              canUndo={panels.canUndo}
+              onReset={() => {
+                beforeSwitch.current = { slots, tabs, rotate }
+                panels.reset()
+                resetSlots()
+                widths.resetAll()
+                // '' reads back as "never set": the strip's own height (a height is not an undo step,
+                // like the widths).
+                surfaceSet('nexus.split.connect.strip', '')
+                setStripEpoch((n) => n + 1)
+              }}
+              lead={picker}
+            />
+          </div>
           {onPopOut && !remote && (
             <button
               type="button"

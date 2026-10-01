@@ -121,9 +121,10 @@ with the keyboard and while its menu is open, and starts the interval again afte
 The main window's Connect never rotates, so what you are looking at while you
 operate never changes by itself.
 
-**Layouts.** The Panels menu opens with four ready-made arrangements of the same
-panes, and names the layout on screen: **Standard** (how Connect first opens), one
-of the four, or **Custom** once you have moved or resized anything yourself.
+**Layouts.** The **Layout** button in the Connect header, beside **⊞ Panels**, opens
+four ready-made arrangements of the same panes (the Panels menu shows the same
+choices at its top), and names the layout on screen: **Standard** (how Connect first
+opens), one of the four, or **Custom** once you have moved or resized anything yourself.
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|

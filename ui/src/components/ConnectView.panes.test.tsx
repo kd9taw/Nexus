@@ -776,3 +776,64 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
     })
   })
 })
+
+// THE LAYOUT BUTTON (the operator's pick, 2026-10-01: "A visible Layout button"). The layouts sat only
+// at the top of ⊞ Panels, where the operator went looking for them and did not find them. Connect's
+// header now carries a Layout button beside ⊞ Panels that opens the SAME picker with the same Undo —
+// one picker, two doors, one history — so a pick made behind either door reads back behind the other.
+describe('the Layout button — the same picker, beside ⊞ Panels', () => {
+  const layoutButton = (c: HTMLElement) =>
+    within(c.querySelector('.connect-header') as HTMLElement).getByRole('button', { name: 'Layout' }) as HTMLButtonElement
+  const picker = () => screen.getByRole('group', { name: 'Layout' })
+  const now = () => picker().querySelector('.connect-layout-now')?.textContent
+
+  it('stands beside ⊞ Panels and opens the picker: the four layouts, and the one on screen', async () => {
+    const { container } = await mount()
+    const button = layoutButton(container)
+    const panels = screen.getByRole('button', { name: /⊞ Panels/ })
+    expect(button.closest('.connect-layout-menu')?.nextElementSibling, 'right beside ⊞ Panels').toBe(panels.closest('.panels-menu'))
+    expect(screen.queryByRole('group', { name: 'Layout' }), 'closed until it is pressed').toBeNull()
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(within(picker()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Map first', 'List first', 'Dashboard', 'Frame'])
+    expect(now()).toBe('Standard')
+    expect((screen.getByRole('button', { name: 'Undo last change' }) as HTMLButtonElement).disabled, 'nothing to undo yet').toBe(true)
+  })
+
+  it('a pick there applies, ⊞ Panels reads the same layout, and its Undo takes the pick back', async () => {
+    const { container } = await mount()
+    fireEvent.click(layoutButton(container))
+    fireEvent.click(within(picker()).getByRole('button', { name: 'Map first' }))
+    const shown = SLOT_IDS.filter((s) => !CONNECT_PRESETS.mapFirst.hidden.includes(s))
+    expect(slotsOn(container).sort(), 'Map first is on screen').toEqual([...shown].sort())
+    expect(now()).toBe('Map first')
+    // A click anywhere else closes it, as ⊞ Panels closes; behind the other door, the same layout.
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('group', { name: 'Layout' }), 'closed by a click elsewhere').toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /⊞ Panels/ }))
+    expect(now(), 'the ⊞ Panels picker').toBe('Map first')
+    fireEvent.pointerDown(document.body)
+    fireEvent.click(layoutButton(container))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo last change' }))
+    expect(now(), 'the one Undo').toBe('Standard')
+    expect(slotsOn(container).sort()).toEqual([...SLOT_IDS].sort())
+  })
+
+  it('Escape closes it onto its button and still reaches the window — on Connect, Escape is also the stop', async () => {
+    const { container } = await mount()
+    const button = layoutButton(container)
+    fireEvent.click(button)
+    const reached: string[] = []
+    const atWindow = (e: KeyboardEvent) => reached.push(e.key)
+    window.addEventListener('keydown', atWindow)
+    try {
+      fireEvent.keyDown(within(picker()).getByRole('button', { name: 'Frame' }), { key: 'Escape' })
+    } finally {
+      window.removeEventListener('keydown', atWindow)
+    }
+    expect(screen.queryByRole('group', { name: 'Layout' }), 'Escape closed it').toBeNull()
+    expect(document.activeElement, 'focus is back on the button').toBe(button)
+    expect(reached, 'Escape stopped short of the window').toEqual(['Escape'])
+  })
+})

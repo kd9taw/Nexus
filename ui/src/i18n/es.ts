@@ -1076,6 +1076,8 @@ export const ES: PartialCatalog = {
   "connect.layout.frame.label": "Marco",
   "connect.layout.frame.title": "Dos paneles a cada lado de un mapa a toda altura, para un panel de control en su propia pantalla: a la izquierda las condiciones de banda y el clima espacial, a la derecha quién te oye y qué cazar",
   "connect.layout.replaces": "Elegir una reemplaza tu propia disposición. «Deshacer el último cambio» la recupera.",
+  "connect.layout.button": "Disposición",
+  "connect.layout.button.title": "Elige una disposición para esta pantalla: Mapa primero, Listas primero, Tablero o Marco",
   "connect.slot.pick.aria": "Elegir qué muestra el slot {{slot}}",
   "connect.slot.pick.title": "Elegir qué muestra este slot",
   "contests.group.later": "Más adelante",
