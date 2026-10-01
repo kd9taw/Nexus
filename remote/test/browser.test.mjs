@@ -2767,6 +2767,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       }
       for (const layout of [0,1]) {
         await click(`document.querySelectorAll('.cockpit-layout-toggle button')[${layout}]`)
+        // The switch moves the card into the other layout's rail, so it mounts afresh: a loading
+        // placeholder, a 300 ms settle, then a new station read. Where the rail's share is taller
+        // than the placeholder (the narrow stack at 175 %) the read grows the card, and a read
+        // landing between the scroll and the measurement below pushes it past the edge it was just
+        // aligned to (CI: 15 px at 1024x768 and 1280x800). Measure the card once its read has
+        // landed, as before the first switch. The layout class says the rail is the new one.
+        await until(`document.querySelector('.operate-host .cockpit-lower')?.classList.contains('${layout ? 'roster' : 'classic'}') && !!document.querySelector('.operate-host .recall-card')?.textContent.includes('Recall browser note')`)
         for (const [width,height] of [[1024,768],[1280,800],[1200,1390],[3440,1440]]) for (const zoom of [1,1.75]) {
           await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');window.dispatchEvent(new Event('resize'))`)

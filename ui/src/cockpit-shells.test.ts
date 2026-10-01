@@ -14,8 +14,10 @@ import {
 } from './features/paneSeam'
 
 // Guards the DEFICIT VALVE (2026-07-30 layout assessment, mechanism C1/C2): every
-// non-Operate cockpit shell must resolve to `overflow-y: auto` so a genuine vertical
-// deficit SCROLLS instead of clipping the log form / PTT tail unreachably.
+// cockpit shell must resolve to `overflow-y: auto` so a genuine vertical deficit SCROLLS
+// instead of clipping the log form / PTT tail unreachably. Operate joined on 2026-10-01
+// (2026-10-01): its shell was `overflow: hidden`, so at a narrow effective size its decode panes
+// were the only thing left to give and were crushed to their title bars.
 //
 // Why a cascade COMPUTER and not a regex: two scroll "fixes" shipped dead —
 //   1. `.phone-cockpit { overflow-y:auto }` lost to `.layout.single.phone-cockpit
@@ -203,7 +205,8 @@ function winningOverflowY(
 it('hosted FT scrolls vertical deficits and contains its stacked message column', () => {
   const native = [new Set(['app']), new Set(['shell']), new Set(['layout', 'single', 'operate-cockpit'])]
   const remote = [new Set(['app', 'remote-workspace']), ...native.slice(1)]
-  expect(winningOverflowY(native, null)?.value).toBe('hidden')
+  // The desktop's Operate shell scrolls its deficit too since 2026-10-01 (the SHELLS census below).
+  expect(winningOverflowY(native, null)?.value).toBe('auto')
   expect(winningOverflowY(remote, null)?.value).toBe('auto')
   expect(winningOverflowY([...remote, new Set(['cockpit-body']), new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])], null)?.value).toBe('auto')
 })
@@ -329,6 +332,19 @@ const SHELLS: Array<[string, Array<Set<string>>]> = [
   // against that clip, and the internet popover it hosts is `position: absolute` with the
   // shell as its nearest non-visible ancestor, so the panel's lower rows had nowhere to go.
   ['.layout.single.needed-panel.aprs-cockpit', APRS_CHAIN],
+  // Operate (2026-10-01) was the one cockpit left out: `.layout.single.operate-cockpit` was
+  // `overflow: hidden`, which made its lower region (Call Roster, Band Activity, Rx Frequency,
+  // Stations) the only thing that could give. At the 1024×768 floor at 100 % the panes got 49 px
+  // each and showed no row; at 1366×768 at 125 % the region was 0 px. The region now floors at
+  // 18em, yielding to a short window (operate-classic-grid.test.ts), the waterfall yields first,
+  // and past the floor this valve scrolls. At its end it has scrolled just far enough to show
+  // the floor whole, so the QSO strip with Stop TX, directly above the region, stays on screen
+  // whenever the shell is taller than the floor plus the strip. Chrome kept Stop TX on screen
+  // and hit-testable at every scroll position at 1024×768 at 100 % and 125 %, 1366×768 at 125 %
+  // and 150 %, and 1920×1080 at 175 %. And at 1366×768 at 175 % the header alone pushed the strip
+  // below the window: with `hidden` here Stop TX could not be reached with the mouse at all, and
+  // now it can be scrolled to.
+  ['.layout.single.operate-cockpit', shellChain('operate-cockpit')],
 ]
 
 it('the APRS shell still wears the class list this census reasons about', () => {

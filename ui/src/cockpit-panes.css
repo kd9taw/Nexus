@@ -494,7 +494,8 @@
    its lower grid can otherwise collapse to zero and leave the rail outside
    even the shell's scroll range. Reserve a yielding content region, following
    the pane grid's 18em floor, with a viewport share for short windows. The
-   remote shell provides the interposed scroller; native FT sizing is unchanged. */
+   remote shell provides the interposed scroller. (Since 2026-10-01 the desktop region carries this
+   same floor, styles.css `.cockpit-lower`, behind the desktop shell's own valve.) */
 .remote-cockpit-lower {
   min-height: min(18em, calc(0.35 * var(--vh-eff)));
 }
