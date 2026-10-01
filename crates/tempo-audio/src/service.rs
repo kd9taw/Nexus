@@ -9472,11 +9472,13 @@ impl RadioLoop {
             // the TX-off cut happens (a screen change included), the SSTV audio feed stops too,
             // as Stop does"). The feed below keeps ~10 s queued ahead of the air and tops it up
             // every tick, so a stop that ended the over WITHOUT the SSTV abort — the TX-off cut
-            // further down, a tune superseding the hold, a radio switch's handoff (which consumes
-            // the abort its halt armed), a Test-CAT hold, an audio rebuild — was undone a tick
-            // later: the feed refilled the ring, and on a VOX or audio-keyed rig the audio IS the
-            // key, so the rest of the picture went out under "TX off". An over can end under a
-            // live feed two ways, and both end the picture:
+            // further down (leaving Phone, or another cockpit's Stop that arms only the slot
+            // abort), a tune superseding the hold, a radio switch's handoff (which consumes the
+            // abort its halt armed) — was undone a tick later. (The context halts of a Test-CAT
+            // hold, an audio rebuild or a teardown arm the abort, so they always ended it.) The
+            // feed refilled the ring, and on a VOX or audio-keyed rig the audio IS the key, so the
+            // rest of the picture went out under "TX off". An over can end under a live feed two
+            // ways, and both end the picture:
             //
             //  • the latch goes down with the hold still standing. Leaving Phone lowers it
             //    directly (`Engine::set_operating_mode`), never through `set_tx_enabled(false)`,
