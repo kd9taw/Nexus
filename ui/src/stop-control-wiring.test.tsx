@@ -731,6 +731,21 @@ describe('Connect keeps the station clock', () => {
     expect(clocks.map((c) => c.querySelector('.utc-label')?.textContent)).toEqual(['UTC', 'Local'])
     expect(clocks[0].querySelector('.utc-time')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
   })
+
+  it('Frame + bar puts the dashboard bar over Connect, with the station from the snapshot, and its clock stands for the header’s', async () => {
+    everySectionOn()
+    await mountOn('connect')
+    const shell = document.querySelector('main .connect-shell') as HTMLElement
+    expect(shell, 'control: Connect is the screen on show').not.toBeNull()
+    expect(shell.querySelector(':scope > .dash-bar'), 'control: no bar before the tap').toBeNull()
+    fireEvent.click(within(shell.querySelector('.connect-header') as HTMLElement).getByRole('button', { name: 'Layout' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Layout' })).getByRole('button', { name: 'Frame + bar' }))
+    const bar = shell.querySelector(':scope > .dash-bar') as HTMLElement
+    expect(bar, 'the bar is over the view').not.toBeNull()
+    expect([bar.querySelector('.dash-call')?.textContent, bar.querySelector('.dash-grid')?.textContent]).toEqual(['KD9TAW', 'EN52'])
+    expect(shell.querySelector('.connect-header .utc-clock'), 'one clock: the bar’s').toBeNull()
+    expect(document.querySelector('header.topbar'), 'and still no top bar').toBeNull()
+  })
 })
 
 describe('…and every OTHER screen keeps the top bar: the exception is Connect alone', () => {

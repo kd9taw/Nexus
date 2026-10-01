@@ -1,11 +1,12 @@
 // Connect layout presets — Map first, List first and Dashboard (the UI look-and-feel redesign,
-// 2026-09-26), and Frame (the dashboard window's wall-display layout). Pure (no JSX, no storage),
-// so every rule unit-tests without React.
+// 2026-09-26), Frame (the dashboard window's wall-display layout), and Frame + bar (the default view
+// to try, 2026-10-01). Pure (no JSX, no storage), so every rule unit-tests without React.
 //
 // A preset is a WHOLE ARRANGEMENT over the machinery Connect already has, and nothing else:
 //   · which pane sits in each slot (features/connectConfig — the permutation grid);
 //   · which slots are closed and how each rail is split (features/panelState CONNECT_PANELS);
-//   · each rail's width preference (features/connectRails, clamped on load against the window).
+//   · each rail's width preference (features/connectRails, clamped on load against the window);
+//   · whether the clock-and-indices bar runs across the top of the view (ConnectView, per surface).
 // It stores nothing of its own. Which layout is on screen is READ BACK from those three records
 // (`connectLayoutNow`), so the picker can never disagree with the screen: move or resize anything
 // after picking one and it reads Custom, and nothing snaps back, because nothing remembers the
@@ -30,7 +31,7 @@ import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, type PaneId, type SlotId } from './c
 import { RAIL_MAX, RAIL_MIN, type RailWidths } from './connectRails'
 import type { PanelLayout } from './panelState'
 
-export const CONNECT_PRESET_IDS = ['mapFirst', 'listFirst', 'dashboard', 'frame'] as const
+export const CONNECT_PRESET_IDS = ['mapFirst', 'listFirst', 'dashboard', 'frame', 'frameBar'] as const
 export type ConnectPresetId = (typeof CONNECT_PRESET_IDS)[number]
 
 /** The map layers a layout may turn on (the header's one exception). A layer id both maps share. */
@@ -48,19 +49,28 @@ export interface ConnectLayout {
   rails: { left: number | null; right: number | null }
   /** Map layers the tap turns ON (never off), on both maps; not part of what reads back. */
   mapLayers?: readonly PresetMapLayer[]
+  /** The slots that hold tabs: each one's panes in tab order, the shown pane (`slots`) first. Absent is
+   *  one pane per slot, which is every layout but Frame + bar. Written and read back like the slots. */
+  tabs?: Readonly<Partial<Record<SlotId, readonly PaneId[]>>>
+  /** The clock-and-indices bar (DashboardBar) across the top of the view. Absent is off. A tap writes
+   *  it either way and it reads back, like the closed slots. Where the host draws the bar itself (the
+   *  dashboard window, the TV page) the record is kept but the view draws no second one. */
+  bar?: boolean
 }
 
 /** What the screen is built from right now — the three records a layout writes. */
 export interface ConnectLayoutState {
   slots: Readonly<Record<SlotId, PaneId>>
-  /** The slots holding more than one pane (connectConfig `tabs`). A layout is one pane per slot,
-   *  so a screen with any tabs is the operator's own arrangement: it reads Custom, and a layout's
-   *  tap puts one pane back in each slot. Absent is none. */
+  /** The slots holding more than one pane (connectConfig `tabs`). A layout without a tab plan is
+   *  one pane per slot, so a screen with tabs it does not list is the operator's own arrangement: it
+   *  reads Custom, and the layout's tap puts its own tabs (or one pane per slot) back. Absent is none. */
   tabs?: Readonly<Partial<Record<SlotId, readonly PaneId[]>>>
   panels: PanelLayout<SlotId>
   /** The STORED preferences, not the widths the window fitted them to: a list-first rail
    *  squeezed by a small window is still list-first, and reloading on a big one gives it back. */
   rails: RailWidths
+  /** The bar is on (this surface's record). Absent is off. */
+  bar?: boolean
 }
 
 /** The operator-approved default, and what ⊞ Reset layout restores. It is DEFAULT_SLOTS itself,
@@ -156,6 +166,40 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     rails: { left: 400, right: 400 },
     mapLayers: ['sats'],
   },
+  // FRAME + BAR — the default view to try (the operator's batch 60, 2026-10-01: "A: Frame + bar"; NOT
+  // yet the default, which is a later step). The default-view survey's candidate A, as the side-by-side
+  // renders measured it: Frame's shape with the boxes an operator reads first — Bands for you over
+  // Openings on the left, Chase over Getting Out on the right — in 400 px columns, where the renders
+  // found every band tile and every Chase row whole at 1024, 1366 and 1920 wide. The bar across the top
+  // carries the clocks, the call and grid and the day's indices (so Space Wx's numbers stay in view with
+  // its box behind a tab), and THE TAB PLAN (the operator: "Ship the tab plan") puts the rest of
+  // Connect's own boxes one click behind the four: the band boxes behind Bands for you, the opening
+  // boxes behind Openings, the activity boxes behind Chase, the conditions boxes behind Getting Out.
+  // The closed row keeps Band Outlook and the Clock, the rotor and the amplifier, and the band scope,
+  // for ⊞ Panels to bring back. The map is not this layout's: its card, its layers and its look stay as
+  // the operator has them.
+  frameBar: {
+    slots: {
+      left1: 'bandTiles',
+      left2: 'openings',
+      right1: 'chase',
+      right2: 'getout',
+      bottom1: 'outlook',
+      bottom2: 'rotor',
+      bottom3: 'scope',
+    },
+    tabs: {
+      left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
+      left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours'],
+      right1: ['chase', 'chaseFeed', 'selection', 'contests', 'satPasses'],
+      right2: ['getout', 'spacewx', 'kpOutlook', 'measuredMuf', 'beacons', 'greyline'],
+      bottom1: ['outlook', 'clock'],
+      bottom2: ['rotor', 'amp'],
+    },
+    hidden: STRIP,
+    rails: { left: 400, right: 400 },
+    bar: true,
+  },
 }
 
 /**
@@ -175,6 +219,18 @@ export function validateConnectLayout(id: string, layout: ConnectLayout): string
     }
     if (!(PANE_IDS as readonly string[]).includes(p)) errs.push(`${id}: ${s} names '${p}', which is not a Connect pane`)
     where.set(p, [...(where.get(p) ?? []), s])
+  }
+  // The tab rules (connectConfig): a slot's list holds the pane it shows and more, real panes only,
+  // and a pane behind a tab is in no other slot — coerceTabs would quietly repair anything else.
+  for (const s of SLOT_IDS) {
+    const list = layout.tabs?.[s] as readonly string[] | undefined
+    if (!list) continue
+    if (list.length < 2) errs.push(`${id}: ${s} lists one tab — a slot of one pane lists none`)
+    if (!list.includes(layout.slots[s])) errs.push(`${id}: ${s}'s tabs leave out '${layout.slots[s]}', the pane the slot shows`)
+    for (const p of list) {
+      if (!(PANE_IDS as readonly string[]).includes(p)) errs.push(`${id}: ${s}'s tabs name '${p}', which is not a Connect pane`)
+      else if (p !== layout.slots[s]) where.set(p, [...(where.get(p) ?? []), s])
+    }
   }
   for (const [p, slots] of where)
     if (slots.length > 1) errs.push(`${id}: '${p}' is placed twice (${slots.join(', ')}) — the grid is a permutation`)
@@ -202,12 +258,22 @@ export function layoutPanels(layout: ConnectLayout): PanelLayout<SlotId> {
 const even = (share: number | undefined) => Math.abs((share ?? 1) - 1) < 1e-6
 
 function matches(layout: ConnectLayout, now: ConnectLayoutState): boolean {
-  if (SLOT_IDS.some((s) => (now.tabs?.[s]?.length ?? 0) > 1)) return false
   for (const s of SLOT_IDS) {
-    if (now.slots[s] !== layout.slots[s]) return false
+    const want = layout.tabs?.[s]
+    const have = now.tabs?.[s]
+    if (want && want.length > 1) {
+      // A slot of tabs: the same panes in the same order. Which one is SHOWN is not the arrangement —
+      // a tab click is no change of layout, and costs no Undo — as long as it is one of them.
+      if (!have || have.length !== want.length || have.some((p, i) => p !== want[i])) return false
+      if (!want.includes(now.slots[s])) return false
+    } else {
+      if ((have?.length ?? 0) > 1) return false
+      if (now.slots[s] !== layout.slots[s]) return false
+    }
     if ((now.panels.state[s] === 'removed') !== layout.hidden.includes(s)) return false
     if (!even(now.panels.share[s])) return false
   }
+  if (!!now.bar !== !!layout.bar) return false
   return now.rails.left === layout.rails.left && now.rails.right === layout.rails.right
 }
 

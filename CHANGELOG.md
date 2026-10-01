@@ -206,6 +206,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is the same picker that opens at the top of **⊞ Panels**, so a pick made in either shows in
   both, and either Undo takes it back. The dashboard window, the TV page and the Remote Connect
   page have the button too.
+- **Connect: Frame + bar, the new default view to try.** **Layout** has a fifth choice, **Frame +
+  bar**: Bands for you over Openings on the left and Chase over Getting Out on the right, in 400 px
+  columns around a full-height map, with the dashboard window's bar across the top (your callsign
+  and grid, a big UTC clock and your local time, and the day's indices). Every other box is one click
+  away as a tab behind those four. Connect still opens on Standard; pick Frame + bar to try it, and
+  **Undo last change**, another layout or **Reset layout** takes the bar away again. In the dashboard
+  window and on the TV page, which have the bar already, it is the one bar.
+- **The dashboard bar shows a storm.** Kp, X-ray and the solar-wind speed turn amber when the Space
+  Wx box's gauges are at their warning level (Kp 4 and up, an M or X flare, a wind of 600 km/s or
+  more), in the dashboard window, on the TV page and in Frame + bar. In the light theme the number
+  stays dark with an amber underline, so it stays easy to read.
 - **The Connect window can stay behind your other windows (Windows).** The dashboard bar has a
   **Stay behind** button. Pressed, the window stays behind your other windows even when you click
   on it, so it can fill a screen behind Nexus without covering the cockpit. The window remembers

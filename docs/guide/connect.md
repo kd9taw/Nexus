@@ -126,9 +126,9 @@ The main window's Connect never rotates, so what you are looking at while you
 operate never changes by itself.
 
 **Layouts.** The **Layout** button in the Connect header, beside **⊞ Panels**, opens
-four ready-made arrangements of the same panes (the Panels menu shows the same
+five ready-made arrangements of the same panes (the Panels menu shows the same
 choices at its top), and names the layout on screen: **Standard** (how Connect first
-opens), one of the four, or **Custom** once you have moved or resized anything yourself.
+opens), one of the five, or **Custom** once you have moved or resized anything yourself.
 
 | Layout | Left column | Right column | Bottom row | Column width |
 |---|---|---|---|---|
@@ -136,6 +136,7 @@ opens), one of the four, or **Custom** once you have moved or resized anything y
 | List first | Chase, Chase Feed | Getting Out, Openings | closed | wide, 560 px |
 | Dashboard | Space Wx, Band Advisor | Chase, Getting Out | Openings, Band Outlook, Greyline | 400 px |
 | Frame | Band Advisor, Space Wx | Getting Out, Chase | closed, so the map runs the full height (and Satellites turns on) | 400 px |
+| Frame + bar | Bands for you, Openings | Chase, Getting Out | closed, so the map runs the full height | 400 px |
 
 A layout applies only when you pick it, and nothing snaps back afterwards: change a
 pane or a width and the menu reads Custom. Over an arrangement of your own the menu
@@ -150,12 +151,27 @@ The one exception is **Frame**, which also turns on **Satellites** on the map an
 globe. It never turns a layer off, if you untick Satellites afterwards it stays off, and
 **Undo** turns it back off with the rest of the layout.
 
+**Frame + bar** is the view to try as Connect's new default (Connect still opens on
+Standard). It puts the dashboard window's bar across the top of Connect: your
+callsign and grid, a big UTC clock beside your local time, and the day's SFI, Kp,
+sunspot number, A, X-ray and solar-wind speed. Its four boxes keep the others one
+click away as tabs: Band Advisor, Bands by region, Activity Matrix and Best band
+behind Bands for you; Sporadic-E, Openings Log, Insights and 24h Band×Hour behind
+Openings; Chase Feed, Selection, Contests and Satellite Passes behind Chase; Space Wx,
+Kp outlook, Measured MUF, NCDXF Beacons and Greyline behind Getting Out. The closed
+bottom row keeps Band Outlook and the Clock, Rotor and Amplifier, and Band Scope.
+Clicking a tab is not a change of layout. The bar stays while you change things
+yourself; another layout, **Undo** or **Reset layout** takes it away. The map is left
+as you had it, its Propagation card included.
+
 **Connect in its own window.** **⧉ Pop out** in the Connect header opens Connect as a
 dashboard window for a second monitor or a screen of its own. It opens at 1600 × 1000,
 or your whole screen if that is smaller, with the full layout, and a bar across the top
 shows your callsign and grid, a big UTC clock beside your local time, and the day's SFI,
 Kp, sunspot number, A, X-ray and solar-wind speed (a dash for each when there is no live
-data, and a note when the numbers are old). The sunspot number is NOAA's daily count,
+data, and a note when the numbers are old). In a storm Kp, X-ray and the solar wind turn
+amber when the Space Wx box's gauges reach their warning level (in the light theme the
+number stays dark, underlined in amber). The sunspot number is NOAA's daily count,
 shown with the day it is from, as in the Space Wx box. Close it and it comes back on the
 same monitor, in the same place and at the same size; if that monitor is gone it opens
 in the middle of your main screen, sized to fit. The window keeps its own layout, so a

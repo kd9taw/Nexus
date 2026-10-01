@@ -33,6 +33,10 @@ export const PER_SURFACE = [
   'nexus.awardsTab',
   // The Awards and Satellites views' column split (layout L7): a proportion of THIS window's grid.
   'nexus.awards.columns',
+  // Whether THIS window's Connect draws the dashboard bar over its header (a layout writes it: Frame +
+  // bar on, every other layout and Reset layout off). A pop-out inherits the main window's until it
+  // picks a layout of its own, like the placement it is read back with.
+  'nexus.connect.bar',
   'nexus.connect.config',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',

@@ -4,7 +4,8 @@
 // exists must read exactly as before:
 //   · a stored config with no tabs — every one saved before this — loads to the same slots;
 //   · with one pane per slot, picking a pane is today's swap, pair for pair (assignIn);
-//   · a layout preset is one pane per slot, and a layout with tabs is not a preset.
+//   · a layout preset lists its own tabs (only Frame + bar has any), and a tab it does not list makes
+//     the screen the operator's own (Custom).
 // The pure half, here; ConnectView.boxes.test.tsx drives the same rules through the real view.
 import { describe, expect, it } from 'vitest'
 import {
@@ -237,15 +238,17 @@ describe('the invariant survives any sequence of the operator’s moves', () => 
   })
 })
 
-describe('a layout with tabs is not a preset', () => {
-  it('every preset reads as itself with no tabs, and as Custom the moment one slot holds two panes', () => {
+describe('a tab a layout does not list is not that layout', () => {
+  it('every preset reads as itself with exactly its own tabs, and as Custom the moment a slot holds one more', () => {
     for (const id of CONNECT_PRESET_IDS) {
       const pre = CONNECT_PRESETS[id]
-      const now = { slots: pre.slots, panels: layoutPanels(pre), rails: pre.rails }
-      expect(connectLayoutNow({ ...now, tabs: {} }), id).toBe(id)
+      const own = Object.fromEntries(Object.entries(pre.tabs ?? {}).map(([s, l]) => [s, [...l]])) as Partial<Record<SlotId, PaneId[]>>
+      const now = { slots: pre.slots, panels: layoutPanels(pre), rails: pre.rails, bar: !!pre.bar }
+      expect(connectLayoutNow({ ...now, tabs: own }), id).toBe(id)
       const s = SLOT_IDS.find((x) => !pre.hidden.includes(x))!
-      const extra = PANE_IDS.find((p) => !Object.values(pre.slots).includes(p))!
-      expect(connectLayoutNow({ ...now, tabs: { [s]: [pre.slots[s], extra] } }), `${id} + a tab`).toBe('custom')
+      const placed = SLOT_IDS.flatMap((x) => slotBoxes({ slots: pre.slots, tabs: own }, x))
+      const extra = PANE_IDS.find((p) => !placed.includes(p))!
+      expect(connectLayoutNow({ ...now, tabs: { ...own, [s]: [...slotBoxes({ slots: pre.slots, tabs: own }, s), extra] } }), `${id} + a tab`).toBe('custom')
     }
   })
 })

@@ -10,8 +10,7 @@ import {
   type ConnectLayoutState,
   type PresetMapLayer,
 } from './connectPresets'
-import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, type PaneId, type SlotId } from './connectConfig'
-import { assignIn } from './paneLayout'
+import { DEFAULT_SLOTS, PANE_IDS, SLOT_IDS, assignBox, slotBoxes, type PaneId, type SlotId } from './connectConfig'
 import { RAIL_MAX, RAIL_MIN, RAIL_STEP } from './connectRails'
 
 // CONNECT LAYOUT PRESETS — pure half. What a preset WRITES (placement, visibility, splits, rail
@@ -19,14 +18,20 @@ import { RAIL_MAX, RAIL_MIN, RAIL_STEP } from './connectRails'
 // that could not apply as written must be refused before it ships. ConnectView.panes.test.tsx
 // drives the same presets through the real view.
 
-/** Exactly what applying `layout` leaves behind: the slots, the panel record, the rail prefs. */
+/** Exactly what applying `layout` leaves behind: the slots and their tabs, the panel record, the rail
+ *  prefs, and whether the bar is on. */
 const applied = (layout: ConnectLayout): ConnectLayoutState => ({
   slots: { ...layout.slots },
+  tabs: Object.fromEntries(Object.entries(layout.tabs ?? {}).map(([s, l]) => [s, [...l]])),
   panels: layoutPanels(layout),
   rails: { ...layout.rails },
+  bar: !!layout.bar,
 })
-
-const VOCAB = { slotIds: SLOT_IDS, paneIds: PANE_IDS, defaults: DEFAULT_SLOTS }
+/** The picker's own move (connectConfig assignBox: with tabs, the tab list follows the shown pane). */
+const picked = (now: ConnectLayoutState, slot: SlotId, id: PaneId): ConnectLayoutState => ({
+  ...now,
+  ...assignBox({ slots: { ...now.slots }, tabs: { ...(now.tabs as Partial<Record<SlotId, PaneId[]>>) } }, slot, id),
+})
 
 describe('the presets are well formed', () => {
   for (const id of CONNECT_PRESET_IDS) {
@@ -92,11 +97,91 @@ describe('the presets are well formed', () => {
   })
 })
 
+// FRAME + BAR — the default view to try (the operator's batch 60, 2026-10-01: "A: Frame + bar"; release
+// step 4: a layout to pick, NOT yet the default). The default-view survey's candidate A as the
+// side-by-side renders measured it: Frame's shape with Bands for you over Openings on the left and Chase
+// over Getting Out on the right, the clock-and-indices bar across the top, and the tab plan behind every
+// slot (the operator's Q9: "Ship the tab plan").
+describe('Frame + bar — the default view to try', () => {
+  const A = () => CONNECT_PRESETS.frameBar
+
+  it('is the fifth choice, after the four that shipped, so no stored pick is renumbered', () => {
+    expect(CONNECT_PRESET_IDS).toEqual(['mapFirst', 'listFirst', 'dashboard', 'frame', 'frameBar'])
+  })
+
+  it('Bands for you over Openings on the left, Chase over Getting Out on the right, the bottom row closed, 400 px columns', () => {
+    expect([A().slots.left1, A().slots.left2]).toEqual(['bandTiles', 'openings'])
+    expect([A().slots.right1, A().slots.right2]).toEqual(['chase', 'getout'])
+    expect([...A().hidden].sort()).toEqual(['bottom1', 'bottom2', 'bottom3'])
+    expect(A().rails).toEqual({ left: 400, right: 400 })
+  })
+
+  it('the clock-and-indices bar across the top, and nothing about the map (the Propagation card stays as it is)', () => {
+    expect(A().bar).toBe(true)
+    expect(A().mapLayers).toBeUndefined()
+    for (const id of CONNECT_PRESET_IDS.filter((x) => x !== 'frameBar')) expect(CONNECT_PRESETS[id].bar, id).toBeFalsy()
+    expect(STANDARD_LAYOUT.bar).toBeFalsy()
+  })
+
+  it('the tab plan: every box Connect keeps is on screen or behind one tab, the shown one first', () => {
+    expect(A().tabs).toEqual({
+      left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
+      left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours'],
+      right1: ['chase', 'chaseFeed', 'selection', 'contests', 'satPasses'],
+      right2: ['getout', 'spacewx', 'kpOutlook', 'measuredMuf', 'beacons', 'greyline'],
+      bottom1: ['outlook', 'clock'],
+      bottom2: ['rotor', 'amp'],
+    })
+    expect(A().slots.bottom3).toBe('scope')
+    // Placed, shown or behind a tab: all but the two boards, which are whole screens of their own.
+    const placed = SLOT_IDS.flatMap((s) => slotBoxes({ slots: A().slots, tabs: A().tabs as Partial<Record<SlotId, PaneId[]>> }, s))
+    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota'])
+  })
+
+  it('reads back as itself whichever tab a slot shows: showing a tab is not an arrangement change', () => {
+    const base = applied(A())
+    expect(connectLayoutNow(base), 'control: as written').toBe('frameBar')
+    expect(connectLayoutNow({ ...base, slots: { ...base.slots, left1: 'advisory', right2: 'greyline' } })).toBe('frameBar')
+  })
+
+  it('a tab added, a tab taken out, or the tabs reordered reads Custom', () => {
+    const base = applied(A())
+    const tabs = base.tabs as Partial<Record<SlotId, PaneId[]>>
+    const variants: Array<[string, Partial<Record<SlotId, PaneId[]>>]> = [
+      ['a tab added', { ...tabs, bottom3: ['scope', 'spots'] }],
+      ['a tab taken out', { ...tabs, left2: tabs.left2!.slice(0, -1) }],
+      ['the tabs reordered', { ...tabs, right1: [...tabs.right1!].reverse() }],
+    ]
+    for (const [what, t] of variants) expect(connectLayoutNow({ ...base, tabs: t }), what).toBe('custom')
+  })
+
+  it('the stock arrangement with the bar on, or a tabbed slot under a one-pane layout, is nobody’s layout: Custom', () => {
+    expect(connectLayoutNow({ ...applied(STANDARD_LAYOUT), bar: true })).toBe('custom')
+    const frame = applied(CONNECT_PRESETS.frame)
+    expect(connectLayoutNow({ ...frame, tabs: { left1: ['bandAdvisor', 'clock'] } })).toBe('custom')
+  })
+
+  it('POSITIVE CONTROL — a tab plan that breaks the placement rule is refused', () => {
+    const p = A()
+    const tabs = p.tabs as Partial<Record<SlotId, PaneId[]>>
+    expect(validateConnectLayout('frameBar', { ...p, tabs: { ...tabs, bottom1: ['clock', 'scope'] } })).toEqual([
+      "frameBar: bottom1's tabs leave out 'outlook', the pane the slot shows",
+      "frameBar: 'scope' is placed twice (bottom3, bottom1) — the grid is a permutation",
+    ])
+    expect(validateConnectLayout('frameBar', { ...p, tabs: { ...tabs, bottom3: ['scope'] } })).toEqual([
+      "frameBar: bottom3 lists one tab — a slot of one pane lists none",
+    ])
+    expect(validateConnectLayout('frameBar', { ...p, tabs: { ...tabs, bottom3: ['scope', 'bogus' as PaneId] } })).toEqual([
+      "frameBar: bottom3's tabs name 'bogus', which is not a Connect pane",
+    ])
+  })
+})
+
 // FRAME — the wall-display layout for the dashboard window: two boxes down each side of a map that
 // runs the full height, the arrangement a station keeps on a screen of its own beside the radio.
 describe('Frame — the wall-display layout', () => {
   it('is the fourth choice, after the three that shipped, so no stored pick is renumbered', () => {
-    expect(CONNECT_PRESET_IDS).toEqual(['mapFirst', 'listFirst', 'dashboard', 'frame'])
+    expect(CONNECT_PRESET_IDS.slice(0, 4)).toEqual(['mapFirst', 'listFirst', 'dashboard', 'frame'])
   })
 
   it('two panes down each side, and the bottom row closed, so the map runs the full height', () => {
@@ -140,10 +225,12 @@ describe('which layout is on screen', () => {
       // that answers Custom to everything.
       expect(connectLayoutNow(base), 'control: the untouched preset').toBe(id)
       const shown = SLOT_IDS.filter((s) => !CONNECT_PRESETS[id].hidden.includes(s))
-      const unplaced = PANE_IDS.find((p) => !Object.values(base.slots).includes(p))!
+      const placedAnywhere = SLOT_IDS.flatMap((s) => slotBoxes({ slots: base.slots, tabs: (base.tabs ?? {}) as Partial<Record<SlotId, PaneId[]>> }, s))
+      const unplaced = PANE_IDS.find((p) => !placedAnywhere.includes(p))!
       const changes: Array<[string, ConnectLayoutState]> = [
-        ['a new pane picked into a slot', { ...base, slots: assignIn(VOCAB, base.slots, 'left1', unplaced) }],
-        ['two placed panes swapped', { ...base, slots: assignIn(VOCAB, base.slots, 'left1', base.slots.right1) }],
+        ['a new pane picked into a slot', picked(base, 'left1', unplaced)],
+        ['two placed panes swapped', picked(base, 'left1', base.slots.right1)],
+        [base.bar ? 'the bar turned off' : 'the bar turned on', { ...base, bar: !base.bar }],
         ['a shown pane closed', { ...base, panels: { ...base.panels, state: { ...base.panels.state, [shown[0]]: 'removed' } } }],
         ['a split moved', { ...base, panels: { ...base.panels, share: { left1: 1.1, left2: 0.9 } } }],
         ['the left rail widened', { ...base, rails: { ...base.rails, left: (base.rails.left ?? 300) + RAIL_STEP } }],

@@ -23,6 +23,7 @@ import { setGlobeLayer } from '../features/globeLayers'
 const Globe3D = lazy(() => import('./Globe3D'))
 import { PaneFrame } from './connect/PaneFrame'
 import { UtcClock } from './UtcClock'
+import { DashboardBar } from './DashboardBar'
 import { remoteFeeds, resolveSelection, usePaneContext } from './connect/usePaneContext'
 import { paneById } from './connect/panes'
 import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
@@ -114,6 +115,7 @@ const LAYOUT_WORDS: Record<ConnectPresetId, { label: () => string; title: () => 
   listFirst: { label: () => t('connect.layout.listFirst.label'), title: () => t('connect.layout.listFirst.title') },
   dashboard: { label: () => t('connect.layout.dashboard.label'), title: () => t('connect.layout.dashboard.title') },
   frame: { label: () => t('connect.layout.frame.label'), title: () => t('connect.layout.frame.title') },
+  frameBar: { label: () => t('connect.layout.frameBar.label'), title: () => t('connect.layout.frameBar.title') },
 }
 
 /** THE LAYOUT PICKER. ONE component, drawn behind two doors: Connect's own Layout button
@@ -211,6 +213,10 @@ function LayoutMenu({ picker, onUndo, canUndo }: { picker: ReactNode; onUndo: ()
   )
 }
 
+/** PER-SURFACE: whether this window's view draws the clock-and-indices bar across its top (a layout
+ *  writes it: Frame + bar on, every other layout and Reset layout off). '1' is on; anything else, off. */
+const BAR_KEY = 'nexus.connect.bar'
+
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
 function persisted<T extends string>(key: string, allow: readonly T[], fallback: T): T {
   const v = surfaceGet(key)
@@ -220,6 +226,10 @@ function persisted<T extends string>(key: string, allow: readonly T[], fallback:
 
 interface Props {
   myGrid: string
+  /** The station as the dashboard bar a layout puts over the view shows it — the main window's snapshot's
+   *  call and grid, as the dashboard window's bar shows them. The Remote page reads the station's own;
+   *  the hosts that draw their own bar need not pass it. */
+  station?: { call: string; grid: string }
   theme: Theme
   stations: Station[]
   prop: PropagationSnapshot | null
@@ -263,6 +273,7 @@ interface Props {
 
 export function ConnectView({
   myGrid: nativeMyGrid,
+  station: nativeStation,
   theme,
   stations,
   prop: nativeProp,
@@ -293,6 +304,7 @@ export function ConnectView({
   const onSelectCall=remote?setRemoteSelection:nativeOnSelectCall
   const prop=remote?remoteConnect.value?.prop??null:nativeProp
   const myGrid=remote?remoteConnect.value?.mygrid??'':nativeMyGrid
+  const station=remote?{call:remoteConnect.value?.mycall??'',grid:remoteConnect.value?.mygrid??''}:nativeStation??{call:'',grid:''}
   const [intent, setIntent] = useState<MapIntent>(() =>
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
@@ -387,6 +399,15 @@ export function ConnectView({
   // until it makes a change of its own.
   const surface = useMemo(() => surfaceId(), [])
   const panels = usePanelLayout(CONNECT_PANELS, surface, 'main')
+  // THE BAR (a layout's, features/connectPresets `bar`): this surface's record of whether the view draws
+  // the dashboard bar over its header. Where the host draws the bar itself (`hostBar`) the record is
+  // still kept, and read back, but the view draws no second bar.
+  const [barOn, setBarOn] = useState(() => surfaceGet(BAR_KEY) === '1')
+  const writeBar = (on: boolean) => {
+    setBarOn(on)
+    surfaceSet(BAR_KEY, on ? '1' : '0')
+  }
+  const barShown = barOn && !hostBar
   // RESET LAYOUT IS THE OUT-OF-BOX STATE (operator 2026-09-13): default pane in every slot, every
   // pane open, default widths and splits. The panel record's one-level Undo already covers the
   // visibility + split half of a Reset; the slot placement lives in the config, so the placement
@@ -407,6 +428,7 @@ export function ConnectView({
     rotate: typeof rotate
     rails?: RailWidths
     mapLayers?: { intent: MapIntent; turnedOn: Array<{ layer: PresetMapLayer; map: '2d' | '3d' }> }
+    bar?: boolean
   } | null>(null)
   // A LAYOUT'S REACH INTO THE MAP (features/connectPresets `mapLayers`): the layers it turns on are
   // written into both maps' records on this surface — the 2-D map's for the intent in use, and the
@@ -443,7 +465,7 @@ export function ConnectView({
   // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame. Which one is on
   // screen is READ BACK from the placement, the panel record and the stored rail widths — never
   // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
-  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref })
+  const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref, bar: barOn })
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
   const pickLayout = (id: ConnectPresetId) => {
@@ -454,13 +476,15 @@ export function ConnectView({
       if (setIntentMapLayer(intent, layer, true)) turnedOn.push({ layer, map: '2d' })
       if (setGlobeLayer(layer, true)) turnedOn.push({ layer, map: '3d' })
     }
-    beforeSwitch.current = { slots, tabs, rotate, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined }
+    beforeSwitch.current = { slots, tabs, rotate, rails: widths.pref, mapLayers: turnedOn.length ? { intent, turnedOn } : undefined, bar: barOn }
     // The panes' own text sizes (⋯ ▸ A− / A+) ride through a layout: a layout decides where the panes
     // go and how much room each gets, never how big their words are — the rule it already keeps for
     // the map's own settings. Reset layout is what puts every pane back at the app's size.
     panels.setLayout({ ...layoutPanels(p), scale: panels.layout.scale })
-    restoreSlots(p.slots)
+    // Its tab plan, or one pane per slot (Frame + bar is the one layout with tabs).
+    restoreSlots(p.slots, p.tabs ? Object.fromEntries(Object.entries(p.tabs).map(([s, l]) => [s, [...l]])) : undefined)
     widths.setPrefs({ left: p.rails.left, right: p.rails.right })
+    writeBar(!!p.bar)
     if (turnedOn.length) setMapLayersRev((n) => n + 1)
   }
   // The ONE Undo, behind both doors (⊞ Panels and the Layout button): the panel record steps back,
@@ -472,6 +496,7 @@ export function ConnectView({
     if (before) {
       restoreSlots(before.slots, before.tabs, before.rotate)
       if (before.rails) widths.setPrefs(before.rails)
+      if (before.bar !== undefined) writeBar(before.bar)
       if (before.mapLayers) {
         for (const { layer, map } of before.mapLayers.turnedOn) {
           if (map === '2d') setIntentMapLayer(before.mapLayers.intent, layer, false)
@@ -541,6 +566,10 @@ export function ConnectView({
     <NavigationMapContext.Provider value={remote?{connect:remoteConnect.value,satellites:remoteSats.value?.mygrid===myGrid?remoteSats.value.view:null,track:remoteTrack?.track??null,ageMs:remoteConnect.ageMs}:null}>
     <main className="layout single">
       <div className={`connect-shell${chromeHidden ? ' map-full' : ''}`}>
+        {/* FRAME + BAR's bar (the operator's pick: "Yes, the full bar" — the dashboard window's, call
+            and grid included) across the top of the view, over the header. It goes with the header in
+            full screen. */}
+        {!chromeHidden && barShown && <DashboardBar call={station.call} grid={station.grid} prop={prop} />}
         {!chromeHidden && (
         <div className="connect-header">
           {remote&&<span role="status" className="dim">{remoteConnect.value?t('remote.collectionObserver'):remoteConnect.loading?t('remote.collectionLoading'):t('remote.collectionUnavailable')}</span>}
@@ -576,10 +605,12 @@ export function ConnectView({
               onUndo={undoLayout}
               canUndo={panels.canUndo}
               onReset={() => {
-                beforeSwitch.current = { slots, tabs, rotate }
+                beforeSwitch.current = { slots, tabs, rotate, bar: barOn }
                 panels.reset()
                 resetSlots()
                 widths.resetAll()
+                // The out-of-box state has no bar.
+                writeBar(false)
                 // '' reads back as "never set": the strip's own height (a height is not an undo step,
                 // like the widths).
                 surfaceSet('nexus.split.connect.strip', '')
@@ -601,9 +632,9 @@ export function ConnectView({
           {/* THE STATION CLOCK, in every layout (the operator, 2026-10-01). The top bar left Connect
               with its radio controls and took its UTC clock with it, and "things like time are very
               good" on a second monitor or the TV; the alerts, REC, the watchdog alert, Help and Field
-              stay off. The top bar's own clock, last in the header. Where the host draws the dashboard
-              bar over the view, its big clock is the one. */}
-          {!hostBar && (
+              stay off. The top bar's own clock, last in the header. Where a dashboard bar is drawn over
+              the view (Frame + bar's, or the host's), its big clock is the one. */}
+          {!hostBar && !barShown && (
             <div className="connect-clock">
               <UtcClock />
               {showLocalClock && <UtcClock local />}

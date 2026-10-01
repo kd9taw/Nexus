@@ -3129,6 +3129,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // The top bar is not drawn on Connect, so its clock rides in Connect's header, with the local
           // clock beside it when Settings ▸ Workspace asks for one, as the top bar's did.
           showLocalClock={localClock}
+          // Frame + bar's bar shows the station as the dashboard window's bar does: the snapshot's.
+          station={{ call: snap?.mycall ?? '', grid: snap?.mygrid ?? '' }}
         />
       )
       break

@@ -7306,12 +7306,16 @@ export const EN = {
   // The dashboard window's wall-display layout: a frame of panes around a full-height map.
   'connect.layout.frame.label': 'Frame',
   'connect.layout.frame.title': 'Two panes down each side of a map that runs the full height, for a dashboard on a screen of its own: band conditions and space weather on the left, who is hearing you and what to chase on the right',
+  // The default view to try (the operator's pick, 2026-10-01: "A: Frame + bar"): Frame's shape with the
+  // dashboard window's clock and space-weather bar across the top, and the other boxes behind tabs.
+  'connect.layout.frameBar.label': 'Frame + bar',
+  'connect.layout.frameBar.title': "Frame's shape with the clock and space-weather bar across the top: Bands for you over Openings on the left, Chase over Getting Out on the right, and the other boxes one click away as tabs",
   'connect.layout.replaces': 'Picking one replaces your own arrangement. Undo last change puts it back.',
   // Connect's own Layout button (the operator's pick, 2026-10-01): it opens the same picker as the
-  // ⊞ Panels menu's Layout section, beside ⊞ Panels in Connect's header. The title names the four
+  // ⊞ Panels menu's Layout section, beside ⊞ Panels in Connect's header. The title names the five
   // layouts by their own labels above.
   'connect.layout.button': 'Layout',
-  'connect.layout.button.title': 'Choose a layout for this screen: Map first, List first, Dashboard or Frame',
+  'connect.layout.button.title': 'Choose a layout for this screen: Map first, List first, Dashboard, Frame or Frame + bar',
 
   // Pane names, as they read in the picker and in each pane's header.
   'connect.pane.advisory.title': 'Best band',
