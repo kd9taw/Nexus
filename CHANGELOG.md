@@ -611,6 +611,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stops with the transmission, at once, and the warning line beside Send says it was stopped and
   why. SSTV's own Stop, TX Off and Stop TX work as before, and a picture that plays out ends
   exactly as it did.
+- **SSTV: a picture you stop is announced as stopped, not finished.** With a screen reader, a
+  picture stopped part-way with TX Off or Stop TX used to be announced as "SSTV transmit
+  finished", and SSTV's own Stop said "SSTV transmit stopped" and then "finished". Now a picture
+  that ends before its end is announced once, as "SSTV transmit stopped", and "finished" is said
+  only when the whole picture went out. A picture Nexus stopped for you still shows its warning
+  line beside Send instead. Nothing about when or how a picture is sent or stopped changed.
 - **APRS: a beacon or message that could not go out is dropped, not sent later on its own.** A
   beacon, a message or an automatic ack waits a moment until the radio is free to key it.
   Turning transmit off (the APRS screen's TX On/Off, or anywhere else) used to leave what was

@@ -5741,6 +5741,7 @@ export const DE: PartialCatalog = {
   "sstv.tx.send.failed": "SSTV-Sendung abgelehnt",
   "sstv.tx.announce.sending": "Sende SSTV {{mode}}",
   "sstv.tx.announce.finished": "SSTV-Aussendung beendet",
+  "sstv.tx.announce.stopped": "SSTV-Aussendung abgebrochen",
   "sstv.tx.progress": "TX — {{mode}} · noch {{clock}}",
   "sstv.gallery.empty": "Empfangene Bilder sammeln sich hier — automatisch gespeichert mit Rufzeichen (FSK-ID), Betriebsart, Frequenz und Zeit.",
   "sstv.gallery.open.aria": "Das um {{when}} empfangene {{mode}}-Bild in einem eigenen Fenster öffnen",

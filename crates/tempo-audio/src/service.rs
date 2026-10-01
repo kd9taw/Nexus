@@ -26298,6 +26298,60 @@ mod tests {
         );
     }
 
+    /// What the SSTV view reads to say how a picture ended (N57b, 2026-09-30: "finished" only for
+    /// one that played out). A picture that played out still has its whole key-down elapsed when
+    /// it stops sending; every early end leaves it short of that. The view says "finished" on the
+    /// first and "stopped", or shows the warning line, on the rest, from the progress the Remote
+    /// page receives as well. This pins the engine's half on the real loop.
+    #[test]
+    fn a_pictures_progress_tells_a_play_out_from_every_early_end() {
+        let played_out = |e: &Arc<Mutex<Engine>>| {
+            let e = e.lock().unwrap();
+            !e.sstv_sending() && e.sstv_tx_progress().is_some_and(|(p, t)| t > 0.0 && p >= t)
+        };
+        // A 3 s picture, the loop stepped past its end.
+        let engine = sstv_ready_engine(vec![0.2f32; 36_000]);
+        let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+        let mut t = 100.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 3_600.0);
+        assert!(
+            played_out(&engine),
+            "a picture that played out reads as played out"
+        );
+        // Every early end, 9 s into a 60 s picture.
+        type End = fn(&mut Engine);
+        let ends: [(&str, End); 6] = [
+            ("Stop", |e| e.sstv_stop()),
+            ("TX Off", |e| e.set_tx_enabled(false)),
+            ("Stop TX", |e| e.halt_tx()),
+            ("leaving Phone for FT8", |e| {
+                e.set_operating_mode("digital", false)
+            }),
+            ("a tune", |e| e.set_tune(true)),
+            ("CW's Stop", |e| e.stop_cw()),
+        ];
+        for (name, end) in ends {
+            let engine = sstv_ready_engine(vec![0.2f32; 720_000]);
+            let (mut backend, mut rig, mut state) = (MockBackend::new(), Rig::vox(), loop_state());
+            let mut t = 100.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_000.0);
+            assert!(
+                engine.lock().unwrap().sstv_sending(),
+                "{name}: premise, the picture is on the air"
+            );
+            end(&mut engine.lock().unwrap());
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 9_100.0);
+            assert!(
+                !engine.lock().unwrap().sstv_sending(),
+                "{name}: premise, the picture ended"
+            );
+            assert!(
+                !played_out(&engine),
+                "{name}: a picture ended early reads as played out"
+            );
+        }
+    }
+
     /// A logging rigctld stub whose `f` answer the TEST can change mid-run —
     /// which is the whole of what a keyed Icom in split does: the same `f` that
     /// answered the downlink a moment ago answers the UPLINK, because the
