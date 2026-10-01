@@ -462,9 +462,10 @@ export function ConnectView({
     ...(widths.applied.right != null ? { '--cn-rail-r': `${widths.applied.right}px` } : {}),
   } as React.CSSProperties
 
-  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame. Which one is on
-  // screen is READ BACK from the placement, the panel record and the stored rail widths — never
-  // stored — so a pane moved or resized after a pick reads Custom and nothing can snap back.
+  // LAYOUT PRESETS (features/connectPresets): Map first · List first · Dashboard · Frame · Frame + bar.
+  // Which one is on screen is READ BACK from the placement (its tabs included), the panel record, the
+  // stored rail widths and the bar's record — never stored — so a pane moved or resized after a pick
+  // reads Custom and nothing can snap back.
   const layoutNow = connectLayoutNow({ slots, tabs, panels: panels.layout, rails: widths.pref, bar: barOn })
   // Only ever an explicit tap. One undoable step: the panel record takes the visibility and the
   // splits in one write, and the placement + widths it replaced are held for the same Undo.
