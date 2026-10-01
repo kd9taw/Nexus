@@ -46,10 +46,11 @@
 //!   :9364-9389, :9627-9690).
 //! - Relay (`>`): retransmit `rest *DE* MYCALL`; at the final hop parse the chain to `A>B>C` and
 //!   answer `A>B>C ACK` (unless the embedded text is itself an autoreply command).
-//! - Store-and-forward: with relay on, `MSG TO:` stores a `Store` inbox row keyed to the base
-//!   callsign and is answered `<from> ACK`, as JS8Call answers it (mainwindow.cpp:9014-9051); the
-//!   next heartbeat/query from that call is offered `MSG ID n`; `QUERY MSG n` delivers it and
-//!   marks it `Delivered`.
+//! - Store-and-forward: with relay on, `MSG TO:` stores a `Store` inbox row keyed to the target's
+//!   base call (JS8Call's `Radio::base_callsign`: VE3/W1AW and W1AW/P are held for W1AW) and is
+//!   answered `<from> ACK`, as JS8Call answers it (mainwindow.cpp:9014-9051); the next
+//!   heartbeat/query from that station, as heard or by its base call, is offered `MSG ID n`;
+//!   `QUERY MSG n` delivers it and marks it `Delivered`.
 //! - A `MSG` to me or a joined group (never `@ALLCALL`) is filed `Unread` in my inbox, as
 //!   JS8Call's `addCommandToMyInbox` files it (mainwindow.cpp:9121-9133), and answered as JS8Call
 //!   answers it (:9139): `<from> ACK` to the sender as heard, or `<path> ACK` back along the relay
@@ -127,6 +128,14 @@ fn on_list(list: &[String], from: &str) -> bool {
     let base = radio_base_callsign(from);
     list.iter()
         .any(|c| c.trim().eq_ignore_ascii_case(from.trim()) || c.trim().eq_ignore_ascii_case(&base))
+}
+
+/// Whether `e` is a message held for `who` (the station as heard): held under that call or its
+/// base call, the test JS8Call hands a message over on (QUERY MSG n skips one only when `to !=
+/// who && to != Radio::base_callsign(who)`, mainwindow.cpp:9219).
+fn held_for(e: &InboxEntry, who: &str) -> bool {
+    e.state == InboxState::Store
+        && (e.to.eq_ignore_ascii_case(who) || e.to.eq_ignore_ascii_case(&radio_base_callsign(who)))
 }
 
 /// Truncate `s` to at most `max` bytes on a char boundary (air-sourced strings are never large;
@@ -601,11 +610,9 @@ impl Station {
             return;
         }
         let grid = m.grid.as_deref().map(|g| clamp_str(g, MAX_CALL_LEN));
-        let stored = self
-            .inbox
-            .iter()
-            .filter(|e| e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&call))
-            .count() as u8;
+        // The messages held for the station as it was heard, found as its queries find them.
+        let who = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
+        let stored = self.inbox.iter().filter(|e| held_for(e, &who)).count() as u8;
         if let Some(h) = self.heard.iter_mut().find(|h| h.call == call) {
             h.snr_db = m.snr_db;
             h.freq_hz = m.freq_hz;
@@ -743,13 +750,13 @@ impl Station {
             return;
         }
         // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
-        // held for it is found under its base call.
+        // held for it is found as JS8Call finds it (`getNextMessageIdForCallsign(d.from)`, :9082).
         let to = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         if self.is_me(&to) {
             return;
         }
         let mut text = format!("{to} HEARTBEAT SNR {}", format_snr(m.snr_db));
-        if let Some(id) = self.stored_for(split_portable(&to).0) {
+        if let Some(id) = self.stored_for(&to) {
             text.push_str(&format!(" MSG ID {id}"));
         }
         // On a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
@@ -906,10 +913,12 @@ impl Station {
     }
 
     fn handle_msg_to(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
-        // `MSG TO:` — store the body for the named target (the first token of the body).
+        // `MSG TO:` — store the body for the named target (the first token of the body), held
+        // under its base call as JS8Call holds it, `cd.to = Radio::base_callsign(to)`
+        // (mainwindow.cpp:9042): VE3/W1AW's and W1AW/P's are held for W1AW.
         let body = m.text.trim();
         let (target, text) = body.split_once(' ').unwrap_or((body, ""));
-        let target = split_portable(target).0.to_ascii_uppercase();
+        let target = radio_base_callsign(target);
         if target.is_empty() {
             return;
         }
@@ -971,8 +980,9 @@ impl Station {
         actions: &mut Vec<StationAction>,
     ) {
         // The querier as heard names the reply (`replyPath = d.from`, mainwindow.cpp:9248,
-        // :9270-9285); its base call is what a held message is filed for (`to`, the base, as
-        // JS8Call stores it, :9042, and finds it, :9523).
+        // :9270-9285), and a held message is found for it as JS8Call finds one: under that call
+        // or its base call (QUERY MSG n, :9219; QUERY MSGS, :9268 → :9508-9533). `base` keys
+        // the @ALLCALL hold-off alone.
         let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let base = split_portable(&from).0.to_string();
         // `QUERY MSG n` delivers the stored message n (if it is for the querier) and marks it,
@@ -983,9 +993,7 @@ impl Station {
             let Some(id) = query_msg_id(m).filter(|_| mine) else {
                 return;
             };
-            if let Some(e) = self.inbox.iter().find(|e| {
-                e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&base)
-            }) {
+            if let Some(e) = self.inbox.iter().find(|e| e.id == id && held_for(e, &from)) {
                 let deliver = format!("{from} MSG {} FROM {}", e.text, e.from);
                 // Marked Delivered as the reply is released, not here: JS8Call marks it in the
                 // reply's callback (mainwindow.cpp:9227-9235), so a No leaves it held. A delivery
@@ -1010,7 +1018,7 @@ impl Station {
         // interval (:9377-9379, checked first at :8812).
         if self.cfg.autoreply && self.addressed_to_me(&m.to_text) {
             let to_allcall = m.to_text.eq_ignore_ascii_case("@ALLCALL");
-            let reply = match self.stored_for(&base) {
+            let reply = match self.stored_for(&from) {
                 Some(id) => format!("{from} YES MSG ID {id}"),
                 None if to_allcall => return,
                 None => format!("{from} NO"),
@@ -1065,11 +1073,18 @@ impl Station {
         }
     }
 
-    fn stored_for(&self, call: &str) -> Option<u32> {
-        self.inbox
-            .iter()
-            .find(|e| e.state == InboxState::Store && e.to.eq_ignore_ascii_case(call))
-            .map(|e| e.id)
+    /// The message held for `who` (the station as heard) that is offered first, as JS8Call's
+    /// `getNextMessageIdForCallsign` finds it (mainwindow.cpp:9508-9533): one held under the
+    /// call as heard, else one held under its base call (`Radio::base_callsign`), the oldest
+    /// first in each.
+    fn stored_for(&self, who: &str) -> Option<u32> {
+        let held_under = |call: &str| {
+            self.inbox
+                .iter()
+                .find(|e| e.state == InboxState::Store && e.to.eq_ignore_ascii_case(call))
+                .map(|e| e.id)
+        };
+        held_under(who).or_else(|| held_under(&radio_base_callsign(who)))
     }
 
     /// A set STATUS, or JS8Call's default, "IDLE <MYIDLE> VERSION <MYVERSION>"
@@ -1744,8 +1759,10 @@ impl Station {
         self.stop_cq_repeat();
     }
 
-    /// Reset the idle-watchdog baseline to `now_ms` (and clear any standing trip). Called
-    /// internally by every operator send, and PUBLICLY by the engine when the operator
+    /// Reset the idle-watchdog baseline to `now_ms` (and clear any standing trip): the only way
+    /// a trip ends, so the count restarts whenever it does (a trip cleared with the count left
+    /// running came back on the next tick). Called internally by every operator send, and
+    /// PUBLICLY by the engine for every operator act and when the operator
     /// ENTERS the tier: a freshly built `Station` has `last_activity_ms == 0`, so without a
     /// baseline the first `tick` at a real wall clock would read the station as decades idle
     /// and trip the watchdog on the operator's first decode. Entering the view is the
@@ -1834,7 +1851,7 @@ impl Station {
             })
     }
 
-    /// Whole minutes since the operator last acted: every operator send and entering the tier
+    /// Whole minutes since the operator last acted: every operator act and entering the tier
     /// (`mark_active`), the baseline the idle watchdog reads. It is the count JS8Call's
     /// once-a-minute `incrementIdleTimer` keeps and its UI activity resets (mainwindow.cpp:
     /// 10969-10979). A station never marked active has no baseline and reads 0, as JS8Call's
@@ -1849,10 +1866,6 @@ impl Station {
 
     pub fn idle_tripped(&self) -> bool {
         self.idle_tripped
-    }
-
-    pub fn clear_idle_trip(&mut self) {
-        self.idle_tripped = false;
     }
 
     pub fn last_tx_display(&self) -> Option<&str> {
@@ -4265,6 +4278,99 @@ mod tests {
                 "W1AW/P MSG FRIDAY CONTACT FROM N0XYZ/P".to_string(),
             ],
             "the message held for W1AW is offered and delivered to W1AW/P, from N0XYZ/P"
+        );
+    }
+
+    /// JS8Call holds a `MSG TO:` under its target's base call, `cd.to =
+    /// Radio::base_callsign(to)` (mainwindow.cpp:9042): the longer side of the first `/`
+    /// (Radio.cpp:117-133), so a prefix goes as a suffix does. Nexus took off `/P` alone.
+    #[test]
+    fn a_msg_to_for_a_compound_call_is_held_under_its_base_call_as_js8call_holds_it() {
+        for (target, held) in [
+            ("VE3/K1ABC", "K1ABC"),
+            ("K1ABC/MM", "K1ABC"),
+            ("K1ABC/P", "K1ABC"),
+            ("K1ABC", "K1ABC"),
+            ("VE3/K1ABC/P", "K1ABC/P"),
+        ] {
+            let mut s = Station::new(cfg());
+            store_for(&mut s, target, 0);
+            assert_eq!(s.inbox()[0].to, held, "MSG TO:{target} is held for {held}");
+        }
+    }
+
+    /// …and found as JS8Call finds it: under the asking station's call as heard, then under its
+    /// base call (`getNextMessageIdForCallsign`, mainwindow.cpp:9508-9533, for QUERY MSGS at
+    /// :9268 and a heartbeat's MSG ID at :9082), and handed over to either form (QUERY MSG n
+    /// skips only `to != who && to != Radio::base_callsign(who)`, :9219). A message held for
+    /// VE3/K1ABC (under K1ABC) is offered to K1ABC and to VE3/K1ABC, its heartbeat is told of it,
+    /// VE3/K1ABC gets it, and the roster counts it. One held for VE3/K1ABC/P (under K1ABC/P) is
+    /// offered to K1ABC/P as heard, heartbeat and query, and not to K1ABC: JS8Call's lookup does
+    /// not find it there.
+    #[test]
+    fn a_message_held_for_a_compound_call_is_found_under_either_form_as_js8call_finds_it() {
+        let mut c = cfg();
+        c.hb_ack = true;
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        store_for(&mut s, "VE3/K1ABC", 0);
+        let id = s.inbox()[0].id;
+        s.on_event(&heartbeat("VE3/K1ABC", -5), 1_000);
+        for who in ["K1ABC", "VE3/K1ABC"] {
+            s.on_event(
+                &directed(who, "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+                1_000,
+            );
+        }
+        s.on_event(
+            &directed(
+                "VE3/K1ABC",
+                "KD9TAW",
+                Some(Command::Query),
+                None,
+                &format!("MSG {id}"),
+                -5,
+            ),
+            2_000,
+        );
+        assert_eq!(
+            waiting(&s),
+            [
+                format!("VE3/K1ABC HEARTBEAT SNR -05 MSG ID {id}"),
+                format!("K1ABC YES MSG ID {id}"),
+                format!("VE3/K1ABC YES MSG ID {id}"),
+                "VE3/K1ABC MSG FRIDAY CONTACT FROM W1AW".to_string(),
+            ],
+            "held for VE3/K1ABC: offered to both forms, its heartbeat told, delivered"
+        );
+        let heard = s.heard().iter().find(|h| h.call == "VE3/K1ABC");
+        assert_eq!(
+            heard.map(|h| h.stored_msgs),
+            Some(1),
+            "the roster counts the message held for VE3/K1ABC"
+        );
+
+        let mut c = cfg();
+        c.hb_ack = true;
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        store_for(&mut s, "VE3/K1ABC/P", 0);
+        let id = s.inbox()[0].id;
+        s.on_event(&heartbeat("K1ABC/P", -5), 1_000);
+        for who in ["K1ABC/P", "K1ABC"] {
+            s.on_event(
+                &directed(who, "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+                1_000,
+            );
+        }
+        assert_eq!(
+            waiting(&s),
+            [
+                format!("K1ABC/P HEARTBEAT SNR -05 MSG ID {id}"),
+                format!("K1ABC/P YES MSG ID {id}"),
+                "K1ABC NO".to_string(),
+            ],
+            "held for VE3/K1ABC/P: found under the call as heard, K1ABC/P"
         );
     }
 

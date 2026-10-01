@@ -669,12 +669,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat acknowledgement) named a station heard as W1AW/P as W1AW. Each now names the station as
   it was heard, as a JS8Call station's reply does, and a message delivered from your store names
   its sender as it was heard too. A message held for W1AW is still offered and delivered to W1AW/P.
+- **JS8: a message left for a station with a prefix or suffix is held for its base call, as in
+  JS8Call.** A MSG TO: for VE3/W1AW or W1AW/MM was held under that whole call, so W1AW asking
+  QUERY MSGS was told NO, and a message held for W1AW was never offered to VE3/W1AW. JS8Call holds
+  every such message under the base call, W1AW, and offers it to a station by the call it is heard
+  under or by its base call; Nexus now does the same, in the heartbeat acknowledgement's MSG ID,
+  the answer to QUERY MSGS, QUERY MSG and the count in the Stations list. A message already held
+  is still found under the call it was held for.
 - **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
   When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
   put those switches back on underneath while the watchdog still stood, so a query heard then
   counted down a reply, and the reply went out after your next send. Now nothing is answered,
   relayed or delivered while the watchdog stands, as JS8Call does, and nothing heard meanwhile goes
   out later.
+- **JS8: what you do in the JS8 screen restarts the idle watchdog, as in JS8Call.** After the idle
+  watchdog had turned auto-reply, relay and the heartbeat off, turning a switch or the repeating CQ
+  back on ended it for one second only: the watchdog still counted from your last send and tripped
+  again, with its notice. Now each send, each switch on or off, Drop queue, Yes or No, Read or
+  Delete in the Inbox and a speed choice starts the idle count again, as each key press or click
+  does in JS8Call. A send did end the watchdog, but left auto-reply and relay off while the dock
+  showed them on: a query heard afterwards waited in your message box instead of being answered,
+  and a MSG TO: for another station was not held. They now come back on, as the dock shows them.
+  The heartbeat and the repeating CQ stay off until you turn them on.
 - **JS8: the Auto-reply hint and tooltip say what is answered.** Settings' Auto-reply hint now
   names the ACK for a message to you or a group you joined and for a MSG TO: you hold, and says
   that on @ALLCALL only QUERY MSGS is answered; the cockpit's AUTOREPLY tooltip no longer says
