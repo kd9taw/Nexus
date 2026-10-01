@@ -14288,13 +14288,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    This DOES apply to the Tempo-chat header variant: at (0,3,0) it ties
    `.layout[data-three-pane].has-tempo-header` above and wins on order. The old
    @media body was (0,2,0) and lost, so chat collapsed into a hybrid — the header
-   rule's 5-column areas over a single 1fr column. Keep this block after it. */
+   rule's 5-column areas over a single 1fr column. Keep this block after it.
+   ROWS AT CONTENT HEIGHT (2026-10-01): they were minmax(0, auto) under cells declared
+   `min-height: 0`, so a cell could shrink below what it holds and spill over the next
+   one, and `.layout`'s `overflow-y: auto` (the stack's scroller) never fired. */
 [data-viewport='sm'] .layout[data-three-pane],
 [data-viewport='xs'] .layout[data-three-pane] {
   grid-template-columns: 1fr;
   grid-template-rows: none;
   grid-template-areas: none;
-  grid-auto-rows: minmax(0, auto);
+  grid-auto-rows: minmax(min-content, auto);
+}
+/* ...AND EVERY CELL GIVES UP ITS AREA NAME (2026-10-01). The block above deletes the template's
+   areas, but each cell still said `grid-area: stations` (and so on); a name with no area
+   resolves to the grid's implicit lines (CSS Grid §8.3.1), the SAME lines for every cell,
+   so the header, the stations rail, the conversation and the waterfall rail all landed in
+   ONE cell, painted over each other: the rail hid the station list and the conversation,
+   and the station search box sat over its first decode row. Placed `auto`, they stack in
+   source order as this collapse always meant. three-pane-collapse.test.tsx. */
+[data-viewport='sm'] .grid-header,
+[data-viewport='sm'] .grid-stations,
+[data-viewport='sm'] .grid-center,
+[data-viewport='sm'] .grid-waterfall,
+[data-viewport='xs'] .grid-header,
+[data-viewport='xs'] .grid-stations,
+[data-viewport='xs'] .grid-center,
+[data-viewport='xs'] .grid-waterfall {
+  grid-area: auto;
 }
 [data-viewport='sm'] .grid-stations,
 [data-viewport='sm'] .grid-center,
@@ -22428,13 +22448,20 @@ button.sat-chip:disabled {
   gap: var(--gap);
   padding: var(--space-2) 10px;
 }
-/* Narrow (EFFECTIVE width) stack. Rows are minmax(0, 1fr) — Operate's idiom —
-   because minmax(0, auto) froze track 2 at the Builder's max-content (~270px)
-   and starved the source column above it down to its overflow-less minimum. */
+/* Narrow (EFFECTIVE width) stack: the source above the channel list. Each row floors at what
+   its half holds and shares any surplus, and past that the panel scrolls (the deficit's owner,
+   `.layout.single > .panel`). The rows were minmax(0, 1fr), two equal halves of whatever the
+   panel had left: 187 px each at the 1024×768 floor at 100 %, while the source half holds 392 px
+   (its rows plus the results' 120 px floor). With no scroller between them the source spilled
+   out of its row and the channel list, painted later, covered the results, so no Tune or Add
+   could be clicked (Chrome, 2026-10-01). The floor counts each list at its own 120 px, not its whole
+   list, because both lists take a zero LENGTH basis (below). Before that, minmax(0, auto) froze
+   track 2 at the Builder's max-content (~270px) and starved the source column above it.
+   layout-single-deficit.test.tsx computes both halves. */
 [data-viewport='sm'] .rp-body,
 [data-viewport='xs'] .rp-body {
   grid-template-columns: 1fr;
-  grid-auto-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(min-content, 1fr);
 }
 .rp-source {
   min-width: 0;
@@ -22530,9 +22557,13 @@ button.sat-chip:disabled {
   border-color: var(--state-weak);
 }
 
-/* Results: an ARIA div-table, nearest first. */
+/* Results: an ARIA div-table, nearest first. The basis is a zero LENGTH, not `flex: 1`'s 0 %: in
+   the narrow stack the row is sized from its content, and a percentage basis there resolves to
+   `content` (CSS Flexbox §7.2.3), so the whole list went into the row (669 px for 14 machines)
+   and the results stopped scrolling. Wherever the column has a height of its own, 0px and 0 %
+   are the same thing. The channel list below is the same. */
 .rp-results {
-  flex: 1;
+  flex: 1 1 0px;
   min-height: 120px;
   overflow-y: auto;
   border: 1px solid var(--border);
@@ -22560,8 +22591,19 @@ button.sat-chip:disabled {
   font-size: 0.8rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
+/* An off-air machine fades by COLOUR, not by see-through (2026-10-01), as closed bands do (.ba-row.is-closed). The row
+   was `opacity: 0.55`, which put every word on it under 4.5:1 (light: the call 3.73, Tune and Add
+   2.07; night: every word under 3.6). Its words take the dim ink, and Tune and Add go to outline
+   buttons in it: the dim ink is tuned for the row's surface, and on the buttons' accent tint it
+   fell to 4.43:1 in the dark Nebula theme. The OFF-AIR badge (.rp-offair-badge below) letters in
+   the ink with its warning colour on its border, so the row still reads as off the air at a
+   glance. RadioProgView.offair.contrast.test.tsx holds every word to 4.5:1 in every theme. */
 .rp-row.offair {
-  opacity: 0.55;
+  color: var(--text-dim);
+}
+.rp-row.offair .pota-hunt-btn {
+  color: var(--text-dim);
+  background: transparent;
 }
 .rp-row.digital .rp-call,
 .rp-row.digital .rp-freq {
@@ -22580,9 +22622,12 @@ button.sat-chip:disabled {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
+/* OFF-AIR: the ink, with the warning colour on its border at full strength. Lettered in the
+   warning colour itself it read 4.37 and 4.16:1 in the dark Slate and Lagoon themes (Chrome),
+   and its old `border-color` drew nothing: a .pota-badge has no border of its own. */
 .rp-offair-badge {
-  color: var(--state-weak);
-  border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
+  color: var(--text);
+  border: 1px solid var(--state-weak);
 }
 .rp-actions {
   justify-self: end;
@@ -22665,7 +22710,7 @@ button.sat-chip:disabled {
   width: 60px;
 }
 .rp-chan-rows {
-  flex: 1;
+  flex: 1 1 0px; /* a zero LENGTH basis, as .rp-results explains */
   min-height: 120px;
   overflow-y: auto;
   display: flex;

@@ -472,6 +472,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Program at a large zoom: Tune and Add can be clicked again.** With the app pinned at 100 % on
+  a 1024×768 screen (or 125 % on 1366×768, 175 % on 1920×1080), Program puts the search above the
+  channel list, and the channel list covered the search results, so no Tune or Add button in them
+  could be clicked. Each half now keeps room for what it holds and Program scrolls instead. At the
+  automatic zoom nothing moves.
+- **Tempo at a large zoom: the station list, the conversation and the waterfall rail no longer
+  sit on top of each other.** With the app pinned at 100 % on a 1024×768 screen (or 125 % on
+  1366×768, 175 % on 1920×1080), all of Tempo's panes landed in the same place: the waterfall rail
+  covered the station list and the conversation, and the station search box sat over the first
+  Band Activity rows. They now stack one under another and Tempo scrolls.
+- **Program: an off-air repeater fades by colour and stays readable.** With "On-air only" off, a
+  repeater listed as off the air was drawn see-through, which made every word on its row hard to
+  read. Its call, frequency and buttons are now in the dimmer text colour, Tune and Add lose their
+  tint, and the OFF-AIR tag is in the normal text colour with its warning colour as an outline, so
+  the row reads clearly in every theme and still stands out as off the air.
 - **Settings has the switch to follow the radio's own split.** 1.9.1 added following the radio's
   own split and said to turn it on in Settings, but there was never a switch for it: the only way
   was to edit settings.json. Settings › Radio › Rig & CAT now has **Follow the radio's split**,
