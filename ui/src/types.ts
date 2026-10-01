@@ -4393,6 +4393,10 @@ export interface AppSnapshot {
    *  again when the refusal can pass, held for the quit when it cannot. Null while every change
    *  is in the database or on its way there; absent from a station older than the re-send. */
   logSaveTrouble?: LogSaveTrouble | null
+  /** Files this run could not read and KEPT rather than save over (tempo_core::keep_aside).
+   *  Empty on a healthy launch; absent from the Remote, which never receives these paths, and
+   *  from a station older than the rule. */
+  keptFiles?: KeptFile[]
   /** Parsec presence mode (Settings ▸ Radio ▸ Transmit limits & sharing). Null while it is
    *  switched off, which is the default; absent from a station older than the mode. */
   parsecPresence?: ParsecPresence | null
@@ -4409,6 +4413,17 @@ export interface ParsecPresence {
   stoppedAt: number | null
   /** What that stop ended: 'tune' | 'ptt' | 'rtty' | 'psk'. */
   stopped: string[]
+}
+
+/** A file the station could not read, and kept (mirror of the Rust KeptFile). */
+export interface KeptFile {
+  /** Which store: 'pendingQso', … (tokens; the words are the UI's). */
+  store: string
+  /** Where the file is now: the name it was moved aside to, or its own path when it could not
+   *  be moved. */
+  path: string
+  /** It could not be moved, so it is where it was and nothing writes over it this run. */
+  keptInPlace: boolean
 }
 
 /** Why the logbook database could not be opened at launch (mirror of the Rust

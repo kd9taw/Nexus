@@ -53,6 +53,7 @@ import {
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
 import { contestStartWarning } from './features/contestLocation'
+import { keptFileMessage } from './features/keptFiles'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
 import { setUnitsMirror } from './units'
@@ -711,6 +712,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       0,
     )
   }, [snap?.logStoreProblem, remote])
+
+  // A file the station could not read and kept rather than save over (a torn journal, or one a
+  // newer Nexus wrote): each said ONCE a session, sticky until dismissed, as the notice above
+  // is. Not on the Remote: its snapshot never carries these paths, which are this computer's.
+  const keptFilesShown = useRef(new Set<string>())
+  useEffect(() => {
+    if (remote) return
+    for (const file of snap?.keptFiles ?? []) {
+      const said = `${file.store}\n${file.path}`
+      if (keptFilesShown.current.has(said)) continue
+      keptFilesShown.current.add(said)
+      pushToast(keptFileMessage(file), 'error', 0)
+    }
+  }, [snap?.keptFiles, remote])
 
   // The logbook database refused a change (C10b). The station keeps it in memory — sending it
   // again while the refusal can pass, holding it for the quit when it cannot — and the screen

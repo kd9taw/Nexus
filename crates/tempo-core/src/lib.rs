@@ -29,6 +29,7 @@ pub mod hamqth;
 pub mod hrdlog;
 pub mod inbox;
 pub mod journal;
+pub mod keep_aside;
 pub mod logbook;
 pub mod lotw;
 pub mod lotw_upload;

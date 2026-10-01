@@ -5276,15 +5276,216 @@ fn journal_assistance(settings: &tempo_app::settings::Settings, note: &str, forc
         let excess = log.len() - ASSISTANCE_JOURNAL_CAP;
         log.drain(..excess);
     }
-    if let Ok(text) = serde_json::to_string(&*log) {
-        let path = assistance_journal_path();
+    write_assistance_journal(&assistance_journal_path(), &log);
+}
+
+/// The assistance journal at `path` for the launch: its rows, or none when there is no file, or
+/// one this build cannot read. That one is kept aside ([`tempo_core::keep_aside`]), because the
+/// launch journals its own row at once and would write over the record.
+fn restore_assistance_journal(path: &Path, now: i64) -> Vec<AssistanceEvent> {
+    tempo_core::keep_aside::read_or_keep("assistance", path, now, |text| {
+        serde_json::from_str::<Vec<AssistanceEvent>>(text).map_err(|e| e.to_string())
+    })
+    .unwrap_or_default()
+}
+
+/// Write the assistance journal to `path` (atomic tmp+rename, best-effort), unless the file there
+/// is one this run could not read and could not move aside: the record in it is never written
+/// over.
+fn write_assistance_journal(path: &Path, log: &[AssistanceEvent]) {
+    if tempo_core::keep_aside::refuses(path) {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(log) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let tmp = path.with_extension("json.tmp");
         if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+            let _ = std::fs::rename(&tmp, path);
         }
+    }
+}
+
+#[cfg(test)]
+mod assistance_journal_tests {
+    //! The assistance journal on the launch's read and the journal's own write, when the file
+    //! there cannot be read: kept, byte for byte, under a dated name and never written over, and
+    //! named for the screen. A journal whose only news is fields, and no journal, read as they
+    //! always have.
+    use super::*;
+    use tempo_core::keep_aside::Kept;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn kept_under(dir: &Path) -> Vec<Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    fn row(note: &str) -> AssistanceEvent {
+        AssistanceEvent {
+            ts_unix: 1_790_000_000,
+            unassisted: true,
+            sources: vec![AssistanceSourceState {
+                name: "DX cluster".into(),
+                active: false,
+            }],
+            note: note.into(),
+        }
+    }
+
+    /// The record as this build writes it: one row.
+    fn a_journal() -> String {
+        serde_json::to_string(&vec![row("UNASSISTED entry declared by the operator")]).unwrap()
+    }
+
+    /// An unreadable record is kept, byte for byte, beside the new one; the launch's own row,
+    /// written the moment it starts, makes a new record and does not touch the kept one.
+    fn assert_kept(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("kept");
+        let path = dir.join("assistance_journal.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut log = restore_assistance_journal(&path, NOW);
+        assert!(log.is_empty(), "{what}: nothing is read out of it");
+        log.push(row("Nexus started"));
+        write_assistance_journal(&path, &log);
+
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable record must survive the launch's own row, byte for byte, moved aside"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "assistance",
+                path: dir.join(ASIDE),
+                kept_in_place: false,
+            }],
+            "{what}: the screen is told where it is"
+        );
+        assert_eq!(
+            restore_assistance_journal(&path, NOW + 1).len(),
+            1,
+            "{what}: the new record is this build's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_assistance_journal_cut_short_is_kept_and_never_written_over() {
+        let whole = a_journal().into_bytes();
+        assert_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a source state a later build could record.
+    #[test]
+    fn an_assistance_journal_with_a_value_this_build_does_not_know_is_kept_and_never_written_over()
+    {
+        let unknown = a_journal().replacen("\"active\":false", "\"active\":\"partly\"", 1);
+        assert!(
+            unknown.contains("partly"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept("an unknown value", unknown.into_bytes());
+    }
+
+    /// A record that cannot be moved aside (every dated name taken, in a folder the writer can
+    /// write to) is never written over.
+    #[test]
+    fn an_assistance_journal_that_cannot_be_moved_is_never_written_over() {
+        let dir = scratch("stuck");
+        let path = dir.join("assistance_journal.json");
+        let bytes = b"[{\"tsUnix\":1790000000,\"unassisted\"".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(dir.join(ASIDE), b"taken").unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!(
+                    "assistance_journal.unreadable-20260930-142233-{n}.json"
+                )),
+                b"taken",
+            )
+            .unwrap();
+        }
+        let mut log = restore_assistance_journal(&path, NOW);
+        log.push(row("Nexus started"));
+        write_assistance_journal(&path, &log);
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable record must never be written over"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "assistance",
+                path: path.clone(),
+                kept_in_place: true,
+            }],
+            "the screen is told it was left in place"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_assistance_journal_whose_only_news_is_fields_reads_as_it_always_has() {
+        let dir = scratch("fields");
+        let path = dir.join("assistance_journal.json");
+        let journal = a_journal().replacen("{", "{\"aNewField\":7,", 1);
+        assert!(journal.contains("aNewField"));
+        std::fs::write(&path, &journal).unwrap();
+        assert_eq!(
+            (
+                restore_assistance_journal(&path, NOW).len(),
+                kept_under(&dir)
+            ),
+            (1, vec![]),
+            "read as it always has, with nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_assistance_journal_is_a_first_run() {
+        let dir = scratch("none");
+        let path = dir.join("assistance_journal.json");
+        assert_eq!(
+            (
+                restore_assistance_journal(&path, NOW).len(),
+                kept_under(&dir)
+            ),
+            (0, vec![]),
+            "no record: nothing read and nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -5738,7 +5939,192 @@ fn write_json_atomic(path: &std::path::Path, text: &str) -> bool {
 
 /// Atomically write the conversation JSON (see [`write_json_atomic`]).
 fn write_conversations_atomic(text: &str) -> bool {
-    write_json_atomic(&conversations_path(), text)
+    write_conversations_at(&conversations_path(), text)
+}
+
+/// [`write_conversations_atomic`] at `path`, unless the file there is one this run could not read
+/// and could not move aside: the threads in it are never written over.
+fn write_conversations_at(path: &Path, text: &str) -> bool {
+    !tempo_core::keep_aside::refuses(path) && write_json_atomic(path, text)
+}
+
+/// The Tempo conversation threads at `path` for the launch. `None` when there is no file, and when
+/// there is one this build cannot read, which is kept aside ([`tempo_core::keep_aside`]): the
+/// threads' own saver would otherwise write the empty roster over it moments after the launch.
+fn restore_conversations(path: &Path, now: i64) -> Option<Vec<tempo_app::dto::Conversation>> {
+    tempo_core::keep_aside::read_or_keep("conversations", path, now, |text| {
+        serde_json::from_str::<Vec<tempo_app::dto::Conversation>>(text).map_err(|e| e.to_string())
+    })
+}
+
+#[cfg(test)]
+mod conversations_file_tests {
+    //! The Tempo conversation threads on the launch's read and the threads' own write, when the
+    //! file there cannot be read: kept, byte for byte, under a dated name and never written over,
+    //! and named for the screen. A file whose only news is fields, and no file, read as they
+    //! always have.
+    use super::*;
+    use tempo_core::keep_aside::Kept;
+
+    /// 2026-09-30 14:22:33 UTC.
+    const NOW: i64 = 1_790_778_153;
+    const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Every file in `dir` whose bytes are exactly `bytes`.
+    fn holding(dir: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| std::fs::read(p).ok().as_deref() == Some(bytes))
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn kept_under(dir: &Path) -> Vec<Kept> {
+        tempo_core::keep_aside::kept()
+            .into_iter()
+            .filter(|k| k.path.starts_with(dir))
+            .collect()
+    }
+
+    /// The threads as this build writes them: one thread, one message, from W1ABC.
+    const THREADS: &str = r#"[{"peer":"W1ABC","messages":[{"from":"W1ABC","to":"K2DEF","text":"hello from the shack","slot":5,"directedToMe":true,"outbound":false,"snr":-10,"freqHz":1500.0,"dtSec":0.1,"tier":"TempoFast"}]}]"#;
+
+    fn peers(convs: &Option<Vec<tempo_app::dto::Conversation>>) -> Option<Vec<String>> {
+        convs
+            .as_ref()
+            .map(|c| c.iter().map(|t| t.peer.clone()).collect())
+    }
+
+    /// An unreadable file is kept, byte for byte, beside the new one; the threads' saver,
+    /// whose first pass writes the roster moments after the launch, makes a new file and does
+    /// not touch the kept one.
+    fn assert_kept(what: &str, bytes: Vec<u8>) {
+        let dir = scratch("kept");
+        let path = dir.join("conversations.json");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let restored = restore_conversations(&path, NOW);
+        assert_eq!(peers(&restored), None, "{what}: nothing is read out of it");
+        assert!(
+            write_conversations_at(&path, "[]"),
+            "{what}: the saver writes a new file"
+        );
+
+        assert_eq!(
+            holding(&dir, &bytes),
+            vec![dir.join(ASIDE)],
+            "{what}: the unreadable threads must survive the saver's first pass, byte for byte, moved aside"
+        );
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "conversations",
+                path: dir.join(ASIDE),
+                kept_in_place: false,
+            }],
+            "{what}: the screen is told where it is"
+        );
+        assert_eq!(
+            peers(&restore_conversations(&path, NOW + 1)),
+            Some(vec![]),
+            "{what}: the new file is this build's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_cut_short_are_kept_and_never_written_over() {
+        let whole = THREADS.as_bytes();
+        assert_kept("cut short", whole[..whole.len() * 3 / 5].to_vec());
+    }
+
+    /// A value this build does not know: a waveform tier from a later build.
+    #[test]
+    fn conversations_with_a_value_this_build_does_not_know_are_kept_and_never_written_over() {
+        let unknown = THREADS.replacen("\"tier\":\"TempoFast\"", "\"tier\":\"TempoUltra\"", 1);
+        assert!(
+            unknown.contains("TempoUltra"),
+            "the fixture must carry the unknown value"
+        );
+        assert_kept("an unknown value", unknown.into_bytes());
+    }
+
+    /// A file that cannot be moved aside (every dated name taken, in a folder the saver can write
+    /// to) is never written over.
+    #[test]
+    fn conversations_that_cannot_be_moved_are_never_written_over() {
+        let dir = scratch("stuck");
+        let path = dir.join("conversations.json");
+        let bytes = b"[{\"peer\":\"W1ABC\",\"messages\":[".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(dir.join(ASIDE), b"taken").unwrap();
+        for n in 2..=100 {
+            std::fs::write(
+                dir.join(format!("conversations.unreadable-20260930-142233-{n}.json")),
+                b"taken",
+            )
+            .unwrap();
+        }
+        assert_eq!(peers(&restore_conversations(&path, NOW)), None);
+        let wrote = write_conversations_at(&path, "[]");
+        assert_eq!(
+            std::fs::read(&path).ok(),
+            Some(bytes),
+            "the unreadable threads must never be written over"
+        );
+        assert!(!wrote, "the saver is told its write did not happen");
+        assert_eq!(
+            kept_under(&dir),
+            vec![Kept {
+                store: "conversations",
+                path: path.clone(),
+                kept_in_place: true,
+            }],
+            "the screen is told it was left in place"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_whose_only_news_is_fields_read_as_they_always_have() {
+        let dir = scratch("fields");
+        let path = dir.join("conversations.json");
+        let threads = THREADS
+            .replacen("{\"peer\"", "{\"aNewField\":7,\"peer\"", 1)
+            .replacen("\"slot\"", "\"aNewMessageField\":true,\"slot\"", 1);
+        assert!(threads.contains("aNewMessageField"));
+        std::fs::write(&path, &threads).unwrap();
+        assert_eq!(
+            (peers(&restore_conversations(&path, NOW)), kept_under(&dir)),
+            (Some(vec!["W1ABC".to_string()]), vec![]),
+            "read as they always have, with nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_conversations_file_is_a_first_run() {
+        let dir = scratch("none");
+        let path = dir.join("conversations.json");
+        assert_eq!(
+            (peers(&restore_conversations(&path, NOW)), kept_under(&dir)),
+            (None, vec![]),
+            "no file: no threads and nothing to say"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// The durable UI-state store: `ui-state.json`, a SIBLING of settings.json inside the current
@@ -26535,22 +26921,6 @@ fn remember_radioprog_notice(notice: &Option<RadioProgFileNotice>) {
     }
 }
 
-/// A new name beside `path` for an unreadable projects file: `radioprog.unreadable-YYYYMMDD-HHMMSS
-/// .json` (UTC), numbered on when that name is taken, so a later set-aside never replaces an
-/// earlier one (a rename onto an existing file replaces it, on every platform). `None` when every
-/// name is taken, which leaves the file where it is.
-fn radioprog_aside_path(path: &Path, now: i64) -> Option<PathBuf> {
-    let (y, mo, d, h, mi, s) = tempo_core::logbook::datetime_utc(now.max(0) as u64);
-    let stem = format!("radioprog.unreadable-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}");
-    let dir = path.parent()?;
-    (1..=100)
-        .map(|n| match n {
-            1 => dir.join(format!("{stem}.json")),
-            n => dir.join(format!("{stem}-{n}.json")),
-        })
-        .find(|candidate| !candidate.exists())
-}
-
 /// `radioprog.json` for Program, and whether anything about it has to be said.
 ///
 /// A file that is there but cannot be read is NEVER treated as an empty one. That was this
@@ -26580,8 +26950,10 @@ fn radioprog_open(path: &Path, now: i64) -> RadioProgOpened {
         }
         Err(reason) => reason,
     };
-    let moved =
-        radioprog_aside_path(path, now).filter(|aside| std::fs::rename(path, aside).is_ok());
+    // The shared name (`radioprog.unreadable-YYYYMMDD-HHMMSS.json`, `-2` … when taken). Program
+    // keeps its own notice, at the top of the section, rather than the shell's.
+    let moved = tempo_core::keep_aside::aside_path(path, now)
+        .filter(|aside| std::fs::rename(path, aside).is_ok());
     eprintln!(
         "tempo: {} could not be read ({reason}); {}",
         path.display(),
@@ -29261,15 +29633,12 @@ fn start_on_the_logbook(
                 *OPENINGS_LOG.lock().unwrap_or_else(|e| e.into_inner()) = eps;
             }
         }
-        // Assistance journal: restore the record, then stamp the launch. Stamping
-        // unconditionally (force) is deliberate — a restart mid-contest must leave no window
-        // the record is silent about what was running. (The atomic was mirrored earlier, before
-        // any feed could spawn.)
-        if let Ok(text) = std::fs::read_to_string(assistance_journal_path()) {
-            if let Ok(rows) = serde_json::from_str::<Vec<AssistanceEvent>>(&text) {
-                *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) = rows;
-            }
-        }
+        // Assistance journal: restore the record (one this build cannot read is kept aside, and
+        // the screen says where), then stamp the launch. Stamping unconditionally (force) is
+        // deliberate — a restart mid-contest must leave no window the record is silent about
+        // what was running. (The atomic was mirrored earlier, before any feed could spawn.)
+        *ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner()) =
+            restore_assistance_journal(&assistance_journal_path(), now_unix());
         journal_assistance(eng.settings(), "Nexus started", true);
         eng.set_grid_rarity_resolver(propagation::gridrarity::effective_tier_u8);
         // FCC callsign→state index: load the cached copy into the resolver, then auto-refresh in
@@ -29371,35 +29740,28 @@ fn start_on_the_logbook(
         eng.set_fd_log_path(fd_path);
         // A contact left in the confirm-before-log popup by a previous session (crash, power
         // loss, or a quit with the popup open) is a REAL QSO — the other station logged it.
-        // Restore the hold so the operator can still log it. Best-effort: a missing or corrupt
-        // journal just means there was nothing pending.
+        // Restore the hold so the operator can still log it. A missing journal means nothing
+        // was pending; one this build cannot read is kept aside, and the screen says where.
         eng.set_pending_qso_path(pending_qso_path());
-        if let Ok(text) = std::fs::read_to_string(pending_qso_path()) {
-            eng.load_pending_qso_json(&text);
-        }
+        eng.restore_pending_qso_journal(now_unix());
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation
         // threads: each restored bubble's held-vs-abandoned decision reads the live
         // queue (a held message whose journal entry survived stays "waiting to send"
-        // and transmits when its peer is next heard). Best-effort like the others.
+        // and transmits when its peer is next heard). A queue this build cannot read is kept
+        // aside, and the screen says where.
         eng.set_pending_msgs_path(pending_msgs_path());
-        if let Ok(text) = std::fs::read_to_string(pending_msgs_path()) {
-            eng.load_pending_msgs(&text);
-        }
-        // JS8 store-and-forward inbox: same contract as the Tempo journal above —
-        // best-effort, a missing or corrupt file yields an empty station.
+        eng.restore_pending_msgs(now_unix());
+        // JS8 store-and-forward inbox: a missing file is an empty station; one this build cannot
+        // read is kept aside, and the screen says where.
         eng.set_js8_journal_path(js8_station_path());
-        if let Ok(text) = std::fs::read_to_string(js8_station_path()) {
-            eng.js8_load_journal(&text);
-        }
+        eng.restore_js8_journal(now_unix());
         // Restore persisted Tempo conversation threads so chat history (and the `*`
-        // band feed) survives an app restart. Best-effort: a missing/corrupt file
-        // just yields an empty roster of threads.
-        if let Ok(text) = std::fs::read_to_string(conversations_path()) {
-            if let Ok(convs) = serde_json::from_str::<Vec<tempo_app::dto::Conversation>>(&text) {
-                eng.load_conversations(convs);
-            }
+        // band feed) survives an app restart. A missing file is an empty roster of threads;
+        // one this build cannot read is kept aside, and the screen says where.
+        if let Some(convs) = restore_conversations(&conversations_path(), now_unix()) {
+            eng.load_conversations(convs);
         }
         if persisted_source == SourceKind::Companion {
             if let Err(e) = eng.set_source(SourceKind::Companion) {

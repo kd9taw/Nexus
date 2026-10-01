@@ -315,6 +315,11 @@ html {
 }
 .ui-toast-msg {
   flex: 1;
+  /* A flex item never shrinks below its longest word on its own, and a file path is one long word:
+     the toast for a file Nexus kept pushed its own × out of the window. Let the message shrink,
+     and break a word that cannot fit. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ui-toast-close {
   /* The body is click-through (see .ui-toast); its controls are not. */

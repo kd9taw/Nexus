@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 5,248 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 5,258 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,8 +20,8 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 116 | The program's name. |
-| QSO / QSOs | 97 / 54 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
+| Nexus | 126 | The program's name. |
+| QSO / QSOs | 98 / 55 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 96 | ARRL's Logbook of The World — a service name. |
 | CAT | 84 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 79 / 73 | Transmit and receive. Printed on the radio itself. |
@@ -36,7 +36,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | DXCC | 44 | The award programme and the entity list. |
 | SSTV | 41 | The mode. |
 | APRS / APRS-IS | 40 / 12 | The protocol and its internet backbone. |
-| Field Day | 34 | The ARRL/RAC event's official name. |
+| Field Day | 35 | The ARRL/RAC event's official name. |
 | USB / LSB / SSB / FM | 34 / 10 / 27 / 21 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
 | FT8 / FT4 | 33 / 18 | Mode names. |
@@ -99,8 +99,8 @@ word in, and use only that word in the CSV.
 | radio | 232 | The rig itself, and the radio list in Settings. | |
 | mode | 210 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 153 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
-| log / logbook | 138 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 121 | The Settings screen and every reference to it. | |
+| log / logbook | 141 / 60 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
+| settings | 123 | The Settings screen and every reference to it. | |
 | grid | 117 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 108 | Sound cards, levels, routing. | |
 | station | 109 | Both your own station and the one you are working. | |

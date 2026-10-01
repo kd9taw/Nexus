@@ -495,6 +495,9 @@ const MIGRATED = [
   // Parsec presence mode's words (the Settings readout, the status-lane stop report) — migrated
   // from birth. The station sends tokens; every sentence is here, from the catalog.
   'features/parsecPresence.ts',
+  // The words for a file the station could not read and kept — migrated from birth. The station
+  // sends a store token and a path; every sentence is here, from the catalog.
+  'features/keptFiles.ts',
 ]
 
 /**

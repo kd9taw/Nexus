@@ -106,9 +106,10 @@ fn main() {
             std::process::exit(2);
         }
     }
-    // Parse READ-ONLY. Settings::load() renames an unparseable file to .json.corrupt and
-    // returns defaults (settings.rs:1648) — after which Nexus would save those defaults back
-    // over the path, resetting license_class to Open and silently re-opening TX privileges.
+    // Parse READ-ONLY. Settings::load() renames an unparseable file aside (a dated
+    // settings.unreadable-<UTC>.json) and returns defaults, after which Nexus would save those
+    // defaults back over the path, resetting license_class to Open and silently re-opening TX
+    // privileges.
     // A diagnostic must never be able to do that to a live station config.
     let mut settings: Settings = if devices_spec.is_some() {
         Settings::default() // --devices mode never reads the operator's config at all

@@ -593,6 +593,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of Program where the kept file is. If the file cannot be moved aside, it stays where it is
   and Program saves nothing until it is moved or repaired. A file from a newer Nexus that only adds
   new fields opens as it always has.
+- **A QSO waiting in the “Log this QSO?” popup is no longer lost to a file Nexus cannot read.**
+  Nexus keeps the QSOs waiting for your confirmation in a file, so a crash or a power cut does not
+  lose them. When that file could not be read (damaged, or written by a newer Nexus with a value
+  this one does not know), Nexus restored nothing and wrote the next waiting QSO over it, and every
+  contact in it was gone. Now Nexus keeps that file, untouched, under a new dated name beside it
+  (such as `pending_qso.unreadable-20260930-142233.json`), and says where, once, when it starts.
+  If the file cannot be moved aside, Nexus leaves it where it is and does not write over it.
+- **Field Day and contest contacts are no longer lost to a backup Nexus cannot read in full.**
+  Nexus keeps a backup of the contest log beside your settings and rewrites it with every contact,
+  so a restart mid-event loses nothing. When part of that backup could not be read (cut off by a
+  crash, or damaged), Nexus restored what it could and the next contact rewrote the backup
+  without the rest; a backup it could not open at all restored nothing, and the next contact
+  replaced every earlier contact of the event. Now Nexus restores the contacts it can read and
+  keeps the backup itself, untouched, under a new dated name beside it, and says where. If the
+  backup cannot be moved aside, Nexus leaves it where it is, does not write over it, and keeps
+  this session's contest contacts in memory, where switching between Run and S&P keeps them.
+- **The JS8 inbox is no longer lost to a file Nexus cannot read.** When the file that keeps your
+  stored JS8 messages could not be read (damaged, or written by a newer Nexus with a value this one
+  does not know), Nexus started an empty inbox and the next message that arrived wrote over the
+  file. Now Nexus keeps that file, untouched, under a new dated name beside it, and says where. If
+  it cannot be moved aside, Nexus leaves it where it is and does not write over it.
+- **Tempo messages waiting to send are no longer lost to a file Nexus cannot read.** When the file
+  that holds them could not be read (damaged, or written by a newer Nexus in a way this one cannot
+  read), Nexus started with none waiting and the next message you sent wrote over the file. Now
+  Nexus keeps that file, untouched, under a new dated name beside it, and says where. If it cannot
+  be moved aside, Nexus leaves it where it is and does not write over it.
+- **The Assistance record is no longer lost to a file Nexus cannot read.** The record of which
+  QSO-finding assistance was running, and when (Settings ▸ Contesting ▸ Contest Category), is
+  evidence for an unassisted entry. When its file could not be read, Nexus started an empty record
+  and wrote over the file the moment it started. Now Nexus keeps that file, untouched, under a new
+  dated name beside it, and says where. If it cannot be moved aside, Nexus leaves it where it is
+  and does not write over it.
+- **Tempo conversations are no longer lost to a file Nexus cannot read.** When the file that keeps
+  your Tempo chat history could not be read, Nexus started with no conversations and wrote over
+  the file a few seconds later. Now Nexus keeps that file, untouched, under a new dated name
+  beside it, and says where. If it cannot be moved aside, Nexus leaves it where it is and does not
+  write over it.
+- **A settings file Nexus cannot read is kept under a name of its own, and Nexus says so.** Nexus
+  already set an unreadable `settings.json` aside as `settings.json.corrupt` before starting from
+  the default settings, but always under that one name, so a second set-aside replaced the first,
+  and nothing on screen said it had happened. Now each one is kept under a new dated name beside
+  it (such as `settings.unreadable-20260930-142233.json`), never replacing an earlier one, and
+  Nexus says where, once, when it starts. If the file cannot be moved aside, Nexus leaves it where
+  it is and saves no setting over it, rather than writing the default settings over yours.
+- **Armed satellite and DXpedition alarms survive a reset of Nexus's window storage.** They were
+  meant to be kept with your settings, like the satellites and DXpeditions you chase, but were
+  kept only in the window's own storage, which a reinstall or a reset of the webview's data clears.
+  They now live with your settings, so an armed alarm, and a pass or a window that already fired,
+  survive both.
+- **A notice that names a long file path wraps it instead of pushing its × off the screen.** A
+  path has no spaces to break at, so a notice naming one grew wider than the notice column and its
+  × close button ended up outside the window. The path now wraps inside the notice, and the × stays
+  where you can reach it.
 - **Program exports the tone of a repeater whose directory entry lists several modes'
   settings together.** For a machine that runs FM and a digital mode, the hearham directory can
   write the FM tone beside the digital settings, as `CC1/146.2` or `NAC293/100.0`. Program read

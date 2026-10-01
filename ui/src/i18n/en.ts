@@ -9428,6 +9428,31 @@ export const EN = {
     'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
   'shell.logStore.failed':
     'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
+  // A file Nexus could not read at launch and KEPT rather than save over (features/keptFiles.ts):
+  // a torn journal, or one a newer Nexus wrote. `{{path}}` is the file's full path on the
+  // operator's computer, a token. One sentence per store says what the file held; `other` is a
+  // store this build has no words for. “Log this QSO?” is the popup's own title
+  // (logPrompt.title), quoted as this language shows it.
+  'shell.keptFile.pendingQso':
+    'Nexus could not read the file of QSOs that were waiting in the “Log this QSO?” popup, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.fieldDay':
+    'Nexus could not read all of the backup of your Field Day or contest log, so it kept that file, untouched, at {{path}}, and started a new backup from the contacts it could read. Nothing was deleted.',
+  'shell.keptFile.js8Inbox':
+    'Nexus could not read your JS8 inbox, so it kept that file, untouched, at {{path}}, and started a new inbox. Nothing was deleted.',
+  'shell.keptFile.pendingMsgs':
+    'Nexus could not read the file of Tempo messages waiting to send, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.assistance':
+    'Nexus could not read your Assistance record, so it kept that file, untouched, at {{path}}, and started a new record. Nothing was deleted.',
+  'shell.keptFile.conversations':
+    'Nexus could not read your Tempo conversations, so it kept that file, untouched, at {{path}}, and started with none. Nothing was deleted.',
+  'shell.keptFile.settings':
+    'Nexus could not read your settings, so it kept that file, untouched, at {{path}}, and started from the default settings. Nothing was deleted.',
+  'shell.keptFile.other':
+    'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
+  'shell.keptFile.keptInPlace':
+    'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
+  'shell.keptFile.settingsKeptInPlace':
+    'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
   // window open until they are saved (components/LogbookSaving.tsx). `{{count}}` is a number of
   // changes; `{{reason}}` is the station's diagnostic wording, passed through untranslated. The
