@@ -556,6 +556,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat acknowledgement) named a station heard as W1AW/P as W1AW. Each now names the station as
   it was heard, as a JS8Call station's reply does, and a message delivered from your store names
   its sender as it was heard too. A message held for W1AW is still offered and delivered to W1AW/P.
+- **JS8: nothing is answered while the idle watchdog stands, even after you change a setting.**
+  When the idle watchdog had turned auto-reply, relay and the heartbeat off, changing any setting
+  put those switches back on underneath while the watchdog still stood, so a query heard then
+  counted down a reply, and the reply went out after your next send. Now nothing is answered,
+  relayed or delivered while the watchdog stands, as JS8Call does, and nothing heard meanwhile goes
+  out later.
 - **Program lists the FM repeaters whose directory entry also names a digital mode.** The hearham
   directory writes a machine that runs FM and a digital mode as `YSF/FM`, `DMR/FM`, `D-STAR/FM` or
   `P25/FM`, and a narrow-FM machine as `NFM`. Program took only a plain `FM` as FM, so 514 such

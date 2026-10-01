@@ -419,9 +419,17 @@ impl Station {
             return actions;
         }
 
+        // While the idle watchdog stands nothing is answered, relayed or delivered: JS8Call
+        // processes no automatic reply while idle (`if(m_tx_watchdog) continue;`,
+        // mainwindow.cpp:8818). Gated here on the trip itself, not on the switches it turned off:
+        // a settings change re-applies those to the station while the trip still stands.
+        let replies = !self.idle_tripped;
+
         // Heartbeat heard → maybe HB-ACK.
         if m.is_heartbeat() && m.cq.is_none() {
-            self.maybe_hb_ack(m, now_ms, &mut actions);
+            if replies {
+                self.maybe_hb_ack(m, now_ms, &mut actions);
+            }
             return actions;
         }
         if m.cq.is_some() {
@@ -434,7 +442,7 @@ impl Station {
         let mine = to_me || to_group;
         if let Some(cmd) = m.cmd {
             if self.cfg.relay && cmd == Command::Relay {
-                if mine {
+                if mine && replies {
                     self.handle_relay(m, now_ms, &mut actions);
                 }
                 return actions;
@@ -448,7 +456,9 @@ impl Station {
                 return actions;
             }
             if cmd == Command::QueryMsgs || is_query_msg(m) {
-                self.handle_query_msg(m, mine, now_ms, &mut actions);
+                if replies {
+                    self.handle_query_msg(m, mine, now_ms, &mut actions);
+                }
                 return actions;
             }
             // A MSG to me or a group I joined is filed UNREAD (JS8Call's `d.cmd == " MSG" &&
@@ -460,6 +470,7 @@ impl Station {
             // Never an @ALLCALL query: JS8Call's SNR?/INFO?/STATUS?/GRID?/HEARING? replies each
             // carry `!isAllCall` (mainwindow.cpp:8834, :8839, :8849, :8859, :8869).
             if self.cfg.autoreply
+                && replies
                 && cmd.is_autoreply()
                 && (to_me || to_group)
                 && !self.is_me(&m.from)
@@ -801,7 +812,7 @@ impl Station {
         });
         actions.push(StationAction::InboxChanged);
         self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
-        if self.cfg.autoreply && !self.is_me(&m.from) {
+        if self.cfg.autoreply && !self.idle_tripped && !self.is_me(&m.from) {
             // …and acknowledged as JS8Call acknowledges the store (:9027-9051), along the relay
             // path read from the text after the target's call: an automatic reply, so only
             // with autoreply on.
@@ -3735,6 +3746,90 @@ mod tests {
             waiting(&s).len(),
             1,
             "control: a path of {MAX_PATH_HOPS} calls is answered"
+        );
+    }
+
+    /// While the idle watchdog stands, nothing is answered, relayed or delivered, as JS8Call
+    /// processes no automatic reply while idle (mainwindow.cpp:8818), even after a settings change
+    /// has put the switches back on in the station (the engine's `js8_apply_station_config`). An
+    /// operator act clears the trip, and the same query is answered again.
+    #[test]
+    fn no_reply_of_any_kind_while_the_idle_watchdog_stands() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 5;
+        c.hb_ack = true;
+        let mut s = Station::new(c.clone());
+        s.mark_active(0);
+        s.tick(5 * 60 * 1000);
+        assert!(s.idle_tripped(), "control: the watchdog tripped");
+        s.set_config(c);
+        assert!(
+            s.config().autoreply && s.config().relay,
+            "precondition: a settings change put the switches back on in the station"
+        );
+        let t = 5 * 60 * 1000 + 1;
+        s.on_event(
+            &directed(
+                "N0XYZ",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC FRIDAY CONTACT",
+                -5,
+            ),
+            t,
+        );
+        let id = s.inbox()[0].id;
+        assert!(waiting(&s).is_empty(), "MSG TO: no ACK while tripped");
+        for (what, ev) in [
+            (
+                "SNR?",
+                directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            ),
+            (
+                "MSG",
+                directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -5),
+            ),
+            (
+                "QUERY MSGS",
+                directed("K1ABC", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+            ),
+            (
+                "QUERY MSG",
+                directed(
+                    "K1ABC",
+                    "KD9TAW",
+                    Some(Command::Query),
+                    None,
+                    &format!("MSG {id}"),
+                    -5,
+                ),
+            ),
+            (
+                "relay",
+                directed("W1AW", "KD9TAW", Some(Command::Relay), None, "N0XYZ HI", -5),
+            ),
+        ] {
+            s.on_event(&ev, t);
+            assert!(waiting(&s).is_empty(), "{what}: no reply while tripped");
+        }
+        s.set_hb(true, t);
+        s.on_event(&heartbeat("N0XYZ", -5), t);
+        assert!(waiting(&s).is_empty(), "HB-ACK: no reply while tripped");
+        assert_eq!(
+            s.inbox().iter().find(|e| e.id == id).map(|e| e.state),
+            Some(InboxState::Store),
+            "the held message is not marked delivered"
+        );
+        s.mark_active(t);
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            t,
+        );
+        assert_eq!(
+            waiting(&s),
+            ["W1AW SNR -05"],
+            "control: with the trip cleared it is answered"
         );
     }
 

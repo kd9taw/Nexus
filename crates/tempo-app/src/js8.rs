@@ -2464,6 +2464,48 @@ mod tests {
         assert!(overs.is_empty(), "nothing keys: {overs:?}");
     }
 
+    /// A settings change during an idle trip re-applies the switches to the station
+    /// (`js8_apply_station_config`), and a query heard then must not be answered: JS8Call
+    /// processes no automatic reply while its idle watchdog stands (mainwindow.cpp:8818). Nor may
+    /// it go out later, once a send of the operator's clears the trip: only that send keys.
+    #[test]
+    fn a_settings_change_during_an_idle_trip_does_not_re_arm_a_reply() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_idle_watchdog_min = 5;
+        e.js8_apply_station_config();
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(t0 - 6 * 60_000); // the operator's last act, six minutes ago
+        e.js8_tick(t0);
+        assert!(e.js8_state().idle_tripped, "control: the watchdog tripped");
+        e.settings.js8_info = "RIG IC7300".into(); // any settings change
+        e.js8_apply_station_config();
+        assert!(
+            e.js8_station.config().autoreply,
+            "precondition: the change put autoreply back on in the station"
+        );
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "tripped: no reply counts down"
+        );
+        e.js8_send(None, "TEST".into())
+            .expect("the operator's send clears the trip");
+        assert!(!e.js8_state().idle_tripped, "control: the trip is cleared");
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(
+            booked,
+            ["KD9TAW: TEST"],
+            "only the operator's message keys, nothing heard while tripped: {overs:?}"
+        );
+    }
+
     /// A `MSG TO:` I hold for another station, on the air: stored, then answered `W1AW ACK`
     /// after the countdown, as JS8Call answers it (mainwindow.cpp:9051), one frame on my offset.
     #[test]
