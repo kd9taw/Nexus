@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 //
-// A NEED CHIP READS IN EVERY LIGHT THEME, WHEREVER IT SITS (operator, 2026-09-30, "Extend app-wide": "One rule and the
-// same kind of guard, so every need chip reads the same in light themes").
+// A NEED CHIP READS IN EVERY THEME, WHEREVER IT SITS (operator, 2026-09-30, "Extend app-wide": "One rule and the same kind
+// of guard, so every need chip reads the same in light themes"; then "Same rule in dark").
 //
-// A need chip (NEW ONE, ZONE, BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA, WATCH) is lettered in its need colour on a
-// 24 % tint of that colour. The light themes have their own, darker need colours, but lettered on their own tint they
-// still read under the 4.5:1 floor there. Connect's chips took the provenance chip's treatment on 2026-09-30: the word in
-// the theme's ink, and the need on the chip's border at full strength. The same rule now holds for every chip in the app,
-// in every light theme. Dark is untouched.
+// A need chip (NEW ONE, ZONE, BAND, MODE, GRID, STATE, LoTW, DXPED, POTA, SOTA, WATCH) was lettered in its need colour on a
+// 24 % tint of that colour, and lettered on its own tint it read under the 4.5:1 floor in both themes: as low as 1.37:1 in
+// the light one and 2.49:1 in the dark one, in Chrome. Connect's chips took the provenance chip's treatment first: the
+// word in the theme's ink, and the need on the chip's border at full strength. The same rule now holds for every chip in
+// the app, in every theme. On a Band Activity row tinted in its own need's colour the chip drops its tint and is an outline
+// in that colour (operator, 2026-09-30: "Chip drops its tint there"): stacked on the row's tint, the chip's own made WATCH
+// on a watched station's row read 3.12:1 in the night modes, in Chrome. And at night a chip's own tint is 10 % of its need
+// colour (operator, 2026-09-30: "10 % fill"), so the dim night ink reads on a row that is tinted, selected or dimmed.
 //
 // THE HOSTS. Nine components letter a need chip, and each is rendered here in its host's own chain: Band Activity
 // (OperateDecodes: Operate's Band Activity and Rx Frequency panes, and the Tempo rail), the Call Roster (OperateRoster), the
@@ -40,6 +43,7 @@ import {
   PALETTE_SETS,
   SENTINEL_MODES,
   baseTheme,
+  isNight,
   chainOf,
   cmpSpec,
   contrast,
@@ -119,6 +123,11 @@ const ALERTS: NeedAlert[] = [
   alert('W7SUM', ['Sota']),
   alert('3Y0J', ['NewEntity', 'Dxped'], { entity: 'Bouvet', zone: 38 }),
 ]
+/** Needs only Band Activity letters (no card, roster row or board row): rows led by the tinted needs the rest leave out. */
+const BA_ALERTS: NeedAlert[] = [
+  alert('VK0ZN', ['NewZone', 'NewMode'], { entity: 'Heard Island', zone: 39 }),
+  alert('ZS6MD', ['NewMode'], { entity: 'South Africa', zone: 38 }),
+]
 const byCall = (alerts: NeedAlert[]) => new Map(alerts.map((a) => [a.call, [a]]))
 const leadByCall = (alerts: NeedAlert[]) => new Map(alerts.map((a) => [a.call, a.tags[0]]))
 const STATIONS: Station[] = [
@@ -143,6 +152,9 @@ const DECODES: DecodeRow[] = [
   decode('W7SUM', { freqHz: 1210, isCq: false, message: 'K1XX W7SUM -10' }), // a plain new row
   decode('3Y0J', { freqHz: 1400, isCq: false, directedToMe: true, message: 'W9XYZ 3Y0J -05' }), // calling me
   decode('K1GRD', { freqHz: 1600, newGrid: true }), // the decode's own new-grid flag
+  decode('ZL9ZZ', { freqHz: 1800, newDxcc: true }), // the decode's own new-one flag: a NEW ONE row
+  decode('VK0ZN', { freqHz: 2000 }), // a zone need's row
+  decode('ZS6MD', { freqHz: 2200 }), // a mode need's row
 ]
 const PHONE_ALERTS: NeedAlert[] = [
   alert('VP8PJ', ['Wanted', 'NewEntity'], { entity: 'Falkland Islands', mode: 'SSB', freqMhz: 14.2 }),
@@ -218,7 +230,7 @@ const connectCtx = (): PaneContext =>
 
 // ── the hosts, each in its own chain ─────────────────────────────────────────────────────────────────────────────
 const noop = () => {}
-const decodesProps = { decodes: DECODES, slot: SLOT, band: '20m', tier: 'FT8' as const, harqRescues: 0, onCall: noop, needAlertsByCall: byCall(ALERTS), myGrid: 'EN52' }
+const decodesProps = { decodes: DECODES, slot: SLOT, band: '20m', tier: 'FT8' as const, harqRescues: 0, onCall: noop, needAlertsByCall: byCall([...ALERTS, ...BA_ALERTS]), myGrid: 'EN52' }
 const stationList = () => (
   <StationList
     stations={STATIONS} myGrid="EN52" currentSlot={SLOT} activePeer="JA1ABC" unreadByPeer={{}} needByCall={leadByCall(ALERTS)}
@@ -404,13 +416,40 @@ function everyNeed(chips: Chip[]): Chip[] {
 const sheet = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const RULES = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css'))
-/** The chip as it shipped, before any rule of its own lettered it in ink: every light rule on a need chip or a need
- *  colour, and the NEW ONE chip's ink in every theme, removed. */
-const SHIPPED = RULES.filter(
-  (r) =>
-    !(r.selector.startsWith("[data-theme='light'] ") && /\.need-(chip|pota|sota)\b/.test(r.selector)) &&
-    !(/\.need-chip\b/.test(r.selector) && r.decls.some((d) => d.prop === 'color' && d.value === 'var(--text)')),
-)
+/** The rule that takes the lead chip's tint away on its own Band Activity row (a `.decode-row.need-X .need-chip.need-X`). */
+const LEAD = /^\.decode-row\.(need-[a-z]+) \.need-chip\.\1$/
+/** The Band Activity rows the sheet tints in a need's colour (`.decode-row.need-X` with a background of its own). */
+const TINTED_ROWS = [
+  ...new Set(
+    RULES.filter((r) => /^\.decode-row\.need-[a-z]+$/.test(r.selector) && r.decls.some((d) => d.prop === 'background' || d.prop === 'background-color')).map(
+      (r) => r.selector.slice('.decode-row.'.length),
+    ),
+  ),
+].sort()
+/** The tinted Band Activity row a chip sits in, by its need class, or null. */
+const rowNeedOf = (w: Chip) => w.chain.find((e) => e.classes.includes('decode-row'))?.classes.find((c) => TINTED_ROWS.includes(c)) ?? null
+/** The chip that leads its row: on a row tinted in its own need's colour. */
+const isLead = (w: Chip) => rowNeedOf(w) === `need-${w.cls}`
+/** The chip as it shipped, lettered in its need colour with its border a mix of it: the rules that lettered it in ink
+ *  before this rule was the chip's own (the light themes' and NEW ONE's), the lead chip's outline and the night tint
+ *  removed, and its shipped declarations restated after the sheet, so each outranks what the sheet now says in its place. */
+const AS_SHIPPED = `
+.need-chip { color: var(--need-color, var(--accent)); border: 1px solid color-mix(in srgb, var(--need-color, var(--accent)) 70%, transparent); }
+.need-chip.need-dxped { color: #38bdf8; border: 1px solid color-mix(in srgb, #38bdf8 50%, transparent); }
+.need-chip.need-state { color: var(--need-state); border: 1px solid color-mix(in srgb, var(--need-state) 48%, transparent); }
+.need-pota { --need-color: #16a34a; }
+.need-sota { --need-color: #9333ea; }
+`
+const SHIPPED = [
+  ...RULES.filter(
+    (r) =>
+      !(r.selector.startsWith("[data-theme='light'] ") && /\.need-(chip|pota|sota)\b/.test(r.selector)) &&
+      !(r.selector === '.need-chip.need-entity' && r.decls.some((d) => d.prop === 'color' && d.value === 'var(--text)')) &&
+      !LEAD.test(r.selector) &&
+      !(r.selector.startsWith("[data-night='1'] ") && /\.need-chip\b/.test(r.selector)),
+  ),
+  ...parseRules(AS_SHIPPED, { n: RULES.length }),
+]
 
 const skinsOf = (theme: 'light' | 'dark') => ['', ...SKINS.filter((s) => s.base === theme).map((s) => s.id)]
 /** Every built-in light theme: the four light modes, bare and on each light theme, and the standard light theme under each
@@ -577,7 +616,7 @@ function unreadable(rules: Rule[], chips: Chip[], modes: readonly Mode[]): strin
   return out
 }
 
-describe('a need chip reads in every light theme, wherever it sits', () => {
+describe('a need chip reads in every theme, wherever it sits', () => {
   let found: Chip[] = []
   let natural: Chip[] = []
   let chips: Chip[] = []
@@ -623,30 +662,65 @@ describe('a need chip reads in every light theme, wherever it sits', () => {
     expect(unreadable(RULES, chips, LIGHT)).toEqual([])
   }, 240_000)
 
+  // In the dark themes the same, but in a row that tints or dims (below) 4.3:1: there the night modes' dimmer ink reads 4.35
+  // to 4.46:1 on NEW ONE (the operator accepted it: "Take all three"). A worked station's card, dimmed to 72 %, takes a
+  // WATCH chip to 4.28:1 on the Lagoon theme (it shipped at 3.51:1), so that card is held to 4.25:1.
+  // THE NIGHT MODES (operator, 2026-09-30: "10 % fill"). With the word in the dim night ink, a chip that is not its row's
+  // own stacks its tint on a tinted, selected or dimmed row's; at the day's 24 % that took a word down to 3.31:1 (a POTA
+  // chip on a watched station's row). At night the tint is 10 % of the need colour, and there the word reads 4.44:1 or
+  // better (measured), never worse than it shipped: a chip there is held to 4.4:1 and to what it shipped at. Every other
+  // chip clears 4.5:1 at night too.
+  const NIGHT_TINTS: Array<[string, (e: El) => boolean]> = [
+    ['a Band Activity row calling me', (e) => e.classes.includes('decode-row') && e.classes.includes('directed')],
+    ['a selected Call Roster row', (e) => e.classes.includes('or-row') && e.classes.includes('selected')],
+    ['a selected station card', (e) => e.classes.includes('station-card') && e.classes.includes('selected')],
+  ]
+  it('every chip clears 4.5:1 in every dark theme, in each need it can letter, on what it sits on (4.3:1 in a row that tints or dims; at night 4.4:1 in a row that tints, never worse than it shipped)', () => {
+    const low: string[] = []
+    for (const w of chips)
+      for (const mode of DARK) {
+        const { fg, bg, ratio } = wordOf(RULES, mode, w)
+        const floor = isNight(mode)
+          ? tintsOrDims(w) || NIGHT_TINTS.some(([, is]) => w.chain.some(is)) ? 4.4 : 4.5
+          : dipOf(w) === "a worked station's card" ? 4.25 : tintsOrDims(w) ? 4.3 : 4.5
+        if (ratio < floor) low.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
+        if (isNight(mode) && ratio < 4.5) {
+          const was = wordOf(SHIPPED, mode, w).ratio
+          if (ratio < was - 0.005) low.push(`${w.what} ${mode}: ${ratio.toFixed(2)}:1, worse than it shipped at ${was.toFixed(2)}:1`)
+        }
+      }
+    expect(low).toEqual([])
+    expect(NIGHT_TINTS.filter(([, is]) => !chips.some((w) => w.chain.some(is))).map(([name]) => name), 'rows with no chip').toEqual([])
+  }, 240_000)
+
   // THE THREE ROWS A BORDER DIPS IN. Each tints or dims itself, and a need colour at full strength reads 2.7–3.0:1
-  // against that (measured: the grey LoTW and the amber BAND the lowest): a selected row on the Needed board (the accent's
-  // tint), the roster's row for the station being worked (the transmit colour's) and a worked station's card (dimmed to
-  // 72 %). The word reads 4.5:1 in them as everywhere, and it names the need. Their borders are held to that floor.
+  // against that in the light themes (measured: the grey LoTW and the amber BAND the lowest): a selected row on the Needed
+  // board (the accent's tint), the roster's row for the station being worked (the transmit colour's) and a worked station's
+  // card (dimmed to 72 %). The word reads 4.5:1 in them as everywhere, and it names the need. Their borders are held to
+  // that floor, and in the dark themes to 2.6:1 (NEW ONE's magenta on a worked card on the Lagoon theme, 2.63:1; it shipped
+  // at 1.99:1). In the dark themes, too, a chip on a Band Activity row in another need's colour is held to 2.6:1: NEW ONE's
+  // magenta on a watched station's lime row reads 2.62:1 on Slate and Lagoon and 2.93:1 on the standard dark theme (the
+  // operator, 2026-09-30, with "Chip drops its tint there": held at 2.6).
   const DIPS: Array<[string, (e: El) => boolean]> = [
     ['a selected Needed-board row', (e) => e.classes.includes('np-row') && e.classes.includes('selected')],
     ["the roster's row for the station being worked", (e) => e.classes.includes('or-row') && e.classes.includes('working')],
     ["a worked station's card", (e) => e.classes.includes('station-card') && e.classes.includes('worked')],
   ]
   const dipOf = (w: Chip) => DIPS.find(([, is]) => w.chain.some(is))?.[0] ?? null
-  /** A row that tints itself or dims: the three above, or a Band Activity row in a need's colour. In the night modes the
-   *  dark ink on NEW ONE reads 4.35–4.46:1 in them (measured: a watched station's row, a worked station's card). */
+  /** A row that tints itself or dims: the three above, or a Band Activity row in a need's colour. */
   const tintsOrDims = (w: Chip) => dipOf(w) != null || w.chain.some((e) => e.classes.includes('decode-row') && e.classes.some((c) => c.startsWith('need-')))
-  it('the need stays on the border at full strength, 3:1 off what the chip sits on in every light theme (2.7:1 in the three rows that tint or dim)', () => {
+  it('the need stays on the border at full strength, 3:1 off what the chip sits on in every theme (2.7:1 in the three rows that tint or dim, 2.6:1 in dark there and on another need\'s row)', () => {
     const low: string[] = []
     for (const w of chips)
-      for (const mode of LIGHT) {
+      for (const mode of [...LIGHT, ...DARK]) {
         const e = edgeOf(RULES, mode, w)
         if (!e) {
           low.push(`${w.what} ${mode}: no border`)
           continue
         }
         if (!e.value.includes('var(--need-color')) low.push(`${w.what} ${mode}: the border is ${e.value}, not the need colour`)
-        const floor = dipOf(w) ? 2.7 : 3
+        const dark = DARK.includes(mode)
+        const floor = dipOf(w) ? (dark ? 2.6 : 2.7) : dark && rowNeedOf(w) != null && !isLead(w) ? 2.6 : 3
         if (e.ratio < floor) low.push(`${w.what} ${mode}: the border ${hex(e.c)} on ${hex(e.under)} = ${e.ratio.toFixed(2)}:1`)
       }
     expect(low).toEqual([])
@@ -654,29 +728,39 @@ describe('a need chip reads in every light theme, wherever it sits', () => {
     expect(DIPS.filter(([name]) => !chips.some((w) => dipOf(w) === name)).map(([name]) => name), 'rows with no chip').toEqual([])
   }, 240_000)
 
-  // Dark keeps the need colours. That is checked by what dark paints, not against the sheet minus this change's rules,
-  // which a rule escaping the light theme would be in as well: in every dark theme each chip letters in its own need
-  // colour, and its border stays a mix of it. The one exception is NEW ONE (operator, 2026-09-30, the dark batch: "the NEW
-  // ONE chip's word goes to the text colour"): its magenta on its own tint read 4.27:1 on the dark page, so it letters in
-  // the theme's ink, at 4.5:1 (4.3:1 in a row that tints or dims), with the need kept on its tint and border.
-  it('in every dark theme each chip letters in its own need colour (NEW ONE in the ink, at 4.5:1), its border a mix of it', () => {
-    const moved: string[] = []
-    for (const w of chips)
-      for (const mode of DARK) {
-        const i = w.chain.length - 1
-        const ink = inkOf(RULES, mode, w)
-        const raw = colourAt(RULES, mode, w, ink.at, ink.value, [0, 0, 0])
-        const need = colourAt(RULES, mode, w, i, w.cls === 'entity' ? 'var(--text)' : 'var(--need-color, var(--accent))', [0, 0, 0])
-        if (hex(raw) !== hex(need)) moved.push(`${w.what} ${mode}: lettered ${hex(raw)}, not ${w.cls === 'entity' ? 'the ink' : 'its need colour'} ${hex(need)}`)
-        if (w.cls === 'entity') {
-          const { fg, bg, ratio } = wordOf(RULES, mode, w)
-          if (ratio < (tintsOrDims(w) ? 4.3 : 4.5)) moved.push(`${w.what} ${mode}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
-        }
-        const border = edgeOf(RULES, mode, w)?.value ?? 'none'
-        if (!border.includes('color-mix(')) moved.push(`${w.what} ${mode}: the border is ${border}, not a mix of the need colour`)
+  // THE LEAD CHIP ON ITS OWN ROW (operator, 2026-09-30: "Chip drops its tint there"). On a Band Activity row tinted in a
+  // need's colour, the chip of that need has no tint of its own in any theme (the row carries it), and its border is the
+  // need colour at full strength (the border check above); every other chip on a Band Activity row keeps its tint. Every
+  // row the sheet tints has its lead chip here, so a row tinted later cannot be left out of the rule.
+  it("on a Band Activity row in its own need's colour the chip is an outline in that colour, in every theme; every other chip keeps its tint", () => {
+    const wrong: string[] = []
+    for (const w of chips) {
+      if (!w.chain.some((e) => e.classes.includes('decode-row'))) continue
+      const i = w.chain.length - 1
+      for (const mode of [...LIGHT, ...DARK]) {
+        const tint = declAt(RULES, mode, w, i, 'background', 'background-color')
+        if (isLead(w) && tint) wrong.push(`${w.what} ${mode}: on its own row it keeps a tint, ${tint}`)
+        if (!isLead(w) && !tint) wrong.push(`${w.what} ${mode}: it has lost its tint`)
       }
-    expect(moved).toEqual([])
+    }
+    expect(wrong).toEqual([])
+    expect(TINTED_ROWS.filter((n) => !chips.some((w) => isLead(w) && rowNeedOf(w) === n)), 'tinted rows with no lead chip').toEqual([])
+    expect(TINTED_ROWS, 'the tinted rows').toEqual(['need-band', 'need-confirm', 'need-entity', 'need-grid', 'need-mode', 'need-state', 'need-watch', 'need-zone'])
   }, 240_000)
+
+  // POTA AND SOTA (operator, 2026-09-30: "SOTA/POTA's fixed colours give way"): a fixed green and purple, set for the
+  // Needed board's chips, overrode the theme's own in the dark themes. Each chip now takes the theme's colour in every theme.
+  it("the POTA and SOTA chips take the theme's own colours in every theme", () => {
+    const wrong: string[] = []
+    for (const w of chips.filter((c) => c.cls === 'pota' || c.cls === 'sota'))
+      for (const mode of [...LIGHT, ...DARK]) {
+        const i = w.chain.length - 1
+        const got = hex(colourAt(RULES, mode, w, i, 'var(--need-color)', [0, 0, 0]))
+        const want = hex(colourAt(RULES, mode, w, i, `var(--need-${w.cls})`, [0, 0, 0]))
+        if (got !== want) wrong.push(`${w.what} ${mode}: ${got}, not the theme's ${want}`)
+      }
+    expect(wrong).toEqual([])
+  }, 120_000)
 
   it('FIRES: the chip as it shipped is caught in the light theme on every host, at the ratios Chrome measured', () => {
     const shipped = unreadable(SHIPPED, natural, ['light'])
@@ -692,5 +776,15 @@ describe('a need chip reads in every light theme, wherever it sits', () => {
     expect(has(/^Operate Call Roster \.or-row\.need-pota \.need-pota "PARK" light: #16a34a on #c4e7d3 = 2\.4[67]:1$/), 'PARK on the roster').toBe(true)
     expect(has(/^Tempo Stations rail \.station-card\.worked\.needed\.need-confirm \.need-confirm "LoTW" light: #8491a3 on #d7dbe2 = 2\.3[01]:1$/), 'LoTW, dimmed').toBe(true)
     expect(has(/^the Satellites view \.sat-earn \.need-grid "GRID ×5" light: #047857 on #c0dcd6 = 3\.7[78]:1$/), 'GRID on the Next-up strip').toBe(true)
+  }, 120_000)
+
+  it('FIRES: the chip as it shipped is caught in the dark theme too, at the ratios Chrome measured', () => {
+    const shipped = unreadable(SHIPPED, natural, ['dark'])
+    const has = (re: RegExp) => shipped.some((m) => re.test(m))
+    // Chrome's figures: the same pairs, the surface a unit apart where its mix rounds, the ratio from its unrounded colours.
+    expect(has(/^Operate Band Activity \.decode-row\.need-watch \.need-entity "NEW ONE" dark: #f23ec0 on #62464[bc] = 2\.49:1$/), 'NEW ONE on a watched station').toBe(true)
+    expect(has(/^Operate Band Activity \.decode-row\.need-watch \.need-zone "ZONE" dark: #c084fc on #56575a = 2\.7[34]:1$/), 'ZONE on it').toBe(true)
+    expect(has(/^Operate Band Activity \.decode-row\.new \.need-sota "SOTA" dark: #9333ea on #322358 = 2\.57:1$/), 'SOTA').toBe(true)
+    expect(has(/^the Needed view \.np-row\.need-pota \.need-pota "(NEW PARK|POTA)" dark: #16a34a on #0e3323 = 4\.2[0-3]:1$/), 'NEW PARK').toBe(true)
   }, 120_000)
 })
