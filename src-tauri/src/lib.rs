@@ -26870,7 +26870,7 @@ async fn repeater_search(
                     conn_log(
                         "RSGB",
                         "info",
-                        &format!("the RSGB list was not used for this search: {why}"),
+                        format!("the RSGB list was not used for this search: {why}"),
                     );
                     rsgb_unavailable = true;
                 }

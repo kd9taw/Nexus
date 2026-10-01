@@ -628,7 +628,7 @@ fn grid_ref_to_latlon(reference: &str) -> Option<(f64, f64)> {
     };
     let digits = &r[2..];
     if !(2..=10).contains(&digits.len())
-        || digits.len() % 2 != 0
+        || !digits.len().is_multiple_of(2)
         || !digits.bytes().all(|d| d.is_ascii_digit())
     {
         return None;
