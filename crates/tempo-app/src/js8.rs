@@ -2485,6 +2485,79 @@ mod tests {
         assert!(overs.is_empty(), "nothing keys: {overs:?}");
     }
 
+    /// A settings change during an idle trip re-applies the switches to the station
+    /// (`js8_apply_station_config`), and a query heard then must not be answered: JS8Call
+    /// processes no automatic reply while its idle watchdog stands (mainwindow.cpp:8818). Nor may
+    /// it go out later, once a send of the operator's clears the trip: only that send keys.
+    #[test]
+    fn a_settings_change_during_an_idle_trip_does_not_re_arm_a_reply() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_idle_watchdog_min = 5;
+        e.js8_apply_station_config();
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(t0 - 6 * 60_000); // the operator's last act, six minutes ago
+        e.js8_tick(t0);
+        assert!(e.js8_state().idle_tripped, "control: the watchdog tripped");
+        e.settings.js8_info = "RIG IC7300".into(); // any settings change
+        e.js8_apply_station_config();
+        assert!(
+            e.js8_station.config().autoreply,
+            "precondition: the change put autoreply back on in the station"
+        );
+        e.js8_ingest(&[snr_query_to_me("W1AW")], 0);
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "tripped: no reply counts down"
+        );
+        e.js8_send(None, "TEST".into())
+            .expect("the operator's send clears the trip");
+        assert!(!e.js8_state().idle_tripped, "control: the trip is cleared");
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(
+            booked,
+            ["KD9TAW: TEST"],
+            "only the operator's message keys, nothing heard while tripped: {overs:?}"
+        );
+    }
+
+    /// A `MSG TO:` I hold for another station, on the air: stored, then answered `W1AW ACK`
+    /// after the countdown, as JS8Call answers it (mainwindow.cpp:9051), one frame on my offset.
+    #[test]
+    fn a_js8_msg_to_held_for_another_station_is_acked_on_the_air() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        for (f, i3) in msg_to_frames() {
+            e.js8_ingest(&[row(&f, i3, Js8Speed::Normal, 1750.0)], 0);
+        }
+        let st = e.js8_state();
+        assert_eq!(
+            (st.inbox.len(), st.inbox[0].state),
+            (1, InboxState::Store),
+            "control: the MSG TO: is held for K1ABC"
+        );
+        let shown = st.pending_reply.map(|p| p.display);
+        assert_eq!(
+            shown.as_deref(),
+            Some("KD9TAW: W1AW ACK"),
+            "the ACK counts down"
+        );
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let overs = run_js8_loop_from(&mut e, t0, 60);
+        assert_eq!(overs.len(), 1, "one ACK over: {overs:?}");
+        let row = e.js8_state().activity.last().cloned().expect("its row");
+        assert_eq!(
+            (row.mine, row.text.as_str(), row.freq_hz),
+            (true, "KD9TAW: W1AW ACK", 1500.0),
+            "booked where it keyed"
+        );
+    }
+
     // ===== the queue at a TX-off or privileges refusal: dropped, never sent later =====
 
     /// A message queued inside the licence's privileges, then the dial moved out of them before
