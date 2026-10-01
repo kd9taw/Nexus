@@ -1163,6 +1163,10 @@ const CW_REFUSED_PRIVILEGES: &str = "CW not sent: this frequency is outside your
      privileges, so it was dropped, not held for later. Send it again from inside them.";
 const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outside your \
      license's CW privileges, so it was dropped.";
+/// …and when the operator LEFT the CW screen with words still to go
+/// ([`Engine::set_operating_mode_with_reset`]): dropped, not keyed from the screen they went to.
+const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
+     dropped. Send it again when you are ready.";
 
 /// …and what the RTTY cockpit's warning line says when [`Engine::poll_rtty_one`] drops refused
 /// overs, and when the auto-sequencer stops because one of them was its own.
@@ -1195,6 +1199,11 @@ const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the
 const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
      privileges, so the picture that was waiting was dropped, not held for later. Send it again \
      from inside them.";
+/// …and when the operator LEFT the Phone section, which SSTV rides, with a picture still waiting
+/// ([`Engine::set_operating_mode_with_reset`]).
+const SSTV_LEFT_SECTION: &str = "SSTV stopped: you moved to another mode's screen, so the \
+     picture that was waiting was dropped, not held for your return. Send it again when you are \
+     ready.";
 /// …and when the radio loop ends a picture already going out ([`Engine::sstv_tx_cut`]): transmit
 /// went off under it, or another stop ended its transmission. Never for SSTV's own Stop, TX Off or
 /// Stop TX, which cut it through the SSTV abort as they always did.
@@ -7418,15 +7427,16 @@ impl Engine {
         self.drop_rtty_latch();
         // …and PSK's, for the identical reason.
         self.drop_psk_latch();
-        // ⛔ …and LEAVING RTTY OR PSK DROPS WHAT WAS TYPED AHEAD (operator, 2026-09-30: "Drop it
-        // when you leave"): the section's queue is cleared, the log says so once, and its ⚠
-        // line tells the operator on their return, so nothing keys when they come back. Bound
-        // HERE, to the act of leaving: every section change (the nav, a spot click that opens
-        // another cockpit, an SSTV channel pick, the Remote) passes through this method, and a
-        // section re-asserting itself (a view entry) leaves nothing. The over in flight is left
-        // as a section change has always left it: nothing here arms an abort for a one-shot
-        // over (the latches above cut only a LATCHED stream), so it finishes where TX stays
-        // armed, and the loop's TX-off cut ends it where the disarm below lowers the latch.
+        // ⛔ …and LEAVING RTTY, PSK OR CW DROPS WHAT WAS TYPED AHEAD, and leaving Phone an SSTV
+        // picture still waiting (operator, 2026-09-30: "Drop it when you leave"; for CW, "Same
+        // leave rule"; for SSTV, "Drop it on leave"): the section's queue is cleared, the log
+        // says so once, and its ⚠ line tells the operator on their return, so nothing keys when
+        // they come back. Bound HERE, to the act of leaving: every section change (the nav, a spot
+        // click that opens another cockpit, an SSTV channel pick, the Remote) passes through this
+        // method, and a section re-asserting itself (a view entry) leaves nothing. The over in
+        // flight is left as a section change has always left it: nothing here arms an abort for a
+        // one-shot over (the latches above cut only a LATCHED stream), so it finishes where TX
+        // stays armed, and the loop's TX-off cut ends it where the disarm below lowers the latch.
         self.drop_queued_overs_on_leaving(om);
         // The other half of the context pair (see the tier line): which section the operator is
         // in decides what every transmit, CAT and audio line beneath it means. Logged only when
@@ -7565,10 +7575,9 @@ impl Engine {
             // their aborts — and a section change is not an operator pressing TX Off: nothing
             // here arms an abort. The over in flight is the loop's: with the latch down, its
             // TX-off cut ends a non-slot over (a manual mode's). Nothing queued is held either:
-            // RTTY's and PSK's went as the section was left (above), and CW's goes at the loop's
-            // next `poll_cw_one`, which drops a refused send and says so (operator, 2026-09-30).
-            // So: lower the latch, bump the gate generation (an over planned while armed must
-            // not commit), and nothing else. One bit changes, and it is the operator's.
+            // RTTY's, PSK's and CW's went as the section was left (above). So: lower the latch,
+            // bump the gate generation (an over planned while armed must not commit), and
+            // nothing else. One bit changes, and it is the operator's.
             if self.tx_enabled {
                 tempo_core::applog::info("tx", "transmit disarmed by leaving a manual mode");
             }
@@ -7578,12 +7587,13 @@ impl Engine {
         }
     }
 
-    /// What leaving RTTY or PSK does to that section's typed-ahead overs, from the one place a
-    /// section changes ([`Self::set_operating_mode_with_reset`]): dropped with a notice, never held
-    /// for the return. `to` is the section being entered. An RTTY auto QSO ends with the screen,
-    /// with a line of its own ([`RTTY_AUTO_LEFT`]; nothing was refused, so the refusal line would
-    /// mislead): left running, its next over would be queued while the operator is away and key
-    /// on the return.
+    /// What leaving RTTY, PSK or CW does to what that section still has queued, and leaving Phone
+    /// to an SSTV picture still waiting, from the one place a section changes
+    /// ([`Self::set_operating_mode_with_reset`]): dropped with a notice, never keyed on the return
+    /// or from the screen the operator went to. `to` is the section being entered. An RTTY auto
+    /// QSO ends with the screen, with a line of its own ([`RTTY_AUTO_LEFT`]; nothing was refused,
+    /// so the refusal line would mislead): left running, its next over would be queued while the
+    /// operator is away and key on the return.
     fn drop_queued_overs_on_leaving(&mut self, to: crate::settings::OperatingMode) {
         use crate::settings::OperatingMode;
         let from = self.settings.operating_mode;
@@ -7616,6 +7626,27 @@ impl Engine {
             tempo_core::applog::info("tx", "PSK not keyed: the PSK section was left (dropped)");
             self.psk_queue.clear();
             self.psk_keyer_error = Some(PSK_LEFT_SECTION.to_string());
+        }
+        // …and CW (the operator, 2026-09-30: "Same leave rule for CW"). The loop hands the keyer
+        // ONE word at a time, so this drops every word not yet handed over; the word already in
+        // the keyer finishes, as it always has (nothing here arms `cw_abort`), and that one word
+        // is the smallest boundary the keyers allow. Before this, the rest of a macro kept keying
+        // from Phone, RTTY or PSK, whose armed latch let `poll_cw_one` hand it out. Only a move
+        // OUT of CW counts: the CW ID after an FT 73 is queued, and keyed, from Digital by design.
+        if from == OperatingMode::Cw && to != OperatingMode::Cw && !self.cw_queue.is_empty() {
+            tempo_core::applog::info("tx", "CW not keyed: the CW section was left (dropped)");
+            self.cw_queue.clear();
+            self.cw_keyer_error = Some(CW_LEFT_SECTION.to_string());
+        }
+        // …and SSTV, which rides Phone (the operator, 2026-09-30: "Drop it on leave"). Only a
+        // picture still WAITING for the loop is the rule's: one the loop has taken is on the air,
+        // and leaving does to it what it always did (nothing here arms `sstv_abort`).
+        if from == OperatingMode::Phone && to != OperatingMode::Phone && self.sstv_tx.is_some() {
+            tempo_core::applog::info("tx", "SSTV not keyed: the Phone section was left (dropped)");
+            self.sstv_tx = None;
+            self.sstv_tx_mode = None;
+            self.sstv_tx_progress = None;
+            self.sstv_tx_notice = Some(SSTV_LEFT_SECTION.to_string());
         }
     }
 
@@ -8788,13 +8819,13 @@ impl Engine {
     /// or the send is refused. One word per call so the loop paces the send and Stop TX (which
     /// clears the queue) can drop the remainder before it reaches the rig.
     ///
-    /// ⛔ A REFUSED SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30). TX off (a section
-    /// change or a watchdog trip lowers the latch and keeps the queue), a dial outside the
-    /// licence's privileges, or a CW emission outside its CW privileges (below): every word still
-    /// queued is cleared, and the log and the CW cockpit's warning line
-    /// ([`Self::cw_keyer_error`]) say why. Held, they keyed the moment TX was allowed again (TX
-    /// back on, a tune back into the privileges), at a time the operator did not choose. A send
-    /// made once TX is allowed keys as it always did.
+    /// ⛔ A REFUSED SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30). TX off (leaving the CW
+    /// section drops the queue itself, in [`Self::set_operating_mode_with_reset`], so this is the
+    /// backstop for a latch lowered any other way), a dial outside the licence's privileges, or a
+    /// CW emission outside its CW privileges (below): every word still queued is cleared, and the
+    /// log and the CW cockpit's warning line ([`Self::cw_keyer_error`]) say why. Held, they keyed
+    /// the moment TX was allowed again (TX back on, a tune back into the privileges), at a time
+    /// the operator did not choose. A send made once TX is allowed keys as it always did.
     ///
     /// ⭐ AND AS CW, WHERE THE KEYER PUTS IT ([`Self::tx_allowed_as`]): the carrier at the dial,
     /// and on the soundcard keyer the tone a pitch from it on the side the transmitting VFO is
@@ -18961,9 +18992,11 @@ contact yourself."
     /// a time the operator did not choose. TX Off itself already drops it (`set_tx_enabled`), so
     /// the TX-off arm here is the backstop for a latch lowered any other way.
     ///
-    /// HELD, as before, while a tune carrier is up, and outside the Phone section: `tx_allowed`
-    /// judges the current section's emission, so it speaks for SSTV only in Phone. A picture
-    /// already going out is the loop's, and nothing here touches it.
+    /// HELD, as before, while a tune carrier is up. Outside the Phone section there is none to
+    /// hold: leaving Phone drops a waiting picture ([`Self::set_operating_mode_with_reset`]), and
+    /// the section check here stays as the backstop; `tx_allowed` judges the current section's
+    /// emission, so it speaks for SSTV only in Phone. A picture already going out is the loop's,
+    /// and nothing here touches it.
     ///
     /// No wall-clock watchdog check here: the over's length is bounded UP
     /// FRONT by `sstv_send`'s budget, and the loop unkeys unconditionally at the precomputed
@@ -28712,6 +28745,69 @@ mod tests {
         );
     }
 
+    /// ⛔ LEAVING PHONE DROPS AN SSTV PICTURE STILL WAITING (the operator, 2026-09-30: "Drop it on
+    /// leave"). SSTV rides Phone, and a picture waits for the loop after Send. Left for CW, RTTY
+    /// or PSK, which keep TX armed, the poll's section check held it and it keyed on the return to
+    /// Phone; left for FT8, which lowers TX, it waited for the poll's TX-off drop.
+    #[test]
+    fn a_waiting_sstv_picture_is_dropped_when_the_phone_section_is_left() {
+        for to in ["cw", "rtty", "keyboard", "digital"] {
+            let mut e = phone_armed_engine();
+            e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+            e.set_operating_mode("phone", false); // a view re-asserting its own section
+            assert!(
+                e.sstv_sending(),
+                "{to}: re-entering Phone dropped the picture"
+            );
+            e.set_operating_mode(to, false);
+            assert!(
+                !e.sstv_sending(),
+                "{to}: the waiting picture outlived the Phone screen"
+            );
+            assert!(
+                !e.sstv_abort,
+                "{to}: leaving aborted a picture that was not on the air"
+            );
+            assert_eq!(
+                e.sstv_tx_notice(),
+                Some(SSTV_LEFT_SECTION),
+                "{to}: the SSTV cockpit is told"
+            );
+            e.set_operating_mode("phone", false);
+            assert!(
+                e.poll_sstv_tx().is_none(),
+                "{to}: the picture keyed on the return"
+            );
+            e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+            assert!(
+                e.poll_sstv_tx().is_some(),
+                "{to}: a picture sent on the return keys as before"
+            );
+        }
+    }
+
+    /// …and a picture the loop has already taken is on the air: not the rule's. Leaving drops
+    /// nothing, arms no abort and says nothing, as a section change always did.
+    #[test]
+    fn an_sstv_picture_on_the_air_is_not_the_leave_rules() {
+        let mut e = phone_armed_engine();
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert!(e.poll_sstv_tx().is_some(), "control: the loop takes it");
+        e.set_sstv_sending(true);
+        e.set_operating_mode("cw", false);
+        assert!(!e.sstv_abort, "leaving aborted the picture on the air");
+        assert_eq!(
+            e.sstv_tx_mode(),
+            Some("PD-120"),
+            "leaving took the picture's label off its progress"
+        );
+        assert_eq!(
+            e.sstv_tx_notice(),
+            None,
+            "leaving said a picture on the air was dropped"
+        );
+    }
+
     /// ⛔ A picture the radio loop cut short on the air is left as Stop leaves it, and the SSTV
     /// cockpit is told why, in words that tell the latch going down under it from another stop
     /// ending its transmission (N57, 2026-09-30). The reason stands until the next picture keys,
@@ -32077,9 +32173,11 @@ mod tests {
     }
 
     /// ⛔ A REFUSED CW SEND IS DROPPED, NEVER HELD (the operator, 2026-09-30: "Drop it, with a
-    /// notice"). TX off with words still queued, here from leaving the CW section mid-macro
-    /// (the latch drops and every queue stays), used to hold them, and they keyed the moment TX
-    /// came back, at a time nobody chose.
+    /// notice"). TX off with words still queued used to hold them, and they keyed the moment TX
+    /// came back, at a time nobody chose. The refusal at the poll is the backstop now: leaving the
+    /// CW section mid-macro drops the rest itself
+    /// (`a_cw_macro_typed_ahead_is_dropped_when_the_cw_section_is_left`), so the test lowers the
+    /// latch directly.
     #[test]
     fn a_cw_send_refused_with_tx_off_is_dropped_and_does_not_key_when_tx_comes_back() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -32092,10 +32190,9 @@ mod tests {
             Some("TEST"),
             "control: the macro keys"
         );
-        e.set_operating_mode("digital", false); // mid-macro: the latch drops, the queue stays
-        assert!(!e.tx_enabled(), "precondition: TX is off");
+        e.tx_enabled = false; // not TX Off: the latch lowered another way, the queue kept
         assert_eq!(e.poll_cw_one(), None, "nothing keys with TX off");
-        e.set_operating_mode("cw", false); // back to CW, which arms TX on entry
+        e.set_tx_enabled(true);
         assert!(e.tx_enabled(), "precondition: TX is on again");
         assert_eq!(
             e.poll_cw_one(),
@@ -32113,6 +32210,64 @@ mod tests {
             Some("73"),
             "a send made once TX is on keys as before"
         );
+    }
+
+    /// ⛔ LEAVING THE CW SCREEN DROPS WHAT WAS STILL TO GO (the operator, 2026-09-30: "Same leave
+    /// rule for CW"). A macro keys its first word, and the CW section is left while the rest
+    /// waits: for Phone by the nav (its re-home to the phone segment) and without it, for RTTY,
+    /// PSK and FT8. Phone, RTTY and PSK keep TX armed, so the rest keyed from the screen the
+    /// operator went to; Phone without the re-home dropped it under the privileges notice; FT8
+    /// lowers TX, and the poll dropped it under the TX-off one. The word already handed to the
+    /// keyer is not the engine's to cut: nothing arms `cw_abort`.
+    #[test]
+    fn a_cw_macro_typed_ahead_is_dropped_when_the_cw_section_is_left() {
+        for (to, follow) in [
+            ("phone", true),
+            ("phone", false),
+            ("rtty", false),
+            ("keyboard", false),
+            ("digital", false),
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(14.03, "20m", "CW");
+            e.send_cw("CQ CQ DE KD9TAW K");
+            assert_eq!(
+                e.poll_cw_one().as_deref(),
+                Some("CQ"),
+                "{to}: control, the first word keys"
+            );
+            e.set_operating_mode("cw", false); // a view re-asserting its own section
+            assert!(
+                !e.cw_queue.is_empty(),
+                "{to}: re-entering CW dropped the queue"
+            );
+            e.set_operating_mode(to, follow);
+            assert_eq!(
+                e.poll_cw_one(),
+                None,
+                "{to} (re-home {follow}): the rest keyed from the other screen"
+            );
+            assert!(!e.cw_abort, "{to}: leaving cut the word in flight");
+            assert_eq!(
+                e.cw_keyer_error().as_deref(),
+                Some(CW_LEFT_SECTION),
+                "{to} (re-home {follow}): the CW cockpit is told the screen was left"
+            );
+            e.set_operating_mode("cw", false);
+            assert_eq!(
+                e.poll_cw_one(),
+                None,
+                "{to}: what was still to go keyed on the return"
+            );
+            e.send_cw("73");
+            assert_eq!(
+                e.poll_cw_one().as_deref(),
+                Some("73"),
+                "{to}: a send made on the return keys as before"
+            );
+        }
     }
 
     /// …and outside the licence's privileges: a send from a dial the licence may not key was
@@ -55906,6 +56061,40 @@ mod digital_side_licence_tests {
                     "{sc:?}: and it is dropped, not held to key at some later moment"
                 );
             }
+        }
+    }
+
+    /// ⛔ …AND THE CW SCREEN'S LEAVE RULE NEVER TOUCHES IT (the operator: "Leave it as is"). The
+    /// rule drops what CW had queued when the CW section is LEFT; the ID is queued, and keyed,
+    /// from Digital, so it keys there as before on both keyers, across the section re-assert an
+    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`.
+    #[test]
+    fn the_cw_id_after_an_ft_73_still_keys_from_digital() {
+        for sc in Soundcard::CW {
+            let mut e = ft_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
+            e.settings.cw_id_after_73 = true;
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+            assert!(
+                !e.poll_tx(4).is_empty(),
+                "precondition: the closing 73 transmits"
+            );
+            assert!(e.take_pending_cw_id(), "precondition: the CW ID is armed");
+            // What the radio loop does with it once the over has played out.
+            let mycall = e.settings.mycall.clone();
+            e.send_cw(&mycall);
+            e.set_operating_mode("digital", false);
+            assert_eq!(
+                e.poll_cw_one().as_deref(),
+                Some("K2DEF"),
+                "{sc:?}: the CW ID did not key from Digital"
+            );
+            assert_eq!(
+                e.cw_keyer_error(),
+                None,
+                "{sc:?}: and nothing says it was dropped"
+            );
         }
     }
 
