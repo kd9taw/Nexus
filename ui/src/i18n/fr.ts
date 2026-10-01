@@ -5124,7 +5124,7 @@ export const FR: PartialCatalog = {
   "settings.radios.editing.badge": "Édition",
   "settings.radios.editing.title": "Le formulaire Radio / CAT + Audio ci-dessous modifie cette radio.",
   "settings.radios.editingNote": "<b>Modification de {{name}}</b> — ce n'est pas votre radio active. <b>Enregistrer</b> n'écrit que la config CAT / audio de cette radio ; votre radio active et les réglages généraux de la station ne sont pas touchés.",
-  "settings.radios.hint.multi": "Les réglages Radio / CAT + Audio ci-dessous modifient “{{name}}”. Chaque radio a SES PROPRES CAT + audio — cliquez “Modifier” sur une radio pour la configurer SANS changer celle sur laquelle vous opérez ; “Rendre active” change de radio active.",
+  "settings.radios.hint.multi": "Les réglages Radio / CAT + Audio ci-dessous modifient “{{name}}”. Chaque radio a SES PROPRES CAT + audio — cliquez “Modifier” sur une radio pour la configurer SANS changer celle sur laquelle vous opérez ; “Rendre active” change de radio active. Ces réglages Radio / CAT valent en revanche pour toute la station, et en changer un change toutes les radios : “L'interface manipule par RTS sur le port CAT”, “Fonctionnement Split”, “Suivre le split de la radio”, “Sensibilité de la molette” et, sous Avancé, “Port de partage”, “Contrôle de flux série” et “Ligne de manipulation au démarrage”.",
   "settings.radios.hint.single": "Deux radios en même temps — par exemple une HF plus une VHF/UHF sur une autre antenne ? Ajoutez une deuxième radio ; vous pourrez alors Modifier l'une ou l'autre sans interrompre celle sur laquelle vous opérez. À ignorer si vous débutez.",
   "settings.radios.legend": "Radios",
   "settings.radios.makeActive.action": "Rendre active",

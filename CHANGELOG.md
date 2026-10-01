@@ -470,6 +470,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus checks your licence privileges against; if the radio says it is split but not where it
   transmits, Nexus will not transmit. Nexus never asks a radio whose split can only be read by
   moving it. From a browser the switch is shown but cannot be changed.
+- **Settings says which Rig & CAT controls belong to every radio.** With two or more radios, the
+  note over the radio cards said that editing another radio would not change the one you are
+  operating, and the manual said every Rig & CAT control is per radio. Seven are station-wide, one
+  setting for all your radios: Interface keys RTS on the CAT port, Split operation, Follow the
+  radio's split, Wheel tuning sensitivity, and under Advanced, Sharing port, Serial handshake and
+  Keying line at startup. The note and the manual now name them, so changing one while you edit
+  another radio no longer surprises the radio you are operating.
 - **JS8: a message sent to you is kept in the Inbox, as JS8Call keeps it.** A MSG addressed to
   you, or to a group you joined, now lands in the JS8 Inbox as unread, with the path it was
   relayed along. The station that sent it is flagged ⚑ in the Stations pane and moves to the top of

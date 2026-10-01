@@ -5124,7 +5124,7 @@ export const ES: PartialCatalog = {
   "settings.radios.editing.badge": "Editando",
   "settings.radios.editing.title": "El formulario Equipo / CAT + Audio de abajo está editando este equipo.",
   "settings.radios.editingNote": "<b>Editando {{name}}</b> — no es el equipo en uso. <b>Guardar</b> escribe solo la configuración CAT / audio de este equipo; el equipo activo y los ajustes generales de la estación no se tocan.",
-  "settings.radios.hint.multi": "Los ajustes Equipo / CAT + Audio de abajo editan “{{name}}”. Cada equipo tiene su PROPIO CAT + audio — pulsa “Editar” en cualquier equipo para configurarlo SIN cambiar aquel con el que estás operando; “Activar” cambia el equipo en uso.",
+  "settings.radios.hint.multi": "Los ajustes Equipo / CAT + Audio de abajo editan “{{name}}”. Cada equipo tiene su PROPIO CAT + audio — pulsa “Editar” en cualquier equipo para configurarlo SIN cambiar aquel con el que estás operando; “Activar” cambia el equipo en uso. Estos controles de Equipo / CAT son, en cambio, de toda la estación, así que cambiar uno cambia todos los equipos: “La interfaz manipula con RTS en el puerto CAT”, “Operación en Split”, “Seguir el split del equipo”, “Sensibilidad de la rueda” y, en Avanzado, “Puerto para compartir”, “Control de flujo serie” y “Línea de manipulación al arrancar”.",
   "settings.radios.hint.single": "¿Usas dos equipos a la vez — por ejemplo uno de HF más otro de VHF/UHF en otra antena? Añade un segundo equipo; luego podrás editar cualquiera de los dos sin interrumpir aquel con el que operas. Si empiezas, ignora esto.",
   "settings.radios.legend": "Equipos",
   "settings.radios.makeActive.action": "Activar",
