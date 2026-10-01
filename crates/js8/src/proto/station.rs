@@ -95,6 +95,13 @@ const MAX_HEARD: usize = 500;
 const MAX_OUTBOX: usize = 32;
 const MAX_PENDING: usize = 32;
 
+/// How long JS8Call's confirmation box waits before it answers No by itself. Every automatic
+/// reply opens one with a 90-second timeout (`confirmThenEnqueueMessage(90, …)`,
+/// mainwindow.cpp:9386, and the HB-ACK's, :6302); the box takes a second off as it opens
+/// (`showEvent` → `tick`, SelfDestructMessageBox.cpp:26-31, :39), so it reads "No (89)" and
+/// clicks its default, No (:68), 89 seconds after it opened.
+pub const CONFIRM_NO_AFTER_MS: u64 = 89_000;
+
 /// Truncate `s` to at most `max` bytes on a char boundary (air-sourced strings are never large;
 /// see the bounds block above).
 fn clamp_str(s: &str, max: usize) -> String {
@@ -170,6 +177,12 @@ pub struct StationConfig {
     pub status: String,
     pub allcall_reply_interval_ms: u64,
     pub reply_delay_ms: u64,
+    /// JS8Call's `AutoreplyConfirmation`, "Ask for confirmation before sending autoreply
+    /// transmissions" (Configuration.ui:855), on as JS8Call ships it (Configuration.cpp:1949).
+    /// On, every automatic reply waits for the operator's Yes and is No by itself after
+    /// [`CONFIRM_NO_AFTER_MS`] (`confirmThenEnqueueMessage`, mainwindow.cpp:9385-9389; the
+    /// HB-ACK's own, :6301-6307). Off, replies go automatically.
+    pub autoreply_confirmation: bool,
 }
 
 impl Default for StationConfig {
@@ -190,6 +203,7 @@ impl Default for StationConfig {
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
             reply_delay_ms: 0,
+            autoreply_confirmation: true,
         }
     }
 }
@@ -309,6 +323,13 @@ struct Pending {
     display: String,
     fires_at_ms: u64,
     freq_hint: FreqHint,
+    /// Waiting for the operator's Yes (`autoreply_confirmation`): `fires_at_ms` is then when
+    /// JS8Call's box answers No by itself, and nothing releases it but a Yes.
+    asks: bool,
+    /// The held message a `QUERY MSG n` hands over: marked Delivered when the reply is
+    /// released, as JS8Call's callback marks it (`markMsgDelivered`, mainwindow.cpp:9227-9235,
+    /// run by `processTxQueue` once the reply is dequeued, :9687-9689), so a No leaves it held.
+    delivers: Option<u32>,
 }
 
 pub struct Station {
@@ -865,20 +886,24 @@ impl Station {
             let Some(id) = query_msg_id(m).filter(|_| mine) else {
                 return;
             };
-            if let Some(e) = self.inbox.iter_mut().find(|e| {
+            if let Some(e) = self.inbox.iter().find(|e| {
                 e.id == id && e.state == InboxState::Store && e.to.eq_ignore_ascii_case(&base)
             }) {
-                e.state = InboxState::Delivered;
                 let deliver = format!("{from} MSG {} FROM {}", e.text, e.from);
-                actions.push(StationAction::InboxChanged);
-                self.schedule_reply(
-                    Origin::AutoReply,
-                    &from,
-                    &deliver,
-                    FreqHint::Dial,
-                    now_ms,
-                    actions,
-                );
+                // Marked Delivered as the reply is released, not here: JS8Call marks it in the
+                // reply's callback (mainwindow.cpp:9227-9235), so a No leaves it held. A delivery
+                // already waiting draws no second one.
+                if !self.reply_waits(&deliver) {
+                    self.schedule(
+                        Origin::AutoReply,
+                        &from,
+                        &deliver,
+                        FreqHint::Dial,
+                        Some(id),
+                        now_ms,
+                        actions,
+                    );
+                }
             }
             return;
         }
@@ -927,6 +952,20 @@ impl Station {
         self.allcall_replied.insert(from.to_string(), now_ms);
         self.prune_allcall(now_ms); // keep the map self-limiting, not one entry per call ever
         false
+    }
+
+    /// Hand over the held message `id` (a `QUERY MSG n` delivery being released): Delivered, so
+    /// it is offered no more (`markMsgDelivered`, mainwindow.cpp:9227-9235).
+    fn mark_delivered(&mut self, id: Option<u32>, actions: &mut Vec<StationAction>) {
+        let Some(id) = id else { return };
+        if let Some(e) = self
+            .inbox
+            .iter_mut()
+            .find(|e| e.id == id && e.state == InboxState::Store)
+        {
+            e.state = InboxState::Delivered;
+            actions.push(StationAction::InboxChanged);
+        }
     }
 
     fn stored_for(&self, call: &str) -> Option<u32> {
@@ -996,6 +1035,25 @@ impl Station {
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
+        self.schedule(origin, to, text, freq_hint, None, now_ms, actions);
+    }
+
+    /// Every automatic reply's one way in. With `autoreply_confirmation` on it waits for the
+    /// operator's Yes, and answers No by itself after [`CONFIRM_NO_AFTER_MS`], as JS8Call's
+    /// `confirmThenEnqueueMessage(90, …)` box does (mainwindow.cpp:5209-5230, :9385-9389);
+    /// otherwise it counts down to go by itself. `delivers` is the held message a `QUERY MSG n`
+    /// hands over, marked Delivered as the reply is released.
+    #[allow(clippy::too_many_arguments)]
+    fn schedule(
+        &mut self,
+        origin: Origin,
+        to: &str,
+        text: &str,
+        freq_hint: FreqHint,
+        delivers: Option<u32>,
+        now_ms: u64,
+        actions: &mut Vec<StationAction>,
+    ) {
         // Cap the pending auto-reply queue: under a flood, refuse and toast rather than growing.
         // Refusing an auto-reply is correct — the alternative keys stale traffic for hours.
         if self.pending.len() >= MAX_PENDING {
@@ -1005,7 +1063,19 @@ impl Station {
             });
             return;
         }
-        let fires_at_ms = now_ms + self.reply_delay_ms();
+        let asks = self.cfg.autoreply_confirmation;
+        let fires_at_ms = if asks {
+            now_ms + CONFIRM_NO_AFTER_MS
+        } else {
+            now_ms + self.reply_delay_ms()
+        };
+        let delivers = if asks {
+            delivers
+        } else {
+            // It goes by itself: handed over now, as before.
+            self.mark_delivered(delivers, actions);
+            None
+        };
         let to = clamp_str(to, MAX_CALL_LEN);
         let text = clamp_str(text, MAX_TEXT_LEN);
         let display = format!("{}: {text}", self.base());
@@ -1016,6 +1086,8 @@ impl Station {
             display: display.clone(),
             fires_at_ms,
             freq_hint,
+            asks,
+            delivers,
         });
         actions.push(StationAction::ReplyPending {
             origin,
@@ -1041,6 +1113,18 @@ impl Station {
         // reclaim aged state each tick (inbox 48 h expiry + caps, allcall interval prune).
         self.prune_inbox(now_ms, &mut actions);
         self.prune_allcall(now_ms);
+        // A reply nobody answered is No when its box runs out (SelfDestructMessageBox.cpp:68):
+        // nothing is sent and a held message it would have handed over stays held.
+        self.pending.retain(|p| {
+            let no = p.asks && now_ms >= p.fires_at_ms;
+            if no {
+                actions.push(StationAction::Toast {
+                    text: format!("Auto-reply not sent, no answer: {}", p.display),
+                    directed_to_me: false,
+                });
+            }
+            !no
+        });
         // idle watchdog
         if self.cfg.idle_watchdog_min > 0 && !self.idle_tripped {
             let limit = self.cfg.idle_watchdog_min as u64 * 60 * 1000;
@@ -1145,11 +1229,12 @@ impl Station {
         busy: &dyn Fn(f32) -> bool,
         rng: &mut dyn FnMut() -> u32,
     ) -> Option<TxFrame> {
-        // release fired pending replies into the outbox (oldest first).
+        // release fired pending replies into the outbox (oldest first); one waiting for the
+        // operator's Yes is released by the Yes alone (`answer_reply`).
         self.pending.sort_by_key(|p| p.fires_at_ms);
         let mut i = 0;
         while i < self.pending.len() {
-            if self.pending[i].fires_at_ms <= period_start_ms {
+            if !self.pending[i].asks && self.pending[i].fires_at_ms <= period_start_ms {
                 let p = self.pending.remove(i);
                 if let Ok(out) = self.compose_out(p.origin, &p.text, p.freq_hint) {
                     // If the outbox is full, the reply is dropped rather than queued behind stale
@@ -1411,6 +1496,55 @@ impl Station {
 
     pub fn cancel_pending_reply(&mut self) {
         self.pending.clear();
+    }
+
+    /// The operator's answer to the reply shown as (`display`, `fires_at_ms`), JS8Call's Yes or
+    /// No (mainwindow.cpp:5219-5226). Yes releases it to the outbox, where the next period keys
+    /// it, and hands over the held message a delivery carries; No drops it, whatever kind it is,
+    /// so a No is never answered by a frame. Either is the operator's act: it restarts the idle
+    /// count and clears an idle trip, as any click in JS8Call does (`eventFilter`,
+    /// mainwindow.cpp:2979-2988). `None` when no such reply waits any more.
+    pub fn answer_reply(
+        &mut self,
+        display: &str,
+        fires_at_ms: u64,
+        yes: bool,
+        now_ms: u64,
+    ) -> Option<Vec<StationAction>> {
+        let i = self
+            .pending
+            .iter()
+            .position(|p| p.display == display && p.fires_at_ms == fires_at_ms)?;
+        self.mark_active(now_ms);
+        let mut actions = Vec::new();
+        if !yes {
+            self.pending.remove(i);
+        } else if self.pending[i].asks {
+            let p = self.pending.remove(i);
+            self.mark_delivered(p.delivers, &mut actions);
+            if let Ok(out) = self.compose_out(p.origin, &p.text, p.freq_hint) {
+                // A full outbox drops it rather than queue it behind stale traffic, as a
+                // countdown's release does.
+                let _ = self.push_outbox(out);
+            }
+        }
+        Some(actions)
+    }
+
+    /// For a moment when nothing may transmit (TX off, no locator, outside the privileges): once a
+    /// reply counting down to go by itself falls due, every such reply is dropped, never carried
+    /// to a later moment. A reply waiting for the operator's Yes stays shown. True when any was
+    /// dropped.
+    pub fn drop_due_replies(&mut self, now_ms: u64) -> bool {
+        if !self
+            .pending
+            .iter()
+            .any(|p| !p.asks && p.fires_at_ms <= now_ms)
+        {
+            return false;
+        }
+        self.pending.retain(|p| p.asks);
+        true
     }
 
     pub fn drop_queue(&mut self) {
@@ -1760,14 +1894,37 @@ mod tests {
     use super::*;
     use crate::proto::reassembly::Checksum;
 
+    /// A station whose replies go by themselves (the confirmation off), so a test sees each reply
+    /// on the air; `asking_cfg` is JS8Call's default, where each one asks first.
     fn cfg() -> StationConfig {
         StationConfig {
             mycall: "KD9TAW".into(),
             grid: "EN52".into(),
             speed: Speed::Normal,
             reply_delay_ms: 1000,
+            autoreply_confirmation: false,
             ..Default::default()
         }
+    }
+
+    /// JS8Call's default: every automatic reply asks Yes/No first.
+    fn asking_cfg() -> StationConfig {
+        StationConfig {
+            autoreply_confirmation: true,
+            ..cfg()
+        }
+    }
+
+    fn snr_query(from: &str) -> MessageEvent {
+        directed(from, "KD9TAW", Some(Command::SnrQuery), None, "", -7)
+    }
+
+    /// Whatever keys in the `n` periods from `from_ms` (one entry per frame).
+    fn keyed_in(s: &mut Station, from_ms: u64, n: u64) -> Vec<String> {
+        (0..n)
+            .filter_map(|k| drain(s, from_ms + k * 15_000))
+            .map(|f| f.display)
+            .collect()
     }
 
     fn directed(
@@ -4299,6 +4456,263 @@ mod tests {
             calls(s.snapshot(t)),
             ["K1ABC", "K2DEF"],
             "off, every call is saved"
+        );
+    }
+
+    // ===== (E) JS8Call's AutoreplyConfirmation: each automatic reply asks Yes/No first =====
+
+    /// JS8Call ships the confirmation on (`AutoreplyConfirmation`, default true,
+    /// Configuration.cpp:1949).
+    #[test]
+    fn replies_ask_for_confirmation_by_default_as_js8call_ships_it() {
+        assert!(StationConfig::default().autoreply_confirmation);
+    }
+
+    /// ⭐ Each automatic reply asks first (`confirmThenEnqueueMessage`, mainwindow.cpp:9385-9389):
+    /// nothing keys while it waits, however many periods pass, and the box says No by itself 89 s
+    /// after it opened. The operator's Yes releases it, and it keys in the period after the Yes.
+    #[test]
+    fn an_automatic_reply_waits_for_yes_and_keys_after_it() {
+        let mut s = Station::new(asking_cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        let p = s.pending_reply().expect("the reply asks");
+        assert_eq!(
+            (p.display.as_str(), p.fires_at_ms),
+            ("KD9TAW: W1AW SNR -07", 1000 + 89_000),
+            "JS8Call's reply, No 89 s after it was made"
+        );
+        assert_eq!(
+            keyed_in(&mut s, 15_000, 5),
+            Vec::<String>::new(),
+            "nothing keys while it asks"
+        );
+        assert!(
+            s.answer_reply(&p.display, p.fires_at_ms, true, 80_000)
+                .is_some(),
+            "Yes"
+        );
+        assert!(s.pending_reply().is_none(), "answered");
+        assert_eq!(
+            keyed_in(&mut s, 90_000, 4),
+            ["KD9TAW: W1AW SNR -07"],
+            "Yes: it keys once, in the next period"
+        );
+    }
+
+    /// No, or no answer for 89 s, sends nothing: JS8Call's box closes on No either way
+    /// (mainwindow.cpp:5219-5226; SelfDestructMessageBox.cpp:68). A Yes after that is refused.
+    #[test]
+    fn no_or_no_answer_for_89_seconds_sends_nothing() {
+        let mut s = Station::new(asking_cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        let p = s.pending_reply().expect("asks");
+        assert!(s
+            .answer_reply(&p.display, p.fires_at_ms, false, 2000)
+            .is_some());
+        assert!(s.pending_reply().is_none(), "No: answered");
+        assert!(keyed_in(&mut s, 15_000, 8).is_empty(), "No: nothing keys");
+
+        let mut s = Station::new(asking_cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        let p = s.pending_reply().expect("asks");
+        s.tick(1000 + 89_000 - 1);
+        assert!(s.pending_reply().is_some(), "still asking a moment before");
+        s.tick(1000 + 89_000);
+        assert!(s.pending_reply().is_none(), "No by itself at 89 s");
+        assert!(
+            s.answer_reply(&p.display, p.fires_at_ms, true, 91_000)
+                .is_none(),
+            "a Yes after that answers nothing"
+        );
+        assert!(keyed_in(&mut s, 15_000, 8).is_empty(), "nothing keys");
+
+        // Only a Yes releases it: a period past its time, even with no tick to close it first.
+        let mut s = Station::new(asking_cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        assert!(
+            keyed_in(&mut s, 120_000, 4).is_empty(),
+            "an unanswered reply never keys, even past its time"
+        );
+    }
+
+    /// Off, a reply goes by itself, JS8Call's `enqueueMessage` path (mainwindow.cpp:9388): it is
+    /// never a question.
+    #[test]
+    fn with_confirmation_off_a_reply_goes_by_itself() {
+        let mut s = Station::new(cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        assert_eq!(
+            keyed_in(&mut s, 5000, 4),
+            ["KD9TAW: W1AW SNR -07"],
+            "keyed with no Yes"
+        );
+    }
+
+    /// Every automatic reply asks, not the queries alone: the MSG ACK, the stored MSG TO:'s ACK,
+    /// the relay, QUERY MSGS and the HB-ACK (`sendHeartbeatAck`'s own box, mainwindow.cpp:6301-6307).
+    #[test]
+    fn every_automatic_reply_asks() {
+        let events = [
+            directed("W1AW", "KD9TAW", Some(Command::Msg), None, "HELLO", -7),
+            directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC FRIDAY",
+                -7,
+            ),
+            directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::Relay),
+                None,
+                "K1ABC> HI",
+                -7,
+            ),
+            directed("W1AW", "KD9TAW", Some(Command::QueryMsgs), None, "", -7),
+            heartbeat("W1AW", -7),
+        ];
+        for ev in &events {
+            let mut s = Station::new(StationConfig {
+                hb_ack: true,
+                ..asking_cfg()
+            });
+            s.set_hb(true, 0);
+            s.hb_next_ms = None; // no heartbeat of our own in the window
+            s.on_event(ev, 1000);
+            let p = s.pending_reply().expect("it asks");
+            assert_eq!(p.fires_at_ms, 1000 + 89_000, "{}", p.display);
+            assert!(
+                keyed_in(&mut s, 15_000, 5).is_empty(),
+                "{}: nothing keys without a Yes",
+                p.display
+            );
+        }
+    }
+
+    /// A `QUERY MSG n` hands the held message over on Yes alone: JS8Call marks it delivered in
+    /// the reply's callback (mainwindow.cpp:9227-9235), so a No leaves it held, and the station
+    /// still offers it.
+    #[test]
+    fn a_held_message_is_handed_over_on_yes_only() {
+        let mut s = Station::new(asking_cfg());
+        store_for(&mut s, "N0XYZ", 0);
+        let id = s.inbox()[0].id;
+        let ask = |s: &mut Station, t: u64| {
+            s.on_event(
+                &directed(
+                    "N0XYZ",
+                    "KD9TAW",
+                    Some(Command::Query),
+                    None,
+                    &format!("MSG {id}"),
+                    -5,
+                ),
+                t,
+            );
+        };
+        ask(&mut s, 1000);
+        let p = s.pending_reply().expect("the delivery asks");
+        assert_eq!(p.display, "KD9TAW: N0XYZ MSG FRIDAY CONTACT FROM W1AW");
+        assert_eq!(s.inbox()[0].state, InboxState::Store, "held while it asks");
+        s.answer_reply(&p.display, p.fires_at_ms, false, 2000);
+        assert_eq!(s.inbox()[0].state, InboxState::Store, "No: still held");
+        ask(&mut s, 3000);
+        let p = s.pending_reply().expect("asked again, it asks again");
+        let actions = s
+            .answer_reply(&p.display, p.fires_at_ms, true, 4000)
+            .expect("Yes");
+        assert_eq!(
+            s.inbox()[0].state,
+            InboxState::Delivered,
+            "Yes: handed over"
+        );
+        assert!(actions.contains(&StationAction::InboxChanged), "…journaled");
+        let first_frames: Vec<String> = (0..6u64)
+            .filter_map(|k| drain(&mut s, 15_000 + k * 15_000))
+            .filter(|f| f.first)
+            .map(|f| f.display)
+            .collect();
+        assert_eq!(
+            first_frames,
+            ["KD9TAW: N0XYZ MSG FRIDAY CONTACT FROM W1AW"],
+            "the delivery keys once"
+        );
+    }
+
+    /// The operator's answer is their act: JS8Call resets its idle count on any click
+    /// (`eventFilter` → `resetIdleTimer`, mainwindow.cpp:2979-2988), the Yes and the No included.
+    #[test]
+    fn answering_a_reply_restarts_the_idle_count() {
+        for yes in [true, false] {
+            let mut s = Station::new(asking_cfg());
+            s.mark_active(1);
+            s.on_event(&snr_query("W1AW"), 10 * 60_000 + 1);
+            let p = s.pending_reply().expect("asks");
+            assert_eq!(
+                s.idle_minutes(10 * 60_000 + 1),
+                10,
+                "control: ten idle minutes"
+            );
+            s.answer_reply(&p.display, p.fires_at_ms, yes, 10 * 60_000 + 1);
+            assert_eq!(s.idle_minutes(10 * 60_000 + 30_000), 0, "yes={yes}");
+        }
+    }
+
+    /// A No is never answered by a frame, whatever kind of reply it reaches: a reply counting down
+    /// (made with the confirmation off) stops too. A Yes to it changes nothing: it goes at its time.
+    #[test]
+    fn a_no_stops_a_reply_counting_down_too() {
+        let mut s = Station::new(cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        let p = s.pending_reply().expect("counts down");
+        s.answer_reply(&p.display, p.fires_at_ms, false, 1500);
+        assert!(keyed_in(&mut s, 5000, 4).is_empty(), "No: nothing keys");
+
+        let mut s = Station::new(cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        let p = s.pending_reply().expect("counts down");
+        s.answer_reply(&p.display, p.fires_at_ms, true, 1500);
+        assert_eq!(keyed_in(&mut s, 5000, 4), ["KD9TAW: W1AW SNR -07"]);
+    }
+
+    /// Stop TX (`halt`) and the idle watchdog drop a reply still asking, as they drop every reply.
+    #[test]
+    fn stop_tx_and_the_idle_watchdog_drop_a_reply_still_asking() {
+        let mut s = Station::new(asking_cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        assert!(s.pending_reply().is_some(), "control: it asks");
+        s.halt();
+        assert!(s.pending_reply().is_none(), "Stop TX drops it");
+
+        let mut s = Station::new(StationConfig {
+            idle_watchdog_min: 5,
+            ..asking_cfg()
+        });
+        s.mark_active(0);
+        s.on_event(&snr_query("W1AW"), 60_000);
+        assert!(s.pending_reply().is_some(), "control: it asks");
+        s.tick(5 * 60_000);
+        assert!(s.idle_tripped(), "control: tripped");
+        assert!(s.pending_reply().is_none(), "the trip drops it");
+    }
+
+    /// With nothing able to transmit, a reply counting down that falls due is dropped with every
+    /// other such reply; one asking stays shown, for the operator to answer.
+    #[test]
+    fn drop_due_replies_drops_the_countdowns_and_keeps_a_question() {
+        let mut s = Station::new(cfg());
+        s.on_event(&snr_query("W1AW"), 1000);
+        s.set_config(asking_cfg());
+        s.on_event(&snr_query("K1ABC"), 1500);
+        assert!(!s.drop_due_replies(1500), "nothing due yet");
+        assert!(s.drop_due_replies(1000 + 1000), "the countdown fell due");
+        let left = s.pending_reply().expect("the question stays");
+        assert_eq!(left.display, "KD9TAW: K1ABC SNR -07");
+        assert!(
+            !s.drop_due_replies(80_000),
+            "a question never falls due here"
         );
     }
 }

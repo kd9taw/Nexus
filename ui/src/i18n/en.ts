@@ -6348,7 +6348,10 @@ export const EN = {
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
   'settings.js8.autoreply.label': 'Auto-reply to queries',
   'settings.js8.autoreply.hint':
-    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK, each after a one-period countdown you can cancel in the cockpit. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Needs TX on.',
+    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Needs TX on.',
+  'settings.js8.autoreplyConfirmation.label': 'Ask for confirmation before sending automatic replies',
+  'settings.js8.autoreplyConfirmation.hint':
+    'On by default, as in JS8Call: every automatic reply (to a query, an ACK, a relay, a heartbeat acknowledgement) waits in the cockpit for your Yes, and is not sent if you say No or do not answer within 89 seconds. Off, they go by themselves.',
   'settings.js8.relay.label': 'Relay for other stations',
   'settings.js8.relay.hint':
     'On by default, as in JS8Call: a message routed through your callsign is passed along, and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
@@ -8456,7 +8459,7 @@ export const EN = {
   'js8.dock.autoreply.title.on':
     'Auto-reply is on, but TX is off — nothing keys; a reply is shown as “would have replied”. Enable TX (the header pill) to let replies go out.',
   'js8.dock.autoreply.title.armed':
-    'Auto-reply is ARMED: SNR?, GRID?, INFO?, QUERY and MSG addressed to you or a group you joined are answered after a visible countdown you can cancel. Click to turn it off.',
+    'Auto-reply is ARMED: SNR?, GRID?, INFO?, QUERY and MSG addressed to you or a group you joined are answered, each after your Yes when Settings asks for one. Click to turn it off.',
   'js8.dock.relay.title.off':
     'Relay is off — a > message routed through you is displayed and not passed on. Click to turn it on (remembered). Relaying is third-party traffic; you are responsible for it.',
   'js8.dock.relay.title.on':
@@ -8480,6 +8483,13 @@ export const EN = {
     'JS8 idle watchdog: no operator activity for {{min}} min — heartbeat, autoreply and relay are off. TX stays as you left it; any send or switch re-arms them.',
   'js8.dock.pending.cancel.label': 'Cancel',
   'js8.dock.pending.cancel.title': 'Cancel this automatic reply before it goes out',
+  // JS8Call's AutoreplyConfirmation box, its own words (mainwindow.cpp:5211-5212): Yes / No, with
+  // the seconds to No on the No button, as JS8Call counts them on its default button.
+  'js8.dock.confirm': 'A transmission is queued for autoreply: {{text}} — would you like to send this transmission?',
+  'js8.dock.confirm.yes.label': 'Yes',
+  'js8.dock.confirm.yes.title': 'Send it: it goes out in the next period, through every TX check.',
+  'js8.dock.confirm.no.label': 'No ({{secs}})',
+  'js8.dock.confirm.no.title': 'Do not send it. With no answer it is No when the count reaches 0, as in JS8Call.',
   'js8.dock.queue.title': 'Queued frames — one leaves per period while TX is on. F/L mark the first and last frame of a message.',
   'js8.dock.queue.drop.label': 'Drop queue',
   'js8.dock.queue.drop.title': 'Drop every queued frame. Not a stop: a frame already on the air finishes — Stop TX cuts it.',
@@ -8502,6 +8512,7 @@ export const EN = {
   'js8.toast.command.failed': 'JS8 command refused',
   'js8.toast.noAddressee': 'A command needs a station — put a callsign, @ALLCALL or a group in To',
   'js8.toast.cancel.failed': 'Could not cancel the reply',
+  'js8.toast.answer.failed': 'Could not answer the question',
   'js8.toast.drop.failed': 'Could not drop the queue',
 
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────

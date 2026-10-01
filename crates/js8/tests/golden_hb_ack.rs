@@ -50,6 +50,9 @@ fn hb_ack_keyed_by(acker: &str, target: &str, snr: i32, speed: Speed) -> Vec<TxF
         hb_ack: true,
         hb_interval_min: 30,
         reply_delay_ms: 1,
+        // The logged replies keyed by themselves, the period after what they answer: those
+        // stations did not ask first (JS8Call's AutoreplyConfirmation off).
+        autoreply_confirmation: false,
         ..StationConfig::default()
     });
     s.set_hb(true, 0);

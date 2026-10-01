@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JS8: each automatic reply asks you first, as JS8Call does.** JS8Call ships with "Ask for
+  confirmation before sending autoreply transmissions" on, and so does Nexus now (Settings ▸
+  Digital ▸ JS8). An answer to a query, an ACK, a relay or a heartbeat acknowledgement waits in
+  the dock as JS8Call's question, "A transmission is queued for autoreply … would you like to send
+  this transmission?", with **Yes** and **No**. Yes sends it in the next period, through every TX
+  check; No sends nothing, and so does no answer: after 89 seconds it is No, JS8Call's 90-second box
+  as it counts. A message held for another station is handed over only on Yes. Turn the setting
+  off and replies go by themselves, as before.
 - **PstRotatorAz by name in the rotator picker.** Settings ▸ Radio ▸ Rotator now offers
   **PstRotatorAz / PstRotator (UDP)**, Hamlib's model 3 for YO3DMU's PstRotatorAz. It used to be
   reachable only as "Other Hamlib model #…" 3. PstRotatorAz takes its commands over UDP, so for this
@@ -108,16 +116,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`W1AW ACK` for a message from W1AW), the reply a JS8Call station sends, so the sender sees that
   it arrived; a message that came through a relay is acknowledged back along the same relay path.
   It is an automatic reply like the others: it needs TX on and AUTOREPLY on (the default, as in
-  JS8Call), waits one period in the dock with its countdown and Cancel, and is dropped, not sent
-  later, if TX is off, your locator is missing or the frequency is outside your privileges when it
-  comes due. A message to @ALLCALL, to another station or to a group you have not joined is never
+  JS8Call), asks for your Yes first unless you turned that off, and is dropped, not sent later, if
+  TX is off, your locator is missing or the frequency is outside your privileges when its turn
+  comes. A message to @ALLCALL, to another station or to a group you have not joined is never
   acknowledged, and a copy that arrives while the ACK is still waiting does not get a second one.
 - **JS8: a message you hold for another station is acknowledged, as JS8Call acknowledges it.** When a
   station leaves a MSG TO: with you for someone else, Nexus now answers the sender with an ACK
   (`W1AW ACK`), the reply a JS8Call station sends, so the sender knows you have it; one that came
   through a relay is acknowledged back along that relay path. It is an automatic reply like the
-  acknowledgement of a message to you: it needs TX on and AUTOREPLY on, and waits in the dock with
-  its countdown and Cancel.
+  acknowledgement of a message to you: it needs TX on and AUTOREPLY on, and asks for your Yes
+  first unless you turned that off.
 - **A Text size setting: Normal, Large or Larger (#215).** Settings ▸ Appearance ▸ Workspace has a
   new **Text size** row, directly under UI scale. Large makes every word on the screen 12% bigger
   and Larger 25%, Band Activity, the Call Roster and the Logbook included, while the rest of the

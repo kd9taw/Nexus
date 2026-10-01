@@ -55,6 +55,7 @@ vi.mock('../api', async (importOriginal) => {
     js8CallCq: vi.fn(async () => s()),
     js8Arm: vi.fn(async () => s()),
     js8Cancel: vi.fn(async () => s()),
+    js8AnswerReply: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
     js8LocatorRefusal: vi.fn(async () => null),
     // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
@@ -75,6 +76,7 @@ const js8Send = api.js8Send as ReturnType<typeof vi.fn>
 const js8SendCommand = api.js8SendCommand as ReturnType<typeof vi.fn>
 const js8Arm = api.js8Arm as ReturnType<typeof vi.fn>
 const js8Cancel = api.js8Cancel as ReturnType<typeof vi.fn>
+const js8AnswerReply = api.js8AnswerReply as ReturnType<typeof vi.fn>
 const js8DropQueue = api.js8DropQueue as ReturnType<typeof vi.fn>
 const js8LocatorRefusal = api.js8LocatorRefusal as ReturnType<typeof vi.fn>
 
@@ -90,6 +92,7 @@ beforeEach(() => {
   js8SendCommand.mockClear()
   js8Arm.mockClear()
   js8Cancel.mockClear()
+  js8AnswerReply.mockClear()
   js8DropQueue.mockClear()
   js8LocatorRefusal.mockReset()
   js8LocatorRefusal.mockImplementation(async () => null)
@@ -102,8 +105,8 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function renderCockpit(s: AppSnapshot = snap) {
-  const r = render(<Js8Cockpit snap={s} />)
+async function renderCockpit(s: AppSnapshot = snap, props: { autoreplyConfirmation?: boolean } = {}) {
+  const r = render(<Js8Cockpit snap={s} {...props} />)
   await act(async () => {
     await Promise.resolve()
     await Promise.resolve()
@@ -218,9 +221,10 @@ describe('the second-act chips never look armed without the session TX latch', (
 })
 
 describe('the pending auto-reply and the queue', () => {
-  it('shows the countdown and Cancel → js8Cancel; with TX off it says nothing will key', async () => {
+  it('with the confirmation off: the countdown and Cancel → js8Cancel; with TX off it says nothing will key', async () => {
     state.current = { ...base(), pendingReply: { origin: 'autoReply', to: 'W1AW', display: 'KD9TAW: W1AW SNR -03', firesAtMs: Date.now() + 14_000 } }
-    await renderCockpit()
+    await renderCockpit(snap, { autoreplyConfirmation: false })
+    expect(document.querySelector('.js8-confirm-row')).toBeNull()
     const row = q('.js8-pending-row')
     expect(row).not.toBeNull()
     expect(row.closest('.cockpit-txdock')).not.toBeNull()
@@ -261,9 +265,53 @@ describe('the pending auto-reply and the queue', () => {
   })
 })
 
+// JS8Call's AutoreplyConfirmation (on by default, Configuration.cpp:1949): each automatic reply is a
+// question, its own words (mainwindow.cpp:5211-5212), Yes / No with the seconds to No on No.
+describe('the automatic reply asks Yes / No, as JS8Call does', () => {
+  const asking = () => ({ origin: 'autoReply' as const, to: 'W1AW', display: 'KD9TAW: W1AW SNR -03', firesAtMs: Date.now() + 89_000 })
+
+  it("asks in JS8Call's words, in the TX dock, with Yes and No (seconds) and no Cancel", async () => {
+    state.current = { ...base(), txEnabled: true, pendingReply: asking() }
+    await renderCockpit()
+    const row = q('.js8-confirm-row')
+    expect(row).not.toBeNull()
+    expect(row.closest('.cockpit-txdock')).not.toBeNull()
+    expect(row.closest('.pane-frame')).toBeNull()
+    expect(row.textContent).toContain('A transmission is queued for autoreply: KD9TAW: W1AW SNR -03')
+    expect(row.textContent).toContain('would you like to send this transmission?')
+    expect(q('.js8-confirm-yes').textContent).toBe('Yes')
+    expect(q('.js8-confirm-no').textContent).toMatch(/^No \((89|88)\)$/)
+    expect(document.querySelector('.js8-cancel')).toBeNull()
+  })
+
+  it('Yes and No each answer THAT reply, named by what it showed', async () => {
+    const p = asking()
+    state.current = { ...base(), txEnabled: true, pendingReply: p }
+    await renderCockpit()
+    await act(async () => {
+      fireEvent.click(q('.js8-confirm-yes'))
+    })
+    expect(js8AnswerReply).toHaveBeenLastCalledWith(true, p.display, p.firesAtMs)
+    await act(async () => {
+      fireEvent.click(q('.js8-confirm-no'))
+    })
+    expect(js8AnswerReply).toHaveBeenLastCalledWith(false, p.display, p.firesAtMs)
+    expect(js8Cancel).not.toHaveBeenCalled()
+  })
+
+  it('with TX off it still asks, and says nothing will key', async () => {
+    state.current = { ...base(), pendingReply: asking() }
+    await renderCockpit()
+    expect(q('.js8-confirm-row').textContent).toMatch(/TX is off, nothing keys/)
+    expect(q('.js8-confirm-yes')).not.toBeNull()
+    expect(q('.js8-confirm-no')).not.toBeNull()
+  })
+})
+
 // JS8Call's query menu has "GRID <locator> - Send my current station Maidenhead grid locator"
 // (mainwindow.cpp:6656), disabled with no locator (:6657), which sends `<call> GRID <my_grid()>`
 // (:6665) at once (TransmitDirected, on by default: Configuration.cpp:1947). The station row's
+
 // one-click queries are Nexus's query menu.
 describe('send my grid, from a station row', () => {
   const sendGrid = () => q<HTMLButtonElement>('.js8-station-acts .js8-send-grid')

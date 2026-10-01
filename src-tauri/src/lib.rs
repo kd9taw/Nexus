@@ -15805,6 +15805,22 @@ fn js8_cancel(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State
     Ok(eng.js8_state())
 }
 
+/// The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
+/// AutoreplyConfirmation), named by the `display` and `fires_at_ms` it was shown with. A Yes puts
+/// it in the queue, where every TX gate applies when its period comes; a Yes to one no longer
+/// waiting is refused, so it can never send another reply.
+#[tauri::command(async)]
+fn js8_answer_reply(
+    state: State<'_, SharedEngine>,
+    yes: bool,
+    display: String,
+    fires_at_ms: u64,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_answer_reply(yes, display, fires_at_ms)?;
+    Ok(eng.js8_state())
+}
+
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
 #[tauri::command(async)]
 fn js8_drop_queue(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
@@ -30528,6 +30544,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_arm,
             js8_cq_repeat,
             js8_cancel,
+            js8_answer_reply,
             js8_drop_queue,
             js8_inbox_mark,
             js8_inbox_delete,

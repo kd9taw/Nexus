@@ -4745,6 +4745,7 @@ impl Engine {
             status: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
             reply_delay_ms: 17_000,
+            autoreply_confirmation: true,
         };
         Self {
             app,
@@ -45525,41 +45526,47 @@ mod tests {
     /// G3 default — would key on launch. At launch the latch is down; a query still gets a
     /// visible countdown ("would have replied"), never a frame; the expired countdown is
     /// CANCELLED, so arming TX later cannot fire a stale reply.
+    ///
+    /// Both ways a reply waits: asking for the operator's Yes (JS8Call's default, which says No
+    /// by itself after 89 s) and, with the confirmation off, counting down to go by itself.
     #[test]
     fn js8_autoreply_never_keys_at_launch() {
-        let mut e = Engine::with_settings(Settings {
-            mycall: "KD9TAW".to_string(),
-            mygrid: "EN52".to_string(),
-            js8_autoreply: true, // the G3 default, spelled out
-            js8_relay: true,
-            ..Settings::default()
-        });
-        e.js8_enter();
-        assert!(!e.tx_enabled(), "launch is listen-only");
-        let s0 = js8_slot_now();
-        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
-        let st = e.js8_state();
-        assert!(
-            st.pending_reply.is_some(),
-            "the station still computes the reply (shown, not sent)"
-        );
-        assert!(!st.armed.autoreply, "…and reports it as NOT armed");
-        for s in s0..s0 + 4 {
-            assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
-        }
-        assert!(!e.tx_enabled());
-        // The countdown expires while the latch is down → cancelled, never carried.
-        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
-        assert!(
-            e.js8_state().pending_reply.is_none(),
-            "an expired unarmed reply is cancelled"
-        );
-        e.set_tx_enabled(true);
-        for s in s0 + 4..s0 + 8 {
+        for asks in [true, false] {
+            let mut e = Engine::with_settings(Settings {
+                mycall: "KD9TAW".to_string(),
+                mygrid: "EN52".to_string(),
+                js8_autoreply: true, // the G3 default, spelled out
+                js8_relay: true,
+                js8_autoreply_confirmation: asks,
+                ..Settings::default()
+            });
+            e.js8_enter();
+            assert!(!e.tx_enabled(), "launch is listen-only");
+            let s0 = js8_slot_now();
+            e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+            let st = e.js8_state();
             assert!(
-                e.poll_tx(s).is_empty(),
-                "arming later must not fire the stale reply"
+                st.pending_reply.is_some(),
+                "the station still computes the reply (shown, not sent)"
             );
+            assert!(!st.armed.autoreply, "…and reports it as NOT armed");
+            for s in s0..s0 + 4 {
+                assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
+            }
+            assert!(!e.tx_enabled());
+            // The countdown expires while the latch is down → cancelled, never carried.
+            e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
+            assert!(
+                e.js8_state().pending_reply.is_none(),
+                "an expired unarmed reply is cancelled"
+            );
+            e.set_tx_enabled(true);
+            for s in s0 + 4..s0 + 8 {
+                assert!(
+                    e.poll_tx(s).is_empty(),
+                    "arming later must not fire the stale reply (asks: {asks})"
+                );
+            }
         }
     }
 
@@ -45608,10 +45615,13 @@ mod tests {
         );
     }
 
-    /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second.
+    /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second. The
+    /// confirmation off, so it goes by itself; `both_acts_and_a_yes_yield_exactly_one_reply` is
+    /// the asking path.
     #[test]
     fn both_acts_present_yield_exactly_one_reply_after_the_countdown() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_autoreply_confirmation = false;
         e.js8_enter();
         e.set_tx_enabled(true); // act 1 (session)
         assert!(
@@ -45638,10 +45648,46 @@ mod tests {
             .any(|d| d.mine && d.message.contains("W1AW SNR")));
     }
 
-    /// Cancel is the operator's veto on the countdown.
+    /// Both acts, at JS8Call's default (the reply asks first): nothing keys until the operator's
+    /// Yes, and then EXACTLY ONE reply, never a second.
+    #[test]
+    fn both_acts_and_a_yes_yield_exactly_one_reply() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true); // act 1 (session)
+        assert!(e.settings.js8_autoreply && e.settings.js8_autoreply_confirmation);
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        let p = e.js8_state().pending_reply.expect("the reply asks");
+        assert!(p.display.contains("W1AW SNR"), "{}", p.display);
+        for s in s0..s0 + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "nothing keys before the Yes (slot {s})"
+            );
+        }
+        e.js8_answer_reply(true, p.display, p.fires_at_ms)
+            .expect("Yes");
+        let keyed: Vec<u64> = (s0 + 4..s0 + 10)
+            .filter(|&s| !e.poll_tx(s).is_empty())
+            .collect();
+        assert_eq!(
+            keyed,
+            [s0 + 4],
+            "exactly one reply, the period after the Yes"
+        );
+        assert!(e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .any(|d| d.mine && d.message.contains("W1AW SNR")));
+    }
+
+    /// Cancel is the operator's veto on the countdown (the confirmation off).
     #[test]
     fn js8_cancel_stops_a_pending_reply() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_autoreply_confirmation = false;
         e.js8_enter();
         e.set_tx_enabled(true);
         let s0 = js8_slot_now();

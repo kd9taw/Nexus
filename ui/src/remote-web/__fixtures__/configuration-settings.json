@@ -147,6 +147,7 @@
     "journeyStreakEnabled": false,
     "js8ActivityAgingMin": 2,
     "js8Autoreply": true,
+    "js8AutoreplyConfirmation": true,
     "js8CallsignAgingMin": 0,
     "js8CqIntervalMin": 0,
     "js8Groups": [],

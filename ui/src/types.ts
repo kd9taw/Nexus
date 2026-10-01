@@ -3491,6 +3491,9 @@ export interface Settings {
   /** Autoreply to directed queries addressed to me / @ALLCALL / a joined group
    * (JS8Call default on). Second act of the two-act rule. */
   js8Autoreply: boolean
+  /** JS8Call's AutoreplyConfirmation (default on): every automatic reply waits in the cockpit for
+   * the operator's Yes and is not sent after 89 s without one. Off, replies go by themselves. */
+  js8AutoreplyConfirmation: boolean
   /** Relay `>` traffic for other stations (third-party traffic; JS8Call default on). */
   js8Relay: boolean
   /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/

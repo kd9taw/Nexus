@@ -36,6 +36,9 @@ fn ack_keyed_by(acker: &str, speed: Speed, msg: &Message) -> Option<TxFrame> {
         speed,
         groups,
         reply_delay_ms: 1,
+        // The logged replies keyed by themselves, the period after what they answer: those
+        // stations did not ask first (JS8Call's AutoreplyConfirmation off).
+        autoreply_confirmation: false,
         ..StationConfig::default()
     });
     s.on_event(&MessageEvent::Message(msg.clone()), 0);

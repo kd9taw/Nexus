@@ -153,6 +153,20 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect((control(fs, 'Band activity aging (minutes)') as HTMLInputElement).value, 'ActivityAging: 2').toBe('2')
   })
 
+  // JS8Call's "Ask for confirmation before sending autoreply transmissions", on as it ships
+  // (Configuration.ui:855, Configuration.cpp:1949).
+  it('asks for confirmation before automatic replies by default, and a click turns it off', async () => {
+    const fs = await openJs8()
+    const sw = control(fs, 'Ask for confirmation before sending automatic replies')
+    expect(sw.getAttribute('aria-checked'), 'on by default').toBe('true')
+    fireEvent.click(sw)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8AutoreplyConfirmation: false })),
+    )
+  })
+
   it('the four speed switches edit one bitmask, independently', async () => {
     const fs = await openJs8()
     const sw = (label: string) => control(fs, label)

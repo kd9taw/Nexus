@@ -8581,6 +8581,22 @@ export function SettingsPanel({
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.autoreplyConfirmation.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    // `!== false`: on by default, as JS8Call ships AutoreplyConfirmation.
+                    aria-checked={form.js8AutoreplyConfirmation !== false}
+                    className={`toggle${form.js8AutoreplyConfirmation !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AutoreplyConfirmation', form.js8AutoreplyConfirmation === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.autoreplyConfirmation.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.relay.label')}</span>
                   <button disabled={remote}
                     type="button"

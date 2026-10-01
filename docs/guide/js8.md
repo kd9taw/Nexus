@@ -52,8 +52,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 **The TX dock**, pinned under the panes. The **To** box (blank = everyone, a callsign,
 `@ALLCALL`, or a `@GROUP` you belong to), the composer, a frame estimate ("3 frames ·
 45 s") and **Send**; a command palette with JS8Call's 32 directed commands; the **CQ**
-variant picker and **CQ**; **HB**; the **AUTOREPLY · RELAY · HB ACK** chips; the pending
-auto-reply row with its countdown and **Cancel**; the queue with **Drop queue**; and the
+variant picker and **CQ**; **HB**; the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
+reply's question, **Yes** or **No** (with the confirmation off, its countdown and **Cancel**); the
+queue with **Drop queue**; and the
 idle-watchdog readout.
 
 ## Receiving
@@ -80,8 +81,11 @@ another station, as JS8Call does),
 **HB ACK** (answers heartbeats with your report) — those three persist in Settings, at
 JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which is
 session-only. A chip that is on while TX is off shows it plainly, and nothing keys.
-Every automatic reply first sits in the dock for one period with a countdown and a
-**Cancel**. After an hour with nothing typed (the idle watchdog; adjustable), heartbeats,
+Every automatic reply first asks in the dock, as JS8Call asks: "A transmission is queued for
+autoreply … would you like to send this transmission?" **Yes** sends it in the next period; **No**
+sends nothing, and so does no answer, which is No after 89 seconds. A message you hold for
+someone is handed over only on Yes. Turn **Ask for confirmation before sending automatic replies**
+off in Settings and replies go by themselves after a one-period countdown with a **Cancel**. After an hour with nothing typed (the idle watchdog; adjustable), heartbeats,
 auto-reply and relay switch themselves off and the dock says so.
 
 **Stop TX** (header, or **Esc** anywhere in the screen) cuts the frame on the air, empties
